@@ -52,7 +52,19 @@ const COMPUTER_RENDERERS = {
   dashboard: renderDashboard,
   catalog: renderCatalog,
   list: renderList,
+  article: renderArticle,
 };
+
+// Rows whose def declares `requiresContentFlag` are hidden from any
+// catalog/list screen unless that flag is currently on — same
+// CONTENT_CONFIG mechanism P0's prompt wiring reads, applied here so a
+// gated site/item never even appears rather than appearing and then
+// refusing (COMPUTER's visitSite is the authoritative second check for
+// anything that reaches it another way).
+function filterByContentFlags(rows, gs) {
+  const flags = (gs.meta.contentConfig && gs.meta.contentConfig.contentFlags) || CONTENT_CONFIG.contentFlags;
+  return rows.filter(row => !row.requiresContentFlag || flags[row.requiresContentFlag]);
+}
 
 // A dashboard is just its named panels, drawn in order — DASHBOARD_PANELS
 // is its own small named registry rather than a per-app switch, so a
@@ -115,14 +127,15 @@ const DASHBOARD_PANELS = {
 // declarations are), so a bare global-property lookup silently returns
 // undefined for every data registry in this codebase — this cost real
 // debugging time to find; see ARCHITECTURE.md's P4 notes.
-const CATALOG_SOURCES = { JOB_DEFS, SHOP_CATALOG_LIST };
+const CATALOG_SOURCES = { JOB_DEFS, SHOP_CATALOG_LIST, SITE_DEFS_LIST };
 
 function renderCatalog(body, gs, app, screen) {
   const source = CATALOG_SOURCES[screen.source];
   if (!source) { body.innerHTML = '<p class="dim">Nothing here.</p>'; return; }
+  const rows = filterByContentFlags(Object.values(source), gs);
   const list = document.createElement('div');
   list.className = 'cs-catalog';
-  for (const row of Object.values(source)) {
+  for (const row of rows) {
     const item = document.createElement('div');
     item.className = 'cs-catalog-row';
     const price = row.payPerBlock != null ? `$${row.payPerBlock}/block` : (row.price != null ? `$${row.price}` : '');
@@ -156,7 +169,7 @@ function resolveScreenSource(gs, screen) {
 // (e.g. "Checkout") — used for Shop's cart today; IM's thread list and
 // Browser's history will reuse it once those apps exist.
 function renderList(body, gs, app, screen) {
-  const items = resolveScreenSource(gs, screen) || [];
+  const items = filterByContentFlags(resolveScreenSource(gs, screen) || [], gs);
   if (items.length === 0) { body.innerHTML = `<p class="dim tiny">${screen.emptyText || 'Nothing here.'}</p>`; return; }
 
   const list = document.createElement('div');
@@ -189,6 +202,27 @@ function renderListRow(row, screen) {
     item.appendChild(btn);
   }
   return item;
+}
+
+// A single open "page" — reads which one from live session state
+// (apps.<app>.openSiteId) rather than view.params, matching the
+// state-over-params convention `list`'s 'state:' sources already
+// established. Browser is the only consumer today; a future app with its
+// own "currently open thing" (e.g. IM's open thread) can follow the same
+// pattern with its own openXId field rather than this renderer needing to
+// know about every app.
+function renderArticle(body, gs, app, screen) {
+  const browser = gs.world.computer.apps.browser;
+  const site = SITE_DEFS[browser?.openSiteId];
+  if (!site) { body.innerHTML = '<p class="dim">No page open.</p>'; return; }
+  const panel = makePanel(`<h3>${site.label}</h3><p class="dim tiny">${site.url}</p><p>${site.body}</p>`);
+  body.appendChild(panel);
+  const backBtn = document.createElement('button');
+  backBtn.className = 'btn btn-secondary tiny';
+  backBtn.setAttribute('data-action', 'computer.open-screen');
+  backBtn.setAttribute('data-screen', 'home');
+  backBtn.textContent = 'Back';
+  body.appendChild(backBtn);
 }
 
 // ===== /SECTION: RENDER.COMPUTER =====

@@ -91,4 +91,29 @@ async function doShopCheckout() {
   await saveAtBoundary('shop-checkout', currentGameState);
 }
 
+async function doBrowserVisit(siteId) {
+  if (!siteId) return;
+  showLoading();
+  try {
+    const result = visitSite(currentGameState, siteId);
+    if (!result.ok) { addLogEntry('system', result.reason); return; }
+
+    if (result.site.effects) {
+      const effects = result.site.effects.map(line => parseEffectDSL(line)[0]).filter(Boolean);
+      const roomObjects = currentGameState.objects[`room_${currentGameState.player.location}`] || {};
+      const effCtx = buildEffectContext(currentGameState, [], [], roomObjects, currentGameState.player.inventory || []);
+      applyEffects(effects, effCtx);
+    }
+    await advanceAndResolve(1);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
+
+    switchScreen(currentGameState, 'site');
+    renderComputerScreen(currentGameState);
+    render(currentGameState, currentSceneState);
+    await saveAtBoundary('browser-visit', currentGameState);
+  } finally {
+    hideLoading();
+  }
+}
+
 // ===== /SECTION: UI.COMPUTER =====

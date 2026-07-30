@@ -367,6 +367,9 @@ async function handleAction(action, npcId, extra) {
     case 'shop.checkout':
       await doShopCheckout();
       break;
+    case 'browser.visit':
+      await doBrowserVisit(extra?.rowId);
+      break;
     case 'talk':
       if (npcId) await doTalk(npcId);
       break;

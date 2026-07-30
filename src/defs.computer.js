@@ -1,13 +1,13 @@
 // ===== SECTION: DEFS.COMPUTER =====
 // App registry and per-app content data. A new app is an APP_DEFS entry +
 // a data source + (ideally) zero new render code — see RENDER.COMPUTER's
-// small set of generic renderers (dashboard/catalog/...), which every
-// app's screens are declared against rather than each app writing its own
-// DOM code.
+// small set of generic renderers (dashboard/catalog/list/article), which
+// every app's screens are declared against rather than each app writing
+// its own DOM code.
 //
-// 'work' and 'shop' exist so far — browser/classes/services/classifieds/
-// im/stream/adult land in later passes, each adding one APP_DEFS entry and
-// whatever data source it needs, following this same shape.
+// 'work', 'shop', and 'browser' exist so far — classes/services/
+// classifieds/im/stream land in later passes, each adding one APP_DEFS
+// entry and whatever data source it needs, following this same shape.
 
 const APP_DEFS = {
   work: {
@@ -36,6 +36,14 @@ const APP_DEFS = {
       },
     },
   },
+  browser: {
+    id: 'browser', label: 'Browser', category: 'web', requires: [],
+    entryScreen: 'home',
+    screens: {
+      home: { renderer: 'catalog', source: 'SITE_DEFS_LIST', rowAction: 'browser.visit', rowActionLabel: 'Visit' },
+      site: { renderer: 'article' },
+    },
+  },
 };
 
 // --- Jobs: what WorkHub's board offers, and what working a block pays.
@@ -62,5 +70,42 @@ const JOB_DEFS = {
     energyPerBlock: 7, repGrowth: 0.03,
   },
 };
+
+// --- Browser: a handful of authored sites, not (yet) LLM-generated
+// content — deferred rather than faked; see ARCHITECTURE.md's P4 Browser
+// notes for the kv.gen/generateAndCache design this will grow into.
+// `requiresContentFlag` gates a site behind CONTENT_CONFIG's flags (the
+// same mechanism the tone/content prompt wiring from P0 reads) — the
+// adult site is data, not a special case in the browser's code. `effects`
+// are applied on visit (COMPUTER's visitSite/UI.COMPUTER's doBrowserVisit)
+// through the same trusted-producer applyEffects path ACTIONS uses.
+const SITE_DEFS = {
+  daily_byte: {
+    id: 'daily_byte', label: 'The Daily Byte', url: 'dailybyte.example', category: 'news',
+    body: "Local headlines: a zoning dispute drags into its third public meeting, a raccoon loose downtown has its own hashtag now, and the weather desk is once again fairly sure it will rain on Saturday.",
+  },
+  chefs_corner: {
+    id: 'chefs_corner', label: "Chef's Corner", url: 'chefscorner.example', category: 'tutorial',
+    body: "This week: a step-by-step knife-skills primer — how to actually dice an onion without losing a fingertip, and why your knife is probably duller than you think.",
+    effects: ['ADD_SKILL_XP cooking 6'],
+  },
+  fitcast: {
+    id: 'fitcast', label: 'FitCast', url: 'fitcast.example', category: 'tutorial',
+    body: "A 20-minute bodyweight routine you can do between video calls. No equipment, moderate regret.",
+    effects: ['ADD_SKILL_XP fitness 6'],
+  },
+  codeflow: {
+    id: 'codeflow', label: 'CodeFlow Academy', url: 'codeflow.example', category: 'tutorial',
+    body: "Lesson 1: writing your first script. It's mostly typos. Everyone's is, at first.",
+    effects: ['ADD_SKILL_XP tech 6'],
+  },
+  afterhours: {
+    id: 'afterhours', label: 'AfterHours', url: 'afterhours.example', category: 'adult',
+    requiresContentFlag: 'mature',
+    body: "(You're on AfterHours. It's exactly what it sounds like.)",
+    effects: ['ADJUST_NEED player mood +0.1', 'ADJUST_NEED player energy -5', 'ADJUST_NEED player hygiene -3'],
+  },
+};
+const SITE_DEFS_LIST = Object.values(SITE_DEFS);
 
 // ===== /SECTION: DEFS.COMPUTER =====

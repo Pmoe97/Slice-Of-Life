@@ -19,8 +19,16 @@ function defaultComputerState() {
     apps: {
       work: { jobId: null, employed: false, todayBlocks: 0, todayEarned: 0, reputation: 0, backlog: [], strikes: 0, lastPayDay: 0 },
       shop: { cart: [], wishlist: [] },
+      browser: { openSiteId: null, history: [] },
     },
   };
+}
+
+// Which content-flag settings currently apply — the character-creation
+// choice if one was made, else CONTENT_CONFIG's defaults (P0's tone/
+// content wiring reads the same fallback in PROMPT's buildContentSection).
+function activeContentFlags(gameState) {
+  return (gameState.meta.contentConfig && gameState.meta.contentConfig.contentFlags) || CONTENT_CONFIG.contentFlags;
 }
 
 function openApp(gameState, appId) {
@@ -178,6 +186,29 @@ function checkoutCart(gameState) {
   });
   shop.cart = [];
   return { ok: true, total, etaDay };
+}
+
+// --- Browser app ---
+
+// Gated by CONTENT_CONFIG's flags — the browser itself doesn't special-
+// case the adult site; it just refuses to open anything whose
+// requiresContentFlag isn't currently on. RENDER.COMPUTER's
+// filterByContentFlags keeps a gated site from even appearing in the
+// home listing in the first place; this is the second, authoritative
+// check for anyone who reaches visitSite some other way.
+function visitSite(gameState, siteId) {
+  const site = SITE_DEFS[siteId];
+  if (!site) return { ok: false, reason: 'Page not found.' };
+  if (site.requiresContentFlag && !activeContentFlags(gameState)[site.requiresContentFlag]) {
+    return { ok: false, reason: 'This content is disabled in your settings.' };
+  }
+  const browser = gameState.world.computer.apps.browser;
+  browser.openSiteId = siteId;
+  browser.history.push({
+    day: gameState.meta.clock.day, tick: getTickIndex(gameState.meta.clock.minutes),
+    siteId, category: site.category, private: site.category === 'adult',
+  });
+  return { ok: true, site };
 }
 
 // ===== /SECTION: COMPUTER =====

@@ -591,3 +591,57 @@ delivery records with `qty` correctly expanded through `buyQty` (2 units
 × 12 eggs/unit = 24 eggs); advancing the clock past the ETA and running
 `processDeliveriesForDay` correctly moved both stacks onto the doormat's
 `.contents` and flipped delivery status to `delivered`.
+
+### Browser
+
+`APP_DEFS.browser` has two screens: `home` (`catalog` over the new
+`SITE_DEFS_LIST`) and `site` (a new fourth generic renderer, `article`,
+reading which page is open from live session state —
+`apps.browser.openSiteId` — rather than `view.params`, matching the
+`state:`-source convention Shop's cart already established). `SITE_DEFS`
+(`defs.computer.js`) is five authored sites — a news site, three
+skill-tutorial sites (cooking/fitness/tech, each carrying an
+`ADD_SKILL_XP` effect), and one adult site, AfterHours, gated by
+`requiresContentFlag: 'mature'`.
+
+**Content is authored, not LLM-generated, in this pass.** The plan's
+fuller design — pages generated at navigation and cached in a new
+`kv.gen` folder via a `generateAndCache` helper, so a page is stable on
+re-read and only paid for once — is real scope, deliberately deferred
+rather than faked with a placeholder call. `SITE_DEFS[id].body` is a
+static string for now; swapping specific sites over to generated content
+later doesn't change anything about `visitSite`/`doBrowserVisit` or the
+`article` renderer, only where `body` comes from.
+
+**Content-flag gating is genuinely two-layered, not just a UI nicety.**
+`render.computer.js`'s new `filterByContentFlags` hides any
+`catalog`/`list` row whose `requiresContentFlag` isn't currently on
+*before* it's ever drawn — so a gated site doesn't appear and then
+refuse, it simply isn't there. `computer.js`'s `visitSite` independently
+re-checks the same flag as the authoritative gate for anything that
+reaches it another way (a future free-text path, an NPC-suggested link,
+etc. — P5's classifyIntent will eventually route through here too). Both
+fall back to `CONTENT_CONFIG.contentFlags` — the exact fallback P0's
+prompt-side `buildContentSection` already uses, so "is mature content on"
+means the same thing everywhere in the codebase now, not three slightly
+different checks.
+
+**Visiting a site applies its `effects` through the same trusted-producer
+`applyEffects` path as any `ACTION_DEFS` entry** (`doBrowserVisit`,
+`UI.COMPUTER`) — a tutorial site's `ADD_SKILL_XP` and AfterHours'
+`ADJUST_NEED` lines are not a special case, just effects attached to
+different content.
+
+**Verification performed**: with default content flags (`mature: true`
+out of the box, per `CONTENT_CONFIG` — "not gated by design"), the home
+listing correctly showed all five sites including AfterHours. Visiting
+Chef's Corner correctly awarded exactly 6 cooking XP and recorded a
+`{day, tick, siteId, category:'tutorial', private:false}` history entry.
+Visiting AfterHours correctly applied its need effects net of the one
+tick of natural decay every visit costs — mood `+0.1` effect minus
+`0.02`/tick decay landed at exactly `+0.08`; energy `-5` effect minus
+`2`/tick decay landed at exactly `-7` — and recorded its history entry
+with `category:'adult', private:true`. Flipping `contentFlags.mature` to
+`false` correctly removed AfterHours from the listing *and* made a direct
+`visitSite('afterhours')` call fail with "This content is disabled in
+your settings" — both layers of the gate independently verified.
