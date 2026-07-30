@@ -1,0 +1,10 @@
+$meta
+  title = Slice of Life
+  description = An apartment living sim. You're one of several roommates sharing a four-bedroom apartment. Drama, comedy, romance, and the daily grind of cohabitation.
+  tags = slice-of-life, simulation, rpg, visual-novel, drama, apartment
+  header
+    mode = minimal
+
+kv = {import:kv-plugin}
+generateText = {import:ai-text-plugin}
+generateImage = {import:text-to-image-plugin}
