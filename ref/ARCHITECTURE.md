@@ -4,9 +4,9 @@ This file tracks the implementation of the sandbox-expansion plan (computer,
 object model, items, skills, stealth, autonomy). The original design brief
 lives in `ref/Original Prompt and Response Train.txt`; the full phased plan
 this file follows lives in the plan history (chat-side), summarized per
-phase below as each lands. There is no git repo for this project, so this
-document — plus the section-header comments in each `src/*.js` file — is
-the only design record. Keep it current as phases land; don't let it drift.
+phase below as each lands. This document — plus the section-header
+comments in each `src/*.js` file and the git commit history — is the
+design record. Keep it current as phases land; don't let it drift.
 
 ## Status
 
@@ -14,7 +14,7 @@ the only design record. Keep it current as phases land; don't let it drift.
 |---|---|---|
 | P0 | **Done** | Effects engine, action registry, tone/content wiring |
 | P1 | **Done** | World object model |
-| P2 | **Partial** — see below | Items and inventory |
+| P2 | **Done** | Items and inventory |
 | P3 | Not started | Skills and progression |
 | P4 | Not started | The computer |
 | P5 | Not started | Free-action resolution pipeline |
@@ -258,79 +258,111 @@ directly without any kv or LLM dependency):
   target version). This is the scenario every existing save will actually
   hit on first load after this update, and it works end-to-end.
 
-## P2 — Items and inventory (partial: engine done, not yet wired to gameplay)
+## P2 — Items and inventory
 
-**Stopped here deliberately** to leave the game in a consistent, playable
-state (P0/P1 gameplay is unaffected by everything below — nothing new is
-exercised by any action yet). What's done and verified vs. what's left for
-the next session to pick up:
-
-**Done:**
-- `ITEM_DEFS` (58 defs — foods/ingredients, prepared meals, snacks/drinks,
-  cleaning supplies, toiletries, tools/decor/electronics/media/medication/
-  gifts, plus `_unknown` as the legacy-data fallback) and `RECIPES` (4
-  recipes: pasta, omelette, stir-fry, sandwich — each with `leaves` DSL
-  lines that dirty the stove/sink on success) in `defs.world.js`.
-  `STARTER_GROCERIES` is declared there too but **not yet wired into
-  `spawnObjectsForNewGame`** — new games do not currently start with
-  anything in the fridge/pantry.
-- `src/items.js` — stack helpers (`addStack`/`removeStack`/`stackQty`),
-  legacy-inventory-name resolution (`resolveItemDefIdByName`,
-  `normalizeLegacyInventoryEntry`, `migrateInventory`), and recipe
-  selection (`recipeAvailable`/`pickAvailableRecipe`). Added to the script
-  load order between `world.js` and `effects.js`.
+**New/changed files:**
+- `defs.world.js` gains `ITEM_DEFS` (58 defs — foods/ingredients, prepared
+  meals, snacks/drinks, cleaning supplies, toiletries, tools/decor/
+  electronics/media/medication/gifts, plus `_unknown` as the legacy-data
+  fallback), `RECIPES` (4 recipes: pasta, omelette, stir-fry, sandwich —
+  each with `leaves` DSL lines that dirty the stove/sink on success), and
+  `STARTER_GROCERIES`.
+- `src/items.js` (new) — stack helpers (`addStack`/`removeStack`/
+  `stackQty`), legacy-inventory-name resolution
+  (`resolveItemDefIdByName`/`normalizeLegacyInventoryEntry`/
+  `migrateInventory`), and recipe selection
+  (`recipeAvailable`/`pickAvailableRecipe`). Loads between `world.js` and
+  `effects.js`.
 - **`effects.js`'s object/item effect types are now fully implemented**
   (`SET_OBJECT_STATE`, `ADJUST_OBJECT_CONDITION`, `MOVE_OBJECT`,
   `MOVE_ITEM`, `CONSUME_ITEM`, `DESTROY_ITEM`, `SPAWN_ITEM` — all flip from
   P0's `implemented:false` placeholder to real `validate`/`apply` pairs).
-  This is the biggest structural change: `buildEffectContext`'s signature
-  changed from a flat `reachableIds` array to `(gameState, activeNpcIds,
-  presentNpcIds, roomObjects, carryItems)` — `roomObjects` is `{objId:
-  instance}` for the producer's current room, `carryItems` is the player's
-  inventory. `computeReachSet` now returns real object ids instead of
-  always being empty. **All three call sites were updated to match**:
-  `npc.js`'s `validateProposal` (via `context.roomObjects`/
-  `context.carryItems`, both now assembled by `assembleContext`) and
-  `applyProposal` (via live `gameState.objects`/`gameState.player.inventory`
-  — more authoritative than the context snapshot since apply happens after
-  validation), and `actions.js`'s `executeAction`.
-- `findObjectById(gameState, objId)` (EFFECTS) scans every object bucket —
-  fine at the current object count (~40), avoids a second id→bucket index
-  that could drift from the real one.
+  `buildEffectContext`'s signature changed from a flat `reachableIds`
+  array to `(gameState, activeNpcIds, presentNpcIds, roomObjects,
+  carryItems)` — `roomObjects` is `{objId: instance}` for the producer's
+  current room, `carryItems` is the player's inventory. `computeReachSet`
+  now returns real object ids, deliberately scoped to the producer's
+  current room only. All three call sites updated to match: `npc.js`'s
+  `validateProposal` (via `context.roomObjects`/`context.carryItems`, both
+  now assembled by `assembleContext`) and `applyProposal` (via live
+  `gameState.objects`/`gameState.player.inventory`), and `actions.js`'s
+  `executeAction`. `findObjectById(gameState, objId)` (EFFECTS) scans every
+  object bucket — fine at the current object count (~40).
+- **`actions.js` gained `source.kind === 'object'` support and a
+  two-step execution model.** `actionSourceMatches` now resolves an
+  object-sourced action by finding an instance of `source.objDef` in the
+  current room (`findObjectInRoom`). `executeAction` gained an optional
+  `def.prepare(ctx)` step whose result is threaded into both
+  `def.buildEffects(ctx, prepared)` and a dynamic
+  `def.narration.build(ctx, prepared)` — this is what lets `self.cook` pick
+  a recipe *once* and have the same pick determine what actually happened
+  and what gets said about it, rather than risking two independent picks
+  disagreeing. Actions that don't need this (the four other P0 verbs) are
+  untouched — they still use the static `effects`/`narration.templates`
+  shape.
+- **`self.cook` (DEFS.ACTIONS) is now object-sourced and recipe-driven.**
+  Source changed from `{kind:'room', roomIds:['kitchen']}` to
+  `{kind:'object', objDef:'stove'}`; gated by a new `hasRecipeIngredients`
+  requirement checker (backed by `pickAvailableRecipe` against the
+  kitchen's fridge+pantry contents — "Nothing to cook" is now a real,
+  reachable state, not a fallback that never fires). `prepareCook` picks
+  the recipe once; `buildCookEffects` emits `CONSUME_ITEM` lines split
+  across fridge/pantry as needed (`ingredientConsumeLines`), `SPAWN_ITEM`s
+  the full batch into inventory, immediately `CONSUME_ITEM`s one portion
+  (so clicking Cook still satisfies hunger in one action, with leftovers
+  staying in inventory when a recipe yields more than one), then applies
+  the recipe's `leaves` lines with `{stove}`/`{sink}` resolved to this
+  room's actual instance ids (`expandCookLeaveLine`). `cookNarration`
+  reports the picked recipe by name.
+- **`world.js`'s `spawnObjectsForNewGame` now seeds `STARTER_GROCERIES`**
+  into the fridge/pantry instances' `.contents` (`seedStarterGroceries`)
+  so a fresh house is cookable from day one.
+- **`state.js`: `player` 1→2 migration** registered, calling
+  `items.js`'s `migrateInventory` to normalize the legacy mixed-type
+  inventory (bare strings, `{name,qty}` objects) into real stacks;
+  unmatched names fall through to `ITEM_DEFS._unknown` with the original
+  text preserved in `meta.origName`.
+- **`render.js`'s `renderInventory` fixed to resolve stack display names
+  from `ITEM_DEFS[defId].label`** instead of the old `item.name` (which
+  the new stack shape doesn't have) — without this, every item in the
+  inventory panel would have rendered as blank/undefined. Tolerates
+  un-migrated legacy shapes too, for the window before a save's `player`
+  folder has actually run its migration.
 
-**Not done — pick up next:**
-- **`player` 1→2 migration** normalizing the mixed-type legacy inventory
-  (bare strings / `{name,qty}`) into real stacks via
-  `items.js`'s `migrateInventory`. Not wired into `state.js`'s `MIGRATIONS`
-  yet. Nothing crashes without it (old string-shaped entries just silently
-  fail to match any `defId` in `removeStack`/`stackQty`'s comparisons — a
-  harmless no-op, not an error), but existing saves' inventories stay
-  inert until this lands.
-- **`self.cook` is still the P0 version** (a flat `ADJUST_NEED` effect, no
-  ingredients, no object source) — it has not been upgraded to the
-  object-sourced, recipe-consuming action the architecture plan describes.
-  This is the natural next step: change `self.cook`'s `source` to `{kind:
-  'object', objDef:'stove'}`, add a `hasRecipeIngredients`-style requirement
-  checker backed by `pickAvailableRecipe`, and have its effects reference
-  the picked recipe's `produces`/`leaves` via `SPAWN_ITEM`/`CONSUME_ITEM`/
-  `SET_OBJECT_STATE` lines. `actionSourceMatches` (ACTIONS) does not yet
-  handle `source.kind === 'object'` at all — that needs adding alongside
-  this.
-- **`STARTER_GROCERIES` isn't seeded** — `spawnObjectsForNewGame` (WORLD)
-  needs a small addition to populate the fridge/pantry instances'
-  `.contents` from it after spawning, using the same stack shape
-  (`{defId, qty, ownerId: null, meta: {}}`).
-- Shop catalog (deriving `SHOP_CATALOG` from `ITEM_DEFS.price`/`buyQty`) —
-  planned for P4, not started.
+**A verification-tooling note worth keeping**: this browser preview pane
+snapshots `main.html` and does not re-fetch `<script src>` tags on
+navigate/reload, even across closing and reopening tabs — `fetch()` against
+the same file confirms the *disk* content is current, but the loaded page
+keeps serving whatever it first loaded. Live-testing further code changes
+against this file requires injecting a fresh `<iframe src="main.html?...">`
+and running test code inside `iframe.contentWindow` via `.eval(...)` (not
+by reading its globals as `window` properties from the parent — top-level
+`const`/`let` bindings in a classic script are lexical, not `window`
+properties; only `var`/function declarations are). This is how P2's
+post-cache-discovery verification below was actually run.
 
-**Verification performed for the completed portion**, via console tests
-against the loaded scripts: full house generation still succeeds
-(`SIM_generateHouse`, no regression from P1); a synthetic kitchen scenario
-confirmed `SET_OBJECT_STATE` correctly dirties the stove/sink, cleanliness
-correctly drops afterward (`recomputeRoomCleanliness`), `CONSUME_ITEM`
-correctly removes inventory and applies the item's `consumable` need
-deltas (2 eggs consumed → hunger +12, matching `eggs.consumable.hunger:
-6 × 2`), and the reach-set boundary correctly rejects an effect naming an
-object from a *different* room even when reachable-by-existence — the
-LLM cannot tell "wrong room" from "doesn't exist," which is the intended
-anti-hallucination property.
+**Verification performed**, via the iframe technique above, against the
+real (non-stale) code:
+- Fresh house generation seeds the fridge with `eggs×6, milk×1, cheese×1,
+  butter×1` and the pantry with `pasta_dry×2, tomato_sauce×2, rice×2,
+  bread×1`, exactly matching `STARTER_GROCERIES`.
+- `resolveAvailableActions` correctly lists `self.cook` as available once
+  the object-sourced lookup finds the stove.
+- A full `executeAction('self.cook', ...)` run (through the real
+  `writeGeneratedGameState`/`loadGameState`/kv round-trip, mocked kv):
+  picked the `pasta` recipe (first in declaration order whose ingredients
+  were on hand), correctly narrated *"You cook pasta. It smells good —
+  there's enough for leftovers,"* restored hunger from 80 to the 100 cap,
+  left `meal_pasta×1` in inventory (produced 2, ate 1), decremented
+  `pasta_dry`/`tomato_sauce` in the pantry by 1 each while leaving
+  `rice`/`bread` and the entire fridge untouched, and correctly set the
+  stove's `burner` to `crusty` and the sink's `dishes` to `many` per the
+  recipe's `leaves` lines.
+- `migrateInventory` on a synthetic legacy array (`['pizza', {name:'eggs',
+  qty:3}, {name:'made up thing', qty:1}]`) correctly resolved to
+  `frozen_pizza`, `eggs`, and `_unknown` (with `origName` preserved) — no
+  data silently dropped.
+- `render(currentGameState, ...)` ran with no error against this state, and
+  the inventory panel's DOM text correctly read "Pasta" (resolved via
+  `ITEM_DEFS.meal_pasta.label`) instead of the blank/`undefined` the old
+  `item.name` lookup would have produced against the new stack shape.

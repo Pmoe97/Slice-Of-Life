@@ -21,12 +21,23 @@ function resolveAvailableActions(gameState) {
 function actionSourceMatches(def, ctx) {
   if (def.source.kind === 'room') return def.source.roomIds.includes(ctx.gameState.player.location);
   if (def.source.kind === 'self') return true;
-  return false; // 'object'/'npc'/'item'/'app' sources arrive in later phases
+  if (def.source.kind === 'object') return !!findObjectInRoom(ctx, def.source.objDef);
+  return false; // 'npc'/'item'/'app' sources arrive in later phases
 }
 
 function buildActionContext(gameState) {
   const roomId = gameState.player.location;
-  return { gameState, presentNpcIds: getPresentNpcIds(gameState.npcs, roomId), roomId };
+  const roomObjects = (gameState.objects && gameState.objects[`room_${roomId}`]) || {};
+  return { gameState, presentNpcIds: getPresentNpcIds(gameState.npcs, roomId), roomId, roomObjects };
+}
+
+// Find the (first) instance of a given OBJECT_DEFS id in the current room
+// — used both for source:'object' availability and by action-specific
+// prepare()/buildEffects() logic (e.g. self.cook finding the stove/fridge/
+// pantry it needs). Rooms never hold two instances of the same def today,
+// so "first" is unambiguous.
+function findObjectInRoom(ctx, defId) {
+  return Object.values(ctx.roomObjects).find(o => o.defId === defId) || null;
 }
 
 // --- Requirement checking (mirrors SIM's CAST_REQUIREMENT_CHECKERS: a
@@ -45,10 +56,19 @@ function checkRequirements(def, ctx) {
 
 // --- executeAction: the single chokepoint for a registered verb.
 // Decomposed into named steps to respect the 40-line-per-function
-// convention. Applies def.effects directly via applyEffects, bypassing
+// convention. Applies effects directly via applyEffects, bypassing
 // validateEffects — this is the trusted-producer path (see EFFECTS' file
-// header): the effect list is config-authored, not user input, so the
-// LLM-facing magnitude caps don't apply to it. ---
+// header): the effect list is config-authored (even when computed at
+// runtime by buildEffects), not user input, so the LLM-facing magnitude
+// caps don't apply to it.
+//
+// `def.prepare(ctx)` (optional) computes shared runtime data ONCE — e.g.
+// self.cook picking which recipe is actually available — and passes the
+// result to both `buildEffects` and a dynamic narration builder, so the
+// same recipe pick can't disagree between what happened and what got
+// said about it. Actions that don't need this (the four simple ones)
+// leave `prepare`/`buildEffects` unset and keep using the static
+// `effects`/`narration.templates` shape from P0. ---
 async function executeAction(actionId, gameState) {
   const def = ACTION_DEFS[actionId];
   if (!def) return { ok: false, reason: 'Unknown action.' };
@@ -57,19 +77,21 @@ async function executeAction(actionId, gameState) {
   const check = checkRequirements(def, ctx);
   if (!check.ok) return { ok: false, reason: check.reason, ticksSpent: 0 };
 
-  const effects = (def.effects || []).map(line => parseEffectDSL(line)[0]).filter(Boolean);
-  const roomObjects = (gameState.objects && gameState.objects[`room_${ctx.roomId}`]) || {};
-  const effCtx = buildEffectContext(gameState, [], ctx.presentNpcIds, roomObjects, gameState.player.inventory || []);
+  const prepared = def.prepare ? def.prepare(ctx) : null;
+  const effectLines = def.buildEffects ? def.buildEffects(ctx, prepared) : (def.effects || []);
+  const effects = effectLines.map(line => parseEffectDSL(line)[0]).filter(Boolean);
+  const effCtx = buildEffectContext(gameState, [], ctx.presentNpcIds, ctx.roomObjects, gameState.player.inventory || []);
   applyEffects(effects, effCtx);
 
   const ticks = def.timeCost?.base ?? 1;
   await advanceAndResolve(ticks);
   gameState.player = decayPlayerNeeds(gameState.player, ticks);
 
-  return { ok: true, ticksSpent: ticks, narration: narrateAction(def) };
+  return { ok: true, ticksSpent: ticks, narration: narrateAction(def, ctx, prepared) };
 }
 
-function narrateAction(def) {
+function narrateAction(def, ctx, prepared) {
+  if (def.narration?.mode === 'dynamic' && def.narration.build) return def.narration.build(ctx, prepared);
   const templates = def.narration?.templates || ['You do it.'];
   return templates[Math.floor(Math.random() * templates.length)];
 }

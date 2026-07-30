@@ -221,10 +221,20 @@ function renderInventory(gs) {
   const tpl = document.getElementById('tpl-inv-item');
   for (const item of inv) {
     const node = tpl.content.cloneNode(true);
-    node.querySelector('.inv-name').textContent = typeof item === 'string' ? item : item.name;
+    node.querySelector('.inv-name').textContent = inventoryDisplayName(item);
     node.querySelector('.inv-qty').textContent = item.qty > 1 ? `×${item.qty}` : '';
     container.appendChild(node);
   }
+}
+
+// Resolves a stack's display name from ITEM_DEFS (ITEMS section). Also
+// tolerates un-migrated legacy shapes (bare strings, {name,qty}) so this
+// keeps working during the window before a save's `player` folder has
+// actually run its 1->2 migration.
+function inventoryDisplayName(item) {
+  if (typeof item === 'string') return item;
+  if (item.defId) return ITEM_DEFS[item.defId]?.label || item.meta?.origName || item.defId;
+  return item.name || 'Unknown item';
 }
 
 // --- Deliveries ---

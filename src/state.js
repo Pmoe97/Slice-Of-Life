@@ -25,7 +25,7 @@ function assert(cond, msg, context) {
 // --- Folder versions (independent migration) ---
 const FOLDER_VERSIONS = {
   meta: 1,
-  player: 1,
+  player: 2,
   world: 2,
   npcs: 1,
   images: 1,
@@ -38,7 +38,15 @@ const MIGRATIONS = {
   meta: [
     // { from: 0, to: 1, fn: (state) => { ... } }
   ],
-  player: [],
+  player: [
+    // player 1->2 (ITEMS section): inventory was mixed-type — bare strings
+    // from very early code, {name,qty} objects from placeDelivery. Real
+    // stacks are {defId,qty,ownerId,meta}; unmatched legacy names fall
+    // through to ITEM_DEFS._unknown with the original text preserved in
+    // meta.origName, so no save loses data even if the name doesn't match
+    // anything (see ITEMS' migrateInventory/resolveItemDefIdByName).
+    { from: 1, to: 2, fn: (player) => ({ ...player, inventory: migrateInventory(player.inventory) }) },
+  ],
   world: [
     // world 1->2 (WORLD section): rooms[].objects was a spec'd field that
     // was initialized to [] and never read or written by anything — real

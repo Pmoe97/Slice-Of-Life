@@ -64,9 +64,24 @@ function spawnObjectsForNewGame(seed, npcs) {
       if (inst) objects[bucket][inst.id] = inst;
     });
   }
+  seedStarterGroceries(objects);
   objects['carry_player'] = {};
   for (const npcId of Object.keys(npcs)) objects[`carry_${npcId}`] = {};
   return objects;
+}
+
+// STARTER_GROCERIES (DEFS.WORLD) into the fridge/pantry instances' own
+// .contents, so a fresh house is cookable on day one — matches the
+// existing "the house has a past before the player's first turn"
+// convention (SIM backdates castWeb shared-history beats the same way).
+function seedStarterGroceries(objects) {
+  const kitchen = objects['room_kitchen'];
+  if (!kitchen) return;
+  for (const [defId, groceries] of Object.entries(STARTER_GROCERIES)) {
+    const obj = Object.values(kitchen).find(o => o.defId === defId);
+    if (!obj) continue;
+    obj.contents = groceries.map(g => ({ defId: g.defId, qty: g.qty, ownerId: null, meta: {} }));
+  }
 }
 
 // Lazy-spawn a single bucket that's missing or empty in kv — the path both
