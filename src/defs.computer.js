@@ -14,8 +14,8 @@ const APP_DEFS = {
     id: 'work', label: 'WorkHub', category: 'productivity', requires: [],
     entryScreen: 'dash',
     screens: {
-      dash: { renderer: 'dashboard', panels: ['job.summary', 'job.backlog', 'job.earnings'] },
-      board: { renderer: 'catalog', source: 'JOB_DEFS', rowAction: 'work.apply', rowActionLabel: 'Apply' },
+      dash: { label: 'Dashboard', renderer: 'dashboard', panels: ['job.summary', 'job.backlog', 'job.earnings'] },
+      board: { label: 'Job Board', renderer: 'catalog', source: 'JOB_DEFS', rowAction: 'work.apply', rowActionLabel: 'Apply' },
     },
   },
   // "Nile" — an unsubtle Amazon knockoff. Everything ships next-day
@@ -27,9 +27,9 @@ const APP_DEFS = {
     id: 'shop', label: 'Nile', category: 'shopping', requires: [],
     entryScreen: 'browse',
     screens: {
-      browse: { renderer: 'catalog', source: 'SHOP_CATALOG_LIST', rowAction: 'shop.add-to-cart', rowActionLabel: 'Add to Cart' },
+      browse: { label: 'Browse', renderer: 'catalog', source: 'SHOP_CATALOG_LIST', rowAction: 'shop.add-to-cart', rowActionLabel: 'Add to Cart' },
       cart: {
-        renderer: 'list', source: 'state:apps.shop.cart', emptyText: 'Your cart is empty.',
+        label: 'Cart', renderer: 'list', source: 'state:apps.shop.cart', emptyText: 'Your cart is empty.',
         labelFn: (row) => `${ITEM_DEFS[row.defId]?.label || row.defId} × ${row.units} — $${(ITEM_DEFS[row.defId]?.price || 0) * row.units}`,
         rowAction: 'shop.remove-from-cart', rowActionLabel: 'Remove',
         footerAction: 'shop.checkout', footerActionLabel: 'Checkout',
@@ -40,8 +40,23 @@ const APP_DEFS = {
     id: 'browser', label: 'Browser', category: 'web', requires: [],
     entryScreen: 'home',
     screens: {
-      home: { renderer: 'catalog', source: 'SITE_DEFS_LIST', rowAction: 'browser.visit', rowActionLabel: 'Visit' },
-      site: { renderer: 'article' },
+      home: { label: 'Home', renderer: 'catalog', source: 'SITE_DEFS_LIST', rowAction: 'browser.visit', rowActionLabel: 'Visit' },
+      site: { label: 'Page', renderer: 'article', hideFromNav: true },
+    },
+  },
+  // Paid, multi-lesson courses — distinct from Browser's free one-off
+  // tutorial sites. A course is a real commitment: money up front, several
+  // timed lessons to actually finish it.
+  classes: {
+    id: 'classes', label: 'EduStream', category: 'education', requires: [],
+    entryScreen: 'catalog',
+    screens: {
+      catalog: { label: 'Catalog', renderer: 'catalog', source: 'COURSE_DEFS_LIST', rowAction: 'classes.enroll', rowActionLabel: 'Enroll' },
+      enrolled: {
+        label: 'My Courses', renderer: 'list', source: 'state:apps.classes.enrolled', emptyText: 'Not enrolled in anything.',
+        labelFn: (row) => `${COURSE_DEFS[row.courseId]?.label} — ${row.progress}/${COURSE_DEFS[row.courseId]?.lessons} lessons`,
+        rowAction: 'classes.attend-lesson', rowActionLabel: 'Attend Lesson',
+      },
     },
   },
 };
@@ -107,5 +122,28 @@ const SITE_DEFS = {
   },
 };
 const SITE_DEFS_LIST = Object.values(SITE_DEFS);
+
+// --- Courses: paid, multi-lesson, real commitments. `requiresLevel` gates
+// enrollment (the same skillLevel check JOB_DEFS' requiredSkills uses),
+// not attendance — once enrolled you can always finish what you started. ---
+const COURSE_DEFS = {
+  knife_skills_101: {
+    id: 'knife_skills_101', label: 'Knife Skills 101', skillId: 'cooking',
+    cost: 60, lessons: 4, xpPerLesson: 15, ticksPerLesson: 2, requiresLevel: 0,
+  },
+  intro_to_scripting: {
+    id: 'intro_to_scripting', label: 'Intro to Scripting', skillId: 'tech',
+    cost: 90, lessons: 5, xpPerLesson: 15, ticksPerLesson: 2, requiresLevel: 0,
+  },
+  strength_fundamentals: {
+    id: 'strength_fundamentals', label: 'Strength Fundamentals', skillId: 'fitness',
+    cost: 75, lessons: 4, xpPerLesson: 15, ticksPerLesson: 2, requiresLevel: 0,
+  },
+  advanced_patisserie: {
+    id: 'advanced_patisserie', label: 'Advanced Patisserie', skillId: 'cooking',
+    cost: 150, lessons: 6, xpPerLesson: 20, ticksPerLesson: 3, requiresLevel: 3,
+  },
+};
+const COURSE_DEFS_LIST = Object.values(COURSE_DEFS);
 
 // ===== /SECTION: DEFS.COMPUTER =====

@@ -116,4 +116,32 @@ async function doBrowserVisit(siteId) {
   }
 }
 
+async function doClassesEnroll(courseId) {
+  if (!courseId) return;
+  const result = enrollInCourse(currentGameState, courseId);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  addLogEntry('system', `Enrolled in ${result.course.label} for $${result.course.cost}.`);
+  switchScreen(currentGameState, 'enrolled');
+  renderComputerScreen(currentGameState);
+  await saveAtBoundary('classes-enroll', currentGameState);
+}
+
+async function doAttendLesson(courseId) {
+  if (!courseId) return;
+  showLoading();
+  try {
+    const result = attendLesson(currentGameState, courseId);
+    if (!result.ok) { addLogEntry('system', result.reason); return; }
+    await advanceAndResolve(result.ticks);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, result.ticks);
+    if (result.completed) addLogEntry('narration', `You finish ${result.course.label}. Certificate unlocked, for whatever that's worth.`);
+    else addLogEntry('narration', `You attend a lesson in ${result.course.label}. +${result.xpGain} ${result.course.skillId} XP.`);
+    renderComputerScreen(currentGameState);
+    render(currentGameState, currentSceneState);
+    await saveAtBoundary('classes-lesson', currentGameState);
+  } finally {
+    hideLoading();
+  }
+}
+
 // ===== /SECTION: UI.COMPUTER =====

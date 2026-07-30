@@ -20,6 +20,7 @@ function defaultComputerState() {
       work: { jobId: null, employed: false, todayBlocks: 0, todayEarned: 0, reputation: 0, backlog: [], strikes: 0, lastPayDay: 0 },
       shop: { cart: [], wishlist: [] },
       browser: { openSiteId: null, history: [] },
+      classes: { enrolled: [], completed: [] },
     },
   };
 }
@@ -209,6 +210,45 @@ function visitSite(gameState, siteId) {
     siteId, category: site.category, private: site.category === 'adult',
   });
   return { ok: true, site };
+}
+
+// --- Classes app ---
+// Enrolling is the commitment (money, gated by skill level like a job
+// application); attending lessons is the payoff, one timed lesson at a
+// time, until progress reaches the course's lesson count.
+
+function enrollInCourse(gameState, courseId) {
+  const course = COURSE_DEFS[courseId];
+  if (!course) return { ok: false, reason: 'No such course.' };
+  const classes = gameState.world.computer.apps.classes;
+  if (classes.enrolled.some(e => e.courseId === courseId) || classes.completed.includes(courseId)) {
+    return { ok: false, reason: 'Already enrolled or completed.' };
+  }
+  if (skillLevel(gameState.player, course.skillId) < course.requiresLevel) {
+    return { ok: false, reason: `Requires ${course.skillId} level ${course.requiresLevel}.` };
+  }
+  if (gameState.player.money < course.cost) return { ok: false, reason: `Can't afford $${course.cost}.` };
+  gameState.player.money -= course.cost;
+  classes.enrolled.push({ courseId, progress: 0 });
+  return { ok: true, course };
+}
+
+function attendLesson(gameState, courseId) {
+  const course = COURSE_DEFS[courseId];
+  const classes = gameState.world.computer.apps.classes;
+  const enrollment = classes.enrolled.find(e => e.courseId === courseId);
+  if (!course || !enrollment) return { ok: false, reason: 'Not enrolled in that.' };
+
+  enrollment.progress += 1;
+  gameState.player.skills = gameState.player.skills || {};
+  gameState.player.skills[course.skillId] = (gameState.player.skills[course.skillId] || 0) + course.xpPerLesson;
+
+  const completed = enrollment.progress >= course.lessons;
+  if (completed) {
+    classes.enrolled = classes.enrolled.filter(e => e.courseId !== courseId);
+    classes.completed.push(courseId);
+  }
+  return { ok: true, course, xpGain: course.xpPerLesson, completed, ticks: course.ticksPerLesson };
 }
 
 // ===== /SECTION: COMPUTER =====

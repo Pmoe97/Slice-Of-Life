@@ -15,12 +15,14 @@ function renderComputerScreen(gs) {
   if (!root) return;
   renderComputerChrome(gs);
 
+  const view = gs.world.computer.view;
+  const app = APP_DEFS[view.appId];
+  renderScreenNav(gs, app);
+
   const body = document.getElementById('cs-body');
   if (!body) return;
   body.innerHTML = '';
 
-  const view = gs.world.computer.view;
-  const app = APP_DEFS[view.appId];
   if (!app) { body.innerHTML = '<p class="dim">Pick an app above.</p>'; return; }
   const screen = app.screens[view.screenId];
   if (!screen) { body.innerHTML = '<p class="dim">Unknown screen.</p>'; return; }
@@ -28,6 +30,31 @@ function renderComputerScreen(gs) {
   const renderer = COMPUTER_RENDERERS[screen.renderer];
   if (renderer) renderer(body, gs, app, screen);
   else body.innerHTML = `<p class="dim">No renderer for "${screen.renderer}".</p>`;
+}
+
+// A small sub-nav across the current app's own screens (Dashboard | Job
+// Board, Browse | Cart, ...) — separate from cs-tabs, which switches
+// between apps. Without this a screen reached only via a row action (the
+// job board, a cart) had no way back except closing the whole computer;
+// screens marked `hideFromNav` (e.g. Browser's single-article `site`
+// screen, reached only via a Visit click) are still real screens, just
+// not something you'd jump to directly.
+function renderScreenNav(gs, app) {
+  const nav = document.getElementById('cs-screennav');
+  if (!nav) return;
+  nav.innerHTML = '';
+  if (!app) return;
+  const entries = Object.entries(app.screens).filter(([, s]) => !s.hideFromNav);
+  if (entries.length < 2) return;
+  for (const [screenId, screen] of entries) {
+    const btn = document.createElement('button');
+    btn.className = 'cs-screennav-btn';
+    btn.setAttribute('data-action', 'computer.open-screen');
+    btn.setAttribute('data-screen', screenId);
+    if (gs.world.computer.view.screenId === screenId) btn.setAttribute('data-current', '');
+    btn.textContent = screen.label || screenId;
+    nav.appendChild(btn);
+  }
 }
 
 function renderComputerChrome(gs) {
@@ -127,7 +154,7 @@ const DASHBOARD_PANELS = {
 // declarations are), so a bare global-property lookup silently returns
 // undefined for every data registry in this codebase — this cost real
 // debugging time to find; see ARCHITECTURE.md's P4 notes.
-const CATALOG_SOURCES = { JOB_DEFS, SHOP_CATALOG_LIST, SITE_DEFS_LIST };
+const CATALOG_SOURCES = { JOB_DEFS, SHOP_CATALOG_LIST, SITE_DEFS_LIST, COURSE_DEFS_LIST };
 
 function renderCatalog(body, gs, app, screen) {
   const source = CATALOG_SOURCES[screen.source];
@@ -138,7 +165,10 @@ function renderCatalog(body, gs, app, screen) {
   for (const row of rows) {
     const item = document.createElement('div');
     item.className = 'cs-catalog-row';
-    const price = row.payPerBlock != null ? `$${row.payPerBlock}/block` : (row.price != null ? `$${row.price}` : '');
+    const price = row.payPerBlock != null ? `$${row.payPerBlock}/block`
+      : row.price != null ? `$${row.price}`
+      : row.cost != null ? `$${row.cost}`
+      : '';
     item.innerHTML = `<span class="cs-catalog-title">${row.title || row.label}</span><span class="dim tiny">${price}</span>`;
     const btn = document.createElement('button');
     btn.className = 'btn tiny';

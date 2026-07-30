@@ -645,3 +645,43 @@ with `category:'adult', private:true`. Flipping `contentFlags.mature` to
 `false` correctly removed AfterHours from the listing *and* made a direct
 `visitSite('afterhours')` call fail with "This content is disabled in
 your settings" — both layers of the gate independently verified.
+
+### Screen-nav fix (applies to every app, not new scope of its own)
+
+Found while building Classes: there was no way back from a screen reached
+only via a row action — Work's job board, once opened, had no path back
+to the dashboard except closing the whole computer. Fixed generically
+rather than per-app: `render.computer.js`'s new `renderScreenNav(gs, app)`
+draws a small sub-nav (`#cs-screennav`, distinct from `#cs-tabs`, which
+switches between *apps*) listing the current app's own screens, using a
+new `label` field every screen definition now carries. A screen can opt
+out with `hideFromNav: true` — Browser's `site` screen uses this (you
+only ever reach it via a Visit click, and its own explicit "Back" button
+already covers the return path); the nav renders nothing at all when an
+app has fewer than two navigable screens, so Work/Shop/Browser/Classes
+all got a working way back for free once this landed once.
+
+### Classes (EduStream)
+
+Paid, multi-lesson courses — distinct from Browser's free one-off
+tutorial sites, and a real commitment: `COURSE_DEFS` (`defs.computer.js`,
+4 courses across cooking/tech/fitness, one skill-gated at level 3) costs
+money up front to enroll (skill-level-gated the same way `JOB_DEFS.
+requiredSkills` gates job applications), then several timed lessons
+(`computer.js`'s `attendLesson`) to actually finish. `catalog` (over the
+new `COURSE_DEFS_LIST`) handles the enrollment screen; `list` (over
+`state:apps.classes.enrolled`) handles progress and "Attend Lesson",
+reusing both generic renderers from Shop/Browser with zero new render
+code beyond a `.cost` fallback added to `catalog`'s price display (course
+defs use `cost`, not `price`/`payPerBlock`).
+
+**Verified**: screen-nav correctly listed both screens for all four apps
+that have more than one, and correctly rendered empty for Browser's home
+(since `site` is the only other screen and it's hidden). Enrolling
+charged exactly the course's `cost` and auto-navigated to "My Courses".
+Attending all 4 lessons of Knife Skills 101 correctly incremented
+progress 1→2→3→4, moved the course from `enrolled` to `completed` on the
+4th, and awarded exactly `60` cooking XP total (`4 × 15`). Re-enrolling in
+a completed course and enrolling in a level-gated course the player
+doesn't qualify for both correctly refused with the exact expected
+reasons.

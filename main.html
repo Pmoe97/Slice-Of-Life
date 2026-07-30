@@ -282,6 +282,24 @@ body {
 }
 .cs-tab:hover { background: var(--color-surface-hover); }
 .cs-tab[data-current] { background: var(--color-accent-dim); border-color: var(--color-accent); }
+
+.cs-screennav {
+  display: flex; gap: var(--space-1); flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+.cs-screennav:empty { display: none; }
+.cs-screennav-btn {
+  background: none; border: none;
+  color: var(--color-text-dim);
+  font-size: var(--fs-xs);
+  text-transform: uppercase; letter-spacing: 0.05em;
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+}
+.cs-screennav-btn:hover { color: var(--color-text); }
+.cs-screennav-btn[data-current] { color: var(--color-accent); font-weight: 700; }
+
 .cs-body { flex: 1; overflow-y: auto; padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
 
 .cs-panel {
@@ -643,6 +661,7 @@ body {
         <nav class="cs-tabs" id="cs-tabs"></nav>
         <button class="btn btn-secondary tiny" data-action="computer.close">Close</button>
       </div>
+      <nav class="cs-screennav" id="cs-screennav"></nav>
       <div class="cs-body" id="cs-body"></div>
     </section>
   </main>

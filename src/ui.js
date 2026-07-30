@@ -370,6 +370,12 @@ async function handleAction(action, npcId, extra) {
     case 'browser.visit':
       await doBrowserVisit(extra?.rowId);
       break;
+    case 'classes.enroll':
+      await doClassesEnroll(extra?.rowId);
+      break;
+    case 'classes.attend-lesson':
+      await doAttendLesson(extra?.rowId);
+      break;
     case 'talk':
       if (npcId) await doTalk(npcId);
       break;
