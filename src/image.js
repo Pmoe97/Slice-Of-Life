@@ -29,24 +29,20 @@ function phaseLighting(phase) {
 }
 
 // --- Build image prompt ---
-function buildImagePrompt(roomId, phase, activeNpcs) {
+// `roomObjects` (optional, WORLD's bucket for this room) drives the
+// room-specific detail sentence from each object def's imagePhrase — real
+// furniture the player can act on, instead of a fixed per-roomType string
+// that never reflected what was actually there. Falls back to the old
+// generic phrasing when objects aren't available (e.g. a caller that
+// hasn't loaded WORLD state), so this stays non-breaking.
+function buildImagePrompt(roomId, phase, activeNpcs, roomObjects) {
   const room = ROOMS[roomId];
   const roomName = String(room?.name || roomId);
   const roomType = room?.type || 'common';
   const light = phaseLighting(phase);
 
   let prompt = `Interior of a ${roomType === 'bedroom' ? 'cozy bedroom' : roomName.toLowerCase()} in a shared apartment, ${light}. `;
-
-  // Room-specific details
-  if (roomType === 'bedroom') {
-    prompt += 'Single bed, desk, wardrobe, personal items. ';
-  } else if (roomId === 'kitchen') {
-    prompt += 'Counters, stove, fridge, small table. Dishes, mugs. ';
-  } else if (roomId === 'living_room') {
-    prompt += 'Sofa, coffee table, TV, bookshelf. Lived-in but comfortable. ';
-  } else if (roomId === 'bathroom') {
-    prompt += 'Sink, mirror, shower. Tiles, towels. ';
-  }
+  prompt += roomObjectsPhrase(roomObjects) || fallbackRoomPhrase(roomId, roomType);
 
   // Character layers
   if (activeNpcs && activeNpcs.length > 0) {
@@ -61,13 +57,31 @@ function buildImagePrompt(roomId, phase, activeNpcs) {
   return prompt;
 }
 
+function roomObjectsPhrase(roomObjects) {
+  if (!roomObjects) return null;
+  const phrases = Object.values(roomObjects)
+    .map(obj => OBJECT_DEFS[obj.defId]?.imagePhrase)
+    .filter(Boolean);
+  return phrases.length > 0 ? `${phrases.join(', ')}. ` : null;
+}
+
+// Only reached when no WORLD object bucket was passed in — kept as a
+// fallback so this function never regresses to producing an empty prompt.
+function fallbackRoomPhrase(roomId, roomType) {
+  if (roomType === 'bedroom') return 'Single bed, desk, wardrobe, personal items. ';
+  if (roomId === 'kitchen') return 'Counters, stove, fridge, small table. Dishes, mugs. ';
+  if (roomId === 'living_room') return 'Sofa, coffee table, TV, bookshelf. Lived-in but comfortable. ';
+  if (roomId === 'bathroom') return 'Sink, mirror, shower. Tiles, towels. ';
+  return '';
+}
+
 function buildCharacterPrompt(npc, expression, pose) {
   const v = npc.bible.visual || 'a young adult';
   return `${v}, ${expression || 'neutral expression'}, ${pose || 'standing casually'}, anime-inspired illustration style, full body, clean background, character sheet pose, warm lighting.`;
 }
 
 // --- Generate or retrieve cached background ---
-async function getSceneImage(roomId, phase, activeNpcs) {
+async function getSceneImage(roomId, phase, activeNpcs, roomObjects) {
   const sceneKey = composeSceneKey(roomId, phase, 'normal', activeNpcs?.map(n => n.id) || []);
 
   // Check cache
@@ -78,7 +92,7 @@ async function getSceneImage(roomId, phase, activeNpcs) {
 
   // Generate new
   try {
-    const prompt = buildImagePrompt(roomId, phase, activeNpcs);
+    const prompt = buildImagePrompt(roomId, phase, activeNpcs, roomObjects);
     const result = await root.generateImage(prompt, {
       resolution: IMAGE_CACHE.resolutions.bg,
       negativePrompt: 'blurry, distorted, extra limbs, low quality',

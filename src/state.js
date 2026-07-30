@@ -26,10 +26,11 @@ function assert(cond, msg, context) {
 const FOLDER_VERSIONS = {
   meta: 1,
   player: 1,
-  world: 1,
+  world: 2,
   npcs: 1,
   images: 1,
   snapshots: 1,
+  objects: 1,
 };
 
 // --- Migration functions (per folder). Stubbed for day-one; iterate here. ---
@@ -38,10 +39,32 @@ const MIGRATIONS = {
     // { from: 0, to: 1, fn: (state) => { ... } }
   ],
   player: [],
-  world: [],
+  world: [
+    // world 1->2 (WORLD section): rooms[].objects was a spec'd field that
+    // was initialized to [] and never read or written by anything — real
+    // objects now live in the 'objects' kv folder instead. This migration
+    // just drops the dead field. The 'world' folder holds several
+    // differently-shaped keys under one migration pass (rooms/castWeb/
+    // quests/events/deliveries/rent all share this function), so it only
+    // touches entries that structurally look like a room-shell map
+    // (values with a `capacity` property) and passes everything else
+    // through untouched.
+    { from: 1, to: 2, fn: (data) => {
+      if (!data || typeof data !== 'object') return data;
+      const looksLikeRooms = Object.values(data).some(v => v && typeof v === 'object' && 'capacity' in v);
+      if (!looksLikeRooms) return data;
+      const migrated = {};
+      for (const [roomId, room] of Object.entries(data)) {
+        const { objects, ...rest } = room;
+        migrated[roomId] = rest;
+      }
+      return migrated;
+    } },
+  ],
   npcs: [],
   images: [],
   snapshots: [],
+  objects: [],
 };
 
 function migrateFolder(folder, data, fromVer, toVer) {
@@ -60,7 +83,7 @@ function migrateFolder(folder, data, fromVer, toVer) {
 // ===== KV ADAPTER =====
 // All kv access goes through here. Folders are auto-created by property access.
 
-const KVFolders = ['meta', 'player', 'world', 'npcs', 'images', 'snapshots'];
+const KVFolders = ['meta', 'player', 'world', 'npcs', 'images', 'snapshots', 'objects'];
 
 // --- Pending operation records for multi-key crash recovery ---
 async function setPendingOp(opId, description, keys) {
@@ -271,6 +294,13 @@ async function saveAtBoundary(reason, gameState) {
     for (const [id, npc] of Object.entries(gameState.npcs || {})) {
       queueWrite('npcs', id, npc);
     }
+    // Object buckets are few (~12) and small, so an unconditional write
+    // loop here is the same tradeoff the NPC loop above already makes —
+    // real dirty-tracking is worth adding once something actually mutates
+    // objects on most turns (P2 cooking, P6 stealth), not before.
+    for (const [bucket, data] of Object.entries(gameState.objects || {})) {
+      queueWrite('objects', bucket, data);
+    }
   } else {
     const meta = await root.kv.meta.get('meta') || {};
     meta.saveTimestamp = Date.now();
@@ -362,6 +392,32 @@ async function updateWorld(key, fn) {
   return await root.kv.world.get(key);
 }
 
+// ===== OBJECT ACCESSORS (WORLD section's instance data) =====
+// One kv key per placement bucket (room_<roomId> | carry_<'player'|npcId>)
+// — mirrors the 'world' folder's per-key split (rooms/castWeb/quests/...)
+// rather than one giant blob, so mutating one room's objects doesn't
+// rewrite every bucket.
+
+async function getObjectBucket(bucket) {
+  return await root.kv.objects.get(bucket);
+}
+
+async function setObjectBucket(bucket, data) {
+  return root.kv.objects.set(bucket, data);
+}
+
+async function updateObjectBucket(bucket, fn) {
+  await root.kv.objects.update(bucket, fn);
+  return await root.kv.objects.get(bucket);
+}
+
+async function getAllObjectBuckets() {
+  const keys = await root.kv.objects.keys();
+  const out = {};
+  for (const k of keys) out[k] = await root.kv.objects.get(k);
+  return out;
+}
+
 // ===== META ACCESSORS =====
 
 async function getMeta() {
@@ -449,12 +505,17 @@ async function loadGameState() {
   const deliveries = await getWorld('deliveries') || [];
   const rent = await getWorld('rent') || { total: ECONOMY.rent.total, perResident: 0, contributorCount: 0 };
 
-  return {
+  const gameState = {
     meta,
     player,
     npcs,
     world: { rooms, castWeb, quests, events, deliveries, rent },
   };
+  // Lazily spawns any bucket missing from kv (a pre-WORLD save, or a
+  // resident who moved in since the last full write) rather than needing a
+  // destructive migration — see WORLD's ensureAllObjectBuckets.
+  gameState.objects = await ensureAllObjectBuckets(gameState);
+  return gameState;
 }
 
 // --- New game: initialize fresh state ---
@@ -502,6 +563,10 @@ async function writeGeneratedGameState(gameState) {
 
   for (const [id, npc] of Object.entries(gameState.npcs)) {
     await root.kv.npcs.set(id, npc);
+  }
+
+  for (const [bucket, data] of Object.entries(gameState.objects || {})) {
+    await root.kv.objects.set(bucket, data);
   }
 
   return gameState;

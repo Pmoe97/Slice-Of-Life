@@ -13,7 +13,7 @@ the only design record. Keep it current as phases land; don't let it drift.
 | Phase | Status | What it adds |
 |---|---|---|
 | P0 | **Done** | Effects engine, action registry, tone/content wiring |
-| P1 | Not started | World object model |
+| P1 | **Done** | World object model |
 | P2 | Not started | Items and inventory |
 | P3 | Not started | Skills and progression |
 | P4 | Not started | The computer |
@@ -161,3 +161,99 @@ Full live-loop verification (kv persistence, real LLM calls, NPC schedule
 interaction with the new action chips) still needs the actual Perchance
 generator environment and hasn't been done outside it — that's a
 pre-existing constraint of this project, not something P0 introduced.
+
+## P1 — World object model
+
+**New files:**
+- `src/defs.world.js` — `OBJECT_DEFS` (28 definitions across every room
+  type: bedroom furniture instanced per-bedroom, kitchen, bathroom, living
+  room, hallway, plus a few personal-effect items — diary/guitar/jewelry_box
+  — for later stealth content) and `APARTMENT_LAYOUT` (declares initial
+  per-room placement; `ownerFrom: 'roomResident'` resolves to whichever
+  npc/player currently lives there at spawn time).
+- `src/world.js` — seeded object ids (`genObjectId`), spawning
+  (`spawnObjectsForNewGame`, `ensureObjectsForBucket`/
+  `ensureAllObjectBuckets` for lazy-spawn on pre-P1 saves), derived room
+  ownership/privacy (`roomOwnerId`/`roomPrivacy` — **not stored**, see
+  below), and cleanliness derivation (`recomputeRoomCleanliness`,
+  `refreshRoomCleanliness`).
+
+**Where objects live.** A new kv folder `objects`, one key per placement
+bucket (`room_<roomId>` | `carry_player` | `carry_<npcId>` — ~10-12 keys
+for a typical household, not hundreds), added alongside accessor functions
+in `state.js` (`getObjectBucket`/`setObjectBucket`/`updateObjectBucket`/
+`getAllObjectBuckets`) — `world.js` never touches `root.kv` directly, per
+the "state.js is the sole kv access point" invariant. `gameState.objects`
+is a new top-level key (sibling to `world`, not nested under it).
+
+**`world.rooms[id].objects` is abandoned, not filled in.** It was
+initialized to `[]` and never read or written by anything (confirmed by
+grep before starting this phase). `sim.js`'s `buildGameState` no longer
+sets it. A `world` 1→2 migration strips it from existing saves — since the
+`world` folder holds several differently-shaped keys under one migration
+pass (rooms/castWeb/quests/events/deliveries/rent), the migration function
+only touches entries that structurally look like a room-shell map (values
+with a `capacity` property) and passes everything else through untouched.
+
+**Ownership and privacy are derived, never stored** — `roomOwnerId(roomId,
+npcs)` and `roomPrivacy(roomId)` are pure functions computed on demand,
+mirroring `getPresentNpcIds`'s existing "presence is derived live from
+`npc.location`, never mirrored" pattern (SIM). This means a move-in or
+move-out can never leave a stale owner behind; there was nothing to keep in
+sync in the first place. (This simplified the original plan, which called
+for storing `ownerId`/`privacy` on `world.rooms[id]` — deriving them
+instead sidesteps a real problem: the generic per-folder migration function
+can't tell which `world` key it's being called for, so it has no reliable
+way to compute ownership, which needs `npcs` data it doesn't have access
+to.)
+
+**Cleanliness is now derived, not a fixed value set once at spawn and never
+touched again.** `OBJECT_DEFS[defId].dirtyWhen: { stateKey: { value:
+griminess0to1 } }` is a data-driven lookup — `recomputeRoomCleanliness`
+weights each object's griminess by `cleanlinessWeight` and averages. A room
+with no cleanliness-relevant objects (weight 0 across the board, e.g. the
+hallway with just a doormat and coat rack) falls back to
+`CLEANLINESS.baseline` (50, matching the old fixed starting value).
+`refreshRoomCleanliness(gameState, roomId)` is the hook later phases call
+after an effect changes an object's dirty-relevant state (P2 cooking
+dirtying a stove/sink, P6 cleaning it back up) — nothing calls it yet
+since no action mutates object state in P1.
+
+**Image prompts now reflect real room contents.** `image.js`'s
+`buildImagePrompt` takes an optional `roomObjects` param and builds the
+room-specific detail sentence from `OBJECT_DEFS[defId].imagePhrase` across
+whatever's actually in that room, replacing the old fixed per-roomType
+string (`image.js:41-49` — kept as `fallbackRoomPhrase` for callers that
+don't pass objects). `render.js`'s `renderScene` now passes
+`gs.objects[room_<roomId>]` through. Note: the scene image cache key
+(`composeSceneKey`) doesn't yet factor in object state, so a room getting
+dirtier won't by itself trigger new art — a deliberate deferral (bursting
+the image cache on every state change would be expensive to regenerate),
+not an oversight.
+
+**Verification performed for P1**, again via console tests against the
+loaded scripts (SIM_generateHouse is fully synchronous/pure, so it runs
+directly without any kv or LLM dependency):
+- Full house generation spawns object buckets for all 8 rooms + a carry
+  bucket per player/npc; kitchen's 7 objects match `APARTMENT_LAYOUT`
+  exactly; `bedroom_player`'s bed is owned by `'player'`, other furniture
+  unowned; `bedroom_1`'s resident correctly owns their bed/guitar/diary via
+  `ownerFrom: 'roomResident'`.
+- Determinism: identical seed → identical object ids; different seed →
+  different ids — confirms `genObjectId`'s seeding actually holds, the
+  same invariant `genSeededNpcId` protects for characters.
+- Fresh-object cleanliness derivation returns 100 for rooms with clean
+  objects, correctly falls back to the 50 baseline for the hallway (no
+  cleanliness-weighted objects yet); `world.rooms[id]` confirmed to no
+  longer carry the dead `objects` field.
+- **Full kv-dependent path**, exercised against an in-memory mock of the
+  Perchance kv-plugin API (get/set/update/keys/delete) simulating a
+  pre-WORLD save: wrote `world.rooms` with the legacy `objects: []` field
+  and no `objects` folder data at all, then called the real
+  `loadGameState()`. Confirmed: the dead field was stripped automatically
+  (via `loadGameState`'s existing `initStorage()` call triggering the new
+  migration), every object bucket was lazily spawned with the correct
+  contents despite never having been written, and a subsequent explicit
+  `checkAndMigrateFolder('world')` call was a correct no-op (already at
+  target version). This is the scenario every existing save will actually
+  hit on first load after this update, and it works end-to-end.

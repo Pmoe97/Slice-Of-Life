@@ -861,13 +861,23 @@ function shareKeywords(a, b) {
 function buildGameState(seed, cast, clock, droppedConstraints) {
   const { npcs, npcIds, castWeb } = cast;
 
-  // Room shell state (cleanliness/objects/lastEvent). Presence is never
-  // stored here — it's derived live from npc.location via getPresentNpcIds.
-  // NPCs' starting location was already set to their assigned bedroom in
-  // generateCast; the player starts in bedroom_player (set below).
+  // Room shell state (cleanliness/lastEvent). Presence is never stored here
+  // — it's derived live from npc.location via getPresentNpcIds, and (as of
+  // WORLD) ownership/privacy are derived the same way via roomOwnerId/
+  // roomPrivacy rather than stored, so a move-in/move-out can never leave a
+  // stale value behind. NPCs' starting location was already set to their
+  // assigned bedroom in generateCast; the player starts in bedroom_player
+  // (set below).
+  //
+  // Objects are spawned first (WORLD's spawnObjectsForNewGame) so
+  // cleanliness can be derived from them immediately rather than starting
+  // at a fixed placeholder that then never moves until something touches
+  // it — see recomputeRoomCleanliness.
+  const objects = spawnObjectsForNewGame(seed, npcs);
   const rooms = {};
   for (const roomId of ALL_ROOMS) {
-    rooms[roomId] = { capacity: ROOMS[roomId].capacity, cleanliness: 50, objects: [], lastEvent: null };
+    const bucket = objects[`room_${roomId}`];
+    rooms[roomId] = { capacity: ROOMS[roomId].capacity, cleanliness: recomputeRoomCleanliness(bucket), lastEvent: null };
   }
 
   // Seed episode logs with backdated shared-history beats
@@ -922,6 +932,7 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
       deliveries: [],
       rent,
     },
+    objects,
     droppedConstraints,
   };
 }

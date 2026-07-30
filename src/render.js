@@ -139,8 +139,13 @@ function renderScene(gs, sceneState) {
   img.setAttribute('data-loading', '');
   img.src = getPlaceholder();
 
-  // Generate scene async
-  getSceneImage(roomId, phase, activeNpcs).then(result => {
+  // Generate scene async. roomObjects (WORLD) drives the room-specific
+  // detail phrase in the prompt — note the scene cache key doesn't yet
+  // reflect object state, so a room getting dirtier won't by itself
+  // trigger new art; that's a deliberate deferral (regenerating art on
+  // every state change would be expensive), not an oversight.
+  const roomObjects = gs.objects?.[`room_${roomId}`];
+  getSceneImage(roomId, phase, activeNpcs, roomObjects).then(result => {
     if (img.getAttribute('data-scene-key') !== sceneKey) return; // scene moved on before this resolved
     if (result.url) {
       img.src = result.url;

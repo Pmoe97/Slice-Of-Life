@@ -614,6 +614,11 @@ const EFFECT_LIMITS = {
   spendTimeMax: 8,
 };
 
+// --- Room cleanliness, once WORLD derives it from object state instead of
+// the old fixed initial value. baseline is used only when a room has no
+// cleanliness-relevant objects (weight 0 across the board). ---
+const CLEANLINESS = { baseline: 50 };
+
 // --- Small numeric tuning for the registered apartment actions (ACTIONS/
 // DEFS.ACTIONS), pulled out of doCook/doWatchTV/doRelax's old inline
 // literals so nothing magic lives in the action bodies. ---
