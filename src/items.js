@@ -10,6 +10,12 @@ function stackQty(stacks, defId) {
   return (stacks || []).filter(s => s.defId === defId).reduce((sum, s) => sum + s.qty, 0);
 }
 
+// Every purchasable item, computed once at load (ITEM_DEFS is static
+// content, not runtime state) — COMPUTER's Nile app browses this list
+// directly rather than a hand-authored parallel catalog, so pricing lives
+// with the item once.
+const SHOP_CATALOG_LIST = Object.values(ITEM_DEFS).filter(d => d.id !== '_unknown' && d.price != null);
+
 // Adds qty of defId to a stack list, merging into an existing same-owner
 // stack when the def is stackable (capped at maxStack), else appending a
 // new entry. Returns a new array — never mutates the input.

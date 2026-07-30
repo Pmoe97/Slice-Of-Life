@@ -18,6 +18,7 @@ function defaultComputerState() {
     stack: [],
     apps: {
       work: { jobId: null, employed: false, todayBlocks: 0, todayEarned: 0, reputation: 0, backlog: [], strikes: 0, lastPayDay: 0 },
+      shop: { cart: [], wishlist: [] },
     },
   };
 }
@@ -125,6 +126,58 @@ function checkWorkDeadline(gameState, day) {
     return { fired: true, title, missed: incomplete };
   }
   return { fired: false, title: job.title, strikes: work.strikes, maxStrikes: job.firingStrikes, missed: incomplete };
+}
+
+// --- Nile (shop) app ---
+// Cart entries are { defId, units } — one "unit" is one click of Add to
+// Cart, costing ITEM_DEFS[defId].price and, on checkout, delivering
+// ITEM_DEFS[defId].buyQty items. Keeping "how many times you clicked" and
+// "how many items that yields" separate is what lets a $4 dozen eggs be
+// one cart line instead of a quantity-12 stack the player has to type.
+
+function addToCart(gameState, defId) {
+  const def = ITEM_DEFS[defId];
+  if (!def || def.price == null) return { ok: false, reason: 'Not sold here.' };
+  const cart = gameState.world.computer.apps.shop.cart;
+  const existing = cart.find(c => c.defId === defId);
+  if (existing) existing.units += 1;
+  else cart.push({ defId, units: 1 });
+  return { ok: true };
+}
+
+function removeFromCart(gameState, defId) {
+  const shop = gameState.world.computer.apps.shop;
+  shop.cart = shop.cart.filter(c => c.defId !== defId);
+}
+
+function cartSubtotal(cart) {
+  return cart.reduce((sum, c) => sum + (ITEM_DEFS[c.defId]?.price || 0) * c.units, 0);
+}
+
+// SPEND_MONEY covers the cart total + one flat delivery fee, and each
+// cart line becomes a world.deliveries entry. Nothing lands in inventory
+// yet — UI's processDeliveriesForDay SPAWN_ITEMs it onto the hallway
+// doormat when the ETA hits, so the player (or a quick roommate) has to
+// actually go get it.
+function checkoutCart(gameState) {
+  const shop = gameState.world.computer.apps.shop;
+  if (shop.cart.length === 0) return { ok: false, reason: 'Your cart is empty.' };
+  const total = cartSubtotal(shop.cart) + ECONOMY.deliveryFee;
+  if (gameState.player.money < total) return { ok: false, reason: `Can't afford $${total} (you have $${Math.round(gameState.player.money)}).` };
+
+  gameState.player.money -= total;
+  const etaDay = gameState.meta.clock.day + 1;
+  const deliveries = gameState.world.deliveries || (gameState.world.deliveries = []);
+  shop.cart.forEach((c, i) => {
+    const def = ITEM_DEFS[c.defId];
+    deliveries.push({
+      id: `del_${gameState.meta.clock.day}_${gameState.meta.clock.minutes}_${i}`,
+      defId: c.defId, qty: (def.buyQty || 1) * c.units,
+      status: 'ordered', etaDay, orderedDay: gameState.meta.clock.day,
+    });
+  });
+  shop.cart = [];
+  return { ok: true, total, etaDay };
 }
 
 // ===== /SECTION: COMPUTER =====

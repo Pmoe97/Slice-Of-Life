@@ -534,3 +534,60 @@ bug, not an implementation one, but worth remembering next time):
   produced strike 1, strike 2, then `fired:true` with `employed` flipping
   to `false` and the job cleared, matching `JOB_DEFS.cafe_temp.
   firingStrikes: 3`.
+
+### Nile — the shop app
+
+An unsubtle Amazon knockoff (the name's the joke), added right after
+WorkHub. `APP_DEFS.shop` has two screens: `browse` (the `catalog`
+renderer over `SHOP_CATALOG_LIST`, new in `items.js` — every `ITEM_DEFS`
+entry with a `price`, computed once at load since item content is
+static) and `cart`.
+
+**`cart` is the first screen to use a new generic renderer, `list`**
+(`render.computer.js`), added alongside a `resolveScreenSource(gs,
+screen)` helper that reads a screen's `source` two ways: a bare name
+(`'JOB_DEFS'`, `'SHOP_CATALOG_LIST'`) looks up the existing
+`CATALOG_SOURCES` registry; a `'state:apps.shop.cart'` path walks live
+into `gs.world.computer` — this is how a screen shows the player's own
+mutable session data instead of a fixed catalog, and it's now the pattern
+IM's thread list and Browser's history will reuse rather than each
+needing its own renderer. `list` also supports a `labelFn(row)` per-screen
+formatter and an optional `footerAction` button (Checkout), neither of
+which `catalog` needed.
+
+**Cart entries are `{defId, units}`, not `{defId, qty}`** — one "unit" is
+one click of Add to Cart, costing `ITEM_DEFS[defId].price` and expanding
+to `ITEM_DEFS[defId].buyQty` actual items on checkout (`computer.js`'s
+`cartSubtotal`/`checkoutCart`). This is what lets a $4 "unit" mean a dozen
+eggs without the player ever typing a quantity — keeping "how many times
+you clicked" and "how many items that yields" as two separate numbers is
+the whole trick.
+
+**Checkout doesn't touch inventory at all.** It charges
+`cartSubtotal + ECONOMY.deliveryFee` and writes one `world.deliveries`
+entry per cart line (`{defId, qty, status:'ordered', etaDay,
+orderedDay}`). **`processDeliveriesForDay`** (`ui.js`) was rewritten to
+match: instead of pushing a `{name, qty}` object straight into
+`player.inventory` (the old free-text-order behavior), it finds the
+hallway's `doormat` object and calls ITEMS' `addStack` on its `.contents`
+— "you have to go get your package, and a roommate could get to it
+first" is a direct consequence of routing delivery through a real object
+instead of a shortcut into the player's pockets.
+
+**The old free-text delivery flow is fully retired**: `showDeliveryModal`/
+`placeDelivery`/the `order-delivery`/`confirm-delivery` actions and the
+sidebar's "Order Something" button are all gone, replaced by a hint
+pointing at Nile. `render.js`'s `renderDeliveries` updated to resolve a
+delivery's display name from `ITEM_DEFS[d.defId]` instead of the deleted
+free-text `d.item` field.
+
+**Verification performed**, same fresh-iframe technique: the catalog
+correctly listed all 53 purchasable items with price; adding eggs twice
+correctly merged into one cart line at `units:2` (not two separate
+lines); the cart screen correctly rendered `"Eggs × 2 — $8"` (2 × $4) via
+`labelFn`; checkout charged exactly `$20` (`2×$4 eggs + 1×$4 dish soap +
+$8 delivery`, matching a hand-computed expected total) and produced two
+delivery records with `qty` correctly expanded through `buyQty` (2 units
+× 12 eggs/unit = 24 eggs); advancing the clock past the ETA and running
+`processDeliveriesForDay` correctly moved both stacks onto the doormat's
+`.contents` and flipped delivery status to `delivered`.

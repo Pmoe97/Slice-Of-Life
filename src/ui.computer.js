@@ -66,4 +66,29 @@ async function doWorkBlock() {
   }
 }
 
+async function doShopAddToCart(defId) {
+  if (!defId) return;
+  const result = addToCart(currentGameState, defId);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  renderComputerScreen(currentGameState);
+  await saveAtBoundary('shop-add', currentGameState);
+}
+
+async function doShopRemoveFromCart(defId) {
+  if (!defId) return;
+  removeFromCart(currentGameState, defId);
+  renderComputerScreen(currentGameState);
+  await saveAtBoundary('shop-remove', currentGameState);
+}
+
+async function doShopCheckout() {
+  const result = checkoutCart(currentGameState);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  addLogEntry('system', `Order placed on Nile: $${result.total}. Arriving on the doormat tomorrow.`);
+  switchScreen(currentGameState, 'browse');
+  renderComputerScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('shop-checkout', currentGameState);
+}
+
 // ===== /SECTION: UI.COMPUTER =====

@@ -5,7 +5,7 @@
 // app's screens are declared against rather than each app writing its own
 // DOM code.
 //
-// Only 'work' exists so far — shop/browser/classes/services/classifieds/
+// 'work' and 'shop' exist so far — browser/classes/services/classifieds/
 // im/stream/adult land in later passes, each adding one APP_DEFS entry and
 // whatever data source it needs, following this same shape.
 
@@ -16,6 +16,24 @@ const APP_DEFS = {
     screens: {
       dash: { renderer: 'dashboard', panels: ['job.summary', 'job.backlog', 'job.earnings'] },
       board: { renderer: 'catalog', source: 'JOB_DEFS', rowAction: 'work.apply', rowActionLabel: 'Apply' },
+    },
+  },
+  // "Nile" — an unsubtle Amazon knockoff. Everything ships next-day
+  // regardless of what it is, to the hallway doormat, and someone else in
+  // the apartment could get to it before you do (COMPUTER's checkoutCart
+  // + UI's processDeliveriesForDay, which SPAWN_ITEMs onto the doormat
+  // rather than teleporting straight into your inventory).
+  shop: {
+    id: 'shop', label: 'Nile', category: 'shopping', requires: [],
+    entryScreen: 'browse',
+    screens: {
+      browse: { renderer: 'catalog', source: 'SHOP_CATALOG_LIST', rowAction: 'shop.add-to-cart', rowActionLabel: 'Add to Cart' },
+      cart: {
+        renderer: 'list', source: 'state:apps.shop.cart', emptyText: 'Your cart is empty.',
+        labelFn: (row) => `${ITEM_DEFS[row.defId]?.label || row.defId} × ${row.units} — $${(ITEM_DEFS[row.defId]?.price || 0) * row.units}`,
+        rowAction: 'shop.remove-from-cart', rowActionLabel: 'Remove',
+        footerAction: 'shop.checkout', footerActionLabel: 'Checkout',
+      },
     },
   },
 };

@@ -107,17 +107,23 @@ async function processRentForDay(day) {
   }
 }
 
+// Deliveries land on the hallway doormat (WORLD/ITEMS), not straight into
+// the player's pockets — "you have to go get your package, and a
+// roommate could get to it first" is the whole point of routing this
+// through SPAWN_ITEM instead of pushing directly into player.inventory.
 function processDeliveriesForDay(day) {
   const deliveries = currentGameState.world.deliveries || [];
+  const doormat = Object.values(currentGameState.objects?.room_hallway || {}).find(o => o.defId === 'doormat');
   for (const d of deliveries) {
     if (d.status !== 'ordered' || day < d.etaDay) continue;
     d.status = 'delivered';
-    const inv = currentGameState.player.inventory || [];
-    const existing = inv.find(item => typeof item !== 'string' && item.name === d.item);
-    if (existing) existing.qty = (existing.qty || 1) + 1;
-    else inv.push({ name: d.item, qty: 1 });
-    currentGameState.player.inventory = inv;
-    addLogEntry('narration', `Your delivery has arrived: ${d.item}.`);
+    const label = ITEM_DEFS[d.defId]?.label || d.defId || 'a package';
+    if (doormat && d.defId) {
+      doormat.contents = addStack(doormat.contents, d.defId, d.qty || 1, null, {});
+      addLogEntry('narration', `A delivery has arrived: ${label}. It's waiting on the doormat.`);
+    } else {
+      addLogEntry('narration', `A delivery has arrived: ${label}.`);
+    }
   }
 }
 
@@ -352,6 +358,15 @@ async function handleAction(action, npcId, extra) {
     case 'work.apply':
       await doWorkApply(extra?.rowId);
       break;
+    case 'shop.add-to-cart':
+      await doShopAddToCart(extra?.rowId);
+      break;
+    case 'shop.remove-from-cart':
+      await doShopRemoveFromCart(extra?.rowId);
+      break;
+    case 'shop.checkout':
+      await doShopCheckout();
+      break;
     case 'talk':
       if (npcId) await doTalk(npcId);
       break;
@@ -366,9 +381,6 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'move':
       if (extra?.roomId) await doMove(extra.roomId);
-      break;
-    case 'order-delivery':
-      showDeliveryModal();
       break;
     case 'save':
       await saveGame(currentGameState);
@@ -1001,22 +1013,10 @@ function closeModal() {
   overlay.removeAttribute('data-open');
 }
 
-function showDeliveryModal() {
-  const overlay = document.getElementById('modal-overlay');
-  const title = document.getElementById('modal-title');
-  const body = document.getElementById('modal-body');
-  const actions = document.getElementById('modal-actions');
-  title.textContent = 'Order Delivery';
-  body.innerHTML = `
-    <div class="char-form">
-      <label>What do you want to order?</label>
-      <input type="text" id="delivery-input" placeholder="e.g. pizza, groceries, supplies">
-      <div class="form-hint">Delivery fee: $${ECONOMY.deliveryFee}. Arrives next day.</div>
-    </div>
-  `;
-  actions.innerHTML = '<button class="btn" data-action="confirm-delivery">Order</button><button class="btn btn-secondary" data-action="close-modal">Cancel</button>';
-  overlay.setAttribute('data-open', '');
-}
+// Free-text delivery ordering (showDeliveryModal/placeDelivery) was
+// replaced by Nile (COMPUTER's shop app) — a real priced catalog instead
+// of typing anything and getting a flat $8 fee. See defs.computer.js's
+// APP_DEFS.shop and computer.js's checkoutCart.
 
 // --- Debug panel ---
 
@@ -1120,14 +1120,6 @@ function attachEventHandlers() {
 
     // Handle modal-internal actions
     if (action === 'close-modal') { closeModal(); return; }
-    if (action === 'confirm-delivery') {
-      const input = document.getElementById('delivery-input');
-      if (input && input.value.trim()) {
-        placeDelivery(input.value.trim());
-        closeModal();
-      }
-      return;
-    }
     if (action === 'debug-close') { closeDebugPanel(); return; }
 
     // Debug toggle sections
@@ -1178,22 +1170,6 @@ function attachEventHandlers() {
       handleAction('talk', npcId);
     }
   });
-}
-
-async function placeDelivery(item) {
-  if (!currentGameState) return;
-  const delivery = {
-    id: `del_${Date.now()}`,
-    item,
-    status: 'ordered',
-    etaDay: currentGameState.meta.clock.day + 1,
-    orderedDay: currentGameState.meta.clock.day,
-  };
-  currentGameState.world.deliveries = [...(currentGameState.world.deliveries || []), delivery];
-  currentGameState.player.money -= ECONOMY.deliveryFee;
-  addLogEntry('narration', `You ordered ${item}. It should arrive tomorrow. (-$${ECONOMY.deliveryFee})`);
-  render(currentGameState, currentSceneState);
-  await saveAtBoundary('delivery', currentGameState);
 }
 
 // Boot

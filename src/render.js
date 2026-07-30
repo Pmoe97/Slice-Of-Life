@@ -253,7 +253,9 @@ function renderDeliveries(gs) {
   for (const d of deliveries) {
     const div = document.createElement('div');
     div.className = 'inv-item';
-    div.textContent = `${d.item} — ${d.status}`;
+    const label = ITEM_DEFS[d.defId]?.label || d.defId || d.item || 'a package';
+    const qty = d.qty > 1 ? ` ×${d.qty}` : '';
+    div.textContent = `${label}${qty} — ${d.status}`;
     container.appendChild(div);
   }
 }
