@@ -254,6 +254,55 @@ body {
 .log-entry[data-fresh] { animation: fade-in 0.4s ease; }
 @keyframes fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
+/* Computer screen — a third child of #main-content, gated by
+   [data-mode="computer"]. Not the modal shell: header/sidebars/footer
+   stay visible while it's open, so the clock keeps ticking and a
+   roommate can still walk in on you (see COMPUTER's file header). */
+#main-content[data-mode="computer"] .scene-container,
+#main-content[data-mode="computer"] .narration-log { display: none; }
+#computer-screen { display: none; flex-direction: column; flex: 1; overflow: hidden; }
+#main-content[data-mode="computer"] #computer-screen { display: flex; }
+
+.cs-chrome {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+.cs-clock { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-dim); white-space: nowrap; }
+.cs-tabs { display: flex; gap: var(--space-1); flex: 1; flex-wrap: wrap; }
+.cs-tab {
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--color-text);
+  cursor: pointer;
+}
+.cs-tab:hover { background: var(--color-surface-hover); }
+.cs-tab[data-current] { background: var(--color-accent-dim); border-color: var(--color-accent); }
+.cs-body { flex: 1; overflow-y: auto; padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
+
+.cs-panel {
+  padding: var(--space-3);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.cs-panel h3 { font-size: var(--fs-base); margin-bottom: var(--space-1); }
+.cs-panel .btn { margin-top: var(--space-2); }
+
+.cs-catalog { display: flex; flex-direction: column; gap: var(--space-2); }
+.cs-catalog-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.cs-catalog-title { font-size: var(--fs-sm); }
+
 /* Right sidebar content */
 .npc-card {
   padding: var(--space-2) var(--space-3);
@@ -586,6 +635,14 @@ body {
       </div>
     </div>
     <div class="narration-log" id="narration-log"></div>
+    <section id="computer-screen" aria-label="Computer">
+      <div class="cs-chrome">
+        <span class="cs-clock" id="cs-clock"></span>
+        <nav class="cs-tabs" id="cs-tabs"></nav>
+        <button class="btn btn-secondary tiny" data-action="computer.close">Close</button>
+      </div>
+      <div class="cs-body" id="cs-body"></div>
+    </section>
   </main>
 
   <!-- Right Sidebar -->
@@ -784,14 +841,16 @@ body {
 <!-- ===== SECTION: SCRIPTS ===== -->
 <!-- Load order matters (each script's top-level code may reference an
      earlier script's data at load time — e.g. DEFS.ACTIONS reading NEEDS
-     from CONFIG): CONFIG → DEFS.WORLD → DEFS.ACTIONS → STATE → SIM →
-     WORLD → ITEMS → EFFECTS → ACTIONS → SKILLS → NPC → PROMPT → LLM →
-     IMAGE → RENDER → UI → BOOT. Functions calling into a LATER script are
-     fine either way — those calls only happen at runtime, after every
-     script below has finished loading. -->
+     from CONFIG): CONFIG → DEFS.WORLD → DEFS.ACTIONS → DEFS.COMPUTER →
+     STATE → SIM → WORLD → ITEMS → EFFECTS → ACTIONS → SKILLS → COMPUTER →
+     NPC → PROMPT → LLM → IMAGE → RENDER → RENDER.COMPUTER → UI →
+     UI.COMPUTER → BOOT. Functions calling into a LATER script are fine
+     either way — those calls only happen at runtime, after every script
+     below has finished loading. -->
 <script src="src/config.js"></script>
 <script src="src/defs.world.js"></script>
 <script src="src/defs.actions.js"></script>
+<script src="src/defs.computer.js"></script>
 <script src="src/state.js"></script>
 <script src="src/sim.js"></script>
 <script src="src/world.js"></script>
@@ -799,10 +858,13 @@ body {
 <script src="src/effects.js"></script>
 <script src="src/actions.js"></script>
 <script src="src/skills.js"></script>
+<script src="src/computer.js"></script>
 <script src="src/npc.js"></script>
 <script src="src/prompt.js"></script>
 <script src="src/llm.js"></script>
 <script src="src/image.js"></script>
 <script src="src/render.js"></script>
+<script src="src/render.computer.js"></script>
 <script src="src/ui.js"></script>
+<script src="src/ui.computer.js"></script>
 <!-- ===== /SECTION: SCRIPTS ===== -->

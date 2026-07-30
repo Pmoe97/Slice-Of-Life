@@ -33,8 +33,10 @@ const ALL_ROOMS = Object.keys(ROOMS);
 const ECONOMY = {
   startingMoney: 1200,
   rent: { total: 2400, perResident: 0 }, // perResident computed at runtime
-  workPayPerBlock: 85,     // per 30-min work block
-  workEnergyCost: 8,
+  // workPayPerBlock/workEnergyCost were the old flat-rate doWork()'s
+  // numbers — superseded by DEFS.COMPUTER's JOB_DEFS (P4), which carries
+  // pay/energy cost per job rather than one flat rate. Deleted rather
+  // than left dead.
   deliveryFee: 8,
   payPeriodDays: 7,          // rent due weekly
   rentLatePenaltyMood: 0.1,  // player mood lost per day rent stays unpaid (mood is [-1,1])
@@ -629,6 +631,14 @@ const ACTION_TUNING = {
   tvMoodGain: 0.1,
   relaxMoodGain: 0.16,
   relaxEnergyGain: 5,
+};
+
+// --- Work-block pay tuning (COMPUTER's work app). Focus scales pay by how
+// rested/content the player is — a bad night or a bad mood costs money,
+// not just narration. ---
+const WORK_TUNING = {
+  minEnergyFocus: 0.4, maxEnergyFocus: 1.0,
+  minMoodFocus: 0.5, maxMoodFocus: 1.0,
 };
 
 // --- Tone / content directives. PROMPT injects these into every narrative

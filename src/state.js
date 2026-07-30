@@ -294,6 +294,7 @@ async function saveAtBoundary(reason, gameState) {
     queueWrite('world', 'deliveries', gameState.world.deliveries);
     queueWrite('world', 'quests', gameState.world.quests);
     queueWrite('world', 'rent', gameState.world.rent);
+    queueWrite('world', 'computer', gameState.world.computer || defaultComputerState());
     // kv.npcs is one key per npc (brief: "appending an episode rewrites one
     // character, not the world"). Every tick resolves every NPC's
     // location/activity/needs/mood in-memory via resolveBatch, but until
@@ -512,12 +513,16 @@ async function loadGameState() {
   const events = await getWorld('events') || [];
   const deliveries = await getWorld('deliveries') || [];
   const rent = await getWorld('rent') || { total: ECONOMY.rent.total, perResident: 0, contributorCount: 0 };
+  // A new kv key rather than a version bump — defaultComputerState()
+  // (COMPUTER) is exactly what a save from before the computer existed
+  // should read as, no transformation needed.
+  const computer = await getWorld('computer') || defaultComputerState();
 
   const gameState = {
     meta,
     player,
     npcs,
-    world: { rooms, castWeb, quests, events, deliveries, rent },
+    world: { rooms, castWeb, quests, events, deliveries, rent, computer },
   };
   // Lazily spawns any bucket missing from kv (a pre-WORLD save, or a
   // resident who moved in since the last full write) rather than needing a
@@ -568,6 +573,7 @@ async function writeGeneratedGameState(gameState) {
   await root.kv.world.set('events', gameState.world.events);
   await root.kv.world.set('deliveries', gameState.world.deliveries);
   await root.kv.world.set('rent', gameState.world.rent);
+  await root.kv.world.set('computer', gameState.world.computer || defaultComputerState());
 
   for (const [id, npc] of Object.entries(gameState.npcs)) {
     await root.kv.npcs.set(id, npc);

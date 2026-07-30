@@ -16,6 +16,12 @@ function render(gameState, sceneState) {
   renderActionChips(gameState, sceneState);
   renderNarrationLog(gameState);
   renderFooter(gameState);
+  // Harmless when #main-content isn't in computer mode (CSS keeps
+  // #computer-screen hidden either way) — always redrawing it here means
+  // every path that already calls render() keeps the computer screen in
+  // sync for free, rather than every computer action needing to remember
+  // a second render call.
+  if (gameState.world.computer) renderComputerScreen(gameState);
 }
 
 // --- Header ---
@@ -274,12 +280,14 @@ function renderActionChips(gs, sceneState) {
     if (phase === 'night' || phase === 'early_morning') {
       chips.push({ label: 'Sleep', action: 'sleep' });
     }
-    chips.push({ label: 'Work', action: 'work' });
+    // Work moved behind the computer (COMPUTER/UI.COMPUTER) — a real job
+    // with a board and a backlog, not a flat-rate button.
+    chips.push({ label: 'Use Computer', action: 'computer.use' });
   }
   // Eat/Cook/Shower/Watch TV/Relax are registered actions (ACTIONS section)
   // rather than hardcoded here — resolveAvailableActions queries
-  // ACTION_DEFS the same way the apartment and (from P4) the computer both
-  // will, instead of each surface keeping its own if-chain.
+  // ACTION_DEFS the same way the apartment and the computer both do,
+  // instead of each surface keeping its own if-chain.
   for (const avail of resolveAvailableActions(gs)) {
     if (!avail.ok) continue;
     chips.push({ label: avail.label, action: avail.actionId });

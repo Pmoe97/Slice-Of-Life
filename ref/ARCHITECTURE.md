@@ -16,7 +16,7 @@ design record. Keep it current as phases land; don't let it drift.
 | P1 | **Done** | World object model |
 | P2 | **Done** | Items and inventory |
 | P3 | **Done** | Skills and progression |
-| P4 | Not started | The computer |
+| P4 | **Partial** — see below | The computer |
 | P5 | Not started | Free-action resolution pipeline |
 | P6 | Not started | Stealth, evidence, suspicion |
 | P7 | Not started | NPC autonomy |
@@ -421,3 +421,116 @@ verification in this project now goes through that iframe pattern):
   under 0.75 (skill level 6, `timeReduction[6] = 0.70`), a consequence of
   integer tick rounding on a small base cost, not a flaw in `skillMod`
   itself — the curve values were independently verified correct above.
+
+## P4 — The computer (proving ground): screen layer + WorkHub done
+
+**Scope reminder**: the plan lists eight apps (work, shop, browser, classes,
+services, classifieds, im, stream/adult). This pass builds the screen
+layer, the generic-renderer framework everything else will reuse, and one
+fully working app — Work — as the proving ground the plan asked for. It
+exercises the object model (computer is an object), the app/screen
+registry, session persistence, skill curves, and the deterministic
+day-rollover hook, so the remaining apps are now "add an `APP_DEFS` entry
++ a data source" work rather than new infrastructure. Shop/browser/
+classes/services/classifieds/im/stream/adult are **not started**.
+
+**New files:**
+- `src/defs.computer.js` — `APP_DEFS` (just `work` so far) and `JOB_DEFS`
+  (3 jobs: café temp, remote data entry, freelance developer — the last
+  gated on `tech` skill level 3 and reading `payMultiplier` through
+  `qualitySkill`).
+- `src/computer.js` — `defaultComputerState()`, view navigation
+  (`openApp`/`switchScreen`/`closeComputer`), and the Work app's domain
+  logic: `computeFocusMultiplier` (energy × mood, clamped, via new
+  `WORK_TUNING` config), `generateDailyBacklog` (seeded off save
+  seed+day, zero LLM — matches SIM's off-screen-event convention),
+  `applyForJob`, `workOneBlock`, `checkWorkDeadline`.
+- `src/render.computer.js` — `renderComputerScreen`/`renderComputerChrome`
+  (clock + app tabs) and two generic renderers: `dashboard` (draws named
+  panels from `DASHBOARD_PANELS`, currently `job.summary`/`job.backlog`/
+  `job.earnings`) and `catalog` (a row list with a per-row action button —
+  used for the job board, and shaped to be reused by the shop later).
+  Six more renderers from the plan (list/grid/feed/article/form/chat/
+  player) don't exist yet; each app past Work will need whichever of
+  these it depends on.
+- `src/ui.computer.js` — the UI-facing wrappers
+  (`doComputerOpen`/`doComputerClose`/`doComputerOpenApp`/
+  `doComputerOpenScreen`/`doWorkApply`/`doWorkBlock`), matching UI's own
+  `doX()` convention (loading state, render, save-at-boundary).
+
+**Screen layer, not the modal shell.** `#computer-screen` is a third
+child of `#main-content` (`main.html`), shown/hidden purely via
+`#main-content[data-mode="computer"]` CSS — header, sidebars, and footer
+stay visible and functional the whole time. Opening the computer costs no
+time and calls no `advanceAndResolve`; only in-app actions with a real
+cost (`computer.work-block`) do. `render()` (RENDER) now calls
+`renderComputerScreen` unconditionally on every render — harmless when
+hidden, and it means every existing call site that already calls
+`render()` keeps the computer screen in sync for free rather than needing
+to remember a second call.
+
+**`world.computer` is a new key in the existing `world` kv folder**, not a
+version bump — `defaultComputerState()` is exactly what a save from
+before the computer existed should read as, so `getWorld('computer') ||
+defaultComputerState()` in `loadGameState` needed no migration function,
+just a default. Persisted from `writeGeneratedGameState` (new game) and
+`saveAtBoundary` (every boundary save) the same way every other `world`
+sub-key already is.
+
+**Work replaces the old flat `doWork()`** (`ui.js`, deleted): apply on the
+job board (gated by `requiredSkills`), work through a seeded daily
+backlog one block at a time, pay scaled by `payPerBlock × payMultiplier
+(qualitySkill) × focus (energy/mood)`, reputation grows per block,
+missing a deadline costs a strike via a new `processWorkDeadlineForDay`
+hook in UI's `processDayRollover`, and enough strikes ends the job. The
+"Work" chip in `bedroom_player` (`render.js`) is now "Use Computer"
+(`computer.use`), a hand-written switch case in `handleAction` (like
+`sleep`/`move`) rather than an `ACTION_DEFS` entry, since opening the
+computer is a viewpoint change with no time cost or narration, not a
+world-effecting action.
+
+**Click delegation extended**: `attachEventHandlers`'s generic handler
+(`ui.js`) now also reads `data-app`/`data-screen`/`data-row-id` off a
+clicked element and passes them through `handleAction`'s `extra` param
+(the same slot `data-room-id` → `{roomId}` already used for room clicks) —
+this is what lets `render.computer.js`'s cloned buttons work through the
+existing single click listener without a second one.
+
+**A real bug found and fixed during verification**: `renderCatalog`
+originally resolved `screen.source` (a string like `'JOB_DEFS'`) via
+`window[screen.source]`, which always returned `undefined` — top-level
+`const`/`let` bindings in a classic `<script>` are lexical, not `window`
+properties (only `var`/function declarations are; this is the same
+distinction the P2 entry's iframe-testing note above had to work around
+from the *outside* of a script, and it turns out the *code itself* needs
+to respect it too). Fixed with an explicit `CATALOG_SOURCES = { JOB_DEFS
+}` registry in `render.computer.js` instead of a bare global-property
+lookup — this is now the pattern any future `screen.source`-consuming
+renderer should follow, not `window[...]`.
+
+**Verification performed**, via the same fresh-iframe technique (values
+snapshotted with `JSON.parse(JSON.stringify(...))` before further
+mutation, after an initial test run's naive reference-capture made a
+mutated end-state look like it belonged to an earlier point — a test-code
+bug, not an implementation one, but worth remembering next time):
+- Fresh game load: `world.computer` is a pristine default (unemployed, no
+  backlog, zero reputation/strikes).
+- Opening the computer sets `data-mode="computer"` and renders the
+  WorkHub tab; the job board catalog correctly lists all three jobs with
+  price and an Apply button (post-fix).
+- Applying for a job correctly sets `jobId`/`employed`/a 4-task seeded
+  backlog/`lastPayDay`.
+- Working blocks: pay per block *decreased* each time (13→12→11→10) as
+  energy dropped (92→84→76→68) — `computeFocusMultiplier` working as
+  designed, not a bug. A 5th attempt after the 4-task backlog was already
+  complete correctly failed with `$0`/no energy cost.
+- The dashboard panels correctly reflected state after each change
+  (reputation 20%, 4/4 tasks, $46 earned).
+- **Full persistence round-trip**: after closing the computer, a fresh
+  `loadGameState()` call (through the real kv-backed path, mocked kv)
+  correctly returned the exact same work state — job, backlog, earnings,
+  reputation all intact.
+- **Firing escalation**: three consecutive missed deadlines correctly
+  produced strike 1, strike 2, then `fired:true` with `employed` flipping
+  to `false` and the job cleared, matching `JOB_DEFS.cafe_temp.
+  firingStrikes: 3`.

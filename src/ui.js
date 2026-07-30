@@ -64,6 +64,22 @@ async function processDayRollover(day) {
   await processRentForDay(day);
   processDeliveriesForDay(day);
   processQuestsForDay(day);
+  processWorkDeadlineForDay(day);
+}
+
+// COMPUTER's work app: an incomplete backlog at the deadline costs a
+// strike; enough strikes and the player is let go. Always resolved
+// (never a hard stop) — same "the house keeps living" principle as rent
+// and quests above.
+function processWorkDeadlineForDay(day) {
+  if (!currentGameState.world.computer) return;
+  const result = checkWorkDeadline(currentGameState, day);
+  if (!result) return;
+  if (result.fired) {
+    addLogEntry('system', `You've been let go from ${result.title} — ${result.missed} task(s) missed too many times.`);
+  } else {
+    addLogEntry('system', `Missed ${result.missed} task(s) at ${result.title} (strike ${result.strikes}/${result.maxStrikes}).`);
+  }
 }
 
 // Rent is a live system per the brief: a due charge posts every
@@ -318,8 +334,23 @@ async function handleAction(action, npcId, extra) {
     case 'sleep':
       await doSleep();
       break;
-    case 'work':
-      await doWork();
+    case 'computer.use':
+      await doComputerOpen();
+      break;
+    case 'computer.close':
+      await doComputerClose();
+      break;
+    case 'computer.open-app':
+      doComputerOpenApp(extra?.appId);
+      break;
+    case 'computer.open-screen':
+      doComputerOpenScreen(extra?.screenId);
+      break;
+    case 'computer.work-block':
+      await doWorkBlock();
+      break;
+    case 'work.apply':
+      await doWorkApply(extra?.rowId);
       break;
     case 'talk':
       if (npcId) await doTalk(npcId);
@@ -501,23 +532,11 @@ async function doSleep() {
   }
 }
 
-async function doWork() {
-  showLoading();
-  try {
-    const blocks = 4; // 2 hours
-    const earned = blocks * ECONOMY.workPayPerBlock;
-    await advanceAndResolve(blocks);
-    currentGameState.player.money += earned;
-    currentGameState.player.energy = Math.max(0, currentGameState.player.energy - ECONOMY.workEnergyCost * blocks);
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, blocks);
-    addLogEntry('narration', `You work for a couple hours. You earn $${earned}.`);
-    render(currentGameState, currentSceneState);
-    await saveAtBoundary('work', currentGameState);
-  } finally {
-    hideLoading();
-  }
-}
-
+// Work moved to the computer (COMPUTER/UI.COMPUTER) — a real job with a
+// board, a backlog, pay scaled by skill/focus, and deadlines, replacing
+// the old flat "click Work, get $340" button. See doComputerOpen/
+// doWorkApply/doWorkBlock and DEFS.COMPUTER's JOB_DEFS.
+//
 // Eat/Cook/Shower/Watch TV/Relax moved to ACTIONS/DEFS.ACTIONS — see
 // runRegisteredAction, dispatched from the bridge at the top of
 // handleAction above.
@@ -1120,7 +1139,14 @@ function attachEventHandlers() {
     }
 
     const npcId = target.getAttribute('data-npc');
-    handleAction(action, npcId || null);
+    // Computer screen buttons (RENDER.COMPUTER) carry which app/screen/row
+    // they target via data-* rather than data-npc — read intent, pass it
+    // through as `extra`, same pattern as data-room-id's {roomId} above.
+    const extra = {};
+    if (target.hasAttribute('data-app')) extra.appId = target.getAttribute('data-app');
+    if (target.hasAttribute('data-screen')) extra.screenId = target.getAttribute('data-screen');
+    if (target.hasAttribute('data-row-id')) extra.rowId = target.getAttribute('data-row-id');
+    handleAction(action, npcId || null, extra);
   });
 
   // Free-text input
