@@ -28,19 +28,35 @@ async function advanceAndResolve(ticks) {
   currentGameState = newState;
   appendWorldEvents(events);
 
+  // In-memory, not a kv round-trip via updateNpc: this loop used to read-
+  // modify-write through kv per npc, which silently clobbered any earlier
+  // in-memory-only mutation on the same npc this same call chain (e.g.
+  // STEALTH's resolveRoomEntryStealth, or applyProposal's EFFECTS-vocab
+  // block in doTalk) with a stale pre-mutation kv snapshot, since neither
+  // of those persist immediately — they rely on the next saveAtBoundary,
+  // same as this loop now does. addMemoryEpisode/decayMemory are already
+  // pure functions (see EFFECTS' applyMemoryEpisodeEffect calling
+  // addMemoryEpisode directly the same way), so no kv access is needed
+  // here at all.
   for (const evt of events) {
     const npc = currentGameState.npcs[evt.npcId];
     if (!npc) continue;
     const text = formatEventText(evt, currentGameState.npcs);
-    const updated = await updateNpc(evt.npcId, n => addMemoryEpisode(n, evt.day, text, 0.5));
-    currentGameState.npcs[evt.npcId] = updated;
+    currentGameState.npcs[evt.npcId] = addMemoryEpisode(npc, evt.day, text, 0.5);
+    // STEALTH (P6): SIM's resolveTick only decides/records evidence
+    // discovery (stays synchronous/LLM-free); the suspicion bump itself is
+    // a trusted-producer effect application, same tier as everywhere else
+    // in this file that calls applyEffects directly.
+    if (evt.type === 'evidence_discovered') {
+      const effCtx = buildEffectContext(currentGameState, [evt.npcId], [evt.npcId], {}, []);
+      applyEffects(parseEffectDSL(`ADJUST_SUSPICION ${evt.npcId} boundary_violation +${STEALTH_TUNING.sneakCaughtSuspicionDelta}`), effCtx);
+    }
   }
 
   for (const [id, npc] of Object.entries(currentGameState.npcs)) {
     if (npc.residency.status === 'former' || npc.residency.status === 'prospective') continue;
     if (!npc.memory.episodes || npc.memory.episodes.length === 0) continue;
-    const decayed = await updateNpc(id, n => decayMemory(n, ticks));
-    currentGameState.npcs[id] = decayed;
+    currentGameState.npcs[id] = decayMemory(npc, ticks);
   }
 
   // Day-rollover economy: rent due/overdue, delivery arrivals, quest
@@ -656,6 +672,21 @@ async function doTalk(npcId) {
     currentSceneState = sceneState;
     narrateDemotion(demotedId, npcId);
 
+    // Deterministic confrontation, before the LLM ever runs — a suspicion
+    // threshold crossing (STEALTH, P6) is a guaranteed reaction, not
+    // something left to the narrator's discretion. Decays suspicion
+    // afterward so the same talk doesn't refire it every time; a fresh
+    // incident can still push suspicion back over the threshold later.
+    const npc = currentGameState.npcs[npcId];
+    const suspicion = (npc.suspicion || {}).boundary_violation || 0;
+    if (suspicion >= STEALTH_TUNING.confrontThreshold) {
+      const template = BOUNDARY_CONFRONT_TEMPLATES[Math.floor(Math.random() * BOUNDARY_CONFRONT_TEMPLATES.length)];
+      addLogEntry('narration', template.replace('{name}', npc.bible.name || 'Your roommate'));
+      const effCtx = buildEffectContext(currentGameState, [npcId], [npcId], {}, []);
+      const target = suspicion * STEALTH_TUNING.confrontDecayFactor;
+      applyEffects(parseEffectDSL(`ADJUST_SUSPICION ${npcId} boundary_violation ${(target - suspicion).toFixed(2)}`), effCtx);
+    }
+
     // Use LLM to generate opening
     const context = assembleContext(currentGameState, currentSceneState);
     const result = await callLLM(context, `You approach ${currentGameState.npcs[npcId]?.bible?.name || 'your roommate'} to talk.`);
@@ -701,12 +732,25 @@ async function doMove(roomId) {
   showLoading();
   try {
     currentGameState.player.location = roomId;
+    // Boundary-crossing check runs on entry, before the tick advances, so
+    // "who was home" reflects who was actually there when the player
+    // walked in (see STEALTH's resolveRoomEntryStealth). Trusted producer,
+    // no LLM — safe to run unconditionally on every move.
+    const stealthResult = resolveRoomEntryStealth(currentGameState, roomId);
     await advanceAndResolve(1);
     currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
     // Recompute scene participants for the new room — active starts
     // populated (see getSceneParticipants) rather than empty.
     currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
     addLogEntry('narration', `You move to the ${ROOMS[roomId]?.name || roomId}.`);
+    if (stealthResult.witnessed) {
+      const ownerId = roomOwnerId(roomId, currentGameState.npcs);
+      const ownerName = currentGameState.npcs[ownerId]?.bible?.name;
+      // Two full alternatives, not a {name}/'They' template — "They looks
+      // up" is wrong subject-verb agreement, and singular-they's correct
+      // "They look up" reads wrong once a real name replaces it.
+      addLogEntry('narration', ownerName ? `${ownerName} looks up as you come in.` : 'Someone looks up as you come in.');
+    }
     surfaceRoomEvidence(roomId);
 
     // NPC-initiated conversation: if someone's here and active, let them

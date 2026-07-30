@@ -301,6 +301,29 @@ function resolveTick(gameState) {
       moodDelta = evt.moodDelta;
     }
 
+    // Evidence discovery (STEALTH, P6): a resident who ends up back in
+    // their own room has a chance to notice undiscovered evidence left by
+    // an earlier sneak or a housekeeper's boundary-crossing visit. Decides
+    // and records discovery only, in-memory (mutating gameState.objects in
+    // place is already how object state works across a tick — resolveBatch
+    // never clones `objects`, only `npcs`, so this is the same live
+    // reference the caller holds). The suspicion write itself happens in
+    // UI's advanceAndResolve event loop alongside the memory-episode write
+    // every other event type already gets there — resolveTick stays
+    // synchronous/LLM-free either way.
+    if (location && roomOwnerId(location, npcs) === id) {
+      const bucket = gameState.objects?.[`room_${location}`] || {};
+      const undiscovered = Object.values(bucket).find(o => o.evidence && !o.evidence.discovered);
+      if (undiscovered && rng() < (STEALTH_TUNING.baseEvidenceDiscoveryChance + undiscovered.evidence.strength * STEALTH_TUNING.evidenceStrengthDiscoveryFactor)) {
+        undiscovered.evidence.discovered = true;
+        newEvents.push({
+          day: meta.clock.day, tick: getTickIndex(meta.clock.minutes), roomId: location, npcId: id,
+          type: 'evidence_discovered', moodDelta: 0, data: { kind: undiscovered.evidence.kind },
+          template: EVIDENCE_KIND_TEXT[undiscovered.evidence.kind], seenByPlayer: false,
+        });
+      }
+    }
+
     npcUpdates[id] = {
       location,
       activity,
@@ -539,7 +562,7 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
     const wound = partial.wound || weightedPick(charRng, WOUND_POOL.map(x => ({ val: x, weight: 1 }))).val;
     const want = partial.want || weightedPick(charRng, WANT_POOL.map(x => ({ val: x, weight: 1 }))).val;
     const blindSpot = partial.blindSpot || weightedPick(charRng, BLINDSPOT_POOL.map(x => ({ val: x, weight: 1 }))).val;
-    const boundary = partial.boundary || weightedPick(charRng, BOUNDARY_POOL.map(x => ({ val: x, weight: 1 }))).val;
+    const boundary = partial.boundary || weightedPick(charRng, BOUNDARY_POOL.map(x => ({ val: x, weight: 1 }))).val.text;
 
     // Speech profile — not author-overridable in the UI yet, always rolled
     const speech = {
@@ -959,6 +982,10 @@ function createNpcFromBible(bible, residencyStatus) {
     memory: { facts: [], episodes: [], summary: '' },
     arcs: [],
     flags: {},
+    // P6: suspicion[subject] (0..1). Additive default, same precedent as
+    // player.skills (SKILLS) — every read/write guards with `|| {}`, so no
+    // FOLDER_VERSIONS migration is needed for existing saves.
+    suspicion: {},
   };
 }
 

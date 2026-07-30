@@ -29,7 +29,7 @@ function buildContentSection(contentConfig) {
 // evidence verbs join this list as WORLD/ITEMS/STEALTH land; until then
 // they're deliberately absent so the model is never invited to use a verb
 // that can't do anything yet (see EFFECTS' `implemented` flag).
-const SCENE_EFFECT_VOCAB = ['ADJUST_NEED', 'MOOD_DELTA', 'SPEND_MONEY', 'ADD_SKILL_XP', 'ADD_FLAG', 'MEMORY_FACT', 'NPC_ACTIVITY'];
+const SCENE_EFFECT_VOCAB = ['ADJUST_NEED', 'MOOD_DELTA', 'SPEND_MONEY', 'ADD_SKILL_XP', 'ADD_FLAG', 'MEMORY_FACT', 'NPC_ACTIVITY', 'WITNESS', 'ADJUST_SUSPICION', 'LEAVE_EVIDENCE'];
 
 function buildEffectVocabSection() {
   const lines = SCENE_EFFECT_VOCAB.map(type => `  ${type} ${EFFECT_DEFS[type].paramShape.join(' ')}`);

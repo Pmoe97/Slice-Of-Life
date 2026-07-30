@@ -18,7 +18,7 @@ design record. Keep it current as phases land; don't let it drift.
 | P3 | **Done** | Skills and progression |
 | P4 | **Done** | The computer (all 8 apps: Work, Nile, Browser, Classes, Services, Classifieds, IM, Stream) |
 | P5 | **Done** | Free-action resolution pipeline |
-| P6 | Not started | Stealth, evidence, suspicion |
+| P6 | **Done** | Stealth, evidence, suspicion |
 | P7 | Not started | NPC autonomy |
 | P8 | Not started | Content volume expansion |
 
@@ -989,3 +989,168 @@ time) with a real house from `SIM_generateHouse`/`writeGeneratedGameState`/
   and made exactly one `generateText` call — confirming P5 is additive:
   every existing LLM-narrative behavior is unchanged for anything
   `classifyIntent` doesn't recognize.
+
+## P6 — Stealth, evidence, suspicion
+
+Landed on top of stubs P0/P1/P2 had already left waiting: `WITNESS`/
+`ADJUST_SUSPICION`/`LEAVE_EVIDENCE` were declared in `EFFECT_DEFS` with
+`implemented:false` since P0; `OBJECT_DEFS.evidenceKinds` and every spawned
+object's `evidence: null` field since P1; `SERVICE_DEFS.accessScope` since
+P4; `SKILL_CURVES.stealthSuccess` since P3; `FLAG_PATTERNS` already had
+`intruded_.+`/`suspects_.+` reserved. This phase is almost entirely
+*consuming* prior phases' foresight, not inventing new surface area.
+
+**Data model.** `npc.suspicion: {subject: 0..1}` (`SUSPICION_SUBJECTS`:
+`boundary_violation`, `general` — only the former is written this pass, the
+latter reserved for a future non-boundary source like theft) is a new
+sibling of `relPlayer`/`flags`/`memory`, added to `createNpcFromBible`
+(sim.js) the same way `player.skills` landed in P3 — additive default, no
+`FOLDER_VERSIONS` bump, every read/write guards with `|| {}`. Never touches
+`npc.bible`, which stays frozen exactly as the hard invariant requires;
+`bible.boundary` is read-only here.
+
+**`BOUNDARY_POOL` gained a `category` field** (`config.js`): each of the 12
+pool entries is now `{text, category}` instead of a bare string, with only
+`'their bedroom is sacred space...'` tagged `room_access` (the other 11 are
+`'other'`, reserved for future food/topic/schedule boundary mechanics this
+pass doesn't build). `sim.js`'s one consumption site changed from
+`weightedPick(...).val` to `.val.text` — `bible.boundary` is still drawn
+and stored as plain prose, byte-identical to before; this is a parallel
+lookup table, not a bible schema change. `stealth.js`'s
+`findBoundaryCategory(boundaryText)` reverse-looks-up an NPC's frozen
+boundary string against the pool to decide whether their authored boundary
+is specifically room-related (sharper reaction, `matchedBoundaryMultiplier`)
+or not (still real, generic).
+
+**`EFFECT_DEFS` implementations** (`effects.js`): `WITNESS` writes a memory
+episode (`WITNESS_MEMORY_TEMPLATES`, 2nd-person since `subjectRef` is
+validated player-only this pass — NPC-witnesses-NPC is P7 territory) plus a
+`noticed_boundary_*`/`suspects_*` flag (already-reserved `FLAG_PATTERNS`).
+`ADJUST_SUSPICION` clamps `npc.suspicion[subject]` to `[0,1]`, capped per-
+call by a new `EFFECT_LIMITS.suspicionDeltaCap` (0.4). `LEAVE_EVIDENCE`
+validates the object actually declares that evidence kind
+(`OBJECT_DEFS.evidenceKinds`) and writes `{kind, strength, day,
+discovered:false}` onto the object instance, capped by a new
+`evidenceStrengthCap`. All three added to `prompt.js`'s
+`SCENE_EFFECT_VOCAB`, so the LLM narrator can now also emit them mid-scene.
+`SET_ROOM_STATE` deliberately stays `implemented:false` — still a general
+"arbitrary room key/value" primitive with no stealth-specific consumer;
+forcing a use for it now would be exactly the sprawling-unfinished-system
+trap the phase was scoped to avoid.
+
+**New file `src/stealth.js`** (loaded after `skills.js`, before
+`computer.js`): `resolveRoomEntryStealth(gameState, roomId)` is the one
+entry point, called from `UI`'s `doMove` right after `player.location` is
+set (so "who's home" reflects who was actually there when the player
+walked in, not next-tick positions). A **trusted producer** — same trust
+tier as `ACTIONS`' `executeAction` — it builds `WITNESS`/`ADJUST_SUSPICION`/
+`REL_DELTA` (direct witness) or, when the room's owner is out,
+`ADJUST_SUSPICION`/`ADD_FLAG intruded_<room>`/`LEAVE_EVIDENCE` (sneak,
+gated by a `skillMod(player, 'stealth', 'stealthSuccess')` roll against a
+tick/room-scoped seeded rng) as effect-DSL lines, then calls `applyEffects`
+directly — never `validateEffects`, per `EFFECTS`' own trust-boundary rule.
+A successful sneak (roll beats the stealth curve) leaves zero state change
+at all, narration-only. `pickEvidenceObject` weight-picks among the room's
+`private`+`evidenceKinds` objects (today: diary, desktop computer).
+
+**`UI.doTalk` gained a deterministic pre-LLM confrontation check**: if
+`npc.suspicion.boundary_violation` is at/above `STEALTH_TUNING.
+confrontThreshold` (0.5), a templated `BOUNDARY_CONFRONT_TEMPLATES` line
+logs before the LLM ever runs (guaranteed reaction, not left to the
+narrator's discretion), and suspicion is multiplied down by
+`confrontDecayFactor` (0.5) so the same conversation doesn't refire it —
+a fresh incident can still push it back over threshold later. Falls back
+to `'Your roommate'` (matching this function's existing LLM-prompt-line
+fallback) rather than a bare pronoun, avoiding a subject-verb-agreement
+trap described below.
+
+**Evidence discovery** extends `SIM`'s existing `resolveTick` pass 2
+(sim.js) rather than a new subsystem: a resident resolved into their own
+room this tick rolls against any undiscovered evidence there
+(`baseEvidenceDiscoveryChance` + `strength × evidenceStrengthDiscoveryFactor`),
+flips `.discovered` in place, and pushes an `evidence_discovered` event —
+`resolveTick` only *decides and records*, staying synchronous/LLM-free.
+`UI`'s `advanceAndResolve` (which already turns every event into a memory
+episode) adds one branch: on `evidence_discovered`, apply an
+`ADJUST_SUSPICION` bump the same trusted-producer way `doMove` does.
+
+**Housekeeper consequence** closes a loop P4's own code comments already
+flagged: `computer.js`'s `performCleaningVisit`, when the hired service's
+`accessScope` is `'all'` (deep cleaning), now rolls per bedroom-with-an-
+owner for a chance to leave a `MEMORY_EPISODE` + small `ADJUST_SUSPICION`
+(`housekeeperSuspicionDelta`, deliberately smaller than a direct sneak).
+Runs from `processServiceVisitsForDay`, called from `processDayRollover` —
+templated text, no live `generateText` call, same reasoning as
+Classifieds' `fallback*` prose generators.
+
+**A real pre-existing bug, found and fixed while wiring `doMove`**:
+`UI`'s `advanceAndResolve` used `updateNpc` (a kv *read*-modify-write) to
+apply the per-tick memory-episode-addition and decay passes. Since
+`updateNpc` reads from kv rather than from the live `currentGameState`, any
+in-memory-only NPC mutation made earlier in the same handler — exactly what
+`resolveRoomEntryStealth` (and `doTalk`'s new confrontation check) does —
+was silently clobbered the moment `advanceAndResolve` ran afterward and
+touched that same NPC, which it almost always does once an NPC has any
+memory episodes at all (true for nearly every NPC past turn one). Direct
+witness testing caught this immediately: suspicion and the fresh memory
+episode both reverted to their pre-move values. Fixed by having both loops
+operate on and write back to `currentGameState.npcs` directly (`add
+MemoryEpisode`/`decayMemory` are already pure functions — `EFFECTS`'
+`applyMemoryEpisodeEffect` calls `addMemoryEpisode` the exact same way)
+instead of round-tripping through kv; persistence still happens correctly
+at the next `saveAtBoundary`, same as every other in-memory-only mutation
+in the codebase already relies on. This was latent in `doTalk`'s existing
+`applyProposal` effects block too (mutate-then-`advanceAndResolve`, same
+shape), not something P6 introduced — P6 just exercised the path for the
+first time in `doMove`, which previously never mutated NPCs before
+advancing.
+
+**A grammar bug caught by testing, not by inspection**: an early draft of
+`doMove`'s witness narration used `${npc.bible.name || 'They'} looks up...`
+— correct for a real name, wrong subject-verb agreement for the pronoun
+fallback ("They looks up"). Fixed to two full alternative sentences
+(`'<Name> looks up...'` / `'Someone looks up...'`) rather than a
+single template with a pronoun substituted into a name-shaped slot —
+avoids the general singular-they/proper-name conjugation clash rather than
+papering over this one instance of it.
+
+**Verified**, via the fresh-iframe technique against real houses from
+`SIM_generateHouse`/`writeGeneratedGameState`/`loadGameState`:
+- **Config-only groundwork**: `BOUNDARY_POOL` reshape confirmed
+  byte-identical `bible.boundary` prose (still a plain string, matches a
+  pool entry's `.text` exactly) and every fresh NPC got `suspicion: {}`.
+- **Effect implementations** (direct `validateEffects`/`applyEffects`
+  calls): valid `WITNESS`/`ADJUST_SUSPICION`/`LEAVE_EVIDENCE` all applied
+  correctly (memory episode + flag; suspicion delta; `.evidence` written
+  with the right kind/strength). Rejections confirmed exactly as designed:
+  suspicion delta over `±0.4` → `"suspicion delta too large"`; an unknown
+  subject (`theft`) → `"Unknown suspicion subject"`; a mismatched evidence
+  kind → `"Computer can't carry evidence of kind..."`.
+- **Direct witness** (owner home): `suspicion.boundary_violation` → exactly
+  `0.35`, `relPlayer.tension` → `+0.1`, a fresh memory episode, and the
+  `noticed_boundary_player` flag — all from a single `doMove` call, with
+  the narration log correctly showing `"<Name> looks up as you come in."`.
+- **Sneak, forced caught** (`skillMod` overridden to force the roll):
+  `player.flags.intruded_<room>` set, suspicion bumped by exactly `0.15`
+  (the smaller, indirect delta), and — in a room actually containing a
+  diary — `.evidence` populated with `{kind:'personal_item', strength:0.4,
+  discovered:false}`. **Sneak, forced clean**: zero state change of any
+  kind, confirming a successful sneak is genuinely narration-only.
+- **Confrontation**: seeding `suspicion.boundary_violation = 0.6` and
+  calling `doTalk` produced the deterministic confrontation line and
+  dropped suspicion to exactly `0.3` (`0.6 × 0.5`); an immediate second
+  `doTalk` correctly did not refire (stayed below `confrontThreshold`).
+- **Evidence discovery**: with undiscovered evidence planted and the clock
+  forced into the owner's sleep block (guaranteeing `resolveTick` resolves
+  their location to their own room) and the roll forced to succeed, a
+  single `advanceAndResolve` flipped `.evidence.discovered` to `true`,
+  produced an `evidence_discovered` event, added the matching memory
+  episode, and bumped suspicion by exactly `0.15`.
+- **Housekeeper**: hiring `deep_cleaning` and forcing 60 daily
+  `processServiceVisitsForDay` calls produced memory episodes mentioning
+  "cleaning service" and suspicion accumulating (clamped at `1.0`, as
+  designed) on the affected resident, with **zero** `generateText` calls
+  across the entire run — confirming day-rollover stays LLM-free.
+- **Trust boundary**: confirmed via the same `validateEffects` calls above
+  that the three new types are LLM-legal (`llm:true`, now `implemented:
+  true`) and enforce their caps exactly like every other LLM-tier effect.

@@ -299,10 +299,32 @@ function cleanRoomObjects(gameState, roomId) {
 // Returns how many individual dirty states got reset — not a room count —
 // so "the housekeeper found nothing to do" and "the housekeeper reset 11
 // things across 6 rooms" are distinguishable in the log.
+//
+// STEALTH (P6): accessScope:'all' really does enter every bedroom, which
+// is exactly the kind of housekeeper-caused boundary crossing that earns a
+// (small, indirect) suspicion consequence — a trusted producer, same tier
+// as ACTIONS/STEALTH's own effect calls, run from processDayRollover so it
+// must stay synchronous/LLM-free (templated MEMORY_EPISODE text, no live
+// generateText call, same reasoning as Classifieds' fallback* generators).
 function performCleaningVisit(gameState, service) {
   const scopeRooms = service.accessScope === 'all' ? ALL_ROOMS : COMMON_ROOMS;
   let itemsCleaned = 0;
-  for (const roomId of scopeRooms) itemsCleaned += cleanRoomObjects(gameState, roomId);
+  const lines = [];
+  for (const roomId of scopeRooms) {
+    itemsCleaned += cleanRoomObjects(gameState, roomId);
+    if (service.accessScope !== 'all') continue;
+    const ownerId = roomOwnerId(roomId, gameState.npcs);
+    if (!ownerId || ownerId === 'player') continue;
+    const rng = seededRng(gameState.meta.seed, `cleaning_${gameState.meta.clock.day}_${roomId}`);
+    if (rng() < STEALTH_TUNING.baseEvidenceDiscoveryChance) {
+      lines.push(`MEMORY_EPISODE ${ownerId} Someone let a cleaning service into their room again without asking.`);
+      lines.push(`ADJUST_SUSPICION ${ownerId} boundary_violation +${STEALTH_TUNING.housekeeperSuspicionDelta}`);
+    }
+  }
+  if (lines.length) {
+    const effCtx = buildEffectContext(gameState, [], [], {}, []);
+    applyEffects(lines.map(l => parseEffectDSL(l)[0]).filter(Boolean), effCtx);
+  }
   return itemsCleaned;
 }
 

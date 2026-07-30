@@ -510,19 +510,27 @@ const BLINDSPOT_POOL = [
   'believes their work does not define them (it does)',
 ];
 
+// {text, category} rather than bare strings (P6) — 'room_access' is
+// mechanically read by STEALTH to decide whether an entered bedroom's
+// owner has a *specifically room-related* boundary (sharper reaction) or
+// not (still real, generic). The other 11 stay 'other': the pool is now
+// capable of carrying more categories (food/topic/schedule boundaries)
+// without a shape change, but only room_access has a consumer this pass.
+// Never mutates any NPC's frozen bible.boundary string — sim.js still
+// draws that as plain prose from .text; this is a parallel lookup table.
 const BOUNDARY_POOL = [
-  'their bedroom is sacred space — do not enter without asking',
-  'no one touches their food in the fridge',
-  'do not bring up their ex, ever',
-  'they need quiet after 11pm, no exceptions',
-  'they will not be the one who calls the landlord',
-  'they decide who gets the parking spot',
-  'their workout time is non-negotiable',
-  'do not comment on how much they drink',
-  'their pet peeve is people leaving dishes in the sink',
-  'they will not cover rent for someone else twice',
-  'their music is not up for debate',
-  'do not ask about their family',
+  { text: 'their bedroom is sacred space — do not enter without asking', category: 'room_access' },
+  { text: 'no one touches their food in the fridge', category: 'other' },
+  { text: 'do not bring up their ex, ever', category: 'other' },
+  { text: 'they need quiet after 11pm, no exceptions', category: 'other' },
+  { text: 'they will not be the one who calls the landlord', category: 'other' },
+  { text: 'they decide who gets the parking spot', category: 'other' },
+  { text: 'their workout time is non-negotiable', category: 'other' },
+  { text: 'do not comment on how much they drink', category: 'other' },
+  { text: 'their pet peeve is people leaving dishes in the sink', category: 'other' },
+  { text: 'they will not cover rent for someone else twice', category: 'other' },
+  { text: 'their music is not up for debate', category: 'other' },
+  { text: 'do not ask about their family', category: 'other' },
 ];
 
 // --- Speech profile pools ---
@@ -616,7 +624,50 @@ const EFFECT_LIMITS = {
   spendTimeMax: 8,
   itemQtyCap: 10,
   objectConditionCap: 25,
+  suspicionDeltaCap: 0.4,
+  evidenceStrengthCap: 1,
 };
+
+// --- Stealth (P6): suspicion subjects, tuning, and narration text.
+// Suspicion lives per-NPC as npc.suspicion[subject] (0..1), a sibling of
+// relPlayer/flags, never the frozen bible. 'general' is a deliberately
+// unused-for-now catch-all so a future non-boundary suspicion source
+// (theft, a caught lie) doesn't need a config change to land. ---
+const SUSPICION_SUBJECTS = ['boundary_violation', 'general'];
+
+// Nothing magic outside CONFIG — every stealth number lives here.
+const STEALTH_TUNING = {
+  witnessedSuspicionDelta: 0.35,        // owner present, direct witness
+  sneakCaughtSuspicionDelta: 0.15,      // owner absent, stealth roll failed
+  housekeeperSuspicionDelta: 0.08,      // indirect, via accessScope:'all' cleaning
+  matchedBoundaryMultiplier: 1.5,       // boundary.category === 'room_access' for this room's owner
+  confrontThreshold: 0.5,               // npc.suspicion[subject] that triggers a deterministic confrontation line
+  confrontDecayFactor: 0.5,             // suspicion multiplied by this after confronting, so it doesn't refire every talk
+  witnessedTensionDelta: 0.1,           // REL_DELTA tension bump on direct witness
+  sneakEvidenceStrength: 0.4,           // fixed strength trusted producers use for LEAVE_EVIDENCE
+  baseEvidenceDiscoveryChance: 0.15,    // per-tick roll when the owner is in their own room
+  evidenceStrengthDiscoveryFactor: 0.5, // added to base, scaled by evidence.strength
+};
+
+const EVIDENCE_KIND_TEXT = {
+  browser_history: "{name} noticed the browser history on the computer looked off.",
+  open_app: "{name} noticed an app had been left open that they didn't open.",
+  personal_item: "{name} noticed their things had been gone through.",
+};
+
+// Stored verbatim as memory-episode text (not re-templated at read time,
+// unlike the narration-only BOUNDARY_CONFRONT_TEMPLATES below) — written
+// in 2nd person since WITNESS.subjectRef is player-only this pass (see
+// effects.js's validateWitnessSubject); no {name} placeholder needed.
+const WITNESS_MEMORY_TEMPLATES = {
+  certain: 'Saw you come out of their room without being asked in.',
+  suspects: 'Has a feeling you were in their room when they weren\'t supposed to be.',
+};
+
+const BOUNDARY_CONFRONT_TEMPLATES = [
+  '"Hey — were you in my room?" {name} asks, watching your face for the answer.',
+  '"I know someone\'s been in my room," {name} says. "I just want to know it was you and not someone else."',
+];
 
 // --- Room cleanliness, once WORLD derives it from object state instead of
 // the old fixed initial value. baseline is used only when a room has no

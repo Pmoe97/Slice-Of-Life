@@ -131,6 +131,24 @@ function validateHasEnough(defId, qtyStr, from, ctx) {
   return stackQty(locationStackList(from, ctx), defId) >= Number(qtyStr) || `Not enough ${defId} at ${from}.`;
 }
 
+// --- Stealth validators (P6) ---
+function validateSuspicionSubject(s) { return SUSPICION_SUBJECTS.includes(s) || `Unknown suspicion subject: ${s}`; }
+function validateCertainty(c) { return ['certain', 'suspects'].includes(c) || `Unknown certainty: ${c}`; }
+// NPC-witnesses-NPC is P7 autonomy territory (multi-NPC scenes) — this
+// stays player-only until then.
+function validateWitnessSubject(ref) { return ref === 'player' || `Unknown witness subject: ${ref}`; }
+function validateEvidenceKind(objId, kind, ctx) {
+  const obj = ctx.roomObjects[objId];
+  const def = obj && OBJECT_DEFS[obj.defId];
+  if (!def) return `Not reachable: ${objId}`;
+  return (def.evidenceKinds || []).includes(kind) || `${def.label} can't carry evidence of kind "${kind}".`;
+}
+function validateEvidenceStrength(s) {
+  if (!isFiniteNumber(s)) return `Not a number: ${s}`;
+  const v = Number(s);
+  return (v > 0 && v <= EFFECT_LIMITS.evidenceStrengthCap) || `Strength out of range (max ${EFFECT_LIMITS.evidenceStrengthCap}).`;
+}
+
 // Runs each check in order, short-circuiting on the first failure — lets
 // each EFFECT_DEFS.validate stay a flat one-liner instead of a nested
 // ternary chain. A "check" is either a precomputed true|reason value, or a
@@ -266,6 +284,27 @@ function applySpawnItem(p, ctx) {
   writeLocationStackList(p.to, ctx.gameState, addStack(toList, p.defId, Number(p.qty), p.to === 'player' ? 'player' : null));
 }
 
+// --- Stealth appliers (P6) ---
+function applyWitness(p, ctx) {
+  const npc = ctx.gameState.npcs[p.npcId];
+  if (!npc) return;
+  const text = WITNESS_MEMORY_TEMPLATES[p.certainty];
+  ctx.gameState.npcs[p.npcId] = addMemoryEpisode(npc, ctx.gameState.meta.clock.day, text, p.certainty === 'certain' ? 0.8 : 0.5);
+  const flagKey = p.certainty === 'certain' ? `noticed_boundary_${p.subjectRef}` : `suspects_${p.subjectRef}`;
+  applyAddFlag({ who: p.npcId, key: flagKey, value: true }, ctx);
+}
+function applyAdjustSuspicion(p, ctx) {
+  const npc = ctx.gameState.npcs[p.npcId];
+  if (!npc) return;
+  npc.suspicion = npc.suspicion || {};
+  npc.suspicion[p.subject] = clamp((npc.suspicion[p.subject] || 0) + Number(p.delta), 0, 1);
+}
+function applyLeaveEvidence(p, ctx) {
+  const obj = findObjectById(ctx.gameState, p.objId);
+  if (!obj) return;
+  obj.evidence = { kind: p.kind, strength: Number(p.strength), day: ctx.gameState.meta.clock.day, discovered: false };
+}
+
 // --- Effect registry ---
 // paramShape: token names; a leading '...' on the last entry means "rest of
 // line, one free-text param" (so a reason or a message can contain spaces).
@@ -377,9 +416,26 @@ const EFFECT_DEFS = {
     validate: (p, ctx) => firstFailure(validateItemDefId(p.defId), () => validateQtyRange(p.qty), () => validateLocationRef(p.to, ctx)),
     apply: applySpawnItem,
   },
-  WITNESS: { paramShape: ['npcId', 'subjectRef', 'certainty'], llm: true, implemented: false },
-  ADJUST_SUSPICION: { paramShape: ['npcId', 'subject', 'delta'], llm: true, implemented: false },
-  LEAVE_EVIDENCE: { paramShape: ['objId', 'kind', 'strength'], llm: true, implemented: false },
+  // --- Stealth effects (WORLD/SKILLS-backed, P6) ---
+  WITNESS: {
+    paramShape: ['npcId', 'subjectRef', 'certainty'], llm: true, implemented: true,
+    validate: (p, ctx) => firstFailure(validatePresentNpc(p.npcId, ctx), () => validateWitnessSubject(p.subjectRef), () => validateCertainty(p.certainty)),
+    apply: applyWitness,
+  },
+  ADJUST_SUSPICION: {
+    paramShape: ['npcId', 'subject', 'delta'], llm: true, implemented: true,
+    validate: (p, ctx) => firstFailure(validateActiveNpc(p.npcId, ctx), () => validateSuspicionSubject(p.subject), () => validateMagnitude(p.delta, EFFECT_LIMITS.suspicionDeltaCap, 'suspicion')),
+    apply: applyAdjustSuspicion,
+  },
+  LEAVE_EVIDENCE: {
+    paramShape: ['objId', 'kind', 'strength'], llm: true, implemented: true,
+    validate: (p, ctx) => firstFailure(validateReachableObject(p.objId, ctx), () => validateEvidenceKind(p.objId, p.kind, ctx), () => validateEvidenceStrength(p.strength)),
+    apply: applyLeaveEvidence,
+  },
+  // Still a general-purpose "arbitrary room key/value" primitive with no
+  // specific consumer yet — stays undeclared until something actually
+  // needs it, rather than forcing a use now (see STEALTH's file-level
+  // scope notes in ARCHITECTURE.md).
   SET_ROOM_STATE: { paramShape: ['roomId', 'key', 'value'], llm: true, implemented: false },
   APP_STATE: { paramShape: ['appId', '...jsonPatch'], llm: false, implemented: false },
   SCHEDULE_EVENT: { paramShape: ['day', 'tick', 'type', 'ref'], llm: false, implemented: false },
