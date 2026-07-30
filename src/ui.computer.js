@@ -162,4 +162,48 @@ async function doServicesCancel(serviceId) {
   await saveAtBoundary('services-cancel', currentGameState);
 }
 
+async function doClassifiedsPost() {
+  const result = postRoommateAd(currentGameState);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  addLogEntry('system', 'You post a roommate-wanted ad on RoomList.');
+  renderComputerScreen(currentGameState);
+  await saveAtBoundary('classifieds-post', currentGameState);
+}
+
+function doClassifiedsViewApplicant(npcId) {
+  if (!npcId) return;
+  currentGameState.world.computer.apps.classifieds.viewingApplicantId = npcId;
+  switchScreen(currentGameState, 'detail');
+  renderComputerScreen(currentGameState);
+}
+
+async function doClassifiedsAccept(npcId) {
+  if (!npcId) return;
+  showLoading();
+  try {
+    const result = acceptApplicant(currentGameState, npcId);
+    if (!result.ok) { addLogEntry('system', result.reason); return; }
+    addLogEntry('narration', `${result.npc.bible.name} moves in. Rent shifts to reflect the new headcount.`);
+    // getSceneParticipants recomputes off npc.location, which moveToRoom
+    // already set — the new resident can show up in the room list/scene
+    // immediately without a separate sync step.
+    currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
+    switchScreen(currentGameState, 'post');
+    renderComputerScreen(currentGameState);
+    render(currentGameState, currentSceneState);
+    await saveAtBoundary('classifieds-accept', currentGameState);
+  } finally {
+    hideLoading();
+  }
+}
+
+async function doClassifiedsReject(npcId) {
+  if (!npcId) return;
+  const result = rejectApplicant(currentGameState, npcId);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  switchScreen(currentGameState, 'applicants');
+  renderComputerScreen(currentGameState);
+  await saveAtBoundary('classifieds-reject', currentGameState);
+}
+
 // ===== /SECTION: UI.COMPUTER =====

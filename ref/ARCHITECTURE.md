@@ -733,3 +733,69 @@ states unchanged) instead of erroring or silently cancelling. Switching
 to `deep_cleaning` correctly reached the bedroom and made the bed,
 restoring cleanliness to 100 — confirming the scope distinction is now
 mechanically real, post-fix.
+
+### Classifieds (RoomList)
+
+Roommate-wanted ads that produce **real move-ins**, not a scripted event.
+`postRoommateAd` requires an empty bedroom and sets `apps.classifieds.
+posted = {active, postedDay}`; a new `generateApplicantsForDay`
+(`computer.js`), called from a `processClassifiedsForDay` hook in `ui.js`'s
+`processDayRollover`, rolls a candidate roughly every other day (a seeded
+coin-flip gate, capped at 3 pending applicants) using **the exact same
+generator the initial cast uses** — SIM's `rollCastSlot` — biased away
+from current residents' occupation categories and interest tags the same
+way the original cast-generation pass already prefers variety.
+
+**Applicants are real NPCs from the moment they're rolled**, not a
+lightweight preview record promoted later: `createNpcFromBible(...,
+'prospective')` writes them straight into `gameState.npcs` with
+`residency.status: 'prospective'` — an enum value the character schema
+has declared since P0 and `resolveTick` has always explicitly skipped,
+but which nothing had ever actually produced until this. Verified
+directly: a rolled applicant is invisible to `resolveTick` (absent from
+its `npcUpdates`), exactly as designed.
+
+**Zero LLM at day rollover, on purpose.** An applicant's name/visual/
+history/sketch come from `llm.js`'s `fallback*` generators — the same
+deterministic, seeded, templated functions a character-creation prose
+expansion already falls back to on failure — not a live `generateText`
+call. Day rollover runs unattended; the brief's "LLM only at player-
+contact points" rule argues against firing a network call the player
+didn't trigger, so this reuses the fallback path as the primary path
+here rather than as an edge case.
+
+**Interviewing is direct profile review for now, not an IM conversation.**
+The plan's fuller design routes interviews through the IM app; since IM
+doesn't exist yet, `classifieds.view-applicant` opens a `detail` screen
+(new `applicant` renderer, a fifth generic-ish renderer — really a
+one-off, since a bible profile view isn't a shape `catalog`/`list`/
+`dashboard`/`article` naturally fit) showing the same fields the
+character-creation preview already shows (occupation, want, wound, blind
+spot), with Accept/Reject. Wiring this through IM once it exists is a
+follow-up, not a redesign — `acceptApplicant`/`rejectApplicant` don't
+care how the player decided.
+
+**Accepting does the full move-in in one place**: `moveToRoom` (dead code
+since it was written, now finally has a caller) assigns the room/bed,
+`changeResidencyStatus` flips them to `resident`, `computeRent`
+recomputes what everyone owes, a `castWeb` pair is created against every
+current resident (via the existing `createBlankPair`) so relationship
+tracking works immediately, and `claimRoomPersonalItems` transfers
+ownership of *everything* unowned in their new room — not just the
+explicitly-personal items (guitar/diary/jewelry box), but the desk/
+wardrobe/nightstand too, since it's genuinely their room's furniture now
+and P6's boundary checks will eventually want to know whose it is.
+Rejecting simply deletes the prospective NPC record — nothing was ever
+committed for them to leave behind.
+
+**Verified**, via the fresh-iframe technique: posting required (and
+correctly enforced) an empty bedroom, and a second post while one was
+already active correctly refused. Forcing the day-rollover gate across
+enough days produced a real applicant with `residency.status:
+'prospective'`, confirmed invisible to `resolveTick`. Viewing and
+rejecting an applicant correctly deleted their NPC record entirely.
+Viewing and accepting a second applicant correctly: flipped them to
+`resident`, assigned an empty bedroom, recomputed rent from `$1200` to
+`$800`/person (2 residents + player, `2400/3`), created a `castWeb` pair
+against the original resident, deactivated the listing, and claimed every
+previously-unowned object in their new bedroom under their id.

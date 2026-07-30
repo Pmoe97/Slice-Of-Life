@@ -66,6 +66,20 @@ async function processDayRollover(day) {
   processQuestsForDay(day);
   processWorkDeadlineForDay(day);
   processServiceVisitsForDayUi(day);
+  processClassifiedsForDay(day);
+}
+
+// COMPUTER's classifieds app: rolls a new applicant on an active listing,
+// deterministically, the same way SIM rolls off-screen events — no LLM,
+// so this can safely run unattended every day rather than only when the
+// player checks the app.
+function processClassifiedsForDay(day) {
+  if (!currentGameState.world.computer) return;
+  const newApplicantIds = generateApplicantsForDay(currentGameState, day);
+  for (const npcId of newApplicantIds) {
+    const npc = currentGameState.npcs[npcId];
+    addLogEntry('system', `New applicant on RoomList: ${npc.bible.name} (${npc.bible.occupation.title}).`);
+  }
 }
 
 // COMPUTER's work app: an incomplete backlog at the deadline costs a
@@ -400,6 +414,18 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'services.cancel':
       await doServicesCancel(extra?.rowId);
+      break;
+    case 'classifieds.post':
+      await doClassifiedsPost();
+      break;
+    case 'classifieds.view-applicant':
+      doClassifiedsViewApplicant(extra?.rowId);
+      break;
+    case 'classifieds.accept':
+      await doClassifiedsAccept(extra?.rowId);
+      break;
+    case 'classifieds.reject':
+      await doClassifiedsReject(extra?.rowId);
       break;
     case 'talk':
       if (npcId) await doTalk(npcId);

@@ -22,6 +22,7 @@ function defaultComputerState() {
       browser: { openSiteId: null, history: [] },
       classes: { enrolled: [], completed: [] },
       services: { hired: [] },
+      classifieds: { posted: { active: false, postedDay: 0 }, applicants: [], viewingApplicantId: null },
     },
   };
 }
@@ -324,6 +325,116 @@ function processServiceVisitsForDay(gameState, day) {
     results.push({ serviceId: hire.serviceId, skipped: false, label: service.label, itemsCleaned, cost: service.costPerVisit, accessScope: service.accessScope });
   }
   return results;
+}
+
+// --- Classifieds app ---
+
+function findEmptyBedroom(gameState) {
+  const bedrooms = ['bedroom_1', 'bedroom_2', 'bedroom_3'];
+  return bedrooms.find(roomId =>
+    !Object.values(gameState.npcs).some(n => n.residency.room === roomId && n.residency.status === 'resident')
+  ) || null;
+}
+
+function postRoommateAd(gameState) {
+  const classifieds = gameState.world.computer.apps.classifieds;
+  if (classifieds.posted.active) return { ok: false, reason: 'You already have an active listing.' };
+  if (!findEmptyBedroom(gameState)) return { ok: false, reason: 'No empty room to offer.' };
+  classifieds.posted = { active: true, postedDay: gameState.meta.clock.day };
+  return { ok: true };
+}
+
+// Called from day rollover. Deterministic and zero-LLM by design (this
+// runs unattended, not at a player-contact point) — the applicant's
+// prose comes from LLM's fallback* generators, the same seeded-templated
+// path a character-creation prose expansion falls back to on failure, not
+// a live LLM call. usedCats/priorTags bias the roll away from what
+// current residents already are, mirroring SIM's own cast-generation
+// preference for a varied household.
+function generateApplicantsForDay(gameState, day) {
+  const classifieds = gameState.world.computer.apps.classifieds;
+  if (!classifieds.posted.active) return [];
+  if (!findEmptyBedroom(gameState)) { classifieds.posted.active = false; return []; }
+  if (classifieds.applicants.length >= 3) return [];
+
+  const gate = seededRng(gameState.meta.seed, `applicant_gate_${day}`);
+  if (gate() > 0.5) return [];
+
+  const residentIds = Object.keys(gameState.npcs).filter(id => gameState.npcs[id].residency.status === 'resident');
+  const usedCats = new Set(residentIds.map(id => gameState.npcs[id].bible.occupation.category));
+  const priorTags = residentIds.map(id => new Set(gameState.npcs[id].bible.interests.flatMap(i => i.tags)));
+  const slot = 1000 + day; // offset clear of real cast slots (0..residentCount-1)
+  const npcId = genSeededNpcId(gameState.meta.seed, slot);
+  if (gameState.npcs[npcId]) return []; // already rolled for this day (idempotent guard)
+
+  const rolled = rollCastSlot(gameState.meta.seed, slot, npcId, `applicant_${day}`, usedCats, priorTags, {});
+  if (!rolled) return [];
+  const structured = rolled.normalized.bible;
+  const bible = {
+    ...structured,
+    name: structured.name || fallbackName(structured),
+    visual: fallbackVisual(structured),
+    history: fallbackHistory(structured),
+    sketch: fallbackSketch(structured),
+    sampleLines: fallbackSampleLines(structured),
+  };
+  const check = validateCharacter({ bible });
+  if (!check.valid) return [];
+
+  gameState.npcs[npcId] = createNpcFromBible(check.normalized.bible, 'prospective');
+  classifieds.applicants.push(npcId);
+  return [npcId];
+}
+
+// An empty room's furniture spawns with ownerId:null (WORLD) since nobody
+// lived there yet. On move-in, ALL of it becomes the new resident's — not
+// just the explicitly-personal items (guitar/diary/jewelry box), but the
+// desk/wardrobe/nightstand too: it's the furniture in *their* room now,
+// which matters once boundary/ownership checks (P6) start asking whose
+// wardrobe this is.
+function claimRoomPersonalItems(gameState, roomId, npcId) {
+  const bucket = gameState.objects[`room_${roomId}`];
+  if (!bucket) return;
+  for (const obj of Object.values(bucket)) {
+    if (obj.ownerId === null) obj.ownerId = npcId;
+  }
+}
+
+function acceptApplicant(gameState, npcId) {
+  const npc = gameState.npcs[npcId];
+  if (!npc || npc.residency.status !== 'prospective') return { ok: false, reason: 'No such applicant.' };
+  const roomId = findEmptyBedroom(gameState);
+  if (!roomId) return { ok: false, reason: 'No empty room available.' };
+
+  let updated = moveToRoom(npcId, npc, roomId, gameState.npcs);
+  updated = changeResidencyStatus(updated, 'resident', { since: gameState.meta.clock.day });
+  gameState.npcs[npcId] = updated;
+  claimRoomPersonalItems(gameState, roomId, npcId);
+
+  for (const otherId of Object.keys(gameState.npcs)) {
+    if (otherId === npcId || gameState.npcs[otherId].residency.status !== 'resident') continue;
+    const pairKey = [npcId, otherId].sort().join('|');
+    if (!gameState.world.castWeb[pairKey]) {
+      const [a, b] = [npcId, otherId].sort();
+      gameState.world.castWeb[pairKey] = createBlankPair(a, b);
+    }
+  }
+  gameState.world.rent = computeRent(gameState.npcs);
+
+  const classifieds = gameState.world.computer.apps.classifieds;
+  classifieds.applicants = classifieds.applicants.filter(id => id !== npcId);
+  classifieds.posted.active = false;
+
+  return { ok: true, npc: gameState.npcs[npcId] };
+}
+
+function rejectApplicant(gameState, npcId) {
+  const npc = gameState.npcs[npcId];
+  if (!npc || npc.residency.status !== 'prospective') return { ok: false, reason: 'No such applicant.' };
+  const classifieds = gameState.world.computer.apps.classifieds;
+  classifieds.applicants = classifieds.applicants.filter(id => id !== npcId);
+  delete gameState.npcs[npcId];
+  return { ok: true };
 }
 
 // ===== /SECTION: COMPUTER =====

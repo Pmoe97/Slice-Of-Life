@@ -75,6 +75,30 @@ const APP_DEFS = {
       },
     },
   },
+  // Roommate-wanted ads. Applicants are real NPCs (generated the same way
+  // the initial cast is — SIM's rollCastSlot — with residency.status
+  // 'prospective', an enum value the schema has always had and
+  // resolveTick has always skipped, but which nothing produced until
+  // now) rather than a lightweight preview record, so an accepted
+  // applicant is already a fully-formed resident with no second
+  // generation step.
+  classifieds: {
+    id: 'classifieds', label: 'RoomList', category: 'classifieds', requires: [],
+    entryScreen: 'post',
+    screens: {
+      post: { label: 'Listing', renderer: 'dashboard', panels: ['classifieds.status'] },
+      applicants: {
+        label: 'Applicants', renderer: 'list', source: 'state:apps.classifieds.applicants',
+        emptyText: 'No applicants yet — check back after posting.',
+        labelFn: (npcId, gs) => {
+          const npc = gs.npcs[npcId];
+          return npc ? `${npc.bible.name} — ${npc.bible.occupation.title}` : 'Unknown applicant';
+        },
+        rowAction: 'classifieds.view-applicant', rowActionLabel: 'View',
+      },
+      detail: { label: 'Applicant', renderer: 'applicant', hideFromNav: true },
+    },
+  },
 };
 
 // --- Jobs: what WorkHub's board offers, and what working a block pays.

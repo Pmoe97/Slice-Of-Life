@@ -80,6 +80,7 @@ const COMPUTER_RENDERERS = {
   catalog: renderCatalog,
   list: renderList,
   article: renderArticle,
+  applicant: renderApplicantProfile,
 };
 
 // Rows whose def declares `requiresContentFlag` are hidden from any
@@ -144,6 +145,28 @@ const DASHBOARD_PANELS = {
     if (!work.jobId) return makePanel('');
     return makePanel(`<h3>Today</h3><p class="tiny">${work.todayBlocks || 0} blocks — $${work.todayEarned || 0} earned</p>`);
   },
+  'classifieds.status': (gs) => {
+    const c = gs.world.computer.apps.classifieds;
+    if (c.posted.active) {
+      const panel = makePanel(`<h3>Listing Active</h3><p class="dim tiny">Posted Day ${c.posted.postedDay}. Check back for applicants.</p>`);
+      if (c.applicants.length > 0) {
+        const btn = document.createElement('button');
+        btn.className = 'btn tiny';
+        btn.setAttribute('data-action', 'computer.open-screen');
+        btn.setAttribute('data-screen', 'applicants');
+        btn.textContent = `View Applicants (${c.applicants.length})`;
+        panel.appendChild(btn);
+      }
+      return panel;
+    }
+    const panel = makePanel('<h3>No Listing</h3><p class="dim tiny">Post an ad to find a new roommate.</p>');
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny';
+    btn.setAttribute('data-action', 'classifieds.post');
+    btn.textContent = 'Post Ad';
+    panel.appendChild(btn);
+    return panel;
+  },
 };
 
 // screen.source names a data source by string (e.g. 'JOB_DEFS') — a light
@@ -206,7 +229,7 @@ function renderList(body, gs, app, screen) {
   const list = document.createElement('div');
   list.className = 'cs-list';
   for (const row of items) {
-    list.appendChild(renderListRow(row, screen));
+    list.appendChild(renderListRow(row, screen, gs));
   }
   body.appendChild(list);
 
@@ -219,16 +242,22 @@ function renderList(body, gs, app, screen) {
   }
 }
 
-function renderListRow(row, screen) {
+// A row's data may be a bare id string (e.g. Classifieds' applicant list,
+// which is just npcIds — the actual records live in gs.npcs, not in
+// session state) rather than an object — `labelFn` gets `gs` as a second
+// argument specifically so it can resolve a bare id into something
+// displayable, and row-id falls back to the row itself when it's already
+// a string.
+function renderListRow(row, screen, gs) {
   const item = document.createElement('div');
   item.className = 'cs-list-row';
-  const label = screen.labelFn ? screen.labelFn(row) : (row.label || row.defId || String(row));
+  const label = screen.labelFn ? screen.labelFn(row, gs) : (row.label || row.defId || String(row));
   item.innerHTML = `<span>${label}</span>`;
   if (screen.rowAction) {
     const btn = document.createElement('button');
     btn.className = 'btn tiny';
     btn.setAttribute('data-action', screen.rowAction);
-    btn.setAttribute('data-row-id', row.id || row.defId || '');
+    btn.setAttribute('data-row-id', typeof row === 'string' ? row : (row.id || row.defId || ''));
     btn.textContent = screen.rowActionLabel || 'Select';
     item.appendChild(btn);
   }
@@ -253,6 +282,48 @@ function renderArticle(body, gs, app, screen) {
   backBtn.setAttribute('data-action', 'computer.open-screen');
   backBtn.setAttribute('data-screen', 'home');
   backBtn.textContent = 'Back';
+  body.appendChild(backBtn);
+}
+
+// Classifieds' applicant detail — same "which one is open" pattern as
+// Browser's article (apps.classifieds.viewingApplicantId, not
+// view.params). Shows the same bible fields the character-creation
+// preview does (occupation/want/wound/blind spot), since an applicant IS
+// a fully-formed prospective NPC, not a lightweight preview record.
+function renderApplicantProfile(body, gs, app, screen) {
+  const classifieds = gs.world.computer.apps.classifieds;
+  const npc = gs.npcs[classifieds?.viewingApplicantId];
+  if (!npc) { body.innerHTML = '<p class="dim">No applicant selected.</p>'; return; }
+  const b = npc.bible;
+  const panel = makePanel(`
+    <h3>${b.name}</h3>
+    <p class="dim tiny">${b.occupation.title} — ${b.occupation.hours}</p>
+    <p class="tiny">${b.history}</p>
+    <p class="tiny">Want: ${b.want}</p>
+    <p class="tiny">Wound: ${b.wound}</p>
+    <p class="tiny">Blind spot: ${b.blindSpot}</p>
+  `);
+  body.appendChild(panel);
+
+  const acceptBtn = document.createElement('button');
+  acceptBtn.className = 'btn';
+  acceptBtn.setAttribute('data-action', 'classifieds.accept');
+  acceptBtn.setAttribute('data-row-id', classifieds.viewingApplicantId);
+  acceptBtn.textContent = 'Accept as Roommate';
+  body.appendChild(acceptBtn);
+
+  const rejectBtn = document.createElement('button');
+  rejectBtn.className = 'btn btn-secondary';
+  rejectBtn.setAttribute('data-action', 'classifieds.reject');
+  rejectBtn.setAttribute('data-row-id', classifieds.viewingApplicantId);
+  rejectBtn.textContent = 'Reject';
+  body.appendChild(rejectBtn);
+
+  const backBtn = document.createElement('button');
+  backBtn.className = 'btn btn-secondary tiny';
+  backBtn.setAttribute('data-action', 'computer.open-screen');
+  backBtn.setAttribute('data-screen', 'applicants');
+  backBtn.textContent = 'Back to List';
   body.appendChild(backBtn);
 }
 
