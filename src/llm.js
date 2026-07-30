@@ -75,6 +75,38 @@ CRITICAL RULES:
   return prompt;
 }
 
+// --- Build the IM prompt for a single-npc text exchange (COMPUTER's im
+// app) — same buildNpcBlock as the scene prompt, no room/scene framing,
+// and a narrower, IM-flavored output contract (no narration field, no
+// object/item effects — see assembleImContext's file comment for why the
+// reach-set already blocks those regardless). ---
+function buildImPrompt(context, message) {
+  const npc = context.activeNpcs[0];
+
+  let prompt = `You are the narrator for a slice-of-life apartment simulation, writing ${npc.name}'s side of a text-message conversation with the player. This is texting, not a scene — no narration, no scene-setting, just their reply.
+
+${buildStyleSection(context.contentConfig)}
+${buildContentSection(context.contentConfig)}
+${buildNpcBlock(npc)}
+Texting style: ${npc.bible.speech.textingStyle}.
+
+THE PLAYER JUST TEXTED: "${message}"
+
+RESPOND WITH VALID JSON IN THIS EXACT FORMAT (no other text, no markdown):
+{
+  "dialogue": [ { "speaker": "${npc.name}", "text": "their reply, in their texting style" } ],
+  "relationshipDeltas": { "${npc.id}": { "trust": 0.0, "affection": 0.0, "tension": 0.0, "respect": 0.0 } },
+  "moodDeltas": { "${npc.id}": 0.0 }
+}
+
+CRITICAL RULES:
+- Write only what they'd actually text back — short, in their voice (verbosity ${npc.bible.speech.verbosity}, formality ${npc.bible.speech.formality}), matching their texting style.
+- Relationship deltas are tiny: -0.3 to +0.3. Mood -0.2 to +0.2. If nothing changes, omit them.
+- 1-3 short messages max, not a paragraph. No narration field — dialogue only.`;
+
+  return prompt;
+}
+
 function buildNpcBlock(npc) {
   const b = npc.bible;
   const mem = npc.memory;
@@ -228,6 +260,44 @@ async function callLLM(context, playerAction) {
   } catch (e) {
     console.warn('LLM call failed:', e.message);
     recordParseTier(4);
+    return { valid: false, errors: [e.message], proposal: null };
+  }
+}
+
+// --- Call LLM for an IM reply ---
+// Deliberately a simpler ladder than callLLM's (JSON.parse, then a single
+// regex fallback for dialogue — no brace-matching tier): IM's contract is
+// narrower (dialogue + tiny deltas, no narration, no object/item effects),
+// so there's less shape to recover from a mangled response in the first
+// place. Reuses validateProposal/applyProposal unchanged — an IM reply is
+// validated and applied exactly like a scene proposal, just against a
+// one-npc context with no room.
+async function callImLLM(context, message) {
+  const prompt = buildImPrompt(context, message);
+  try {
+    const response = await root.generateText({ instruction: prompt, startWith: '{' });
+    let jsonStr = response.trim();
+    if (!jsonStr.startsWith('{')) jsonStr = '{' + jsonStr;
+    if (!jsonStr.endsWith('}')) jsonStr = jsonStr + '}';
+
+    let proposal;
+    try {
+      proposal = JSON.parse(jsonStr);
+    } catch (e) {
+      const dialogue = [];
+      const dialogueRegex = /"speaker"\s*:\s*"([^"]+)"[^}]*?"text"\s*:\s*"([^"]+)"/g;
+      let match;
+      while ((match = dialogueRegex.exec(jsonStr)) !== null) dialogue.push({ speaker: match[1], text: match[2] });
+      if (dialogue.length === 0) return { valid: false, errors: ['unparseable IM response'], proposal: null };
+      return { valid: true, errors: null, proposal: { dialogue } };
+    }
+
+    if (!proposal.dialogue) return { valid: false, errors: ['IM response missing dialogue'], proposal: null };
+    const { valid, errors } = validateProposal(proposal, context);
+    if (!valid) { console.warn('IM proposal failed validation:', errors); return { valid: false, errors, proposal: null }; }
+    return { valid: true, errors: null, proposal };
+  } catch (e) {
+    console.warn('IM LLM call failed:', e.message);
     return { valid: false, errors: [e.message], proposal: null };
   }
 }

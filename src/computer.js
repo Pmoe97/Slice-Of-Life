@@ -23,6 +23,8 @@ function defaultComputerState() {
       classes: { enrolled: [], completed: [] },
       services: { hired: [] },
       classifieds: { posted: { active: false, postedDay: 0 }, applicants: [], viewingApplicantId: null },
+      im: { threads: {}, viewingNpcId: null },
+      stream: { subscriptions: [], watchHistory: [], resumePoints: {} },
     },
   };
 }
@@ -435,6 +437,54 @@ function rejectApplicant(gameState, npcId) {
   classifieds.applicants = classifieds.applicants.filter(id => id !== npcId);
   delete gameState.npcs[npcId];
   return { ok: true };
+}
+
+// --- IM app ---
+
+function ensureImThread(gameState, npcId) {
+  const im = gameState.world.computer.apps.im;
+  if (!im.threads[npcId]) im.threads[npcId] = { msgs: [], unread: 0 };
+  return im.threads[npcId];
+}
+
+// Sends a player message and resolves the reply through the exact same
+// LLM proposal contract doTalk/doPlayerAction use (NPC's validateProposal/
+// applyProposal) — a text reply can move relPlayer or land a memory fact
+// exactly like a scene conversation can. Player-initiated (called from a
+// click, not a tick), so an async LLM call here doesn't touch the
+// zero-LLM-in-ticks invariant. On failure, a system line in the thread
+// says so rather than the message silently vanishing.
+async function sendImMessage(gameState, npcId, text) {
+  const npc = gameState.npcs[npcId];
+  if (!npc) return { ok: false, reason: 'No such contact.' };
+  const thread = ensureImThread(gameState, npcId);
+  const tick = getTickIndex(gameState.meta.clock.minutes);
+  thread.msgs.push({ from: 'player', text, day: gameState.meta.clock.day, tick });
+  thread.unread = 0;
+
+  const context = assembleImContext(gameState, npcId);
+  const result = await callImLLM(context, text);
+  if (result.valid && result.proposal) {
+    const applied = await applyProposal(result.proposal, context, gameState);
+    for (const entry of applied.logEntries) {
+      if (entry.type === 'dialogue') thread.msgs.push({ from: 'npc', text: entry.text, day: gameState.meta.clock.day, tick });
+    }
+    return { ok: true, updatedNpcIds: applied.updatedNpcIds };
+  }
+  thread.msgs.push({ from: 'system', text: `${npc.bible.name} hasn't replied yet.`, day: gameState.meta.clock.day, tick });
+  return { ok: true, updatedNpcIds: [] };
+}
+
+// --- Stream app ---
+
+function watchEpisode(gameState, showId) {
+  const show = STREAM_DEFS[showId];
+  if (!show) return { ok: false, reason: 'No such show.' };
+  const stream = gameState.world.computer.apps.stream;
+  const episode = (stream.resumePoints[showId] || 0) + 1;
+  stream.resumePoints[showId] = episode;
+  stream.watchHistory.push({ showId, episode, day: gameState.meta.clock.day });
+  return { ok: true, show, episode };
 }
 
 // ===== /SECTION: COMPUTER =====

@@ -427,6 +427,15 @@ async function handleAction(action, npcId, extra) {
     case 'classifieds.reject':
       await doClassifiedsReject(extra?.rowId);
       break;
+    case 'im.open-thread':
+      doImOpenThread(extra?.rowId);
+      break;
+    case 'im.send':
+      await doImSend(extra?.rowId);
+      break;
+    case 'stream.watch':
+      await doStreamWatch(extra?.rowId);
+      break;
     case 'talk':
       if (npcId) await doTalk(npcId);
       break;

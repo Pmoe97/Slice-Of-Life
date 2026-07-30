@@ -206,4 +206,54 @@ async function doClassifiedsReject(npcId) {
   await saveAtBoundary('classifieds-reject', currentGameState);
 }
 
+function doImOpenThread(npcId) {
+  if (!npcId) return;
+  currentGameState.world.computer.apps.im.viewingNpcId = npcId;
+  const thread = currentGameState.world.computer.apps.im.threads[npcId];
+  if (thread) thread.unread = 0;
+  switchScreen(currentGameState, 'chat');
+  renderComputerScreen(currentGameState);
+}
+
+async function doImSend(npcId) {
+  const input = document.getElementById('cs-chat-input');
+  const text = input?.value.trim();
+  if (!text || !npcId) return;
+  showLoading();
+  try {
+    const result = await sendImMessage(currentGameState, npcId, text);
+    if (!result.ok) { addLogEntry('system', result.reason); return; }
+    await syncNpcsFromKv(result.updatedNpcIds);
+    await advanceAndResolve(1);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
+    renderComputerScreen(currentGameState);
+    render(currentGameState, currentSceneState);
+    await saveAtBoundary('im-send', currentGameState);
+  } finally {
+    hideLoading();
+  }
+}
+
+async function doStreamWatch(showId) {
+  if (!showId) return;
+  showLoading();
+  try {
+    const result = watchEpisode(currentGameState, showId);
+    if (!result.ok) { addLogEntry('system', result.reason); return; }
+
+    const roomObjects = currentGameState.objects[`room_${currentGameState.player.location}`] || {};
+    const effCtx = buildEffectContext(currentGameState, [], [], roomObjects, currentGameState.player.inventory || []);
+    applyEffects([{ type: 'ADJUST_NEED', params: { who: 'player', need: 'mood', delta: String(result.show.moodGain) } }], effCtx);
+
+    await advanceAndResolve(result.show.episodeTicks);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, result.show.episodeTicks);
+    addLogEntry('narration', `You watch episode ${result.episode} of ${result.show.label}.`);
+    renderComputerScreen(currentGameState);
+    render(currentGameState, currentSceneState);
+    await saveAtBoundary('stream-watch', currentGameState);
+  } finally {
+    hideLoading();
+  }
+}
+
 // ===== /SECTION: UI.COMPUTER =====

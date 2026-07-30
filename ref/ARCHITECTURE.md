@@ -16,7 +16,7 @@ design record. Keep it current as phases land; don't let it drift.
 | P1 | **Done** | World object model |
 | P2 | **Done** | Items and inventory |
 | P3 | **Done** | Skills and progression |
-| P4 | **Partial** — see below | The computer |
+| P4 | **Done** | The computer (all 8 apps: Work, Nile, Browser, Classes, Services, Classifieds, IM, Stream) |
 | P5 | Not started | Free-action resolution pipeline |
 | P6 | Not started | Stealth, evidence, suspicion |
 | P7 | Not started | NPC autonomy |
@@ -430,9 +430,13 @@ layer, the generic-renderer framework everything else will reuse, and one
 fully working app — Work — as the proving ground the plan asked for. It
 exercises the object model (computer is an object), the app/screen
 registry, session persistence, skill curves, and the deterministic
-day-rollover hook, so the remaining apps are now "add an `APP_DEFS` entry
-+ a data source" work rather than new infrastructure. Shop/browser/
-classes/services/classifieds/im/stream/adult are **not started**.
+day-rollover hook, so the remaining apps became "add an `APP_DEFS` entry
++ a data source" work rather than new infrastructure — confirmed true in
+practice: all eight apps (Work, Nile, Browser, Classes, Services,
+Classifieds, IM, Stream — see their own sections below) shipped in this
+same pass, in the end, needing only two more generic renderers (`list`,
+`article`) plus two genuinely one-off ones (`applicant`, `chat`) beyond
+`dashboard`/`catalog`.
 
 **New files:**
 - `src/defs.computer.js` — `APP_DEFS` (just `work` so far) and `JOB_DEFS`
@@ -799,3 +803,99 @@ Viewing and accepting a second applicant correctly: flipped them to
 `$800`/person (2 residents + player, `2400/3`), created a `castWeb` pair
 against the original resident, deactivated the listing, and claimed every
 previously-unowned object in their new bedroom under their id.
+
+### IM (Messages)
+
+Real conversations with residents, through **the exact same LLM proposal
+contract `doTalk`/`doPlayerAction` already use** — a text reply can move
+`relPlayer`, land a memory fact, everything a scene conversation can do,
+because it goes through the same `validateProposal`/`applyProposal`
+(`npc.js`), just against a one-npc, no-room context.
+
+**New context/prompt/call trio, parallel to the scene path rather than
+reusing it directly** (the scene path is hardwired to room/phase/
+cleanliness framing that doesn't fit a text thread): `npc.js`'s
+`assembleImContext(gameState, npcId)` builds the same shape
+`assembleContext` does (so `validateProposal`/`applyProposal` don't need
+to know which path called them) but for exactly one npc, with
+`roomObjects`/`carryItems` deliberately empty — nothing is physically
+reachable over text, so any object/item effect a reply tried to sneak in
+fails EFFECTS' reach-set check the same way an out-of-room reference
+would. `llm.js`'s `buildImPrompt` reuses `buildNpcBlock` verbatim and
+adds the npc's `textingStyle`; `callImLLM` is a deliberately *simpler*
+parse ladder than `callLLM`'s (`JSON.parse`, then one regex dialogue
+fallback, no brace-matching tier) since IM's contract is narrower —
+dialogue and tiny deltas only, no narration field, no effects.
+
+**Threads are session state** (`apps.im.threads: {npcId: {msgs, unread}}`),
+sent via `computer.js`'s `sendImMessage` — player-initiated (called from
+a click, not a tick), so the async LLM call inside it doesn't touch the
+zero-LLM-in-ticks invariant. A failed/unparseable reply appends a system
+line ("hasn't replied yet") to the thread rather than losing the
+player's message or throwing.
+
+**`chat` is a genuinely one-off renderer, not reused elsewhere yet** — it
+draws message history plus an inline `<input>` + Send button scoped
+entirely inside `#cs-body`, deliberately *not* reusing the footer's
+`#input-bar` (which drives free-text scene actions): the two pipelines
+don't need to know about each other. The input's value is read
+synchronously by `UI.COMPUTER`'s `doImSend` before anything re-renders,
+so losing the DOM node on the next `renderComputerScreen` call (which
+always rebuilds `cs-body`) never loses what was typed.
+
+**Two small, reusable extensions to existing machinery**, both needed for
+the thread list specifically:
+- `render.computer.js`'s `resolveScreenSource` gained a third source
+  kind, the literal string `'residents'`, pulling current resident
+  npcIds straight from `gs.npcs` — IM's contact list is npcs, not
+  app-session data, so it doesn't fit the existing bare-name or
+  `'state:'` forms.
+- `list`'s rows can now be bare id strings (not just objects) — Classifieds'
+  applicant list already needed this (see that section above); IM's
+  thread list is the second consumer, confirming it as a real pattern
+  rather than a one-off.
+
+**NPC-initiated texts are not wired.** The plan's fuller design has an
+autonomy drive set a `pendingIntent` on a thread during a tick (pure,
+no LLM), with the LLM only writing the actual message once the player
+opens the thread — but autonomy (P7) doesn't exist yet. Threads are
+player-initiated only for now; `pendingIntent`/unread-from-the-house-side
+is a P7 follow-up, not a redesign of anything built here.
+
+**Verified**, via the fresh-iframe technique with a mock `generateText`
+that parses the npc name/id out of its own prompt template and returns a
+realistic reply: opening a thread and sending a message correctly
+appended both the player's line and the parsed reply to `msgs`; the
+mocked relationship/mood deltas (`trust +0.05`, `mood +0.03`) applied
+exactly through the real `applyProposal`. A full kv round-trip
+(`loadGameState` after close) confirmed both the thread history and the
+npc's `relPlayer`/`mood` changes persisted correctly. Switching the mock
+to return unparseable garbage correctly produced the "hasn't replied yet"
+fallback instead of a crash or a lost message. Manually setting a
+thread's `unread` count and opening it correctly cleared it. (One
+false-alarm along the way: a synthetic test house built via
+`SIM_generateHouse` alone — bypassing the normal
+`approveCastAndStartGame` prose-expansion step — legitimately has a blank
+`bible.name`, by design; patching in a name confirmed the actual display
+logic was correct all along. Worth remembering for any future test setup
+that needs a *named* NPC, not just a game state.)
+
+### Stream (Streamly)
+
+The simplest of the eight — one screen, reusing `catalog` with **zero
+new render code**, not even the `.cost`/`.price` fallback chain (shows
+are free; the price column just renders empty). `STREAM_DEFS`
+(`defs.computer.js`, three shows) plus `watchEpisode` (`computer.js`,
+tracking `resumePoints`/`watchHistory` per show) round out P4.
+
+**Verified**: watching applied the show's `moodGain` net of the
+episode's own tick decay to the exact expected value (`+0.1` effect −
+`0.02/tick × 2 ticks` = `+0.06`); watching the same show twice correctly
+incremented the episode number both times (confirmed via the
+`watchHistory` log, since a naive before/after snapshot of
+`resumePoints` without cloning hit the same live-reference aliasing
+pitfall noted in earlier sections — a reminder for next time, not a
+product bug). A final full regression sweep opened all eight apps in one
+session and confirmed every one rendered without error, with all eight
+labels present in the app tab bar (WorkHub, Nile, Browser, EduStream,
+HomeCare, RoomList, Messages, Streamly).

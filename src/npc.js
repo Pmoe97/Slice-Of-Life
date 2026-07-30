@@ -238,6 +238,32 @@ function assembleContext(gameState, sceneState) {
   };
 }
 
+// Context for a single IM exchange (COMPUTER's im app) — same shape
+// assembleContext produces (validateProposal/applyProposal read the same
+// fields either way), but for exactly one npc and with no room framing:
+// you're texting them, not standing in front of them. roomObjects/
+// carryItems are empty on purpose — nothing physically reachable over
+// text, so any object/item effect a reply tried to sneak in fails EFFECTS'
+// reach-set check the same way a genuinely out-of-room reference would.
+function assembleImContext(gameState, npcId) {
+  const npc = gameState.npcs[npcId];
+  if (!npc) return null;
+  return {
+    contentConfig: gameState.meta.contentConfig || null,
+    player: {
+      name: 'You', mood: gameState.player.mood, money: gameState.player.money, flags: gameState.player.flags,
+    },
+    activeNpcs: [{
+      id: npcId, name: npc.bible.name || 'Unknown', bible: npc.bible, mood: npc.mood, activity: npc.activity,
+      needs: npc.needs, relPlayer: npc.relPlayer, memory: buildMemorySlice(npc),
+      castWebSlice: buildCastWebSlice(npcId, gameState.npcs, gameState.world.castWeb),
+    }],
+    ambientNpcs: [],
+    worldEvents: [],
+    roomObjects: {}, carryItems: [],
+  };
+}
+
 function buildMemorySlice(npc) {
   return {
     facts: (npc.memory.facts || []).slice(-10).map(f => f.text),

@@ -99,6 +99,39 @@ const APP_DEFS = {
       detail: { label: 'Applicant', renderer: 'applicant', hideFromNav: true },
     },
   },
+  // Real conversations with residents, through the exact same LLM
+  // proposal contract doTalk/doPlayerAction already use — a reply can
+  // move relPlayer, land a memory fact, everything a scene conversation
+  // can do. NPC-initiated texts (a pendingIntent an autonomy drive sets)
+  // aren't wired yet since autonomy (P7) doesn't exist; threads are
+  // player-initiated only for now.
+  im: {
+    id: 'im', label: 'Messages', category: 'social', requires: [],
+    entryScreen: 'threads',
+    screens: {
+      threads: {
+        label: 'Threads', renderer: 'list', source: 'residents', emptyText: 'No one to text yet.',
+        labelFn: (npcId, gs) => {
+          const npc = gs.npcs[npcId];
+          const unread = gs.world.computer.apps.im.threads[npcId]?.unread;
+          return `${npc?.bible.name || 'Unknown'}${unread ? ` (${unread})` : ''}`;
+        },
+        rowAction: 'im.open-thread', rowActionLabel: 'Open',
+      },
+      chat: { label: 'Chat', renderer: 'chat', hideFromNav: true },
+    },
+  },
+  // The simplest app: one screen, watching costs time and lifts mood, no
+  // sub-navigation needed. Rounds out P4 by reusing `catalog` with zero
+  // new render code at all — not even a `.cost` fallback, since shows are
+  // free to watch (the price column just renders empty).
+  stream: {
+    id: 'stream', label: 'Streamly', category: 'entertainment', requires: [],
+    entryScreen: 'browse',
+    screens: {
+      browse: { label: 'Browse', renderer: 'catalog', source: 'STREAM_DEFS_LIST', rowAction: 'stream.watch', rowActionLabel: 'Watch Episode' },
+    },
+  },
 };
 
 // --- Jobs: what WorkHub's board offers, and what working a block pays.
@@ -202,5 +235,13 @@ const SERVICE_DEFS = {
   },
 };
 const SERVICE_DEFS_LIST = Object.values(SERVICE_DEFS);
+
+// --- Shows: free to watch, cost time, lift mood. ---
+const STREAM_DEFS = {
+  the_neighborhood: { id: 'the_neighborhood', label: 'The Neighborhood', genre: 'sitcom', episodeTicks: 2, moodGain: 0.08 },
+  murder_actually: { id: 'murder_actually', label: 'Murder, Actually', genre: 'crime drama', episodeTicks: 3, moodGain: 0.05 },
+  bake_off_but_worse: { id: 'bake_off_but_worse', label: 'Bake Off (But Worse)', genre: 'reality', episodeTicks: 2, moodGain: 0.1 },
+};
+const STREAM_DEFS_LIST = Object.values(STREAM_DEFS);
 
 // ===== /SECTION: DEFS.COMPUTER =====

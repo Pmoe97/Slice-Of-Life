@@ -81,6 +81,7 @@ const COMPUTER_RENDERERS = {
   list: renderList,
   article: renderArticle,
   applicant: renderApplicantProfile,
+  chat: renderChat,
 };
 
 // Rows whose def declares `requiresContentFlag` are hidden from any
@@ -177,7 +178,7 @@ const DASHBOARD_PANELS = {
 // declarations are), so a bare global-property lookup silently returns
 // undefined for every data registry in this codebase — this cost real
 // debugging time to find; see ARCHITECTURE.md's P4 notes.
-const CATALOG_SOURCES = { JOB_DEFS, SHOP_CATALOG_LIST, SITE_DEFS_LIST, COURSE_DEFS_LIST, SERVICE_DEFS_LIST };
+const CATALOG_SOURCES = { JOB_DEFS, SHOP_CATALOG_LIST, SITE_DEFS_LIST, COURSE_DEFS_LIST, SERVICE_DEFS_LIST, STREAM_DEFS_LIST };
 
 function renderCatalog(body, gs, app, screen) {
   const source = CATALOG_SOURCES[screen.source];
@@ -205,13 +206,17 @@ function renderCatalog(body, gs, app, screen) {
   body.appendChild(list);
 }
 
-// Resolves a screen's `source` two ways: a bare name ('JOB_DEFS') looks up
-// CATALOG_SOURCES (static content, built once at load); a 'state:a.b.c'
-// path reads live from gs.world.computer (e.g. 'state:apps.shop.cart') —
-// this is how a screen shows the player's own mutable session data
-// (a cart, a browser history, an IM thread) rather than a fixed catalog.
+// Resolves a screen's `source` three ways: a bare name ('JOB_DEFS') looks
+// up CATALOG_SOURCES (static content, built once at load); a 'state:a.b.c'
+// path reads live from gs.world.computer (e.g. 'state:apps.shop.cart'); a
+// literal 'residents' pulls current resident npcIds straight from gs.npcs
+// — IM's contact list is npcs, not app-session data, so it doesn't fit
+// either of the other two shapes.
 function resolveScreenSource(gs, screen) {
   if (!screen.source) return null;
+  if (screen.source === 'residents') {
+    return Object.keys(gs.npcs).filter(id => gs.npcs[id].residency.status === 'resident');
+  }
   if (screen.source.startsWith('state:')) {
     return screen.source.slice(6).split('.').reduce((cur, key) => cur?.[key], gs.world.computer);
   }
@@ -325,6 +330,47 @@ function renderApplicantProfile(body, gs, app, screen) {
   backBtn.setAttribute('data-screen', 'applicants');
   backBtn.textContent = 'Back to List';
   body.appendChild(backBtn);
+}
+
+// A thread with one npc — message history plus an inline compose row.
+// Deliberately its own text input rather than reusing the footer's
+// #input-bar (which drives free-text scene actions): the two pipelines
+// don't need to know about each other, and this keeps IM fully
+// self-contained inside the computer screen. The input's value is read
+// synchronously by UI.COMPUTER's doImSend before anything re-renders, so
+// losing the DOM node on the next render (RENDER.COMPUTER always rebuilds
+// cs-body) never loses what was typed.
+function renderChat(body, gs, app, screen) {
+  const im = gs.world.computer.apps.im;
+  const npc = gs.npcs[im?.viewingNpcId];
+  if (!npc) { body.innerHTML = '<p class="dim">No conversation open.</p>'; return; }
+
+  const thread = im.threads[im.viewingNpcId] || { msgs: [] };
+  const log = document.createElement('div');
+  log.className = 'cs-chat-log';
+  for (const m of thread.msgs) {
+    const bubble = document.createElement('div');
+    bubble.className = 'cs-chat-bubble';
+    bubble.setAttribute('data-from', m.from);
+    bubble.textContent = m.from === 'player' ? m.text : m.from === 'npc' ? `${npc.bible.name}: ${m.text}` : m.text;
+    log.appendChild(bubble);
+  }
+  body.appendChild(log);
+
+  const inputRow = document.createElement('div');
+  inputRow.className = 'cs-chat-input-row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = 'cs-chat-input';
+  input.placeholder = `Text ${npc.bible.name}...`;
+  const sendBtn = document.createElement('button');
+  sendBtn.className = 'btn tiny';
+  sendBtn.setAttribute('data-action', 'im.send');
+  sendBtn.setAttribute('data-row-id', im.viewingNpcId);
+  sendBtn.textContent = 'Send';
+  inputRow.appendChild(input);
+  inputRow.appendChild(sendBtn);
+  body.appendChild(inputRow);
 }
 
 // ===== /SECTION: RENDER.COMPUTER =====
