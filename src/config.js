@@ -612,6 +612,8 @@ const EFFECT_LIMITS = {
   npcActivityMaxLength: 60,
   spendTimeMin: 1,
   spendTimeMax: 8,
+  itemQtyCap: 10,
+  objectConditionCap: 25,
 };
 
 // --- Room cleanliness, once WORLD derives it from object state instead of

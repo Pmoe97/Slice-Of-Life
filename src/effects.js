@@ -24,11 +24,13 @@
 // resolveTick/resolveBatch already work.
 //
 // `implemented:false` entries are declared now so the DSL/vocabulary shape
-// is stable across phases, but their apply() is a documented no-op until
-// the phase that gives them something to act on (WORLD/ITEMS/STEALTH)
-// lands. They are deliberately excluded from every PROMPT_KINDS
-// effectVocabulary list until then, so the LLM is never invited to use a
-// verb that can't do anything yet.
+// is stable across phases, but validation always fails for them until the
+// phase that gives them something to act on lands (WORLD/ITEMS landed in
+// P1/P2 — SET_OBJECT_STATE/MOVE_ITEM/etc. are real now; STEALTH's
+// WITNESS/ADJUST_SUSPICION/LEAVE_EVIDENCE and the trusted-only app/
+// schedule/residency/arc types are still ahead). They are deliberately
+// excluded from every PROMPT_KINDS effectVocabulary list until implemented,
+// so the LLM is never invited to use a verb that can't do anything yet.
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function isFiniteNumber(s) { return Number.isFinite(Number(s)) && String(s).trim() !== ''; }
@@ -83,6 +85,50 @@ function validateXp(xpStr) {
 function validateFlagKey(key) { return FLAG_PATTERNS.some(re => re.test(key)) || `Flag key doesn't match a known pattern: ${key}`; }
 function validateTextLength(text, max) {
   return (typeof text === 'string' && text.length > 0 && text.length <= max) || `Text missing or too long (max ${max}).`;
+}
+
+// --- Object/item validators (WORLD/ITEMS-backed) ---
+// ctx.roomObjects is { objId: instance } for the room the effect's
+// producer is in — reach is deliberately scoped to "your own room" rather
+// than the whole apartment, which is what makes the reach-set an
+// anti-hallucination wall and not just an existence check.
+function validateReachableObject(objId, ctx) {
+  return !!ctx.roomObjects[objId] || `Not reachable: ${objId}`;
+}
+function validateObjectStateChange(objId, key, value, ctx) {
+  const obj = ctx.roomObjects[objId];
+  const def = obj && OBJECT_DEFS[obj.defId];
+  if (!def) return `Not reachable: ${objId}`;
+  if (!def.states?.[key]) return `${def.label} has no state "${key}".`;
+  return def.states[key].includes(value) || `Invalid value "${value}" for ${key}.`;
+}
+function validateObjectBreakable(objId, deltaStr, ctx) {
+  const obj = ctx.roomObjects[objId];
+  const def = obj && OBJECT_DEFS[obj.defId];
+  if (!def) return `Not reachable: ${objId}`;
+  if (!def.breakable) return `${def.label} isn't breakable.`;
+  return validateMagnitude(deltaStr, EFFECT_LIMITS.objectConditionCap, 'condition');
+}
+function validateObjectPortable(objId, ctx) {
+  const obj = ctx.roomObjects[objId];
+  const def = obj && OBJECT_DEFS[obj.defId];
+  if (!def) return `Not reachable: ${objId}`;
+  return !!def.portable || `${def.label} can't be moved.`;
+}
+function validateItemDefId(defId) { return !!ITEM_DEFS[defId] || `Unknown item: ${defId}`; }
+function validateQtyRange(qtyStr) {
+  if (!isFiniteNumber(qtyStr)) return `Not a number: ${qtyStr}`;
+  const q = Number(qtyStr);
+  return (q > 0 && q <= EFFECT_LIMITS.itemQtyCap) || `Quantity out of range (max ${EFFECT_LIMITS.itemQtyCap}).`;
+}
+function validateLocationRef(ref, ctx) {
+  return ref === 'player' || !!ctx.roomObjects[ref] || `Not reachable: ${ref}`;
+}
+function locationStackList(ref, ctx) {
+  return ref === 'player' ? ctx.carryItems : (ctx.roomObjects[ref]?.contents || []);
+}
+function validateHasEnough(defId, qtyStr, from, ctx) {
+  return stackQty(locationStackList(from, ctx), defId) >= Number(qtyStr) || `Not enough ${defId} at ${from}.`;
 }
 
 // Runs each check in order, short-circuiting on the first failure — lets
@@ -152,6 +198,72 @@ function applyMemoryFactEffect(p, ctx) {
 function applyMemoryEpisodeEffect(p, ctx) {
   const npc = ctx.gameState.npcs[p.npcId];
   if (npc) ctx.gameState.npcs[p.npcId] = addMemoryEpisode(npc, ctx.gameState.meta.clock.day, p.text, 0.5);
+}
+
+// --- Object/item appliers (WORLD/ITEMS-backed) ---
+// findObjectById scans every bucket rather than indexing by id — cheap at
+// the current object count (~40) and avoids maintaining a second id->bucket
+// map that could drift from the real one.
+function findObjectById(gameState, objId) {
+  for (const bucket of Object.values(gameState.objects || {})) {
+    if (bucket[objId]) return bucket[objId];
+  }
+  return null;
+}
+function locationStackListMutable(ref, gameState) {
+  return ref === 'player' ? gameState.player.inventory : findObjectById(gameState, ref)?.contents;
+}
+function writeLocationStackList(ref, gameState, list) {
+  if (ref === 'player') { gameState.player.inventory = list; return; }
+  const obj = findObjectById(gameState, ref);
+  if (obj) obj.contents = list;
+}
+
+function applySetObjectState(p, ctx) {
+  const obj = findObjectById(ctx.gameState, p.objId);
+  if (obj) obj.state = { ...obj.state, [p.key]: p.value };
+}
+function applyAdjustObjectCondition(p, ctx) {
+  const obj = findObjectById(ctx.gameState, p.objId);
+  if (obj) obj.condition = clamp((obj.condition ?? 100) + Number(p.delta), 0, 100);
+}
+function applyMoveObject(p, ctx) {
+  const obj = findObjectById(ctx.gameState, p.objId);
+  if (!obj || !OBJECT_DEFS[obj.defId]?.portable) return;
+  const fromBucket = ctx.gameState.objects[obj.bucket];
+  if (fromBucket) delete fromBucket[obj.id];
+  const toBucket = ctx.gameState.objects[p.toBucket] || (ctx.gameState.objects[p.toBucket] = {});
+  obj.bucket = p.toBucket;
+  toBucket[obj.id] = obj;
+}
+function applyMoveItem(p, ctx) {
+  const fromList = locationStackListMutable(p.from, ctx.gameState);
+  if (!fromList) return;
+  const { stacks: afterRemove, removed } = removeStack(fromList, p.defId, Number(p.qty));
+  writeLocationStackList(p.from, ctx.gameState, afterRemove);
+  if (removed <= 0) return;
+  const toList = locationStackListMutable(p.to, ctx.gameState) || [];
+  writeLocationStackList(p.to, ctx.gameState, addStack(toList, p.defId, removed, p.to === 'player' ? 'player' : null));
+}
+function applyConsumeItem(p, ctx) {
+  const fromList = locationStackListMutable(p.from, ctx.gameState);
+  if (!fromList) return;
+  const { stacks: afterRemove, removed } = removeStack(fromList, p.defId, Number(p.qty));
+  writeLocationStackList(p.from, ctx.gameState, afterRemove);
+  if (removed <= 0) return;
+  const def = ITEM_DEFS[p.defId];
+  for (const [need, amt] of Object.entries(def?.consumable || {})) {
+    applyAdjustNeed({ who: 'player', need, delta: String(amt * removed) }, ctx);
+  }
+}
+function applyDestroyItem(p, ctx) {
+  const fromList = locationStackListMutable(p.from, ctx.gameState);
+  if (!fromList) return;
+  writeLocationStackList(p.from, ctx.gameState, removeStack(fromList, p.defId, Number(p.qty)).stacks);
+}
+function applySpawnItem(p, ctx) {
+  const toList = locationStackListMutable(p.to, ctx.gameState) || [];
+  writeLocationStackList(p.to, ctx.gameState, addStack(toList, p.defId, Number(p.qty), p.to === 'player' ? 'player' : null));
 }
 
 // --- Effect registry ---
@@ -229,15 +341,42 @@ const EFFECT_DEFS = {
     apply: applyMemoryEpisodeEffect,
   },
 
-  // --- Declared, not yet implemented (need WORLD/ITEMS/STEALTH — P1/P2/P6).
-  // Excluded from every prompt's effectVocabulary until their phase lands. ---
-  SET_OBJECT_STATE: { paramShape: ['objId', 'key', 'value'], llm: true, implemented: false },
-  ADJUST_OBJECT_CONDITION: { paramShape: ['objId', 'delta'], llm: true, implemented: false },
-  MOVE_OBJECT: { paramShape: ['objId', 'toBucket'], llm: true, implemented: false },
-  MOVE_ITEM: { paramShape: ['defId', 'qty', 'from', 'to'], llm: true, implemented: false },
-  CONSUME_ITEM: { paramShape: ['defId', 'qty', 'from'], llm: true, implemented: false },
-  DESTROY_ITEM: { paramShape: ['defId', 'qty', 'from'], llm: true, implemented: false },
-  SPAWN_ITEM: { paramShape: ['defId', 'qty', 'to'], llm: false, implemented: false },
+  // --- Object/item effects (WORLD/ITEMS-backed, P1/P2) ---
+  SET_OBJECT_STATE: {
+    paramShape: ['objId', 'key', 'value'], llm: true, implemented: true,
+    validate: (p, ctx) => validateObjectStateChange(p.objId, p.key, p.value, ctx),
+    apply: applySetObjectState,
+  },
+  ADJUST_OBJECT_CONDITION: {
+    paramShape: ['objId', 'delta'], llm: true, implemented: true,
+    validate: (p, ctx) => validateObjectBreakable(p.objId, p.delta, ctx),
+    apply: applyAdjustObjectCondition,
+  },
+  MOVE_OBJECT: {
+    paramShape: ['objId', 'toBucket'], llm: true, implemented: true,
+    validate: (p, ctx) => validateObjectPortable(p.objId, ctx),
+    apply: applyMoveObject,
+  },
+  MOVE_ITEM: {
+    paramShape: ['defId', 'qty', 'from', 'to'], llm: true, implemented: true,
+    validate: (p, ctx) => firstFailure(validateItemDefId(p.defId), () => validateQtyRange(p.qty), () => validateLocationRef(p.from, ctx), () => validateLocationRef(p.to, ctx), () => validateHasEnough(p.defId, p.qty, p.from, ctx)),
+    apply: applyMoveItem,
+  },
+  CONSUME_ITEM: {
+    paramShape: ['defId', 'qty', 'from'], llm: true, implemented: true,
+    validate: (p, ctx) => firstFailure(validateItemDefId(p.defId), () => validateQtyRange(p.qty), () => validateLocationRef(p.from, ctx), () => validateHasEnough(p.defId, p.qty, p.from, ctx)),
+    apply: applyConsumeItem,
+  },
+  DESTROY_ITEM: {
+    paramShape: ['defId', 'qty', 'from'], llm: true, implemented: true,
+    validate: (p, ctx) => firstFailure(validateItemDefId(p.defId), () => validateQtyRange(p.qty), () => validateLocationRef(p.from, ctx), () => validateHasEnough(p.defId, p.qty, p.from, ctx)),
+    apply: applyDestroyItem,
+  },
+  SPAWN_ITEM: {
+    paramShape: ['defId', 'qty', 'to'], llm: false, implemented: true,
+    validate: (p, ctx) => firstFailure(validateItemDefId(p.defId), () => validateQtyRange(p.qty), () => validateLocationRef(p.to, ctx)),
+    apply: applySpawnItem,
+  },
   WITNESS: { paramShape: ['npcId', 'subjectRef', 'certainty'], llm: true, implemented: false },
   ADJUST_SUSPICION: { paramShape: ['npcId', 'subject', 'delta'], llm: true, implemented: false },
   LEAVE_EVIDENCE: { paramShape: ['objId', 'kind', 'strength'], llm: true, implemented: false },
@@ -304,15 +443,26 @@ function normalizeProposal(proposal) {
   return { effects: raw.map(normalizeEffectEntry).filter(Boolean) };
 }
 
-// --- Reach-set: which object/item ids an effect is allowed to reference.
-// Empty until WORLD (P1)/ITEMS (P2) exist — an effect naming an id will
-// correctly fail validation (nothing is in reach) rather than silently
-// no-op, which is the safe direction for an unimplemented boundary. ---
-function computeReachSet(ctx) { return new Set(ctx.reachableIds || []); }
+// --- Reach-set: which object ids an effect is allowed to reference —
+// deliberately scoped to the producer's current room (ctx.roomObjects),
+// never the whole apartment. An effect naming an id outside it, or one
+// that doesn't exist at all, fails validation the same way; the LLM
+// cannot distinguish "wrong room" from "doesn't exist", which is exactly
+// the point — it can't learn the shape of rooms it can't see. ---
+function computeReachSet(ctx) { return new Set(Object.keys(ctx.roomObjects || {})); }
 
-// --- Effect context: what a producer's effects are allowed to touch. ---
-function buildEffectContext(gameState, activeNpcIds, presentNpcIds, reachableIds) {
-  return { gameState, activeNpcIds: activeNpcIds || [], presentNpcIds: presentNpcIds || [], reachableIds: reachableIds || [] };
+// --- Effect context: what a producer's effects are allowed to touch.
+// roomObjects is { objId: instance } for the current room (WORLD);
+// carryItems is the player's inventory stack list (ITEMS). Both empty
+// arrays/objects are safe defaults for callers that predate WORLD/ITEMS
+// data (object/item effects simply have nothing to validate against, so
+// they correctly fail rather than silently no-op). ---
+function buildEffectContext(gameState, activeNpcIds, presentNpcIds, roomObjects, carryItems) {
+  return {
+    gameState,
+    activeNpcIds: activeNpcIds || [], presentNpcIds: presentNpcIds || [],
+    roomObjects: roomObjects || {}, carryItems: carryItems || [],
+  };
 }
 
 function checkOneEffect(eff, def, ctx, tier) {

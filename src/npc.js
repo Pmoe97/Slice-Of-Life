@@ -229,6 +229,12 @@ function assembleContext(gameState, sceneState) {
     activeNpcs: activeContext,
     ambientNpcs: ambientContext,
     worldEvents: getRecentEvents(world.events, 3, npcs),
+    // WORLD/ITEMS reach data for the effects boundary (EFFECTS' reach-set)
+    // — the LLM proposal path validates object/item effects against
+    // exactly this room's objects and the player's own inventory, never
+    // the whole apartment.
+    roomObjects: (gameState.objects && gameState.objects[`room_${roomId}`]) || {},
+    carryItems: player.inventory || [],
   };
 }
 
@@ -356,12 +362,12 @@ function validateProposal(proposal, context) {
   // partial acceptance means one bad effect line costs only that line, not
   // the narration/dialogue/legacy deltas around it (see applyProposal).
   // The minimal `{ player: { money } }` shim below is enough for every
-  // effect validator that currently exists (only SPEND_MONEY reads
-  // gameState) without threading the full game state through this
-  // function's signature.
+  // money-checking validator without threading the full game state through
+  // this function's signature; context.roomObjects/carryItems (assembled
+  // by assembleContext) are the real WORLD/ITEMS reach data.
   const activeIds = context.activeNpcs.map(n => n.id);
   const presentIds = [...activeIds, ...(context.ambientNpcs || []).map(n => n.id)];
-  const effCtx = buildEffectContext({ player: { money: context.player.money } }, activeIds, presentIds, []);
+  const effCtx = buildEffectContext({ player: { money: context.player.money } }, activeIds, presentIds, context.roomObjects, context.carryItems);
   const effResult = validateEffects(normalizeProposal(proposal).effects, effCtx, 'llm');
   recordEffectOutcome(effResult);
 
@@ -427,7 +433,8 @@ async function applyProposal(proposal, context, gameState) {
   if (proposal.effects) {
     const activeIds = context.activeNpcs.map(n => n.id);
     const presentIds = [...activeIds, ...(context.ambientNpcs || []).map(n => n.id)];
-    const effCtx = buildEffectContext(gameState, activeIds, presentIds, []);
+    const roomObjects = (gameState.objects && gameState.objects[`room_${gameState.player.location}`]) || {};
+    const effCtx = buildEffectContext(gameState, activeIds, presentIds, roomObjects, gameState.player.inventory || []);
     const { valid } = validateEffects(normalizeProposal(proposal).effects, effCtx, 'llm');
     effectNpcIds = applyEffects(valid, effCtx).touchedNpcIds;
   }

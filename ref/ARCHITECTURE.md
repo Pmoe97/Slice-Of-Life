@@ -14,7 +14,7 @@ the only design record. Keep it current as phases land; don't let it drift.
 |---|---|---|
 | P0 | **Done** | Effects engine, action registry, tone/content wiring |
 | P1 | **Done** | World object model |
-| P2 | Not started | Items and inventory |
+| P2 | **Partial** — see below | Items and inventory |
 | P3 | Not started | Skills and progression |
 | P4 | Not started | The computer |
 | P5 | Not started | Free-action resolution pipeline |
@@ -257,3 +257,80 @@ directly without any kv or LLM dependency):
   `checkAndMigrateFolder('world')` call was a correct no-op (already at
   target version). This is the scenario every existing save will actually
   hit on first load after this update, and it works end-to-end.
+
+## P2 — Items and inventory (partial: engine done, not yet wired to gameplay)
+
+**Stopped here deliberately** to leave the game in a consistent, playable
+state (P0/P1 gameplay is unaffected by everything below — nothing new is
+exercised by any action yet). What's done and verified vs. what's left for
+the next session to pick up:
+
+**Done:**
+- `ITEM_DEFS` (58 defs — foods/ingredients, prepared meals, snacks/drinks,
+  cleaning supplies, toiletries, tools/decor/electronics/media/medication/
+  gifts, plus `_unknown` as the legacy-data fallback) and `RECIPES` (4
+  recipes: pasta, omelette, stir-fry, sandwich — each with `leaves` DSL
+  lines that dirty the stove/sink on success) in `defs.world.js`.
+  `STARTER_GROCERIES` is declared there too but **not yet wired into
+  `spawnObjectsForNewGame`** — new games do not currently start with
+  anything in the fridge/pantry.
+- `src/items.js` — stack helpers (`addStack`/`removeStack`/`stackQty`),
+  legacy-inventory-name resolution (`resolveItemDefIdByName`,
+  `normalizeLegacyInventoryEntry`, `migrateInventory`), and recipe
+  selection (`recipeAvailable`/`pickAvailableRecipe`). Added to the script
+  load order between `world.js` and `effects.js`.
+- **`effects.js`'s object/item effect types are now fully implemented**
+  (`SET_OBJECT_STATE`, `ADJUST_OBJECT_CONDITION`, `MOVE_OBJECT`,
+  `MOVE_ITEM`, `CONSUME_ITEM`, `DESTROY_ITEM`, `SPAWN_ITEM` — all flip from
+  P0's `implemented:false` placeholder to real `validate`/`apply` pairs).
+  This is the biggest structural change: `buildEffectContext`'s signature
+  changed from a flat `reachableIds` array to `(gameState, activeNpcIds,
+  presentNpcIds, roomObjects, carryItems)` — `roomObjects` is `{objId:
+  instance}` for the producer's current room, `carryItems` is the player's
+  inventory. `computeReachSet` now returns real object ids instead of
+  always being empty. **All three call sites were updated to match**:
+  `npc.js`'s `validateProposal` (via `context.roomObjects`/
+  `context.carryItems`, both now assembled by `assembleContext`) and
+  `applyProposal` (via live `gameState.objects`/`gameState.player.inventory`
+  — more authoritative than the context snapshot since apply happens after
+  validation), and `actions.js`'s `executeAction`.
+- `findObjectById(gameState, objId)` (EFFECTS) scans every object bucket —
+  fine at the current object count (~40), avoids a second id→bucket index
+  that could drift from the real one.
+
+**Not done — pick up next:**
+- **`player` 1→2 migration** normalizing the mixed-type legacy inventory
+  (bare strings / `{name,qty}`) into real stacks via
+  `items.js`'s `migrateInventory`. Not wired into `state.js`'s `MIGRATIONS`
+  yet. Nothing crashes without it (old string-shaped entries just silently
+  fail to match any `defId` in `removeStack`/`stackQty`'s comparisons — a
+  harmless no-op, not an error), but existing saves' inventories stay
+  inert until this lands.
+- **`self.cook` is still the P0 version** (a flat `ADJUST_NEED` effect, no
+  ingredients, no object source) — it has not been upgraded to the
+  object-sourced, recipe-consuming action the architecture plan describes.
+  This is the natural next step: change `self.cook`'s `source` to `{kind:
+  'object', objDef:'stove'}`, add a `hasRecipeIngredients`-style requirement
+  checker backed by `pickAvailableRecipe`, and have its effects reference
+  the picked recipe's `produces`/`leaves` via `SPAWN_ITEM`/`CONSUME_ITEM`/
+  `SET_OBJECT_STATE` lines. `actionSourceMatches` (ACTIONS) does not yet
+  handle `source.kind === 'object'` at all — that needs adding alongside
+  this.
+- **`STARTER_GROCERIES` isn't seeded** — `spawnObjectsForNewGame` (WORLD)
+  needs a small addition to populate the fridge/pantry instances'
+  `.contents` from it after spawning, using the same stack shape
+  (`{defId, qty, ownerId: null, meta: {}}`).
+- Shop catalog (deriving `SHOP_CATALOG` from `ITEM_DEFS.price`/`buyQty`) —
+  planned for P4, not started.
+
+**Verification performed for the completed portion**, via console tests
+against the loaded scripts: full house generation still succeeds
+(`SIM_generateHouse`, no regression from P1); a synthetic kitchen scenario
+confirmed `SET_OBJECT_STATE` correctly dirties the stove/sink, cleanliness
+correctly drops afterward (`recomputeRoomCleanliness`), `CONSUME_ITEM`
+correctly removes inventory and applies the item's `consumable` need
+deltas (2 eggs consumed → hunger +12, matching `eggs.consumable.hunger:
+6 × 2`), and the reach-set boundary correctly rejects an effect naming an
+object from a *different* room even when reachable-by-existence — the
+LLM cannot tell "wrong room" from "doesn't exist," which is the intended
+anti-hallucination property.

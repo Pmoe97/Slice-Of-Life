@@ -58,7 +58,8 @@ async function executeAction(actionId, gameState) {
   if (!check.ok) return { ok: false, reason: check.reason, ticksSpent: 0 };
 
   const effects = (def.effects || []).map(line => parseEffectDSL(line)[0]).filter(Boolean);
-  const effCtx = buildEffectContext(gameState, [], ctx.presentNpcIds, []);
+  const roomObjects = (gameState.objects && gameState.objects[`room_${ctx.roomId}`]) || {};
+  const effCtx = buildEffectContext(gameState, [], ctx.presentNpcIds, roomObjects, gameState.player.inventory || []);
   applyEffects(effects, effCtx);
 
   const ticks = def.timeCost?.base ?? 1;
