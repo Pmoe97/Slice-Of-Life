@@ -17,7 +17,7 @@ design record. Keep it current as phases land; don't let it drift.
 | P2 | **Done** | Items and inventory |
 | P3 | **Done** | Skills and progression |
 | P4 | **Done** | The computer (all 8 apps: Work, Nile, Browser, Classes, Services, Classifieds, IM, Stream) |
-| P5 | Not started | Free-action resolution pipeline |
+| P5 | **Done** | Free-action resolution pipeline |
 | P6 | Not started | Stealth, evidence, suspicion |
 | P7 | Not started | NPC autonomy |
 | P8 | Not started | Content volume expansion |
@@ -899,3 +899,93 @@ product bug). A final full regression sweep opened all eight apps in one
 session and confirmed every one rendered without error, with all eight
 labels present in the app tab bar (WorkHub, Nile, Browser, EduStream,
 HomeCare, RoomList, Messages, Streamly).
+
+## P5 — Free-action resolution pipeline
+
+**New file:** `src/intent.js` (loaded after `actions.js`, before `skills.js`
+— needs `ACTION_DEFS`/`resolveAvailableActions` from ACTIONS, needs to load
+before UI calls it). `classifyIntent(text, gameState)` is the single entry
+point: normalizes the input (lowercase, strip punctuation, collapse
+whitespace), then tries three deterministic match tiers in order —
+registered actions, room movement, a small fixed set of "quick" verbs —
+and returns `null` if none hit, which is the existing LLM narrative path's
+unchanged cue to run.
+
+**Why free text used to always cost an LLM call.** `UI`'s `doPlayerAction`
+called `callLLM` unconditionally for every free-text input, even "eat" —
+there was no attempt to check whether the game already had a deterministic
+answer. `ACTION_DEFS` entries had carried a `verbs` array (free-text
+synonyms) since P0, unused by anything; this is the pass that finally reads
+them.
+
+**Match strategy: longest whole-phrase substring wins, no fuzziness beyond
+that.** `matchVerbPhrase` checks each candidate phrase as a `\b`-bounded
+substring of the normalized input and keeps the longest one that hits —
+"grab a bite" (a `self.eat` synonym) beats a bare "eat" if both happen to
+appear, so more specific phrasing wins over generic. Deliberately no
+scoring model, no LLM-based classification: this has to stay in the same
+zero-latency, zero-cost tier as the rest of the deterministic action
+system, and plain substring matching is easy to reason about and to add
+new verbs to later.
+
+**Three match tiers, in order:**
+1. **Registered actions** — for every action `resolveAvailableActions`
+   currently reports as `ok:true` (so out-of-context/ungated actions never
+   match), tries `matchVerbPhrase` against that action's `verbs` plus its
+   `label`. A hit routes through the existing `runRegisteredAction` —
+   `intent.js` never touches `applyEffects`/`executeAction` itself, it only
+   decides which registered action id, if any, the text means.
+2. **Movement** — `matchRoomIntent` checks the input against each room's
+   display name, or (for a resident's bedroom specifically) that resident's
+   name adjacent to "room"/"bedroom" — "go to marcus's room" and "marcus
+   room" both resolve without the player needing to know room-id
+   vocabulary. This is the tier P6 depends on: free-text room entry and a
+   room-map click now converge on the exact same `doMove` call, so P6 only
+   needs one stealth hook, not two.
+3. **Quick verbs** — a small fixed table (`QUICK_INTENTS`, in `intent.js`
+   itself, not `config.js`: this is structural glue naming which hand-
+   written UI.js functions are free-text-reachable, not a tunable number)
+   covering `sleep` and `pay-rent`. Both are already deterministic,
+   argument-free, side-effect-safe functions (`doSleep`/`doPayRent`) — no
+   reason to force them through `ACTION_DEFS`'s trusted-effects-list shape
+   just to make them free-text-reachable.
+
+**Scope decision: `talk`/`work`/`ask-to-leave` stay out of `classifyIntent`
+for this pass.** `talk` in particular doesn't fit `ACTION_DEFS`'s shape
+without a real change to `executeAction`'s contract — it would need a new
+`source.kind:'npc'` and a `requiresLLM` flag, since its entire point is an
+LLM-generated conversation opener, not a deterministic effects list.
+`work`/`ask-to-leave` are already button/chip-only (multi-step computer app
+state; residency mutation with an NPC target) with no product reason to
+build free-text target-matching for them now. Free-text "talk to X"
+continues to fall through to the unchanged LLM path.
+
+**`UI`'s `doPlayerAction` change**: `classifyIntent` runs first, before
+`showLoading`/the LLM call. Each matched branch (`runRegisteredAction`/
+`doMove`/`doSleep`/`doPayRent`) is called and returned from directly — they
+each already manage their own loading state, persistence, and render, so
+this is purely a routing shortcut, not a second implementation of any of
+them. A `null` classification falls through to the existing LLM-call code,
+completely unchanged.
+
+**Verified**, via the fresh-iframe technique (a genuine `navigate()` reload
+was confirmed stale against an edited `ui.js` mid-session — same gotcha
+HANDOFF.md documents — so the iframe fix was necessary, not optional, this
+time) with a real house from `SIM_generateHouse`/`writeGeneratedGameState`/
+`loadGameState` and a mocked `root.generateText` that counts calls:
+- `classifyIntent('eat something', gameState)` in the kitchen → `{kind:
+  'registered', actionId:'self.eat'}`; `classifyIntent('take a shower', …)`
+  in the bathroom, `'put on a show'`/`'unwind'` in the living room → the
+  correct `self.shower`/`self.watch_tv`/`self.relax` matches. An
+  out-of-context probe (kitchen actions while in the bathroom) correctly
+  fell through to `null`.
+- End-to-end through `doPlayerAction`: `"eat something"` raised
+  `player.hunger` (80→100, capped) with **zero** `generateText` calls;
+  `"go to the kitchen"` from the living room moved `player.location` to
+  `'kitchen'` with zero calls; `"sleep"` restored energy to 100 with zero
+  calls; `"pay the rent"` zeroed `rentOwed` and deducted the exact amount
+  from `player.money` with zero calls. An out-of-vocabulary probe ("I
+  stare out the window and think about my life") correctly fell through
+  and made exactly one `generateText` call — confirming P5 is additive:
+  every existing LLM-narrative behavior is unchanged for anything
+  `classifyIntent` doesn't recognize.

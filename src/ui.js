@@ -497,6 +497,16 @@ async function handleFreeText(text) {
 // --- Player actions ---
 
 async function doPlayerAction(actionText) {
+  // Try to resolve free text deterministically before ever touching the
+  // LLM (P5). Each branch delegates to the exact function a chip/button
+  // would call — same effects, same persistence, same render — so this is
+  // purely a routing shortcut, not a second implementation of any of them.
+  const intent = classifyIntent(actionText, currentGameState);
+  if (intent?.kind === 'registered') { await runRegisteredAction(intent.actionId); return; }
+  if (intent?.kind === 'move') { await doMove(intent.roomId); return; }
+  if (intent?.kind === 'quick' && intent.quickId === 'sleep') { await doSleep(); return; }
+  if (intent?.kind === 'quick' && intent.quickId === 'pay-rent') { await doPayRent(); return; }
+
   showLoading();
   try {
     await advanceAndResolve(1);
