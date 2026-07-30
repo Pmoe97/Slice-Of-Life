@@ -144,4 +144,22 @@ async function doAttendLesson(courseId) {
   }
 }
 
+async function doServicesHire(serviceId) {
+  if (!serviceId) return;
+  const result = hireService(currentGameState, serviceId);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  addLogEntry('system', `Hired ${result.service.label}. First visit in ${result.service.cadenceDays} days.`);
+  switchScreen(currentGameState, 'hired');
+  renderComputerScreen(currentGameState);
+  await saveAtBoundary('services-hire', currentGameState);
+}
+
+async function doServicesCancel(serviceId) {
+  if (!serviceId) return;
+  const result = cancelService(currentGameState, serviceId);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  renderComputerScreen(currentGameState);
+  await saveAtBoundary('services-cancel', currentGameState);
+}
+
 // ===== /SECTION: UI.COMPUTER =====

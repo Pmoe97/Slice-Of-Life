@@ -685,3 +685,51 @@ progress 1→2→3→4, moved the course from `enrolled` to `completed` on the
 a completed course and enrolling in a level-gated course the player
 doesn't qualify for both correctly refused with the exact expected
 reasons.
+
+### Services (HomeCare)
+
+Recurring hired help, not a one-off purchase. `SERVICE_DEFS`
+(`defs.computer.js`) has two tiers: `standard_cleaning` (common areas
+only) and `deep_cleaning` (`accessScope: 'all'` — bedrooms too). Hiring
+(`hireService`, `computer.js`) charges the first visit immediately and
+schedules `nextDay = day + cadenceDays`; **the visit itself happens
+automatically at day rollover** (`processServiceVisitsForDay`, called
+from a new `processServiceVisitsForDayUi` hook in `ui.js`'s
+`processDayRollover`), not from a click — this is the first app content
+whose payoff the player doesn't directly trigger.
+
+**Cleaning is real, not narrated-only.** `cleanRoomObjects` resets every
+`dirtyWhen`-tracked state on every object in scope back to
+`def.states[key][0]` (the clean value, which is always listed first by
+convention — no second "what does clean mean" table needed) and calls
+WORLD's `refreshRoomCleanliness` afterward. `performCleaningVisit` scopes
+this to `COMMON_ROOMS` or `ALL_ROOMS` depending on the service's
+`accessScope` — this is the mechanic that gives `accessScope: 'all'`
+actual teeth: a `deep_cleaning` hire really does enter every bedroom,
+which is exactly the kind of housekeeper-caused boundary crossing STEALTH
+(P6) will eventually attach a consequence to (narrated for now,
+mechanically inert beyond the cleaning).
+
+**A visit the player can't currently afford is postponed one full
+cadence, not cancelled** — same "always playable, never a hard stop"
+principle as rent, quests, and work deadlines.
+
+**A real content gap found and fixed while testing this**: `bed`'s
+`made`/`unmade` state (declared back in P1) had an empty `dirtyWhen`, so
+it never affected derived cleanliness and cleaning services had nothing
+to reset — the `deep_cleaning`-vs-`standard_cleaning` distinction would
+have been *invisible* for any bedroom, since there was nothing there to
+clean regardless of scope. Fixed in `defs.world.js`: `bed.dirtyWhen =
+{made: {unmade: 0.15}}` (a light weight — an unmade bed is a minor
+tidiness issue, not filth).
+
+**Verified**: hiring correctly charged `costPerVisit` and scheduled the
+next visit `cadenceDays` out. A `standard_cleaning` visit correctly reset
+a filthy stove and a many-dishes sink to clean (kitchen cleanliness
+50s→100) while leaving an unmade bed in the player's bedroom untouched
+(common-only scope). Going broke before the next scheduled visit
+correctly postponed it (`nextDay` pushed out again, no charge, object
+states unchanged) instead of erroring or silently cancelling. Switching
+to `deep_cleaning` correctly reached the bedroom and made the bed,
+restoring cleanliness to 100 — confirming the scope distinction is now
+mechanically real, post-fix.

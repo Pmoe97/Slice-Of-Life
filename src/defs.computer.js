@@ -59,6 +59,22 @@ const APP_DEFS = {
       },
     },
   },
+  // Hired help — a recurring subscription, not a one-off purchase. See
+  // COMPUTER's processServiceVisitsForDay: a hired service visits on its
+  // own cadence via day rollover, not something the player has to click
+  // each time.
+  services: {
+    id: 'services', label: 'HomeCare', category: 'services', requires: [],
+    entryScreen: 'catalog',
+    screens: {
+      catalog: { label: 'Available', renderer: 'catalog', source: 'SERVICE_DEFS_LIST', rowAction: 'services.hire', rowActionLabel: 'Hire' },
+      hired: {
+        label: 'Hired', renderer: 'list', source: 'state:apps.services.hired', emptyText: 'No services hired.',
+        labelFn: (row) => `${SERVICE_DEFS[row.serviceId]?.label} — next visit Day ${row.nextDay}`,
+        rowAction: 'services.cancel', rowActionLabel: 'Cancel',
+      },
+    },
+  },
 };
 
 // --- Jobs: what WorkHub's board offers, and what working a block pays.
@@ -145,5 +161,22 @@ const COURSE_DEFS = {
   },
 };
 const COURSE_DEFS_LIST = Object.values(COURSE_DEFS);
+
+// --- Services: recurring hired help. `accessScope:'all'` means the
+// bedrooms too, not just common rooms — a real boundary-violation source
+// once STEALTH (P6) exists to notice: you didn't enter anyone's room, but
+// you hired someone who did. Kept honest now (the cleaning itself is
+// real) rather than half-built waiting for that phase. ---
+const SERVICE_DEFS = {
+  standard_cleaning: {
+    id: 'standard_cleaning', label: 'TidyBot Cleaning (Common Areas)',
+    costPerVisit: 40, cadenceDays: 7, accessScope: 'common',
+  },
+  deep_cleaning: {
+    id: 'deep_cleaning', label: 'TidyBot Deep Clean (Whole Apartment)',
+    costPerVisit: 90, cadenceDays: 7, accessScope: 'all',
+  },
+};
+const SERVICE_DEFS_LIST = Object.values(SERVICE_DEFS);
 
 // ===== /SECTION: DEFS.COMPUTER =====

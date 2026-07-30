@@ -21,6 +21,7 @@ function defaultComputerState() {
       shop: { cart: [], wishlist: [] },
       browser: { openSiteId: null, history: [] },
       classes: { enrolled: [], completed: [] },
+      services: { hired: [] },
     },
   };
 }
@@ -249,6 +250,80 @@ function attendLesson(gameState, courseId) {
     classes.completed.push(courseId);
   }
   return { ok: true, course, xpGain: course.xpPerLesson, completed, ticks: course.ticksPerLesson };
+}
+
+// --- Services app ---
+
+function hireService(gameState, serviceId) {
+  const service = SERVICE_DEFS[serviceId];
+  if (!service) return { ok: false, reason: 'No such service.' };
+  const services = gameState.world.computer.apps.services;
+  if (services.hired.some(h => h.serviceId === serviceId)) return { ok: false, reason: 'Already hired.' };
+  if (gameState.player.money < service.costPerVisit) return { ok: false, reason: `Can't afford $${service.costPerVisit}.` };
+  gameState.player.money -= service.costPerVisit;
+  services.hired.push({ serviceId, nextDay: gameState.meta.clock.day + service.cadenceDays });
+  return { ok: true, service };
+}
+
+function cancelService(gameState, serviceId) {
+  const services = gameState.world.computer.apps.services;
+  const had = services.hired.some(h => h.serviceId === serviceId);
+  services.hired = services.hired.filter(h => h.serviceId !== serviceId);
+  return { ok: had, reason: had ? null : 'Not currently hired.' };
+}
+
+// Resets every dirty-capable state on an object back to its cleanest enum
+// value — `def.states[key][0]` is that value by construction (every
+// OBJECT_DEFS entry lists the clean value first: 'clean' before 'crusty'
+// before 'filthy', 'empty' before 'full', etc.), so cleaning needs no
+// second parallel "what does clean look like" table.
+function cleanRoomObjects(gameState, roomId) {
+  const bucket = gameState.objects[`room_${roomId}`];
+  if (!bucket) return 0;
+  let cleanedCount = 0;
+  for (const obj of Object.values(bucket)) {
+    const def = OBJECT_DEFS[obj.defId];
+    if (!def?.dirtyWhen) continue;
+    for (const key of Object.keys(def.dirtyWhen)) {
+      const cleanValue = def.states[key][0];
+      if (obj.state[key] !== cleanValue) { obj.state[key] = cleanValue; cleanedCount++; }
+    }
+  }
+  refreshRoomCleanliness(gameState, roomId);
+  return cleanedCount;
+}
+
+// Returns how many individual dirty states got reset — not a room count —
+// so "the housekeeper found nothing to do" and "the housekeeper reset 11
+// things across 6 rooms" are distinguishable in the log.
+function performCleaningVisit(gameState, service) {
+  const scopeRooms = service.accessScope === 'all' ? ALL_ROOMS : COMMON_ROOMS;
+  let itemsCleaned = 0;
+  for (const roomId of scopeRooms) itemsCleaned += cleanRoomObjects(gameState, roomId);
+  return itemsCleaned;
+}
+
+// Called from UI's processDayRollover. A visit that the player can't
+// currently afford is postponed one full cadence rather than cancelling
+// the subscription outright — "always playable, never a hard stop,"
+// matching rent/quests/work-deadlines' existing pattern.
+function processServiceVisitsForDay(gameState, day) {
+  const services = gameState.world.computer.apps.services;
+  const results = [];
+  for (const hire of services.hired) {
+    if (day < hire.nextDay) continue;
+    const service = SERVICE_DEFS[hire.serviceId];
+    if (gameState.player.money < service.costPerVisit) {
+      hire.nextDay = day + service.cadenceDays;
+      results.push({ serviceId: hire.serviceId, skipped: true, label: service.label });
+      continue;
+    }
+    gameState.player.money -= service.costPerVisit;
+    const itemsCleaned = performCleaningVisit(gameState, service);
+    hire.nextDay = day + service.cadenceDays;
+    results.push({ serviceId: hire.serviceId, skipped: false, label: service.label, itemsCleaned, cost: service.costPerVisit, accessScope: service.accessScope });
+  }
+  return results;
 }
 
 // ===== /SECTION: COMPUTER =====

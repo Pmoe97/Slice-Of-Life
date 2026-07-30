@@ -65,6 +65,7 @@ async function processDayRollover(day) {
   processDeliveriesForDay(day);
   processQuestsForDay(day);
   processWorkDeadlineForDay(day);
+  processServiceVisitsForDayUi(day);
 }
 
 // COMPUTER's work app: an incomplete backlog at the deadline costs a
@@ -79,6 +80,24 @@ function processWorkDeadlineForDay(day) {
     addLogEntry('system', `You've been let go from ${result.title} — ${result.missed} task(s) missed too many times.`);
   } else {
     addLogEntry('system', `Missed ${result.missed} task(s) at ${result.title} (strike ${result.strikes}/${result.maxStrikes}).`);
+  }
+}
+
+// COMPUTER's services app: a hired housekeeper visits on its own cadence,
+// no click required. accessScope:'all' means bedrooms too — a real
+// boundary crossing the player caused indirectly, not by being there
+// themselves. STEALTH (P6) is what will eventually turn that into a
+// consequence; for now it's narrated but mechanically inert beyond the
+// cleaning itself.
+function processServiceVisitsForDayUi(day) {
+  if (!currentGameState.world.computer) return;
+  for (const result of processServiceVisitsForDay(currentGameState, day)) {
+    if (result.skipped) {
+      addLogEntry('system', `${result.label} couldn't be paid — visit postponed.`);
+    } else {
+      const scopeNote = result.accessScope === 'all' ? ' (including bedrooms)' : '';
+      addLogEntry('narration', `${result.label} came by${scopeNote} and tidied up. (-$${result.cost})`);
+    }
   }
 }
 
@@ -375,6 +394,12 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'classes.attend-lesson':
       await doAttendLesson(extra?.rowId);
+      break;
+    case 'services.hire':
+      await doServicesHire(extra?.rowId);
+      break;
+    case 'services.cancel':
+      await doServicesCancel(extra?.rowId);
       break;
     case 'talk':
       if (npcId) await doTalk(npcId);

@@ -154,7 +154,7 @@ const DASHBOARD_PANELS = {
 // declarations are), so a bare global-property lookup silently returns
 // undefined for every data registry in this codebase — this cost real
 // debugging time to find; see ARCHITECTURE.md's P4 notes.
-const CATALOG_SOURCES = { JOB_DEFS, SHOP_CATALOG_LIST, SITE_DEFS_LIST, COURSE_DEFS_LIST };
+const CATALOG_SOURCES = { JOB_DEFS, SHOP_CATALOG_LIST, SITE_DEFS_LIST, COURSE_DEFS_LIST, SERVICE_DEFS_LIST };
 
 function renderCatalog(body, gs, app, screen) {
   const source = CATALOG_SOURCES[screen.source];
@@ -168,6 +168,7 @@ function renderCatalog(body, gs, app, screen) {
     const price = row.payPerBlock != null ? `$${row.payPerBlock}/block`
       : row.price != null ? `$${row.price}`
       : row.cost != null ? `$${row.cost}`
+      : row.costPerVisit != null ? `$${row.costPerVisit}/visit`
       : '';
     item.innerHTML = `<span class="cs-catalog-title">${row.title || row.label}</span><span class="dim tiny">${price}</span>`;
     const btn = document.createElement('button');

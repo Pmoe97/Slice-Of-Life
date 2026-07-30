@@ -22,7 +22,7 @@ const OBJECT_DEFS = {
     id: 'bed', label: 'Bed', nouns: ['bed', 'mattress'],
     portable: false, breakable: false, container: false, private: true,
     states: { made: ['made', 'unmade'] }, defaultState: { made: 'made' },
-    dirtyWhen: {}, cleanlinessWeight: 2,
+    dirtyWhen: { made: { unmade: 0.15 } }, cleanlinessWeight: 2,
     affords: ['bed.sleep', 'inspect.object'],
     imagePhrase: 'a single bed with rumpled sheets',
   },
