@@ -15,7 +15,7 @@ design record. Keep it current as phases land; don't let it drift.
 | P0 | **Done** | Effects engine, action registry, tone/content wiring |
 | P1 | **Done** | World object model |
 | P2 | **Done** | Items and inventory |
-| P3 | Not started | Skills and progression |
+| P3 | **Done** | Skills and progression |
 | P4 | Not started | The computer |
 | P5 | Not started | Free-action resolution pipeline |
 | P6 | Not started | Stealth, evidence, suspicion |
@@ -366,3 +366,58 @@ real (non-stale) code:
   the inventory panel's DOM text correctly read "Pasta" (resolved via
   `ITEM_DEFS.meal_pasta.label`) instead of the blank/`undefined` the old
   `item.name` lookup would have produced against the new stack shape.
+
+## P3 — Skills and progression
+
+**New file:** `src/skills.js` — `SKILLS` (xp curve base, max level 10),
+`skillLevel(player, skillId)` (`floor(sqrt(xp / xpPerLevelBase))`,
+capped), `SKILL_CURVES` (11-entry arrays, one per level, for
+`timeReduction`, `cookQuality`, `cleanEfficiency`, `stealthSuccess`,
+`payMultiplier`, `socialEdge`), and `skillMod(player, skillId, curveId)` —
+the one lookup function every skill-modified outcome goes through.
+
+**No migration was needed** — `player.skills` was already `{}` on every
+save (SIM's player init), and `skillLevel` treats a missing entry as 0 xp,
+so every existing save is forward-compatible for free.
+
+**Only `timeReduction` is actually consumed by gameplay yet** —
+`cookQuality`, `cleanEfficiency`, `stealthSuccess`, `payMultiplier`, and
+`socialEdge` are declared and curve-complete, waiting for the systems that
+will read them (P4's jobs for `payMultiplier`, P6's stealth for
+`stealthSuccess`, P7's chore drives for `cleanEfficiency`, cooking outcome
+variance for `cookQuality`). This mirrors EFFECTS' P0 pattern of declaring
+a full vocabulary before every consumer exists — better than leaving a gap
+to retrofit later.
+
+**`actions.js` gained two small, generic hooks** rather than one-off
+cooking-specific code:
+- `resolveTimeCost(def, gameState)` — an `ACTION_DEFS` entry's base
+  `timeCost` is shrunk by `skillMod(...)` whenever it declares
+  `timeCost.skill`/`timeCost.curve` (floored at `timeCost.min`, default 1).
+  Any future action gets skill-scaled duration just by declaring these
+  three fields — no per-action time-cost code needed.
+- `executeAction` now appends `ADD_SKILL_XP <id> <xp>` automatically when
+  `def.skill` is declared, after the action's own effects — so an action
+  earns its skill XP unconditionally once `checkRequirements` has already
+  confirmed it's actually happening, without `buildEffects` needing to
+  remember to emit it itself.
+- `self.cook` (DEFS.ACTIONS) now declares `timeCost: { base: 2,
+  skill: 'cooking', curve: 'timeReduction', min: 1 }` and
+  `skill: { id: 'cooking', xp: 12 }` — cooking gets measurably faster with
+  practice, and is the first (and so far only) skill-earning action.
+
+**Verification performed**, via the same fresh-iframe technique as P2
+(this browser preview snapshots `main.html`, see the P2 note above — every
+verification in this project now goes through that iframe pattern):
+- Level math checked directly against the formula: 0 xp → level 0; 40 xp →
+  level 1 (`sqrt(40/40)=1`); 360 xp → level 3 (`sqrt(360/40)=3`); 4000 xp →
+  capped at level 10. `timeReduction` curve lookups at level 0 (`1.0`, no
+  reduction) and level 3 (`0.85`) both correct.
+- A 6-cook loop (restocking the pantry each round) correctly accrued 12 xp
+  per cook (0→12→24→36→48→60→72) and crossed into skill level 1 exactly at
+  48 xp, matching the formula. `ticksSpent` stayed at 2 through all 6 cooks
+  in this run — expected, not a bug: `self.cook`'s base cost is only 2
+  ticks, and `Math.round(2 × mod)` doesn't cross below 2 until `mod` drops
+  under 0.75 (skill level 6, `timeReduction[6] = 0.70`), a consequence of
+  integer tick rounding on a small base cost, not a flaw in `skillMod`
+  itself — the curve values were independently verified correct above.

@@ -78,16 +78,31 @@ async function executeAction(actionId, gameState) {
   if (!check.ok) return { ok: false, reason: check.reason, ticksSpent: 0 };
 
   const prepared = def.prepare ? def.prepare(ctx) : null;
-  const effectLines = def.buildEffects ? def.buildEffects(ctx, prepared) : (def.effects || []);
+  const effectLines = def.buildEffects ? def.buildEffects(ctx, prepared) : [...(def.effects || [])];
+  // Skill XP is declarative (def.skill), not something buildEffects has to
+  // remember to emit itself — checkRequirements already guaranteed the
+  // action is actually happening by the time we get here, so awarding it
+  // unconditionally is correct, not a "gained XP for nothing" risk.
+  if (def.skill) effectLines.push(`ADD_SKILL_XP ${def.skill.id} ${def.skill.xp}`);
   const effects = effectLines.map(line => parseEffectDSL(line)[0]).filter(Boolean);
   const effCtx = buildEffectContext(gameState, [], ctx.presentNpcIds, ctx.roomObjects, gameState.player.inventory || []);
   applyEffects(effects, effCtx);
 
-  const ticks = def.timeCost?.base ?? 1;
+  const ticks = resolveTimeCost(def, gameState);
   await advanceAndResolve(ticks);
   gameState.player = decayPlayerNeeds(gameState.player, ticks);
 
   return { ok: true, ticksSpent: ticks, narration: narrateAction(def, ctx, prepared) };
+}
+
+// Base time cost, optionally shrunk by a skill curve (SKILLS) — declaring
+// `timeCost.skill`/`timeCost.curve` on any ACTION_DEFS entry is enough to
+// make it faster with practice; nothing else needs to change per-action.
+function resolveTimeCost(def, gameState) {
+  const base = def.timeCost?.base ?? 1;
+  if (!def.timeCost?.skill || !def.timeCost?.curve) return Math.max(1, base);
+  const mod = skillMod(gameState.player, def.timeCost.skill, def.timeCost.curve);
+  return Math.max(def.timeCost.min || 1, Math.round(base * mod));
 }
 
 function narrateAction(def, ctx, prepared) {

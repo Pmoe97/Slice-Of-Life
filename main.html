@@ -785,10 +785,10 @@ body {
 <!-- Load order matters (each script's top-level code may reference an
      earlier script's data at load time — e.g. DEFS.ACTIONS reading NEEDS
      from CONFIG): CONFIG → DEFS.WORLD → DEFS.ACTIONS → STATE → SIM →
-     WORLD → EFFECTS → ACTIONS → NPC → PROMPT → LLM → IMAGE → RENDER → UI
-     → BOOT. Functions calling into a LATER script are fine either way —
-     those calls only happen at runtime, after every script below has
-     finished loading. -->
+     WORLD → ITEMS → EFFECTS → ACTIONS → SKILLS → NPC → PROMPT → LLM →
+     IMAGE → RENDER → UI → BOOT. Functions calling into a LATER script are
+     fine either way — those calls only happen at runtime, after every
+     script below has finished loading. -->
 <script src="src/config.js"></script>
 <script src="src/defs.world.js"></script>
 <script src="src/defs.actions.js"></script>
@@ -798,6 +798,7 @@ body {
 <script src="src/items.js"></script>
 <script src="src/effects.js"></script>
 <script src="src/actions.js"></script>
+<script src="src/skills.js"></script>
 <script src="src/npc.js"></script>
 <script src="src/prompt.js"></script>
 <script src="src/llm.js"></script>
