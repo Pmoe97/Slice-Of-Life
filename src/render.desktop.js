@@ -8,6 +8,24 @@
 // everything *around* a window's body — chrome the pre-Phase-2 shim
 // didn't have at all (a single shared full-bleed panel with a tab bar).
 
+// True on touch-primary devices (any width/orientation) or once the
+// viewport gets too narrow for floating chrome to be usable even with a
+// mouse (a 36px titlebar + three 26px controls + the 360px --win-min-w
+// don't fit comfortably below this). Touch-primary is checked first and
+// separately from width because a landscape phone is touch-primary but
+// can be wider than 520px, while a narrow desktop browser window is
+// still mouse-driven and should keep real floating/draggable windows.
+// Keep this condition byte-for-byte in sync with main.html's matching
+// `@media (hover: none) and (pointer: coarse), (max-width: 520px)`
+// block — that CSS copy only handles touch-target sizing and hiding the
+// (now-meaningless) maximize control; this JS copy is what actually
+// forces windows fullscreen in renderWindows below and gates gesture
+// start in UI.WINDOWMANAGER.
+function isDesktopShellCompact() {
+  return window.matchMedia('(hover: none) and (pointer: coarse)').matches
+      || window.matchMedia('(max-width: 520px)').matches;
+}
+
 // The entry point RENDER (render.js) calls unconditionally on every
 // render pass of the whole game, not just while the computer is open —
 // skip the entire rebuild below when it's powered off rather than doing
@@ -160,16 +178,26 @@ function renderWindows(gs) {
       container.appendChild(node);
     }
 
+    // On compact/touch screens every window is forced fullscreen
+    // regardless of its own stored `maximized` flag — but that forcing
+    // is purely a derived, render-time condition, never written back
+    // into gameState. That's deliberate: it means there's nothing to
+    // migrate or reconcile when the viewport crosses the breakpoint
+    // (rotate, resize, plug in a mouse) — the very next render just
+    // stops forcing and the window reappears exactly where its real
+    // rect/maximized state already said it was.
+    const forceFullscreen = win.maximized || isDesktopShellCompact();
+
     if (win.minimized) node.setAttribute('data-minimized', '');
     else node.removeAttribute('data-minimized');
-    if (win.maximized) node.setAttribute('data-maximized', '');
+    if (forceFullscreen) node.setAttribute('data-maximized', '');
     else node.removeAttribute('data-maximized');
     if (computer.focusedAppId === appId) node.setAttribute('data-focused', '');
     else node.removeAttribute('data-focused');
 
     const dragging = typeof dragGesture !== 'undefined' && dragGesture && dragGesture.appId === appId;
     if (!dragging) {
-      if (win.maximized) {
+      if (forceFullscreen) {
         node.style.left = '0px'; node.style.top = '0px';
         node.style.width = '100%'; node.style.height = '100%';
       } else {

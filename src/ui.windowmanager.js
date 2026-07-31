@@ -13,10 +13,27 @@
 
 let dragGesture = null;
 
+let shellViewportDebounce = null;
+
+// Re-render promptly on a live crossing of the compact-shell breakpoint
+// (rotating a phone, or a desktop user resizing the browser window)
+// instead of waiting for an unrelated game tick to happen to redraw the
+// computer screen. renderWindows re-derives forceFullscreen fresh every
+// call, so this is the only piece needed to make the transition "just
+// work" — there's no gameState to reconcile either way.
+function onShellViewportChange() {
+  clearTimeout(shellViewportDebounce);
+  shellViewportDebounce = setTimeout(() => {
+    if (currentGameState?.world?.computer?.power === 'on') renderComputerScreen(currentGameState);
+  }, 150);
+}
+
 function initWindowManagerHandlers() {
   document.addEventListener('mousedown', onWindowManagerMouseDown);
   document.addEventListener('mousemove', onWindowManagerMouseMove);
   document.addEventListener('mouseup', onWindowManagerMouseUp);
+  window.addEventListener('resize', onShellViewportChange);
+  window.addEventListener('orientationchange', onShellViewportChange);
 }
 
 function cssPxVar(varName, fallback) {
@@ -48,6 +65,14 @@ function onWindowManagerMouseDown(e) {
   const appId = winNode.dataset.app;
   const win = currentGameState.world.computer.windows[appId];
   if (!win) return;
+  // Compact/touch screens force every window fullscreen (see
+  // RENDER.DESKTOP's isDesktopShellCompact/renderWindows) — a drag or
+  // resize gesture started here would just fight that CSS-forced layout
+  // and, on mouseup, write a bogus rect into gameState that reappears
+  // the moment the viewport grows back past the breakpoint. Bail before
+  // any gesture can start; the taskbar is the only affordance for
+  // switching focus in this mode.
+  if (isDesktopShellCompact()) return;
 
   if (currentGameState.world.computer.focusedAppId !== appId) focusWindowVisually(appId);
 

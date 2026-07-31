@@ -130,6 +130,7 @@ body {
     "left   main   right"
     "footer footer footer";
   height: 100vh;
+  height: 100dvh;
   gap: var(--grid-gap);
   background: var(--color-border);
 }
@@ -452,7 +453,7 @@ body {
 .start-menu-item:hover { background: var(--color-surface-hover); }
 .start-menu-item .icon { width: 20px; height: 20px; color: var(--color-accent); }
 
-.win-body { flex: 1; overflow-y: auto; padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
+.win-body { flex: 1; overflow-y: auto; padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); container-type: inline-size; container-name: win-body; }
 
 .cs-panel {
   padding: var(--space-3);
@@ -744,6 +745,22 @@ body {
   .drawer-toggle { display: flex !important; }
 }
 
+/* Desktop shell — compact/touch mode. Condition kept in sync with
+   RENDER.DESKTOP's isDesktopShellCompact(): touch-primary devices at
+   any width, or a viewport too narrow for floating chrome to be
+   usable even with a mouse. This copy only handles touch-target
+   sizing and hiding the now-redundant maximize control — the actual
+   fullscreen-forcing is driven by JS (renderWindows setting
+   data-maximized), not by this media query. */
+@media (hover: none) and (pointer: coarse), (max-width: 520px) {
+  .win-control-btn { width: 44px; height: 44px; }
+  .win-control-btn[data-action="computer.window-maximize"] { display: none; }
+  .win-titlebar { cursor: default; }
+  .win-screennav-btn { padding: 12px var(--space-3); min-height: 44px; }
+  .taskbar-btn, .taskbar-start-btn { height: 44px; }
+  .desktop-icon { padding: var(--space-3); }
+}
+
 .drawer-toggle {
   display: none;
   background: var(--color-surface-alt);
@@ -904,6 +921,22 @@ body {
 /* IM — two-pane messenger: thread sidebar always visible next to
    whichever conversation is open. */
 .im-layout { display: grid; grid-template-columns: 180px 1fr; gap: var(--space-3); flex: 1; min-height: 0; }
+
+/* A window's own rendered width, not the viewport — a floating window
+   can be manually resized narrow by a mouse user independent of actual
+   screen size, landing in the same narrow range a phone would. Only
+   these two fixed-pixel-sidebar layouts need this; the auto-fill/minmax
+   grids elsewhere already reflow against their own containing block on
+   their own. Deliberately placed after both base .nile-layout/.im-layout
+   rules above (not right next to .win-body's container-type, where an
+   earlier version of this rule lived) — @container carries no extra
+   specificity over a plain class selector, so on equal specificity the
+   last rule in source order wins regardless of which one is "more
+   conditional"; this has to come after so it can actually override. */
+@container win-body (max-width: 480px) {
+  .nile-layout { grid-template-columns: 1fr; }
+  .im-layout { grid-template-columns: 1fr; grid-template-rows: 160px 1fr; }
+}
 .im-sidebar { background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-2); overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .im-thread-row { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2); border-radius: var(--radius-sm); cursor: pointer; position: relative; }
 .im-thread-row:hover { background: var(--color-surface-hover); }
@@ -964,6 +997,7 @@ body {
     <div class="h-sep"></div>
     <button class="btn btn-secondary" id="save-btn" data-action="save">Save</button>
     <button class="btn btn-secondary" id="menu-btn" data-action="menu">Menu</button>
+    [fullscreenButton("⛶ Fullscreen", "⛶ Exit Fullscreen", "background: var(--color-surface-alt); color: var(--color-text); border: none; border-radius: var(--radius-md); padding: var(--space-2) var(--space-4); font-size: var(--fs-sm); font-weight: 600; cursor: pointer;")]
   </header>
 
   <!-- Left Sidebar -->
@@ -1000,6 +1034,7 @@ body {
         <div class="taskbar-running" id="taskbar-running"></div>
         <div class="taskbar-tray">
           <span class="cs-clock" id="cs-clock"></span>
+          [fullscreenButton("⛶", "⛶", "background: var(--color-surface-alt); color: var(--color-text); border: none; border-radius: var(--radius-md); padding: var(--space-1) var(--space-2); font-size: var(--fs-xs); font-weight: 600; cursor: pointer;")]
           <button class="btn btn-secondary tiny" data-action="computer.close">Power Off</button>
         </div>
       </div>
