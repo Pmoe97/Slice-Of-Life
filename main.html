@@ -341,7 +341,14 @@ body {
 .desktop-icon .icon { width: 32px; height: 32px; }
 .desktop-icon-label { font-size: var(--fs-xs); line-height: var(--lh-tight); text-shadow: 0 1px 2px var(--color-shadow); }
 
-.computer-windows { position: absolute; inset: 0 0 var(--taskbar-h) 0; overflow: hidden; }
+/* pointer-events: none so this full-viewport (empty when no windows are
+   open) layer doesn't sit on top of .desktop-icons in paint order and
+   silently eat every click/tap over the icon grid — it's a sibling
+   painted after .desktop-icons with the same inset:0 box, so without
+   this an absolutely-positioned box still hit-tests even with zero
+   visible content. Individual .win elements opt back into normal hit-
+   testing below. */
+.computer-windows { position: absolute; inset: 0 0 var(--taskbar-h) 0; overflow: hidden; pointer-events: none; }
 
 .win {
   position: absolute;
@@ -352,6 +359,7 @@ body {
   border-radius: var(--win-radius);
   box-shadow: var(--win-shadow-unfocused);
   overflow: hidden;
+  pointer-events: auto;
 }
 .win[data-focused] { box-shadow: var(--win-shadow-focused); border-color: var(--color-accent); }
 .win[data-minimized] { display: none; }
@@ -742,6 +750,24 @@ body {
   #sidebar-left[data-open] { transform: translateX(0); }
   #sidebar-right { transform: translateX(100%); right: 0; }
   #sidebar-right[data-open] { transform: translateX(0); }
+  /* Header — keep only what's about the current location/scene (Room)
+     plus the drawer toggle and utility buttons; Day/Time/Money and the
+     need bars move to the left sidebar's Player panel (now the only
+     place they're shown at all on mobile, see renderPlayerPanel) since
+     there isn't room for both header and content to be legible at once
+     at phone widths. */
+  #header { gap: var(--space-2); padding: 0 var(--space-2); }
+  /* #hdr-needs also carries the .h-group class, which #header .h-group's
+     base rule sets display:flex on at higher specificity (ID+class) than
+     a bare #hdr-needs selector (ID only) — qualify with #header so this
+     actually wins instead of silently losing the cascade. */
+  .h-status-group, #hdr-room-sep, #header #hdr-needs, #hdr-needs-sep { display: none; }
+  #hdr-room-group { min-width: 0; }
+  #hdr-room-group .h-value {
+    display: inline-block; max-width: 38vw; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
+  }
+  #save-btn, #menu-btn { padding: var(--space-1) var(--space-2); font-size: var(--fs-xs); }
   .drawer-toggle { display: flex !important; }
 }
 
@@ -968,36 +994,44 @@ body {
   <!-- Header -->
   <header id="header">
     <button class="drawer-toggle" data-toggle="left" aria-label="Toggle navigation">&#9776;</button>
-    <div class="h-group">
-      <span class="h-label">Day</span>
-      <span class="h-value" id="hdr-day">1</span>
+    <!-- Day/Time/Money — peripheral status, not scene-specific. Hidden on
+         mobile (see the @media (max-width: 900px) block) since it's
+         duplicated in the left sidebar's Player panel there; kept visible
+         on desktop since the header has room for it. -->
+    <div class="h-status-group" id="hdr-status-group">
+      <div class="h-group">
+        <span class="h-label">Day</span>
+        <span class="h-value" id="hdr-day">1</span>
+      </div>
+      <div class="h-sep"></div>
+      <div class="h-group">
+        <span class="h-label">Time</span>
+        <span class="h-value" id="hdr-time">08:00</span>
+      </div>
+      <div class="h-sep"></div>
+      <div class="h-group">
+        <span class="h-label">$</span>
+        <span class="h-value" id="hdr-money">0</span>
+      </div>
     </div>
-    <div class="h-sep"></div>
-    <div class="h-group">
-      <span class="h-label">Time</span>
-      <span class="h-value" id="hdr-time">08:00</span>
-    </div>
-    <div class="h-sep"></div>
-    <div class="h-group">
-      <span class="h-label">$</span>
-      <span class="h-value" id="hdr-money">0</span>
-    </div>
-    <div class="h-sep"></div>
-    <div class="h-group">
+    <div class="h-sep" id="hdr-room-sep"></div>
+    <div class="h-group" id="hdr-room-group">
       <span class="h-label">Room</span>
       <span class="h-value" id="hdr-room">—</span>
     </div>
     <div class="spacer"></div>
+    <!-- Need bars — also duplicated in the sidebar Player panel; hidden
+         on mobile for the same reason as the status group above. -->
     <div class="h-group" id="hdr-needs">
       <span class="h-label">E</span><div class="need-bar" data-need="energy" title="Energy"><div class="fill" data-fill="100"></div></div>
       <span class="h-label">H</span><div class="need-bar" data-need="hunger" title="Hunger"><div class="fill" data-fill="100"></div></div>
       <span class="h-label">G</span><div class="need-bar" data-need="hygiene" title="Hygiene"><div class="fill" data-fill="100"></div></div>
       <span class="h-label">M</span><div class="need-bar" data-need="mood" title="Mood"><div class="fill" data-fill="100"></div></div>
     </div>
-    <div class="h-sep"></div>
+    <div class="h-sep" id="hdr-needs-sep"></div>
     <button class="btn btn-secondary" id="save-btn" data-action="save">Save</button>
     <button class="btn btn-secondary" id="menu-btn" data-action="menu">Menu</button>
-    [fullscreenButton("⛶ Fullscreen", "⛶ Exit Fullscreen", "background: var(--color-surface-alt); color: var(--color-text); border: none; border-radius: var(--radius-md); padding: var(--space-2) var(--space-4); font-size: var(--fs-sm); font-weight: 600; cursor: pointer;")]
+    [fullscreenButton("⛶ Fullscreen", "⛶ Exit Fullscreen", "background: var(--color-surface-alt); color: var(--color-text); border: none; border-radius: var(--radius-md); padding: var(--space-1) var(--space-2); font-size: var(--fs-xs); font-weight: 600; cursor: pointer;")]
   </header>
 
   <!-- Left Sidebar -->

@@ -1635,12 +1635,20 @@ function attachEventHandlers() {
     });
   }
 
-  // Drawer toggles (mobile)
+  // Drawer toggles (mobile) — the two drawers slide in from opposite
+  // edges and are wide enough to overlap each other and the content
+  // between them, so only one may be open at a time. Opening one always
+  // closes the other rather than each toggle button only knowing about
+  // its own side.
   document.querySelectorAll('[data-toggle]').forEach(btn => {
     btn.addEventListener('click', () => {
       const side = btn.getAttribute('data-toggle');
       const sidebar = side === 'left' ? document.getElementById('sidebar-left') : document.getElementById('sidebar-right');
-      if (sidebar) sidebar.toggleAttribute('data-open');
+      const other = side === 'left' ? document.getElementById('sidebar-right') : document.getElementById('sidebar-left');
+      if (!sidebar) return;
+      const opening = !sidebar.hasAttribute('data-open');
+      other?.removeAttribute('data-open');
+      sidebar.toggleAttribute('data-open', opening);
     });
   });
 

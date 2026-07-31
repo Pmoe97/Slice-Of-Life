@@ -96,7 +96,13 @@ function renderPlayerPanel(gs) {
   const { player } = gs;
 
   stats.innerHTML = '';
+  // Day/Time duplicate the header's own clock — deliberate: on mobile the
+  // header hides everything but Room to make room for it (see the
+  // @media (max-width: 900px) block), so this sidebar panel becomes the
+  // only place that info is visible at all, not just a secondary copy.
   const items = [
+    { label: 'Day', val: formatDate(gs.meta.clock.day) },
+    { label: 'Time', val: formatTime(gs.meta.clock.minutes) },
     { label: 'Money', val: `$${player.money}` },
     { label: 'Energy', val: `${Math.round(player.energy)}%` },
     { label: 'Hunger', val: `${Math.round(player.hunger)}%` },
