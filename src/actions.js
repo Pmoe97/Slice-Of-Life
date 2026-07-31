@@ -120,6 +120,15 @@ async function runRegisteredAction(actionId) {
     const result = await executeAction(actionId, currentGameState);
     if (!result.ok) { addLogEntry('system', result.reason || "You can't do that right now."); return; }
     addLogEntry('narration', result.narration);
+    // Chain quest progress: check if this action type completes a step
+    const def = ACTION_DEFS[actionId];
+    const actionType = actionId.split('.').pop();
+    if (actionType === 'cook' || actionType === 'watch_tv') {
+      // Check all NPCs for chain quests with matching steps
+      for (const npcId of Object.keys(currentGameState.npcs)) {
+        checkChainQuestProgress(actionType, npcId);
+      }
+    }
     render(currentGameState, currentSceneState);
     await saveAtBoundary(actionId, currentGameState);
   } finally {

@@ -275,6 +275,20 @@ function startAutosave(getState) {
   autosaveTimer = setInterval(() => saveAtBoundary('timer', getState ? getState() : null), AUTOSAVE_MS);
 }
 
+// Stops ticking without restarting — used at the start of a new-game
+// transition (UI's approveCastAndStartGame), which awaits prose expansion
+// and several kv writes that can easily exceed AUTOSAVE_MS. Without this,
+// a stale timer from the PREVIOUS game could fire mid-transition (its
+// getState closure still resolves to the old currentGameState, since that
+// module-level binding isn't reassigned until syncGameStateFromKv
+// completes) and write the old game's NPCs back into kv via the debounced
+// queue, after writeGeneratedGameState already wrote the new cast —
+// polluting the new game with leftover roommates from the old one.
+function stopAutosave() {
+  if (autosaveTimer) clearInterval(autosaveTimer);
+  autosaveTimer = null;
+}
+
 // Persist the live game state at a save boundary (phase change, scene exit,
 // before an LLM call, manual save, or the autosave timer). gameState is the
 // in-memory object UI mutates directly during play — without it there is
@@ -577,6 +591,14 @@ async function writeGeneratedGameState(gameState) {
 
   for (const [id, npc] of Object.entries(gameState.npcs)) {
     await root.kv.npcs.set(id, npc);
+  }
+  // Delete stale NPC keys from a previous game that aren't in the new
+  // cast. Done AFTER the new NPCs are written so a failure here leaves
+  // the new state intact rather than deleting everything.
+  const newNpcIds = new Set(Object.keys(gameState.npcs));
+  const existingNpcKeys = await root.kv.npcs.keys();
+  for (const k of existingNpcKeys) {
+    if (!newNpcIds.has(k)) await root.kv.npcs.delete(k);
   }
 
   for (const [bucket, data] of Object.entries(gameState.objects || {})) {

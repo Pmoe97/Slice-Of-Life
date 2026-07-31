@@ -19,8 +19,8 @@ design record. Keep it current as phases land; don't let it drift.
 | P4 | **Done** | The computer (all 8 apps: Work, Nile, Browser, Classes, Services, Classifieds, IM, Stream) |
 | P5 | **Done** | Free-action resolution pipeline |
 | P6 | **Done** | Stealth, evidence, suspicion |
-| P7 | Not started | NPC autonomy |
-| P8 | Not started | Content volume expansion |
+| P7 | **Done** | NPC autonomy (drives, clothing, peeping) |
+| P8 | **Partial** | Content volume + app visual overhauls (see P7/P8 section) |
 
 ## Load order
 
@@ -1154,3 +1154,208 @@ papering over this one instance of it.
 - **Trust boundary**: confirmed via the same `validateEffects` calls above
   that the three new types are LLM-legal (`llm:true`, now `implemented:
   true`) and enforce their caps exactly like every other LLM-tier effect.
+
+## P7 / P8 — NPC autonomy, adult content, app visuals (external + audited)
+
+**Provenance**: this phase was built outside this session, by the
+Perchance in-editor AI Helper working from its own audit
+(`ref/Perchance Helper AI - P0 - P6 Audit + Plan.txt`), while the primary
+session was between context windows. It landed as a large uncommitted
+working-tree diff (~1500 lines across 12 files, one new file
+`src/drives.js`) with no verification of its own claims. This session's
+job was to audit that work against the real code (four parallel research
+passes, plus direct live-iframe testing) and fix what didn't hold up
+before committing any of it. What follows documents what's actually true
+of the code now, post-fix — not what the external tool's own narration
+claimed.
+
+### NPC autonomy (P7) — `src/drives.js`
+
+New file, loaded after `effects.js`/before `actions.js`. `DRIVE_DEFS`
+(config.js) declares 9 drives — `cook`, `shower`, `sleep_recover`,
+`seek_company`, `clean_common`, `do_laundry`, `chat_with_roommate`,
+`text_player`, `react_to_player` — each with `gates` (need thresholds),
+`weight` (roll chance), `cooldownTicks`, and a `blockFilter` (which
+schedule blocks it can fire in). `evaluateDrives(npc, npcId, npcs,
+resolved, gameState, rng, currentTick)` runs as `resolveTick`'s new pass 3
+(sim.js), after needs/mood (pass 2) — same synchronous, zero-LLM,
+trusted-producer pattern as everything else that calls `applyEffects`
+directly from inside a tick.
+
+**NPC clothing** (`npc.clothing`, default `'dressed'`) is an additive
+field on the NPC factory (sim.js, same no-migration precedent as
+`suspicion`/`skills` — **not** in `CHARACTER_SCHEMA`, since that schema
+only governs LLM-authored `bible` fields). Written two ways: schedule-
+driven in `resolveTick` pass 2 (`sleep` block → `sleepwear`, waking →
+`dressed`) and drive-driven (`shower`'s `setsClothing`/`clothingRestore` →
+`towel` then back to `dressed`).
+
+**`text_player`** queues a *templated*, non-LLM line into the IM thread
+(`processNpcImMessages`) — NPC-initiated texts are one-way; only the
+player's reply goes through the real LLM-backed `sendImMessage`.
+**`chat_with_roommate`** applies a `castWeb` relationship delta between two
+present NPCs, entirely independent of the scene/engagement system — it
+never touches `activeNpcIds`, so it doesn't interact with the "max 2 active
+NPCs" invariant at all.
+
+**Two bugs found and fixed in the drive system itself:**
+- `clean_common` (`cleansRoom: true`) checked `obj.dirtyWhen` (that field
+  lives on `OBJECT_DEFS[obj.defId]`, never the object instance) and
+  `obj.state === 'dirty'` (`obj.state` is a keyed object, e.g. `{made:
+  'unmade'}`, never that bare string) — the condition could never be true,
+  so the drive narrated "tidied up the {room}" while doing nothing
+  mechanical, the entire time it existed. Fixed to call `cleanRoomObjects`
+  (COMPUTER) directly — the same real implementation the hired housekeeper
+  already uses — instead of reimplementing (incorrectly) a parallel
+  version of it.
+- `do_laundry` had `effects: []` and no `cleansRoom` flag — also purely
+  flavor text — despite a real target existing: `laundry_hamper`
+  (defs.world.js) has a resettable `state.fill` (`empty`/`partial`/`full`).
+  Added a `emptiesHamper: true` flag, handled in `evaluateDrives` by
+  scanning every object bucket (the drive has no location requirement of
+  its own) for a hamper and resetting `fill` to `empty`.
+- Both verified directly: forcing a dirtied stove burner and a full hamper
+  through `evaluateDrives` with a zero-returning rng correctly reset the
+  burner to its clean state and the hamper to `empty`.
+
+### Peeping and adult content (P7/P8) — `src/stealth.js`, AfterHours
+
+**`resolvePeep(gameState, roomId)`** (stealth.js): observes an NPC through
+a door from the hallway. Picks a description from `PEEP_CLOTHING_DESC`
+keyed by `clothing`/`activity` (six templates: showering, sleeping,
+undressed, sleepwear, towel, dressed). A trusted producer — calls
+`applyEffects` directly, never touches `bible`. Wired end-to-end: `render.js`
+offers a "Peep into &lt;Room&gt;" chip from the hallway when a room's occupant
+isn't fully dressed or is showering; `doPeep` (ui.js) calls `resolvePeep`
+and persists. Detection: `PEEP_TUNING.detectionNpcAwake`/`detectionNpcAsleep`
+scaled by `1 - stealthSkillFactor × skillMod(player, 'stealth',
+'stealthSuccess')`; a shower adds a ×0.5 detection multiplier. Caught →
+`ADJUST_SUSPICION`/`REL_DELTA tension`/`REL_DELTA affection` (triple
+penalty); a near-miss (not caught, `rng() < PEEP_TUNING.suspectedChance`)
+narrates suspicion without any mechanical effect; a clean peep still grants
+an unconditional small mood gain.
+
+**Bug found and fixed**: `PEEP_TUNING` declared `detectionNpcAware` but
+`stealth.js` read `PEEP_TUNING.detectionNpcAwake` — a name mismatch, so
+detection chance was `undefined` for every awake target (`NaN` once the
+shower/stealth-skill multipliers applied), and `rng() < NaN` is always
+`false`. **Every awake NPC was undetectable, at any stealth skill level —
+the confrontation/suspicion loop for peeping was dead weight outside of
+catching someone asleep.** Fixed by renaming the config key to match.
+Verified with 200 trials at stealth level 0 against a fixed-awake target:
+~51.5% caught, matching the formula's predicted 52.5% (`0.6 × (1 − 0.5 ×
+0.25)`) within sampling noise — previously this would have been 0%.
+
+Also removed two genuinely dead `PEEP_TUNING` values (`arousalGain`,
+`detectionBase` — declared, never read anywhere, no `arousal` player stat
+exists to wire them into) and moved the peep "suspected" threshold from a
+bare `0.2` inline in `stealth.js` to a real config value
+(`PEEP_TUNING.suspectedChance`), matching the "no magic numbers outside
+config" convention every other tuning value in this file already follows.
+
+**AfterHours** (defs.computer.js) is now a real browsable app: 5 categories
+(Featured/Amateur/Couples/Solo/Roleplay) × 12 titled entries, rendered as a
+category-tabbed grid (`renderAfterHours`, render.computer.js) with a real
+`root.generateImage` call per watched entry.
+
+**Bug found and fixed**: `doAfterHoursWatch` called `renderComputerScreen()`
+directly, then `render()` — which *also* calls `renderComputerScreen()`
+internally (this "call it twice" pattern is systemic across
+`ui.computer.js`, harmless everywhere else since re-rendering is
+idempotent). AfterHours was the one screen with a side effect embedded in
+its renderer: each of those two render passes independently found
+`afterHoursImgUrl` still `null` and fired its own `root.generateImage`
+call, each targeting a `#ah-watch-img` DOM node the *other* pass had
+already torn down by the time it resolved — so neither image reliably
+rendered. Fixed by making `renderAfterHours` a pure state→DOM renderer
+again (shows image / "Loading…" / "unavailable" based on a new
+`browser.afterHoursImgLoading` flag, no side effects) and moving the
+actual `generateImage` call into a new `generateAfterHoursImageOnce`
+(ui.computer.js), triggered exactly once from `doAfterHoursWatch`, guarded
+against a stale response landing after the player has switched to a
+different entry or category. Verified: exactly one `generateImage` call
+per watch, correct loading→image DOM transition, and a stale in-flight
+response from a superseded watch is discarded rather than overwriting the
+player's current view.
+
+### Need/relationship consequences and quest chains (P8-adjacent)
+
+`NEED_CONSEQUENCES` (config.js) makes hitting 0 on a need do something real,
+applied via `processNeedConsequences` (ui.js), called from every
+`advanceAndResolve`: energy → forced sleep (teleport to bed, mood penalty,
+and — after a bug fix, see below — the clock actually advances by the lost
+time); hunger → a mood penalty, escalating to a second "health" consequence
+after enough consecutive occurrences; hygiene → tension/affection deltas to
+every resident plus a chance-based in-character reaction line.
+`REL_CONSEQUENCES` makes tension real past two thresholds: `0.6` (chance to
+avoid the player entering a room), `0.8` for 7 consecutive days (calls the
+existing `doAskToLeave` — a real residency-status change, not flavor text).
+`QUEST_CHAINS` (care_package, bonding_night, apology, +1 more) are real
+multi-step goals; `checkChainQuestProgress` is called from cooking, buying,
+talking, and (new this pass) `doGiveItem`.
+
+**Two dead-config bugs found and fixed**, both in `processNeedConsequences`:
+- `NEED_CONSEQUENCES.energy.ticksLost` (8) was declared and tuned but never
+  read — a "collapse" cost a mood penalty and nothing else, despite a
+  comment describing the intent ("advance time by the lost ticks"). Fixed:
+  the clock now actually advances via `advanceClock` on collapse, placed
+  before `advanceAndResolve` computes its own day-crossing check, so a
+  collapse that crosses midnight still gets a correct day-rollover.
+  Deliberately doesn't re-simulate NPCs for the skipped hours — a blackout
+  is a narrative time-skip, not a resimulated scene. Verified: forcing
+  energy to 0 advanced the clock by exactly 240 minutes (8 ticks × 30 min).
+- `NEED_CONSEQUENCES.hunger.healthThresholdTicks`/`healthLogMessage` were
+  declared but nothing counted consecutive occurrences to compare against
+  the threshold. Added `player.flags._starvingStreak`, incremented each
+  call while hunger stays at 0, reset above 10; once it reaches
+  `healthThresholdTicks` a second, distinct log line and mood penalty fire
+  (once, guarded by `_starvingHealthHit`). Verified: three consecutive
+  `processNeedConsequences` calls at 0 hunger correctly fired the health
+  message exactly at the threshold, not before.
+
+`doGiveItem` (ui.js) also gained a defensive presence check
+(`getPresentNpcIds(...).includes(npcId)`) — it previously only verified the
+target NPC existed, relying entirely on the UI chip to enforce that they
+were actually in the room. Verified: attempting to give an item to an
+absent NPC now correctly no-ops (inventory and quest step both unchanged);
+a present NPC still works exactly as before.
+
+### A real, still-live bug found and fixed: stale autosave timer on new game
+
+The external audit's own diagnosis of a "NPCs vanishing from saves" bug
+was partly right (a real leak: starting a new game never deleted the
+*previous* game's stale NPC keys) and partly wrong (its specific
+"delete-then-write race" mechanism never existed in this codebase's
+history). The leak fix that shipped with this pass —
+`writeGeneratedGameState` (state.js) now writes the new cast first, then
+deletes any kv NPC key not in the new cast, ordered so an interruption
+never zeroes the new cast — is correct and was left as-is.
+
+But auditing it turned up a different, real race in the same neighborhood:
+`approveCastAndStartGame` doesn't call `startAutosave` until *after* the
+new game finishes writing — meaning the *previous* game's 30-second
+autosave timer (`AUTOSAVE_MS`, state.js) stays armed for the entire
+prose-expansion + kv-write sequence, which routinely exceeds 30s. If that
+stale timer fires before `syncGameStateFromKv` reassigns the module-level
+`currentGameState`, its `getState` closure still resolves to the *old*
+game, and `saveAtBoundary('timer', <old state>)` writes the old game's
+NPCs back into kv via the debounced write queue — landing after
+`writeGeneratedGameState`'s direct writes, so the new game ends up
+polluted with leftover roommates from the old one. Fixed with a new
+`stopAutosave()` (state.js, the missing counterpart to `startAutosave`),
+called at the very start of both `approveCastAndStartGame` and
+`continueGame` (the same race applies there — the menu is reachable
+mid-game) — no autosave timer is ever armed during a state transition.
+Verified the timer-cancellation mechanics directly (instrumented
+`setInterval`/`clearInterval`): `stopAutosave()` clears exactly the
+interval `startAutosave()` created.
+
+### What's still genuinely P8 (not done)
+
+Content volume: 8 new browser sites, 10 new streaming shows, and the
+AfterHours upgrade above landed. App visual overhauls (real CSS/renderers
+for WorkHub/Nile/Streamly/Browser/IM, replacing the old generic
+dashboard/catalog/list renderers) also landed as part of this same diff.
+Not done: an intimacy/relationship-gated physical-intimacy system (still
+just relationship numbers + LLM-flavored dialogue), more recipes/items,
+and further NPC interaction depth beyond the drives above.

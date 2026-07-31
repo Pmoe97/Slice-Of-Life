@@ -324,12 +324,76 @@ function resolveTick(gameState) {
       }
     }
 
+    // Clothing state based on schedule block: sleeping → sleepwear,
+    // everything else → dressed (unless a drive overrides it, e.g. shower
+    // → towel). This runs before drives so drive overrides win.
+    let clothing = npc.clothing || 'dressed';
+    if (block === 'sleep') {
+      clothing = 'sleepwear';
+    } else if (clothing === 'sleepwear') {
+      clothing = 'dressed';
+    }
+
     npcUpdates[id] = {
       location,
       activity,
       needs,
       mood: Math.max(-1, Math.min(1, npc.mood + moodDelta)),
+      clothing,
     };
+  }
+
+  // Pass 3: NPC autonomy drives (P7). Evaluates DRIVE_DEFS for each
+  // resident, producing self-care, chores, NPC-to-NPC social, IM texts,
+  // and player reactions — all deterministic, zero LLM. Effects route
+  // through the same applyEffects pipeline as player actions.
+  const currentTick = getTickIndex(meta.clock.minutes);
+  const allImMessages = [];
+  const allRelDeltas = [];
+  for (const [id, npc] of Object.entries(npcs)) {
+    if (!resolved[id]) continue;
+    if (npc.residency.status !== 'resident') continue;
+    // Skip sleeping NPCs — they can't act on drives
+    if (resolved[id].block === 'sleep') continue;
+
+    const driveResult = evaluateDrives(
+      npc, id, npcs, resolved[id], gameState, rng, currentTick
+    );
+
+    // Merge drive effects into npcUpdates
+    if (driveResult.activityOverride) {
+      npcUpdates[id].activity = driveResult.activityOverride;
+    }
+    // Drive effects may have modified needs via applyEffects on gameState
+    // — pull the updated needs back
+    if (gameState.npcs[id]) {
+      npcUpdates[id].needs = gameState.npcs[id].needs;
+    }
+
+    // Clothing state from drives (e.g., showering → towel)
+    if (driveResult.clothingState) {
+      npcUpdates[id].clothing = driveResult.clothingState;
+    }
+    if (driveResult.clothingRestore) {
+      // Restore clothing after the drive activity ends — we set it
+      // back to 'dressed' on the next non-showering tick
+      npcUpdates[id].clothing = 'dressed';
+    }
+
+    // Merge events, IM messages, and rel deltas
+    newEvents.push(...driveResult.events);
+    allImMessages.push(...driveResult.imMessages);
+    allRelDeltas.push(...driveResult.relDeltas);
+  }
+
+  // Process queued IM messages into computer state
+  if (allImMessages.length > 0) {
+    processNpcImMessages(gameState, allImMessages);
+  }
+
+  // Process NPC-to-NPC and NPC-to-player relationship deltas
+  if (allRelDeltas.length > 0) {
+    processNpcRelDeltas(gameState, allRelDeltas);
   }
 
   return { npcUpdates, newEvents };
@@ -986,6 +1050,10 @@ function createNpcFromBible(bible, residencyStatus) {
     // player.skills (SKILLS) — every read/write guards with `|| {}`, so no
     // FOLDER_VERSIONS migration is needed for existing saves.
     suspicion: {},
+    // P7: clothing state — dressed|sleepwear|towel|undressed. Drives
+    // (e.g., showering) set this; schedule block 'sleep' sets 'sleepwear'.
+    // Same additive-default pattern as suspicion/skills.
+    clothing: 'dressed',
   };
 }
 

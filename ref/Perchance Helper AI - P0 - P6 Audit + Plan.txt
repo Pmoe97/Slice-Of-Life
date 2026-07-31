@@ -1,0 +1,87 @@
+Audit: Slice of Life — Current State
+What's Built (P0–P6)
+The architecture is genuinely impressive — 22 source files, clean separation of concerns, hard invariants that have held. Here's what works:
+
+P0 (Effects Engine): Solid foundation. Typed effect vocabulary, DSL parsing, three-tier trust boundary (LLM/trusted-producer/config). applyEffects is synchronous/in-memory as designed. The effect system is the backbone everything else hangs off.
+
+P1 (World Objects): 28 object defs, seeded instances, derived ownership/privacy/cleanliness. Objects live in per-room kv buckets. Cleanliness is derived from object state, not a stale fixed value.
+
+P2 (Items/Inventory): 58 item defs, 4 recipes, full stack system. Recipe-driven cooking with the two-step prepare/build model. Container contents on objects (fridge, pantry, wardrobe, etc.).
+
+P3 (Skills): XP→level curves, 6 outcome curves declared. Only timeReduction is consumed (cooking gets faster). The rest (stealthSuccess, payMultiplier, cleanEfficiency, socialEdge, cookQuality) are curve-complete but waiting for consumers.
+
+P4 (Computer — 8 apps): All 8 apps are functionally complete:
+
+WorkHub: job board, daily backlog, focus multiplier (energy×mood), strikes/firing
+Nile: catalog→cart→checkout→deliveries on doormat (roommate could grab your package)
+Browser: authored sites, content-flag gating, AfterHours (adult site)
+EduStream: paid multi-lesson courses, skill-gated enrollment
+HomeCare: recurring cleaning, accessScope: 'all' enters bedrooms (boundary crossing)
+RoomList: produces real NPC move-ins via the same cast generation pipeline
+Messages: real LLM conversations through the same proposal contract as scene talk
+Streamly: free shows, mood gain, time cost
+P5 (Free-text Intent): classifyIntent routes common actions ("eat", "go to kitchen", "sleep") deterministically before hitting the LLM. Clean substring matching, longest-phrase-wins.
+
+P6 (Stealth): Room entry stealth (witness if owner present, stealth roll if absent), evidence on objects, suspicion per-NPC, confrontation at threshold. Housekeeper boundary crossing wired through performCleaningVisit.
+
+Critical Bug Found
+NPCs are vanishing from saves. The live game state has 0 NPCs but rent says 3 contributors, and the log shows Julian existed and was talked to. The NPCs were lost during a save/load cycle. Looking at saveAtBoundary in state.js:248, it writes NPCs correctly, and loadGameState reads them via getAllNpcs(). The likely culprit: the flushWrites function had a historical bug where it used composite keys instead of real keys (fixed per the comment), but there may be a remaining issue with the debounced write queue losing NPC writes between sessions, or the NPCs were deleted during a "new game" start (approveCastAndStartGame deletes existing NPC keys) and the new cast's NPCs never persisted due to a race.
+
+Gaps Against Your Goals
+1. No gameplay loops (your #1 priority)
+The house doesn't feel like a breathing ecosystem because:
+
+P7 (NPC Autonomy) doesn't exist. NPCs only move via schedule resolution in resolveTick — they go to rooms and do flavor-text activities, but they never do anything meaningful. They don't cook, don't clean, don't initiate conversations, don't text you, don't react to dirty dishes, don't notice you're in their room unless you walk in while they're there. The DRIVE_DEFS system referenced in the architecture doesn't exist yet.
+No consequences for neglect. Player needs decay but nothing bad happens at 0. NPC needs decay and restore by schedule block, but low needs don't drive any behavior.
+Quests are trivial. "Talk to NPC" = instant completion. No multi-step goals, no failure states that matter.
+No relationship progression that matters. relPlayer axes move by ±0.3 per conversation, but nothing reads them for mechanical consequences — no romance threshold, no "they'll let you in their room", no "they'll confront you about rent".
+2. Computer apps look like button lists, not apps (your stated goal)
+Every app renders through 4 generic renderers (dashboard, catalog, list, article). They're functionally correct but visually flat — rows of text with a button each. No app has its own visual identity. The Streamly app doesn't look like a streaming service, Nile doesn't look like a shop, WorkHub doesn't look like a work dashboard. The chat renderer for IM is the closest to feeling like an app.
+
+3. Adult content is minimal (your stated goal)
+What exists:
+
+AfterHours browser site: a single text paragraph with mood+/energy- effects
+CONTENT_CONFIG.contentFlags.mature: true — no gating by design
+CONTENT_DIRECTIVES.mature tells the LLM to "write them like an adult novel would"
+Stealth system catches you entering bedrooms
+What's missing:
+
+No porn on the computer. AfterHours is one static paragraph. No image content, no video-like experience, no browsing multiple pages.
+No sex/intimacy system. No mechanics for physical intimacy with roommates. No relationship threshold that unlocks it. No scene type for it.
+No spying on roommates. Stealth only covers room entry. You can't peek through a door, can't watch someone shower, can't catch someone changing. The shower object exists but has no "someone is using it" state. NPC schedules put them in rooms but don't track what they're doing there in a way that creates voyeuristic opportunities.
+No NPC undress/clothing state. NPCs have no clothing or state field. You can't walk in on someone in a towel, in underwear, sleeping naked. The shower object has a power: on/off state but nothing ties it to an NPC actually being in it.
+No "walking around the house in states of undress" — NPCs don't transition between rooms in towels or sleepwear.
+4. Content flag wiring is broken
+handleGenerateCast saves contentConfig: { tone, contentPrefs } but never sets contentFlags. activeContentFlags() in computer.js reads gameState.meta.contentConfig.contentFlags which is always undefined, so it falls back to CONTENT_CONFIG.contentFlags defaults. The character-creation form has a "Content Preferences" field but it's never wired to anything.
+
+Recommended Next Steps (in priority order)
+Step 1: Fix the NPC persistence bug. This is blocking everything — a game with no NPCs is unplayable. Need to trace the save/load cycle and find where NPC writes are lost.
+
+Step 2: NPC Autonomy (P7) — the breathing ecosystem. This is the highest-impact change for making the house feel alive:
+
+Add DRIVE_DEFS — a data-driven system where NPCs have drives (hunger→eat, low social→seek company, dirty dishes→clean, high tension→confront) that fire during resolveTick as trusted-producer effect applications (zero-LLM, same pattern as stealth).
+Add NPC-initiated IM texts (pendingIntent on threads, LLM writes the message when the player opens the thread).
+Add NPC reactions to the player's presence (noticing you in their room, commenting on dirty common areas).
+Add NPC chore behavior (cooking leaves dishes, someone eventually cleans them).
+Step 3: Adult content systems. Build on the existing architecture:
+
+NPC clothing state: Add npc.clothing field (dressed/undressed/towel/sleepwear) that changes based on schedule blocks (shower block→towel, sleep block→sleepwear, morning→getting dressed). Walking in during these states creates the voyeuristic moments you want.
+Shower/bathroom occupancy: Track which NPC is using the shower. Entering the bathroom while occupied = witnessing them showering. This uses the existing stealth witness system with a new evidence kind.
+Peeping mechanic: A new action sourced from hallway/bedroom doors — peek — that uses the stealth skill and can catch an NPC in a private state.
+Porn app upgrade: AfterHours becomes a real app with browsable content, image generation for adult content, and a proper "watching" loop with mood/energy/arousal effects.
+Intimacy system: A relationship-gated progression — high enough affection + trust unlocks physical intimacy as a scene type. This goes through the existing LLM proposal pipeline with a new INTIMACY effect type.
+Step 4: App visual overhauls. Make each computer app look like itself:
+
+Streamly: video player UI with show thumbnails (generated images), episode progress bars
+Nile: product grid with item images, cart sidebar
+WorkHub: task cards with progress, earnings chart
+Browser: tabbed browsing with URL bar
+IM: full chat UI with timestamps, typing indicators
+Step 5: Gameplay loop tightening.
+
+Needs consequences: energy at 0 → forced sleep, hunger at 0 → mood penalty + health, hygiene at 0 → NPC reactions (disgust, avoidance)
+Rent pressure: overdue rent → NPC tension escalates, possible eviction warning
+Relationship consequences: high tension → NPC avoids you, refuses to talk, eventually considers moving out
+Multi-step quests: not just "talk to NPC" but "cook for NPC" → "give them a gift" → "have a deep conversation"
+Step 6: Content volume (P8). More browser sites, more stream shows, more recipes, more items, more NPC interaction depth.

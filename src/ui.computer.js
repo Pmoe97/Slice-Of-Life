@@ -84,7 +84,11 @@ async function doShopRemoveFromCart(defId) {
 async function doShopCheckout() {
   const result = checkoutCart(currentGameState);
   if (!result.ok) { addLogEntry('system', result.reason); return; }
-  addLogEntry('system', `Order placed on Nile: $${result.total}. Arriving on the doormat tomorrow.`);
+  addLogEntry('system', `Order placed on Nile: ${result.total}. Arriving on the doormat tomorrow.`);
+  // Chain quest progress: buying from Nile
+  for (const npcId of Object.keys(currentGameState.npcs)) {
+    checkChainQuestProgress('buy', npcId);
+  }
   switchScreen(currentGameState, 'browse');
   renderComputerScreen(currentGameState);
   render(currentGameState, currentSceneState);
@@ -113,6 +117,91 @@ async function doBrowserVisit(siteId) {
     await saveAtBoundary('browser-visit', currentGameState);
   } finally {
     hideLoading();
+  }
+}
+
+// AfterHours category tab switch — just updates the filter, no time cost
+function doAfterHoursCategory(catId) {
+  const browser = currentGameState.world.computer.apps.browser;
+  browser.afterHoursCategory = catId;
+  browser.afterHoursWatching = null;
+  browser.afterHoursImgUrl = null;
+  browser.afterHoursImgLoading = false;
+  renderComputerScreen(currentGameState);
+}
+
+// AfterHours content watch — applies watch effects, then triggers image
+// generation itself (see generateAfterHoursImageOnce below). Deliberately
+// NOT triggered from inside renderAfterHours (RENDER.COMPUTER) any more —
+// render() gets called twice per action across this whole file (a
+// pre-existing, harmless-everywhere-else convention), and a render-
+// triggered async side effect fired twice in the same tick, each call
+// racing to write into a DOM node the OTHER call's re-render had already
+// torn down. Neither image ever reliably showed. Moving the trigger here
+// makes it fire exactly once per watch, regardless of how many times the
+// screen gets re-rendered afterward.
+async function doAfterHoursWatch(entryId) {
+  if (!entryId) return;
+  const site = SITE_DEFS['afterhours'];
+  if (!site?.adultContent) return;
+  const entry = site.adultContent.entries.find(e => e.id === entryId);
+  if (!entry) return;
+
+  showLoading();
+  try {
+    const browser = currentGameState.world.computer.apps.browser;
+    browser.afterHoursWatching = entryId;
+    browser.afterHoursImgUrl = null;
+    browser.afterHoursImgLoading = false;
+
+    // Apply watch effects
+    if (site.watchEffects) {
+      const effects = site.watchEffects.map(line => parseEffectDSL(line)[0]).filter(Boolean);
+      const roomObjects = currentGameState.objects[`room_${currentGameState.player.location}`] || {};
+      const effCtx = buildEffectContext(currentGameState, [], [], roomObjects, currentGameState.player.inventory || []);
+      applyEffects(effects, effCtx);
+    }
+
+    await advanceAndResolve(1);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
+
+    addLogEntry('narration', `You browse AfterHours: "${entry.title}".`);
+    render(currentGameState, currentSceneState);
+    await saveAtBoundary('ah-watch', currentGameState);
+  } finally {
+    hideLoading();
+  }
+
+  // Runs after the loading overlay clears — real image-gen latency
+  // shouldn't block the quick synchronous state update above.
+  await generateAfterHoursImageOnce(entryId);
+}
+
+// The one place that calls root.generateImage for AfterHours. Guards
+// against the entry having changed (category switch, another watch click)
+// while the request was in flight — a stale response is discarded rather
+// than overwriting whatever the player is now looking at.
+async function generateAfterHoursImageOnce(entryId) {
+  const browser = currentGameState.world.computer.apps.browser;
+  if (browser.afterHoursWatching !== entryId || browser.afterHoursImgLoading) return;
+  const site = SITE_DEFS['afterhours'];
+  const entry = site?.adultContent?.entries.find(e => e.id === entryId);
+  if (!entry) return;
+
+  browser.afterHoursImgLoading = true;
+  renderComputerScreen(currentGameState);
+  try {
+    const prompt = `Cinematic still from an adult drama film: "${entry.title}". ${entry.desc}. Soft lighting, intimate atmosphere, tasteful and sensual, film grain, shallow depth of field.`;
+    const result = await root.generateImage(prompt, { resolution: '512x768' });
+    if (browser.afterHoursWatching !== entryId) return; // player moved on — discard
+    browser.afterHoursImgUrl = result.dataUrl;
+  } catch (e) {
+    // Leave afterHoursImgUrl null — renderAfterHours shows "unavailable".
+  } finally {
+    if (browser.afterHoursWatching === entryId) {
+      browser.afterHoursImgLoading = false;
+      renderComputerScreen(currentGameState);
+    }
   }
 }
 

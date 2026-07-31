@@ -336,6 +336,13 @@ const ITEM_DEFS = {
   meal_omelette: { id: 'meal_omelette', label: 'Omelette', nouns: ['omelette'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 30, mood: 0.02 } },
   meal_stirfry: { id: 'meal_stirfry', label: 'Stir-fry', nouns: ['stir-fry', 'stirfry'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 3 }, consumable: { hunger: 42, mood: 0.03 } },
   meal_sandwich: { id: 'meal_sandwich', label: 'Sandwich', nouns: ['sandwich'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 25 } },
+  // --- New meal items (P8) ---
+  meal_breakfast: { id: 'meal_breakfast', label: 'Bacon and Eggs', nouns: ['bacon and eggs', 'breakfast'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 1 }, consumable: { hunger: 35, mood: 0.03 } },
+  meal_burger: { id: 'meal_burger', label: 'Burger', nouns: ['burger'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, consumable: { hunger: 38, mood: 0.04 } },
+  meal_salad: { id: 'meal_salad', label: 'Salad', nouns: ['salad'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 1 }, consumable: { hunger: 22, mood: 0.02 } },
+  meal_fried_rice: { id: 'meal_fried_rice', label: 'Fried Rice', nouns: ['fried rice'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 3 }, consumable: { hunger: 40, mood: 0.03 } },
+  meal_soup: { id: 'meal_soup', label: 'Tomato Soup', nouns: ['soup', 'tomato soup'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 4 }, consumable: { hunger: 28, mood: 0.02 } },
+  meal_potato: { id: 'meal_potato', label: 'Loaded Potato', nouns: ['potato', 'baked potato'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, consumable: { hunger: 30, mood: 0.03 } },
 
   // Snacks/drinks (directly consumable, no cooking needed)
   instant_noodles: { id: 'instant_noodles', label: 'Instant Noodles', nouns: ['instant noodles', 'ramen'], category: 'food', stackable: true, maxStack: 12, consumable: { hunger: 20 }, price: 2, buyQty: 4 },
@@ -410,6 +417,43 @@ const RECIPES = {
     produces: { defId: 'meal_sandwich', qty: 1 },
     leaves: ['SET_OBJECT_STATE {sink} dishes few'],
   },
+  // --- New recipes (P8 content volume) ---
+  bacon_eggs: {
+    id: 'bacon_eggs', label: 'Bacon and Eggs',
+    ingredients: [{ defId: 'eggs', qty: 2 }, { defId: 'bacon', qty: 1 }],
+    produces: { defId: 'meal_breakfast', qty: 1 },
+    leaves: ['SET_OBJECT_STATE {sink} dishes few', 'SET_OBJECT_STATE {stove} burner crusty'],
+  },
+  burger: {
+    id: 'burger', label: 'Burger',
+    ingredients: [{ defId: 'ground_beef', qty: 1 }, { defId: 'bread', qty: 1 }, { defId: 'onion', qty: 1 }],
+    produces: { defId: 'meal_burger', qty: 1 },
+    leaves: ['SET_OBJECT_STATE {sink} dishes few', 'SET_OBJECT_STATE {stove} burner crusty'],
+  },
+  salad: {
+    id: 'salad', label: 'Salad',
+    ingredients: [{ defId: 'lettuce', qty: 1 }, { defId: 'tomato', qty: 1 }, { defId: 'cheese', qty: 1 }],
+    produces: { defId: 'meal_salad', qty: 1 },
+    leaves: ['SET_OBJECT_STATE {sink} dishes few'],
+  },
+  fried_rice: {
+    id: 'fried_rice', label: 'Fried Rice',
+    ingredients: [{ defId: 'rice', qty: 1 }, { defId: 'eggs', qty: 1 }, { defId: 'onion', qty: 1 }],
+    produces: { defId: 'meal_fried_rice', qty: 2 },
+    leaves: ['SET_OBJECT_STATE {sink} dishes many', 'SET_OBJECT_STATE {stove} burner crusty'],
+  },
+  soup: {
+    id: 'soup', label: 'Tomato Soup',
+    ingredients: [{ defId: 'tomato_sauce', qty: 1 }, { defId: 'onion', qty: 1 }, { defId: 'garlic', qty: 1 }],
+    produces: { defId: 'meal_soup', qty: 2 },
+    leaves: ['SET_OBJECT_STATE {sink} dishes few', 'SET_OBJECT_STATE {stove} burner crusty'],
+  },
+  loaded_potato: {
+    id: 'loaded_potato', label: 'Loaded Baked Potato',
+    ingredients: [{ defId: 'potatoes', qty: 1 }, { defId: 'cheese', qty: 1 }, { defId: 'butter', qty: 1 }],
+    produces: { defId: 'meal_potato', qty: 1 },
+    leaves: ['SET_OBJECT_STATE {sink} dishes few'],
+  },
 };
 
 // Seeded into the fridge/pantry at new-game spawn (WORLD's
@@ -419,11 +463,13 @@ const RECIPES = {
 const STARTER_GROCERIES = {
   fridge: [
     { defId: 'eggs', qty: 6 }, { defId: 'milk', qty: 1 },
-    { defId: 'cheese', qty: 1 }, { defId: 'butter', qty: 1 },
+    { defId: 'cheese', qty: 2 }, { defId: 'butter', qty: 1 },
+    { defId: 'bacon', qty: 1 }, { defId: 'lettuce', qty: 1 },
   ],
   pantry: [
     { defId: 'pasta_dry', qty: 2 }, { defId: 'tomato_sauce', qty: 2 },
-    { defId: 'rice', qty: 2 }, { defId: 'bread', qty: 1 },
+    { defId: 'rice', qty: 2 }, { defId: 'bread', qty: 2 },
+    { defId: 'onion', qty: 2 }, { defId: 'potatoes', qty: 2 },
   ],
 };
 

@@ -83,6 +83,110 @@ const NEEDS = {
   npcSocialRestore: 4,   // per tick when sharing a common room with another resident
 };
 
+// --- Need consequences (P7 gameplay loops). When a need hits 0, real
+// mechanical effects fire — not just a red bar. These are checked every
+// tick in decayPlayerNeeds (SIM) and applied through the same applyEffects
+// pipeline as everything else. ---
+const NEED_CONSEQUENCES = {
+  energy: {
+    floor: 0,
+    // Energy at 0 → forced sleep (player blacks out). The player is
+    // teleported to their bed and loses several hours.
+    effect: 'forced_sleep',
+    ticksLost: 8,  // hours of lost time
+    moodPenalty: -0.1,
+    logMessage: 'You collapse from exhaustion. You wake up hours later in your bed, disoriented.',
+  },
+  hunger: {
+    floor: 0,
+    // Hunger at 0 → mood penalty stacks, and after 3 ticks at 0, health
+    // damage (modeled as a persistent mood floor reduction).
+    effect: 'starvation',
+    moodPenaltyPerTick: -0.02,
+    healthThresholdTicks: 3,
+    logMessage: "You're starving. Your mood drops and you can barely focus.",
+    healthLogMessage: "You haven't eaten in too long. You feel genuinely weak.",
+  },
+  hygiene: {
+    floor: 0,
+    // Hygiene at 0 → NPCs react with disgust, tension rises, they avoid you.
+    effect: 'filthy',
+    tensionPerNpcPerTick: 0.01,
+    affectionLossPerNpcPerTick: -0.005,
+    logMessage: 'You smell terrible. Your roommates are giving you space.',
+    npcReactionChance: 0.3,
+    npcReactions: [
+      '{name} wrinkles their nose as you walk by. "Maybe hit the shower?"',
+      '{name} takes a step back. "No offense, but... wow."',
+      '"Have you considered soap?" {name} asks, not entirely joking.',
+      '{name} opens a window pointedly when you enter the room.',
+    ],
+  },
+};
+
+// --- Relationship consequences (P7). High tension has real mechanical
+// effects, not just a number. An NPC past the tension threshold becomes
+// harder to interact with and eventually considers moving out. ---
+const REL_CONSEQUENCES = {
+  tensionThreshold: 0.6,      // NPC starts avoiding you
+  tensionHigh: 0.8,           // NPC refuses to talk, considers leaving
+  tensionAvoidChance: 0.5,    // chance NPC leaves the room when you enter
+  tensionRefuseTalkChance: 0.7, // chance NPC refuses to engage in conversation
+  tensionMoveOutDay: 7,       // days at tensionHigh before NPC moves out
+  affectionGiftThreshold: 0.3, // minimum affection for gift-giving to work
+};
+
+// --- Multi-step quest chains (P7). Not just "talk to NPC" but a sequence
+// of steps that build on each other. Each step has a type and completion
+// condition. ---
+const QUEST_CHAINS = [
+  {
+    id: 'care_package',
+    title: 'Care Package for {name}',
+    steps: [
+      { type: 'cook', desc: 'Cook a meal for {name}' },
+      { type: 'give_item', desc: 'Give the meal to {name}', itemCategory: 'meal' },
+      { type: 'talk', desc: 'Check in with {name} about how they\'re doing' },
+    ],
+    rewardMoney: 80,
+    rewardRelation: { affection: 0.15, trust: 0.1 },
+  },
+  {
+    id: 'bonding_night',
+    title: 'Bonding Night with {name}',
+    steps: [
+      { type: 'buy', desc: 'Buy snacks or drinks from Nile' },
+      { type: 'give_item', desc: 'Share with {name}', itemCategory: 'food' },
+      { type: 'watch_tv', desc: 'Watch something together in the living room' },
+      { type: 'talk', desc: 'Have a real conversation with {name}' },
+    ],
+    rewardMoney: 60,
+    rewardRelation: { affection: 0.2, trust: 0.05 },
+  },
+  {
+    id: 'apology',
+    title: 'Make Things Right with {name}',
+    steps: [
+      { type: 'buy', desc: 'Buy a gift from Nile' },
+      { type: 'give_item', desc: 'Give the gift to {name}', itemCategory: 'gift' },
+      { type: 'talk', desc: 'Apologize to {name}' },
+    ],
+    rewardMoney: 30,
+    rewardRelation: { tension: -0.2, trust: 0.1 },
+  },
+  {
+    id: 'roommate_dinner',
+    title: 'Cook Dinner for the House',
+    steps: [
+      { type: 'cook', desc: 'Cook a proper meal (not just a sandwich)' },
+      { type: 'talk', desc: 'Invite {name} to eat together' },
+      { type: 'talk', desc: 'Have a conversation over dinner with {name}' },
+    ],
+    rewardMoney: 100,
+    rewardRelation: { affection: 0.1, respect: 0.1 },
+  },
+];
+
 // --- Clock ---
 const CLOCK = {
   ticksPerDay: 48,          // 30-min increments
@@ -394,6 +498,15 @@ const OFFSCREEN_EVENTS = [
   { type: 'good_news', weight: 2, text: '{name} got good news: {detail}.', moodDelta: 0.15, dataFields: ['detail'] },
   { type: 'cleaning', weight: 3, text: '{name} cleaned the {room}.', moodDelta: 0.05, dataFields: ['room'] },
   { type: 'sick', weight: 1, text: '{name} is coming down with something.', moodDelta: -0.1, dataFields: [] },
+  // --- New events (P8) ---
+  { type: 'date', weight: 1, text: '{name} went on a {date_desc} date.', moodDelta: 0.12, dataFields: ['date_desc'] },
+  { type: 'hobby', weight: 2, text: '{name} spent time on their {hobby}.', moodDelta: 0.06, dataFields: ['hobby'] },
+  { type: 'nap', weight: 2, text: '{name} took a long nap on the couch.', moodDelta: 0.04, dataFields: [] },
+  { type: 'phone_call', weight: 2, text: '{name} had a long phone call with {caller}.', moodDelta: 0.03, dataFields: ['caller'] },
+  { type: 'laundry', weight: 1, text: '{name} did a load of laundry.', moodDelta: 0.02, dataFields: [] },
+  { type: 'burnt_food', weight: 1, text: '{name} burnt something in the kitchen — the smoke alarm went off.', moodDelta: -0.05, dataFields: [] },
+  { type: 'package', weight: 1, text: '{name} got a package delivered.', moodDelta: 0.05, dataFields: [] },
+  { type: 'late_night_snack', weight: 2, text: '{name} had a late-night snack raid on the fridge.', moodDelta: 0.02, dataFields: [] },
 ];
 
 const EVENT_FILL_DATA = {
@@ -403,6 +516,9 @@ const EVENT_FILL_DATA = {
   topic: ['chores', 'noise', 'bathroom time', 'groceries', 'rent', 'a mess', 'the thermostat'],
   room: ['kitchen', 'living room', 'bathroom', 'hallway'],
   detail: ['a promotion opportunity', 'a new gig', 'a raise', 'an acceptance letter', 'a call back'],
+  date_desc: ['great', 'terrible', 'awkward', 'surprisingly good', 'brief but sweet'],
+  hobby: ['painting', 'guitar practice', 'writing', 'gaming', 'yoga', 'photography', 'knitting'],
+  caller: ['their mom', 'an old friend', 'their boss', 'a sibling', 'someone from a dating app'],
 };
 
 // --- Interest pool (tagged) ---
@@ -649,6 +765,45 @@ const STEALTH_TUNING = {
   evidenceStrengthDiscoveryFactor: 0.5, // added to base, scaled by evidence.strength
 };
 
+// --- Peeping (P7 adult content). Tuning for the spy/peep action that lets
+// the player observe NPCs in private states (showering, sleeping,
+// undressed). This is a boundary-crossing action with its own suspicion
+// and relationship consequences, separate from room-entry stealth. ---
+const PEEP_TUNING = {
+  suspicionDelta: 0.2,          // suspicion increase if caught
+  tensionDelta: 0.15,          // rel tension increase if caught
+  affectionCostIfCaught: -0.1, // rel affection decrease if caught
+  stealthSkillFactor: 0.5,     // how much stealth skill reduces detection
+  moodGain: 0.1,               // player mood gain from peeping
+  detectionNpcAwake: 0.6,      // detection chance if NPC is awake
+  detectionNpcAsleep: 0.1,     // detection chance if NPC is sleeping
+  suspectedChance: 0.2,        // chance of a "someone might have noticed" near-miss when not caught
+};
+
+// Clothing states visible during peeping, by NPC activity
+const PEEP_CLOTHING_DESC = {
+  showering: 'through the crack in the bathroom door — {name} is in the shower, water running down their skin',
+  sleeping: 'through the gap — {name} is asleep in bed, sheets tangled around them',
+  undressed: 'through the crack — {name} is changing, clothes scattered on the floor',
+  sleepwear: 'through the gap — {name} is in their sleepwear, relaxed and unguarded',
+  towel: 'through the crack — {name} is standing with just a towel wrapped around them',
+  dressed: 'through the gap — {name} is just hanging out in their room',
+};
+
+// NPC reactions when they catch the player peeping
+const PEEP_CAUGHT_TEMPLATES = [
+  '"What the hell are you doing?" {name} demands, grabbing something to cover themselves.',
+  '{name} spots you at the door. "Seriously? Get out."',
+  '"Did you just — were you watching me?" {name}\'s face hardens.',
+  '{name} sees the door move and catches you looking. The silence is lethal.',
+];
+
+// NPC reactions when they DON'T catch the player but sense something
+const PEEP_SUSPECTED_TEMPLATES = [
+  '{name} pauses, looking toward the door as if they heard something, then shrugs it off.',
+  '{name} glances at the door briefly, frowning, before going back to what they were doing.',
+];
+
 const EVIDENCE_KIND_TEXT = {
   browser_history: "{name} noticed the browser history on the computer looked off.",
   open_app: "{name} noticed an app had been left open that they didn't open.",
@@ -711,5 +866,144 @@ const CONTENT_DIRECTIVES = {
   conflict: { on: 'Arguments and interpersonal conflict may escalate realistically.', off: 'Keep conflict low-key and quickly defused.' },
   mature: { on: 'Mature themes and adult situations are permitted when the scene calls for them — write them like an adult novel would, not a summary of one.', off: 'Keep content non-explicit; fade to black rather than describing explicit material.' },
 };
+
+// --- NPC Autonomy drives (P7). Data-driven definitions that fire during
+// resolveTick as trusted-producer effects — zero LLM, deterministic.
+// Each drive has: a need gate (when it fires), a weight (how often), an
+// action (what it does), and optional conditions. Drives produce NPC
+// effects via the same applyEffects pipeline, plus NPC-to-NPC IM texts,
+// NPC reactions to player presence, and NPC chore behavior.
+//
+// Need gates use a threshold + direction: { need: 'hunger', op: 'below',
+// threshold: 30 } fires when npc.needs.hunger < 30. Multiple gates = AND.
+// weight is the per-tick probability the drive fires once gates pass.
+// blockFilter limits drives to specific schedule blocks.
+// cooldownTicks prevents the same drive from firing again too soon.
+const DRIVE_DEFS = {
+  // --- Need-driven self-care ---
+  cook: {
+    gates: [{ need: 'hunger', op: 'below', threshold: 25 }],
+    weight: 0.3,
+    blockFilter: ['morning', 'evening', 'leisure', 'midday'],
+    effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'hunger', delta: 30 } }],
+    activityOverride: 'cooking',
+    eventTemplate: '{name} made themselves something to eat.',
+    eventMood: 0.03,
+    cooldownTicks: 8,
+  },
+  shower: {
+    gates: [{ need: 'hygiene', op: 'below', threshold: 30 }],
+    weight: 0.3,
+    blockFilter: ['morning', 'wind_down', 'leisure'],
+    effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'hygiene', delta: 40 } }],
+    activityOverride: 'showering',
+    eventTemplate: '{name} took a shower.',
+    eventMood: 0.02,
+    cooldownTicks: 10,
+    // Showering makes the NPC undressed during the activity — see clothing state
+    setsClothing: 'towel',
+    restoresClothing: true,
+  },
+  sleep_recover: {
+    gates: [{ need: 'energy', op: 'below', threshold: 20 }],
+    weight: 0.4,
+    blockFilter: ['leisure', 'wind_down'],
+    effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'energy', delta: 25 } }],
+    activityOverride: 'napping',
+    eventTemplate: '{name} crashed for a nap.',
+    eventMood: 0.05,
+    cooldownTicks: 16,
+  },
+  seek_company: {
+    gates: [{ need: 'social', op: 'below', threshold: 25 }],
+    weight: 0.25,
+    blockFilter: ['leisure', 'evening', 'wind_down'],
+    effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'social', delta: 15 } }],
+    activityOverride: 'hanging out',
+    eventTemplate: '{name} came out to the common area for some company.',
+    eventMood: 0.04,
+    cooldownTicks: 6,
+    moveToCommon: true,
+  },
+
+  // --- Chore behavior ---
+  clean_common: {
+    gates: [],
+    weight: 0.08,
+    blockFilter: ['morning', 'leisure', 'wind_down'],
+    effects: [],
+    activityOverride: 'cleaning up',
+    eventTemplate: '{name} tidied up the {room}.',
+    eventMood: 0.03,
+    cooldownTicks: 20,
+    cleansRoom: true,
+  },
+  do_laundry: {
+    gates: [],
+    weight: 0.05,
+    blockFilter: ['morning', 'leisure'],
+    effects: [],
+    activityOverride: 'doing laundry',
+    eventTemplate: '{name} started a load of laundry.',
+    eventMood: 0.02,
+    cooldownTicks: 30,
+    emptiesHamper: true,
+  },
+
+  // --- Social: NPC-to-NPC interaction ---
+  chat_with_roommate: {
+    gates: [{ need: 'social', op: 'below', threshold: 40 }],
+    weight: 0.15,
+    blockFilter: ['leisure', 'evening', 'wind_down', 'morning'],
+    effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'social', delta: 20 } }],
+    activityOverride: 'chatting with a roommate',
+    cooldownTicks: 12,
+    npcToNpc: true,
+    // Produces a small rel delta between the two NPCs
+    relDelta: { trust: 0.02, affection: 0.02 },
+  },
+
+  // --- Social: NPC-to-player IM ---
+  text_player: {
+    gates: [],
+    weight: 0.04,
+    blockFilter: ['leisure', 'evening', 'wind_down', 'work'],
+    effects: [],
+    cooldownTicks: 24,
+    sendsIm: true,
+    // IM text templates — picked at random, filled with NPC name
+    imTemplates: [
+      'hey, you around?',
+      'can you grab milk on your way back?',
+      'the wifi is being weird again',
+      'someone left dishes in the sink again 🙄',
+      'you good?',
+      'movie night tonight?',
+      'i made extra food if you want some',
+    ],
+  },
+
+  // --- Reactions to player presence ---
+  react_to_player: {
+    gates: [],
+    weight: 0.2,
+    blockFilter: ['leisure', 'evening', 'wind_down', 'morning'],
+    effects: [],
+    cooldownTicks: 8,
+    reactsToPlayer: true,
+    // Mood-gated: if NPC mood is low, they're more likely to be curt
+    // If mood is high, they're warm. Effects are small rel deltas.
+    moodThresholds: {
+      low: -0.2,
+      high: 0.3,
+    },
+    relDeltaLow: { tension: 0.01 },
+    relDeltaHigh: { affection: 0.01 },
+  },
+};
+
+// Per-NPC drive cooldown tracking (in-memory, reset on load)
+// Stored as npc.flags._driveCooldowns = { driveId: tickIndex }
+const DRIVE_COOLDOWN_KEY = '_driveCooldowns';
 
 // ===== /SECTION: CONFIG =====

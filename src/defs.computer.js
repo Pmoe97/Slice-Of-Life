@@ -14,7 +14,7 @@ const APP_DEFS = {
     id: 'work', label: 'WorkHub', category: 'productivity', requires: [],
     entryScreen: 'dash',
     screens: {
-      dash: { label: 'Dashboard', renderer: 'dashboard', panels: ['job.summary', 'job.backlog', 'job.earnings'] },
+      dash: { label: 'Dashboard', renderer: 'workhub', panels: ['job.summary', 'job.backlog', 'job.earnings'] },
       board: { label: 'Job Board', renderer: 'catalog', source: 'JOB_DEFS', rowAction: 'work.apply', rowActionLabel: 'Apply' },
     },
   },
@@ -27,7 +27,7 @@ const APP_DEFS = {
     id: 'shop', label: 'Nile', category: 'shopping', requires: [],
     entryScreen: 'browse',
     screens: {
-      browse: { label: 'Browse', renderer: 'catalog', source: 'SHOP_CATALOG_LIST', rowAction: 'shop.add-to-cart', rowActionLabel: 'Add to Cart' },
+      browse: { label: 'Browse', renderer: 'nile', source: 'SHOP_CATALOG_LIST', rowAction: 'shop.add-to-cart', rowActionLabel: 'Add to Cart' },
       cart: {
         label: 'Cart', renderer: 'list', source: 'state:apps.shop.cart', emptyText: 'Your cart is empty.',
         labelFn: (row) => `${ITEM_DEFS[row.defId]?.label || row.defId} × ${row.units} — $${(ITEM_DEFS[row.defId]?.price || 0) * row.units}`,
@@ -40,7 +40,7 @@ const APP_DEFS = {
     id: 'browser', label: 'Browser', category: 'web', requires: [],
     entryScreen: 'home',
     screens: {
-      home: { label: 'Home', renderer: 'catalog', source: 'SITE_DEFS_LIST', rowAction: 'browser.visit', rowActionLabel: 'Visit' },
+      home: { label: 'Home', renderer: 'browser', source: 'SITE_DEFS_LIST', rowAction: 'browser.visit', rowActionLabel: 'Visit' },
       site: { label: 'Page', renderer: 'article', hideFromNav: true },
     },
   },
@@ -129,7 +129,7 @@ const APP_DEFS = {
     id: 'stream', label: 'Streamly', category: 'entertainment', requires: [],
     entryScreen: 'browse',
     screens: {
-      browse: { label: 'Browse', renderer: 'catalog', source: 'STREAM_DEFS_LIST', rowAction: 'stream.watch', rowActionLabel: 'Watch Episode' },
+      browse: { label: 'Browse', renderer: 'streamly', source: 'STREAM_DEFS_LIST', rowAction: 'stream.watch', rowActionLabel: 'Watch Episode' },
     },
   },
 };
@@ -187,11 +187,79 @@ const SITE_DEFS = {
     body: "Lesson 1: writing your first script. It's mostly typos. Everyone's is, at first.",
     effects: ['ADD_SKILL_XP tech 6'],
   },
+  // --- New sites (P8 content volume) ---
+  reddit_lite: {
+    id: 'reddit_lite', label: 'FrontPage', url: 'frontpage.example', category: 'social',
+    body: "Top posts right now: someone asking if they're the asshole for eating their roommate's leftovers (verdict: yes), a time-lapse of someone's sourdough starter collapsing, and a heated debate about whether dishes in the sink count as 'soaking' or 'abandoned'.",
+    effects: ['ADJUST_NEED player mood +0.03'],
+  },
+  weather: {
+    id: 'weather', label: 'SkyCheck', url: 'skycheck.example', category: 'utility',
+    body: "Today: partly cloudy, high of 72. Tomorrow: rain starting in the afternoon. This weekend: perfect for the park, if you remember to bring sunscreen.",
+  },
+  recipes: {
+    id: 'recipes', label: 'PlateUp', url: 'plateup.example', category: 'tutorial',
+    body: "Five meals you can make with what's probably already in your pantry. Number 3 will surprise you (it's pasta).",
+    effects: ['ADD_SKILL_XP cooking 8'],
+  },
+  budget_tracker: {
+    id: 'budget_tracker', label: 'CoinJar', url: 'coinjar.example', category: 'utility',
+    body: "Your spending this week: $47 on takeout (yikes), $12 on coffee, $200 on groceries. The app gently suggests you maybe cook at home more.",
+    effects: ['ADJUST_NEED player mood -0.02'],
+  },
+  social_feed: {
+    id: 'social_feed', label: 'Chatter', url: 'chatter.example', category: 'social',
+    body: "Your friend just posted a photo of their brunch. Someone you haven't talked to in three years got a promotion. A stranger is going viral for a very bad take about pizza.",
+    effects: ['ADJUST_NEED player mood +0.02', 'ADJUST_NEED player energy -2'],
+  },
+  job_listings: {
+    id: 'job_listings', label: 'CareerHub', url: 'careerhub.example', category: 'utility',
+    body: "Remote positions hiring now: data entry (no experience needed), freelance developer (3+ years), and a café that needs someone for morning shifts. Apply through WorkHub.",
+  },
+  meditation: {
+    id: 'meditation', label: 'CalmSpace', url: 'calmspace.example', category: 'wellness',
+    body: "A 10-minute guided breathing exercise. Close your eyes. Breathe in for four. Hold for seven. Out for eight. Repeat until the rent stops feeling real.",
+    effects: ['ADJUST_NEED player mood +0.06', 'ADJUST_NEED player energy +3'],
+  },
+  gaming_forum: {
+    id: 'gaming_forum', label: 'PixelPress', url: 'pixelpress.example', category: 'gaming',
+    body: "Hot takes: the new indie game everyone's playing is 'just Stardew Valley but darker', a 47-page thread about why the latest patch ruined everything, and someone's speedrun that breaks the game in 12 minutes.",
+    effects: ['ADJUST_NEED player mood +0.04'],
+  },
   afterhours: {
     id: 'afterhours', label: 'AfterHours', url: 'afterhours.example', category: 'adult',
     requiresContentFlag: 'mature',
-    body: "(You're on AfterHours. It's exactly what it sounds like.)",
-    effects: ['ADJUST_NEED player mood +0.1', 'ADJUST_NEED player energy -5', 'ADJUST_NEED player hygiene -3'],
+    body: "AfterHours — the apartment's favorite late-night destination.",
+    effects: ['ADJUST_NEED player mood +0.08', 'ADJUST_NEED player energy -3'],
+    // Browsable adult content with categories. Each category has a set
+    // of video/post entries with titles. The browser renders these as
+    // a grid of thumbnails. Clicking one generates a scene image via
+    // generateImage and applies mood/arousal effects.
+    adultContent: {
+      categories: [
+        { id: 'featured', label: 'Featured', weight: 3 },
+        { id: 'amateur', label: 'Amateur', weight: 2 },
+        { id: 'couples', label: 'Couples', weight: 2 },
+        { id: 'solo', label: 'Solo', weight: 2 },
+        { id: 'roleplay', label: 'Roleplay', weight: 1 },
+      ],
+      entries: [
+        { id: 'ah_01', title: 'Late Night Session', category: 'featured', desc: 'Two strangers meet at a bar after last call.' },
+        { id: 'ah_02', title: 'Roommates', category: 'couples', desc: 'Thin walls, shared laundry, and a tension that finally snaps.' },
+        { id: 'ah_03', title: 'After Shower', category: 'amateur', desc: 'A steamy bathroom and a dropped towel.' },
+        { id: 'ah_04', title: 'Bedroom Eyes', category: 'solo', desc: 'Just one person, a mirror, and no inhibitions.' },
+        { id: 'ah_05', title: 'The Interview', category: 'roleplay', desc: 'A job interview that takes an unexpected turn.' },
+        { id: 'ah_06', title: 'Night Shift', category: 'featured', desc: 'Working late has its perks.' },
+        { id: 'ah_07', title: 'Pool House', category: 'couples', desc: 'A summer fling remembered in detail.' },
+        { id: 'ah_08', title: 'Morning Routine', category: 'solo', desc: 'Waking up with nowhere to be and nothing to hide.' },
+        { id: 'ah_09', title: 'Room Service', category: 'roleplay', desc: 'A hotel, a knock at the door, and a very generous tip.' },
+        { id: 'ah_10', title: 'Study Break', category: 'amateur', desc: 'Cramming for finals takes a detour.' },
+        { id: 'ah_11', title: 'The Artist', category: 'solo', desc: 'A life drawing class where the model gets comfortable.' },
+        { id: 'ah_12', title: 'Backseat', category: 'couples', desc: 'A parked car and fogged windows.' },
+      ],
+    },
+    // Effects applied when watching a specific entry (in addition to base)
+    watchEffects: ['ADJUST_NEED player mood +0.12', 'ADJUST_NEED player energy -5', 'ADJUST_NEED player hygiene -2'],
   },
 };
 const SITE_DEFS_LIST = Object.values(SITE_DEFS);
@@ -241,6 +309,17 @@ const STREAM_DEFS = {
   the_neighborhood: { id: 'the_neighborhood', label: 'The Neighborhood', genre: 'sitcom', episodeTicks: 2, moodGain: 0.08 },
   murder_actually: { id: 'murder_actually', label: 'Murder, Actually', genre: 'crime drama', episodeTicks: 3, moodGain: 0.05 },
   bake_off_but_worse: { id: 'bake_off_but_worse', label: 'Bake Off (But Worse)', genre: 'reality', episodeTicks: 2, moodGain: 0.1 },
+  // --- New shows (P8 content volume) ---
+  deep_space_nine_to_five: { id: 'deep_space_nine_to_five', label: 'Deep Space Nine-to-Five', genre: 'sci-fi comedy', episodeTicks: 3, moodGain: 0.07 },
+  the_great_debate: { id: 'the_great_debate', label: 'The Great Debate', genre: 'talk show', episodeTicks: 2, moodGain: 0.06 },
+  wilderness: { id: 'wilderness', label: 'Wilderness', genre: 'nature documentary', episodeTicks: 4, moodGain: 0.04 },
+  hot_ones_remake: { id: 'hot_ones_remake', label: 'Hot Ones (Remake)', genre: 'interview', episodeTicks: 2, moodGain: 0.09 },
+  code_black_comedy: { id: 'code_black_comedy', label: 'Code Black', genre: 'medical drama', episodeTicks: 3, moodGain: 0.05 },
+  renovation_rescue: { id: 'renovation_rescue', label: 'Renovation Rescue', genre: 'reality', episodeTicks: 2, moodGain: 0.08 },
+  late_night_snacks: { id: 'late_night_snacks', label: 'Late Night Snacks', genre: 'cooking', episodeTicks: 2, moodGain: 0.07 },
+  true_crime_files: { id: 'true_crime_files', label: 'True Crime Files', genre: 'true crime', episodeTicks: 4, moodGain: 0.03 },
+  stand_up_hour: { id: 'stand_up_hour', label: 'Stand-Up Hour', genre: 'comedy', episodeTicks: 2, moodGain: 0.12 },
+  apartment_hunters: { id: 'apartment_hunters', label: 'Apartment Hunters', genre: 'reality', episodeTicks: 2, moodGain: 0.06 },
 };
 const STREAM_DEFS_LIST = Object.values(STREAM_DEFS);
 

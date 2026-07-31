@@ -59,6 +59,10 @@ async function advanceAndResolve(ticks) {
     currentGameState.npcs[id] = decayMemory(npc, ticks);
   }
 
+  // Need consequences (P7): check player needs after tick resolution.
+  // Fires when a need hits 0 — real mechanical effects, not just a red bar.
+  processNeedConsequences();
+
   // Day-rollover economy: rent due/overdue, delivery arrivals, quest
   // generation/expiry. Runs once per calendar day crossed (a single
   // advanceAndResolve call can span at most one day boundary today given
@@ -83,6 +87,133 @@ async function processDayRollover(day) {
   processWorkDeadlineForDay(day);
   processServiceVisitsForDayUi(day);
   processClassifiedsForDay(day);
+  processRelConsequencesForDay(day);
+}
+
+// Need consequences (P7): fires when player needs hit 0. Called after
+// every advanceAndResolve, so it checks the post-tick state. Each
+// consequence fires at most once per advanceAndResolve call (tracked
+// via player.flags._needConsequenceFired) to avoid stacking the same
+// penalty multiple times in a single multi-tick batch.
+function processNeedConsequences() {
+  if (!currentGameState) return;
+  const p = currentGameState.player;
+  p.flags = p.flags || {};
+
+  // Energy at 0 → forced sleep
+  if (p.energy <= 0 && !p.flags._energyCollapsed) {
+    p.flags._energyCollapsed = true;
+    p.energy = NEEDS.energy.sleepRestore * 4;
+    p.mood = Math.max(-1, p.mood + NEED_CONSEQUENCES.energy.moodPenalty);
+    // Teleport to bed
+    p.location = 'bedroom_player';
+    addLogEntry('narration', NEED_CONSEQUENCES.energy.logMessage);
+    // Advance the clock by the lost ticks — ticksLost was declared but
+    // never consumed, so a "collapse" cost nothing but a mood hit. This
+    // runs before advanceAndResolve computes dayAfter (below), so a
+    // collapse that crosses midnight still gets its day-rollover.
+    // Deliberately doesn't re-run resolveBatch for the skipped hours — a
+    // blackout isn't meant to simulate what NPCs did while the player was
+    // out, just to cost real time.
+    currentGameState.meta.clock = advanceClock(currentGameState.meta.clock, NEED_CONSEQUENCES.energy.ticksLost);
+  }
+  if (p.energy > 10) p.flags._energyCollapsed = false;
+
+  // Hunger at 0 → mood penalty, and — after enough consecutive
+  // advanceAndResolve calls spent at 0 — an additional health consequence.
+  // healthThresholdTicks/healthLogMessage were declared but never read;
+  // _starvingStreak (new) is what actually counts them now.
+  if (p.hunger <= 0) {
+    p.flags._starvingStreak = (p.flags._starvingStreak || 0) + 1;
+    if (!p.flags._starving) {
+      p.flags._starving = true;
+      p.mood = Math.max(-1, p.mood + NEED_CONSEQUENCES.hunger.moodPenaltyPerTick * 5);
+      addLogEntry('narration', NEED_CONSEQUENCES.hunger.logMessage);
+    }
+    if (p.flags._starvingStreak >= NEED_CONSEQUENCES.hunger.healthThresholdTicks && !p.flags._starvingHealthHit) {
+      p.flags._starvingHealthHit = true;
+      p.mood = Math.max(-1, p.mood + NEED_CONSEQUENCES.hunger.moodPenaltyPerTick * 5);
+      addLogEntry('narration', NEED_CONSEQUENCES.hunger.healthLogMessage);
+    }
+  } else if (p.hunger > 10) {
+    p.flags._starving = false;
+    p.flags._starvingStreak = 0;
+    p.flags._starvingHealthHit = false;
+  }
+
+  // Hygiene at 0 → NPC reactions
+  if (p.hygiene <= 0 && !p.flags._filthy) {
+    p.flags._filthy = true;
+    addLogEntry('narration', NEED_CONSEQUENCES.hygiene.logMessage);
+    // Apply tension to all residents
+    for (const [id, npc] of Object.entries(currentGameState.npcs)) {
+      if (npc.residency.status !== 'resident') continue;
+      currentGameState.npcs[id] = applyRelDelta(npc, {
+        tension: NEED_CONSEQUENCES.hygiene.tensionPerNpcPerTick * 5,
+        affection: NEED_CONSEQUENCES.hygiene.affectionLossPerNpcPerTick * 5,
+      });
+    }
+  }
+  if (p.hygiene > 10) p.flags._filthy = false;
+
+  // Random NPC reaction to low hygiene (checked each call)
+  if (p.hygiene < NEEDS.hygiene.warnBelow) {
+    const rng = Math.random();
+    if (rng < NEED_CONSEQUENCES.hygiene.npcReactionChance) {
+      const presentNpcs = getPresentNpcIds(currentGameState.npcs, p.location);
+      if (presentNpcs.length > 0) {
+        const npcId = presentNpcs[Math.floor(Math.random() * presentNpcs.length)];
+        const npc = currentGameState.npcs[npcId];
+        const template = NEED_CONSEQUENCES.hygiene.npcReactions[Math.floor(Math.random() * NEED_CONSEQUENCES.hygiene.npcReactions.length)];
+        addLogEntry('narration', template.replace('{name}', npc.bible.name || 'Someone'));
+      }
+    }
+  }
+}
+
+// Relationship consequences (P7): high tension makes NPCs avoid you,
+// refuse to talk, and eventually consider moving out. Checked when the
+// player enters a room or tries to talk.
+function checkRelConsequences(npcId) {
+  const npc = currentGameState.npcs[npcId];
+  if (!npc) return { canTalk: true, avoided: false };
+  const tension = npc.relPlayer.tension || 0;
+
+  if (tension >= REL_CONSEQUENCES.tensionHigh) {
+    // NPC refuses to talk
+    if (Math.random() < REL_CONSEQUENCES.tensionRefuseTalkChance) {
+      return { canTalk: false, avoided: false, reason: `${npc.bible.name} doesn't want to talk right now. They're clearly upset with you.` };
+    }
+  }
+
+  if (tension >= REL_CONSEQUENCES.tensionThreshold) {
+    // NPC might leave the room when you enter
+    if (Math.random() < REL_CONSEQUENCES.tensionAvoidChance) {
+      return { canTalk: false, avoided: true, reason: `${npc.bible.name} leaves the room when you walk in.` };
+    }
+  }
+
+  return { canTalk: true, avoided: false };
+}
+
+// Track how long an NPC has been at high tension — if it persists, they
+// move out. Checked at day rollover.
+function processRelConsequencesForDay(day) {
+  for (const [id, npc] of Object.entries(currentGameState.npcs)) {
+    if (npc.residency.status !== 'resident') continue;
+    const tension = npc.relPlayer.tension || 0;
+    if (tension >= REL_CONSEQUENCES.tensionHigh) {
+      npc.flags = npc.flags || {};
+      npc.flags._highTensionDays = (npc.flags._highTensionDays || 0) + 1;
+      if (npc.flags._highTensionDays >= REL_CONSEQUENCES.tensionMoveOutDay) {
+        addLogEntry('system', `${npc.bible.name} has had enough. They're moving out.`);
+        // Trigger move-out (reuse doAskToLeave's logic)
+        doAskToLeave(id);
+      }
+    } else {
+      if (npc.flags?._highTensionDays) npc.flags._highTensionDays = 0;
+    }
+  }
 }
 
 // COMPUTER's classifieds app: rolls a new applicant on an active listing,
@@ -153,6 +284,19 @@ async function processRentForDay(day) {
       const updated = await updateNpc(id, n => applyRelDelta(n, { tension: ECONOMY.rentLateTensionPerDay }));
       currentGameState.npcs[id] = updated;
     }
+
+    // Escalating rent pressure: overdue rent past 7 days triggers an
+    // eviction warning. Past 14 days, NPC tension escalates sharply.
+    const daysOverdue = day - (player.rentDueDay - ECONOMY.payPeriodDays);
+    if (daysOverdue >= 14) {
+      addLogEntry('system', `WARNING: Rent is ${daysOverdue} days overdue. Your roommates are furious.`);
+      for (const [id, npc] of Object.entries(currentGameState.npcs)) {
+        if (npc.residency.status !== 'resident') continue;
+        currentGameState.npcs[id] = applyRelDelta(npc, { tension: 0.05, affection: -0.02 });
+      }
+    } else if (daysOverdue >= 7) {
+      addLogEntry('system', `Rent is ${daysOverdue} days overdue. Your roommates are getting worried.`);
+    }
   }
 }
 
@@ -204,25 +348,55 @@ function processQuestsForDay(day) {
     if (rng() < QUEST_CONFIG.generateChancePerDay) {
       const npcId = residentIds[Math.floor(rng() * residentIds.length)];
       const npc = currentGameState.npcs[npcId];
-      const tmpl = QUEST_TEMPLATES[Math.floor(rng() * QUEST_TEMPLATES.length)];
-      const detail = tmpl.type === 'want' ? npc.bible.want
-        : tmpl.type === 'wound' ? npc.bible.wound
-        : (npc.bible.interests[0]?.name || 'something they like');
-      const title = tmpl.template.replace('{name}', npc.bible.name || 'your roommate').replace('{detail}', detail);
-      const quest = {
-        id: `quest_${day}_${npcId}`,
-        title,
-        desc: `Talk to ${npc.bible.name || 'them'} to follow up.`,
-        npcId,
-        type: tmpl.type,
-        rewardMoney: tmpl.rewardMoney,
-        rewardRelation: tmpl.rewardRelation,
-        day,
-        expiresDay: day + QUEST_CONFIG.expiryDays,
-        status: 'active',
-      };
-      quests.active.push(quest);
-      addLogEntry('system', `New goal: ${quest.title}`);
+      const name = npc.bible.name || 'your roommate';
+
+      // 30% chance of a multi-step chain quest, 70% simple quest
+      if (rng() < 0.3) {
+        const chain = QUEST_CHAINS[Math.floor(rng() * QUEST_CHAINS.length)];
+        const title = chain.title.replace('{name}', name);
+        const steps = chain.steps.map((s, i) => ({
+          ...s,
+          desc: s.desc.replace('{name}', name),
+          done: false,
+        }));
+        const quest = {
+          id: `chain_${day}_${npcId}`,
+          title,
+          desc: steps[0].desc,
+          npcId,
+          type: 'chain',
+          chainId: chain.id,
+          steps,
+          currentStep: 0,
+          rewardMoney: chain.rewardMoney,
+          rewardRelation: chain.rewardRelation,
+          day,
+          expiresDay: day + QUEST_CONFIG.expiryDays * 2, // chains get more time
+          status: 'active',
+        };
+        quests.active.push(quest);
+        addLogEntry('system', `New goal: ${quest.title} (Step 1: ${steps[0].desc})`);
+      } else {
+        const tmpl = QUEST_TEMPLATES[Math.floor(rng() * QUEST_TEMPLATES.length)];
+        const detail = tmpl.type === 'want' ? npc.bible.want
+          : tmpl.type === 'wound' ? npc.bible.wound
+          : (npc.bible.interests[0]?.name || 'something they like');
+        const title = tmpl.template.replace('{name}', name).replace('{detail}', detail);
+        const quest = {
+          id: `quest_${day}_${npcId}`,
+          title,
+          desc: `Talk to ${name} to follow up.`,
+          npcId,
+          type: tmpl.type,
+          rewardMoney: tmpl.rewardMoney,
+          rewardRelation: tmpl.rewardRelation,
+          day,
+          expiresDay: day + QUEST_CONFIG.expiryDays,
+          status: 'active',
+        };
+        quests.active.push(quest);
+        addLogEntry('system', `New goal: ${quest.title}`);
+      }
     }
   }
 
@@ -230,23 +404,85 @@ function processQuestsForDay(day) {
 }
 
 // Resolve any active quest referencing this NPC — called from doTalk.
-// Deterministic: the mere act of talking to them is the completion
-// trigger, not something the LLM needs to report.
+// For simple quests, talking completes them. For chain quests, a 'talk'
+// step completes the current step and advances to the next.
 async function checkQuestCompletion(npcId) {
   const quests = currentGameState.world.quests;
   if (!quests || !quests.active) return;
   const idx = quests.active.findIndex(q => q.npcId === npcId);
   if (idx < 0) return;
   const quest = quests.active[idx];
-  quests.active = quests.active.filter((_, i) => i !== idx);
-  quests.completed = quests.completed || [];
-  quests.completed.push({ ...quest, status: 'completed', resolvedDay: currentGameState.meta.clock.day });
-  currentGameState.player.money += quest.rewardMoney || 0;
-  if (quest.rewardRelation) {
-    const updated = await updateNpc(npcId, n => applyRelDelta(n, quest.rewardRelation));
-    currentGameState.npcs[npcId] = updated;
+
+  if (quest.type === 'chain') {
+    // Only complete if the current step is a 'talk' step
+    const step = quest.steps[quest.currentStep];
+    if (step.type !== 'talk') return;
+    step.done = true;
+    quest.currentStep++;
+
+    if (quest.currentStep >= quest.steps.length) {
+      // Chain complete
+      quests.active = quests.active.filter((_, i) => i !== idx);
+      quests.completed = quests.completed || [];
+      quests.completed.push({ ...quest, status: 'completed', resolvedDay: currentGameState.meta.clock.day });
+      currentGameState.player.money += quest.rewardMoney || 0;
+      if (quest.rewardRelation) {
+        const updated = await updateNpc(npcId, n => applyRelDelta(n, quest.rewardRelation));
+        currentGameState.npcs[npcId] = updated;
+      }
+      addLogEntry('system', `Goal complete: ${quest.title} (+${quest.rewardMoney || 0})`);
+    } else {
+      // Advance to next step
+      const nextStep = quest.steps[quest.currentStep];
+      quest.desc = nextStep.desc;
+      addLogEntry('system', `${quest.title} — Step ${quest.currentStep + 1}: ${nextStep.desc}`);
+    }
+  } else {
+    // Simple quest — talking completes it
+    quests.active = quests.active.filter((_, i) => i !== idx);
+    quests.completed = quests.completed || [];
+    quests.completed.push({ ...quest, status: 'completed', resolvedDay: currentGameState.meta.clock.day });
+    currentGameState.player.money += quest.rewardMoney || 0;
+    if (quest.rewardRelation) {
+      const updated = await updateNpc(npcId, n => applyRelDelta(n, quest.rewardRelation));
+      currentGameState.npcs[npcId] = updated;
+    }
+    addLogEntry('system', `Goal complete: ${quest.title} (+${quest.rewardMoney || 0})`);
   }
-  addLogEntry('system', `Goal complete: ${quest.title} (+$${quest.rewardMoney || 0})`);
+}
+
+// Check if a player action completes a quest chain step. Called from
+// doPlayerAction, executeAction, and other action handlers.
+function checkChainQuestProgress(actionType, npcId, itemCategory) {
+  const quests = currentGameState.world.quests;
+  if (!quests || !quests.active) return;
+  for (const quest of quests.active) {
+    if (quest.type !== 'chain' || quest.npcId !== npcId) continue;
+    const step = quest.steps[quest.currentStep];
+    if (!step || step.done) continue;
+    if (step.type !== actionType) continue;
+    if (actionType === 'give_item' && itemCategory && step.itemCategory && itemCategory !== step.itemCategory) continue;
+    // Step complete
+    step.done = true;
+    quest.currentStep++;
+    if (quest.currentStep >= quest.steps.length) {
+      // Chain complete
+      const idx = quests.active.indexOf(quest);
+      quests.active.splice(idx, 1);
+      quests.completed = quests.completed || [];
+      quests.completed.push({ ...quest, status: 'completed', resolvedDay: currentGameState.meta.clock.day });
+      currentGameState.player.money += quest.rewardMoney || 0;
+      if (quest.rewardRelation) {
+        currentGameState.npcs[npcId] = applyRelDelta(currentGameState.npcs[npcId], quest.rewardRelation);
+      }
+      addLogEntry('system', `Goal complete: ${quest.title} (+${quest.rewardMoney || 0})`);
+    } else {
+      const nextStep = quest.steps[quest.currentStep];
+      quest.desc = nextStep.desc;
+      addLogEntry('system', `${quest.title} — Step ${quest.currentStep + 1}: ${nextStep.desc}`);
+    }
+    return;
+  }
 }
 
 async function doPayRent() {
@@ -320,6 +556,66 @@ async function doAskToLeave(npcId) {
   } finally {
     hideLoading();
   }
+}
+
+// Peep: observe an NPC in a private state from the hallway. The npcId
+// parameter here is actually the roomId (the chip passes the room, not
+// the NPC — the player targets a door, not a person). resolvePeep
+// handles detection, suspicion, and narration.
+async function doPeep(roomId) {
+  if (!currentGameState) return;
+  const result = resolvePeep(currentGameState, roomId);
+  if (!result.ok) {
+    addLogEntry('narration', result.reason);
+    return;
+  }
+  addLogEntry('narration', result.narration);
+  currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('peep', currentGameState);
+}
+
+// Give item: gives a meal/food/gift item from inventory to an NPC.
+// Used to complete chain quest 'give_item' steps. The first matching
+// item in the player's inventory is consumed.
+async function doGiveItem(npcId) {
+  if (!currentGameState) return;
+  const npc = currentGameState.npcs[npcId];
+  if (!npc) return;
+  // Defensive presence check — the UI chip only offers this for present
+  // NPCs (via getPresentNpcIds), but the handler itself didn't enforce it,
+  // so any other future call site (or a stale chip click after the NPC
+  // left) could hand something to someone who isn't in the room.
+  if (!getPresentNpcIds(currentGameState.npcs, currentGameState.player.location).includes(npcId)) return;
+  // Find the active chain quest step
+  const quest = (currentGameState.world.quests?.active || []).find(q =>
+    q.type === 'chain' && q.npcId === npcId &&
+    q.steps[q.currentStep]?.type === 'give_item' && !q.steps[q.currentStep]?.done
+  );
+  if (!quest) return;
+  const step = quest.steps[quest.currentStep];
+  // Find matching item in inventory
+  const inv = currentGameState.player.inventory || [];
+  const idx = inv.findIndex(stack => {
+    const def = ITEM_DEFS[stack.defId];
+    return def && (!step.itemCategory || def.category === step.itemCategory);
+  });
+  if (idx < 0) {
+    addLogEntry('system', `You don't have a ${step.itemCategory || 'suitable item'} to give.`);
+    return;
+  }
+  const stack = inv[idx];
+  const itemLabel = ITEM_DEFS[stack.defId]?.label || 'something';
+  // Consume one from the stack
+  inv[idx] = { ...stack, qty: stack.qty - 1 };
+  if (inv[idx].qty <= 0) inv.splice(idx, 1);
+  addLogEntry('narration', `You give ${itemLabel} to ${npc.bible.name || 'them'}. They seem touched.`);
+  // Complete the step
+  checkChainQuestProgress('give_item', npcId, step.itemCategory);
+  // Small affection bump for giving a gift
+  currentGameState.npcs[npcId] = applyRelDelta(npc, { affection: 0.05 });
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('give-item', currentGameState);
 }
 
 const MAX_WORLD_EVENTS = 200;
@@ -419,6 +715,12 @@ async function handleAction(action, npcId, extra) {
     case 'browser.visit':
       await doBrowserVisit(extra?.rowId);
       break;
+    case 'browser.ah-category':
+      doAfterHoursCategory(extra?.rowId);
+      break;
+    case 'browser.ah-watch':
+      await doAfterHoursWatch(extra?.rowId);
+      break;
     case 'classes.enroll':
       await doClassesEnroll(extra?.rowId);
       break;
@@ -463,6 +765,12 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'ask-to-leave':
       if (npcId) await doAskToLeave(npcId);
+      break;
+    case 'peep':
+      if (npcId) await doPeep(npcId);
+      break;
+    case 'give-item':
+      if (npcId) await doGiveItem(npcId);
       break;
     case 'move':
       if (extra?.roomId) await doMove(extra.roomId);
@@ -666,6 +974,24 @@ function narrateDemotion(demotedId, promotedId) {
 async function doTalk(npcId) {
   showLoading();
   try {
+    // Relationship consequences (P7): high tension may cause NPC to refuse
+    // to talk or avoid the player entirely.
+    const relCheck = checkRelConsequences(npcId);
+    if (!relCheck.canTalk) {
+      if (relCheck.avoided) {
+        // NPC leaves the room
+        const npc = currentGameState.npcs[npcId];
+        const rooms = COMMON_ROOMS.filter(r => r !== currentGameState.player.location);
+        const newRoom = rooms[Math.floor(Math.random() * rooms.length)];
+        currentGameState.npcs[npcId].location = newRoom;
+        currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
+      }
+      addLogEntry('narration', relCheck.reason);
+      render(currentGameState, currentSceneState);
+      await saveAtBoundary('talk-avoided', currentGameState);
+      return;
+    }
+
     // Promote to active — demotes the least-engaged active member if the
     // cap is already full, narrated rather than swapped silently.
     const { sceneState, demotedId } = promoteToActive(currentSceneState, npcId);
@@ -888,11 +1214,13 @@ async function handleGenerateCast() {
   if (!body) return;
   const seed = body.querySelector('[name="seed"]')?.value.trim() || genSeed();
   const count = parseInt(body.querySelector('[data-char-count]')?.value || '2', 10);
-  // Tone/content preferences are persisted (visible in the debug panel)
-  // but not yet consumed by generation or narration — tone mainly affects
-  // narration style, which belongs to LLM's prompt construction. Wiring it
-  // through is conversation-loop territory, deferred rather than faked
-  // here with an unspecified effect.
+  // Tone/content preferences are persisted to meta.contentConfig and
+  // consumed by prompt construction (TONE_PROFILES/CONTENT_DIRECTIVES in
+  // config) and by content-flag gating (activeContentFlags in computer).
+  // contentPrefs from the form are tag names that map to contentFlags:
+  // if the user lists "mature" or "romance" etc., those flags turn on;
+  // unlisted flags fall back to CONTENT_CONFIG defaults (which have
+  // everything on by design).
   const tone = body.querySelector('[name="tone"]')?.value || CONTENT_CONFIG.tone;
   const contentPrefs = (body.querySelector('[name="content"]')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
   const partials = readCharFormPartials(body, count);
@@ -900,7 +1228,13 @@ async function handleGenerateCast() {
   showLoading('Rolling household...');
   try {
     pendingCast = SIM_generateHouse(seed, count, partials);
-    pendingCast.contentConfig = { tone, contentPrefs };
+    // Build contentFlags from prefs, falling back to defaults for
+    // anything not explicitly mentioned.
+    const flags = { ...CONTENT_CONFIG.contentFlags };
+    for (const pref of contentPrefs) {
+      if (pref in flags) flags[pref] = true;
+    }
+    pendingCast.contentConfig = { tone, contentPrefs, contentFlags: flags };
     pendingRerollCounters = {};
     renderCharPreview();
   } finally {
@@ -981,13 +1315,14 @@ async function handleRerollChar(npcId) {
 
 async function approveCastAndStartGame() {
   if (!pendingCast) return;
+  // Stop any previous game's autosave timer before the (potentially long)
+  // prose-expansion + kv-write sequence below — see STATE's stopAutosave
+  // for the exact race this closes. Resumed at the end once the new game
+  // is fully written and currentGameState points at it.
+  stopAutosave();
   closeModal();
   showLoading('Writing your household\'s story...');
   try {
-    // Clear existing NPC state from kv — starting a new game replaces the old one
-    const existingKeys = await root.kv.npcs.keys();
-    for (const k of existingKeys) await root.kv.npcs.delete(k);
-
     // Prose expansion in parallel — was a serial await-per-npc loop behind
     // a single static spinner, so a 7-roommate house was 7 sequential LLM
     // calls. Each result re-enters through validateCharacter (the single
@@ -1033,6 +1368,10 @@ async function approveCastAndStartGame() {
 }
 
 async function continueGame() {
+  // Same race as approveCastAndStartGame (see STATE's stopAutosave) — the
+  // menu is reachable mid-game (MENU_ACTIONS), so a previous game's timer
+  // could still be armed when the player loads a (possibly different) save.
+  stopAutosave();
   closeModal();
   showLoading('Loading...');
   try {

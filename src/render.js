@@ -207,7 +207,13 @@ function renderQuestList(gs) {
   for (const q of quests.active) {
     const node = tpl.content.cloneNode(true);
     node.querySelector('.q-title').textContent = q.title || 'Untitled';
-    node.querySelector('.q-desc').textContent = q.desc || '';
+    // For chain quests, show step progress
+    if (q.type === 'chain' && q.steps) {
+      const done = q.steps.filter(s => s.done).length;
+      node.querySelector('.q-desc').textContent = `[${done}/${q.steps.length}] ${q.desc || q.steps[q.currentStep]?.desc || ''}`;
+    } else {
+      node.querySelector('.q-desc').textContent = q.desc || '';
+    }
     container.appendChild(node);
   }
 }
@@ -318,6 +324,44 @@ function renderActionChips(gs, sceneState) {
     chips.push({ label: `Step Away from ${npc.bible.name || 'Someone'}`, action: 'step-away', npcId });
     if (npc.residency.status === 'resident') {
       chips.push({ label: `Ask ${npc.bible.name || 'Someone'} to Leave`, action: 'ask-to-leave', npcId });
+    }
+  }
+
+  // Peep: available from the hallway when an NPC is in a private state
+  // (showering, sleeping, undressed, sleepwear) in a room with a door.
+  // Only shows for rooms adjacent to the hallway (bedrooms + bathroom).
+  if (player.location === 'hallway') {
+    for (const roomId of ['bedroom_1', 'bedroom_2', 'bedroom_3', 'bathroom']) {
+      const ownerId = roomOwnerId(roomId, gs.npcs);
+      if (!ownerId) continue;
+      const owner = gs.npcs[ownerId];
+      if (!owner || owner.location !== roomId) continue;
+      const clothing = owner.clothing || 'dressed';
+      const isPrivate = clothing !== 'dressed' || owner.activity === 'showering';
+      if (isPrivate) {
+        chips.push({ label: `Peep into ${ROOMS[roomId]?.name || 'Room'}`, action: 'peep', npcId: roomId });
+      }
+    }
+  }
+
+  // Give item: available when the player has a meal/food/gift item and
+  // is in the same room as an NPC with an active chain quest 'give_item' step
+  const presentNpcIdsForGive = getPresentNpcIds(gs.npcs, player.location);
+  for (const npcId of presentNpcIdsForGive) {
+    const quest = (gs.world.quests?.active || []).find(q =>
+      q.type === 'chain' && q.npcId === npcId &&
+      q.steps[q.currentStep]?.type === 'give_item' && !q.steps[q.currentStep]?.done
+    );
+    if (quest) {
+      const step = quest.steps[quest.currentStep];
+      const hasItem = (gs.player.inventory || []).some(stack => {
+        const def = ITEM_DEFS[stack.defId];
+        return def && (!step.itemCategory || def.category === step.itemCategory);
+      });
+      if (hasItem) {
+        const npc = gs.npcs[npcId];
+        chips.push({ label: `Give Item to ${npc.bible.name || 'Someone'}`, action: 'give-item', npcId });
+      }
     }
   }
 

@@ -73,3 +73,80 @@ function resolveRoomEntryStealth(gameState, roomId) {
   const result = applyEffects(effects, effCtx);
   return { crossed: true, witnessed: presentIds.includes(ownerId), result };
 }
+
+// --- Peeping (P7): observe an NPC in a private state from outside their
+// room. Called from UI's doPeep. Deterministic, in-memory, zero LLM —
+// the narration is built from templates, not generated. Returns a
+// description of what the player sees and whether they were caught.
+function resolvePeep(gameState, roomId) {
+  // Find the NPC in the target room — for bedrooms this is the owner,
+  // for common rooms (bathroom) it's whoever is present.
+  let ownerId = roomOwnerId(roomId, gameState.npcs);
+  if (!ownerId) {
+    // Common room: check who's present
+    const present = getPresentNpcIds(gameState.npcs, roomId);
+    if (present.length > 0) ownerId = present[0];
+  }
+  if (!ownerId) return { ok: false, reason: 'No one is in there right now.' };
+
+  const owner = gameState.npcs[ownerId];
+  if (!owner || owner.residency.status !== 'resident') return { ok: false, reason: 'No one is in there right now.' };
+
+  // The NPC must be in the room being peeped at
+  if (owner.location !== roomId) return { ok: false, reason: 'No one is in there right now.' };
+
+  const clothing = owner.clothing || 'dressed';
+  const activity = owner.activity || '';
+  const effCtx = buildEffectContext(gameState, [ownerId], [ownerId], {}, []);
+  const rng = seededRng(gameState.meta.seed, `peep_${gameState.meta.clock.day}_${getTickIndex(gameState.meta.clock.minutes)}_${roomId}`);
+
+  // Determine what the player sees based on clothing/activity
+  let descKey = clothing;
+  if (activity === 'showering') descKey = 'showering';
+  else if (activity === 'sleeping' || activity === 'napping') descKey = 'sleeping';
+
+  const descTemplate = PEEP_CLOTHING_DESC[descKey] || PEEP_CLOTHING_DESC.dressed;
+  const desc = descTemplate.replace('{name}', owner.bible.name || 'They');
+
+  // Detection roll: is the NPC awake and aware?
+  const isAsleep = activity === 'sleeping' || activity === 'napping';
+  const isShowering = activity === 'showering';
+  let detectionChance = isAsleep ? PEEP_TUNING.detectionNpcAsleep : PEEP_TUNING.detectionNpcAwake;
+  // Showering makes detection harder (water noise, can't see the door)
+  if (isShowering) detectionChance *= 0.5;
+  // Stealth skill reduces detection
+  const stealthMod = skillMod(gameState.player, 'stealth', 'stealthSuccess');
+  detectionChance *= (1 - PEEP_TUNING.stealthSkillFactor * stealthMod);
+
+  const detected = rng() < detectionChance;
+
+  // Apply effects
+  const lines = [];
+  lines.push(`ADJUST_NEED player mood +${PEEP_TUNING.moodGain}`);
+
+  if (detected) {
+    lines.push(`ADJUST_SUSPICION ${ownerId} boundary_violation +${PEEP_TUNING.suspicionDelta}`);
+    lines.push(`REL_DELTA ${ownerId} tension +${PEEP_TUNING.tensionDelta}`);
+    lines.push(`REL_DELTA ${ownerId} affection ${PEEP_TUNING.affectionCostIfCaught}`);
+  }
+
+  const effects = lines.map(l => parseEffectDSL(l)[0]).filter(Boolean);
+  applyEffects(effects, effCtx);
+
+  // Build narration
+  let narration = desc;
+  let caught = false;
+  let suspected = false;
+
+  if (detected) {
+    caught = true;
+    const caughtTemplate = PEEP_CAUGHT_TEMPLATES[Math.floor(rng() * PEEP_CAUGHT_TEMPLATES.length)];
+    narration += ' ' + caughtTemplate.replace('{name}', owner.bible.name || 'They');
+  } else if (rng() < PEEP_TUNING.suspectedChance) {
+    suspected = true;
+    const suspectTemplate = PEEP_SUSPECTED_TEMPLATES[Math.floor(rng() * PEEP_SUSPECTED_TEMPLATES.length)];
+    narration += ' ' + suspectTemplate.replace('{name}', owner.bible.name || 'They');
+  }
+
+  return { ok: true, narration, caught, suspected, ownerId, clothing: descKey };
+}
