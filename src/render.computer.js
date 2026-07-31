@@ -10,82 +10,31 @@
 // screens, not new DOM code. Only `dashboard` and `catalog` exist so far
 // (what WorkHub needs); more join as later apps need them.
 
-function renderComputerScreen(gs) {
-  const root = document.getElementById('computer-screen');
-  if (!root) return;
-  renderComputerChrome(gs);
-
-  const view = gs.world.computer.view;
-  const app = APP_DEFS[view.appId];
-  renderScreenNav(gs, app);
-
-  const body = document.getElementById('cs-body');
-  if (!body) return;
-  body.innerHTML = '';
-
-  if (!app) { body.innerHTML = '<p class="dim">Pick an app above.</p>'; return; }
-  const screen = app.screens[view.screenId];
-  if (!screen) { body.innerHTML = '<p class="dim">Unknown screen.</p>'; return; }
-
-  const renderer = COMPUTER_RENDERERS[screen.renderer];
-  if (renderer) renderer(body, gs, app, screen);
-  else body.innerHTML = `<p class="dim">No renderer for "${screen.renderer}".</p>`;
-}
-
-// A small sub-nav across the current app's own screens (Dashboard | Job
-// Board, Browse | Cart, ...) — separate from cs-tabs, which switches
-// between apps. Without this a screen reached only via a row action (the
-// job board, a cart) had no way back except closing the whole computer;
-// screens marked `hideFromNav` (e.g. Browser's single-article `site`
-// screen, reached only via a Visit click) are still real screens, just
-// not something you'd jump to directly.
-function renderScreenNav(gs, app) {
-  const nav = document.getElementById('cs-screennav');
-  if (!nav) return;
-  nav.innerHTML = '';
-  if (!app) return;
-  const entries = Object.entries(app.screens).filter(([, s]) => !s.hideFromNav);
-  if (entries.length < 2) return;
-  for (const [screenId, screen] of entries) {
-    const btn = document.createElement('button');
-    btn.className = 'cs-screennav-btn';
-    btn.setAttribute('data-action', 'computer.open-screen');
-    btn.setAttribute('data-screen', screenId);
-    if (gs.world.computer.view.screenId === screenId) btn.setAttribute('data-current', '');
-    btn.textContent = screen.label || screenId;
-    nav.appendChild(btn);
-  }
-}
-
-function renderComputerChrome(gs) {
-  const clockEl = document.getElementById('cs-clock');
-  if (clockEl) clockEl.textContent = `Day ${gs.meta.clock.day} — ${formatTime(gs.meta.clock.minutes)}`;
-
-  const tabsEl = document.getElementById('cs-tabs');
-  if (!tabsEl) return;
-  tabsEl.innerHTML = '';
-  for (const app of Object.values(APP_DEFS)) {
-    const btn = document.createElement('button');
-    btn.className = 'cs-tab';
-    btn.setAttribute('data-action', 'computer.open-app');
-    btn.setAttribute('data-app', app.id);
-    if (gs.world.computer.view.appId === app.id) btn.setAttribute('data-current', '');
-    btn.textContent = app.label;
-    tabsEl.appendChild(btn);
-  }
-}
+// Phase 2 of the windowed-desktop rework moved the screen shell itself —
+// renderComputerScreen (the entry point RENDER calls), the per-window
+// screen sub-nav, and the app tab bar/clock — into RENDER.DESKTOP, which
+// now owns the desktop/taskbar/window chrome. What's left here is the
+// renderer registry and every per-app screen renderer: each one still
+// just takes a `body` node and fills it, unaware of whether that body
+// lives inside a real draggable window or (as in the pre-Phase-2 shim)
+// one shared full-bleed panel.
 
 const COMPUTER_RENDERERS = {
-  dashboard: renderDashboard,
   catalog: renderCatalog,
   list: renderList,
   article: renderArticle,
   applicant: renderApplicantProfile,
-  chat: renderChat,
   streamly: renderStreamly,
   nile: renderNile,
   workhub: renderWorkHub,
   browser: renderBrowserHome,
+  'edustream-catalog': renderEduStreamCatalog,
+  'edustream-enrolled': renderEduStreamEnrolled,
+  'homecare-catalog': renderHomeCareCatalog,
+  'homecare-hired': renderHomeCareHired,
+  'roomlist-post': renderRoomListPost,
+  'roomlist-applicants': renderRoomListApplicants,
+  messenger: renderMessages,
 };
 
 // Rows whose def declares `requiresContentFlag` are hidden from any
@@ -99,80 +48,12 @@ function filterByContentFlags(rows, gs) {
   return rows.filter(row => !row.requiresContentFlag || flags[row.requiresContentFlag]);
 }
 
-// A dashboard is just its named panels, drawn in order — DASHBOARD_PANELS
-// is its own small named registry rather than a per-app switch, so a
-// panel (e.g. "job.summary") is reusable across apps that want it.
-function renderDashboard(body, gs, app, screen) {
-  for (const panelId of screen.panels || []) {
-    const fn = DASHBOARD_PANELS[panelId];
-    if (fn) body.appendChild(fn(gs));
-  }
-}
-
 function makePanel(html) {
   const div = document.createElement('div');
   div.className = 'cs-panel';
   div.innerHTML = html;
   return div;
 }
-
-const DASHBOARD_PANELS = {
-  'job.summary': (gs) => {
-    const work = gs.world.computer.apps.work;
-    const job = JOB_DEFS[work.jobId];
-    if (!job) {
-      const panel = makePanel('<h3>Unemployed</h3><p class="dim tiny">Browse the job board to apply.</p>');
-      const btn = document.createElement('button');
-      btn.className = 'btn tiny';
-      btn.setAttribute('data-action', 'computer.open-screen');
-      btn.setAttribute('data-screen', 'board');
-      btn.textContent = 'Job Board';
-      panel.appendChild(btn);
-      return panel;
-    }
-    return makePanel(`<h3>${job.title}</h3><p class="tiny">Reputation ${Math.round((work.reputation || 0) * 100)}% — Strikes ${work.strikes || 0}/${job.firingStrikes}</p>`);
-  },
-  'job.backlog': (gs) => {
-    const work = gs.world.computer.apps.work;
-    if (!work.jobId) return makePanel('');
-    const done = work.backlog.filter(t => t.done).length;
-    const panel = makePanel(`<h3>Today's Tasks</h3><p class="tiny">${done}/${work.backlog.length} complete</p>`);
-    const btn = document.createElement('button');
-    btn.className = 'btn tiny';
-    btn.setAttribute('data-action', 'computer.work-block');
-    btn.textContent = 'Work a Block';
-    if (done >= work.backlog.length) btn.disabled = true;
-    panel.appendChild(btn);
-    return panel;
-  },
-  'job.earnings': (gs) => {
-    const work = gs.world.computer.apps.work;
-    if (!work.jobId) return makePanel('');
-    return makePanel(`<h3>Today</h3><p class="tiny">${work.todayBlocks || 0} blocks — $${work.todayEarned || 0} earned</p>`);
-  },
-  'classifieds.status': (gs) => {
-    const c = gs.world.computer.apps.classifieds;
-    if (c.posted.active) {
-      const panel = makePanel(`<h3>Listing Active</h3><p class="dim tiny">Posted Day ${c.posted.postedDay}. Check back for applicants.</p>`);
-      if (c.applicants.length > 0) {
-        const btn = document.createElement('button');
-        btn.className = 'btn tiny';
-        btn.setAttribute('data-action', 'computer.open-screen');
-        btn.setAttribute('data-screen', 'applicants');
-        btn.textContent = `View Applicants (${c.applicants.length})`;
-        panel.appendChild(btn);
-      }
-      return panel;
-    }
-    const panel = makePanel('<h3>No Listing</h3><p class="dim tiny">Post an ad to find a new roommate.</p>');
-    const btn = document.createElement('button');
-    btn.className = 'btn tiny';
-    btn.setAttribute('data-action', 'classifieds.post');
-    btn.textContent = 'Post Ad';
-    panel.appendChild(btn);
-    return panel;
-  },
-};
 
 // screen.source names a data source by string (e.g. 'JOB_DEFS') — a light
 // indirection so APP_DEFS stays pure data (a def doesn't import anything,
@@ -293,11 +174,13 @@ function renderArticle(body, gs, app, screen) {
     return;
   }
 
+  body.appendChild(renderBrowserNav(gs));
   const panel = makePanel(`<h3>${site.label}</h3><p class="dim tiny">${site.url}</p><p>${site.body}</p>`);
   body.appendChild(panel);
   const backBtn = document.createElement('button');
   backBtn.className = 'btn btn-secondary tiny';
   backBtn.setAttribute('data-action', 'computer.open-screen');
+  backBtn.setAttribute('data-app', app.id);
   backBtn.setAttribute('data-screen', 'home');
   backBtn.textContent = 'Back';
   body.appendChild(backBtn);
@@ -311,6 +194,7 @@ function renderAfterHours(body, gs, site) {
   const browser = gs.world.computer.apps.browser;
   const selectedCat = browser.afterHoursCategory || 'featured';
 
+  body.appendChild(renderBrowserNav(gs));
   // Site header
   const header = makePanel(`<h3>${site.label}</h3><p class="dim tiny">${site.url}</p><p>${site.body}</p>`);
   body.appendChild(header);
@@ -392,6 +276,7 @@ function renderAfterHours(body, gs, site) {
   const backBtn = document.createElement('button');
   backBtn.className = 'btn btn-secondary tiny';
   backBtn.setAttribute('data-action', 'computer.open-screen');
+  backBtn.setAttribute('data-app', 'browser');
   backBtn.setAttribute('data-screen', 'home');
   backBtn.textContent = 'Back';
   body.appendChild(backBtn);
@@ -407,15 +292,24 @@ function renderApplicantProfile(body, gs, app, screen) {
   const npc = gs.npcs[classifieds?.viewingApplicantId];
   if (!npc) { body.innerHTML = '<p class="dim">No applicant selected.</p>'; return; }
   const b = npc.bible;
-  const panel = makePanel(`
-    <h3>${b.name}</h3>
-    <p class="dim tiny">${b.occupation.title} — ${b.occupation.hours}</p>
+  const profile = document.createElement('div');
+  profile.className = 'rl-profile';
+  profile.innerHTML = `
+    <div class="rl-profile-header">
+      <div class="rl-card-avatar rl-profile-avatar" style="background: ${hashToColor(b.name)};">${b.name.charAt(0)}</div>
+      <div>
+        <div class="rl-profile-name">${b.name}</div>
+        <div class="dim tiny">${b.occupation.title} — ${b.occupation.hours}</div>
+      </div>
+    </div>
     <p class="tiny">${b.history}</p>
-    <p class="tiny">Want: ${b.want}</p>
-    <p class="tiny">Wound: ${b.wound}</p>
-    <p class="tiny">Blind spot: ${b.blindSpot}</p>
-  `);
-  body.appendChild(panel);
+    <div class="rl-profile-traits">
+      <div><span class="dim tiny">Want</span><p class="tiny">${b.want}</p></div>
+      <div><span class="dim tiny">Wound</span><p class="tiny">${b.wound}</p></div>
+      <div><span class="dim tiny">Blind spot</span><p class="tiny">${b.blindSpot}</p></div>
+    </div>
+  `;
+  body.appendChild(profile);
 
   const acceptBtn = document.createElement('button');
   acceptBtn.className = 'btn';
@@ -434,50 +328,10 @@ function renderApplicantProfile(body, gs, app, screen) {
   const backBtn = document.createElement('button');
   backBtn.className = 'btn btn-secondary tiny';
   backBtn.setAttribute('data-action', 'computer.open-screen');
+  backBtn.setAttribute('data-app', app.id);
   backBtn.setAttribute('data-screen', 'applicants');
   backBtn.textContent = 'Back to List';
   body.appendChild(backBtn);
-}
-
-// A thread with one npc — message history plus an inline compose row.
-// Deliberately its own text input rather than reusing the footer's
-// #input-bar (which drives free-text scene actions): the two pipelines
-// don't need to know about each other, and this keeps IM fully
-// self-contained inside the computer screen. The input's value is read
-// synchronously by UI.COMPUTER's doImSend before anything re-renders, so
-// losing the DOM node on the next render (RENDER.COMPUTER always rebuilds
-// cs-body) never loses what was typed.
-function renderChat(body, gs, app, screen) {
-  const im = gs.world.computer.apps.im;
-  const npc = gs.npcs[im?.viewingNpcId];
-  if (!npc) { body.innerHTML = '<p class="dim">No conversation open.</p>'; return; }
-
-  const thread = im.threads[im.viewingNpcId] || { msgs: [] };
-  const log = document.createElement('div');
-  log.className = 'cs-chat-log';
-  for (const m of thread.msgs) {
-    const bubble = document.createElement('div');
-    bubble.className = 'cs-chat-bubble';
-    bubble.setAttribute('data-from', m.from);
-    bubble.textContent = m.from === 'player' ? m.text : m.from === 'npc' ? `${npc.bible.name}: ${m.text}` : m.text;
-    log.appendChild(bubble);
-  }
-  body.appendChild(log);
-
-  const inputRow = document.createElement('div');
-  inputRow.className = 'cs-chat-input-row';
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.id = 'cs-chat-input';
-  input.placeholder = `Text ${npc.bible.name}...`;
-  const sendBtn = document.createElement('button');
-  sendBtn.className = 'btn tiny';
-  sendBtn.setAttribute('data-action', 'im.send');
-  sendBtn.setAttribute('data-row-id', im.viewingNpcId);
-  sendBtn.textContent = 'Send';
-  inputRow.appendChild(input);
-  inputRow.appendChild(sendBtn);
-  body.appendChild(inputRow);
 }
 
 // ===== APP-SPECIFIC VISUAL OVERHAULS (Step 4) =====
@@ -505,7 +359,7 @@ function renderStreamly(body, gs, app, screen) {
       <div class="str-player-header">Now Playing</div>
       <div class="str-player-title">${show.label}</div>
       <div class="str-player-genre">${show.genre}</div>
-      <div class="str-progress-bar"><div class="str-progress-fill" data-fill="${pct}"></div></div>
+      <div class="str-progress-bar"><div class="str-progress-fill" style="width: ${pct}%;"></div></div>
       <div class="str-player-info">${progress}/${show.episodeTicks} ticks watched</div>
     `;
     body.appendChild(player);
@@ -609,6 +463,7 @@ function renderWorkHub(body, gs, app, screen) {
     const btn = document.createElement('button');
     btn.className = 'btn tiny';
     btn.setAttribute('data-action', 'computer.open-screen');
+    btn.setAttribute('data-app', app.id);
     btn.setAttribute('data-screen', 'board');
     btn.textContent = 'Job Board';
     panel.appendChild(btn);
@@ -622,7 +477,7 @@ function renderWorkHub(body, gs, app, screen) {
   header.className = 'wh-header';
   header.innerHTML = `
     <h3>${job.title}</h3>
-    <div class="wh-rep-bar"><div class="wh-rep-fill" data-fill="${rep}"></div></div>
+    <div class="wh-rep-bar"><div class="wh-rep-fill" style="width: ${rep}%;"></div></div>
     <div class="wh-stats">
       <span>Reputation ${rep}%</span>
       <span>Strikes ${work.strikes || 0}/${job.firingStrikes}</span>
@@ -666,19 +521,46 @@ function renderWorkHub(body, gs, app, screen) {
   }
 }
 
-// --- Browser: tabbed browsing with URL bar and site cards. ---
-function renderBrowserHome(body, gs, app, screen) {
+// A small address-bar-style nav row — Back/Forward wired to the visit
+// history COMPUTER's visitSite already records (apps.browser.history),
+// plus the current URL. Shared by the home grid, an open article, and
+// AfterHours, so browsing feels continuous across all three rather than
+// each screen having its own disconnected "Back" button.
+function renderBrowserNav(gs) {
   const browser = gs.world.computer.apps.browser;
+  const history = browser.history || [];
+  const idx = browser.historyIndex ?? -1;
 
-  // URL bar
+  const nav = document.createElement('div');
+  nav.className = 'br-nav-bar';
+
+  const backBtn = document.createElement('button');
+  backBtn.className = 'br-nav-btn';
+  backBtn.setAttribute('data-action', 'browser.back');
+  backBtn.innerHTML = svgIcon('back');
+  backBtn.disabled = idx <= 0;
+  nav.appendChild(backBtn);
+
+  const fwdBtn = document.createElement('button');
+  fwdBtn.className = 'br-nav-btn';
+  fwdBtn.setAttribute('data-action', 'browser.forward');
+  fwdBtn.innerHTML = svgIcon('forward');
+  fwdBtn.disabled = idx < 0 || idx >= history.length - 1;
+  nav.appendChild(fwdBtn);
+
   const urlBar = document.createElement('div');
-  urlBar.className = 'br-url-bar';
-  urlBar.innerHTML = `
-    <div class="br-url-input">${browser?.openSiteId ? SITE_DEFS[browser.openSiteId]?.url || 'about:home' : 'about:home'}</div>
-  `;
-  body.appendChild(urlBar);
+  urlBar.className = 'br-url-input';
+  urlBar.textContent = browser.openSiteId ? (SITE_DEFS[browser.openSiteId]?.url || 'about:home') : 'about:home';
+  nav.appendChild(urlBar);
 
-  // Site cards grid
+  return nav;
+}
+
+// --- Browser: address bar with real Back/Forward, plus a grid of
+// site cards. ---
+function renderBrowserHome(body, gs, app, screen) {
+  body.appendChild(renderBrowserNav(gs));
+
   const grid = document.createElement('div');
   grid.className = 'br-grid';
   for (const site of filterByContentFlags(SITE_DEFS_LIST, gs)) {
@@ -698,59 +580,260 @@ function renderBrowserHome(body, gs, app, screen) {
   body.appendChild(grid);
 }
 
-// --- IM: full chat UI with timestamps, unread badges, and a
-// conversation list sidebar. ---
-function renderChat(body, gs, app, screen) {
-  const im = gs.world.computer.apps.im;
-  const npc = gs.npcs[im?.viewingNpcId];
-  if (!npc) { body.innerHTML = '<p class="dim">No conversation open.</p>'; return; }
-
-  const thread = im.threads[im.viewingNpcId] || { msgs: [] };
-
-  // Chat header with NPC name and avatar
-  const header = document.createElement('div');
-  header.className = 'im-chat-header';
-  header.innerHTML = `
-    <div class="im-avatar" style="background: ${hashToColor(npc.bible?.name || im.viewingNpcId)};">${(npc.bible?.name || '?').charAt(0)}</div>
-    <div class="im-chat-name">${npc.bible?.name || 'Unknown'}</div>
-  `;
-  body.appendChild(header);
-
-  // Message log with timestamps
-  const log = document.createElement('div');
-  log.className = 'im-msg-log';
-  for (const m of thread.msgs) {
-    const bubble = document.createElement('div');
-    bubble.className = 'im-msg-bubble';
-    bubble.setAttribute('data-from', m.from);
-    const timeStr = `Day ${m.day}, ${formatTime(m.tick * 30)}`;
-    if (m.from === 'player') {
-      bubble.innerHTML = `<div class="im-msg-text">${m.text}</div><div class="im-msg-time">${timeStr}</div>`;
-    } else if (m.from === 'npc') {
-      bubble.innerHTML = `<div class="im-msg-text">${m.text}</div><div class="im-msg-time">${timeStr}</div>`;
-    } else {
-      bubble.innerHTML = `<div class="im-msg-text dim">${m.text}</div>`;
+// --- EduStream: course cards with a skill badge, and a separate
+// progress view for whatever's currently enrolled. ---
+function renderEduStreamCatalog(body, gs, app, screen) {
+  const classes = gs.world.computer.apps.classes;
+  const grid = document.createElement('div');
+  grid.className = 'es-grid';
+  for (const course of COURSE_DEFS_LIST) {
+    const enrolled = classes.enrolled.some(e => e.courseId === course.id);
+    const completed = classes.completed.includes(course.id);
+    const card = document.createElement('div');
+    card.className = 'es-card';
+    card.innerHTML = `
+      <div class="es-card-badge" style="background: ${hashToColor(course.skillId)};">${course.skillId.charAt(0).toUpperCase()}</div>
+      <div class="es-card-title">${course.label}</div>
+      <div class="es-card-meta">${course.lessons} lessons — $${course.cost}</div>
+      <div class="es-card-meta dim tiny">${course.skillId}${course.requiresLevel ? ` · requires level ${course.requiresLevel}` : ''}</div>
+    `;
+    if (completed) card.innerHTML += '<div class="cs-status-pill done">Completed</div>';
+    else if (enrolled) card.innerHTML += '<div class="cs-status-pill active">Enrolled</div>';
+    else {
+      const btn = document.createElement('button');
+      btn.className = 'btn tiny';
+      btn.setAttribute('data-action', 'classes.enroll');
+      btn.setAttribute('data-row-id', course.id);
+      btn.textContent = 'Enroll';
+      card.appendChild(btn);
     }
-    log.appendChild(bubble);
+    grid.appendChild(card);
   }
-  body.appendChild(log);
+  body.appendChild(grid);
+}
 
-  // Input row
-  const inputRow = document.createElement('div');
-  inputRow.className = 'im-input-row';
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.id = 'cs-chat-input';
-  input.placeholder = `Text ${npc.bible?.name || 'them'}...`;
-  input.className = 'im-input';
-  const sendBtn = document.createElement('button');
-  sendBtn.className = 'btn tiny im-send-btn';
-  sendBtn.setAttribute('data-action', 'im.send');
-  sendBtn.setAttribute('data-row-id', im.viewingNpcId);
-  sendBtn.textContent = 'Send';
-  inputRow.appendChild(input);
-  inputRow.appendChild(sendBtn);
-  body.appendChild(inputRow);
+function renderEduStreamEnrolled(body, gs, app, screen) {
+  const classes = gs.world.computer.apps.classes;
+  if (classes.enrolled.length === 0) { body.innerHTML = '<p class="dim tiny">Not enrolled in anything.</p>'; return; }
+  for (const enrollment of classes.enrolled) {
+    const course = COURSE_DEFS[enrollment.courseId];
+    if (!course) continue;
+    const pct = Math.round((enrollment.progress / course.lessons) * 100);
+    const card = document.createElement('div');
+    card.className = 'es-progress-card';
+    card.innerHTML = `
+      <div class="es-progress-header"><span>${course.label}</span><span class="dim tiny">${enrollment.progress}/${course.lessons} lessons</span></div>
+      <div class="es-progress-bar"><div class="es-progress-fill" style="width: ${pct}%;"></div></div>
+    `;
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny';
+    btn.setAttribute('data-action', 'classes.attend-lesson');
+    btn.setAttribute('data-row-id', enrollment.courseId);
+    btn.textContent = 'Attend Lesson';
+    card.appendChild(btn);
+    body.appendChild(card);
+  }
+}
+
+// --- HomeCare: service cards with a cadence badge and an access-scope
+// badge — "Whole Apartment" really does enter every bedroom, which
+// matters once STEALTH is watching (see COMPUTER's performCleaningVisit),
+// so it gets a visually distinct, slightly alarming treatment rather than
+// reading the same as "Common Areas." ---
+function renderHomeCareCatalog(body, gs, app, screen) {
+  const services = gs.world.computer.apps.services;
+  const grid = document.createElement('div');
+  grid.className = 'hc-grid';
+  for (const service of SERVICE_DEFS_LIST) {
+    const hired = services.hired.some(h => h.serviceId === service.id);
+    const card = document.createElement('div');
+    card.className = 'hc-card';
+    card.innerHTML = `
+      <div class="hc-card-title">${service.label}</div>
+      <div class="hc-card-meta">$${service.costPerVisit}/visit — every ${service.cadenceDays} days</div>
+      <div class="hc-scope-badge hc-scope-${service.accessScope}">${service.accessScope === 'all' ? 'Whole Apartment' : 'Common Areas'}</div>
+    `;
+    if (hired) card.innerHTML += '<div class="cs-status-pill active">Hired</div>';
+    else {
+      const btn = document.createElement('button');
+      btn.className = 'btn tiny';
+      btn.setAttribute('data-action', 'services.hire');
+      btn.setAttribute('data-row-id', service.id);
+      btn.textContent = 'Hire';
+      card.appendChild(btn);
+    }
+    grid.appendChild(card);
+  }
+  body.appendChild(grid);
+}
+
+function renderHomeCareHired(body, gs, app, screen) {
+  const services = gs.world.computer.apps.services;
+  if (services.hired.length === 0) { body.innerHTML = '<p class="dim tiny">No services hired.</p>'; return; }
+  for (const hire of services.hired) {
+    const service = SERVICE_DEFS[hire.serviceId];
+    if (!service) continue;
+    const daysUntil = Math.max(0, hire.nextDay - gs.meta.clock.day);
+    const row = document.createElement('div');
+    row.className = 'hc-hired-row';
+    row.innerHTML = `<div><div class="hc-card-title">${service.label}</div><div class="dim tiny">Next visit in ${daysUntil} day${daysUntil === 1 ? '' : 's'}</div></div>`;
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny btn-secondary';
+    btn.setAttribute('data-action', 'services.cancel');
+    btn.setAttribute('data-row-id', hire.serviceId);
+    btn.textContent = 'Cancel';
+    row.appendChild(btn);
+    body.appendChild(row);
+  }
+}
+
+// --- RoomList: listing-status hero, then applicant cards; the profile
+// detail view (renderApplicantProfile, below) gets the same card
+// treatment as its own screen. ---
+function renderRoomListPost(body, gs, app, screen) {
+  const c = gs.world.computer.apps.classifieds;
+  const hero = document.createElement('div');
+  hero.className = 'rl-hero';
+  if (c.posted.active) {
+    hero.innerHTML = `
+      <div class="rl-hero-title">Listing Active</div>
+      <div class="dim tiny">Posted Day ${c.posted.postedDay}. Check back for applicants.</div>
+    `;
+    if (c.applicants.length > 0) {
+      const btn = document.createElement('button');
+      btn.className = 'btn tiny';
+      btn.setAttribute('data-action', 'computer.open-screen');
+      btn.setAttribute('data-app', 'classifieds');
+      btn.setAttribute('data-screen', 'applicants');
+      btn.textContent = `View Applicants (${c.applicants.length})`;
+      hero.appendChild(btn);
+    }
+  } else {
+    hero.innerHTML = '<div class="rl-hero-title">No Listing</div><div class="dim tiny">Post an ad to find a new roommate.</div>';
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny';
+    btn.setAttribute('data-action', 'classifieds.post');
+    btn.textContent = 'Post Ad';
+    hero.appendChild(btn);
+  }
+  body.appendChild(hero);
+}
+
+function renderRoomListApplicants(body, gs, app, screen) {
+  const c = gs.world.computer.apps.classifieds;
+  if (c.applicants.length === 0) { body.innerHTML = '<p class="dim tiny">No applicants yet — check back after posting.</p>'; return; }
+  const grid = document.createElement('div');
+  grid.className = 'rl-grid';
+  for (const npcId of c.applicants) {
+    const npc = gs.npcs[npcId];
+    if (!npc) continue;
+    const card = document.createElement('div');
+    card.className = 'rl-card';
+    card.setAttribute('data-action', 'classifieds.view-applicant');
+    card.setAttribute('data-row-id', npcId);
+    card.innerHTML = `
+      <div class="rl-card-avatar" style="background: ${hashToColor(npc.bible.name)};">${npc.bible.name.charAt(0)}</div>
+      <div class="rl-card-name">${npc.bible.name}</div>
+      <div class="dim tiny">${npc.bible.occupation.title}</div>
+    `;
+    grid.appendChild(card);
+  }
+  body.appendChild(grid);
+}
+
+// --- IM: a real two-pane messenger — thread sidebar always visible next
+// to whichever conversation is open, rather than separate full-body
+// screens for "list of threads" and "one open thread." ---
+function renderMessages(body, gs, app, screen) {
+  const im = gs.world.computer.apps.im;
+  const residentIds = Object.keys(gs.npcs).filter(id => gs.npcs[id].residency.status === 'resident');
+
+  const layout = document.createElement('div');
+  layout.className = 'im-layout';
+
+  const sidebar = document.createElement('div');
+  sidebar.className = 'im-sidebar';
+  if (residentIds.length === 0) sidebar.innerHTML = '<p class="dim tiny">No one to text yet.</p>';
+  for (const npcId of residentIds) {
+    const npc = gs.npcs[npcId];
+    const thread = im.threads[npcId];
+    const unread = thread?.unread || 0;
+    const lastMsg = thread?.msgs?.[thread.msgs.length - 1];
+    const row = document.createElement('div');
+    row.className = 'im-thread-row' + (im.viewingNpcId === npcId ? ' active' : '');
+    row.setAttribute('data-action', 'im.open-thread');
+    row.setAttribute('data-row-id', npcId);
+    row.innerHTML = `
+      <div class="im-avatar" style="background: ${hashToColor(npc.bible?.name || npcId)};">${(npc.bible?.name || '?').charAt(0)}</div>
+      <div class="im-thread-info">
+        <div class="im-thread-name">${npc.bible?.name || 'Unknown'}</div>
+        <div class="im-thread-preview dim tiny">${lastMsg ? truncateText(lastMsg.text, 34) : 'Say hi'}</div>
+      </div>
+      ${unread ? `<div class="im-unread-badge">${unread}</div>` : ''}
+    `;
+    sidebar.appendChild(row);
+  }
+  layout.appendChild(sidebar);
+
+  const pane = document.createElement('div');
+  pane.className = 'im-pane';
+  const npc = gs.npcs[im.viewingNpcId];
+  if (!npc) {
+    pane.innerHTML = '<p class="dim">Select a conversation.</p>';
+  } else {
+    const thread = im.threads[im.viewingNpcId] || { msgs: [] };
+    const header = document.createElement('div');
+    header.className = 'im-chat-header';
+    header.innerHTML = `
+      <div class="im-avatar" style="background: ${hashToColor(npc.bible?.name || im.viewingNpcId)};">${(npc.bible?.name || '?').charAt(0)}</div>
+      <div class="im-chat-name">${npc.bible?.name || 'Unknown'}</div>
+    `;
+    pane.appendChild(header);
+
+    const log = document.createElement('div');
+    log.className = 'im-msg-log';
+    let lastDay = null;
+    for (const m of thread.msgs) {
+      if (m.day !== lastDay) {
+        const divider = document.createElement('div');
+        divider.className = 'im-day-divider';
+        divider.textContent = `Day ${m.day}`;
+        log.appendChild(divider);
+        lastDay = m.day;
+      }
+      const bubble = document.createElement('div');
+      bubble.className = 'im-msg-bubble';
+      bubble.setAttribute('data-from', m.from);
+      const timeStr = formatTime(m.tick * 30);
+      bubble.innerHTML = m.from === 'system'
+        ? `<div class="im-msg-text dim">${m.text}</div>`
+        : `<div class="im-msg-text">${m.text}</div><div class="im-msg-time">${timeStr}</div>`;
+      log.appendChild(bubble);
+    }
+    pane.appendChild(log);
+
+    const inputRow = document.createElement('div');
+    inputRow.className = 'im-input-row';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.id = 'cs-chat-input';
+    input.placeholder = `Text ${npc.bible?.name || 'them'}...`;
+    input.className = 'im-input';
+    const sendBtn = document.createElement('button');
+    sendBtn.className = 'btn tiny im-send-btn';
+    sendBtn.setAttribute('data-action', 'im.send');
+    sendBtn.setAttribute('data-row-id', im.viewingNpcId);
+    sendBtn.textContent = 'Send';
+    inputRow.appendChild(input);
+    inputRow.appendChild(sendBtn);
+    pane.appendChild(inputRow);
+  }
+  layout.appendChild(pane);
+  body.appendChild(layout);
+}
+
+function truncateText(str, n) {
+  return str.length > n ? `${str.slice(0, n - 1)}…` : str;
 }
 
 // --- Helper: deterministic color from a string hash, for thumbnails ---

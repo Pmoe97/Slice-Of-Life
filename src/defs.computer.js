@@ -51,12 +51,8 @@ const APP_DEFS = {
     id: 'classes', label: 'EduStream', category: 'education', requires: [],
     entryScreen: 'catalog',
     screens: {
-      catalog: { label: 'Catalog', renderer: 'catalog', source: 'COURSE_DEFS_LIST', rowAction: 'classes.enroll', rowActionLabel: 'Enroll' },
-      enrolled: {
-        label: 'My Courses', renderer: 'list', source: 'state:apps.classes.enrolled', emptyText: 'Not enrolled in anything.',
-        labelFn: (row) => `${COURSE_DEFS[row.courseId]?.label} — ${row.progress}/${COURSE_DEFS[row.courseId]?.lessons} lessons`,
-        rowAction: 'classes.attend-lesson', rowActionLabel: 'Attend Lesson',
-      },
+      catalog: { label: 'Catalog', renderer: 'edustream-catalog' },
+      enrolled: { label: 'My Courses', renderer: 'edustream-enrolled' },
     },
   },
   // Hired help — a recurring subscription, not a one-off purchase. See
@@ -67,12 +63,8 @@ const APP_DEFS = {
     id: 'services', label: 'HomeCare', category: 'services', requires: [],
     entryScreen: 'catalog',
     screens: {
-      catalog: { label: 'Available', renderer: 'catalog', source: 'SERVICE_DEFS_LIST', rowAction: 'services.hire', rowActionLabel: 'Hire' },
-      hired: {
-        label: 'Hired', renderer: 'list', source: 'state:apps.services.hired', emptyText: 'No services hired.',
-        labelFn: (row) => `${SERVICE_DEFS[row.serviceId]?.label} — next visit Day ${row.nextDay}`,
-        rowAction: 'services.cancel', rowActionLabel: 'Cancel',
-      },
+      catalog: { label: 'Available', renderer: 'homecare-catalog' },
+      hired: { label: 'Hired', renderer: 'homecare-hired' },
     },
   },
   // Roommate-wanted ads. Applicants are real NPCs (generated the same way
@@ -86,16 +78,8 @@ const APP_DEFS = {
     id: 'classifieds', label: 'RoomList', category: 'classifieds', requires: [],
     entryScreen: 'post',
     screens: {
-      post: { label: 'Listing', renderer: 'dashboard', panels: ['classifieds.status'] },
-      applicants: {
-        label: 'Applicants', renderer: 'list', source: 'state:apps.classifieds.applicants',
-        emptyText: 'No applicants yet — check back after posting.',
-        labelFn: (npcId, gs) => {
-          const npc = gs.npcs[npcId];
-          return npc ? `${npc.bible.name} — ${npc.bible.occupation.title}` : 'Unknown applicant';
-        },
-        rowAction: 'classifieds.view-applicant', rowActionLabel: 'View',
-      },
+      post: { label: 'Listing', renderer: 'roomlist-post' },
+      applicants: { label: 'Applicants', renderer: 'roomlist-applicants' },
       detail: { label: 'Applicant', renderer: 'applicant', hideFromNav: true },
     },
   },
@@ -104,21 +88,15 @@ const APP_DEFS = {
   // move relPlayer, land a memory fact, everything a scene conversation
   // can do. NPC-initiated texts (a pendingIntent an autonomy drive sets)
   // aren't wired yet since autonomy (P7) doesn't exist; threads are
-  // player-initiated only for now.
+  // player-initiated only for now. A single always-both-panes screen
+  // (renderMessages, RENDER.COMPUTER) rather than separate thread-list/
+  // open-thread screens — selecting a contact just changes which
+  // conversation the right-hand pane shows.
   im: {
     id: 'im', label: 'Messages', category: 'social', requires: [],
     entryScreen: 'threads',
     screens: {
-      threads: {
-        label: 'Threads', renderer: 'list', source: 'residents', emptyText: 'No one to text yet.',
-        labelFn: (npcId, gs) => {
-          const npc = gs.npcs[npcId];
-          const unread = gs.world.computer.apps.im.threads[npcId]?.unread;
-          return `${npc?.bible.name || 'Unknown'}${unread ? ` (${unread})` : ''}`;
-        },
-        rowAction: 'im.open-thread', rowActionLabel: 'Open',
-      },
-      chat: { label: 'Chat', renderer: 'chat', hideFromNav: true },
+      threads: { label: 'Messages', renderer: 'messenger' },
     },
   },
   // The simplest app: one screen, watching costs time and lifts mood, no

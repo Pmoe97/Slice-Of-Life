@@ -695,7 +695,22 @@ async function handleAction(action, npcId, extra) {
       doComputerOpenApp(extra?.appId);
       break;
     case 'computer.open-screen':
-      doComputerOpenScreen(extra?.screenId);
+      doComputerOpenScreen(extra?.appId, extra?.screenId);
+      break;
+    case 'computer.window-close':
+      doComputerWindowClose(extra?.appId);
+      break;
+    case 'computer.window-minimize':
+      doComputerWindowMinimize(extra?.appId);
+      break;
+    case 'computer.window-maximize':
+      doComputerWindowMaximize(extra?.appId);
+      break;
+    case 'computer.taskbar-click':
+      doComputerTaskbarClick(extra?.appId);
+      break;
+    case 'computer.toggle-start':
+      doComputerToggleStart();
       break;
     case 'computer.work-block':
       await doWorkBlock();
@@ -714,6 +729,12 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'browser.visit':
       await doBrowserVisit(extra?.rowId);
+      break;
+    case 'browser.back':
+      doBrowserBack();
+      break;
+    case 'browser.forward':
+      doBrowserForward();
       break;
     case 'browser.ah-category':
       doAfterHoursCategory(extra?.rowId);

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<!--
+  TEMPORARY local dev/test harness — NOT part of the shipped game.
+  main.html only runs inside Perchance's own page shell, which injects
+  `root` (kv storage + generateText/generateImage) and a couple of
+  window.generatorPublicId/generatorIsUnsaved globals at runtime. Outside
+  Perchance those don't exist, so main.html can't boot in a plain browser.
+
+  This harness defines a minimal in-memory shim for exactly the surface
+  src/state.js, src/llm.js, and src/image.js call, then fetches main.html
+  itself (so the DOM/CSS/script list stay a single source of truth — this
+  file never duplicates them) and replays its content into this page.
+  Delete this file once the computer-UI rework is verified; it is a
+  throwaway test tool, not a real save backend.
+-->
+<html>
+<head><meta charset="utf-8"><title>dev harness</title></head>
+<body>
+<script>
+  function makeFolder() {
+    const store = new Map();
+    return {
+      async get(key) { return store.has(key) ? structuredClone(store.get(key)) : undefined; },
+      async set(key, val) { store.set(key, structuredClone(val)); return val; },
+      async update(key, fn) {
+        const cur = store.has(key) ? structuredClone(store.get(key)) : undefined;
+        const next = await fn(cur);
+        store.set(key, structuredClone(next));
+        return next;
+      },
+      async delete(key) { store.delete(key); },
+      async keys() { return [...store.keys()]; },
+    };
+  }
+  var root = {
+    kv: {
+      meta: makeFolder(), player: makeFolder(), world: makeFolder(),
+      npcs: makeFolder(), objects: makeFolder(), images: makeFolder(),
+      snapshots: makeFolder(),
+    },
+    // Deliberately reject — exercises the game's own existing fallback
+    // paths (image.js's gradient placeholder, IM's broken-response
+    // handling) rather than needing a hand-rolled fake LLM schema here.
+    async generateText() { throw new Error('dev-harness: generateText stubbed out'); },
+    async generateImage() { throw new Error('dev-harness: generateImage stubbed out'); },
+  };
+  window.generatorPublicId = undefined;
+
+  async function loadHarness() {
+    const html = await (await fetch('main.html?t=' + Date.now(), { cache: 'no-store' })).text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+
+    // Styles: copy both <style> blocks verbatim.
+    for (const style of doc.querySelectorAll('style')) document.head.appendChild(style.cloneNode(true));
+
+    // Markup: everything main.html has outside <style>/<script>/<template>
+    // tags is the #app skeleton — append it as-is.
+    for (const node of [...doc.body.childNodes]) {
+      const tag = node.tagName;
+      if (tag === 'SCRIPT') continue; // loaded below, in order
+      document.body.appendChild(document.importNode(node, true));
+    }
+
+    // Scripts: main.html loads them via <script src>, in a documented
+    // load-bearing order — replay that same order here, waiting for each
+    // to finish before starting the next (classic scripts inserted via
+    // createElement run async by default otherwise).
+    const scriptTags = [...doc.querySelectorAll('script[src]')];
+    const bust = Date.now(); // avoid a stale cached src/*.js across repeat test loads
+    for (const tag of scriptTags) {
+      await new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = tag.getAttribute('src') + '?t=' + bust;
+        s.onload = resolve;
+        s.onerror = () => reject(new Error('failed to load ' + s.src));
+        document.body.appendChild(s);
+      });
+    }
+  }
+  loadHarness().catch(e => {
+    document.body.insertAdjacentHTML('afterbegin', '<pre style="color:#f66;background:#000;padding:8px;">Harness load failed: ' + e.message + '</pre>');
+    console.error(e);
+  });
+</script>
+</body>
+</html>

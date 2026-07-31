@@ -529,8 +529,11 @@ async function loadGameState() {
   const rent = await getWorld('rent') || { total: ECONOMY.rent.total, perResident: 0, contributorCount: 0 };
   // A new kv key rather than a version bump — defaultComputerState()
   // (COMPUTER) is exactly what a save from before the computer existed
-  // should read as, no transformation needed.
-  const computer = await getWorld('computer') || defaultComputerState();
+  // should read as. A save from after the computer existed but before its
+  // windowed-desktop rework has a `computer` key in the old single-`view`
+  // shape though, so a real normalizer is needed here, not just a
+  // fallback — see COMPUTER's normalizeComputerState.
+  const computer = normalizeComputerState(await getWorld('computer'));
 
   const gameState = {
     meta,

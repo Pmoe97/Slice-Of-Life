@@ -1,31 +1,78 @@
 // ===== SECTION: COMPUTER =====
-// Session state and domain logic for the computer as a diegetic screen —
-// not the modal shell (see main.html's #computer-screen, gated by
-// #main-content[data-mode="computer"]). Header/sidebars/footer stay
-// visible while the computer is open: the clock keeps ticking, the
-// Present panel keeps showing who's around, and a roommate can walk in on
-// you. Time passes only on actions with a real cost (working a block),
-// never on navigating between screens.
+// Session state and domain logic for the computer as a full-viewport
+// takeover — not the modal shell (see main.html's #computer-screen,
+// gated by #app[data-mode="computer"], which also hides the header and
+// both sidebars and collapses #app's grid to just the computer). Being
+// "on the computer" means the whole screen IS the monitor; the only way
+// back is the taskbar's own Power Off control (computer.close), not a
+// header/sidebar affordance. The sim keeps ticking underneath regardless
+// (a roommate can still walk in, needs still decay) — it's just not drawn
+// anywhere while this mode is active. Time passes only on actions with a
+// real cost (working a block), never on navigating between screens.
 //
 // Hard rule: the entire screen must be derivable from gameState.world.
 // computer. No app state may live in the DOM — RENDER.COMPUTER's job is
 // to read this object and draw it, nothing else.
 
+// Default on-screen size/position for a newly opened window, cascaded a
+// little further down-right each time so opening several apps in a row
+// doesn't stack them in an unreadable pile — same spirit as a real OS's
+// "new window" placement.
+const WINDOW_DEFAULTS = { w: 640, h: 460, baseX: 80, baseY: 60, cascadeStep: 32, cascadeSlots: 6 };
+
 function defaultComputerState() {
   return {
     power: 'off',
-    view: { appId: null, screenId: null, params: {} },
-    stack: [],
+    // One entry per currently-open app window, keyed by appId — absence
+    // from this object means closed. At most one window per app (matches
+    // `apps.<id>` already being a singleton per app, so no separate
+    // "instance id" concept is needed). Replaces the old single-`view`
+    // shape now that several apps can be open/visible at once.
+    windows: {},
+    focusedAppId: null,
+    nextZIndex: 1,
     apps: {
       work: { jobId: null, employed: false, todayBlocks: 0, todayEarned: 0, reputation: 0, backlog: [], strikes: 0, lastPayDay: 0 },
       shop: { cart: [], wishlist: [] },
-      browser: { openSiteId: null, history: [] },
+      // historyIndex points at `history`'s current position for real
+      // Back/Forward — -1 means nothing visited yet. A save from before
+      // this field existed just reads it as undefined; browserGoBack/
+      // Forward/renderBrowserNav all default a missing value to -1 rather
+      // than needing a migration for one optional int.
+      browser: { openSiteId: null, history: [], historyIndex: -1 },
       classes: { enrolled: [], completed: [] },
       services: { hired: [] },
       classifieds: { posted: { active: false, postedDay: 0 }, applicants: [], viewingApplicantId: null },
       im: { threads: {}, viewingNpcId: null },
       stream: { subscriptions: [], watchHistory: [], resumePoints: {} },
     },
+  };
+}
+
+// A save written before this rework has `computer.view`/`computer.stack`
+// instead of `computer.windows` — reopen whatever was in `view` as one
+// window in the new shape rather than silently dropping "what you were
+// doing." A save with no `computer` key at all (pre-P4) still falls
+// through to a pristine defaultComputerState() via the `!raw` branch.
+function normalizeComputerState(raw) {
+  if (!raw) return defaultComputerState();
+  const fresh = defaultComputerState();
+  const windows = (raw.windows && typeof raw.windows === 'object') ? raw.windows : {};
+  if (!raw.windows && raw.view && raw.view.appId) {
+    windows[raw.view.appId] = {
+      screenId: raw.view.screenId || APP_DEFS[raw.view.appId]?.entryScreen,
+      params: raw.view.params || {},
+      rect: { x: WINDOW_DEFAULTS.baseX, y: WINDOW_DEFAULTS.baseY, w: WINDOW_DEFAULTS.w, h: WINDOW_DEFAULTS.h },
+      zIndex: 1, minimized: false, maximized: false, prevRect: null,
+    };
+  }
+  return {
+    power: raw.power || 'off',
+    windows,
+    focusedAppId: raw.focusedAppId ?? (Object.keys(windows)[0] || null),
+    nextZIndex: raw.nextZIndex || (Object.keys(windows).length + 1),
+    // Back-fill any app added to the roster since this save was written.
+    apps: { ...fresh.apps, ...(raw.apps || {}) },
   };
 }
 
@@ -36,20 +83,97 @@ function activeContentFlags(gameState) {
   return (gameState.meta.contentConfig && gameState.meta.contentConfig.contentFlags) || CONTENT_CONFIG.contentFlags;
 }
 
+// Bring appId's window to the front: highest zIndex, focused, visible.
+// Used both for "open a new window" and "restore/click an existing one" —
+// real OS taskbars treat both the same way once the window exists.
+function focusWindow(gameState, appId) {
+  const win = gameState.world.computer.windows[appId];
+  if (!win) return;
+  win.minimized = false;
+  win.zIndex = ++gameState.world.computer.nextZIndex;
+  gameState.world.computer.focusedAppId = appId;
+}
+
 function openApp(gameState, appId) {
   const def = APP_DEFS[appId];
   if (!def) return;
-  gameState.world.computer.view = { appId, screenId: def.entryScreen, params: {} };
+  const computer = gameState.world.computer;
+  if (!computer.windows[appId]) {
+    const count = Object.keys(computer.windows).length;
+    const slot = count % WINDOW_DEFAULTS.cascadeSlots;
+    computer.windows[appId] = {
+      screenId: def.entryScreen, params: {},
+      rect: {
+        x: WINDOW_DEFAULTS.baseX + slot * WINDOW_DEFAULTS.cascadeStep,
+        y: WINDOW_DEFAULTS.baseY + slot * WINDOW_DEFAULTS.cascadeStep,
+        w: WINDOW_DEFAULTS.w, h: WINDOW_DEFAULTS.h,
+      },
+      zIndex: 0, minimized: false, maximized: false, prevRect: null,
+    };
+  }
+  focusWindow(gameState, appId);
 }
 
-function switchScreen(gameState, screenId, params) {
-  const view = gameState.world.computer.view;
-  gameState.world.computer.view = { ...view, screenId, params: params || {} };
+function switchScreen(gameState, appId, screenId, params) {
+  const win = gameState.world.computer.windows[appId];
+  if (!win) return;
+  win.screenId = screenId;
+  win.params = params || {};
+}
+
+// The appId with the highest zIndex among currently open, non-minimized
+// windows — who a close/minimize should hand focus to next, same as a
+// real OS falling back to "whatever's now on top" rather than picking
+// arbitrarily.
+function topVisibleWindowAppId(gameState, excludeAppId) {
+  let best = null;
+  for (const [appId, win] of Object.entries(gameState.world.computer.windows)) {
+    if (appId === excludeAppId || win.minimized) continue;
+    if (!best || win.zIndex > gameState.world.computer.windows[best].zIndex) best = appId;
+  }
+  return best;
+}
+
+function closeWindow(gameState, appId) {
+  const computer = gameState.world.computer;
+  if (!computer.windows[appId]) return;
+  delete computer.windows[appId];
+  if (computer.focusedAppId === appId) {
+    computer.focusedAppId = topVisibleWindowAppId(gameState, appId);
+  }
+}
+
+function minimizeWindow(gameState, appId) {
+  const computer = gameState.world.computer;
+  const win = computer.windows[appId];
+  if (!win) return;
+  win.minimized = true;
+  if (computer.focusedAppId === appId) {
+    computer.focusedAppId = topVisibleWindowAppId(gameState, appId);
+  }
+}
+
+// Maximize fills the desktop area (RENDER.DESKTOP sizes it via CSS, not a
+// stored rect); toggling back restores whatever rect it had before.
+function toggleMaximizeWindow(gameState, appId) {
+  const win = gameState.world.computer.windows[appId];
+  if (!win) return;
+  if (win.maximized) {
+    win.maximized = false;
+    if (win.prevRect) win.rect = win.prevRect;
+    win.prevRect = null;
+  } else {
+    win.prevRect = win.rect;
+    win.maximized = true;
+  }
+  focusWindow(gameState, appId);
 }
 
 function closeComputer(gameState) {
+  // Powering off is "walking away from the monitor," not closing every
+  // app — windows/rects survive so reopening the computer resumes exactly
+  // where you left it, same as a real OS session.
   gameState.world.computer.power = 'off';
-  gameState.world.computer.view = { appId: null, screenId: null, params: {} };
 }
 
 // --- Work app ---
@@ -209,11 +333,40 @@ function visitSite(gameState, siteId) {
   }
   const browser = gameState.world.computer.apps.browser;
   browser.openSiteId = siteId;
+  const idx = browser.historyIndex ?? -1;
+  // A fresh visit while sitting somewhere behind the end of history (the
+  // player went Back, then clicked something new) discards the stale
+  // forward branch — same as a real browser's address bar.
+  if (idx < browser.history.length - 1) browser.history = browser.history.slice(0, idx + 1);
   browser.history.push({
     day: gameState.meta.clock.day, tick: getTickIndex(gameState.meta.clock.minutes),
     siteId, category: site.category, private: site.category === 'adult',
   });
+  browser.historyIndex = browser.history.length - 1;
   return { ok: true, site };
+}
+
+// Back/Forward move the historyIndex pointer and reopen whatever site was
+// there — no time cost, no re-applied visit effects, no new history
+// entry: revisiting something already in history isn't a new "visit,"
+// it's just looking at it again, the same distinction the real browser
+// address bar makes.
+function browserGoBack(gameState) {
+  const browser = gameState.world.computer.apps.browser;
+  const idx = browser.historyIndex ?? -1;
+  if (idx <= 0) return { ok: false, reason: 'No earlier page.' };
+  browser.historyIndex = idx - 1;
+  browser.openSiteId = browser.history[browser.historyIndex].siteId;
+  return { ok: true, site: SITE_DEFS[browser.openSiteId] };
+}
+
+function browserGoForward(gameState) {
+  const browser = gameState.world.computer.apps.browser;
+  const idx = browser.historyIndex ?? -1;
+  if (idx < 0 || idx >= browser.history.length - 1) return { ok: false, reason: 'No later page.' };
+  browser.historyIndex = idx + 1;
+  browser.openSiteId = browser.history[browser.historyIndex].siteId;
+  return { ok: true, site: SITE_DEFS[browser.openSiteId] };
 }
 
 // --- Classes app ---
