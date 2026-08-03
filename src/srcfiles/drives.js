@@ -1,4 +1,5 @@
 // ===== SECTION: DRIVES =====
+// NPC autonomy drives (Apartment Expansion v2 — Mirrored H).
 // NPC Autonomy (P7). Evaluates DRIVE_DEFS during resolveTick to produce
 // deterministic, zero-LLM NPC behaviors: self-care, chores, NPC-to-NPC
 // social interaction, NPC-to-player IM texts, and reactions to player
@@ -42,12 +43,14 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick)
   const imMessages = [];
   const relDeltas = [];
   let activityOverride = null;
+  let locationOverride = null;
   let clothingState = null;
   let clothingRestore = false;
   let updatedNpc = npc;
 
   const block = resolved.block;
   const location = resolved.location;
+  const peepResults = [];
 
   for (const [driveId, drive] of Object.entries(DRIVE_DEFS)) {
     // Block filter
@@ -58,6 +61,20 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick)
 
     // Cooldown check
     if (isOnCooldown(updatedNpc, driveId, currentTick)) continue;
+
+    // Phase 6: NPC peep drive — custom resolution path. The standard
+    // weight roll is replaced by a personality-gated condition check +
+    // computed chance roll. On success, resolveNpcPeep handles the
+    // stealth/perception contest. Detected peeps produce events that
+    // advanceAndResolve surfaces as a caught-peeping bubble.
+    if (drive.isPeepDrive) {
+      const peepResult = tryNpcPeep(updatedNpc, npcId, resolved, gameState, rng, currentTick);
+      if (peepResult) {
+        peepResults.push(peepResult);
+        updatedNpc = setCooldown(updatedNpc, driveId, currentTick);
+      }
+      continue;
+    }
 
     // Random roll against weight
     if (rng() > drive.weight) continue;
@@ -84,6 +101,27 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick)
       applyEffects(effects, effCtx);
     }
 
+    // Phase 5: meter utility usage for drives that consume utilities —
+    // NPC behaviour must show up on the bills (the whole point of
+    // metering). `meters` on a DRIVE_DEFS entry is the same shape as on
+    // ACTION_DEFS: [[meterKey, amount], ...]. A roommate who takes long
+    // showers or does laundry shows up in your bank account.
+    if (drive.meters) {
+      for (const [key, amt] of drive.meters) {
+        recordUtilityUsage(gameState, key, amt);
+      }
+    }
+
+    // Phase 9: NPC actions decay facility condition too. A full house
+    // degrades facilities faster — the roommate-friction beat. A daily
+    // gym user is wearing out equipment everyone paid for.
+    const decayFacilities = MAINTENANCE.npcDecayActions[driveId];
+    if (decayFacilities) {
+      for (const facilityId of decayFacilities) {
+        decayFacilityCondition(gameState, facilityId);
+      }
+    }
+
     // Activity override
     if (drive.activityOverride) {
       activityOverride = drive.activityOverride;
@@ -97,10 +135,33 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick)
       clothingRestore = true;
     }
 
-    // Move to common area
+    // Move to common area — actually relocate the NPC to a common room
+    // rather than just relabeling their activity while they stay put.
     if (drive.moveToCommon && !location) {
-      // Will be handled by caller — signal with a flag
+      const candidates = COMMON_ROOMS.map(roomId => {
+        const occCount = getPresentNpcIds(npcs, roomId).length;
+        const capacity = ROOMS[roomId].capacity;
+        const weight = occCount >= capacity ? 1 / SCENE.crowdAvoidanceWeight : 1;
+        return { roomId, weight };
+      });
+      const picked = weightedPick(rng, candidates, c => c.weight);
+      if (picked) locationOverride = picked.roomId;
       activityOverride = drive.activityOverride || 'hanging out';
+    }
+
+    // NPC Overhaul Phase 6 — move to a comfortable room for seek_comfort
+    if (drive.moveToComfort) {
+      // Prefer living room (entertainment) or own bedroom
+      const ownRoom = updatedNpc.residency?.room;
+      const comfortRooms = ['living_room', ownRoom].filter(r => r && r !== location);
+      if (comfortRooms.length > 0) {
+        const picked = comfortRooms[Math.floor(rng() * comfortRooms.length)];
+        if (picked && picked !== location) locationOverride = picked;
+      }
+      // NPC Overhaul Phase 6 — move to a comfortable room for seek_comfort
+      // Audit Fix: removed dead `if (!activityOverride)` guard —
+      // seek_comfort already sets activityOverride='relaxing' above.
+      activityOverride = drive.activityOverride || 'relaxing';
     }
 
     // Clean room — reuses COMPUTER's cleanRoomObjects (same function the
@@ -121,15 +182,19 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick)
     // from any room), so this searches every bucket rather than just the
     // current room. Previously do_laundry had zero mechanical effect
     // despite a real, resettable target object (laundry_hamper.state.fill)
-    // existing in defs.world.js.
+    // existing in defs.world.js. Skip if the hamper is already empty —
+    // no point "doing laundry" with nothing to wash.
     if (drive.emptiesHamper) {
+      let found = false;
       for (const bucket of Object.values(gameState.objects || {})) {
         for (const obj of Object.values(bucket)) {
           if (obj.defId === 'laundry_hamper' && obj.state?.fill !== 'empty') {
             obj.state = { ...obj.state, fill: 'empty' };
+            found = true;
           }
         }
       }
+      if (!found) continue; // nothing to wash — skip this drive entirely
     }
 
     // NPC-to-NPC social interaction
@@ -201,12 +266,65 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick)
     }
   }
 
-  return { updatedNpc, events, imMessages, relDeltas, activityOverride, clothingState, clothingRestore };
+  return { updatedNpc, events, imMessages, relDeltas, activityOverride, locationOverride, clothingState, clothingRestore, peepResults };
+}
+
+// --- Phase 6: NPC peep attempt ---
+// Checks personality eligibility + player vulnerable state, then rolls
+// against a computed chance. On success, calls resolveNpcPeep. Returns
+// the peep result for the caller to surface (detected → bubble, silent →
+// nothing visible to player). Returns null if the attempt doesn't fire.
+function tryNpcPeep(npc, npcId, resolved, gameState, rng, currentTick) {
+  const t = npc.bible.temperament;
+  const cfg = NPC_PEEP_TUNING;
+
+  // Personality gate: curious (high openness + low conscientiousness)
+  // OR attracted (high affection toward player)
+  const curiosity = t.openness * cfg.chanceModifiers.openness + (1 - (t.conscientiousness + 1) / 2) * cfg.chanceModifiers.lowConscientiousness;
+  const attraction = (npc.relPlayer?.affection || 0) * cfg.chanceModifiers.affection;
+
+  if (curiosity < 0.15 && attraction < 0.1) return null;
+
+  // Player must be in a vulnerable state
+  const playerState = getPlayerVulnerableState(gameState);
+  if (!playerState) return null;
+
+  // NPC must not be in the same room as the player (they're peeping FROM
+  // outside the door, not already inside)
+  if (resolved.location === gameState.player.location) return null;
+
+  // NPC must be in a room adjacent to the player's room — peeping from
+  // the kitchen while the player is in the bedroom makes no sense.
+  // The hallway is adjacent to all rooms; bedrooms/bathroom are only
+  // adjacent to the hallway (you peep from outside the door).
+  const playerRoom = gameState.player.location;
+  const npcRoom = resolved.location;
+  if (!isRoomAdjacent(npcRoom, playerRoom)) return null;
+
+  // Compute chance: base + personality modifiers
+  let chance = cfg.baseChance + curiosity + attraction;
+
+  // Roll
+  if (rng() > chance) return null;
+
+  // Attempt the peep — resolveNpcPeep handles the stealth/perception contest
+  return resolveNpcPeep(gameState, npcId, playerState);
+}
+
+// Room adjacency: ROOM_ADJACENCY is now a first-class CONFIG constant
+// (config.js). isRoomAdjacent is used by the peep system (tryNpcPeep) and
+// the floor plan visual (render.js). Self-adjacency (same room) returns
+// true as a convenience for callers that check "are these the same or
+// adjacent".
+function isRoomAdjacent(roomA, roomB) {
+  if (roomA === roomB) return true;
+  const adj = ROOM_ADJACENCY[roomA] || [];
+  return adj.includes(roomB);
 }
 
 // Process queued IM messages — adds them to the computer IM threads
 // without triggering LLM replies (NPC-initiated texts are one-way here;
-// the player can reply via the IM app, which goes through sendImMessage).
+// the player can reply via the IM app, which goes through resolveImReply).
 function processNpcImMessages(gameState, messages) {
   for (const msg of messages) {
     const thread = ensureImThread(gameState, msg.npcId);
@@ -228,7 +346,7 @@ function processNpcRelDeltas(gameState, relDeltas) {
       // NPC-to-player: update relPlayer on the NPC
       const npc = gameState.npcs[rd.a];
       if (npc) {
-        gameState.npcs[rd.a] = applyRelDelta(npc, rd.deltas);
+        gameState.npcs[rd.a] = applyRelDelta(npc, rd.deltas, gameState.meta.clock.day);
       }
     } else {
       // NPC-to-NPC: update castWeb

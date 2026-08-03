@@ -8,4 +8,5 @@ $meta
 kv = {import:kv-plugin}
 generateText = {import:ai-text-plugin}
 generateImage = {import:text-to-image-plugin}
+superFetch = {import:super-fetch-plugin}
 fullscreenButton = {import:fullscreen-button-plugin}

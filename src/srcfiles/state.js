@@ -1,4 +1,5 @@
 // ===== SECTION: STATE =====
+// Save/load, kv access, migration (Apartment Expansion v2 — Mirrored H).
 // Sole kv access point. No other section calls root.kv directly.
 // Per-folder versioning, snapshot-before-migrate, debounced coalesced writes,
 // pendingOp records for crash recovery, LRU image cache, assert() helper.
@@ -25,12 +26,12 @@ function assert(cond, msg, context) {
 // --- Folder versions (independent migration) ---
 const FOLDER_VERSIONS = {
   meta: 1,
-  player: 2,
-  world: 2,
-  npcs: 1,
+  player: 3,
+  world: 3,
+  npcs: 2,
   images: 1,
   snapshots: 1,
-  objects: 1,
+  objects: 2,
 };
 
 // --- Migration functions (per folder). Stubbed for day-one; iterate here. ---
@@ -46,6 +47,15 @@ const MIGRATIONS = {
     // meta.origName, so no save loses data even if the name doesn't match
     // anything (see ITEMS' migrateInventory/resolveItemDefIdByName).
     { from: 1, to: 2, fn: (player) => ({ ...player, inventory: migrateInventory(player.inventory) }) },
+    // player 2->3 (Phase 8): add burnout, alarm, and energyMax fields
+    // for saves predating the sleep/alarm system. These are all safe
+    // defaults — no alarm, no burnout, energyMax at the starting value.
+    { from: 2, to: 3, fn: (player) => ({
+      ...player,
+      alarm: player.alarm ?? null,
+      energyMax: player.energyMax ?? ENERGY.startingMax,
+      burnout: player.burnout ?? { consecutiveWorkDays: 0, burnoutLevel: 0, lastWorkDay: 0 },
+    }) },
   ],
   world: [
     // world 1->2 (WORLD section): rooms[].objects was a spec'd field that
@@ -68,24 +78,127 @@ const MIGRATIONS = {
       }
       return migrated;
     } },
+    // world 2->3 (Apartment Expansion): the single `hallway` splits into
+    // `hallway_a`/`hallway_b`, the single `bathroom` splits into
+    // `bathroom_a`/`bathroom_b`. Old room entries are cloned (both halves
+    // get a copy of the old cleanliness/capacity), then the old keys are
+    // deleted. New rooms (dining, entry, game_room, gym, study, balcony,
+    // laundry) don't need migration here — they're lazily spawned by
+    // ensureObjectsForBucket on first load, and their room-shell entries
+    // are created on first access by SIM's room initialization.
+    { from: 2, to: 3, fn: (data) => {
+      if (!data || typeof data !== 'object') return data;
+      const looksLikeRooms = Object.values(data).some(v => v && typeof v === 'object' && 'capacity' in v);
+      if (!looksLikeRooms) return data;
+      const migrated = {};
+      for (const [roomId, room] of Object.entries(data)) {
+        if (roomId === 'hallway') {
+          migrated['hallway_a'] = { ...room };
+          migrated['hallway_b'] = { ...room };
+        } else if (roomId === 'bathroom') {
+          migrated['bathroom_a'] = { ...room };
+          migrated['bathroom_b'] = { ...room };
+        } else {
+          migrated[roomId] = room;
+        }
+      }
+      return migrated;
+    } },
   ],
-  npcs: [],
+  npcs: [
+    // npcs 1->2 (NPC Overhaul Phase 0): backfill all new fields with
+    // defaults for existing saves. Every new field is additive — the
+    // additive-default pattern (same as suspicion/clothing) means no
+    // consumer breaks, but a formal migration ensures consistency rather
+    // than relying on every read site to guard with `|| {}`.
+    { from: 1, to: 2, fn: (npc) => migrateNpcToV2(npc) },
+  ],
   images: [],
   snapshots: [],
-  objects: [],
+  objects: [
+    // objects 1->2 (Apartment Expansion): the old single `hallway` and
+    // `bathroom` rooms became per-wing pairs, so their object buckets have
+    // to move. This is a folderFn, not an `fn`: the objects folder stores
+    // one kv key *per bucket*, so the per-key transform is handed a single
+    // bucket's { objId: instance } map and can neither see nor rename the
+    // bucket key. (The first version of this migration was written as an
+    // `fn` that matched `bucketKey === 'room_hallway'` against object ids —
+    // it never matched anything and silently did nothing.)
+    //
+    // The contents move to ONE wing rather than being cloned into both.
+    // Cloning would have produced two buckets holding objects with
+    // identical ids and a stale `bucket` field, and findObjectById
+    // (EFFECTS) resolves an id by scanning buckets and taking the first
+    // hit — SET_OBJECT_STATE/MOVE_OBJECT/LEAVE_EVIDENCE would have been a
+    // coin flip between the two copies.
+    //
+    // Two objects also changed rooms in the new layout, so their instances
+    // are rehomed rather than left where the old layout put them:
+    // laundry_hamper (bathroom → laundry) and doormat (hallway → entry,
+    // which is where processDeliveriesForDay now looks for packages).
+    { from: 1, to: 2, folderFn: (all) => {
+      if (!all || typeof all !== 'object') return null;
+      const REHOME = { laundry_hamper: 'room_laundry', doormat: 'room_entry' };
+      const RENAME = { room_hallway: 'room_hallway_a', room_bathroom: 'room_bathroom_a' };
+      const next = {};
+      const put = (bucket, obj) => {
+        (next[bucket] = next[bucket] || {})[obj.id] = { ...obj, bucket };
+      };
+
+      for (const [bucketKey, bucketData] of Object.entries(all)) {
+        const target = RENAME[bucketKey];
+        if (!target) { next[bucketKey] = bucketData; continue; }
+        for (const obj of Object.values(bucketData || {})) {
+          if (!obj || !obj.id) continue;
+          put(REHOME[obj.defId] || target, obj);
+        }
+        // Ensure the renamed bucket exists even if it ended up empty, so
+        // ensureObjectsForBucket back-fills it instead of respawning from
+        // scratch and duplicating whatever we just moved out.
+        if (!next[target]) next[target] = {};
+      }
+      return next;
+    } },
+  ],
 };
 
+// A migration entry declares `fn` (a per-key value transform — the common
+// case, applied by migrateFolder below) and/or `folderFn` (applied by
+// migrateFolderKeys). The distinction matters: checkAndMigrateFolder walks
+// the folder one key at a time and hands `fn` a single key's *value*, so a
+// per-key transform structurally cannot add, rename or delete keys. Any
+// migration that reshapes the key space — splitting room_bathroom into
+// room_bathroom_a/_b, say — has to be a folderFn, which receives the whole
+// {key: value} map and returns the new one.
 function migrateFolder(folder, data, fromVer, toVer) {
   let current = data;
   let ver = fromVer;
   for (const m of MIGRATIONS[folder]) {
     if (m.from === ver && m.to === ver + 1) {
-      current = m.fn(current);
+      if (m.fn) current = m.fn(current);
       ver = m.to;
     }
   }
   assert(ver === toVer, `Migration incomplete for ${folder}: at ${ver}, expected ${toVer}`, { folder });
   return current;
+}
+
+// Folder-level (key-space) migrations. Runs after the per-key pass so a
+// folderFn sees values that are already at the right version.
+async function migrateFolderKeys(folder, fromVer, toVer) {
+  for (const m of MIGRATIONS[folder]) {
+    if (!m.folderFn) continue;
+    if (m.from < fromVer || m.to > toVer) continue;
+    const keys = await root.kv[folder].keys();
+    const all = {};
+    for (const k of keys) all[k] = await root.kv[folder].get(k);
+    const next = m.folderFn(all);
+    if (!next) continue;
+    for (const [k, v] of Object.entries(next)) await root.kv[folder].set(k, v);
+    for (const k of keys) {
+      if (!Object.prototype.hasOwnProperty.call(next, k)) await root.kv[folder].delete(k);
+    }
+  }
 }
 
 // ===== KV ADAPTER =====
@@ -189,6 +302,8 @@ async function checkAndMigrateFolder(folder) {
       data = migrateFolder(folder, data, currentVer, targetVer);
       await root.kv[folder].set(k, data);
     }
+    // Key-space reshaping (splits/renames/deletes) — see migrateFolderKeys.
+    await migrateFolderKeys(folder, currentVer, targetVer);
   }
 
   // Update version record
@@ -203,7 +318,7 @@ async function initStorage() {
   let meta = await root.kv.meta.get('meta');
   if (!meta) {
     meta = {
-      versions: { meta: 1, player: 1, world: 1, npcs: 1, images: 1, snapshots: 1 },
+      versions: { meta: 1, player: 1, world: 3, npcs: 2, images: 1, snapshots: 1, objects: 2 },
       seed: null,
       clock: null,
       structuralHash: null,
@@ -309,6 +424,10 @@ async function saveAtBoundary(reason, gameState) {
     queueWrite('world', 'quests', gameState.world.quests);
     queueWrite('world', 'rent', gameState.world.rent);
     queueWrite('world', 'computer', gameState.world.computer || defaultComputerState());
+    queueWrite('world', 'taxes', gameState.world.taxes);
+    queueWrite('world', 'bills', gameState.world.bills || initBillState());
+    queueWrite('world', 'upgrades', gameState.world.upgrades || initUpgradesState());
+    queueWrite('world', 'utilities', gameState.world.utilities || initUtilitiesState());
     // kv.npcs is one key per npc (brief: "appending an episode rewrites one
     // character, not the world"). Every tick resolves every NPC's
     // location/activity/needs/mood in-memory via resolveBatch, but until
@@ -340,7 +459,7 @@ async function saveAtBoundary(reason, gameState) {
 // resolves to the underlying IDB transaction result, not the callback's
 // return value, so a caller trusting this function's return value would
 // get undefined back instead of the updated record (see updatePlayer/
-// updateNpc/updateWorld/updateMeta above, and getPresentNpcIds's
+// updateWorld/updateMeta above, and getPresentNpcIds's
 // null-guard in SIM, for the bug this caused in practice).
 async function atomicUpdate(folder, key, updateFn) {
   await root.kv[folder].update(key, updateFn);
@@ -387,10 +506,13 @@ async function getAllNpcs() {
   return npcs;
 }
 
-async function updateNpc(id, fn) {
-  await root.kv.npcs.update(id, fn);
-  return await root.kv.npcs.get(id);
-}
+// updateNpc (read-modify-write an npc through kv) is deliberately gone:
+// every former caller — applyProposal, processRentForDay,
+// checkQuestCompletion — now mutates currentGameState.npcs in memory and
+// lets the next saveAtBoundary persist it. A kv round-trip mid-turn reads
+// a snapshot from before the clock loop's in-flight checkpoint changes and
+// writes it back over them. Use the in-memory object; setNpc below is the
+// escape hatch when a full replacement really does need to hit kv now.
 
 async function setNpc(id, data) {
   return root.kv.npcs.set(id, data);
@@ -526,7 +648,12 @@ async function loadGameState() {
   const quests = await getWorld('quests') || { active: [], completed: [] };
   const events = await getWorld('events') || [];
   const deliveries = await getWorld('deliveries') || [];
-  const rent = await getWorld('rent') || { total: ECONOMY.rent.total, perResident: 0, contributorCount: 0 };
+  // playerShare replaced perResident when rent stopped being an even split
+  // (see SIM's computeRent). A save written before that has the old field;
+  // it's recomputed from live residency on the next computeRent call, so
+  // the fallback here just needs a sane shape, not a migration.
+  const rent = await getWorld('rent')
+    || { total: ECONOMY.rent.total, playerShare: ECONOMY.rent.total, roommateShares: {}, coveredByRoommates: 0, contributorCount: 0 };
   // A new kv key rather than a version bump — defaultComputerState()
   // (COMPUTER) is exactly what a save from before the computer existed
   // should read as. A save from after the computer existed but before its
@@ -534,12 +661,53 @@ async function loadGameState() {
   // shape though, so a real normalizer is needed here, not just a
   // fallback — see COMPUTER's normalizeComputerState.
   const computer = normalizeComputerState(await getWorld('computer'));
+  // Phase 6 taxes state — falls back to a fresh quarter accumulator for
+  // a save written before taxes existed. quarterDeductions, lastQuarterOwed,
+  // and lastQuarterPaid are new in Phase 6; old saves get zeros.
+  const taxes = await getWorld('taxes') || { quarterGross: 0, lastQuarterBilled: -1, unpaid: 0, autoReserve: false, reserve: 0, quarterDeductions: 0, lastQuarterOwed: 0, lastQuarterPaid: 0 };
+  // Phase 3 bills — falls back to a fresh initBillState() for a save from
+  // before bills existed. Old saves had no `bills` key; the clean-break
+  // migration (when it lands) will discard them entirely, but this keeps
+  // the game playable for now.
+  const bills = await getWorld('bills') || initBillState();
+  // Phase 4 upgrades — falls back to a fresh initUpgradesState() for a
+  // save from before upgrades existed. Old saves get a disrepair state
+  // (everything broken) which the player then restores. This is a
+  // playable but harsh fallback; the clean-break migration will discard
+  // old saves entirely when it lands.
+  // Phase 9: backfill the `condition` field for saves that have upgrades
+  // but predate the maintenance/decay system. Broken → 0, functional+ → 100.
+  const rawUpgrades = await getWorld('upgrades');
+  const upgrades = rawUpgrades ? (() => {
+    const fixed = {};
+    for (const [id, upg] of Object.entries(rawUpgrades)) {
+      fixed[id] = {
+        ...upg,
+        condition: upg.condition !== undefined ? upg.condition
+          : (upg.tier === 'broken' ? 0 : MAINTENANCE.startingCondition),
+      };
+    }
+    return fixed;
+  })() : initUpgradesState();
+  // Phase 5 utility meters — falls back to fresh counters for a save from
+  // before metering existed. Old saves had no `utilities` key; the flat
+  // bill amounts still apply as a fallback in computeBillAmount when
+  // utilities is absent.
+  const utilities = await getWorld('utilities') || initUtilitiesState();
 
   const gameState = {
     meta,
     player,
     npcs,
-    world: { rooms, castWeb, quests, events, deliveries, rent, computer },
+    // Reconstruct npcIds in slot order from the seed (the ids are
+    // deterministic: genSeededNpcId(seed, slotIndex)). Only covers
+    // seed-generated residents — dynamically imported characters
+    // (genNpcId) are appended by Object.keys order, which is fine since
+    // npcIds is only consumed during character creation, not gameplay.
+    npcIds: Object.keys(npcs).filter(id => id.startsWith('npc_')),
+    // droppedConstraints is persisted in meta by writeGeneratedGameState.
+    droppedConstraints: meta.droppedConstraints || [],
+    world: { rooms, castWeb, quests, events, deliveries, rent, computer, taxes, bills, upgrades, utilities },
   };
   // Lazily spawns any bucket missing from kv (a pre-WORLD save, or a
   // resident who moved in since the last full write) rather than needing a
@@ -591,6 +759,10 @@ async function writeGeneratedGameState(gameState) {
   await root.kv.world.set('deliveries', gameState.world.deliveries);
   await root.kv.world.set('rent', gameState.world.rent);
   await root.kv.world.set('computer', gameState.world.computer || defaultComputerState());
+  await root.kv.world.set('taxes', gameState.world.taxes);
+  await root.kv.world.set('bills', gameState.world.bills || initBillState());
+  await root.kv.world.set('upgrades', gameState.world.upgrades || initUpgradesState());
+  await root.kv.world.set('utilities', gameState.world.utilities || initUtilitiesState());
 
   for (const [id, npc] of Object.entries(gameState.npcs)) {
     await root.kv.npcs.set(id, npc);

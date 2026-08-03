@@ -12,10 +12,10 @@
 const APP_DEFS = {
   work: {
     id: 'work', label: 'WorkHub', category: 'productivity', requires: [],
-    entryScreen: 'dash',
+    entryScreen: 'board',
     screens: {
-      dash: { label: 'Dashboard', renderer: 'workhub', panels: ['job.summary', 'job.backlog', 'job.earnings'] },
-      board: { label: 'Job Board', renderer: 'catalog', source: 'JOB_DEFS', rowAction: 'work.apply', rowActionLabel: 'Apply' },
+      board: { label: 'Gig Board', renderer: 'gigboard', source: 'state:apps.gigs.board' },
+      accepted: { label: 'My Gigs', renderer: 'gigaccepted' },
     },
   },
   // "Nile" — an unsubtle Amazon knockoff. Everything ships next-day
@@ -67,20 +67,24 @@ const APP_DEFS = {
       hired: { label: 'Hired', renderer: 'homecare-hired' },
     },
   },
-  // Roommate-wanted ads. Applicants are real NPCs (generated the same way
-  // the initial cast is — SIM's rollCastSlot — with residency.status
-  // 'prospective', an enum value the schema has always had and
-  // resolveTick has always skipped, but which nothing produced until
-  // now) rather than a lightweight preview record, so an accepted
-  // applicant is already a fully-formed resident with no second
-  // generation step.
+  // Roommate-wanted ads (RoomList). Phase 1 upgrade: the browse grid now
+  // shows 30 cheap deterministic stubs per day (generated at day rollover
+  // — no LLM). Full NPCs are created on-demand when the player loads a
+  // profile (Phase 3 fetch queue). The 'post' screen is your listing; the
+  // 'browse' screen is the applicant pool; 'detail' is a single profile
+  // (reuses renderApplicantProfile for full NPCs; stubs show a preview
+  // card with a "Load Full Profile" button).
   classifieds: {
     id: 'classifieds', label: 'RoomList', category: 'classifieds', requires: [],
-    entryScreen: 'post',
+    entryScreen: 'browse',
     screens: {
-      post: { label: 'Listing', renderer: 'roomlist-post' },
-      applicants: { label: 'Applicants', renderer: 'roomlist-applicants' },
-      detail: { label: 'Applicant', renderer: 'applicant', hideFromNav: true },
+      post: { label: 'My Listing', renderer: 'roomlist-post' },
+      browse: { label: 'Browse', renderer: 'roomlist-browse' },
+      queue: { label: 'Inbox', renderer: 'roomlist-queue', hideFromNav: false },
+      studio: { label: 'Studio', renderer: 'roomlist-studio' },
+      applicants: { label: 'Applicants', renderer: 'roomlist-applicants', hideFromNav: true },
+      detail: { label: 'Profile', renderer: 'applicant', hideFromNav: true },
+      assign: { label: 'Assign Room', renderer: 'roomlist-assign', hideFromNav: true },
     },
   },
   // Real conversations with residents, through the exact same LLM
@@ -110,32 +114,114 @@ const APP_DEFS = {
       browse: { label: 'Browse', renderer: 'streamly', source: 'STREAM_DEFS_LIST', rowAction: 'stream.watch', rowActionLabel: 'Watch Episode' },
     },
   },
+  // Phase 3 bills dashboard. One screen showing every bill with its
+  // status, balance, due day, and a Pay button (or Pay All). The cutoff
+  // state is the most important thing on the screen — a red "POWER OFF"
+  // banner is what makes the cost stack feel real rather than a number.
+  bills: {
+    id: 'bills', label: 'Bills', category: 'finance', requires: [],
+    entryScreen: 'dashboard',
+    screens: {
+      dashboard: { label: 'Bills', renderer: 'bills-dashboard' },
+    },
+  },
+  // Phase 4 upgrades: the apartment disrepair/renovation screen. Shows
+  // every facility grouped by room, its current tier, the cost to upgrade,
+  // and a quality summary. Purchasing advances the tier, which raises
+  // apartment quality and the rent ceiling — the money sink that pays
+  // back. See ref/apartment-upgrades-plan.md.
+  upgrades: {
+    id: 'upgrades', label: 'RenoFix', category: 'home', requires: [],
+    entryScreen: 'dashboard',
+    screens: {
+      dashboard: { label: 'Apartment', renderer: 'upgrades-dashboard' },
+    },
+  },
+  // Phase 11: investing. Buy fund shares, watch them grow (or shrink),
+  // sell when you need the money for upgrades. The accelerator for the
+  // renovation sink — idle surplus money should be working.
+  invest: {
+    id: 'invest', label: 'Portfolia', category: 'finance', requires: [],
+    entryScreen: 'dashboard',
+    screens: {
+      dashboard: { label: 'Portfolio', renderer: 'invest-dashboard' },
+    },
+  },
 };
 
 // --- Jobs: what WorkHub's board offers, and what working a block pays.
 // `qualitySkill` (optional) is read through SKILLS' payMultiplier curve —
 // getting better at the relevant skill raises pay on top of the base
 // rate. `requiredSkills` gates applying, not working once hired. ---
-const JOB_DEFS = {
-  cafe_temp: {
-    id: 'cafe_temp', title: 'Café Temp (Remote Scheduling)', payPerBlock: 22,
-    requiredSkills: {}, qualitySkill: null,
-    blocksPerDeadline: 4, deadlineEveryDays: 1, firingStrikes: 3,
-    energyPerBlock: 6, repGrowth: 0.05,
-  },
+// --- Gig board (Phase 2 — vocation rewrite) ---
+// Replaces JOB_DEFS. The player is a freelancer: accept discrete gigs,
+// work them block-by-block, deliver by a deadline. Income is lumpy by
+// design — dry spells happen. See ref/vocation-and-gigs-plan.md.
+//
+// A template is the *shape* of an available gig; instances are generated
+// seeded on day rollover (generateGigsForDay) with payout/blocks/deadline
+// rolled within the template's ranges and scaled by reputation tier.
+const GIG_TEMPLATES = {
   data_entry: {
-    id: 'data_entry', title: 'Remote Data Entry', payPerBlock: 30,
-    requiredSkills: {}, qualitySkill: 'tech',
-    blocksPerDeadline: 6, deadlineEveryDays: 2, firingStrikes: 3,
-    energyPerBlock: 5, repGrowth: 0.04,
+    id: 'data_entry', label: 'Data Entry Batch', category: 'admin',
+    skill: 'tech', minSkill: 0,
+    blocksRange: [3, 8], deadlineRange: [3, 7], basePayoutPerBlock: 24,
+    clientPool: ['Meridian Logistics', 'Crestline Retail', 'Harbor Data Co', 'Pinebrook Clinic'],
   },
-  freelance_dev: {
-    id: 'freelance_dev', title: 'Freelance Developer', payPerBlock: 55,
-    requiredSkills: { tech: 3 }, qualitySkill: 'tech',
-    blocksPerDeadline: 8, deadlineEveryDays: 3, firingStrikes: 2,
-    energyPerBlock: 7, repGrowth: 0.03,
+  web_tweak: {
+    id: 'web_tweak', label: 'Website Tweak', category: 'web',
+    skill: 'tech', minSkill: 2,
+    blocksRange: [4, 10], deadlineRange: [3, 8], basePayoutPerBlock: 40,
+    clientPool: ['Lumen Studio', 'Northgate Bakery', 'Field & Fern Co', 'Sablewood Designs'],
+  },
+  copy_edit: {
+    id: 'copy_edit', label: 'Copy Edit Pass', category: 'writing',
+    skill: 'tech', minSkill: 1,
+    blocksRange: [3, 9], deadlineRange: [3, 9], basePayoutPerBlock: 34,
+    clientPool: ['Quill & Page', 'Lighthouse Press', 'Marlow Books', 'Saltmarsh Media'],
+  },
+  script_automation: {
+    id: 'script_automation', label: 'Automation Script', category: 'dev',
+    skill: 'tech', minSkill: 3,
+    blocksRange: [6, 14], deadlineRange: [4, 9], basePayoutPerBlock: 72,
+    clientPool: ['Vantage Analytics', 'GreenlineOps', 'Cobalt Systems', 'Tidepool HR'],
+  },
+  app_feature: {
+    id: 'app_feature', label: 'App Feature Build', category: 'dev',
+    skill: 'tech', minSkill: 4,
+    blocksRange: [10, 20], deadlineRange: [5, 10], basePayoutPerBlock: 120,
+    clientPool: ['Bramble Inc', 'Hollowpoint Games', 'Cedar & Co', 'Northstar Apps'],
+  },
+  infra_project: {
+    id: 'infra_project', label: 'Infrastructure Project', category: 'dev',
+    skill: 'tech', minSkill: 5,
+    blocksRange: [14, 30], deadlineRange: [6, 10], basePayoutPerBlock: 175,
+    clientPool: ['Mesa Cloud', 'Atlas Platform', 'Ironroot Labs', 'Verge Distribution'],
   },
 };
+
+// Reputation tiers gate which gigs appear and how well they pay. Rep is
+// 0-100. A gig's tier is the lowest tier whose floor the player's rep
+// meets; payout scales within the tier toward its ceiling as rep rises.
+const GIG_REPUTATION_TIERS = [
+  { name: 'Novice',      floor: 0,  payMult: [1.00, 1.10], boardSize: [3, 4] },
+  { name: 'Competent',   floor: 20, payMult: [1.30, 1.55], boardSize: [4, 5] },
+  { name: 'Established', floor: 40, payMult: [1.80, 2.30], boardSize: [5, 6] },
+  { name: 'Specialist',  floor: 65, payMult: [2.80, 3.50], boardSize: [5, 7] },
+  { name: 'Elite',       floor: 85, payMult: [4.00, 5.00], boardSize: [6, 8] },
+];
+
+// Per-block energy cost of gig work. Smaller than the old per-job figure;
+// gigs pay lump sums on delivery, so each block is progress, not a wage.
+const GIG_ENERGY_PER_BLOCK = 6;
+// Max concurrent gigs — the deadline pressure does the limiting.
+const GIG_MAX_CONCURRENT = 3;
+// Reputation movement. Delivery on time scales up by how close to the
+// deadline; a miss scales down by how late. Abandoning is worse.
+const GIG_REP_DELIVERY = 3;     // base rep gain per delivered gig
+const GIG_REP_MISS = -8;        // per missed-deadline gig
+const GIG_REP_ABANDON = -15;    // per abandoned gig
+const GIG_REP_MAX = 100;
 
 // --- Browser: a handful of authored sites, not (yet) LLM-generated
 // content — deferred rather than faked; see ARCHITECTURE.md's P4 Browser
@@ -209,35 +295,32 @@ const SITE_DEFS = {
     requiresContentFlag: 'mature',
     body: "AfterHours — the apartment's favorite late-night destination.",
     effects: ['ADJUST_NEED player mood +0.08', 'ADJUST_NEED player energy -3'],
-    // Browsable adult content with categories. Each category has a set
-    // of video/post entries with titles. The browser renders these as
-    // a grid of thumbnails. Clicking one generates a scene image via
-    // generateImage and applies mood/arousal effects.
+    // Live porn site backed by Pornhub's webmaster API. Categories map
+    // to search queries; clips are fetched at runtime via superFetch and
+    // embedded as iframe players. Entries are NOT static — they're
+    // fetched live when a category tab is opened, so the grid always
+    // shows fresh content. See fetchAfterHoursClips in UI.COMPUTER.
+    cumEffects: ['ADJUST_NEED player mood +0.25', 'ADJUST_NEED player energy -8', 'ADJUST_NEED player hygiene -5'],
     adultContent: {
       categories: [
-        { id: 'featured', label: 'Featured', weight: 3 },
-        { id: 'amateur', label: 'Amateur', weight: 2 },
-        { id: 'couples', label: 'Couples', weight: 2 },
-        { id: 'solo', label: 'Solo', weight: 2 },
-        { id: 'roleplay', label: 'Roleplay', weight: 1 },
+        { id: 'featured',       label: 'Featured',   search: 'featured' },
+        { id: 'amateur',        label: 'Amateur',    search: 'amateur' },
+        { id: 'lesbian',        label: 'Lesbian',    search: 'lesbian' },
+        { id: 'blowjob',        label: 'Blowjob',    search: 'blowjob' },
+        { id: 'hardcore',       label: 'Hardcore',   search: 'hardcore' },
+        { id: 'anal',           label: 'Anal',       search: 'anal' },
+        { id: 'threesome',      label: 'Threesome',  search: 'threesome' },
+        { id: 'milf',           label: 'MILF',        search: 'milf' },
+        { id: 'big-tits',       label: 'Big Tits',   search: 'big-tits' },
+        { id: 'cumshot',        label: 'Cumshots',   search: 'cumshot' },
+        { id: 'rough',          label: 'Rough',      search: 'rough-sex' },
+        { id: 'creampie',       label: 'Creampie',   search: 'creampie' },
+        { id: 'interracial',    label: 'Interracial', search: 'interracial' },
+        { id: 'verified',       label: 'Verified',   search: 'verified-amateurs' },
       ],
-      entries: [
-        { id: 'ah_01', title: 'Late Night Session', category: 'featured', desc: 'Two strangers meet at a bar after last call.' },
-        { id: 'ah_02', title: 'Roommates', category: 'couples', desc: 'Thin walls, shared laundry, and a tension that finally snaps.' },
-        { id: 'ah_03', title: 'After Shower', category: 'amateur', desc: 'A steamy bathroom and a dropped towel.' },
-        { id: 'ah_04', title: 'Bedroom Eyes', category: 'solo', desc: 'Just one person, a mirror, and no inhibitions.' },
-        { id: 'ah_05', title: 'The Interview', category: 'roleplay', desc: 'A job interview that takes an unexpected turn.' },
-        { id: 'ah_06', title: 'Night Shift', category: 'featured', desc: 'Working late has its perks.' },
-        { id: 'ah_07', title: 'Pool House', category: 'couples', desc: 'A summer fling remembered in detail.' },
-        { id: 'ah_08', title: 'Morning Routine', category: 'solo', desc: 'Waking up with nowhere to be and nothing to hide.' },
-        { id: 'ah_09', title: 'Room Service', category: 'roleplay', desc: 'A hotel, a knock at the door, and a very generous tip.' },
-        { id: 'ah_10', title: 'Study Break', category: 'amateur', desc: 'Cramming for finals takes a detour.' },
-        { id: 'ah_11', title: 'The Artist', category: 'solo', desc: 'A life drawing class where the model gets comfortable.' },
-        { id: 'ah_12', title: 'Backseat', category: 'couples', desc: 'A parked car and fogged windows.' },
-      ],
+      // entries are fetched live — not stored in defs. See
+      // fetchAfterHoursClips and browser.afterHoursClips in state.
     },
-    // Effects applied when watching a specific entry (in addition to base)
-    watchEffects: ['ADJUST_NEED player mood +0.12', 'ADJUST_NEED player energy -5', 'ADJUST_NEED player hygiene -2'],
   },
 };
 const SITE_DEFS_LIST = Object.values(SITE_DEFS);

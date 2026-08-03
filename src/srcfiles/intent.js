@@ -73,6 +73,28 @@ const QUICK_INTENTS = {
   'pay-rent': { verbs: ['pay rent', 'pay the rent'] },
 };
 
+// Phase 8: alarm-setting intent. "set alarm for 6" / "set alarm for 6am" /
+// "wake me at 7" → sets the alarm. "clear alarm" / "turn off alarm" →
+// disables it. Returns the parsed hour (0-23) in spec.hour, or null to
+// clear. The hour is extracted from the text, not from QUICK_INTENTS'
+// verb list, because the time is the payload.
+function matchAlarmIntent(norm) {
+  if (/\b(clear|turn off|disable|cancel)\b.*\balarm\b|\balarm\b.*\b(clear|turn off|disable|cancel|off)\b/.test(norm)) {
+    return { kind: 'quick', quickId: 'alarm', hour: null };
+  }
+  const m = norm.match(/\b(?:set|wake me)\b.*\balarm\b(?:\s+for|\s+at)?\s+(\d{1,2})(\s*[ap]m)?/) 
+    || norm.match(/\balarm\b(?:\s+for|\s+at)?\s+(\d{1,2})(\s*[ap]m)?/);
+  if (m) {
+    let hour = parseInt(m[1], 10);
+    const ampm = m[2]?.trim();
+    if (ampm === 'pm' && hour < 12) hour += 12;
+    if (ampm === 'am' && hour === 12) hour = 0;
+    if (hour < SLEEP.alarmMinHour || hour > SLEEP.alarmMaxHour) return null;
+    return { kind: 'quick', quickId: 'alarm', hour };
+  }
+  return null;
+}
+
 function classifyIntent(text, gameState) {
   if (!gameState) return null;
   const norm = normalizeIntentText(text);
@@ -98,7 +120,11 @@ function classifyIntent(text, gameState) {
   const roomId = matchRoomIntent(norm, gameState);
   if (roomId) return { kind: 'move', roomId };
 
-  // 3. Quick verbs.
+  // 3. Alarm setting (Phase 8).
+  const alarmIntent = matchAlarmIntent(norm);
+  if (alarmIntent) return alarmIntent;
+
+  // 4. Quick verbs.
   for (const [quickId, spec] of Object.entries(QUICK_INTENTS)) {
     if (matchVerbPhrase(norm, spec.verbs)) return { kind: 'quick', quickId };
   }

@@ -1,4 +1,5 @@
 // ===== SECTION: DEFS.WORLD =====
+// Object definitions and apartment layout (Apartment Expansion v2 — Mirrored H).
 // Object definitions (the "what kind of thing is this") and the
 // apartment's initial layout (the "what's actually in each room"). See
 // WORLD for the instance schema, spawning, and cleanliness derivation that
@@ -103,7 +104,7 @@ const OBJECT_DEFS = {
     portable: false, breakable: false, container: false, private: false,
     states: { dishes: ['clean', 'few', 'many'] }, defaultState: { dishes: 'clean' },
     dirtyWhen: { dishes: { few: 0.4, many: 0.9 } }, cleanlinessWeight: 3,
-    affords: ['clean.object', 'inspect.object'],
+    affords: ['self.dishes', 'clean.object', 'inspect.object'],
     imagePhrase: 'a kitchen sink',
   },
   pantry: {
@@ -242,6 +243,183 @@ const OBJECT_DEFS = {
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a coat rack by the door',
   },
+  bedroom_door: {
+    id: 'bedroom_door', label: 'Door', nouns: ['door', 'bedroom door'],
+    portable: false, breakable: false, container: false, private: false,
+    states: { lock: ['unlocked', 'locked'] }, defaultState: { lock: 'unlocked' },
+    dirtyWhen: {}, cleanlinessWeight: 0,
+    affords: ['self.lock_door', 'self.unlock_door', 'inspect.object'],
+    imagePhrase: 'a bedroom door with a simple lock',
+  },
+  bathroom_door: {
+    id: 'bathroom_door', label: 'Door', nouns: ['door', 'bathroom door'],
+    portable: false, breakable: false, container: false, private: false,
+    states: { lock: ['unlocked', 'locked'] }, defaultState: { lock: 'unlocked' },
+    dirtyWhen: {}, cleanlinessWeight: 0,
+    affords: ['self.lock_door', 'self.unlock_door', 'inspect.object'],
+    imagePhrase: 'a bathroom door with a simple lock',
+  },
+
+  // --- Dining Room ---
+  dining_table: {
+    id: 'dining_table', label: 'Dining Table', nouns: ['dining table', 'table'],
+    portable: false, breakable: false, container: false, private: false,
+    states: { clutter: ['tidy', 'cluttered'] }, defaultState: { clutter: 'tidy' },
+    dirtyWhen: { clutter: { cluttered: 0.2 } }, cleanlinessWeight: 2,
+    affords: ['inspect.object', 'clean.object'],
+    imagePhrase: 'a large dining table with mismatched chairs',
+  },
+
+  // --- Entry / Foyer ---
+  front_door: {
+    id: 'front_door', label: 'Front Door', nouns: ['front door', 'door'],
+    portable: false, breakable: false, container: false, private: false,
+    states: { lock: ['unlocked', 'locked'] }, defaultState: { lock: 'unlocked' },
+    dirtyWhen: {}, cleanlinessWeight: 0,
+    affords: ['inspect.object'],
+    imagePhrase: 'a heavy front door',
+  },
+  shoe_rack: {
+    id: 'shoe_rack', label: 'Shoe Rack', nouns: ['shoe rack', 'shoes'],
+    portable: false, breakable: false, container: true, containerCapacity: 12, private: false,
+    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 0,
+    affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
+    imagePhrase: 'a shoe rack by the door',
+  },
+
+  // --- Game Room ---
+  pool_table: {
+    id: 'pool_table', label: 'Pool Table', nouns: ['pool table', 'pool'],
+    portable: false, breakable: false, container: false, private: false,
+    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 1,
+    affords: ['self.play_games', 'inspect.object'],
+    imagePhrase: 'a pool table with a rack of cues',
+  },
+  game_console: {
+    id: 'game_console', label: 'Game Console', nouns: ['console', 'game console', 'playstation', 'xbox'],
+    portable: false, breakable: true, container: false, private: false,
+    states: { power: ['off', 'on'] }, defaultState: { power: 'off' },
+    dirtyWhen: {}, cleanlinessWeight: 0,
+    affords: ['self.play_games', 'inspect.object'],
+    imagePhrase: 'a game console hooked up to a wall-mounted TV',
+  },
+  dartboard: {
+    id: 'dartboard', label: 'Dartboard', nouns: ['dartboard', 'darts'],
+    portable: false, breakable: false, container: false, private: false,
+    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 0,
+    affords: ['inspect.object'],
+    imagePhrase: 'a dartboard on the wall',
+  },
+
+  // --- Gym ---
+  treadmill: {
+    id: 'treadmill', label: 'Treadmill', nouns: ['treadmill', 'running machine'],
+    portable: false, breakable: true, container: false, private: false,
+    states: { power: ['off', 'on'] }, defaultState: { power: 'off' },
+    dirtyWhen: {}, cleanlinessWeight: 1,
+    affords: ['self.workout', 'inspect.object'],
+    imagePhrase: 'a treadmill facing the window',
+  },
+  // --- Pool Room (Recreation Wing) ---
+  // `water` tracks what the pool systems facility has actually restored:
+  // 'empty' until the liner and pump are fixed, then 'filled'. Cleanliness
+  // weight is high because a green, stagnant pool drags a whole wing down.
+  swimming_pool: {
+    id: 'swimming_pool', label: 'Swimming Pool', nouns: ['pool', 'swimming pool', 'the water'],
+    portable: false, breakable: false, container: false, private: false,
+    states: { water: ['filled', 'empty'], clarity: ['clear', 'cloudy', 'green'] },
+    defaultState: { water: 'empty', clarity: 'green' },
+    dirtyWhen: { clarity: { cloudy: 0.5, green: 1.0 } }, cleanlinessWeight: 4,
+    affords: ['self.swim', 'clean.object', 'inspect.object'],
+    imagePhrase: 'an indoor swimming pool',
+  },
+  pool_pump: {
+    id: 'pool_pump', label: 'Pool Pump & Filter', nouns: ['pump', 'filter', 'pool pump', 'filtration'],
+    portable: false, breakable: true, container: false, private: false,
+    states: { power: ['off', 'on'] }, defaultState: { power: 'off' },
+    dirtyWhen: {}, cleanlinessWeight: 1,
+    affords: ['inspect.object'],
+    imagePhrase: 'a pool pump and filter housing in the corner',
+  },
+  pool_loungers: {
+    id: 'pool_loungers', label: 'Loungers', nouns: ['loungers', 'deck chairs', 'lounger'],
+    portable: false, breakable: false, container: false, private: false,
+    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 1,
+    affords: ['self.relax', 'inspect.object'],
+    imagePhrase: 'a row of loungers along the poolside',
+  },
+  weight_set: {
+    id: 'weight_set', label: 'Weight Set', nouns: ['weights', 'weight set', 'dumbbells'],
+    portable: false, breakable: false, container: false, private: false,
+    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 1,
+    affords: ['self.workout', 'inspect.object'],
+    imagePhrase: 'a rack of dumbbells and a weight bench',
+  },
+  yoga_mat: {
+    id: 'yoga_mat', label: 'Yoga Mat', nouns: ['yoga mat', 'mat'],
+    portable: true, breakable: false, container: false, private: false,
+    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 0,
+    affords: ['self.workout', 'self.relax', 'inspect.object'],
+    imagePhrase: 'a rolled yoga mat in the corner',
+  },
+
+  // --- Study ---
+  study_desk: {
+    id: 'study_desk', label: 'Study Desk', nouns: ['study desk', 'desk'],
+    portable: false, breakable: false, container: false, private: false,
+    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 1,
+    affords: ['self.study', 'inspect.object'],
+    imagePhrase: 'a large oak desk with a reading lamp',
+  },
+  study_bookshelf: {
+    id: 'study_bookshelf', label: 'Bookshelf', nouns: ['bookshelf', 'shelf', 'books'],
+    portable: false, breakable: false, container: true, containerCapacity: 60, private: false,
+    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 1,
+    affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
+    imagePhrase: 'floor-to-ceiling bookshelves lined with well-worn books',
+  },
+  armchair: {
+    id: 'armchair', label: 'Armchair', nouns: ['armchair', 'chair'],
+    portable: false, breakable: false, container: false, private: false,
+    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 1,
+    affords: ['self.relax', 'inspect.object'],
+    imagePhrase: 'a leather armchair by the window',
+  },
+
+  // --- Balcony ---
+  balcony_table: {
+    id: 'balcony_table', label: 'Bistro Table', nouns: ['table', 'bistro table'],
+    portable: false, breakable: true, container: false, private: false,
+    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 0,
+    affords: ['inspect.object'],
+    imagePhrase: 'a small bistro table with two chairs',
+  },
+  plant_balcony: {
+    id: 'plant_balcony', label: 'Potted Plants', nouns: ['plants', 'potted plants', 'plant'],
+    portable: false, breakable: false, container: false, private: false,
+    states: { health: ['thriving', 'wilting'] }, defaultState: { health: 'thriving' },
+    dirtyWhen: {}, cleanlinessWeight: 0,
+    affords: ['inspect.object'],
+    imagePhrase: 'potted plants along the railing',
+  },
+
+  // --- Laundry Room ---
+  washer: {
+    id: 'washer', label: 'Washer', nouns: ['washer', 'washing machine'],
+    portable: false, breakable: true, container: true, containerCapacity: 15, private: false,
+    states: { power: ['off', 'on'], cycle: ['empty', 'running', 'done'] }, defaultState: { power: 'off', cycle: 'empty' },
+    dirtyWhen: {}, cleanlinessWeight: 1,
+    affords: ['self.laundry', 'container.open', 'container.put', 'inspect.object'],
+    imagePhrase: 'a front-loading washing machine',
+  },
+  dryer: {
+    id: 'dryer', label: 'Dryer', nouns: ['dryer', 'drying machine'],
+    portable: false, breakable: true, container: true, containerCapacity: 15, private: false,
+    states: { power: ['off', 'on'], cycle: ['empty', 'running', 'done'] }, defaultState: { power: 'off', cycle: 'empty' },
+    dirtyWhen: {}, cleanlinessWeight: 1,
+    affords: ['container.open', 'container.take', 'inspect.object'],
+    imagePhrase: 'a dryer next to the washer',
+  },
 };
 
 // --- Apartment layout: what's in each room at new-game spawn ---
@@ -251,8 +429,17 @@ const OBJECT_DEFS = {
 // (shared/house property), which is correct for shared furniture even
 // inside a bedroom (the desk itself isn't "someone's" the way their diary
 // or guitar is).
+// Bump whenever a fixture is ADDED to an existing room's placement list.
+// WORLD's ensureAllObjectBuckets compares this against meta.layoutVersion
+// and back-fills the new fixtures into already-spawned buckets exactly
+// once. (v2 = the Mirrored H expansion: bedroom_door/bathroom_door and the
+// seven new rooms.) Removing a fixture needs no bump — the back-fill only
+// ever adds, and never deletes what a save already has.
+const APARTMENT_LAYOUT_VERSION = 2;
+
 const APARTMENT_LAYOUT = {
   bedroom_player: [
+    { defId: 'bedroom_door' },
     { defId: 'bed', ownerFrom: 'roomResident' },
     { defId: 'desk' },
     { defId: 'wardrobe' },
@@ -260,6 +447,7 @@ const APARTMENT_LAYOUT = {
     { defId: 'desktop_computer' },
   ],
   bedroom_1: [
+    { defId: 'bedroom_door' },
     { defId: 'bed', ownerFrom: 'roomResident' },
     { defId: 'desk' },
     { defId: 'wardrobe' },
@@ -268,6 +456,7 @@ const APARTMENT_LAYOUT = {
     { defId: 'diary', ownerFrom: 'roomResident' },
   ],
   bedroom_2: [
+    { defId: 'bedroom_door' },
     { defId: 'bed', ownerFrom: 'roomResident' },
     { defId: 'desk' },
     { defId: 'wardrobe' },
@@ -275,6 +464,7 @@ const APARTMENT_LAYOUT = {
     { defId: 'jewelry_box', ownerFrom: 'roomResident' },
   ],
   bedroom_3: [
+    { defId: 'bedroom_door' },
     { defId: 'bed', ownerFrom: 'roomResident' },
     { defId: 'desk' },
     { defId: 'wardrobe' },
@@ -284,16 +474,51 @@ const APARTMENT_LAYOUT = {
     { defId: 'stove' }, { defId: 'fridge' }, { defId: 'sink_kitchen' },
     { defId: 'pantry' }, { defId: 'coffee_maker' }, { defId: 'kitchen_table' }, { defId: 'trash_kitchen' },
   ],
-  bathroom: [
+  bathroom_a: [
+    { defId: 'bathroom_door' },
     { defId: 'shower' }, { defId: 'toilet' }, { defId: 'sink_bathroom' },
-    { defId: 'bathroom_mirror' }, { defId: 'laundry_hamper' },
+    { defId: 'bathroom_mirror' },
+  ],
+  bathroom_b: [
+    { defId: 'bathroom_door' },
+    { defId: 'shower' }, { defId: 'toilet' }, { defId: 'sink_bathroom' },
+    { defId: 'bathroom_mirror' },
   ],
   living_room: [
     { defId: 'sofa' }, { defId: 'tv' }, { defId: 'coffee_table_lr' },
     { defId: 'bookshelf' }, { defId: 'lamp_lr' }, { defId: 'plant_lr' },
   ],
-  hallway: [
-    { defId: 'doormat' }, { defId: 'coat_rack' },
+  hallway_a: [
+    { defId: 'coat_rack' },
+  ],
+  hallway_b: [
+    { defId: 'coat_rack' },
+  ],
+  entry: [
+    { defId: 'front_door' },
+    { defId: 'doormat' },
+    { defId: 'shoe_rack' },
+  ],
+  dining: [
+    { defId: 'dining_table' },
+  ],
+  game_room: [
+    { defId: 'pool_table' }, { defId: 'game_console' }, { defId: 'dartboard' },
+  ],
+  gym: [
+    { defId: 'treadmill' }, { defId: 'weight_set' }, { defId: 'yoga_mat' },
+  ],
+  pool_room: [
+    { defId: 'swimming_pool' }, { defId: 'pool_pump' }, { defId: 'pool_loungers' },
+  ],
+  study: [
+    { defId: 'study_desk' }, { defId: 'study_bookshelf' }, { defId: 'armchair' },
+  ],
+  balcony: [
+    { defId: 'balcony_table' }, { defId: 'plant_balcony' },
+  ],
+  laundry: [
+    { defId: 'washer' }, { defId: 'dryer' }, { defId: 'laundry_hamper' },
   ],
 };
 

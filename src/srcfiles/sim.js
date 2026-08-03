@@ -1,6 +1,7 @@
 // ===== SECTION: SIM =====
 // Pure functions: clock, schedules, off-screen resolution, needs, rent, residency.
 // No DOM, no kv, no LLM. All fns take state → return state or deltas.
+// (Apartment Expansion v2 — Mirrored H)
 
 // --- Seeded PRNG (mulberry32) ---
 function mulberry32(seed) {
@@ -74,6 +75,30 @@ function pickUnique(rng, pool, count, weightFn) {
   return result;
 }
 
+// Phase 0: deterministic gender assignment from the weighted enum, used
+// by rollCastSlot and stub generation. Overrides via partial.gender
+// (character studio) skip the roll entirely.
+function rollGender(rng) {
+  const weights = CHAR_GEN.genderWeights;
+  const entries = Object.entries(weights);
+  const total = entries.reduce((s, [, w]) => s + w, 0);
+  let r = rng() * total;
+  for (const [g, w] of entries) {
+    r -= w;
+    if (r <= 0) return g;
+  }
+  return entries[entries.length - 1][0];
+}
+
+// Phase 0: deterministic age roll within CHAR_GEN.ageRange, with a small
+// bias toward the middle of the range for a more natural distribution.
+function rollAge(rng) {
+  const [min, max] = CHAR_GEN.ageRange;
+  const span = max - min;
+  const bias = (rng() + rng()) / 2;
+  return Math.round(min + bias * span);
+}
+
 // --- Clock functions ---
 
 function getWeekday(day) {
@@ -82,6 +107,57 @@ function getWeekday(day) {
 
 function isWeekend(day) {
   return getWeekday(day) >= 5;
+}
+
+// --- Calendar helpers (Phase 1) ---
+// Layered on top of getWeekday — day-of-week is unchanged; the year is a
+// 360-day cycle of 4 quarters/seasons. All are pure functions of `day`,
+// so callers never need to hold a separate calendar object.
+
+// Quarter index 0-3 for a given day. Days are 1-indexed, so day 1 is in
+// quarter 0; day 90 is the last day of quarter 0; day 91 starts quarter 1.
+function getQuarter(day) {
+  return Math.floor((day - 1) / CALENDAR.daysPerQuarter) % 4;
+}
+
+// True on the last day of each quarter (days 90, 180, 270, 360/0 mod year).
+// Taxes bill here.
+function isQuarterEnd(day) {
+  return ((day % CALENDAR.daysPerQuarter) === 0);
+}
+
+// Day index within the current quarter, 1-90.
+function getQuarterDay(day) {
+  return ((day - 1) % CALENDAR.daysPerQuarter) + 1;
+}
+
+// Season aligned 1:1 with quarters: spring/summer/autumn/winter.
+function getSeason(day) {
+  return CALENDAR.seasons[getQuarter(day)];
+}
+
+// Year number since the start of the game — day 1 is year 1. Mostly so
+// quarterly taxes and seasonal utilities carry a long-run count.
+function getYear(day) {
+  return Math.floor((day - 1) / CALENDAR.daysPerYear) + 1;
+}
+
+// --- Recurring obligation helper (Phase 1) ---
+// The "due on day N, then reschedule" shape was duplicated across
+// hireService/processServiceVisitsForDay (cleaning visits), rent
+// (player.rentDueDay) and work deadlines. The bill system (Phase 3) and
+// the gig board (Phase 2) reuse the same pattern, so it lives here as a
+// small helper rather than being reimplemented each time.
+//
+// Given a `dueDay` and a `cadenceDays`, returns the next due day at or
+// after `day` if today is a due day, else null. Callers keep their own
+// state (the `nextDay`/`dueDay` field) and use this to decide whether to
+// fire; rescheduling is just `dueDay + cadenceDays`.
+function isDueToday(dueDay, day) {
+  return day >= dueDay;
+}
+function rescheduleDue(dueDay, cadenceDays) {
+  return dueDay + cadenceDays;
 }
 
 function getPhase(minutes) {
@@ -95,19 +171,28 @@ function getPhase(minutes) {
 }
 
 function formatTime(minutes) {
-  const h = Math.floor(minutes / 60) % 24;
-  const m = minutes % 60;
+  const total = Math.floor(minutes);
+  const h = Math.floor(total / 60) % 24;
+  const m = total % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
 function formatDate(day) {
   const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  return `${weekdays[getWeekday(day)]} Day ${day}`;
+  // Render a real in-fiction date: weekday + month + day-of-month +
+  // year. The month/day cycle is cosmetic (30-day months), so this is
+  // "Wed Mar 24, Year 1" instead of "Wed Day 84". Keeps the weekday
+  // prefix (schedules read it) while giving the year a shape.
+  const doy = ((day - 1) % CALENDAR.daysPerYear);          // 0-359
+  const monthIdx = Math.floor(doy / CALENDAR.daysPerMonth);
+  const dom = (doy % CALENDAR.daysPerMonth) + 1;
+  const year = getYear(day);
+  return `${weekdays[getWeekday(day)]} ${CALENDAR.monthNames[monthIdx]} ${dom}, Year ${year}`;
 }
 
 function advanceClock(clock, ticks) {
   let { day, minutes } = clock;
-  minutes += ticks * CLOCK.tickMinutes;
+  minutes = Math.floor(minutes) + ticks * CLOCK.tickMinutes;
   while (minutes >= 1440) {
     minutes -= 1440;
     day++;
@@ -118,6 +203,79 @@ function advanceClock(clock, ticks) {
 // Get the tick index within a day (0-47)
 function getTickIndex(minutes) {
   return Math.floor(minutes / CLOCK.tickMinutes);
+}
+
+// --- Player vulnerable state (Phase 6): determines what an NPC can peep
+// at. Returns a state key from the player's current activity + context, or
+// null if the player isn't in a vulnerable state. The computer's
+// afterHoursMasturbating flag is the masturbating signal; player.location
+// + schedule/clothing covers the rest. ---
+function getPlayerVulnerableState(gameState) {
+  // Masturbating (AfterHours on the computer) — a real, explicit state
+  // flag the player enters and leaves deliberately.
+  const browser = gameState.world.computer?.apps?.browser;
+  if (browser?.afterHoursMasturbating) return 'masturbating';
+
+  // Everything else reads an explicit, transient flag set for the duration
+  // of the action that causes it: ACTIONS' executeAction sets it from the
+  // action's `vulnerableState` (self.shower → 'showering') and clears it
+  // when the action resolves; doSleep does the same around its batch.
+  //
+  // This deliberately replaces the old location-and-phase inference, which
+  // was far too eager: *standing* anywhere in a bathroom counted as
+  // showering and standing in your own bedroom after dark counted as
+  // sleeping, so NPCs peeped on a fully-dressed player walking through.
+  // Being somewhere is not the same as being vulnerable there.
+  const flagged = gameState.player.flags?._vulnerableState;
+  if (flagged) return flagged;
+
+  return null;
+}
+
+// --- Player perception (Phase 6): how likely the player is to notice an
+// NPC peeping. Derived from energy and mood, not a learnable skill. ---
+function getPlayerPerception(player) {
+  const cfg = NPC_PEEP_TUNING.perception;
+  let p = cfg.base;
+  if (player.energy > 70) p += cfg.energyHighBonus;
+  if (player.energy < 20) p -= cfg.energyLowPenalty;
+  if (player.mood < -0.5) p -= cfg.moodLowPenalty;
+  return Math.max(cfg.min, Math.min(cfg.max, p));
+}
+
+// --- Pathfinding (Phase 4) ---
+
+// BFS shortest path on the room adjacency graph. The graph is tiny (17
+// nodes) so this is trivial and always fast. Returns an array of room IDs
+// [fromRoom, ..., toRoom], or null if no path (shouldn't happen — the
+// graph is connected). The path includes both endpoints.
+function findPath(fromRoom, toRoom) {
+  if (fromRoom === toRoom) return [fromRoom];
+  const adj = ROOM_ADJACENCY;
+  const queue = [fromRoom];
+  const visited = new Set([fromRoom]);
+  const parent = new Map();
+  while (queue.length > 0) {
+    const room = queue.shift();
+    const neighbors = adj[room] || [];
+    for (const n of neighbors) {
+      if (visited.has(n)) continue;
+      visited.add(n);
+      parent.set(n, room);
+      if (n === toRoom) {
+        const path = [n];
+        let cur = room;
+        while (cur !== fromRoom) {
+          path.unshift(cur);
+          cur = parent.get(cur);
+        }
+        path.unshift(fromRoom);
+        return path;
+      }
+      queue.push(n);
+    }
+  }
+  return null;
 }
 
 // --- Presence ---
@@ -143,34 +301,110 @@ function resolveScheduleActivity(npc, clock) {
   const tick = getTickIndex(clock.minutes);
 
   // Find which block this tick falls into
+  let currentBlock = 'leisure';
+  let currentWeight = 0.5;
   for (const [blockName, ranges] of Object.entries(sched)) {
     for (const [start, end, weight] of ranges) {
       if (tick >= start && tick < end) {
-        return { block: blockName, weight };
+        currentBlock = blockName;
+        currentWeight = weight;
+        break;
       }
     }
   }
-  return { block: 'leisure', weight: 0.5 };
+
+  // NPC Overhaul Phase 7.2 — find the NEXT block + estimated return time
+  let nextBlock = '';
+  let willReturnAt = null;
+  const sortedBlocks = [];
+  for (const [blockName, ranges] of Object.entries(sched)) {
+    for (const [start, end] of ranges) {
+      sortedBlocks.push({ blockName, start, end });
+    }
+  }
+  sortedBlocks.sort((a, b) => a.start - b.start);
+  const currentEntry = sortedBlocks.find(e => e.blockName === currentBlock);
+  if (currentEntry) {
+    // Find the next different block after current ends
+    const nextEntry = sortedBlocks.find(e => e.blockName !== currentBlock && e.start >= currentEntry.end);
+    if (nextEntry) {
+      nextBlock = nextEntry.blockName;
+      // If current or next is work/commute, compute return time
+      // NPC Overhaul Audit Fix: willReturnAt should be when the NPC
+      // arrives HOME (end of commute_home block), not when work ends.
+      if (currentBlock === 'work' || currentBlock === 'commute_home' || nextBlock === 'work') {
+        const commuteHomeBlock = sortedBlocks.find(e => e.blockName === 'commute_home');
+        if (commuteHomeBlock) {
+          willReturnAt = commuteHomeBlock.end * 30; // when they arrive home
+        } else {
+          const workBlock = sortedBlocks.find(e => e.blockName === 'work');
+          if (workBlock) willReturnAt = workBlock.end * 30; // fallback: end of work
+        }
+      }
+    }
+  }
+
+  return { block: currentBlock, weight: currentWeight, nextBlock, willReturnAt };
 }
 
-// Determine which room an NPC should be in for a given activity block
+// Determine which room an NPC should be in for a given activity block.
+// Phase 5: activity-aware routing. Picks an activity string, then routes
+// the NPC to the preferred room for that activity. Falls back to
+// crowd-avoidance random pick among all common rooms.
+// Returns { location, activity } — the activity is picked here so the
+// room preference and activity string can't disagree.
 function resolveRoomForActivity(block, npcId, npcs, rng) {
   if (block === 'sleep') {
-    // Go to their bedroom
-    return null; // caller resolves from residency
+    return { location: null, activity: 'sleeping' };
   }
   if (block === 'work' || block === 'commute' || block === 'commute_home') {
-    return null; // off-screen (at work / commuting)
+    return { location: null, activity: ACTIVITY_TABLES[block] ? ACTIVITY_TABLES[block][0] : block };
   }
-  // Common room selection with crowd avoidance, weighted against rooms
-  // already at or above their soft comfort capacity.
-  const candidates = COMMON_ROOMS.map(roomId => {
-    const occCount = getPresentNpcIds(npcs, roomId).length;
-    const capacity = ROOMS[roomId].capacity;
-    const weight = occCount >= capacity ? 1 / SCENE.crowdAvoidanceWeight : 1;
-    return { roomId, weight };
-  });
-  return weightedPick(rng, candidates, c => c.weight).roomId;
+
+  // Pick the activity string first so we can route by it
+  const acts = ACTIVITY_TABLES[block] || ACTIVITY_TABLES.leisure;
+  const activity = acts[Math.floor(rng() * acts.length)];
+
+  // Check if this activity has a room preference
+  const pref = ACTIVITY_ROOM_PREFERENCES[activity];
+  if (pref === null) {
+    return { location: null, activity }; // stay in current room
+  }
+  let targetRoom = null;
+  if (pref) {
+    const candidates = Array.isArray(pref) ? pref : [pref];
+    const valid = candidates.filter(r => {
+      if (!ROOMS[r]) return false;
+      if (r === 'bedroom_player') return false;
+      if (ROOMS[r].type === 'bedroom') {
+        const npc = npcs[npcId];
+        if (npc?.residency?.room !== r) return false;
+      }
+      return true;
+    });
+    if (valid.length > 0) {
+      const weighted = valid.map(roomId => {
+        const occCount = getPresentNpcIds(npcs, roomId).length;
+        const capacity = ROOMS[roomId].capacity;
+        const weight = occCount >= capacity ? 1 / SCENE.crowdAvoidanceWeight : 1;
+        return { roomId, weight };
+      });
+      targetRoom = weightedPick(rng, weighted, c => c.weight).roomId;
+    }
+  }
+
+  // Fallback: crowd-avoidance random pick among all common rooms
+  if (!targetRoom) {
+    const candidates = COMMON_ROOMS.map(roomId => {
+      const occCount = getPresentNpcIds(npcs, roomId).length;
+      const capacity = ROOMS[roomId].capacity;
+      const weight = occCount >= capacity ? 1 / SCENE.crowdAvoidanceWeight : 1;
+      return { roomId, weight };
+    });
+    targetRoom = weightedPick(rng, candidates, c => c.weight).roomId;
+  }
+
+  return { location: targetRoom, activity };
 }
 
 // --- Off-screen event resolution (deterministic, zero LLM) ---
@@ -243,20 +477,68 @@ function resolveTick(gameState) {
     const { block } = resolveScheduleActivity(npc, meta.clock);
     let location = null;
     let activity = block;
+    let transit = npc.transit || null;
 
     if (block === 'sleep') {
       location = npc.residency.room;
       activity = 'sleeping';
+      transit = null;
     } else if (block === 'work' || block === 'commute' || block === 'commute_home') {
       location = null; // off-screen
       activity = ACTIVITY_TABLES[block] ? ACTIVITY_TABLES[block][0] : block;
+      transit = null;
     } else {
-      location = resolveRoomForActivity(block, id, npcs, rng);
-      const acts = ACTIVITY_TABLES[block] || ACTIVITY_TABLES.leisure;
-      activity = acts[Math.floor(rng() * acts.length)];
+      // If already in transit, keep heading to the same destination rather
+      // than picking a new random activity/room each tick (which would make
+      // the NPC forever restart their journey and never arrive).
+      const { location: target, activity: pickedActivity } = resolveRoomForActivity(block, id, npcs, rng);
+      if (npc.transit) {
+        // Continue toward the existing destination
+        const existingTarget = npc.transit.destination;
+        activity = pickedActivity;
+        let path = npc.transit.path;
+        let step = npc.transit.progress || 0;
+        if (path && existingTarget) {
+          const nextStep = Math.min(step + 1, path.length - 1);
+          location = path[nextStep];
+          if (nextStep < path.length - 1) {
+            activity = `heading to the ${ROOMS[existingTarget]?.name || existingTarget}`;
+          }
+          transit = { path, progress: nextStep, destination: existingTarget };
+          if (nextStep >= path.length - 1) transit = null;
+        } else {
+          location = existingTarget || npc.location;
+          transit = null;
+        }
+      } else if (target && target !== npc.location) {
+        // Start new transit
+        activity = pickedActivity;
+        let path = findPath(npc.location, target);
+        if (path && path.length > 1) {
+          const nextStep = 1;
+          location = path[nextStep];
+          if (nextStep < path.length - 1) {
+            activity = `heading to the ${ROOMS[target]?.name || target}`;
+          }
+          transit = { path, progress: nextStep, destination: target };
+          if (nextStep >= path.length - 1) transit = null;
+        } else {
+          location = target;
+        }
+      } else {
+        // `target` is null when the activity has no room preference (an
+        // ACTIVITY_ROOM_PREFERENCES entry of null, e.g. 'reading in bed'
+        // — "wherever you already are"). Falling through to npc.location
+        // alone stranded anyone whose location was *also* null, which is
+        // exactly the state an NPC is in on the tick they get home from
+        // work: they'd stay off-screen until a roll happened to pick an
+        // activity that does name a room. Their own bedroom is the right
+        // "wherever you already are" for someone who isn't anywhere yet.
+        location = target || npc.location || npc.residency.room;
+      }
     }
 
-    resolved[id] = { block, location, activity };
+    resolved[id] = { block, location, activity, transit };
   }
 
   // Pass 2: needs, events, mood — using this tick's resolved locations.
@@ -270,6 +552,8 @@ function resolveTick(gameState) {
       hygiene: Math.max(0, npc.needs.hygiene - NEEDS.npcHygieneDecay),
       energy: Math.max(0, npc.needs.energy - NEEDS.npcEnergyDecay),
       social: Math.max(0, npc.needs.social - NEEDS.npcSocialDecay),
+      comfort: Math.max(0, (npc.needs.comfort || 50) - NEEDS.npcComfortDecay),               // NPC Overhaul Phase 6
+      stimulation: Math.max(0, (npc.needs.stimulation || 50) - NEEDS.npcStimulationDecay),   // NPC Overhaul Phase 6
     };
 
     // Restore needs by schedule block — keyed to the block rather than the
@@ -281,12 +565,41 @@ function resolveTick(gameState) {
     if (block === 'morning' || block === 'evening') {
       needs.hunger = Math.min(NEEDS.hunger.max, needs.hunger + NEEDS.npcEatRestore);
     }
-    if (block === 'morning' || block === 'wind_down') {
+    if (block === 'morning' || block === 'wind_down' || block === 'evening') {
       needs.hygiene = Math.min(NEEDS.hygiene.max, needs.hygiene + NEEDS.npcHygieneRestore);
     }
     if (location) {
       const shareCount = Object.values(resolved).filter(r => r.location === location).length;
       if (shareCount > 1) needs.social = Math.min(NEEDS.npcSocialMax, needs.social + NEEDS.npcSocialRestore);
+    }
+    // NPC Overhaul Phase 6 — restore comfort in comfortable rooms
+    if (location === 'living_room' || location === 'bedroom') {
+      const facilityTiers = gameState.upgrades || {};
+      const hasComfortFacility = location === 'living_room'
+        ? (facilityTiers.living_room_entertainment?.tier || 'broken') !== 'broken'
+        : (facilityTiers.bedroom_habitability?.tier || 'broken') !== 'broken';
+      if (hasComfortFacility) {
+        needs.comfort = Math.min(100, needs.comfort + NEEDS.npcComfortRestore);
+      }
+    }
+    // NPC Overhaul Phase 6 — extra comfort from trusted NPC proximity
+    if (location) {
+      const others = Object.entries(resolved).filter(([oid]) => oid !== id && resolved[oid].location === location);
+      for (const [oid] of others) {
+        const pair = gameState.world?.castWeb?.[[id, oid].sort().join('|')];
+        if (pair) {
+          const dirKey = `${id}→${oid}`;
+          const pairComfort = pair.axes?.[dirKey]?.comfort || 0;
+          if (pairComfort > 0.5) {
+            needs.comfort = Math.min(100, needs.comfort + NEEDS.npcComfortProximityBonus);
+            break;
+          }
+        }
+      }
+    }
+    // NPC Overhaul Phase 6 — restore stimulation during leisure
+    if (block === 'leisure') {
+      needs.stimulation = Math.min(100, needs.stimulation + NEEDS.npcStimulationRestore);
     }
 
     // Random event chance (weighted by stress + low needs)
@@ -340,6 +653,8 @@ function resolveTick(gameState) {
       needs,
       mood: Math.max(-1, Math.min(1, npc.mood + moodDelta)),
       clothing,
+      schedule: { currentBlock: block, nextBlock: resolved[id].nextBlock || '', willReturnAt: resolved[id].willReturnAt || null }, // NPC Overhaul Phase 7.2
+      transit: resolved[id].transit || null,
     };
   }
 
@@ -350,11 +665,17 @@ function resolveTick(gameState) {
   const currentTick = getTickIndex(meta.clock.minutes);
   const allImMessages = [];
   const allRelDeltas = [];
+  const allPeepResults = [];
   for (const [id, npc] of Object.entries(npcs)) {
     if (!resolved[id]) continue;
     if (npc.residency.status !== 'resident') continue;
     // Skip sleeping NPCs — they can't act on drives
     if (resolved[id].block === 'sleep') continue;
+    // Skip NPCs in transit — they're walking, not doing activities.
+    // Drives that set activityOverride would clash with the transit
+    // activity ("heading to the Kitchen") and could make the NPC
+    // appear to cook in a hallway.
+    if (resolved[id].transit) continue;
 
     const driveResult = evaluateDrives(
       npc, id, npcs, resolved[id], gameState, rng, currentTick
@@ -364,10 +685,34 @@ function resolveTick(gameState) {
     if (driveResult.activityOverride) {
       npcUpdates[id].activity = driveResult.activityOverride;
     }
-    // Drive effects may have modified needs via applyEffects on gameState
-    // — pull the updated needs back
-    if (gameState.npcs[id]) {
-      npcUpdates[id].needs = gameState.npcs[id].needs;
+    if (driveResult.locationOverride) {
+      npcUpdates[id].location = driveResult.locationOverride;
+    }
+    // Drive effects ran through applyEffects against gameState.npcs[id].
+    // Pull every field they can touch back, not just needs: applyEffects'
+    // appliers are split between ones that mutate the npc in place
+    // (REL_DELTA, ADJUST_SUSPICION) and ones that *replace*
+    // gameState.npcs[id] wholesale (MEMORY_EPISODE/MEMORY_FACT, via
+    // addMemoryEpisode's pure return). npcUpdates[id] was built earlier in
+    // this tick from the pre-drive `npc` snapshot, so resolveBatch's
+    // `{ ...state.npcs[id], ...update }` merge let that stale copy win and
+    // silently threw the replacements away — which is why resolveNpcPeep's
+    // silent-peep memory (the entire point of the silent branch) never
+    // survived a tick.
+    const postDrive = gameState.npcs[id];
+    if (postDrive) {
+      npcUpdates[id].needs = postDrive.needs;
+      npcUpdates[id].memory = postDrive.memory;
+      npcUpdates[id].relPlayer = postDrive.relPlayer;
+      if (postDrive.suspicion) npcUpdates[id].suspicion = postDrive.suspicion;
+    }
+    // Cooldowns (and any other flags set by setCooldown during drive
+    // evaluation) live on driveResult.updatedNpc.flags — without this
+    // merge they were discarded each tick, making every drive's
+    // cooldownTicks ineffective. Merged over any flags the effects wrote
+    // rather than replacing, so ADD_FLAG and setCooldown can coexist.
+    if (driveResult.updatedNpc.flags) {
+      npcUpdates[id].flags = { ...(postDrive?.flags || {}), ...driveResult.updatedNpc.flags };
     }
 
     // Clothing state from drives (e.g., showering → towel)
@@ -384,6 +729,11 @@ function resolveTick(gameState) {
     newEvents.push(...driveResult.events);
     allImMessages.push(...driveResult.imMessages);
     allRelDeltas.push(...driveResult.relDeltas);
+
+    // Phase 6: collect peep results for async surfacing
+    if (driveResult.peepResults) {
+      allPeepResults.push(...driveResult.peepResults);
+    }
   }
 
   // Process queued IM messages into computer state
@@ -396,17 +746,26 @@ function resolveTick(gameState) {
     processNpcRelDeltas(gameState, allRelDeltas);
   }
 
-  return { npcUpdates, newEvents };
+  return { npcUpdates, newEvents, peepResults: allPeepResults };
 }
 
 // --- Batched time resolution (for sleep / long work blocks) ---
-function resolveBatch(gameState, ticks) {
+// opts.advanceClock (default true) — when false, simulate `ticks` worth of
+// NPC activity without moving meta.clock. The continuous clock loop (TIME)
+// passes false because it has already walked the clock through this span
+// itself; advancing here too ran the whole game at double speed.
+function resolveBatch(gameState, ticks, opts = {}) {
+  const shouldAdvanceClock = opts.advanceClock !== false;
   const allEvents = [];
+  const allPeepResults = [];
   let state = gameState;
   for (let i = 0; i < ticks; i++) {
-    state = { ...state, meta: { ...state.meta, clock: advanceClock(state.meta.clock, 1) } };
+    if (shouldAdvanceClock) {
+      state = { ...state, meta: { ...state.meta, clock: advanceClock(state.meta.clock, 1) } };
+    }
     const result = resolveTick(state);
     allEvents.push(...result.newEvents);
+    if (result.peepResults) allPeepResults.push(...result.peepResults);
     // Apply NPC updates
     const newNpcs = { ...state.npcs };
     for (const [id, update] of Object.entries(result.npcUpdates)) {
@@ -414,7 +773,7 @@ function resolveBatch(gameState, ticks) {
     }
     state = { ...state, npcs: newNpcs };
   }
-  return { state, events: allEvents };
+  return { state, events: allEvents, peepResults: allPeepResults };
 }
 
 // --- Needs decay for player ---
@@ -430,15 +789,182 @@ function decayPlayerNeeds(player, ticks) {
   };
 }
 
+// --- Sleep ---
+// Hours slept, from energy at bedtime. Drained → the long end of the
+// SLEEP range, rested → the short end. Linear between the two; the shape
+// matters less than the direction, and a curve here would be false
+// precision on a number the player only ever experiences as "I woke up
+// around six".
+function resolveSleepHours(energyAtBedtime, energyMax) {
+  const span = SLEEP.maxHours - SLEEP.minHours;
+  const max = energyMax || NEEDS.energy.max;
+  const drained = 1 - clamp(energyAtBedtime / max, 0, 1);
+  return SLEEP.minHours + span * drained;
+}
+
+// Phase 8: alarm-capped sleep. The alarm is a ceiling — it can only
+// shorten the night, never extend it. Returns the actual hours slept and
+// whether the alarm fired. If the natural night ends before the alarm,
+// nothing happens. If the alarm would fire mid-night, the player is woken
+// early and recovers only hoursActuallySlept × restorePerHour — that
+// shortfall is the whole point of the alarm system.
+//
+// bedtimeMinutes is the current clock time in minutes (from clock.minutes,
+// 0-1439). alarmHour is the player's set alarm (0-23) or null.
+function resolveSleepHoursWithAlarm(energyAtBedtime, bedtimeMinutes, alarmHour, energyMax) {
+  const naturalHours = resolveSleepHours(energyAtBedtime, energyMax);
+  if (alarmHour === null || alarmHour === undefined) {
+    return { hours: naturalHours, alarmFired: false };
+  }
+  // Calculate when the natural night would end (in minutes from midnight).
+  const naturalWakeMinutes = (bedtimeMinutes + naturalHours * 60) % (24 * 60);
+  const alarmMinutes = alarmHour * 60;
+  // How many minutes from bedtime until the alarm fires (wrapping midnight).
+  let minutesUntilAlarm = (alarmMinutes - bedtimeMinutes % (24 * 60) + 24 * 60) % (24 * 60);
+  const naturalMinutes = naturalHours * 60;
+  if (minutesUntilAlarm >= naturalMinutes) {
+    // The alarm fires after the natural night ends — nothing happens.
+    return { hours: naturalHours, alarmFired: false };
+  }
+  // The alarm fires before the natural night would end — cap the night.
+  return { hours: minutesUntilAlarm / 60, alarmFired: true };
+}
+
+// Phase 8: burnout tracking. Called at day rollover to update the
+// player's burnout state based on yesterday's work load. If the player
+// worked above BURNOUT.workBlockThreshold blocks, consecutiveWorkDays
+// increments and burnoutLevel rises; otherwise the player is recovering
+// and burnoutLevel falls. The mood and work-pay penalties are applied
+// at read time (getBurnoutMoodPenalty/getBurnoutWorkPayMult) rather than
+// baked in, so they track the current level exactly.
+function updateBurnout(player, day, workBlocksYesterday) {
+  if (!player.burnout) player.burnout = { consecutiveWorkDays: 0, burnoutLevel: 0, lastWorkDay: 0 };
+  const b = player.burnout;
+  if (workBlocksYesterday >= BURNOUT.workBlockThreshold) {
+    b.consecutiveWorkDays++;
+    b.burnoutLevel = Math.min(BURNOUT.maxBurnoutLevel, b.burnoutLevel + BURNOUT.burnoutPerWorkDay);
+  } else {
+    b.consecutiveWorkDays = 0;
+    b.burnoutLevel = Math.max(0, b.burnoutLevel - BURNOUT.burnoutRecoveryPerRestDay);
+  }
+  b.lastWorkDay = day;
+}
+
+// Mood penalty from burnout (subtracted from mood). Scales linearly with
+// burnoutLevel — at full burnout, subtracts BURNOUT.moodPenaltyPerLevel.
+function getBurnoutMoodPenalty(player) {
+  const level = player.burnout?.burnoutLevel || 0;
+  return level * BURNOUT.moodPenaltyPerLevel;
+}
+
+// Work pay multiplier from burnout. At 0 burnout → 1.0 (full pay). At
+// full burnout → (1 - BURNOUT.workPayPenaltyPerLevel). This is what makes
+// grinding progressively less profitable — the death-spiral is the feature.
+function getBurnoutWorkPayMult(player) {
+  const level = player.burnout?.burnoutLevel || 0;
+  return 1 - level * BURNOUT.workPayPenaltyPerLevel;
+}
+
+// Narration for waking up. Reads the two things the player can act on:
+// how long they were out, and whether it was enough.
+function describeSleep(hours, energyOnWaking) {
+  const h = Math.round(hours * 10) / 10;
+  if (energyOnWaking >= NEEDS.energy.max) return `You sleep ${h} hours and wake up genuinely rested.`;
+  if (energyOnWaking >= 70) return `You sleep ${h} hours. Not perfect, but you'll take it.`;
+  if (energyOnWaking >= 40) return `You sleep ${h} hours and wake up still tired.`;
+  return `You sleep ${h} hours. It barely touches how tired you are.`;
+}
+
 // --- Rent computation ---
-function computeRent(npcs) {
-  const residents = Object.values(npcs).filter(n => n.residency.contributesRent && n.residency.status === 'resident');
-  const count = Math.max(1, residents.length + 1); // +1 for player
+// The player holds the lease and owes the full rent. Roommates offset it,
+// each by at most ECONOMY.rent.maxRoommateShare of the total — never by an
+// even split, which is what this used to do (perResident = total/count).
+// An even split made one roommate halve the player's burden and made the
+// whole problem go away at three; capping each contribution means the
+// player is always carrying the largest share and recruiting is a partial
+// relief rather than a solution.
+//
+// residency.rentShare is the negotiated fraction. Nothing negotiates it
+// yet — new residents get ECONOMY.rent.defaultRoommateShare — but the
+// field is where the future agreement system writes, so callers already
+// read per-roommate values rather than a constant.
+//
+// playerShare can go NEGATIVE, and that is a feature, not an overflow: a
+// fully restored apartment at 30% a head breaks even around four roommates
+// and turns a profit by seven. Callers must handle a negative share as
+// income rather than clamping it to zero.
+function computeRent(npcs, gameState) {
+  const quality = gameState ? getApartmentQuality(gameState) : undefined;
+  const ceiling = roommateShareCeiling(quality);
+  const contributors = Object.entries(npcs || {})
+    .filter(([, n]) => n.residency.contributesRent && n.residency.status === 'resident');
+
+  // Who is sharing a bedroom? Counted across ALL residents including the
+  // player, who occupies a bed in their own room — so a roommate taking
+  // the spare bed in there reads as sharing, same as any other double-up.
+  const playerRoom = ALL_ROOMS.find(r => ROOMS[r].isPlayer);
+  const occupancy = {};
+  for (const [, n] of contributors) {
+    if (n.residency.room) occupancy[n.residency.room] = (occupancy[n.residency.room] || 0) + 1;
+  }
+  if (playerRoom) occupancy[playerRoom] = (occupancy[playerRoom] || 0) + 1;
+
+  let covered = 0;
+  const shares = {};
+  for (const [id, npc] of contributors) {
+    let share = clamp(npc.residency.rentShare ?? ECONOMY.rent.defaultRoommateShare, 0, ceiling);
+    // Sharing a bedroom is worth less than a private one. Without this a
+    // full house all pays the private rate, which is the difference
+    // between the apartment clearing ~$5.6k/mo and ~$9k/mo.
+    if ((occupancy[npc.residency.room] || 0) > 1) {
+      share *= ECONOMY.rent.sharedRoomShareMultiplier;
+    }
+    shares[id] = Math.floor(ECONOMY.rent.total * share);
+    covered += shares[id];
+  }
+
   return {
     total: ECONOMY.rent.total,
-    perResident: Math.ceil(ECONOMY.rent.total / count),
-    contributorCount: count,
+    playerShare: ECONOMY.rent.total - covered,
+    roommateShares: shares,
+    coveredByRoommates: covered,
+    contributorCount: contributors.length,
+    shareCeiling: ceiling,
   };
+}
+
+// How much of the rent any one roommate can be asked to carry, given the
+// state of the apartment. Nobody pays penthouse rates for a wreck.
+function roommateShareCeiling(quality) {
+  const r = ECONOMY.rent;
+  const q = clamp(quality ?? getApartmentQuality(), 0, 1);
+  return r.minRoommateShare + (r.maxRoommateShare - r.minRoommateShare) * q;
+}
+
+// Apartment quality on [0, 1]. Derived from the current tier of every
+// facility in world.upgrades — a weighted average of each facility's
+// qualityValue at its current tier, normalized by total qualityWeight.
+// A wreck (everything broken) is 0; a fully restored apartment is 1.
+// This is what makes the upgrade system pay back: it raises the rent
+// ceiling via roommateShareCeiling, so investing in the building is an
+// investment in income. See ref/apartment-upgrades-plan.md.
+//
+// Falls back to 1 (full quality) when world.upgrades is absent (a save
+// from before Phase 4) so old saves stay playable — the clean-break
+// migration will discard them entirely when it lands.
+function getApartmentQuality(gameState) {
+  const upgrades = gameState?.world?.upgrades;
+  if (!upgrades) return 1;
+  let weighted = 0, totalWeight = 0;
+  for (const def of FACILITY_LIST) {
+    const tier = upgrades[def.id]?.tier || FACILITY_STARTING_TIERS[def.id] || 'broken';
+    const tierIdx = def.tiers.findIndex(t => t.tier === tier);
+    const qualityValue = tierIdx >= 0 ? def.tiers[tierIdx].qualityValue : 0;
+    weighted += def.qualityWeight * qualityValue;
+    totalWeight += def.qualityWeight;
+  }
+  if (totalWeight === 0) return 1;
+  return clamp(weighted / totalWeight, 0, 1);
 }
 
 // --- Residency transitions ---
@@ -472,6 +998,11 @@ function changeResidencyStatus(npc, status, opts) {
       since: opts?.since ?? npc.residency.since,
       partnerOf: opts?.partnerOf ?? npc.residency.partnerOf,
       contributesRent,
+      // Someone moving in without a negotiated agreement contributes the
+      // default. opts.rentShare is the seam the future agreement system
+      // writes through when a move-in is the result of an actual
+      // negotiation rather than a bare status change.
+      rentShare: opts?.rentShare ?? npc.residency.rentShare ?? ECONOMY.rent.defaultRoommateShare,
     },
   };
 }
@@ -512,6 +1043,14 @@ function getSceneParticipants(player, npcs, world) {
 function SIM_generateHouse(seed, residentCount, partials) {
   const actualSeed = seed || genSeed();
   const clock = { day: 1, weekday: 0, minutes: CLOCK.startMinutes, phase: getPhase(CLOCK.startMinutes) };
+
+  // Phase 7: solo start. When opening.soloStart is true and residentCount
+  // is 0, skip cast generation entirely — the player starts alone in an
+  // empty apartment. Roommates are recruited later via the Classifieds app.
+  if (ECONOMY.opening?.soloStart && residentCount === 0) {
+    const emptyCast = { npcs: {}, npcIds: [], castWeb: {} };
+    return buildGameState(actualSeed, emptyCast, clock, []);
+  }
 
   // Generate residents
   let bestCast = null;
@@ -636,20 +1175,95 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
       profanityLevel: charRng(),
       verbalTics: pickUnique(charRng, VERBAL_TICS, 1 + Math.floor(charRng() * 2)),
       textingStyle: weightedPick(charRng, TEXTING_STYLES.map(x => ({ val: x, weight: 1 }))).val,
+      vocabularyLevel: charRng(),
+      catchphrases: [],
+    };
+
+    // NPC Overhaul Phase 1: Physical description — seeded from charRng
+    const pickPhys = (pool) => pool[Math.floor(charRng() * pool.length)];
+    const height = pickPhys(PHYS_POOL_HEIGHT);
+    const build = pickPhys(PHYS_POOL_BUILD);
+    const physical = {
+      height,
+      build,
+      heightBuild: `${height} and ${build}`,
+      hair: {
+        color: pickPhys(PHYS_POOL_HAIR_COLOR),
+        style: pickPhys(PHYS_POOL_HAIR_STYLE),
+        length: pickPhys(PHYS_POOL_HAIR_LENGTH),
+        texture: pickPhys(PHYS_POOL_HAIR_TEXTURE),
+      },
+      eyes: {
+        color: pickPhys(PHYS_POOL_EYE_COLOR),
+        shape: pickPhys(PHYS_POOL_EYE_SHAPE),
+      },
+      skin: {
+        tone: pickPhys(PHYS_POOL_SKIN_TONE),
+        texture: pickPhys(PHYS_POOL_SKIN_TEXTURE),
+        ethnicity: pickPhys(PHYS_POOL_SKIN_ETHNICITY),
+      },
+      face: {
+        shape: pickPhys(PHYS_POOL_FACE_SHAPE),
+        nose: pickPhys(PHYS_POOL_NOSE),
+        lips: pickPhys(PHYS_POOL_LIPS),
+        cheekbones: pickPhys(PHYS_POOL_CHEEKBONES),
+        jawline: pickPhys(PHYS_POOL_JAWLINE),
+        ears: pickPhys(PHYS_POOL_EARS),
+      },
+      body: {
+        shape: pickPhys(PHYS_POOL_BODY_SHAPE),
+        chestSize: pickPhys(PHYS_POOL_CHEST_SIZE),
+        buttSize: pickPhys(PHYS_POOL_BUTT_SIZE),
+        legs: pickPhys(PHYS_POOL_LEGS),
+        posture: pickPhys(PHYS_POOL_POSTURE),
+      },
+      distinguishingFeatures: pickUnique(charRng, PHYS_POOL_FEATURES, 1 + Math.floor(charRng() * 2)),
+      piercings: charRng() < 0.4 ? [{ location: pickPhys(PHYS_POOL_PIERCING_LOC), type: pickPhys(PHYS_POOL_PIERCING_TYPE), description: '' }] : [],
+      tattoos: charRng() < 0.35 ? [{ location: pickPhys(PHYS_POOL_TATTOO_LOC), description: '', style: pickPhys(PHYS_POOL_TATTOO_STYLE) }] : [],
+      fashion: pickPhys(PHYS_POOL_FASHION),
+      accessories: '',
+      typicalAttire: { casual: '', work: '', sleep: '', formal: '' },
+      voice: {
+        pitch: pickPhys(PHYS_POOL_VOICE_PITCH),
+        texture: pickPhys(PHYS_POOL_VOICE_TEXTURE),
+        accent: pickPhys(PHYS_POOL_VOICE_ACCENT),
+      },
+      gait: pickPhys(PHYS_POOL_GAIT),
+      scent: pickPhys(PHYS_POOL_SCENT),
+      genitals: '',
     };
 
     // Build structured character (name/visual/history/sketch/sampleLines
     // are prose, expanded later by LLM — except name, which the player may
     // author directly).
+    // NPC Overhaul Phase 5: Personality generation — seeded from charRng, weighted by temperament
+    const numTraits = 3 + Math.floor(charRng() * 3); // 3-5 traits
+    const traits = pickUnique(charRng, PERSONALITY_TRAITS_POOL, numTraits);
+    const coreTrait = traits[Math.floor(charRng() * traits.length)];
+    // hiddenTrait: something NOT in traits — they suppress or don't show it
+    const hiddenPool = PERSONALITY_TRAITS_POOL.filter(t => !traits.includes(t));
+    const hiddenTrait = hiddenPool[Math.floor(charRng() * hiddenPool.length)] || 'sentimental';
+    const numQuirks = 2 + Math.floor(charRng() * 3); // 2-4 quirks
+    const quirks = pickUnique(charRng, QUIRKS_POOL, numQuirks);
+    const numLikes = 3 + Math.floor(charRng() * 3); // 3-5 likes
+    const likes = pickUnique(charRng, LIKES_POOL, numLikes);
+    const numDislikes = 3 + Math.floor(charRng() * 3); // 3-5 dislikes
+    const dislikes = pickUnique(charRng, DISLIKES_POOL, numDislikes);
+    const personality = { traits, coreTrait, hiddenTrait, quirks, likes, dislikes }; // NPC Overhaul Phase 5
+
     const structured = {
       npcId,
       name: partial.name || '',
       visual: '',
       genSeed: Math.floor(charRng() * 1000000),
+      age: partial.age ?? rollAge(charRng),           // Phase 0: first-class age, authorable via partial
+      gender: partial.gender || rollGender(charRng),  // Phase 0: first-class gender, authorable via partial
+      physical,                                           // NPC Overhaul Phase 1
       history: '',
       temperament,
+      personality,                                           // NPC Overhaul Phase 5
       occupation: occ,
-      interests: interests.map(x => ({ name: x.name, tags: x.tags })),
+      interests: interests.map(x => ({ name: x.name, tags: x.tags, skill: Math.floor(charRng() * 40) })), // NPC Overhaul: +skill
       values: values.map(v => ({ name: v.name, opposition: v.opposition })),
       baggage,
       wound,
@@ -791,12 +1405,16 @@ function generateCastWeb(seed, attempt, npcIds, npcs) {
         affection: webRng() * 2 - 1,
         tension: webRng() * 2 - 1,
         respect: webRng() * 2 - 1,
+        comfort: 0,   // NPC Overhaul Phase 3.9 — starts neutral, grows over time
+        desire: 0,    // NPC Overhaul Phase 3.9 — starts neutral
       };
       const axesBtoA = {
         trust: webRng() * 2 - 1,
         affection: webRng() * 2 - 1,
         tension: webRng() * 2 - 1,
         respect: webRng() * 2 - 1,
+        comfort: 0,   // NPC Overhaul Phase 3.9
+        desire: 0,    // NPC Overhaul Phase 3.9
       };
 
       // Shared beat (positive or negative)
@@ -834,7 +1452,7 @@ function computeCompatibility(npcA, npcB) {
     Math.pow(tA.volatility - tB.volatility, 2) +
     Math.pow(tA.openness - tB.openness, 2)
   );
-  const tempSim = Math.max(0, 1 - dist / 3.46); // 3.46 = sqrt(6*2)
+  const tempSim = Math.max(0, 1 - dist / 3.46); // 3.46 ≈ sqrt(3*2²): max distance across 3 axes each spanning [-1,1]
   return Math.min(1, (shared * 0.2) + (tempSim * 0.6));
 }
 
@@ -981,13 +1599,23 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
     }
   }
 
-  // Rent
-  const rent = computeRent(npcs);
+  // Rent — deferred until after world.upgrades is built (below), since
+  // computeRent reads apartment quality from upgrades. For now just
+  // initialize with a placeholder; the real value is set after the
+  // world object is assembled.
+  let rent = { total: ECONOMY.rent.total, playerShare: ECONOMY.rent.total, roommateShares: {}, coveredByRoommates: 0, contributorCount: 0, shareCeiling: 0 };
 
   // Player state
   const player = {
     money: ECONOMY.startingMoney,
-    energy: 100,
+    // Phase 8: energy as a levelled stat. The player starts with a lower
+    // energy ceiling (ENERGY.startingMax) that grows over the game via
+    // sleep consistency and exercise. NEEDS.energy.max is the absolute cap;
+    // player.energyMax is the per-player ceiling that rises toward it.
+    // A lower starting ceiling means fewer work blocks per day, making
+    // early rent harder and the pressure to recruit roommates sharper.
+    energy: 70,
+    energyMax: 70,
     hunger: 80,
     hygiene: 100,
     mood: 0.2, // [-1, 1] scale — see NEEDS.mood config comment. 0.2 mirrors the old 60/100 starting mood at the same relative position.
@@ -995,14 +1623,28 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
     inventory: [],
     location: 'bedroom_player',
     flags: {},
+    // Phase 8: alarm system. The player can set an alarm that caps the
+    // night — it can only shorten sleep, never extend it. null = no alarm.
+    // The hour is 0-23 (e.g. 6 = 06:00). doSleep checks this against the
+    // natural wake time and wakes the player early if the alarm fires
+    // before the full night would complete.
+    alarm: null,
+    // Phase 8: burnout tracking. consecutiveWorkDays counts days where
+    // the player worked above the burnout threshold; burnoutLevel is the
+    // accumulated penalty (0-1) that scales mood loss and work pay down.
+    // Recovery happens on rest days. See ref/sleep-and-alarm-plan.md.
+    burnout: { consecutiveWorkDays: 0, burnoutLevel: 0, lastWorkDay: 0 },
     // Nothing is owed until the first due date actually passes — see
     // UI's processRentForDay, which charges rent every ECONOMY.payPeriodDays
     // and applies escalating consequences while a balance stands.
+    // Phase 7: the opening defers the first rent bill by
+    // ECONOMY.opening.rentGraceDays so the player has time to orient
+    // and start earning before the first charge lands.
     rentOwed: 0,
-    rentDueDay: 1 + ECONOMY.payPeriodDays,
+    rentDueDay: 1 + (ECONOMY.opening?.rentGraceDays || ECONOMY.payPeriodDays),
   };
 
-  return {
+  const state = {
     seed,
     clock,
     structuralHash: hashStr(seed + JSON.stringify(npcIds)),
@@ -1018,10 +1660,106 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
       events: [],
       deliveries: [],
       rent,
+      // Phase 6 taxes: quarterly estimated tax. quarterGross accumulates
+      // each quarter's gross gig income; the bill lands at quarter end.
+      // lastQuarterBilled is the last fully-billed quarter index, so a
+      // save reloaded mid-quarter doesn't rebill. unpaid carries penalties
+      // forward (compounding). autoReserve is the opt-in skim toggle.
+      // quarterDeductions accumulates deductible spending this quarter
+      // (Nile tech, internet share, classes). lastQuarterOwed/lastQuarterPaid
+      // record the most recent bill for display. reserve is the auto-reserve
+      // balance the player can draw on to pay the tax bill.
+      taxes: { quarterGross: 0, lastQuarterBilled: -1, unpaid: 0, autoReserve: false, reserve: 0, quarterDeductions: 0, lastQuarterOwed: 0, lastQuarterPaid: 0 },
+      // Phase 3 bills: one entry per BILL_DEFS. `dueDay` is the next day a
+      // charge posts; `balance` is the currently-owed amount (0 when paid);
+      // `status` is 'current' (paid up / not yet due), 'due' (posted, in
+      // grace), 'overdue' (past grace, cutoff active), 'paid' (settled this
+      // cycle); `overdueDays` counts days past grace for escalation text.
+      // First due days are staggered so the player isn't hit with every
+      // bill on day 8 — rent first (day 8), then utilities spread across
+      // the first month. Initialized by initBillState below.
+      bills: initBillState(),
+      // Phase 4 upgrades: one entry per FACILITY_DEFS. `tier` is the
+      // facility's current condition ('broken'/'functional'/'upgraded').
+      // The apartment starts in disrepair — see ref/game-opening-plan.md.
+      // Initialized by initUpgradesState below.
+      upgrades: initUpgradesState(),
+      // Phase 5 utility metering: one entry per UTILITY_METER key. Each
+      // counter accumulates between billings and resets to zero when the
+      // bill posts. `hvac` also tracks `daysAccrued` since it accrues one
+      // day-unit per day rather than per-action. See computer.js's
+      // recordUtilityUsage / computeBillAmount.
+      utilities: initUtilitiesState(),
     },
     objects,
     droppedConstraints,
   };
+
+  // Phase 7: recompute rent now that world.upgrades exists, so the
+  // apartment quality (disrepair) is reflected in the starting rent split.
+  // For solo start this means the player carries the full $1,900/wk at the
+  // 8% disrepair ceiling — nobody to split with.
+  state.world.rent = computeRent(npcs, state);
+  return state;
+}
+
+// Initialize per-bill state for a new game. Rent is due first (day 8),
+// utilities stagger across the first 30 days so the opening isn't a wall
+// of bills, phone/insurance land at the end of the first month. Stagger
+// offsets are relative to day 1.
+function initBillState() {
+  // Phase 7: utility bills start after ECONOMY.opening.firstBillDelay
+  // so the opening isn't a wall of bills on day one. Rent is deferred
+  // separately via rentDueDay in the player state.
+  const delay = ECONOMY.opening?.firstBillDelay || 0;
+  const firstDue = {
+    rent: 1 + (ECONOMY.opening?.rentGraceDays || ECONOMY.payPeriodDays),
+    electric: 14 + delay, water: 18 + delay, gas: 22 + delay,
+    internet: 12 + delay, phone: 28 + delay, insurance: 30 + delay,
+  };
+  const bills = {};
+  for (const def of Object.values(BILL_DEFS)) {
+    bills[def.id] = {
+      dueDay: firstDue[def.id] || (8 + def.cadenceDays),
+      balance: 0,
+      status: 'current',
+      overdueDays: 0,
+      cutoffActive: false,
+    };
+  }
+  return bills;
+}
+
+// Initialize per-facility state for a new game. Each facility starts at
+// its FACILITY_STARTING_TIERS tier — the apartment is in disrepair.
+// `room` is stamped from the facility def so the upgrade UI can group
+// facilities by room without a lookup.
+function initUpgradesState() {
+  const upgrades = {};
+  for (const def of FACILITY_LIST) {
+    upgrades[def.id] = {
+      tier: FACILITY_STARTING_TIERS[def.id] || 'broken',
+      // Phase 9: condition (0-100) tracks wear. Starts at 100 for
+      // functional+ facilities; broken facilities start at 0 since
+      // there's nothing to wear down. Degrades with use; at 0 the
+      // facility drops a tier.
+      condition: (FACILITY_STARTING_TIERS[def.id] || 'broken') === 'broken' ? 0 : MAINTENANCE.startingCondition,
+    };
+  }
+  return upgrades;
+}
+
+// Phase 5: initialize per-meter utility counters. Each meter starts at
+// zero; `hvac` also carries `daysAccrued` since it accrues one unit per
+// day at day rollover rather than per-action. Meters reset when the bill
+// posts (resetUtilityMeters in computer.js).
+function initUtilitiesState() {
+  const utils = {};
+  for (const key of Object.keys(UTILITY_METER)) {
+    utils[key] = { count: 0 };
+  }
+  utils.hvac.daysAccrued = 0;
+  return utils;
 }
 
 // --- Create NPC object from validated bible ---
@@ -1037,13 +1775,27 @@ function createNpcFromBible(bible, residencyStatus) {
       partnerOf: null,
       since: 1,
       contributesRent: residencyStatus === 'resident' || residencyStatus === undefined,
+      rentShare: ECONOMY.rent.defaultRoommateShare,
     },
     location: null,
     activity: '',
     mood: 0,
-    needs: { hunger: 50, hygiene: 50, energy: 50, social: 50 },
-    relPlayer: { trust: 0, affection: 0, tension: 0, respect: 0 },
-    memory: { facts: [], episodes: [], summary: '' },
+    moodReason: '',                                   // NPC Overhaul
+    schedule: { currentBlock: '', nextBlock: '', willReturnAt: null }, // NPC Overhaul
+    needs: { hunger: 50, hygiene: 50, energy: 50, social: 50, comfort: 50, stimulation: 50 }, // NPC Overhaul: +comfort, +stimulation
+    relPlayer: {
+      trust: 0, affection: 0, tension: 0, respect: 0,
+      comfort: 0, desire: 0,                          // NPC Overhaul
+      intimacyLevel: 0, conversationPhase: 'early',   // NPC Overhaul — derived
+      grievances: [],                                 // NPC Overhaul
+      firstMetDay: 1, lastInteractionDay: 1,          // NPC Overhaul
+    },
+    memory: {
+      facts: [], episodes: [], summary: '',
+      summaryRevision: 0,                              // NPC Overhaul
+      recent: [],                                      // NPC Overhaul — last ~10 exchanges
+      styleCounters: { total: 0, sincePersonal: 0, recentTopics: [], lastJobMention: -1, lastHobbyMention: -1 }, // NPC Overhaul
+    },
     arcs: [],
     flags: {},
     // P6: suspicion[subject] (0..1). Additive default, same precedent as

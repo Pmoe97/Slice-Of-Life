@@ -150,3 +150,73 @@ function resolvePeep(gameState, roomId) {
 
   return { ok: true, narration, caught, suspected, ownerId, clothing: descKey };
 }
+
+// --- NPC peeping on the player (Phase 6): the mirror of resolvePeep.
+// Called from evaluateDrives when the peep_player drive fires. The NPC
+// attempts to spy on the player during a vulnerable state (masturbating,
+// showering, sleeping). Success = the NPC observes silently and gains a
+// memory episode + small relationship delta. Failure = the player catches
+// them, triggering a DOM-injected bubble (reusing the Phase 5 system)
+// with AI-generated NPC reaction and player response options.
+//
+// Returns { detected, npcId, playerState } or { detected: false, npcId,
+// playerState, memory, relDelta } (silent success — caller applies the
+// memory/rel delta and surfaces nothing to the player). The caught-bubble
+// UI is shown asynchronously from the tick (the tick stays synchronous);
+// evaluateDrives collects peep results and the caller (advanceAndResolve)
+// processes them after the tick completes.
+function resolveNpcPeep(gameState, npcId, playerState) {
+  const npc = gameState.npcs[npcId];
+  if (!npc) return null;
+
+  const t = npc.bible.temperament;
+  const rng = seededRng(gameState.meta.seed, `npc_peep_${gameState.meta.clock.day}_${getTickIndex(gameState.meta.clock.minutes)}_${npcId}`);
+
+  // NPC stealth — derived from conscientiousness (methodical = sneaky)
+  // plus randomness. Range: ~0.0 to ~0.7.
+  const npcStealth = (t.conscientiousness + 1) * 0.3 + rng() * 0.4;
+
+  // Player perception — derived from energy and mood
+  const playerPerception = getPlayerPerception(gameState.player);
+
+  // Detection: if NPC stealth < player perception, the player notices
+  const detected = npcStealth < playerPerception;
+
+  if (detected) {
+    // Player catches the NPC — return for async bubble processing
+    return { detected: true, npcId, playerState, npcStealth, playerPerception };
+  }
+
+  // Silent success — NPC peeps without being noticed.
+  // Apply memory episode and relationship delta in-memory.
+  const cfg = NPC_PEEP_TUNING;
+  const warmth = t.warmth;
+  const relDelta = {};
+  if (warmth > 0) {
+    relDelta.affection = cfg.silentRelDelta.positiveAffection;
+  } else {
+    relDelta.tension = cfg.silentRelDelta.negativeTension;
+  }
+
+  // Build a memory episode text based on what the NPC saw
+  const stateDesc = {
+    masturbating: 'masturbating at their computer',
+    showering: 'in the shower',
+    sleeping: 'asleep in bed',
+    undressed: 'getting changed',
+  }[playerState] || 'in a private moment';
+
+  const memoryText = `Saw you ${stateDesc}.`;
+
+  // Apply memory + rel delta directly (trusted producer)
+  const effCtx = buildEffectContext(gameState, [npcId], [npcId], {}, []);
+  const lines = [
+    `MEMORY_EPISODE ${npcId} ${memoryText}`,
+  ];
+  if (relDelta.affection) lines.push(`REL_DELTA ${npcId} affection +${relDelta.affection}`);
+  if (relDelta.tension) lines.push(`REL_DELTA ${npcId} tension +${relDelta.tension}`);
+  const effects = lines.map(l => parseEffectDSL(l)[0]).filter(Boolean);
+  applyEffects(effects, effCtx);
+
+  return { detected: false, npcId, playerState, memory: memoryText, relDelta };
+}

@@ -1,0 +1,85 @@
+Bug Report: Slice of Life Generator
+Critical Bugs
+1. Drive cooldowns never persist (drives.js + sim.js) — FIXED
+evaluateDrives returns updatedNpc with cooldown flags set via setCooldown(), but resolveTick Pass 3 never writes updatedNpc back to gameState.npcs[id] or npcUpdates[id]. It only pulls needs from gameState.npcs[id] (mutated by applyEffects). The flags._driveCooldowns object lives only in the local updatedNpc variable and is discarded each tick. Result: every drive's cooldownTicks is ineffective — drives can fire every single tick. (drives.js:62, sim.js:378-396)
+
+FIX: resolveTick Pass 3 now merges driveResult.updatedNpc.flags into npcUpdates[id].flags, so cooldowns persist across ticks. (sim.js)
+
+2. Double player needs decay in executeAction (actions.js:92-93) — FIXED
+advanceAndResolveMinutes (time.js:127-133) already calls decayPlayerNeeds, then executeAction calls it again. Every registered action (eat, cook, shower, watch TV, relax, dishes, lock/unlock door) decays player needs twice. (actions.js:92-93, time.js:131)
+
+FIX: Removed the redundant decayPlayerNeeds call from executeAction. advanceAndResolveMinutes already handles it. (actions.js)
+
+3. Pausing/resuming clock loop creates duplicate rAF (time.js:174-180) — FIXED
+pauseClockLoop() sets clockLoopRunning = false but does NOT cancel the rAF. The clockFrame callback keeps firing, sees clockLoopRunning === false, and reschedules itself. When resumeClockLoop() runs, it starts a second rAF without canceling the first. Both fire on subsequent frames, both see clockLoopRunning === true, and both process time. Result: double time accumulation after every advanceAndResolve call (which pauses/resumes the loop). (time.js:174-180)
+
+FIX: pauseClockLoop now calls cancelAnimationFrame(clockRafId) and nulls clockRafId before returning. (time.js)
+
+4. processRentForDay clobbers in-memory NPC state (ui.js:314-318) — FIXED
+updateNpc does a kv read-modify-write — the n it passes to the callback is the kv version, not the in-memory version. Any in-memory mutations from the current tick (drives, effects, peeps) that haven't been persisted yet are overwritten by stale kv data. The advanceAndResolve function's own comment explicitly warns about this pattern, but processRentForDay still uses it. (ui.js:314-318)
+
+FIX: Replaced updateNpc (kv round-trip) with direct in-memory applyRelDelta on currentGameState.npcs. Persistence happens at the next saveAtBoundary. (ui.js)
+
+5. checkQuestCompletion clobbers in-memory NPC state (ui.js:456-465) — FIXED
+Same pattern as #4 — uses updateNpc (kv round-trip) for rewardRelation, then overwrites currentGameState.npcs[npcId] with the kv-derived value, potentially clobbering recent in-memory state changes. (ui.js:456-465)
+
+FIX: Replaced updateNpc with direct in-memory applyRelDelta. Made function synchronous (removed async). (ui.js)
+
+6. syncNpcsFromKv after applyProposal clobbers tick-driven NPC changes (ui.js:672-678, doTalk/doPlayerAction) — FIXED
+During LLM calls (which can take seconds), the continuous clock loop fires checkpoints that mutate currentGameState.npcs (locations, needs, clothing). After the LLM returns, applyProposal → updateNpc writes to kv, then syncNpcsFromKv pulls the stale kv versions back, overwriting the checkpoint's NPC updates. The clock loop isn't paused during LLM calls, so this race is live. (ui.js:1040-1048, 692-678)
+
+FIX: applyProposal now applies relationship/mood/memory deltas in-memory on gameState.npcs (same pattern the effects path already used), eliminating the kv round-trip entirely. All syncNpcsFromKv calls after applyProposal were removed. compactMemoryIfNeeded was also fixed to merge only memory fields back instead of wholesale-replacing the NPC object. (npc.js, ui.js, ui.computer.js)
+
+7. processRelConsequencesForDay calls async doAskToLeave without await (ui.js:228-244) — FIXED
+The move-out's kv writes and saveAtBoundary fire asynchronously, racing with subsequent day-rollover processing. If the move-out hasn't completed when processRentForDay runs for the next day, the departing NPC may still be counted as a rent contributor. (ui.js:228-244)
+
+FIX: Made processRelConsequencesForDay async and added await before doAskToLeave. Updated processDayRollover to await it. (ui.js)
+
+Moderate Bugs
+8. Night-shift NPCs never passively restore hygiene (sim.js:309-314) — FIXED
+Hygiene restore only fires during morning or wind_down schedule blocks. The night_shift weekday schedule has neither — only work, commute_home, sleep, evening. Night-shift NPCs' hygiene only decays, never restores passively. They must rely on the shower drive (which only fires when hygiene < 30). (sim.js:309-314, config.js SCHEDULES.night_shift)
+
+FIX: Added 'evening' to the hygiene restore condition (block === 'morning' || 'wind_down' || 'evening'). Night-shift schedules have an evening block. (sim.js)
+
+9. Player needs don't decay during sleep (ui.js:988-1014) — FIXED
+doSleep calls advanceAndResolve(16) (which handles NPC ticks) but never calls decayPlayerNeeds. Only energy is manually restored. Hunger, hygiene, and mood stay frozen for 8 hours of game time. An energy-collapse (processNeedConsequences) advances the clock 8 ticks but also skips decayPlayerNeeds. The player can avoid hunger/hygiene consequences by sleeping. (ui.js:988-1014)
+
+FIX: doSleep now calls decayPlayerNeeds for the sleep duration. processNeedConsequences energy-collapse also calls decayPlayerNeeds for the lost ticks. (ui.js)
+
+10. SITE_DEFS.afterhours has duplicate cumEffects property (defs.computer.js:218 & 243) — FIXED
+The cumEffects key is defined twice in the same object literal. The second silently overwrites the first. Both have identical values so there's no functional impact, but it's a code defect. (defs.computer.js:218, 243)
+
+FIX: Removed the duplicate cumEffects property (and its comment). The first definition is kept. (defs.computer.js)
+
+11. EARN_MONEY effect type is declared but never used (effects.js:332-336) — FIXED
+No producer (action, drive, or LLM) ever emits an EARN_MONEY effect. workOneBlock directly mutates gameState.player.money += earned instead of routing through the effect pipeline. Dead code. (effects.js:332-336, computer.js:237)
+
+FIX: workOneBlock now routes through the effect pipeline using applyEffects(parseEffectDSL(`EARN_MONEY ${earned} work`), effCtx) instead of directly mutating money. (computer.js)
+
+12. loadGameState doesn't restore npcIds or droppedConstraints (state.js:517-549) — FIXED
+buildGameState returns npcIds (slot-order array) and droppedConstraints, but loadGameState never restores them. After a reload, currentGameState.npcIds and currentGameState.droppedConstraints are undefined. The debug panel's droppedConstraints display breaks. (state.js:517-549)
+
+FIX: loadGameState now reconstructs npcIds from Object.keys(npcs) and restores droppedConstraints from meta. (state.js)
+
+Minor Issues
+13. applyProposal validates effects twice (npc.js:320, 410) — FIXED
+validateProposal calls validateEffects for telemetry, then applyProposal calls it again before applying. Minor redundancy — the second call uses the full gameState so it's not strictly incorrect, but it doubles the validation work. (npc.js:320, 410)
+
+FIX: applyProposal no longer re-validates effects. It applies the normalized effects directly (applyEffects defensively skips unknown/unimplemented types). validateProposal's validation is sufficient. (npc.js)
+
+14. tryNpcPeep doesn't check room adjacency (drives.js:227-254) — FIXED
+An NPC in the kitchen can peep at a player in the bedroom — there's no adjacency check. The NPC just needs to be in a different room than the player. (drives.js:227-254)
+
+FIX: Added ROOM_ADJACENCY map and isRoomAdjacent() function. tryNpcPeep now checks that the NPC's room is adjacent to the player's room before allowing a peep. The hallway is adjacent to all rooms; bedrooms/bathroom are only adjacent to the hallway. (drives.js)
+
+15. computeCompatibility comment is misleading (sim.js:886) — FIXED
+Comment says 3.46 = sqrt(6*2) implying 6 axes, but only 3 temperament axes are used. The value is correct (sqrt(12) = 3.46) but the reasoning is confusing. (sim.js:886)
+
+FIX: Updated comment to "3.46 ≈ sqrt(3*2²): max distance across 3 axes each spanning [-1,1]". (sim.js)
+
+16. Energy collapse is more efficient than sleeping (config.js, ui.js) — FIXED
+Collapsing (energy hits 0) restores energy to 100 and costs 8 ticks (4 hours). Intentional sleep costs 16 ticks (8 hours) for the same energy. Collapsing is strictly better. (config.js NEED_CONSEQUENCES.energy.ticksLost=8, ui.js doSleep sleepTicks=16)
+
+FIX: Reduced sleepTicks from 16 to 8 (4 hours, matching collapse). Sleep now restores the same energy in the same time as collapse, but without the mood penalty — making intentional sleep strictly better than collapsing. (ui.js)
+
+Summary: All 16 bugs fixed. 7 critical (cooldowns, double decay, duplicate rAF, kv clobbering, unhandled async), 5 moderate (night-shift hygiene, sleep needs, duplicate property, dead code, missing save fields), and 4 minor issues.

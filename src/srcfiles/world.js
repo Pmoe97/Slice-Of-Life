@@ -1,6 +1,6 @@
 // ===== SECTION: WORLD =====
 // Object instances: spawning, placement ownership, and cleanliness
-// derivation. Pure functions only — kv access goes through STATE's
+// derivation. (Apartment Expansion v2 — Mirrored H)
 // getObjectBucket/setObjectBucket/updateObjectBucket (added alongside the
 // 'objects' folder), never root.kv directly, per the "state.js is the sole
 // kv access point" invariant.
@@ -31,6 +31,18 @@ function roomOwnerId(roomId, npcs) {
 
 function roomPrivacy(roomId) {
   return ROOMS[roomId]?.type === 'bedroom' ? 'owned' : 'public';
+}
+
+// Door lock state for a room. Returns 'unlocked' for rooms without a door
+// object ( or if the door hasn't spawned yet. Used by the interruption
+// system (Phase 5) to modify walk-in probability, and by the floor plan
+// visual to show door states. Checks for both bedroom_door and
+// bathroom_door objects.
+function getDoorState(gameState, roomId) {
+  const bucket = gameState.objects?.[`room_${roomId}`];
+  if (!bucket) return 'unlocked';
+  const door = Object.values(bucket).find(o => o.defId === 'bedroom_door' || o.defId === 'bathroom_door');
+  return door?.state?.lock || 'unlocked';
 }
 
 function resolvePlacementOwner(placement, roomId, npcs) {
@@ -89,9 +101,31 @@ function seedStarterGroceries(objects) {
 // newly-added carry bucket (e.g. a mid-game move-in) go through. Idempotent:
 // re-running against an already-populated bucket is a no-op (checked by
 // the caller, ensureAllObjectBuckets, but also safe to call directly).
-async function ensureObjectsForBucket(bucket, gameState) {
+// backfillLayout — when true, add any APARTMENT_LAYOUT fixture this bucket
+// is missing. Only ever true for the one load after APARTMENT_LAYOUT_VERSION
+// changes (see ensureAllObjectBuckets): running it unconditionally on every
+// load re-added anything the player had permanently removed from a room, so
+// carrying the lamp out of the living room quietly never stuck.
+async function ensureObjectsForBucket(bucket, gameState, backfillLayout = false) {
   const existing = await getObjectBucket(bucket);
-  if (existing && Object.keys(existing).length > 0) return existing;
+  if (existing && Object.keys(existing).length > 0) {
+    if (backfillLayout && bucket.startsWith('room_')) {
+      const roomId = bucket.replace(/^room_/, '');
+      const placements = APARTMENT_LAYOUT[roomId];
+      if (placements) {
+        const existingDefIds = new Set(Object.values(existing).map(o => o.defId));
+        let added = false;
+        let slot = Object.keys(existing).length;
+        for (const placement of placements) {
+          if (existingDefIds.has(placement.defId)) continue;
+          const inst = makeObjectInstance(placement, bucket, slot, gameState.meta.seed, roomId, gameState.npcs, gameState.meta.clock.day);
+          if (inst) { existing[inst.id] = inst; slot++; added = true; }
+        }
+        if (added) await setObjectBucket(bucket, existing);
+      }
+    }
+    return existing;
+  }
   if (bucket.startsWith('carry_')) { await setObjectBucket(bucket, {}); return {}; }
 
   const roomId = bucket.replace(/^room_/, '');
@@ -119,8 +153,20 @@ async function ensureAllObjectBuckets(gameState) {
     ...Object.keys(gameState.npcs || {}).map(id => `carry_${id}`),
     ...Object.keys(APARTMENT_LAYOUT).map(roomId => `room_${roomId}`),
   ];
+  // One-shot fixture back-fill, stamped in meta rather than in the buckets
+  // themselves — a marker key inside a bucket would show up in
+  // Object.keys/values scans of that bucket (computeReachSet, cleanliness
+  // derivation, object lists) as if it were an object.
+  const seenLayoutVersion = gameState.meta?.layoutVersion || 0;
+  const backfillLayout = seenLayoutVersion !== APARTMENT_LAYOUT_VERSION;
+
   const objects = {};
-  for (const bucket of buckets) objects[bucket] = await ensureObjectsForBucket(bucket, gameState);
+  for (const bucket of buckets) objects[bucket] = await ensureObjectsForBucket(bucket, gameState, backfillLayout);
+
+  if (backfillLayout) {
+    gameState.meta.layoutVersion = APARTMENT_LAYOUT_VERSION;
+    await updateMeta(m => ({ ...m, layoutVersion: APARTMENT_LAYOUT_VERSION }));
+  }
   return objects;
 }
 

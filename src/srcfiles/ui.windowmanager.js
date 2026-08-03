@@ -21,10 +21,20 @@ let shellViewportDebounce = null;
 // computer screen. renderWindows re-derives forceFullscreen fresh every
 // call, so this is the only piece needed to make the transition "just
 // work" — there's no gameState to reconcile either way.
+// On mobile, the virtual keyboard opening/closing also fires a resize
+// event — that would tear down and rebuild the window body, destroying
+// whatever input/textarea the user is typing in and stealing focus. That
+// recreated element loses focus, the keyboard closes, the tap refocuses
+// it, the keyboard opens, resize fires again… an infinite blink loop.
+// Skip the re-render while the user is actively typing in a form field;
+// the next non-keyboard render will pick up any real layout change.
 function onShellViewportChange() {
   clearTimeout(shellViewportDebounce);
   shellViewportDebounce = setTimeout(() => {
-    if (currentGameState?.world?.computer?.power === 'on') renderComputerScreen(currentGameState);
+    if (currentGameState?.world?.computer?.power !== 'on') return;
+    const active = document.activeElement;
+    if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable)) return;
+    renderComputerScreen(currentGameState);
   }, 150);
 }
 

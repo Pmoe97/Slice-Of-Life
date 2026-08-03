@@ -1,6 +1,7 @@
 // ===== SECTION: IMAGE =====
 // Scene composition, generateImage call, canvas→Blob caching, URL management.
 // Placeholder shown immediately, swap async. No state writes (uses STATE adapter).
+// (Apartment Expansion v2 — Mirrored H)
 
 // Track active object URLs for cleanup
 const activeImageUrls = new Map(); // sceneKey → objectURL
@@ -47,7 +48,7 @@ function buildImagePrompt(roomId, phase, activeNpcs, roomObjects) {
   // Character layers
   if (activeNpcs && activeNpcs.length > 0) {
     for (const npc of activeNpcs) {
-      const v = npc.bible.visual || 'a person';
+      const v = (typeof getPhysicalDescriptionForPrompt === 'function' ? getPhysicalDescriptionForPrompt(npc) : null) || npc.bible.visual || 'a person';  // NPC Overhaul Phase 1
       const expr = npc.activity ? `, ${npc.activity}` : '';
       prompt += `${v}${expr}. `;
     }
@@ -71,12 +72,21 @@ function fallbackRoomPhrase(roomId, roomType) {
   if (roomType === 'bedroom') return 'Single bed, desk, wardrobe, personal items. ';
   if (roomId === 'kitchen') return 'Counters, stove, fridge, small table. Dishes, mugs. ';
   if (roomId === 'living_room') return 'Sofa, coffee table, TV, bookshelf. Lived-in but comfortable. ';
-  if (roomId === 'bathroom') return 'Sink, mirror, shower. Tiles, towels. ';
+  if (roomId === 'bathroom_a' || roomId === 'bathroom_b') return 'Sink, mirror, shower. Tiles, towels. ';
+  if (roomId === 'hallway_a' || roomId === 'hallway_b') return 'A narrow hallway with coat rack. ';
+  if (roomId === 'dining') return 'A large dining table with chairs. ';
+  if (roomId === 'entry') return 'A front door, doormat, shoe rack. ';
+  if (roomId === 'game_room') return 'Pool table, game console, dartboard. ';
+  if (roomId === 'gym') return 'Treadmill, weights, yoga mat. ';
+  if (roomId === 'pool_room') return 'An indoor swimming pool, loungers, tiled surround. ';
+  if (roomId === 'study') return 'A desk, bookshelves, armchair. ';
+  if (roomId === 'balcony') return 'Bistro table, potted plants, city view. ';
+  if (roomId === 'laundry') return 'Washer, dryer, hamper. ';
   return '';
 }
 
 function buildCharacterPrompt(npc, expression, pose) {
-  const v = npc.bible.visual || 'a young adult';
+  const v = (typeof getPhysicalDescriptionForPrompt === 'function' ? getPhysicalDescriptionForPrompt(npc) : null) || npc.bible.visual || 'a young adult';  // NPC Overhaul Phase 1
   return `${v}, ${expression || 'neutral expression'}, ${pose || 'standing casually'}, anime-inspired illustration style, full body, clean background, character sheet pose, warm lighting.`;
 }
 

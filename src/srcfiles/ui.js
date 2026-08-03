@@ -20,11 +20,23 @@ let currentGameState = null;
 // memory episode (so "Marcus had a rough day" is something Marcus can
 // bring up later, via the existing memory→context pipeline), and decays
 // every resident's memory by the elapsed ticks — decayMemory existed and
-// was never called, so buildMemorySlice's decay>0.2 filter never actually
+// was never called, so buildMemorySliceV2's decay>0.2 filter never actually
 // pruned anything.
-async function advanceAndResolve(ticks) {
+// opts.advanceClock (default true) — whether resolveBatch should move
+//   meta.clock. The clock loop's checkpoint path passes false: the rAF loop
+//   already walked the clock through these minutes, and advancing again is
+//   what made the whole game run at 2x speed.
+// opts.fromClockLoop (default false) — set by the checkpoint path so we
+//   don't pause the very loop that is calling us. Pausing mid-frame left an
+//   orphan rAF chain alive that resumeClockLoop then ran alongside a fresh
+//   one, gaining a chain per checkpoint.
+async function advanceAndResolve(ticks, opts = {}) {
+  const advanceClockToo = opts.advanceClock !== false;
+  const wasRunning = !opts.fromClockLoop && clockLoopRunning;
+  if (wasRunning) pauseClockLoop();
+
   const dayBefore = currentGameState.meta.clock.day;
-  const { state: newState, events } = resolveBatch(currentGameState, ticks);
+  const { state: newState, events, peepResults } = resolveBatch(currentGameState, ticks, { advanceClock: advanceClockToo });
   currentGameState = newState;
   appendWorldEvents(events);
 
@@ -53,6 +65,24 @@ async function advanceAndResolve(ticks) {
     }
   }
 
+  // Phase 6: surface detected NPC peeps as caught-peeping bubbles. Silent
+  // peeps (detected=false) are already applied in-memory by resolveNpcPeep
+  // (memory episode + rel delta); the player never knows. Detected peeps
+  // (detected=true) need an async bubble — but only the first one per
+  // advanceAndResolve call (multiple peeps in one batch is absurd; show
+  // the first, queue nothing for the rest).
+  if (peepResults && peepResults.length > 0) {
+    const detected = peepResults.filter(r => r.detected);
+    // Queue rather than show. This function runs mid-batch — doSleep
+    // resolves 8 ticks in one call with the loading overlay up — and a
+    // modal bubble raised behind that overlay is both invisible and
+    // un-dismissable. flushPendingPeepBubble shows it once the action that
+    // triggered it has actually finished.
+    if (detected.length > 0 && !pendingPeepBubble) {
+      pendingPeepBubble = { npcId: detected[0].npcId, playerState: detected[0].playerState };
+    }
+  }
+
   for (const [id, npc] of Object.entries(currentGameState.npcs)) {
     if (npc.residency.status === 'former' || npc.residency.status === 'prospective') continue;
     if (!npc.memory.episodes || npc.memory.episodes.length === 0) continue;
@@ -68,10 +98,22 @@ async function advanceAndResolve(ticks) {
   // advanceAndResolve call can span at most one day boundary today given
   // the longest batch — sleep — is under a day, but this loops safely in
   // case that changes).
+  // hasDayRolledOver/markDayRolledOver (TIME) are shared with the clock
+  // loop's own midnight detection, so a day crossed by the continuous loop
+  // and a day crossed by a batch here can't both process the same rollover.
   const dayAfter = currentGameState.meta.clock.day;
   for (let d = dayBefore + 1; d <= dayAfter; d++) {
+    if (hasDayRolledOver(d)) continue;
+    markDayRolledOver(d);
     await processDayRollover(d);
   }
+
+  // Resume the continuous clock loop if we paused it.
+  if (wasRunning) resumeClockLoop();
+
+  // The clock loop's checkpoint path never touches the loading overlay, so
+  // nothing else would flush the queue for peeps detected while idling.
+  flushPendingPeepBubble();
 
   return events; // the events objects are the same references stored in
                  // currentGameState.world.events, so a caller marking one
@@ -82,12 +124,23 @@ async function advanceAndResolve(ticks) {
 
 async function processDayRollover(day) {
   await processRentForDay(day);
+  processBillsForDayUi(day);
+  processTaxesForDayUi(day);
   processDeliveriesForDay(day);
   processQuestsForDay(day);
-  processWorkDeadlineForDay(day);
+  processGigsForDay(day);
+  // Phase 8: burnout updates at day rollover based on yesterday's work
+  // load. workBlocksToday is incremented by workGigBlock and reset here.
+  const gigs = currentGameState.world.computer?.apps?.gigs;
+  if (gigs) {
+    updateBurnout(currentGameState.player, day, gigs.workBlocksToday || 0);
+    gigs.workBlocksToday = 0;
+  }
   processServiceVisitsForDayUi(day);
   processClassifiedsForDay(day);
-  processRelConsequencesForDay(day);
+  // Phase 11: investment growth at day-rollover.
+  processInvestmentGrowth(currentGameState, day);
+  await processRelConsequencesForDay(day);
 }
 
 // Need consequences (P7): fires when player needs hit 0. Called after
@@ -100,24 +153,17 @@ function processNeedConsequences() {
   const p = currentGameState.player;
   p.flags = p.flags || {};
 
-  // Energy at 0 → forced sleep
-  if (p.energy <= 0 && !p.flags._energyCollapsed) {
-    p.flags._energyCollapsed = true;
-    p.energy = NEEDS.energy.sleepRestore * 4;
-    p.mood = Math.max(-1, p.mood + NEED_CONSEQUENCES.energy.moodPenalty);
-    // Teleport to bed
-    p.location = 'bedroom_player';
-    addLogEntry('narration', NEED_CONSEQUENCES.energy.logMessage);
-    // Advance the clock by the lost ticks — ticksLost was declared but
-    // never consumed, so a "collapse" cost nothing but a mood hit. This
-    // runs before advanceAndResolve computes dayAfter (below), so a
-    // collapse that crosses midnight still gets its day-rollover.
-    // Deliberately doesn't re-run resolveBatch for the skipped hours — a
-    // blackout isn't meant to simulate what NPCs did while the player was
-    // out, just to cost real time.
-    currentGameState.meta.clock = advanceClock(currentGameState.meta.clock, NEED_CONSEQUENCES.energy.ticksLost);
+  // Energy at 0 → no forced sleep. The player is gated from taking
+  // further energy-costing actions (see canPerformAction), but can
+  // always travel to their bedroom to sleep. This replaces the old
+  // collapse/forced_sleep which teleported the player and skipped hours
+  // — the user explicitly didn't want the player passing out.
+  // We still log a one-time warning so the player knows they're spent.
+  if (p.energy <= 0 && !p.flags._energyDepleted) {
+    p.flags._energyDepleted = true;
+    addLogEntry('narration', "You're completely exhausted. You need to sleep before you can do anything else.");
   }
-  if (p.energy > 10) p.flags._energyCollapsed = false;
+  if (p.energy > 5) p.flags._energyDepleted = false;
 
   // Hunger at 0 → mood penalty, and — after enough consecutive
   // advanceAndResolve calls spent at 0 — an additional health consequence.
@@ -151,7 +197,7 @@ function processNeedConsequences() {
       currentGameState.npcs[id] = applyRelDelta(npc, {
         tension: NEED_CONSEQUENCES.hygiene.tensionPerNpcPerTick * 5,
         affection: NEED_CONSEQUENCES.hygiene.affectionLossPerNpcPerTick * 5,
-      });
+      }, currentGameState.meta.clock.day);
     }
   }
   if (p.hygiene > 10) p.flags._filthy = false;
@@ -174,10 +220,15 @@ function processNeedConsequences() {
 // Relationship consequences (P7): high tension makes NPCs avoid you,
 // refuse to talk, and eventually consider moving out. Checked when the
 // player enters a room or tries to talk.
+// NPC Overhaul Phase 3.8 — also checks comfort/desire thresholds
 function checkRelConsequences(npcId) {
   const npc = currentGameState.npcs[npcId];
   if (!npc) return { canTalk: true, avoided: false };
-  const tension = npc.relPlayer.tension || 0;
+  const rel = npc.relPlayer;
+  const tension = rel.tension || 0;
+  const comfort = rel.comfort || 0;
+  const desire = rel.desire || 0;
+  const affection = rel.affection || 0;
 
   if (tension >= REL_CONSEQUENCES.tensionHigh) {
     // NPC refuses to talk
@@ -193,12 +244,19 @@ function checkRelConsequences(npcId) {
     }
   }
 
-  return { canTalk: true, avoided: false };
+  // NPC Overhaul Phase 3.8 — low comfort makes NPC keep distance
+  const flags = {};
+  if (comfort < REL_CONSEQUENCES.comfortLow) flags.lowComfort = true;
+  if (comfort >= REL_CONSEQUENCES.comfortHigh) flags.highComfort = true;
+  if (desire >= REL_CONSEQUENCES.desireHigh) flags.highDesire = true;
+  if (desire >= REL_CONSEQUENCES.desireHighComfortHigh && comfort >= REL_CONSEQUENCES.comfortHigh && affection >= REL_CONSEQUENCES.affectionHigh) flags.mayInitiate = true;
+
+  return { canTalk: true, avoided: false, ...flags };
 }
 
 // Track how long an NPC has been at high tension — if it persists, they
 // move out. Checked at day rollover.
-function processRelConsequencesForDay(day) {
+async function processRelConsequencesForDay(day) {
   for (const [id, npc] of Object.entries(currentGameState.npcs)) {
     if (npc.residency.status !== 'resident') continue;
     const tension = npc.relPlayer.tension || 0;
@@ -207,8 +265,7 @@ function processRelConsequencesForDay(day) {
       npc.flags._highTensionDays = (npc.flags._highTensionDays || 0) + 1;
       if (npc.flags._highTensionDays >= REL_CONSEQUENCES.tensionMoveOutDay) {
         addLogEntry('system', `${npc.bible.name} has had enough. They're moving out.`);
-        // Trigger move-out (reuse doAskToLeave's logic)
-        doAskToLeave(id);
+        await doAskToLeave(id);
       }
     } else {
       if (npc.flags?._highTensionDays) npc.flags._highTensionDays = 0;
@@ -216,31 +273,31 @@ function processRelConsequencesForDay(day) {
   }
 }
 
-// COMPUTER's classifieds app: rolls a new applicant on an active listing,
-// deterministically, the same way SIM rolls off-screen events — no LLM,
-// so this can safely run unattended every day rather than only when the
-// player checks the app.
+// COMPUTER's classifieds app: generates a fresh batch of applicant stubs
+// for the RoomList browse grid every day (Phase 1). Stubs are cheap
+// deterministic records — no LLM, no full NPC — so this runs safely
+// unattended every day. Full NPC creation happens on-demand when the
+// player loads a profile (Phase 3 fetch queue).
 function processClassifiedsForDay(day) {
   if (!currentGameState.world.computer) return;
-  const newApplicantIds = generateApplicantsForDay(currentGameState, day);
-  for (const npcId of newApplicantIds) {
-    const npc = currentGameState.npcs[npcId];
-    addLogEntry('system', `New applicant on RoomList: ${npc.bible.name} (${npc.bible.occupation.title}).`);
+  const stubs = generateApplicantStubsForDay(currentGameState, day);
+  if (stubs.length > 0) {
+    addLogEntry('system', `RoomList updated — ${stubs.length} new applicants browsing today.`);
   }
 }
 
-// COMPUTER's work app: an incomplete backlog at the deadline costs a
-// strike; enough strikes and the player is let go. Always resolved
-// (never a hard stop) — same "the house keeps living" principle as rent
-// and quests above.
-function processWorkDeadlineForDay(day) {
+// COMPUTER's gig board: generates fresh gigs (probabilistically) and
+// resolves deadlines on day rollover. Replaces the old single-job
+// strike/firing path — a freelancer has no boss, only deadlines.
+function processGigsForDay(day) {
   if (!currentGameState.world.computer) return;
-  const result = checkWorkDeadline(currentGameState, day);
-  if (!result) return;
-  if (result.fired) {
-    addLogEntry('system', `You've been let go from ${result.title} — ${result.missed} task(s) missed too many times.`);
-  } else {
-    addLogEntry('system', `Missed ${result.missed} task(s) at ${result.title} (strike ${result.strikes}/${result.maxStrikes}).`);
+  generateGigsForDay(currentGameState, day);
+  for (const r of processGigDeadlinesForDay(currentGameState, day)) {
+    if (r.missed) {
+      addLogEntry('system', `Missed deadline on "${r.label}" — ${r.partialPay > 0 ? `partial pay ${r.partialPay}, ` : ''}reputation ${r.repDelta}.`);
+    } else if (r.autoDelivered) {
+      addLogEntry('system', `"${r.label}" was delivered late (auto) — paid ${r.payout}, reputation ${r.repDelta}.`);
+    }
   }
 }
 
@@ -268,21 +325,50 @@ function processServiceVisitsForDayUi(day) {
 // and drama," not flavor text.
 async function processRentForDay(day) {
   const player = currentGameState.player;
-  const rent = currentGameState.world.rent;
   if (player.rentDueDay == null) player.rentDueDay = 1 + ECONOMY.payPeriodDays;
 
   if (day >= player.rentDueDay) {
-    player.rentOwed = (player.rentOwed || 0) + rent.perResident;
+    // Recompute against live residency rather than trusting the stored
+    // figure: a roommate who moved in or out since the last bill changes
+    // what the player owes, and that change should land on this bill, not
+    // the one after it.
+    const rent = computeRent(currentGameState.npcs, currentGameState);
+    currentGameState.world.rent = rent;
     player.rentDueDay += ECONOMY.payPeriodDays;
-    addLogEntry('system', `Rent is due: $${rent.perResident}. (Total owed: $${player.rentOwed})`);
+
+    if (rent.playerShare < 0) {
+      // A full house in a fully restored apartment covers more than the
+      // lease costs, and the surplus is the player's. This is the intended
+      // end state — the apartment paying for itself is what maxing the
+      // social sim buys you — so the overflow is paid out rather than
+      // clamped away. Any outstanding balance is settled first.
+      const surplus = -rent.playerShare;
+      const owed = player.rentOwed || 0;
+      const applied = Math.min(owed, surplus);
+      player.rentOwed = owed - applied;
+      const toPocket = surplus - applied;
+      if (toPocket > 0) {
+        const effCtx = buildEffectContext(currentGameState, [], [], {}, []);
+        applyEffects(parseEffectDSL(`EARN_MONEY ${toPocket} rent_surplus`), effCtx);
+      }
+      addLogEntry('system',
+        `Rent settled: roommates cover $${rent.coveredByRoommates} of $${rent.total}. ` +
+        (applied > 0 ? `$${applied} went to your balance; ` : '') +
+        `the apartment cleared $${toPocket} this week.`);
+    } else {
+      player.rentOwed = (player.rentOwed || 0) + rent.playerShare;
+      const helped = rent.coveredByRoommates > 0
+        ? ` (roommates cover $${rent.coveredByRoommates} of $${rent.total})`
+        : ' — you are carrying the whole lease';
+      addLogEntry('system', `Rent is due: $${rent.playerShare}${helped}. (Total owed: $${player.rentOwed})`);
+    }
   }
 
   if ((player.rentOwed || 0) > 0) {
     player.mood = Math.max(-1, player.mood - ECONOMY.rentLatePenaltyMood);
     for (const [id, npc] of Object.entries(currentGameState.npcs)) {
       if (npc.residency.status !== 'resident') continue;
-      const updated = await updateNpc(id, n => applyRelDelta(n, { tension: ECONOMY.rentLateTensionPerDay }));
-      currentGameState.npcs[id] = updated;
+      currentGameState.npcs[id] = applyRelDelta(npc, { tension: ECONOMY.rentLateTensionPerDay }, currentGameState.meta.clock.day);
     }
 
     // Escalating rent pressure: overdue rent past 7 days triggers an
@@ -292,7 +378,7 @@ async function processRentForDay(day) {
       addLogEntry('system', `WARNING: Rent is ${daysOverdue} days overdue. Your roommates are furious.`);
       for (const [id, npc] of Object.entries(currentGameState.npcs)) {
         if (npc.residency.status !== 'resident') continue;
-        currentGameState.npcs[id] = applyRelDelta(npc, { tension: 0.05, affection: -0.02 });
+        currentGameState.npcs[id] = applyRelDelta(npc, { tension: 0.05, affection: -0.02 }, currentGameState.meta.clock.day);
       }
     } else if (daysOverdue >= 7) {
       addLogEntry('system', `Rent is ${daysOverdue} days overdue. Your roommates are getting worried.`);
@@ -300,20 +386,93 @@ async function processRentForDay(day) {
   }
 }
 
-// Deliveries land on the hallway doormat (WORLD/ITEMS), not straight into
+// Phase 3 bills: post charges on their own cadences, fire cutoffs past
+// grace. Rent is handled by processRentForDay above (its split is special);
+// the other bills post here. A cutoff activation is a real log event —
+// "Power is off" is something the player needs to see, not a silent flag.
+function processBillsForDayUi(day) {
+  if (!currentGameState.world.bills) return;
+  // Phase 5: accrue one day of HVAC usage. This runs every day (not just
+  // on billing days) because HVAC is the baseline load — the heater runs
+  // all day, not just when a bill posts.
+  if (currentGameState.world.utilities) {
+    accrueHvacForDay(currentGameState, day);
+  }
+  // Sync the rent bill entry to the player's rent state so the dashboard
+  // shows one consistent figure. processRentForDay owns the actual rent
+  // logic; this just mirrors it into the bills system for display + cutoff.
+  const rentBill = currentGameState.world.bills.rent;
+  if (rentBill) {
+    rentBill.balance = currentGameState.player.rentOwed || 0;
+    if (rentBill.balance > 0) {
+      const daysOverdue = day - (currentGameState.player.rentDueDay - ECONOMY.payPeriodDays);
+      if (daysOverdue > BILL_DEFS.rent.graceDays) {
+        rentBill.status = 'overdue';
+        rentBill.overdueDays = daysOverdue - BILL_DEFS.rent.graceDays;
+        rentBill.cutoffActive = true;
+      } else {
+        rentBill.status = 'due';
+        rentBill.overdueDays = 0;
+      }
+    } else {
+      rentBill.status = 'paid';
+      rentBill.overdueDays = 0;
+      rentBill.cutoffActive = false;
+    }
+  }
+  for (const r of processBillsForDay(currentGameState, day)) {
+    if (r.posted != null) {
+      addLogEntry('system', `${r.label} bill: ${r.posted} posted. (Balance: ${r.balance})`);
+    }
+    if (r.activated) {
+      const eff = BILL_CUTOFF_EFFECTS[r.cutoff];
+      addLogEntry('system', `${r.label} is unpaid past the grace period. ${eff?.label || 'Service cut off.'}`);
+    }
+  }
+}
+
+// Phase 6: quarterly taxes bill at quarter end. Unlike utility bills
+// (which post on a cadence and have cutoffs), taxes are a single lump
+// obligation every 90 days. The player owes rate × (quarterGross −
+// deductions). The auto-reserve pays down what it can; any shortfall
+// carries forward with penalty + interest. No cutoff — taxes just
+// accumulate debt, which compounds if ignored.
+function processTaxesForDayUi(day) {
+  if (!currentGameState.world.taxes) return;
+  if (!isQuarterEnd(day)) return;
+  const result = processQuarterlyTaxes(currentGameState, day);
+  if (!result) return;
+  const q = result.quarter + 1;
+  if (result.owed > 0 || result.carriedForward > 0) {
+    let msg = `Quarter ${q} taxes: ${result.owed} owed on ${result.gross} gross`;
+    if (result.deductions > 0) msg += ` (−${result.deductions} deductions)`;
+    msg += '.';
+    if (result.fromReserve > 0) msg += ` Reserve covered ${result.fromReserve}.`;
+    if (result.shortfall > 0) msg += ` Shortfall: ${result.shortfall}.`;
+    if (result.penalty > 0) msg += ` Underpayment penalty: ${result.penalty}.`;
+    if (result.interestCharge > 0) msg += ` Interest on prior unpaid: ${result.interestCharge}.`;
+    if (result.carriedForward > 0) msg += ` You now owe ${result.carriedForward} in back taxes.`;
+    else msg += ` Tax bill settled.`;
+    addLogEntry('system', msg);
+  } else if (result.carriedForward === 0 && (result.fromReserve > 0)) {
+    addLogEntry('system', `Quarter ${q} taxes settled. No tax owed this quarter (reserve: ${currentGameState.world.taxes.reserve}).`);
+  }
+}
+
+// Deliveries land on the entry doormat (WORLD/ITEMS), not straight into
 // the player's pockets — "you have to go get your package, and a
 // roommate could get to it first" is the whole point of routing this
 // through SPAWN_ITEM instead of pushing directly into player.inventory.
 function processDeliveriesForDay(day) {
   const deliveries = currentGameState.world.deliveries || [];
-  const doormat = Object.values(currentGameState.objects?.room_hallway || {}).find(o => o.defId === 'doormat');
+  const doormat = Object.values(currentGameState.objects?.room_entry || {}).find(o => o.defId === 'doormat');
   for (const d of deliveries) {
     if (d.status !== 'ordered' || day < d.etaDay) continue;
     d.status = 'delivered';
     const label = ITEM_DEFS[d.defId]?.label || d.defId || 'a package';
     if (doormat && d.defId) {
       doormat.contents = addStack(doormat.contents, d.defId, d.qty || 1, null, {});
-      addLogEntry('narration', `A delivery has arrived: ${label}. It's waiting on the doormat.`);
+      addLogEntry('narration', `A delivery has arrived: ${label}. It's waiting by the front door.`);
     } else {
       addLogEntry('narration', `A delivery has arrived: ${label}.`);
     }
@@ -406,7 +565,7 @@ function processQuestsForDay(day) {
 // Resolve any active quest referencing this NPC — called from doTalk.
 // For simple quests, talking completes them. For chain quests, a 'talk'
 // step completes the current step and advances to the next.
-async function checkQuestCompletion(npcId) {
+function checkQuestCompletion(npcId) {
   const quests = currentGameState.world.quests;
   if (!quests || !quests.active) return;
   const idx = quests.active.findIndex(q => q.npcId === npcId);
@@ -427,10 +586,9 @@ async function checkQuestCompletion(npcId) {
       quests.completed.push({ ...quest, status: 'completed', resolvedDay: currentGameState.meta.clock.day });
       currentGameState.player.money += quest.rewardMoney || 0;
       if (quest.rewardRelation) {
-        const updated = await updateNpc(npcId, n => applyRelDelta(n, quest.rewardRelation));
-        currentGameState.npcs[npcId] = updated;
+        currentGameState.npcs[npcId] = applyRelDelta(currentGameState.npcs[npcId], quest.rewardRelation, currentGameState.meta.clock.day);
       }
-      addLogEntry('system', `Goal complete: ${quest.title} (+${quest.rewardMoney || 0})`);
+      addLogEntry('system', `Goal complete: ${quest.title} (+$${quest.rewardMoney || 0})`);
     } else {
       // Advance to next step
       const nextStep = quest.steps[quest.currentStep];
@@ -444,10 +602,9 @@ async function checkQuestCompletion(npcId) {
     quests.completed.push({ ...quest, status: 'completed', resolvedDay: currentGameState.meta.clock.day });
     currentGameState.player.money += quest.rewardMoney || 0;
     if (quest.rewardRelation) {
-      const updated = await updateNpc(npcId, n => applyRelDelta(n, quest.rewardRelation));
-      currentGameState.npcs[npcId] = updated;
+      currentGameState.npcs[npcId] = applyRelDelta(currentGameState.npcs[npcId], quest.rewardRelation, currentGameState.meta.clock.day);
     }
-    addLogEntry('system', `Goal complete: ${quest.title} (+${quest.rewardMoney || 0})`);
+    addLogEntry('system', `Goal complete: ${quest.title} (+$${quest.rewardMoney || 0})`);
   }
 }
 
@@ -473,9 +630,9 @@ function checkChainQuestProgress(actionType, npcId, itemCategory) {
       quests.completed.push({ ...quest, status: 'completed', resolvedDay: currentGameState.meta.clock.day });
       currentGameState.player.money += quest.rewardMoney || 0;
       if (quest.rewardRelation) {
-        currentGameState.npcs[npcId] = applyRelDelta(currentGameState.npcs[npcId], quest.rewardRelation);
+        currentGameState.npcs[npcId] = applyRelDelta(currentGameState.npcs[npcId], quest.rewardRelation, currentGameState.meta.clock.day);
       }
-      addLogEntry('system', `Goal complete: ${quest.title} (+${quest.rewardMoney || 0})`);
+      addLogEntry('system', `Goal complete: ${quest.title} (+$${quest.rewardMoney || 0})`);
     } else {
       const nextStep = quest.steps[quest.currentStep];
       quest.desc = nextStep.desc;
@@ -543,7 +700,7 @@ async function doAskToLeave(npcId) {
     currentGameState.world.castWeb = await getWorld('castWeb');
 
     // Someone leaving raises everyone's share — recompute immediately.
-    currentGameState.world.rent = computeRent(currentGameState.npcs);
+    currentGameState.world.rent = computeRent(currentGameState.npcs, currentGameState);
     await updateWorld('rent', () => currentGameState.world.rent);
 
     addLogEntry('narration', `${npc.bible.name || 'They'} moves out. The room feels a little emptier — and the rent a little heavier.`);
@@ -573,6 +730,42 @@ async function doPeep(roomId) {
   currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('peep', currentGameState);
+}
+
+// Knock on a bedroom door from the hallway. The npcId param is actually
+// the roomId of the bedroom being knocked on (set by renderActionChips as
+// data-npc on knock chips for consistency with peep). If the owner is home
+// and awake, they respond; if asleep or away, a different message.
+async function doKnock(roomId) {
+  if (!currentGameState) return;
+  const ownerId = roomOwnerId(roomId, currentGameState.npcs);
+  const owner = ownerId ? currentGameState.npcs[ownerId] : null;
+  const roomName = ROOMS[roomId]?.name || 'room';
+  if (!owner) {
+    addLogEntry('narration', `You knock on the ${roomName} door. No answer — nobody's home.`);
+  } else if (owner.location !== roomId) {
+    addLogEntry('narration', `You knock on the ${roomName} door. No answer — it's empty.`);
+  } else {
+    const activity = owner.activity || '';
+    const name = owner.bible.name || 'Someone';
+    if (activity === 'sleeping' || activity === 'napping') {
+      addLogEntry('narration', `You knock on the ${roomName} door. After a moment you hear groaning — ${name} is asleep. No response.`);
+    } else if (activity === 'showering') {
+      addLogEntry('narration', `You knock on the ${roomName} door. The shower keeps running inside.`);
+    } else {
+      const responses = [
+        `${name}'s voice: "Yeah? What's up?"`,
+        `${name} opens the door a crack. "Hey, what is it?"`,
+        `${name} calls out, "Come in!"`,
+        `A pause, then footsteps. ${name} opens the door. "Oh, hey."`,
+      ];
+      addLogEntry('narration', `You knock on the ${roomName} door. ${responses[Math.floor(Math.random() * responses.length)]}`);
+    }
+  }
+  await advanceAndResolve(1);
+  currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('knock', currentGameState);
 }
 
 // Give item: gives a meal/food/gift item from inventory to an NPC.
@@ -613,7 +806,7 @@ async function doGiveItem(npcId) {
   // Complete the step
   checkChainQuestProgress('give_item', npcId, step.itemCategory);
   // Small affection bump for giving a gift
-  currentGameState.npcs[npcId] = applyRelDelta(npc, { affection: 0.05 });
+  currentGameState.npcs[npcId] = applyRelDelta(npc, { affection: 0.05 }, currentGameState.meta.clock.day);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('give-item', currentGameState);
 }
@@ -635,22 +828,21 @@ async function compactMemoryIfNeeded(npcIds) {
     const npc = currentGameState.npcs[id];
     if (!npc || !shouldCompactMemory(npc)) continue;
     const compacted = await compactMemory(npc);
-    await setNpc(id, compacted);
-    currentGameState.npcs[id] = compacted;
+    // Merge only the memory fields back — compactMemory captured the
+    // npc snapshot before its LLM call, so spreading the whole object
+    // would clobber any in-memory needs/location/clothing changes the
+    // clock loop made during that call.
+    currentGameState.npcs[id] = { ...currentGameState.npcs[id], memory: compacted.memory };
   }
 }
 
-// Pull just the NPCs an applied LLM proposal touched back from kv, rather
-// than reloading the whole game state (which would revert in-memory
-// clock/needs/location changes that only live in currentGameState until the
-// next save boundary).
-async function syncNpcsFromKv(npcIds) {
-  if (!currentGameState || !npcIds) return;
-  for (const id of npcIds) {
-    const npc = await getNpc(id);
-    if (npc) currentGameState.npcs[id] = npc;
-  }
-}
+// syncNpcsFromKv used to live here: it pulled the NPCs an applied LLM
+// proposal touched back out of kv. It has no callers left — applyProposal
+// (NPC) now mutates gameState.npcs in memory instead of round-tripping
+// through kv, so there is nothing to pull back, and re-reading kv would
+// actively clobber the clock loop's in-memory changes with a stale
+// snapshot. Deleted rather than left as a landmine for the next caller who
+// assumes it's still the way to refresh an NPC.
 
 // --- Orchestration functions ---
 
@@ -660,10 +852,40 @@ async function syncNpcsFromKv(npcIds) {
 // permanently unreachable: they're only ever clicked from a screen that
 // only appears when currentGameState IS null, so the guard fired every
 // time, before the switch below ever ran.
-const MENU_ACTIONS = ['menu', 'new-game-random', 'new-game-guided', 'new-game-manual', 'new-game-seed', 'generate-cast', 'reroll-char', 'approve-cast', 'back-to-form', 'continue', 'debug', 'debug-close'];
+const MENU_ACTIONS = ['menu', 'new-game-solo', 'new-game-random', 'new-game-guided', 'new-game-manual', 'new-game-seed', 'generate-cast', 'reroll-char', 'approve-cast', 'back-to-form', 'continue', 'debug', 'debug-close'];
+
+// Actions that can be performed even when energy is at 0. Travel ('move')
+// must always be allowed — if the player can't reach their bedroom they're
+// stuck with no way to sleep. 'sleep' is the recovery action. 'look' is free
+// observation. Menu/save/debug actions are meta, not in-world actions.
+const ENERGY_GATE_EXEMPT = new Set([
+  'move', 'sleep', 'look',
+  'menu', 'save', 'debug', 'debug-close',
+  'new-game-solo', 'new-game-random', 'new-game-guided', 'new-game-manual', 'new-game-seed',
+  'generate-cast', 'reroll-char', 'approve-cast', 'back-to-form', 'continue',
+  'computer.close',
+]);
+
+function isActionExemptFromEnergyGate(action) {
+  if (ENERGY_GATE_EXEMPT.has(action)) return true;
+  // Computer use itself is OK (you can sit at the desk), but individual
+  // energy-costing computer apps will check separately. Let it through
+  // so the player can at least open the computer.
+  if (action === 'computer.use' || action.startsWith('computer.open')) return true;
+  return false;
+}
 
 async function handleAction(action, npcId, extra) {
   if (!currentGameState && !MENU_ACTIONS.includes(action)) return;
+
+  // Energy gate: when energy is at 0, block all energy-costing actions
+  // except travel and sleep. The player must be able to reach their bedroom
+  // to sleep — blocking travel would leave them stranded.
+  if (currentGameState && currentGameState.player.energy <= 0 && !isActionExemptFromEnergyGate(action)) {
+    addLogEntry('system', "You're too exhausted to do that. You need to sleep first.");
+    render(currentGameState, currentSceneState);
+    return;
+  }
 
   // Registered actions (ACTIONS/DEFS.ACTIONS) are dispatched by data lookup
   // rather than a switch case — this is the bridge for verbs already
@@ -712,11 +934,17 @@ async function handleAction(action, npcId, extra) {
     case 'computer.toggle-start':
       doComputerToggleStart();
       break;
-    case 'computer.work-block':
-      await doWorkBlock();
+    case 'computer.gig-work-block':
+      await doGigWorkBlock(extra?.rowId);
       break;
-    case 'work.apply':
-      await doWorkApply(extra?.rowId);
+    case 'gig.accept':
+      await doGigAccept(extra?.rowId);
+      break;
+    case 'gig.deliver':
+      await doGigDeliver(extra?.rowId);
+      break;
+    case 'gig.abandon':
+      await doGigAbandon(extra?.rowId);
       break;
     case 'shop.add-to-cart':
       await doShopAddToCart(extra?.rowId);
@@ -739,8 +967,29 @@ async function handleAction(action, npcId, extra) {
     case 'browser.ah-category':
       doAfterHoursCategory(extra?.rowId);
       break;
+    case 'browser.ah-search':
+      doAfterHoursSearch(extra?.searchText || '');
+      break;
+    case 'browser.ah-page':
+      doAfterHoursPage(extra?.direction || 1);
+      break;
     case 'browser.ah-watch':
       await doAfterHoursWatch(extra?.rowId);
+      break;
+    case 'browser.ah-refresh':
+      doAfterHoursRefresh();
+      break;
+    case 'browser.ah-close':
+      doAfterHoursClose();
+      break;
+    case 'browser.ah-masturbate':
+      doAfterHoursMasturbate();
+      break;
+    case 'browser.ah-cum':
+      await doAfterHoursCum();
+      break;
+    case 'browser.ah-stop':
+      doAfterHoursStop();
       break;
     case 'classes.enroll':
       await doClassesEnroll(extra?.rowId);
@@ -760,11 +1009,53 @@ async function handleAction(action, npcId, extra) {
     case 'classifieds.view-applicant':
       doClassifiedsViewApplicant(extra?.rowId);
       break;
+    case 'classifieds.view-stub':
+      await doClassifiedsViewStub(extra?.rowId);
+      break;
+    case 'classifieds.filter-toggle':
+      doClassifiedsFilterToggle(extra?.rowId);
+      break;
+    case 'classifieds.sort':
+      doClassifiedsSort(extra?.rowId);
+      break;
+    case 'classifieds.fetch-stub':
+      await doClassifiedsFetchStub(extra?.rowId);
+      break;
+    case 'classifieds.open-queue':
+      doClassifiedsOpenQueue();
+      break;
+    case 'classifieds.clear-filters':
+      doClassifiedsClearFilters();
+      break;
     case 'classifieds.accept':
-      await doClassifiedsAccept(extra?.rowId);
+      await doClassifiedsAccept(extra?.rowId, extra?.roomId);
+      break;
+    case 'classifieds.assign-room':
+      doClassifiedsAssignRoom(extra?.rowId, extra?.roomId);
       break;
     case 'classifieds.reject':
       await doClassifiedsReject(extra?.rowId);
+      break;
+    case 'classifieds.studio-toggle-pool':
+      doClassifiedsStudioTogglePool(extra?.rowId);
+      break;
+    case 'classifieds.studio-create':
+      await doClassifiedsStudioCreate();
+      break;
+    case 'classifieds.studio-clear':
+      doClassifiedsStudioClear();
+      break;
+    case 'classifieds.studio-ai-generate':
+      await doClassifiedsStudioAIGenerate();
+      break;
+    case 'classifieds.interview':
+      doClassifiedsInterview(extra?.rowId);
+      break;
+    case 'classifieds.toggle-favorite':
+      doClassifiedsToggleFavorite(extra?.rowId);
+      break;
+    case 'classifieds.toggle-fav-filter':
+      doClassifiedsToggleFavFilter();
       break;
     case 'im.open-thread':
       doImOpenThread(extra?.rowId);
@@ -774,6 +1065,33 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'stream.watch':
       await doStreamWatch(extra?.rowId);
+      break;
+    case 'bills.pay':
+      await doBillsPay(extra?.rowId);
+      break;
+    case 'bills.pay-all':
+      await doBillsPayAll();
+      break;
+    case 'upgrades.purchase':
+      await doUpgradePurchase(extra?.rowId);
+      break;
+    case 'upgrades.repair':
+      await doUpgradeRepair(extra?.rowId);
+      break;
+    case 'invest.buy':
+      await doInvestBuy(extra?.rowId, extra?.amount);
+      break;
+    case 'invest.sell-all':
+      await doInvestSellAll(extra?.rowId);
+      break;
+    case 'taxes.toggle-reserve':
+      await doTaxToggleAutoReserve();
+      break;
+    case 'taxes.pay':
+      await doTaxPayBill(extra?.amount);
+      break;
+    case 'taxes.withdraw-reserve':
+      await doTaxWithdrawReserve(extra?.amount);
       break;
     case 'talk':
       if (npcId) await doTalk(npcId);
@@ -790,6 +1108,9 @@ async function handleAction(action, npcId, extra) {
     case 'peep':
       if (npcId) await doPeep(npcId);
       break;
+    case 'knock':
+      if (npcId) await doKnock(npcId);
+      break;
     case 'give-item':
       if (npcId) await doGiveItem(npcId);
       break;
@@ -801,6 +1122,9 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'menu':
       showMenuModal();
+      break;
+    case 'new-game-solo':
+      await startSoloGame();
       break;
     case 'new-game-random':
     case 'new-game-guided':
@@ -829,6 +1153,18 @@ async function handleAction(action, npcId, extra) {
     case 'debug-close':
       closeDebugPanel();
       break;
+    case 'conv.send':
+      await doConvSend();
+      break;
+    case 'conv.leave':
+      doConvLeave();
+      break;
+    case 'conv.ask-leave':
+      doConvAskLeave();
+      break;
+    case 'conv.confirm-ask-leave':
+      await doConvConfirmAskLeave(npcId);
+      break;
     default:
       console.warn('Unknown action:', action);
   }
@@ -842,6 +1178,18 @@ async function handleFreeText(text) {
 // --- Player actions ---
 
 async function doPlayerAction(actionText) {
+  // Energy gate for free-text: if energy is 0, only allow the intent to
+  // resolve to a travel or sleep command. Everything else is blocked.
+  if (currentGameState.player.energy <= 0) {
+    const intent = classifyIntent(actionText, currentGameState);
+    if (intent?.kind === 'move' || (intent?.kind === 'quick' && intent.quickId === 'sleep')) {
+      // Fall through to the normal resolver below
+    } else {
+      addLogEntry('system', "You're too exhausted to do that. You need to sleep first.");
+      render(currentGameState, currentSceneState);
+      return;
+    }
+  }
   // Try to resolve free text deterministically before ever touching the
   // LLM (P5). Each branch delegates to the exact function a chip/button
   // would call — same effects, same persistence, same render — so this is
@@ -851,6 +1199,7 @@ async function doPlayerAction(actionText) {
   if (intent?.kind === 'move') { await doMove(intent.roomId); return; }
   if (intent?.kind === 'quick' && intent.quickId === 'sleep') { await doSleep(); return; }
   if (intent?.kind === 'quick' && intent.quickId === 'pay-rent') { await doPayRent(); return; }
+  if (intent?.kind === 'quick' && intent.quickId === 'alarm') { await doSetAlarm(intent.hour); return; }
 
   showLoading();
   try {
@@ -864,8 +1213,7 @@ async function doPlayerAction(actionText) {
 
     if (result.valid && result.proposal) {
       // Apply proposal, then pull back only the NPCs it touched
-      const applied = await applyProposal(result.proposal, context, currentGameState);
-      await syncNpcsFromKv(applied.updatedNpcIds);
+      const applied = await applyProposal(result.proposal, context, currentGameState, actionText);
       for (const entry of applied.logEntries) addLogEntry(entry.type, entry.text, entry.speaker);
       // Piggyback compaction on this player-contact call, never on a pure tick.
       await compactMemoryIfNeeded([...applied.updatedNpcIds, ...(applied.effectNpcIds || [])]);
@@ -943,15 +1291,74 @@ async function doWait() {
   }
 }
 
+// Phase 8: set or clear the alarm. The alarm caps the night — it can
+// only shorten sleep, never extend it. Setting it to null clears it.
+// The hour must be within SLEEP.alarmMinHour..alarmMaxHour.
+async function doSetAlarm(hour) {
+  if (hour === null || hour === undefined) {
+    currentGameState.player.alarm = null;
+    addLogEntry('system', 'Alarm cleared. You\'ll wake when your body wakes you.');
+  } else {
+    hour = Math.max(SLEEP.alarmMinHour, Math.min(SLEEP.alarmMaxHour, hour));
+    currentGameState.player.alarm = hour;
+    const h12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+    const ampm = hour < 12 ? 'am' : 'pm';
+    addLogEntry('system', `Alarm set for ${h12}:${'00'} ${ampm}. If you\'re still asleep then, it\'ll wake you.`);
+  }
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('alarm', currentGameState);
+}
+
 async function doSleep() {
   showLoading();
   try {
-    // Batch-resolve sleeping hours
-    const sleepTicks = 16;
-    const sleepEvents = await advanceAndResolve(sleepTicks);
-    // Restore energy
-    currentGameState.player.energy = Math.min(100, currentGameState.player.energy + NEEDS.energy.sleepRestore * sleepTicks / 2);
-    addLogEntry('narration', 'You sleep. You wake feeling rested.');
+    const prevContext = getTimeContext();
+    setTimeContext('sleeping');
+    // How long the night runs is decided by how drained the player is —
+    // see SLEEP and resolveSleepHours. Turning in exhausted buys a full
+    // 8 hours; turning in nearly rested is a short 6.
+    const energyAtBedtime = currentGameState.player.energy;
+    // Phase 8: the alarm caps the night — it can only shorten sleep,
+    // never extend it. If the alarm would fire before the natural night
+    // ends, the player is woken early and recovers less energy.
+    const alarmHour = currentGameState.player.alarm;
+    const bedtimeMinutes = currentGameState.meta.clock.minutes;
+    const energyMax = currentGameState.player.energyMax || NEEDS.energy.max;
+    const { hours: sleepHours, alarmFired } = resolveSleepHoursWithAlarm(energyAtBedtime, bedtimeMinutes, alarmHour, energyMax);
+    const sleepTicks = Math.round((sleepHours * 60) / CLOCK.tickMinutes);
+    // Asleep is a vulnerable state for the whole batch — see ACTIONS'
+    // withVulnerableState and SIM's getPlayerVulnerableState.
+    const sleepEvents = await withVulnerableState(currentGameState, 'sleeping', () => advanceAndResolve(sleepTicks));
+    // Decay player needs for the time spent sleeping (hunger, hygiene,
+    // mood — energy is restored separately below). advanceAndResolve
+    // only decays NPC needs, not the player's.
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, sleepTicks);
+    // Energy back is proportional to hours actually slept, so a night cut
+    // short (by the alarm) genuinely leaves you short.
+    // Phase 8: energy is capped at player.energyMax (which starts at 70
+    // and grows), not NEEDS.energy.max (the absolute cap of 100).
+    currentGameState.player.energy = Math.min(
+      energyMax,
+      currentGameState.player.energy + sleepHours * SLEEP.restorePerHour
+    );
+    // Phase 8: sleeping near the natural bedtime grows the energy
+    // ceiling. A "good sleep" is within ENERGY.goodSleepWindowHours of
+    // SLEEP.naturalBedtimeHour. This is the main early-game progression
+    // lever — more energy means more work blocks, which means more income.
+    const bedtimeHour = (bedtimeMinutes / 60) % 24;
+    const hoursFromNatural = Math.min(
+      Math.abs(bedtimeHour - SLEEP.naturalBedtimeHour),
+      24 - Math.abs(bedtimeHour - SLEEP.naturalBedtimeHour)
+    );
+    if (hoursFromNatural <= ENERGY.goodSleepWindowHours && !alarmFired) {
+      currentGameState.player.energyMax = Math.min(
+        ENERGY.absoluteMax,
+        energyMax + ENERGY.growthPerGoodSleep
+      );
+    }
+    let sleepMsg = describeSleep(sleepHours, currentGameState.player.energy);
+    if (alarmFired) sleepMsg += ' The alarm dragged you out of bed.';
+    addLogEntry('narration', sleepMsg);
     // Narrate some of what happened while asleep, most recent first. Marked
     // seen so a later visit to the same room doesn't repeat it as evidence.
     for (const evt of sleepEvents.slice(-2)) {
@@ -961,6 +1368,7 @@ async function doSleep() {
         evt.seenByPlayer = true;
       }
     }
+    setTimeContext(prevContext);
     render(currentGameState, currentSceneState);
     await saveAtBoundary('sleep', currentGameState);
   } finally {
@@ -992,74 +1400,256 @@ function narrateDemotion(demotedId, promotedId) {
   addLogEntry('narration', text);
 }
 
+// --- In-person conversation overlay ---
+// A dedicated chat-like interface for talking with an NPC, separate from
+// the scene viewer's narration log. doTalk opens it; conv.* actions drive
+// it. The conversation persists across multiple turns until the player
+// Leaves or Asks to Leave. Reuses the exact same LLM proposal pipeline
+// (callLLM/applyProposal) as doPlayerAction — the difference is purely
+// presentational: results render in the overlay's chat log, not the
+// scene viewer's narration log.
+let convState = null; // { npcId, prevTimeContext, sending }
+
+function convEscapeHtml(s) {
+  return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function convScrollToBottom() {
+  const log = document.getElementById('conv-log');
+  if (log) log.scrollTop = log.scrollHeight;
+}
+
+function convAddBeat(text) {
+  const log = document.getElementById('conv-log');
+  if (!log) return;
+  const el = document.createElement('div');
+  el.className = 'conv-beat';
+  el.textContent = text;
+  log.appendChild(el);
+  convScrollToBottom();
+}
+
+function convAddBubble(from, text) {
+  const log = document.getElementById('conv-log');
+  if (!log) return;
+  const el = document.createElement('div');
+  el.className = from === 'action' ? 'conv-bubble' : 'conv-bubble';
+  if (from === 'action') el.setAttribute('data-from', 'action');
+  else el.setAttribute('data-from', from);
+  el.textContent = text;
+  log.appendChild(el);
+  convScrollToBottom();
+}
+
+function convShowTyping() {
+  const log = document.getElementById('conv-log');
+  if (!log) return null;
+  const el = document.createElement('div');
+  el.className = 'conv-typing';
+  el.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+  log.appendChild(el);
+  convScrollToBottom();
+  return () => { if (el.parentNode) el.remove(); };
+}
+
+function convSetStatus(text) {
+  const el = document.getElementById('conv-status');
+  if (el) el.textContent = text || '';
+}
+
+function openConversationOverlay(npcId) {
+  const npc = currentGameState?.npcs?.[npcId];
+  if (!npc) return;
+  const overlay = document.getElementById('conversation-overlay');
+  if (!overlay) return;
+
+  // Header
+  const avatar = document.getElementById('conv-avatar');
+  if (avatar) {
+    avatar.textContent = (npc.bible?.name || '?').charAt(0);
+    avatar.style.background = hashToColor(npc.bible?.name || npcId);
+  }
+  const nameEl = document.getElementById('conv-name');
+  if (nameEl) nameEl.textContent = npc.bible?.name || 'Unknown';
+  convSetStatus('In conversation');
+
+  // Clear log
+  const log = document.getElementById('conv-log');
+  if (log) log.innerHTML = '';
+
+  // Show ask-to-leave only for residents
+  const askBtn = document.getElementById('conv-ask-leave-btn');
+  if (askBtn) askBtn.hidden = npc.residency?.status !== 'resident';
+
+  overlay.setAttribute('data-open', '');
+
+  // Focus input
+  const input = document.getElementById('conv-input');
+  if (input) { input.value = ''; setTimeout(() => input.focus(), 50); }
+}
+
+function closeConversationOverlay() {
+  const overlay = document.getElementById('conversation-overlay');
+  if (overlay) overlay.removeAttribute('data-open');
+  convState = null;
+}
+
 async function doTalk(npcId) {
-  showLoading();
+  if (!npcId || !currentGameState) return;
+  // Relationship consequences (P7): high tension may cause NPC to refuse
+  // to talk or avoid the player entirely.
+  const relCheck = checkRelConsequences(npcId);
+  if (!relCheck.canTalk) {
+    if (relCheck.avoided) {
+      const rooms = COMMON_ROOMS.filter(r => r !== currentGameState.player.location);
+      const newRoom = rooms[Math.floor(Math.random() * rooms.length)];
+      currentGameState.npcs[npcId].location = newRoom;
+      currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
+    }
+    addLogEntry('narration', relCheck.reason);
+    render(currentGameState, currentSceneState);
+    await saveAtBoundary('talk-avoided', currentGameState);
+    return;
+  }
+
+  // Promote to active — demotes the least-engaged active member if the
+  // cap is already full, narrated rather than swapped silently.
+  const { sceneState, demotedId } = promoteToActive(currentSceneState, npcId);
+  currentSceneState = sceneState;
+  narrateDemotion(demotedId, npcId);
+
+  // Open the conversation overlay before any LLM call so the player sees
+  // the interface immediately, not a loading screen.
+  convState = { npcId, prevTimeContext: getTimeContext(), sending: false };
+  openConversationOverlay(npcId);
+
+  // Deterministic confrontation, before the LLM ever runs — a suspicion
+  // threshold crossing (STEALTH, P6) is a guaranteed reaction, not
+  // something left to the narrator's discretion. Decays suspicion
+  // afterward so the same talk doesn't refire it every time; a fresh
+  // incident can still push suspicion back over the threshold later.
+  const npc = currentGameState.npcs[npcId];
+  const suspicion = (npc.suspicion || {}).boundary_violation || 0;
+  if (suspicion >= STEALTH_TUNING.confrontThreshold) {
+    const template = BOUNDARY_CONFRONT_TEMPLATES[Math.floor(Math.random() * BOUNDARY_CONFRONT_TEMPLATES.length)];
+    convAddBeat(template.replace('{name}', npc.bible.name || 'Your roommate'));
+    const effCtx = buildEffectContext(currentGameState, [npcId], [npcId], {}, []);
+    const target = suspicion * STEALTH_TUNING.confrontDecayFactor;
+    applyEffects(parseEffectDSL(`ADJUST_SUSPICION ${npcId} boundary_violation ${(target - suspicion).toFixed(2)}`), effCtx);
+  }
+
+  // Time slows to real-time for the conversation
+  setTimeContext('conversation');
+
+  // Generate the opening exchange — "You approach [name] to talk."
+  await doConvSend(`You approach ${npc.bible?.name || 'your roommate'} to talk.`);
+
+  // Talking to the referenced NPC is the completion trigger for any
+  // active goal about them — deterministic, doesn't depend on the LLM
+  // succeeding or reporting progress (see checkQuestCompletion).
+  await checkQuestCompletion(npcId);
+}
+
+async function doConvSend(forcedText) {
+  if (!convState || convState.sending) return;
+  const input = document.getElementById('conv-input');
+  const text = forcedText || input?.value.trim();
+  if (!text) return;
+  if (input && !forcedText) input.value = '';
+  convState.sending = true;
+  const sendBtn = document.getElementById('conv-send-btn');
+  if (sendBtn) sendBtn.disabled = true;
+
+  // Player's message appears instantly in the conversation log. Forced
+  // opening text (e.g. "You approach Hana to talk") is shown as a scene
+  // beat rather than a player bubble, since it's narration, not dialogue.
+  if (forcedText) convAddBeat(text);
+  else convAddBubble('player', text);
+
+  // Typing indicator while the NPC generates a response.
+  const removeTyping = convShowTyping();
+  convSetStatus('typing…');
+
   try {
-    // Relationship consequences (P7): high tension may cause NPC to refuse
-    // to talk or avoid the player entirely.
-    const relCheck = checkRelConsequences(npcId);
-    if (!relCheck.canTalk) {
-      if (relCheck.avoided) {
-        // NPC leaves the room
-        const npc = currentGameState.npcs[npcId];
-        const rooms = COMMON_ROOMS.filter(r => r !== currentGameState.player.location);
-        const newRoom = rooms[Math.floor(Math.random() * rooms.length)];
-        currentGameState.npcs[npcId].location = newRoom;
-        currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
-      }
-      addLogEntry('narration', relCheck.reason);
-      render(currentGameState, currentSceneState);
-      await saveAtBoundary('talk-avoided', currentGameState);
-      return;
-    }
-
-    // Promote to active — demotes the least-engaged active member if the
-    // cap is already full, narrated rather than swapped silently.
-    const { sceneState, demotedId } = promoteToActive(currentSceneState, npcId);
-    currentSceneState = sceneState;
-    narrateDemotion(demotedId, npcId);
-
-    // Deterministic confrontation, before the LLM ever runs — a suspicion
-    // threshold crossing (STEALTH, P6) is a guaranteed reaction, not
-    // something left to the narrator's discretion. Decays suspicion
-    // afterward so the same talk doesn't refire it every time; a fresh
-    // incident can still push suspicion back over the threshold later.
-    const npc = currentGameState.npcs[npcId];
-    const suspicion = (npc.suspicion || {}).boundary_violation || 0;
-    if (suspicion >= STEALTH_TUNING.confrontThreshold) {
-      const template = BOUNDARY_CONFRONT_TEMPLATES[Math.floor(Math.random() * BOUNDARY_CONFRONT_TEMPLATES.length)];
-      addLogEntry('narration', template.replace('{name}', npc.bible.name || 'Your roommate'));
-      const effCtx = buildEffectContext(currentGameState, [npcId], [npcId], {}, []);
-      const target = suspicion * STEALTH_TUNING.confrontDecayFactor;
-      applyEffects(parseEffectDSL(`ADJUST_SUSPICION ${npcId} boundary_violation ${(target - suspicion).toFixed(2)}`), effCtx);
-    }
-
-    // Use LLM to generate opening
+    await advanceAndResolve(1);
     const context = assembleContext(currentGameState, currentSceneState);
-    const result = await callLLM(context, `You approach ${currentGameState.npcs[npcId]?.bible?.name || 'your roommate'} to talk.`);
+    const result = await callLLM(context, text);
+
+    removeTyping();
 
     if (result.valid && result.proposal) {
-      const applied = await applyProposal(result.proposal, context, currentGameState);
-      await syncNpcsFromKv(applied.updatedNpcIds);
-      for (const entry of applied.logEntries) addLogEntry(entry.type, entry.text, entry.speaker);
+      const applied = await applyProposal(result.proposal, context, currentGameState, text);
+      // Render results into the conversation overlay's log.
+      for (const entry of applied.logEntries) {
+        if (entry.type === 'narration') convAddBeat(entry.text);
+        else if (entry.type === 'action') convAddBubble('action', `*${entry.text}*`);
+        else if (entry.type === 'internal') convAddBeat(`(${entry.text})`);
+        else if (entry.type === 'dialogue') convAddBubble('npc', entry.text);
+      }
+      // Also persist key beats to the main session log so the scene
+      // viewer retains context after the conversation closes.
+      if (applied.logEntries.length > 0) {
+        addLogEntry('narration', `[Talking to ${currentGameState.npcs[convState.npcId]?.bible?.name || 'them'}] ${applied.logEntries.filter(e => e.type === 'dialogue').map(e => `${e.speaker}: "${e.text}"`).join(' ')}`);
+      }
       await compactMemoryIfNeeded([...applied.updatedNpcIds, ...(applied.effectNpcIds || [])]);
       currentSceneState = advanceEngagement(currentSceneState, resolveSpeakerIds(result.proposal.dialogue, context.activeNpcs));
     } else {
-      addLogEntry('narration', `You try to talk to ${currentGameState.npcs[npcId]?.bible?.name || 'them'}, but they seem distracted.`);
+      convAddBeat(`They seem distracted and don't respond.`);
     }
 
-    // Talking to the referenced NPC is the completion trigger for any
-    // active goal about them — deterministic, doesn't depend on the LLM
-    // succeeding or reporting progress (see checkQuestCompletion).
-    await checkQuestCompletion(npcId);
-
-    await advanceAndResolve(1);
     currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
+    convSetStatus('In conversation');
     render(currentGameState, currentSceneState);
-    await saveAtBoundary('talk', currentGameState);
+    await saveAtBoundary('conv-send', currentGameState);
+  } catch (e) {
+    console.warn('Conversation send failed:', e);
+    removeTyping();
+    convAddBeat('Something went wrong. Try again.');
+    convSetStatus('In conversation');
   } finally {
-    hideLoading();
+    convState.sending = false;
+    if (sendBtn) sendBtn.disabled = false;
+    const freshInput = document.getElementById('conv-input');
+    if (freshInput) freshInput.focus();
   }
+}
+
+function doConvLeave() {
+  if (!convState) return;
+  const prevContext = convState.prevTimeContext;
+  const npcId = convState.npcId;
+  const npc = currentGameState?.npcs?.[npcId];
+  closeConversationOverlay();
+  // Step away from the active conversation.
+  currentSceneState = demoteToAmbient(currentSceneState, npcId);
+  if (npc) addLogEntry('narration', `You step away from ${npc.bible?.name || 'them'}.`);
+  setTimeContext(prevContext);
+  render(currentGameState, currentSceneState);
+  saveAtBoundary('step-away', currentGameState);
+}
+
+function doConvAskLeave() {
+  if (!convState) return;
+  const npcId = convState.npcId;
+  const npc = currentGameState?.npcs?.[npcId];
+  if (!npc || npc.residency?.status !== 'resident') return;
+  const overlay = document.getElementById('modal-overlay');
+  const title = document.getElementById('modal-title');
+  const body = document.getElementById('modal-body');
+  const actions = document.getElementById('modal-actions');
+  if (!overlay || !title || !body || !actions) return;
+  title.textContent = 'Ask to Leave';
+  body.innerHTML = `<p>Are you sure you want to ask <strong>${convEscapeHtml(npc.bible?.name || 'them')}</strong> to move out? This will end their tenancy — they'll pack up and leave the apartment, and the remaining rent will be split among fewer people.</p>`;
+  actions.innerHTML = `<button class="btn" data-action="conv.confirm-ask-leave" data-npc="${npcId}">Ask Them to Leave</button><button class="btn btn-secondary" data-action="close-modal">Cancel</button>`;
+  overlay.setAttribute('data-open', '');
+}
+
+async function doConvConfirmAskLeave(npcId) {
+  closeModal();
+  const prevContext = convState?.prevTimeContext;
+  closeConversationOverlay();
+  if (prevContext) setTimeContext(prevContext);
+  await doAskToLeave(npcId);
 }
 
 // Step away from an active conversation — the deliberate, natural exit the
@@ -1076,6 +1666,20 @@ async function doStepAway(npcId) {
 }
 
 async function doMove(roomId) {
+  // Phase 3: Gated movement — can only move to adjacent rooms.
+  const currentRoom = currentGameState?.player?.location;
+  if (currentRoom && roomId !== currentRoom && !isRoomAdjacent(currentRoom, roomId)) {
+    const targetName = ROOMS[roomId]?.name || roomId;
+    const path = findPath(currentRoom, roomId);
+    if (path && path.length > 2) {
+      const next = ROOMS[path[1]]?.name || path[1];
+      addLogEntry('narration', `You can't get to the ${targetName} from here — you'd have to go through the ${next} first.`);
+    } else {
+      addLogEntry('narration', `You can't get to the ${targetName} from here directly.`);
+    }
+    render(currentGameState, currentSceneState);
+    return;
+  }
   showLoading();
   try {
     currentGameState.player.location = roomId;
@@ -1106,8 +1710,7 @@ async function doMove(roomId) {
       const context = assembleContext(currentGameState, currentSceneState);
       const result = await callLLM(context, 'You walk into the room.');
       if (result.valid && result.proposal) {
-        const applied = await applyProposal(result.proposal, context, currentGameState);
-        await syncNpcsFromKv(applied.updatedNpcIds);
+        const applied = await applyProposal(result.proposal, context, currentGameState, 'You walk into the room.');
         for (const entry of applied.logEntries) addLogEntry(entry.type, entry.text, entry.speaker);
         currentSceneState = advanceEngagement(currentSceneState, resolveSpeakerIds(result.proposal.dialogue, context.activeNpcs));
       }
@@ -1334,6 +1937,42 @@ async function handleRerollChar(npcId) {
   renderCharPreview();
 }
 
+// Phase 7: solo start. The player inherits an empty, run-down apartment
+// alone — no cast generation, no character creation modal, no roommates.
+// This is the Stardew-like opening: the empty bedrooms are the visible
+// statement of the problem, and the first objective (repair a bedroom via
+// RenoFix, then post a Classifieds listing) writes itself.
+async function startSoloGame() {
+  stopAutosave();
+  stopClockLoop();
+  closeModal();
+  showLoading('Moving in...');
+  try {
+    const seed = genSeed();
+    pendingCast = SIM_generateHouse(seed, 0, []);
+    await writeGeneratedGameState(pendingCast);
+    pendingCast = null;
+    await syncGameStateFromKv();
+    currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
+    addLogEntry('system', "You've inherited a luxury apartment. It's a wreck — most rooms are barely functional — and the rent is $1,900 a week. You have 14 days before the first bill. Good luck.");
+    // Phase 7: populate the gig board for day 1 so the player can start
+    // earning immediately — the opening's first objective is income.
+    // Done after syncGameStateFromKv so it operates on the loaded state.
+    if (currentGameState.world.computer?.apps?.gigs) {
+      currentGameState.world.computer.apps.gigs.lastRefreshDay = 0;
+      generateGigsForDay(currentGameState, 1);
+    }
+    render(currentGameState, currentSceneState);
+    startAutosave(() => currentGameState);
+    startClockLoop();
+  } catch (e) {
+    console.error('Solo start failed:', e);
+    showError('Failed to start new game: ' + e.message);
+  } finally {
+    hideLoading();
+  }
+}
+
 async function approveCastAndStartGame() {
   if (!pendingCast) return;
   // Stop any previous game's autosave timer before the (potentially long)
@@ -1341,6 +1980,11 @@ async function approveCastAndStartGame() {
   // for the exact race this closes. Resumed at the end once the new game
   // is fully written and currentGameState points at it.
   stopAutosave();
+  // Same race, same reason: the clock loop mutates currentGameState.meta.clock
+  // every frame and fires sim checkpoints against it. Left running across a
+  // new-game transition it would keep advancing (and checkpointing) the
+  // outgoing game's state while the new one is being written.
+  stopClockLoop();
   closeModal();
   showLoading('Writing your household\'s story...');
   try {
@@ -1355,6 +1999,7 @@ async function approveCastAndStartGame() {
         ...npc.bible,
         name: npc.bible.name || prose.name,
         visual: prose.visual,
+        physical: { ...npc.bible.physical, ...prose.physical },  // NPC Overhaul Phase 1: merge LLM-filled physical
         history: prose.history,
         sketch: prose.sketch,
         sampleLines: prose.sampleLines,
@@ -1380,6 +2025,7 @@ async function approveCastAndStartGame() {
     addLogEntry('system', 'Welcome to your new apartment!');
     render(currentGameState, currentSceneState);
     startAutosave(() => currentGameState);
+    startClockLoop();
   } catch (e) {
     console.error('New game failed:', e);
     showError('Failed to start new game: ' + e.message);
@@ -1393,6 +2039,7 @@ async function continueGame() {
   // menu is reachable mid-game (MENU_ACTIONS), so a previous game's timer
   // could still be armed when the player loads a (possibly different) save.
   stopAutosave();
+  stopClockLoop(); // same reason — see approveCastAndStartGame
   closeModal();
   showLoading('Loading...');
   try {
@@ -1401,6 +2048,8 @@ async function continueGame() {
       currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
       render(currentGameState, currentSceneState);
       startAutosave(() => currentGameState);
+      if (currentGameState.world.computer?.power === 'on') setTimeContext('browsing');
+      startClockLoop();
     } else {
       showMenuModal();
     }
@@ -1442,6 +2091,26 @@ function showLoading(msg) {
 function hideLoading() {
   const overlay = document.querySelector('.loading-overlay');
   if (overlay) overlay.classList.add('hidden');
+  flushPendingPeepBubble();
+}
+
+// --- Deferred caught-peeping bubble (Phase 6) ---
+// advanceAndResolve detects the peep but must not raise the modal itself:
+// it can be running mid-batch behind the loading overlay. It queues here
+// instead, and this flushes once nothing is covering the screen. Holds at
+// most one — several NPCs catching the player in a single batch is absurd,
+// and the extras are dropped rather than stacked.
+let pendingPeepBubble = null;
+
+function flushPendingPeepBubble() {
+  if (!pendingPeepBubble) return;
+  // Still covered — leave it queued; the next hideLoading will retry.
+  if (document.querySelector('.loading-overlay:not(.hidden)')) return;
+  const peep = pendingPeepBubble;
+  pendingPeepBubble = null;
+  // setTimeout(0) so the in-flight render finishes before the bubble is
+  // appended to a container that render is still rebuilding.
+  setTimeout(() => showNpcCaughtPeepingBubble(currentGameState, peep.npcId, peep.playerState), 0);
 }
 
 function showError(msg) {
@@ -1474,12 +2143,10 @@ function showMenuModal() {
   body.innerHTML = `
     <p class="dim">An apartment living sim.</p>
     <div class="menu-section">
-      <div class="form-hint">New Household</div>
-      <div class="menu-actions menu-actions-row">
-        <button class="btn btn-block" data-action="new-game-random">Random</button>
-        <button class="btn btn-block" data-action="new-game-guided">Guided</button>
-        <button class="btn btn-block" data-action="new-game-manual">Manual</button>
-        <button class="btn btn-block" data-action="new-game-seed">Seed</button>
+      <div class="form-hint">New Game</div>
+      <p class="dim tiny" style="margin-bottom: 12px;">You inherit a luxury apartment you can't afford — empty, in disrepair, and all yours. Fix it up, find roommates, make it home.</p>
+      <div class="menu-actions">
+        <button class="btn btn-block" data-action="new-game-solo">Start New Game</button>
       </div>
     </div>
     <div class="menu-actions">
@@ -1574,6 +2241,8 @@ async function boot() {
       currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
       render(currentGameState, currentSceneState);
       startAutosave(() => currentGameState);
+      if (currentGameState.world.computer?.power === 'on') setTimeContext('browsing');
+      startClockLoop();
     } else {
       showMenuModal();
     }
@@ -1590,10 +2259,9 @@ function attachEventHandlers() {
   document.addEventListener('click', (e) => {
     const target = e.target.closest('[data-action]');
     if (!target) {
-      // Check for room item click
-      const roomItem = e.target.closest('[data-room-id]');
-      if (roomItem) {
-        const roomId = roomItem.getAttribute('data-room-id');
+      // Check for floor plan room click (SVG rect with data-room-id)
+      if (e.target.tagName === 'rect' && e.target.hasAttribute('data-room-id')) {
+        const roomId = e.target.getAttribute('data-room-id');
         handleAction('move', null, { roomId });
       }
       return;
@@ -1621,6 +2289,10 @@ function attachEventHandlers() {
     if (target.hasAttribute('data-app')) extra.appId = target.getAttribute('data-app');
     if (target.hasAttribute('data-screen')) extra.screenId = target.getAttribute('data-screen');
     if (target.hasAttribute('data-row-id')) extra.rowId = target.getAttribute('data-row-id');
+    if (target.hasAttribute('data-room-id')) extra.roomId = target.getAttribute('data-room-id');
+    if (target.hasAttribute('data-amount')) extra.amount = Number(target.getAttribute('data-amount'));
+    if (target.hasAttribute('data-direction')) extra.direction = Number(target.getAttribute('data-direction'));
+    if (target.hasAttribute('data-search-text')) extra.searchText = target.getAttribute('data-search-text');
     handleAction(action, npcId || null, extra);
   });
 
@@ -1633,6 +2305,21 @@ function attachEventHandlers() {
         inputBar.value = '';
       }
     });
+  }
+
+  // Conversation overlay input
+  const convInput = document.getElementById('conv-input');
+  if (convInput) {
+    convInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && convInput.value.trim()) {
+        e.preventDefault();
+        handleAction('conv.send');
+      }
+    });
+  }
+  const convSendBtn = document.getElementById('conv-send-btn');
+  if (convSendBtn) {
+    convSendBtn.addEventListener('click', () => handleAction('conv.send'));
   }
 
   // Drawer toggles (mobile) — the two drawers slide in from opposite

@@ -7,7 +7,8 @@
   Perchance those don't exist, so main.html can't boot in a plain browser.
 
   This harness defines a minimal in-memory shim for exactly the surface
-  src/state.js, src/llm.js, and src/image.js call, then fetches main.html
+  src/srcfiles/state.js, src/srcfiles/llm.js, and src/srcfiles/image.js
+  call, then fetches main.html
   itself (so the DOM/CSS/script list stay a single source of truth — this
   file never duplicates them) and replays its content into this page.
   Delete this file once the computer-UI rework is verified; it is a
@@ -52,6 +53,26 @@
     // handling) rather than needing a hand-rolled fake LLM schema here.
     async generateText() { throw new Error('dev-harness: generateText stubbed out'); },
     async generateImage() { throw new Error('dev-harness: generateImage stubbed out'); },
+    // AfterHours' clip fetch. Real superFetch proxies a cross-origin GET;
+    // locally that would just be a CORS failure, which only ever exercises
+    // the error branch. Canned payload instead, shaped like the Pornhub
+    // webmasters response fetchAfterHoursClips parses, so the grid, the
+    // embed player and the masturbate/cum flow are all reachable in the
+    // harness. One entry carries markup in its title on purpose — that's
+    // the escaping regression test.
+    async superFetch(url) {
+      const n = 12;
+      const videos = Array.from({ length: n }, (_, i) => ({
+        title: i === 0 ? '<img src=x onerror="window.__XSS=1">pwn' : `Harness Clip ${i + 1}`,
+        url: `https://www.pornhub.com/view_video.php?viewkey=ph000000${i}`,
+        duration: `${5 + i}:0${i % 10}`,
+        views: 1234567 - i * 98765,
+        rating: 90 - i,
+        default_thumb: '',
+        thumbs: [],
+      }));
+      return { async json() { return { videos }; } };
+    },
   };
   window.generatorPublicId = undefined;
 
@@ -75,11 +96,14 @@
     // to finish before starting the next (classic scripts inserted via
     // createElement run async by default otherwise).
     const scriptTags = [...doc.querySelectorAll('script[src]')];
-    const bust = Date.now(); // avoid a stale cached src/*.js across repeat test loads
+    const bust = Date.now(); // avoid a stale cached src/srcfiles/*.js across repeat test loads
     for (const tag of scriptTags) {
       await new Promise((resolve, reject) => {
         const s = document.createElement('script');
-        s.src = tag.getAttribute('src') + '?t=' + bust;
+        // main.html's src attributes carry their own ?v= cache-bust, so
+        // append with the right separator rather than a second '?'.
+        const rawSrc = tag.getAttribute('src');
+        s.src = rawSrc + (rawSrc.includes('?') ? '&' : '?') + 't=' + bust;
         s.onload = resolve;
         s.onerror = () => reject(new Error('failed to load ' + s.src));
         document.body.appendChild(s);

@@ -1,12 +1,31 @@
 # Architecture notes — the sandbox expansion
 
 This file tracks the implementation of the sandbox-expansion plan (computer,
-object model, items, skills, stealth, autonomy). The original design brief
-lives in `ref/Original Prompt and Response Train.txt`; the full phased plan
-this file follows lives in the plan history (chat-side), summarized per
-phase below as each lands. This document — plus the section-header
-comments in each `src/*.js` file and the git commit history — is the
-design record. Keep it current as phases land; don't let it drift.
+object model, items, skills, stealth, autonomy) and the Apartment Expansion
+that followed it. This document — plus the section-header comments in each
+`src/*.js` file and the git commit history — is the design record for what
+has **already been built**. Keep it current as work lands; don't let it
+drift.
+
+Designs that are decided but **not yet built** live in their own plan docs
+rather than here, so they survive across sessions:
+
+| Plan doc | Covers |
+|---|---|
+| `ref/economy-and-rent-plan.md` | Rent, cost stack, metered utilities, quarterly taxes, investing |
+| `ref/vocation-and-gigs-plan.md` | The freelancer gig board that replaces `JOB_DEFS` |
+| `ref/apartment-upgrades-plan.md` | Disrepair start, facility repair, quality → rent leverage |
+| `ref/sleep-and-alarm-plan.md` | Alarm system, burnout, energy as a levelled stat |
+| `ref/game-opening-plan.md` | The Stardew-like intro and how the player acquires the apartment |
+| `ref/apartment-expansion-plan.md` | The Mirrored H layout (built — kept for the adjacency/room rationale) |
+| `ref/adult-content-overhaul-plan.md` | AfterHours; the API-host-alike redesign is still pending |
+
+> An earlier revision of this file cited `ref/Original Prompt and Response
+> Train.txt`, `ref/Perchance Helper AI - Next Steps.md` and `ref/Perchance
+> Helper AI - P0 - P6 Audit + Plan.txt`. Those files were deleted; their
+> still-relevant content is either in the phase sections below or in the
+> plan docs above. The design brief now lives in this file and those docs,
+> not in a chat transcript.
 
 ## Status
 
@@ -19,16 +38,36 @@ design record. Keep it current as phases land; don't let it drift.
 | P4 | **Done** | The computer (all 8 apps: Work, Nile, Browser, Classes, Services, Classifieds, IM, Stream) |
 | P5 | **Done** | Free-action resolution pipeline |
 | P6 | **Done** | Stealth, evidence, suspicion |
-| P7 | **Done** | NPC autonomy (drives, clothing, peeping) |
-| P8 | **Partial** | Content volume + app visual overhauls (see P7/P8 section) |
+| P7 | **Done** | NPC autonomy — drives, chores, NPC-to-NPC social, IM texts |
+| P8 | **Done** | Content volume expansion (sites, shows, items, events) |
+| Apartment Expansion v2 | **Done** | 17-room Mirrored H, adjacency graph, floor plan, gated movement, NPC pathfinding |
+| Time dilation | **Done** | Continuous rAF clock, context time scales, sim checkpoints |
+| Adult content v2 | **Done** | Live-API AfterHours, masturbation, interruption + NPC peeping |
+| Economy 1 | **Done** | Calendar: 360-day year, seasons, quarters |
+| Economy 2 | **Done** | Gig board replacing JOB_DEFS (vocation-and-gigs-plan) |
+| Economy 3 | **Done** | Flat cost stack: bills, cadences, splitting, cutoff consequences |
+| Economy 4 | **Done** | Apartment upgrades: facilities, disrepair, quality → rent leverage |
+| Economy 5 | **Done** | Usage-metered utilities (NPC actions meter too) |
+| Economy 6 | **Done** | Quarterly taxes, deductions, auto-reserve toggle |
+| Opening | **Done** | Solo start, inheritance framing, rent grace, first-day gig board |
+| Sleep & alarm | **Done** | Alarm system, burnout, energy as a levelled stat |
+| Upgrades deepening | **Done** | Facility decay/maintenance, appeal profiles, condition repair |
+| AfterHours redesign | **Done** | Search bar, pagination, embed-refusal fallback |
+| Investing | **Done** | Index funds (3 tiers), buy/sell, daily growth, tax integration |
 
 ## Load order
 
-`main.html`'s `<script>` tags are the dependency graph. Current order:
+`main.html`'s `<script>` tags are the dependency graph. Current order (all
+tagged `?v=N` for cache-busting — bump **every** tag together, since a
+partial bump is how you get a client running half-old code):
 
 ```
-config.js → defs.actions.js → state.js → sim.js → effects.js → actions.js
-→ npc.js → prompt.js → llm.js → image.js → render.js → ui.js
+config.js → icons.js → defs.world.js → defs.actions.js → defs.computer.js
+→ state.js → sim.js → world.js → items.js → effects.js → drives.js
+→ actions.js → intent.js → skills.js → stealth.js → time.js → computer.js
+→ npc.js → prompt.js → llm.js → interruption.js → image.js → render.js
+→ render.computer.js → render.desktop.js → ui.js → ui.computer.js
+→ ui.windowmanager.js
 ```
 
 Rule: if a new script's *top-level* code reads another script's `const`/
@@ -1155,207 +1194,439 @@ papering over this one instance of it.
   that the three new types are LLM-legal (`llm:true`, now `implemented:
   true`) and enforce their caps exactly like every other LLM-tier effect.
 
-## P7 / P8 — NPC autonomy, adult content, app visuals (external + audited)
+## P7 — NPC autonomy (drives)
 
-**Provenance**: this phase was built outside this session, by the
-Perchance in-editor AI Helper working from its own audit
-(`ref/Perchance Helper AI - P0 - P6 Audit + Plan.txt`), while the primary
-session was between context windows. It landed as a large uncommitted
-working-tree diff (~1500 lines across 12 files, one new file
-`src/drives.js`) with no verification of its own claims. This session's
-job was to audit that work against the real code (four parallel research
-passes, plus direct live-iframe testing) and fix what didn't hold up
-before committing any of it. What follows documents what's actually true
-of the code now, post-fix — not what the external tool's own narration
-claimed.
+**New file:** `src/drives.js`.
 
-### NPC autonomy (P7) — `src/drives.js`
+`DRIVE_DEFS` (CONFIG) is the data half: each entry declares `gates` (need
+thresholds), a `weight` (roll chance), `cooldownTicks`, a `blockFilter`
+(which schedule blocks it may fire in), and `effects` in the same DSL every
+other producer uses. `evaluateDrives(npc, npcId, npcs, resolved, gameState,
+rng, currentTick)` runs as `resolveTick`'s pass 3, after locations and needs
+are settled, so a drive sees the tick it is actually acting in.
 
-New file, loaded after `effects.js`/before `actions.js`. `DRIVE_DEFS`
-(config.js) declares 9 drives — `cook`, `shower`, `sleep_recover`,
-`seek_company`, `clean_common`, `do_laundry`, `chat_with_roommate`,
-`text_player`, `react_to_player` — each with `gates` (need thresholds),
-`weight` (roll chance), `cooldownTicks`, and a `blockFilter` (which
-schedule blocks it can fire in). `evaluateDrives(npc, npcId, npcs,
-resolved, gameState, rng, currentTick)` runs as `resolveTick`'s new pass 3
-(sim.js), after needs/mood (pass 2) — same synchronous, zero-LLM,
-trusted-producer pattern as everything else that calls `applyEffects`
-directly from inside a tick.
+Drives are deterministic and LLM-free by construction — that is the whole
+point of the phase. An apartment that only moves when the player talks to it
+reads as a diorama; drives are what make it a household.
 
-**NPC clothing** (`npc.clothing`, default `'dressed'`) is an additive
-field on the NPC factory (sim.js, same no-migration precedent as
-`suspicion`/`skills` — **not** in `CHARACTER_SCHEMA`, since that schema
-only governs LLM-authored `bible` fields). Written two ways: schedule-
-driven in `resolveTick` pass 2 (`sleep` block → `sleepwear`, waking →
-`dressed`) and drive-driven (`shower`'s `setsClothing`/`clothingRestore` →
-`towel` then back to `dressed`).
+**Behaviours:** `self_care` (shower/eat against low needs), `seek_company`
+(relocate to a common room), `clean_common`, `do_laundry`,
+`chat_with_roommate` (applies a `castWeb` delta between two NPCs),
+`text_player` (queues an IM), and `peep_player` (see Adult content v2).
 
-**`text_player`** queues a *templated*, non-LLM line into the IM thread
-(`processNpcImMessages`) — NPC-initiated texts are one-way; only the
-player's reply goes through the real LLM-backed `sendImMessage`.
-**`chat_with_roommate`** applies a `castWeb` relationship delta between two
-present NPCs, entirely independent of the scene/engagement system — it
-never touches `activeNpcIds`, so it doesn't interact with the "max 2 active
-NPCs" invariant at all.
+**Things that bit us here, recorded so they don't recur:**
 
-**Two bugs found and fixed in the drive system itself:**
-- `clean_common` (`cleansRoom: true`) checked `obj.dirtyWhen` (that field
-  lives on `OBJECT_DEFS[obj.defId]`, never the object instance) and
-  `obj.state === 'dirty'` (`obj.state` is a keyed object, e.g. `{made:
-  'unmade'}`, never that bare string) — the condition could never be true,
-  so the drive narrated "tidied up the {room}" while doing nothing
-  mechanical, the entire time it existed. Fixed to call `cleanRoomObjects`
-  (COMPUTER) directly — the same real implementation the hired housekeeper
-  already uses — instead of reimplementing (incorrectly) a parallel
-  version of it.
-- `do_laundry` had `effects: []` and no `cleansRoom` flag — also purely
-  flavor text — despite a real target existing: `laundry_hamper`
-  (defs.world.js) has a resettable `state.fill` (`empty`/`partial`/`full`).
-  Added a `emptiesHamper: true` flag, handled in `evaluateDrives` by
-  scanning every object bucket (the drive has no location requirement of
-  its own) for a hamper and resetting `fill` to `empty`.
-- Both verified directly: forcing a dirtied stove burner and a full hamper
-  through `evaluateDrives` with a zero-returning rng correctly reset the
-  burner to its clean state and the hamper to `empty`.
+- Cooldowns live on `driveResult.updatedNpc.flags`. `resolveTick` has to
+  merge that back into `npcUpdates[id]` or every `cooldownTicks` in the file
+  is decorative.
+- More generally: effect appliers are split between ones that **mutate** the
+  npc in place (`REL_DELTA`, `ADJUST_SUSPICION`) and ones that **replace**
+  `gameState.npcs[id]` wholesale (`MEMORY_EPISODE`, via `addMemoryEpisode`'s
+  pure return). `npcUpdates[id]` is built from the *pre-drive* snapshot, so
+  anything the replacing kind wrote is lost unless explicitly pulled back.
+  `resolveTick` now re-reads `needs`, `memory`, `relPlayer` and `suspicion`
+  from `gameState.npcs[id]` after the drive loop. **Any new field an effect
+  can touch has to be added there too.**
+- `clean_common` and `do_laundry` originally had no mechanical effect at all
+  — they narrated a chore and changed nothing. A drive that doesn't move
+  state is a lie told to the player.
+- `moveToCommon` used to only relabel the NPC's activity; it now actually
+  relocates them, weighted against rooms already at capacity.
 
-### Peeping and adult content (P7/P8) — `src/stealth.js`, AfterHours
+## P8 — Content volume
 
-**`resolvePeep(gameState, roomId)`** (stealth.js): observes an NPC through
-a door from the hallway. Picks a description from `PEEP_CLOTHING_DESC`
-keyed by `clothing`/`activity` (six templates: showering, sleeping,
-undressed, sleepwear, towel, dressed). A trusted producer — calls
-`applyEffects` directly, never touches `bible`. Wired end-to-end: `render.js`
-offers a "Peep into &lt;Room&gt;" chip from the hallway when a room's occupant
-isn't fully dressed or is showering; `doPeep` (ui.js) calls `resolvePeep`
-and persists. Detection: `PEEP_TUNING.detectionNpcAwake`/`detectionNpcAsleep`
-scaled by `1 - stealthSkillFactor × skillMod(player, 'stealth',
-'stealthSuccess')`; a shower adds a ×0.5 detection multiplier. Caught →
-`ADJUST_SUSPICION`/`REL_DELTA tension`/`REL_DELTA affection` (triple
-penalty); a near-miss (not caught, `rng() < PEEP_TUNING.suspectedChance`)
-narrates suspicion without any mechanical effect; a clean peep still grants
-an unconditional small mood gain.
+No new systems — `SITE_DEFS`, `STREAM_DEFS`, `ITEM_DEFS`, `OFFSCREEN_EVENTS`
+and the activity tables were widened. The point of the phase was that all of
+it is *data*: nothing in P8 required touching a renderer or a resolver,
+which is the standing test of whether the earlier phases actually earned
+their abstractions.
 
-**Bug found and fixed**: `PEEP_TUNING` declared `detectionNpcAware` but
-`stealth.js` read `PEEP_TUNING.detectionNpcAwake` — a name mismatch, so
-detection chance was `undefined` for every awake target (`NaN` once the
-shower/stealth-skill multipliers applied), and `rng() < NaN` is always
-`false`. **Every awake NPC was undetectable, at any stealth skill level —
-the confrontation/suspicion loop for peeping was dead weight outside of
-catching someone asleep.** Fixed by renaming the config key to match.
-Verified with 200 trials at stealth level 0 against a fixed-awake target:
-~51.5% caught, matching the formula's predicted 52.5% (`0.6 × (1 − 0.5 ×
-0.25)`) within sampling noise — previously this would have been 0%.
+## Apartment Expansion v2 — the Mirrored H
 
-Also removed two genuinely dead `PEEP_TUNING` values (`arousalGain`,
-`detectionBase` — declared, never read anywhere, no `arousal` player stat
-exists to wire them into) and moved the peep "suspected" threshold from a
-bare `0.2` inline in `stealth.js` to a real config value
-(`PEEP_TUNING.suspectedChance`), matching the "no magic numbers outside
-config" convention every other tuning value in this file already follows.
+8 rooms → 17. See `ref/apartment-expansion-plan.md` for the layout
+rationale; the architectural facts:
 
-**AfterHours** (defs.computer.js) is now a real browsable app: 5 categories
-(Featured/Amateur/Couples/Solo/Roleplay) × 12 titled entries, rendered as a
-category-tabbed grid (`renderAfterHours`, render.computer.js) with a real
-`root.generateImage` call per watched entry.
+- **`ROOM_ADJACENCY` (CONFIG) is the authoritative spatial graph.** It must
+  stay symmetric and fully connected — `findPath` (SIM, BFS) and the floor
+  plan both assume it. Promoted out of `drives.js`, where it had been a
+  private detail of the peep check.
+- **`ROOM_LAYOUT` (CONFIG)** gives each room `{x,y,w,h}` in SVG viewBox
+  units. `renderFloorPlan` (RENDER) draws rects, dashed adjacency connectors
+  and NPC dots, replacing the flat room list.
+- **Movement is gated.** `doMove` refuses non-adjacent rooms and names the
+  next room along the path instead. Distant rooms render `pointer-events:
+  none`, so the floor plan can't offer a move the rules will reject.
+- **NPCs path rather than teleport.** `npc.transit = {path, progress,
+  destination}` carries a journey across ticks, one room per tick. NPCs in
+  transit are skipped by the drive loop — otherwise a drive's
+  `activityOverride` would have them cooking in a hallway.
+- **`ACTIVITY_ROOM_PREFERENCES` (CONFIG)** routes an activity to a room, so
+  "exercising" happens in the gym rather than wherever the crowd-avoidance
+  roll landed. A `null` entry means "stay put"; callers must fall back to
+  the NPC's own room, not to `null`, or an NPC coming home from work never
+  materialises.
 
-**Bug found and fixed**: `doAfterHoursWatch` called `renderComputerScreen()`
-directly, then `render()` — which *also* calls `renderComputerScreen()`
-internally (this "call it twice" pattern is systemic across
-`ui.computer.js`, harmless everywhere else since re-rendering is
-idempotent). AfterHours was the one screen with a side effect embedded in
-its renderer: each of those two render passes independently found
-`afterHoursImgUrl` still `null` and fired its own `root.generateImage`
-call, each targeting a `#ah-watch-img` DOM node the *other* pass had
-already torn down by the time it resolved — so neither image reliably
-rendered. Fixed by making `renderAfterHours` a pure state→DOM renderer
-again (shows image / "Loading…" / "unavailable" based on a new
-`browser.afterHoursImgLoading` flag, no side effects) and moving the
-actual `generateImage` call into a new `generateAfterHoursImageOnce`
-(ui.computer.js), triggered exactly once from `doAfterHoursWatch`, guarded
-against a stale response landing after the player has switched to a
-different entry or category. Verified: exactly one `generateImage` call
-per watch, correct loading→image DOM transition, and a stale in-flight
-response from a superseded watch is discarded rather than overwriting the
-player's current view.
+## Time dilation — the continuous clock
 
-### Need/relationship consequences and quest chains (P8-adjacent)
+**New file:** `src/time.js`. Replaces "one player action = one tick".
 
-`NEED_CONSEQUENCES` (config.js) makes hitting 0 on a need do something real,
-applied via `processNeedConsequences` (ui.js), called from every
-`advanceAndResolve`: energy → forced sleep (teleport to bed, mood penalty,
-and — after a bug fix, see below — the clock actually advances by the lost
-time); hunger → a mood penalty, escalating to a second "health" consequence
-after enough consecutive occurrences; hygiene → tension/affection deltas to
-every resident plus a chance-based in-character reaction line.
-`REL_CONSEQUENCES` makes tension real past two thresholds: `0.6` (chance to
-avoid the player entering a room), `0.8` for 7 consecutive days (calls the
-existing `doAskToLeave` — a real residency-status change, not flavor text).
-`QUEST_CHAINS` (care_package, bonding_night, apology, +1 more) are real
-multi-step goals; `checkChainQuestProgress` is called from cooking, buying,
-talking, and (new this pass) `doGiveItem`.
+A rAF loop adds game-minutes to `meta.clock` at the current context's
+`TIME_DILATION.scales` rate (idle 20, browsing 10, conversation 1,
+masturbating 3, working 25 game-minutes per real second). The NPC sim runs
+at checkpoints every `simCheckpointMinutes` of accumulated game-time.
 
-**Two dead-config bugs found and fixed**, both in `processNeedConsequences`:
-- `NEED_CONSEQUENCES.energy.ticksLost` (8) was declared and tuned but never
-  read — a "collapse" cost a mood penalty and nothing else, despite a
-  comment describing the intent ("advance time by the lost ticks"). Fixed:
-  the clock now actually advances via `advanceClock` on collapse, placed
-  before `advanceAndResolve` computes its own day-crossing check, so a
-  collapse that crosses midnight still gets a correct day-rollover.
-  Deliberately doesn't re-simulate NPCs for the skipped hours — a blackout
-  is a narrative time-skip, not a resimulated scene. Verified: forcing
-  energy to 0 advanced the clock by exactly 240 minutes (8 ticks × 30 min).
-- `NEED_CONSEQUENCES.hunger.healthThresholdTicks`/`healthLogMessage` were
-  declared but nothing counted consecutive occurrences to compare against
-  the threshold. Added `player.flags._starvingStreak`, incremented each
-  call while hunger stays at 0, reset above 10; once it reaches
-  `healthThresholdTicks` a second, distinct log line and mood penalty fire
-  (once, guarded by `_starvingHealthHit`). Verified: three consecutive
-  `processNeedConsequences` calls at 0 hunger correctly fired the health
-  message exactly at the threshold, not before.
+**The invariant this file exists to hold: exactly one owner advances
+`meta.clock` per path.**
 
-`doGiveItem` (ui.js) also gained a defensive presence check
-(`getPresentNpcIds(...).includes(npcId)`) — it previously only verified the
-target NPC existed, relying entirely on the UI chip to enforce that they
-were actually in the room. Verified: attempting to give an item to an
-absent NPC now correctly no-ops (inventory and quest step both unchanged);
-a present NPC still works exactly as before.
+- *Continuous path* — `clockFrame` advances the clock; the checkpoint it
+  fires calls `advanceAndResolve(ticks, { advanceClock: false })`. When both
+  advanced, the game ran at literally double speed.
+- *Discrete path* — sleep, work blocks, cum, every `ACTION_DEFS` verb —
+  calls `advanceAndResolveMinutes(minutes)`, which pauses the loop, lets
+  `resolveBatch` step the clock one tick at a time (so each tick's schedule
+  resolution sees the right time of day), then settles on the exact target
+  minute.
 
-### A real, still-live bug found and fixed: stale autosave timer on new game
+`advanceAndResolveMinutes` computes ticks as *30-minute boundaries crossed*,
+not `round(minutes/30)`. A 15-minute action at 10:20 crosses 10:30 and costs
+a tick; the same action at 10:00 crosses nothing and costs none. The clock
+is its own carry, so short actions are cheap on average without a separate
+accumulator — and, critically, `timeCost` values in `defs.actions.js` mean
+what they say instead of all rounding up to one tick.
 
-The external audit's own diagnosis of a "NPCs vanishing from saves" bug
-was partly right (a real leak: starting a new game never deleted the
-*previous* game's stale NPC keys) and partly wrong (its specific
-"delete-then-write race" mechanism never existed in this codebase's
-history). The leak fix that shipped with this pass —
-`writeGeneratedGameState` (state.js) now writes the new cast first, then
-deletes any kv NPC key not in the new cast, ordered so an interruption
-never zeroes the new cast — is correct and was left as-is.
+Two failure modes worth remembering:
 
-But auditing it turned up a different, real race in the same neighborhood:
-`approveCastAndStartGame` doesn't call `startAutosave` until *after* the
-new game finishes writing — meaning the *previous* game's 30-second
-autosave timer (`AUTOSAVE_MS`, state.js) stays armed for the entire
-prose-expansion + kv-write sequence, which routinely exceeds 30s. If that
-stale timer fires before `syncGameStateFromKv` reassigns the module-level
-`currentGameState`, its `getState` closure still resolves to the *old*
-game, and `saveAtBoundary('timer', <old state>)` writes the old game's
-NPCs back into kv via the debounced write queue — landing after
-`writeGeneratedGameState`'s direct writes, so the new game ends up
-polluted with leftover roommates from the old one. Fixed with a new
-`stopAutosave()` (state.js, the missing counterpart to `startAutosave`),
-called at the very start of both `approveCastAndStartGame` and
-`continueGame` (the same race applies there — the menu is reachable
-mid-game) — no autosave timer is ever armed during a state transition.
-Verified the timer-cancellation mechanics directly (instrumented
-`setInterval`/`clearInterval`): `stopAutosave()` clears exactly the
-interval `startAutosave()` created.
+- **rAF chains multiply.** Pausing the loop from inside a callback that then
+  re-schedules itself leaves an orphan chain alive; resuming starts a second
+  one beside it. `clockGeneration` is bumped by every pause/stop/start, and
+  a callback whose generation is stale returns without re-scheduling.
+- **Day rollover has two possible triggers.** `resolveBatch`'s clock advance
+  used to be what made `advanceAndResolve` notice midnight; once checkpoints
+  stopped advancing the clock, the continuous path needed its own detection.
+  Both funnel through `markDayRolledOver`/`hasDayRolledOver` so
+  rent/deliveries/quests fire exactly once per day.
 
-### What's still genuinely P8 (not done)
+## Sleep and rent (current numbers)
 
-Content volume: 8 new browser sites, 10 new streaming shows, and the
-AfterHours upgrade above landed. App visual overhauls (real CSS/renderers
-for WorkHub/Nile/Streamly/Browser/IM, replacing the old generic
-dashboard/catalog/list renderers) also landed as part of this same diff.
-Not done: an intimacy/relationship-gated physical-intimacy system (still
-just relationship numbers + LLM-flavored dialogue), more recipes/items,
-and further NPC interaction depth beyond the drives above.
+Both are pressure systems and both were re-tuned after the expansion; the
+designs they are heading toward live in `ref/sleep-and-alarm-plan.md` and
+`ref/economy-and-rent-plan.md`.
+
+- **Sleep** is 6–8 hours scaled by energy at bedtime (drained → long night),
+  and energy recovered is proportional to hours *actually* slept. That
+  proportionality is what will give the planned alarm system teeth. Passing
+  out from exhaustion recovers at `restEfficiency` of the normal rate, so
+  collapsing can never be a shortcut past going to bed — it was, briefly,
+  and the need system spent that time arguing against itself.
+- **Rent is not an even split.** The player holds the lease and owes the
+  whole amount; each roommate offsets at most
+  `ECONOMY.rent.maxRoommateShare` (20%) of the total via
+  `residency.rentShare`. Solo is deliberately not payable. Recruiting is the
+  relief valve, and one roommate is never enough to solve it.
+
+## Adult content v2 — AfterHours, interruption, peeping
+
+**New files:** `src/interruption.js`, plus the bubble sections in
+`ui.computer.js`.
+
+- **AfterHours is live.** Categories map to search queries against the host's
+  webmaster API, fetched through `superFetch` and embedded as iframe
+  players; `SITE_DEFS.afterhours.adultContent.entries` no longer exists.
+  Some clips return an embed refusal — a redesign to behave more like the
+  host's own site is planned (`ref/adult-content-overhaul-plan.md`).
+  Everything on a clip is third-party text: build those nodes with
+  `textContent`, never an `innerHTML` template.
+- **Browsing is free; cumming is the action.** Watching costs nothing.
+  `doAfterHoursMasturbate` enters a state (3x time scale) and starts
+  background pre-generation of the likeliest interrupter's line;
+  `doAfterHoursCum` is the discrete cost (`MASTURBATION.timeCostMinutes`)
+  and rolls the interruption check. The warmup gate is derived from
+  `afterHoursWarmupUntilMs` in state — a `setTimeout` scheduled from inside
+  the render pass re-armed on every re-render and never elapsed.
+- **`INTERRUPTION` (CONFIG)** weights the walk-in roll by door state,
+  time-of-day phase, NPC personality, schedule block and relationship.
+  `getDoorState` (WORLD) reads the room's door object; locking a door is a
+  cheap action with a real mechanical payoff.
+- **NPC peeping is the mirror** of the player's `resolvePeep`. Most attempts
+  are silent — the player never learns of them, and the NPC banks a memory.
+  If the player's perception beats the NPC's stealth, a bubble appears with
+  a three-response choice.
+- **Vulnerability is an explicit, transient flag**, not an inference.
+  `ACTION_DEFS.vulnerableState` (currently `self.shower`) and `doSleep` set
+  `player.flags._vulnerableState` for exactly the ticks the action resolves,
+  via `withVulnerableState`. The first version inferred it from location and
+  phase — merely standing in a bathroom counted as showering — which had
+  NPCs peeping at a fully-dressed player walking through.
+
+**Both bubbles are DOM-injected, outside the render cycle**, because
+`renderWindows` does `innerHTML = ''` on every window body. They append to
+`#computer-screen`, which survives re-renders. Their `dismiss` is
+single-shot and removes its own `keydown` listener — a listener that
+outlives its bubble means the next Escape applies the consequences again.
+
+## The opening — solo start (Phase 7)
+
+**Plan:** `ref/game-opening-plan.md`.
+
+The game no longer generates a full household at new-game. Instead the
+player inherits a luxury apartment alone — empty bedrooms, everything in
+disrepair, and 14 days before the first rent bill. This is the Stardew-like
+opening the plan called for: the empty bedrooms are the visible statement
+of the problem, and the first objective (repair a bedroom → post a
+Classifieds listing → accept a roommate) writes itself.
+
+**What changed:**
+
+- `ECONOMY.opening` (config.js) — new config block: `soloStart`,
+  `rentGraceDays: 14`, `firstBillDelay: 7`.
+- `ECONOMY.startingMoney` — $3,500 → $3,800 (≈2 weeks of solo rent at
+  $1,900/wk; buys time, not safety).
+- `SIM_generateHouse` (sim.js) — when `soloStart` and `residentCount === 0`,
+  skips cast generation entirely and calls `buildGameState` with an empty
+  cast. The existing classifieds/recruitment machinery (applicant
+  generation, move-in, habitability gate) handles all later roommates.
+- `buildGameState` (sim.js) — `rentDueDay` now uses `rentGraceDays`; rent
+  is recomputed after `world.upgrades` exists so the starting split
+  reflects disrepair. Fixed a pre-existing bug where `computeRent` was
+  called with a `gameState` reference that didn't exist yet during
+  `buildGameState` — it only worked before because the old new-game
+  path always had residents.
+- `initBillState` (sim.js) — utility first-due days shifted by
+  `firstBillDelay` so the opening isn't a wall of bills on day one. Rent
+  in the bill table aligns with `rentDueDay`.
+- `generateGigsForDay` (computer.js) — day 1 always generates (skips the
+  30% dry-spell roll) so the solo-start player has immediate income.
+- `startSoloGame` (ui.js) — new function: generates a solo game, writes
+  to kv, populates the day-1 gig board, and shows the opening message.
+  Replaces the old character-creation modal as the primary new-game path.
+- `showMenuModal` (ui.js) — "New Household" with Random/Guided/Manual/Seed
+  replaced with a single "Start New Game" button that calls
+  `startSoloGame`. The old cast-creation modal and its actions
+  (`new-game-random` etc.) remain in the code for the legacy path but
+  are no longer reachable from the menu.
+
+**Verified:**
+
+- Solo start produces 0 NPCs, $3,800, apartment quality 0.02 (all
+  facilities broken except kitchen_appliances), rent $1,900/wk with player
+  carrying the full amount.
+- Rent due day 15 (14-day grace). Utility bills start at day 19+ (7-day
+  delay). Phone/insurance at day 35/37.
+- Gig board populated on day 1 (3 entries) despite the seed's RNG rolling
+  a dry-spell value (0.82 > 0.7) — the day-1 override works.
+- Classifieds recruitment path is intact: `generateApplicantsForDay`
+  handles 0 existing residents gracefully (empty `usedCats`/`priorTags`).
+
+## Sleep, alarm, burnout, energy levelling (Phase 8)
+
+**Plan:** `ref/sleep-and-alarm-plan.md`.
+
+The sleep duration model (6–8 hours scaled by energy at bedtime) was
+already built. This phase adds the three systems the plan called for:
+the alarm, burnout, and energy as a levelled stat.
+
+**The alarm system** — the player can set an alarm that caps the night.
+It can only shorten sleep, never extend it. If the natural night would
+end before the alarm, nothing happens. If the alarm would fire
+mid-night, the player is woken early and recovers only
+`hoursActuallySlept × restorePerHour`. The bad case this creates: very
+drained + went to bed late + early alarm → you needed 8 hours, got 5,
+start the day at 67 energy and it compounds.
+
+- `SLEEP.alarmMinHour` / `alarmMaxHour` (config.js) — alarm can be set
+  between 04:00 and 12:00.
+- `player.alarm` (sim.js) — null = no alarm, 0–23 = the alarm hour.
+- `resolveSleepHoursWithAlarm` (sim.js) — wraps `resolveSleepHours` to
+  cap the night at the alarm. Returns `{ hours, alarmFired }`.
+- `doSetAlarm` (ui.js) — sets or clears the alarm.
+- `matchAlarmIntent` (intent.js) — free-text intent: "set alarm for 6am"
+  → hour 6, "clear alarm" → null. Validates against `alarmMinHour`/`Max`.
+- `doSleep` (ui.js) — uses `resolveSleepHoursWithAlarm` instead of
+  `resolveSleepHours`; appends "The alarm dragged you out of bed." when
+  the alarm fires.
+
+**Burnout** — working near the energy ceiling day after day must hurt.
+`consecutiveWorkDays` tracks days above `BURNOUT.workBlockThreshold` (6
+blocks); each raises `burnoutLevel` by 0.12. Rest days reduce it by 0.20.
+`burnoutLevel` scales a mood penalty (`getBurnoutMoodPenalty`, 0.4 at
+full) and a work-pay multiplier (`getBurnoutWorkPayMult`, 0.5 at full).
+The death-spiral is the feature: burnout makes grinding progressively
+less profitable, not just unpleasant.
+
+- `BURNOUT` (config.js) — all tuning knobs.
+- `player.burnout` (sim.js) — `{ consecutiveWorkDays, burnoutLevel,
+  lastWorkDay }`.
+- `updateBurnout` (sim.js) — called at day rollover from
+  `processDayRollover` with `gigs.workBlocksToday`.
+- `gigs.workBlocksToday` (computer.js) — incremented by `workGigBlock`,
+  reset at day rollover.
+- `computeFocusMultiplier` (computer.js) — subtracts `getBurnoutMoodPenalty`
+  from effective mood before computing the focus factor.
+- `workGigBlock` (computer.js) — multiplies progress by
+  `getBurnoutWorkPayMult`, so burnout makes each block less productive.
+
+**Energy as a levelled stat** — starting energy is 70 (not 100) and grows
+via sleep consistency and exercise. A lower ceiling means fewer work
+blocks per day, making early rent harder and the pressure to recruit
+sharper. `energyMax` rises by 0.5 per good sleep (near natural bedtime,
+no alarm) and 1.0 per workout, capped at `ENERGY.absoluteMax` (100).
+
+- `ENERGY` (config.js) — `startingMax: 70`, `absoluteMax: 100`,
+  `growthPerGoodSleep: 0.5`, `growthPerWorkout: 1.0`,
+  `goodSleepWindowHours: 2`.
+- `player.energyMax` (sim.js) — the per-player ceiling.
+- `resolveSleepHours` / `resolveSleepHoursWithAlarm` (sim.js) — accept
+  an optional `energyMax` parameter so the "drained" calculation uses
+  the per-player ceiling, not the absolute cap.
+- `doSleep` (ui.js) — caps energy at `energyMax`; grows it when bedtime
+  is within `goodSleepWindowHours` of `naturalBedtimeHour` and the alarm
+  didn't fire.
+- `runRegisteredAction` (actions.js) — grows `energyMax` by
+  `growthPerWorkout` after `self.workout`.
+- Collapse recovery (ui.js) — capped at `energyMax` instead of
+  `NEEDS.energy.max`.
+
+**Render:** the sidebar stats panel shows the alarm time (when set) and
+burnout percentage (when > 0). Energy displays as `energy/energyMax` —
+the player sees both the current level and the ceiling.
+
+**Verified:**
+
+- Alarm set via `doSetAlarm(5)` and via free text "set alarm for 6am".
+- Bad case: energy 5, bedtime 01:00, alarm 06:00 → 5 hours sleep, 67.5
+  energy (vs 100 natural). Alarm fires correctly.
+- Good sleep at 22:00 with no alarm → energyMax grows 70 → 70.5.
+- Burnout: 5 high-work days → level 0.60, mood penalty 0.24, work pay
+  mult 0.70. 2 rest days → level 0.20, recovering.
+- Starting energy/energyMax: 70/70 (down from 100/100).
+
+## Apartment upgrades deepening — maintenance, appeal (Phase 9)
+
+**Plan:** `ref/apartment-upgrades-plan.md`.
+
+The facility system (facilities, tiers, disrepair, quality→rent
+leverage) was built in Economy 4. This phase adds the three missing
+pieces the plan called for: maintenance/decay, appeal profiles, and
+condition repair.
+
+**Facility decay with use** — facilities degrade as they're used, not
+merely with time. Each gated action (player or NPC) decrements the
+facility's `condition` (0–100) by `MAINTENANCE.decayPerUse` (1.5). At 0,
+the facility drops a tier (upgraded→functional→broken). A full house
+degrades faster because NPC drives meter decay too — the roommate-
+friction beat: someone who uses the gym daily is wearing out equipment
+everyone paid for.
+
+- `MAINTENANCE` (config.js) — `decayPerUse: 1.5`, `repairCostPerPoint: 2`,
+  `startingCondition: 100`, `npcDecayActions` mapping drive IDs to
+  facility IDs.
+- `FACILITY_DEFS[*].appeal` (config.js) — added to every facility: an
+  object mapping interest names to weight, with `'*'` as the default.
+  Fitness-minded NPCs value the gym; homebodies value the living room;
+  studious ones value the study.
+- `upgrade.condition` (sim.js) — 0–100, starts at 100 for functional+,
+  0 for broken. Old saves without the field are guarded (defaults to
+  100 on first access).
+- `decayFacilityCondition` (computer.js) — decrements condition, drops
+  tier at 0, recomputes rent on tier drop. Called from `executeAction`
+  (player gated actions) and `evaluateDrives` (NPC `npcDecayActions`).
+- `repairFacilityCondition` (computer.js) — restores condition to 100
+  for `repairCostPerPoint × pointsNeeded` dollars. Cheaper than a tier
+  upgrade — the maintenance path that keeps the sink open.
+- `computeApartmentAppeal` (computer.js) — weighted sum of facility
+  appeal values for an NPC's interests, scaled by tier qualityValue.
+  Intended for the Classifieds applicant evaluation.
+
+**Render:** the upgrades dashboard shows a condition bar (green/yellow/
+red) for each functional+ facility, with a "Repair — $N" button when
+condition is below 100. The bar uses `.upg-condition-bar.good/.worn/
+.critical` CSS classes.
+
+**Verified:**
+
+- Conditions initialized: broken=0, functional=100.
+- Decay: kitchen_appliances 100→98.5 after one use.
+- Repair: worn to 83.5, repaired to 100 for $33 (16.5 pts × $2).
+- Tier drop: stove upgraded to functional, decayed 67 uses → dropped
+  to broken, condition reset to 100.
+- Appeal: fitness NPC values gym (0.15→1.25 when gym goes functional);
+  gamer NPC values game room (0.25→1.4 when game room added).
+- UI: 3 condition bars render for functional facilities; repair button
+  appears for worn facilities and works on click.
+
+## AfterHours redesign (Phase 10)
+
+**Plan:** `ref/adult-content-overhaul-plan.md` ("Still open" section).
+
+The AfterHours porn-browser app was functional but lacked search and
+graceful embed-refusal handling. This phase adds:
+
+- **Search bar** — free-text search via Pornhub's webmaster API,
+  overriding the category search. Enter key triggers search; clear
+  button removes the query.
+- **Pagination** — explicit prev/next page navigation with a page
+  indicator. The refresh button now loads the next page rather than
+  refreshing the current one.
+- **Embed refusal fallback** — when an iframe fails to load (some
+  clips refuse to embed with "you can only watch this on Pornhub"),
+  a "Video not loading? Watch on site →" button opens the clip in a
+  new tab. All URLs go through element properties, never innerHTML
+  (they're third-party API output).
+
+**State additions** (`computer.js`): `afterHoursSearchQuery`,
+`afterHoursTotalPages`. Clip objects now carry `watchUrl` for the
+fallback link.
+
+**Render** (`render.computer.js`): search bar, pagination bar, embed
+fallback bar. `showEmbedFallback` helper builds the refusal message.
+
+**Verified:** search sets query correctly; page navigation works
+(prev/next); embed fallback button renders; all new state fields
+present.
+
+## Investing — the money accelerator (Phase 11)
+
+**Plan:** `ref/economy-and-rent-plan.md` (investing as accelerator).
+
+The economy plan says "idle reserve money should be working" and
+"investing becomes the accelerator for [apartment upgrades] rather
+than a parallel score." This phase adds a simple index-fund investing
+app ("Portfolia") to the computer.
+
+**The model** is deliberately simple — no stock picking, no day
+trading, no watching the ticker. Three funds with different
+risk/return profiles:
+
+| Fund | Return | Volatility | Min |
+|---|---|---|---|
+| T-Bill Fund | 4%/yr | ±0.2%/day | $100 |
+| Index 500 | 9%/yr | ±1.2%/day | $500 |
+| Growth Tech | 14%/yr | ±2.5%/day | $1000 |
+
+Daily returns are `annualReturn/360 + noise`, where noise is a seeded
+normal distribution (Box-Muller) so it's deterministic per-save — no
+cheating by reloading. Growth is processed at day-rollover by
+adjusting share values directly.
+
+- `INVESTING` (config.js) — fund definitions, `dailyReturn`
+  function (seeded PRNG + Box-Muller), 0.5% transaction fee.
+- `investBuy`/`investSell` (computer.js) — buy/sell with fee,
+  tracks cost basis and realized gains.
+- `getPortfolioValue`/`getPortfolioCostBasis` (computer.js) —
+  current value and P&L.
+- `processInvestmentGrowth` (computer.js) — day-rollover growth.
+  Called from `processDayRollover` in `ui.js`.
+- **Tax integration** — realized gains added to `quarterGross` in
+  `computeTaxOwed`, reset at quarter end.
+
+**Render** (`render.computer.js`): portfolio summary (value, P&L,
+realized gains), fund cards with buy/sell buttons, risk disclaimer.
+
+**Verified:**
+- Buy $2000 Index 500 → shares=2000, fee=$10, money=$7990.
+- Sell $1000 → shares=1000, fee=$5, gain=$0 (same-day sell).
+- Day rollover growth: 1000→1018 (+1.8% — a good day).
+- Sell all at 1018 → realized gain=$18, money increased.
+- Tax: $500 realized gains + $10k gross - $120 deductions = $10,380
+  taxable, $2,803 owed at 27%.
+- UI: 3 fund cards render, buy/sell buttons work.

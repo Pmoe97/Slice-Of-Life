@@ -15,7 +15,18 @@ function resolveContentConfig(contentConfig) {
 function buildStyleSection(contentConfig) {
   const cfg = resolveContentConfig(contentConfig);
   const profile = TONE_PROFILES[cfg.tone] || TONE_PROFILES.balanced;
-  return `STYLE: ${profile.styleDirective}`;
+  return `STYLE: ${profile.styleDirective}
+
+ANTI-PURPLE-PROSE RULES (follow strictly):
+- Write like a person, not a novelist. No flowery prose.
+- No "a symphony of..." or "the dance of..." metaphors.
+- No listing three things in a row with the same sentence structure.
+- No starting sentences with "The" more than twice in a row.
+- No describing eyes as "orbs", "pools", or "windows to the soul".
+- No "could feel the tension in the air".
+- Characters speak like real people. Short sentences. Incomplete thoughts.
+- Actions are physical and specific, not abstract ("shifts weight" not "embodies unease").
+- No summarizing emotions — show them through behavior and dialogue.`;
 }
 
 function buildContentSection(contentConfig) {
