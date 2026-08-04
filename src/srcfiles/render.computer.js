@@ -40,6 +40,7 @@ const COMPUTER_RENDERERS = {
   'roomlist-studio': renderRoomListStudio,
   'roomlist-assign': renderRoomListAssign,
   messenger: renderMessages,
+  'bank-overview': renderBankOverview,
   'bills-dashboard': renderBillsDashboard,
   'upgrades-dashboard': renderUpgradesDashboard,
   'invest-dashboard': renderInvestDashboard,
@@ -448,14 +449,17 @@ function renderAfterHours(body, gs, site) {
       closeBtn.textContent = 'Close player';
       actions.appendChild(closeBtn);
 
-      // Phase 3: masturbate/cum/stop buttons
-      if (browser.afterHoursMasturbating) {
+      // Phase 3: masturbate/cum/stop buttons. Session-active is DERIVED
+      // (Phase 5.5): the record exists but the device must still be in
+      // use — a pocketed/locked/dead phone or a powered-off computer reads
+      // as inactive here too.
+      if (isAfterHoursSessionActive(gs)) {
         // Session in progress — show Cum (with warmup) and Stop.
-        // afterHoursSessionStart is an absolute game-minute (day*1440+m),
-        // not a time-of-day, so a session running past midnight reports
+        // startedTick is an absolute game-minute (day*1440+m), not a
+        // time-of-day, so a session running past midnight reports
         // elapsed time instead of a large negative number.
-        const sessionMinutes = browser.afterHoursSessionStart != null
-          ? Math.max(0, Math.round(clockToAbsolute(gs.meta.clock) - browser.afterHoursSessionStart))
+        const sessionMinutes = browser.afterHoursSession?.startedTick != null
+          ? Math.max(0, Math.round(clockToAbsolute(gs.meta.clock) - browser.afterHoursSession.startedTick))
           : 0;
         const status = document.createElement('span');
         status.className = 'ah-session-status dim tiny';
@@ -1714,8 +1718,14 @@ function studioSliderField(label, field, value, min, max, step, checked) {
   slider.className = 'rl-studio-slider';
   slider.setAttribute('data-studio-field', `temperament.${field}`);
   if (!checked) slider.disabled = true;
+  // Phase 5 (phone parity): scope the value read to this field's own wrap
+  // — the same studio screen can now be open on the phone and the
+  // computer at once, and getElementById would grab the *first* matching
+  // id in the document (the other shell's slider) and update the wrong
+  // label.
   slider.addEventListener('input', (e) => {
-    document.getElementById(`${id}-val`).textContent = parseFloat(e.target.value).toFixed(1);
+    const valEl = wrap.querySelector(`#${id}-val`);
+    if (valEl) valEl.textContent = parseFloat(e.target.value).toFixed(1);
   });
   row.appendChild(cb);
   row.appendChild(slider);
@@ -1920,6 +1930,26 @@ function renderMessages(body, gs, app, screen) {
       bubble.innerHTML = m.from === 'system'
         ? `<div class="im-msg-text dim">${m.text}</div>`
         : `<div class="im-msg-text">${m.text}</div><div class="im-msg-time">${timeStr}</div>`;
+      // BrineOS Phase 8.5: a shared photo attaches a thumbnail to its
+      // bubble. The record can be gone (roll eviction past CAMERA.rollCap
+      // outlives the message referencing it) — degrade to a text note
+      // rather than a broken image or a crash.
+      if (m.photoId) {
+        const photo = gs.world.phone?.camera?.roll?.find(p => p.id === m.photoId);
+        if (photo) {
+          const thumb = document.createElement('img');
+          thumb.className = 'im-msg-photo';
+          thumb.alt = photo.caption;
+          thumb.src = getPlaceholder();
+          bubble.insertBefore(thumb, bubble.firstChild);
+          getPhotoImage(photo).then(result => { if (result.url) thumb.src = result.url; });
+        } else {
+          const gone = document.createElement('div');
+          gone.className = 'im-msg-text dim';
+          gone.textContent = '[photo no longer available]';
+          bubble.insertBefore(gone, bubble.firstChild);
+        }
+      }
       log.appendChild(bubble);
     }
     pane.appendChild(log);
@@ -2103,6 +2133,91 @@ function renderTaxPanel(body, gs) {
   body.appendChild(panel);
 }
 
+// The whole money picture at a glance. Four real numbers, all drawn
+// straight from live state (decision A of ref/BrineOS-The-Phone-plan.md):
+// --- Brine Bank Overview (BrineOS Phase 1) ---
+// The whole money picture at a glance. Four real numbers, all drawn
+// straight from live state (decision A of ref/BrineOS-The-Phone-plan.md):
+// checking balance, the tax reserve, portfolio value, and total
+// outstanding bills. No new account types — getting to Bills or Portfolia
+// is the shell's screen tabs' job, so this screen is all-numbers.
+function renderBankOverview(body, gs, app, screen) {
+  const checking = Math.round(gs.player.money || 0);
+  const reserve = Math.round((gs.world.taxes && gs.world.taxes.reserve) || 0);
+  const portfolio = Math.round(getPortfolioValue(gs));
+  const bills = gs.world.bills || {};
+  let outstanding = 0;
+  const owed = [];
+  for (const def of Object.values(BILL_DEFS)) {
+    const bill = bills[def.id];
+    if (!bill || (bill.balance || 0) <= 0) continue;
+    outstanding += bill.balance;
+    owed.push({ label: def.label, balance: bill.balance, cutoff: !!bill.cutoffActive });
+  }
+  const netWorth = checking + reserve + portfolio;
+  const outstandingNote = outstanding > 0 ? '$' + outstanding.toLocaleString() + ' in bills outstanding' : 'Bills all paid up';
+
+  const hero = document.createElement('div');
+  hero.className = 'invest-hero';
+  hero.innerHTML = `
+    <div class="invest-summary">
+      <div class="invest-value">${netWorth.toLocaleString()}</div>
+      <div class="invest-label dim tiny">Net Worth (checking + reserve + portfolio)</div>
+    </div>
+    <div class="invest-realized dim tiny">
+      ${outstandingNote}
+    </div>
+  `;
+  body.appendChild(hero);
+
+  const balances = makePanel(`
+    <div class="bank-balance-grid">
+      <div class="bank-balance-card">
+        <div class="bank-balance-value">$${checking.toLocaleString()}</div>
+        <div class="bank-balance-label dim tiny">Checking</div>
+      </div>
+      <div class="bank-balance-card">
+        <div class="bank-balance-value">$${reserve.toLocaleString()}</div>
+        <div class="bank-balance-label dim tiny">Tax Reserve</div>
+      </div>
+      <div class="bank-balance-card">
+        <div class="bank-balance-value">$${portfolio.toLocaleString()}</div>
+        <div class="bank-balance-label dim tiny">Portfolio</div>
+      </div>
+    </div>
+  `);
+  body.appendChild(balances);
+
+  const owedPanel = document.createElement('div');
+  owedPanel.className = 'cs-panel';
+  const header = document.createElement('div');
+  header.className = 'tax-header';
+  header.innerHTML = '<span class="tax-title">Outstanding</span>' +
+    '<span class="tax-quarter">' + (outstanding > 0 ? '$' + outstanding.toLocaleString() + ' total' : 'all current') + '</span>';
+  owedPanel.appendChild(header);
+  if (owed.length === 0) {
+    const none = document.createElement('div');
+    none.className = 'dim tiny';
+    none.textContent = 'Nothing owing. Everything is current.';
+    owedPanel.appendChild(none);
+  } else {
+    for (const o of owed) {
+      const row = document.createElement('div');
+      row.className = 'bank-owed-row' + (o.cutoff ? ' cutoff' : '');
+      row.innerHTML = '<span class="bank-owed-label">' + o.label + (o.cutoff ? ' <span class="bills-status-pill cutoff">CUTOFF</span>' : '') + '</span>' +
+        '<span class="bank-owed-value">$' + o.balance.toLocaleString() + '</span>';
+      owedPanel.appendChild(row);
+    }
+  }
+  body.appendChild(owedPanel);
+
+  const hint = document.createElement('div');
+  hint.className = 'dim tiny';
+  hint.textContent = 'Head to the Bills tab to pay, or Portfolia to invest.';
+  body.appendChild(hint);
+}
+
+
 // --- Bills dashboard (Phase 3) ---
 // One card per bill showing label, status pill, balance, due day, and a
 // Pay button. Cutoff banners at the top show which utilities are off —
@@ -2184,6 +2299,19 @@ function renderBillsDashboard(body, gs, app, screen) {
       const fee = bill.cutoffActive ? def.reconnectionFee : 0;
       btn.textContent = fee > 0 ? 'Pay ' + bill.balance + ' + ' + fee + ' reconnect' : 'Pay ' + bill.balance;
       card.appendChild(btn);
+    }
+
+    // BrineOS Phase 7: a standing preference, not a payment action, so it
+    // renders regardless of current balance. Rent (split:'lease') has its
+    // own cap/eviction path and is not eligible.
+    if (def.split !== 'lease') {
+      const autopayBtn = document.createElement('button');
+      autopayBtn.className = 'btn tiny bills-autopay-btn';
+      autopayBtn.setAttribute('data-action', 'bills.toggle-autopay');
+      autopayBtn.setAttribute('data-row-id', def.id);
+      autopayBtn.setAttribute('data-on', bill.autopay ? 'on' : 'off');
+      autopayBtn.textContent = bill.autopay ? 'Autopay: On' : 'Autopay: Off';
+      card.appendChild(autopayBtn);
     }
     grid.appendChild(card);
   }
@@ -2303,6 +2431,17 @@ function renderUpgradesDashboard(body, gs, app, screen) {
         ${conditionHtml}
         <div class="upg-facility-action">${actionHtml}</div>
       `;
+      // BrineOS Phase 8.4: a before/after restoration shot for this
+      // facility at its current tier — appended as a node rather than
+      // folded into the innerHTML template above, matching how the bills
+      // dashboard appends its usage breakdown/pay button after its own
+      // innerHTML assignment.
+      const snapBtn = document.createElement('button');
+      snapBtn.className = 'btn tiny upg-snap-btn';
+      snapBtn.setAttribute('data-action', 'upgrades.snap-photo');
+      snapBtn.setAttribute('data-row-id', def.id);
+      snapBtn.textContent = 'Snap Photo';
+      card.querySelector('.upg-facility-action').appendChild(snapBtn);
       section.appendChild(card);
     }
     body.appendChild(section);

@@ -59,6 +59,28 @@ const OBJECT_DEFS = {
     evidenceKinds: ['browser_history', 'open_app'],
     imagePhrase: 'a desktop computer on the desk',
   },
+  // The BrineOS phone — a world OBJECT per decision B of
+  // ref/BrineOS-The-Phone-plan.md, NOT an inventory item: only objects
+  // have per-instance identity, mutable state/flags, and can sit alone in
+  // a room bucket (a carried phone on the kitchen counter needs a floor).
+  // `unique` stops a layout bump ever spawning a second one (L5).
+  // Battery is numeric flags.battery (0-100), NOT state — state values
+  // must stay string enums (cleanRoomObjects / validateObjectStateChange
+  // depend on it). NO dirtyWhen/cleanlinessWeight (L6). evidenceKinds
+  // added in Phase 9 (L7) — withheld through Phases 2-8 so the phone
+  // wasn't a LEAVE_EVIDENCE target for the player's own sneaking before
+  // snooping (the actual mechanic that reads this kind) existed.
+  phone: {
+    id: 'phone', label: 'Phone', nouns: ['phone', 'cell', 'cellphone'],
+    portable: true, breakable: true, container: false, private: true,
+    unique: true,
+    states: { plugged: ['unplugged', 'plugged'], lock: ['unlocked', 'locked'] },
+    defaultState: { plugged: 'unplugged', lock: 'unlocked' },
+    defaultFlags: { battery: PHONE.startingBattery },
+    affords: ['phone.use', 'phone.pickup', 'phone.drop', 'phone.plug', 'inspect.object'],
+    imagePhrase: 'a phone face-down on the surface',
+    evidenceKinds: ['phone_contents'],
+  },
   guitar: {
     id: 'guitar', label: 'Guitar', nouns: ['guitar'],
     portable: true, breakable: true, container: false, private: true,
@@ -435,7 +457,7 @@ const OBJECT_DEFS = {
 // once. (v2 = the Mirrored H expansion: bedroom_door/bathroom_door and the
 // seven new rooms.) Removing a fixture needs no bump — the back-fill only
 // ever adds, and never deletes what a save already has.
-const APARTMENT_LAYOUT_VERSION = 2;
+const APARTMENT_LAYOUT_VERSION = 3;
 
 const APARTMENT_LAYOUT = {
   bedroom_player: [
@@ -445,6 +467,7 @@ const APARTMENT_LAYOUT = {
     { defId: 'wardrobe' },
     { defId: 'nightstand' },
     { defId: 'desktop_computer' },
+    { defId: 'phone', ownerFrom: 'roomResident' },
   ],
   bedroom_1: [
     { defId: 'bedroom_door' },

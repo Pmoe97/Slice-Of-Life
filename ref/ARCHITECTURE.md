@@ -19,6 +19,7 @@ rather than here, so they survive across sessions:
 | `ref/game-opening-plan.md` | The Stardew-like intro and how the player acquires the apartment |
 | `ref/apartment-expansion-plan.md` | The Mirrored H layout (built — kept for the adjacency/room rationale) |
 | `ref/adult-content-overhaul-plan.md` | AfterHours; the API-host-alike redesign is still pending |
+| `ref/BrineOS-The-Phone-plan.md` | The phone ("BrineOS"): Tracker, notifications, banking, app parity, alarm, camera, snooping |
 
 > An earlier revision of this file cited `ref/Original Prompt and Response
 > Train.txt`, `ref/Perchance Helper AI - Next Steps.md` and `ref/Perchance
@@ -54,6 +55,16 @@ rather than here, so they survive across sessions:
 | Upgrades deepening | **Done** | Facility decay/maintenance, appeal profiles, condition repair |
 | AfterHours redesign | **Done** | Search bar, pagination, embed-refusal fallback |
 | Investing | **Done** | Index funds (3 tiers), buy/sell, daily growth, tax integration |
+| BrineOS Phase 0 | **Done** | Pre-flight refactors: time-context stack, device-parameterised nav, unknown-appId prune, `unique`-def backfill guard |
+| BrineOS Phase 1 | **Done** | Banking merge (`bills`+`invest` → `bank` with Overview) + electric-bill softlock fix (world `pay-bills` chip) + truthful partial-payment reporting |
+| BrineOS Phase 2 | **Done** | The phone as a world object: def, spawn, pickup/drop/plug (trusted-producer), battery/charging, derived presence. Both in-play verifications (overnight charge, sleep drain) done in a real kv save 2026-08-04 — see write-up |
+| BrineOS Phase 3 | **Done** | The BrineOS shell: always-on FAB + phone overlay, home grid, shared-app render reuse, back/home nav on `world.phone.navStack`, battery/charging status bar, Settings (one DND boolean), death gate. Verified live over game and computer 2026-08-04 — see write-up |
+| BrineOS Phase 4 | **Done** | The Tracker: `tracker.js`'s pure `buildTrackerEntries(gs)` deriving every obligation (rent, bills ×7, taxes, gigs, quests, deliveries, services, IM unread, courses, facility decay, high-tension), urgency ladder + `TRACKER` config, deterministic keys, dismiss/snooze intents on `world.phone`, Notifications/Agenda phone app with deep links, FAB badge gated by DND + presence. Verified live 2026-08-04 — see write-up |
+| BrineOS Phase 5 | **Done** | App parity + connectivity: `devices:['computer','phone']` on all 10 `APP_DEFS` (home grid derived from the registry → 12 tiles), RenoFix wrench icon, `appBlockedReason` wiring `BILL_CUTOFF_EFFECTS` up for real (phone rides cellular — online apps need wifi+cellular both down), real phone-bill cutoff, work-from-phone penalty (`WORK_TUNING.phoneFocusMultiplier`), and the L11 fix: `afterHoursSession { device, startedTick }` replacing the sticky boolean with a fully derived `isAfterHoursSessionActive`. Verified live 2026-08-04 — see write-up |
+| BrineOS Phase 6 | **Done** | Clock app (phone-only shell app, same pattern as Settings/Tracker) as a UI on the pre-existing alarm mechanic (`player.alarm`/`doSetAlarm`/`resolveSleepHoursWithAlarm` all predated BrineOS — no computer-side surface actually existed to remove); `doSleep` now depends on a live, charged phone to fire the alarm. Home grid → 13 tiles. Verified with exact energy/hour values — see write-up |
+| BrineOS Phase 7 | **Done** | Autopay: opt-in per bill (rent excluded), processed after `processBillsForDayUi` in day rollover, one-shot-per-cycle gate, insufficient funds bounces a flat fee onto the balance instead of just sitting unpaid. Verified with exact dollar values — see write-up |
+| BrineOS Phase 8 | **Done** | Camera app: photo records freeze a prompt+seed (never the cache blob — L10), regenerate identically after cache eviction, roll capped at 30. RenoFix "Snap Photo" for before/after shots; share a photo into an IM thread via the existing send/reply pipeline. Verified with a real mocked `root.generateImage` tracking call counts — see write-up |
+| BrineOS Phase 9 | **Done** | Privacy/snooping: passcode setting auto-locks the phone on close; `snoop_phone` drive (isSnoopDrive, mirrors isPeepDrive) — new room-agnostic discovery pass, reused curiosity formula + first mechanical use of `personality.traits`; phone gets `evidenceKinds` at last; memory episode + suspicion (`general`, deliberately inert today) on discovery. Verified end-to-end against the plan's literal acceptance scenario — see write-up |
 
 ## Load order
 
@@ -65,9 +76,10 @@ partial bump is how you get a client running half-old code):
 config.js → icons.js → defs.world.js → defs.actions.js → defs.computer.js
 → state.js → sim.js → world.js → items.js → effects.js → drives.js
 → actions.js → intent.js → skills.js → stealth.js → time.js → computer.js
-→ npc.js → prompt.js → llm.js → interruption.js → image.js → render.js
-→ render.computer.js → render.desktop.js → ui.js → ui.computer.js
-→ ui.windowmanager.js
+→ tracker.js → phone.js → npc.js → prompt.js → llm.js → interruption.js
+→ image.js → render.js → render.computer.js → render.desktop.js
+→ render.phone.js → ui.js → ui.computer.js → ui.windowmanager.js
+→ ui.phone.js
 ```
 
 Rule: if a new script's *top-level* code reads another script's `const`/
@@ -1630,3 +1642,640 @@ realized gains), fund cards with buy/sell buttons, risk disclaimer.
 - Tax: $500 realized gains + $10k gross - $120 deductions = $10,380
   taxable, $2,803 owed at 27%.
 - UI: 3 fund cards render, buy/sell buttons work.
+
+## BrineOS Phase 0 — pre-flight refactors
+
+**Plan:** `ref/BrineOS-The-Phone-plan.md`. These land first so the phone
+(Phase 3+) can't silently break a live game later. No visible change.
+
+- **Time-context stack** (`time.js`). The old `setTimeContext` was a
+  last-writer-wins scalar with 15 call sites and hand-rolled
+  `prevContext` save/restore pairs — opening a surface mid-conversation
+  stomped the conversation's scale (1×) back to idle (20×). Now the
+  stack **base is derived** (`computeTimeContext(gs)`: masturbating >
+  browsing > idle, from durable state) and transient surfaces push/pop:
+  `pushTimeContext`/`popTimeContext`/`getTimeContext`/
+  `resetTimeContext(gs)` (the latter replaces the two boot-site special
+  cases). Conversation, sleep, work-block, and AfterHours sessions all
+  push/pop; phone overlays will too. All 15 call sites removed.
+- **Device-parameterised nav** (`computer.js` `switchScreen`,
+  `ui.computer.js` `doComputerOpenScreen`, `render.desktop.js`
+  `buildWindowShell`, `ui.js` dispatch). `switchScreen` takes
+  `device='computer'`; a phone device routes to `world.phone.navStack`
+  (no-op until Phase 3). Computer window shells emit `data-device`, the
+  dispatcher reads `closest('[data-device]')`, and the single
+  `computer.open-screen` handler branches on it. No module-level
+  `activeDevice` global — both shells live simultaneously.
+- **Unknown-appId prune** (`computer.js` `normalizeComputerState`).
+  Windows are kept only if `APP_DEFS[appId]` exists (a `bills`→`bank`
+  rename would otherwise strand an invisible, uncloseable window), and
+  `focusedAppId` is re-guarded against pointing at a pruned window.
+- **`unique`-def backfill guard** (`world.js`). A layout bump can't
+  spawn a second instance of a `unique` object (the phone) when the
+  first is carried or left in another room. `ensureAllObjectBuckets`
+  back-fills in a second pass after every bucket is loaded, and skips a
+  `unique` def found in any bucket (`objectDefIdExistsAnywhere`).
+
+**Verified:** context-stack nesting restores the right scale at every
+combination; `switchScreen('phone')` never touches computer windows;
+unknown-appId windows are pruned with the focus pointer guarded; the
+unique guard spawns-when-absent, skips-when-present, and skips-when-carried
+(exactly one instance each).
+
+## BrineOS Phase 1 — banking merge + the electric-bill softlock fix
+
+**Plan:** `ref/BrineOS-The-Phone-plan.md`. Done on the computer only, while
+exactly one device reads `APP_DEFS`.
+
+- **One `bank` app** (`defs.computer.js`). `bills` + `invest` removed from
+  `APP_DEFS`; a single `bank` ("Brine Bank", category `finance`) has
+  screens `overview`/`bills`/`invest`, reusing `bills-dashboard` and
+  `invest-dashboard` unchanged. Data stayed where it always lived
+  (`world.bills`, `computer.apps.invest`), so the reused renderers and
+  `do*` handlers work unmodified (decision A). Old saves with open
+  `bills`/`invest` windows are healed by Phase 0's unknown-appId prune.
+- **Overview screen** (`render.computer.js` `renderBankOverview`,
+  registered as `bank-overview`). Four real balances, no new account
+  types (decision A): Checking (`player.money`), Tax Reserve
+  (`world.taxes.reserve`), Portfolio (`getPortfolioValue`), Outstanding
+  (sum of `world.bills[*].balance`). Net Worth hero + balance cards +
+  outstanding list with cutoff pills; navigation to Bills/Portfolia is
+  the shell's screen tabs.
+- **`ICONS.bank`** (`icons.js`) — bank/wallet line-art, same 24×24
+  stroke contract.
+- **Softlock fix** (`render.js`, `ui.js`, `ui.computer.js`). A world chip
+  "Pay Bills (service cut off)" appears (mirroring the Pay Rent chip at
+  `render.js:499`) whenever any bill has `cutoffActive`, so the electric
+  bill stays payable even with power cut and the computer dead. Shared
+  `doPayBillsFromWorld(boundaryId)` (ui.js) wraps `payAllBills` +
+  logging + scene render + save; the computer's Bills → Pay All button
+  now delegates to it. `'pay-bills'` added to `ENERGY_GATE_EXEMPT` so
+  the chip works at 0 energy.
+
+**Verified:** `APP_DEFS` has `bank` and no `bills`/`invest`; the desktop
+shows Brine Bank and all three tabs render (Overview/Bills/Portfolia);
+old-save windows are pruned and `focusedAppId` re-guarded; a simulated
+cutoff surfaces the chip, and clicking pays balance + `reconnectionFee`
+and restores service.
+
+- **1.5 addendum — truthful payment reporting.** Found in review after 1.4
+  landed: `payAllBills` returned the identical `'Nothing to pay right now.'`
+  for "nothing owed" and "owed but unaffordable" — and because the 1.4 chip
+  only appears when a bill is `cutoffActive`, the unaffordable branch is
+  guaranteed reachable (a broke player with the power cut is told there's
+  nothing to pay). `doPayBillsFromWorld` also claimed "you pay off **all**
+  your bills" when some were skipped. Fixed: `payAllBills` (`computer.js`)
+  tracks `owedCount` and the cheapest unaffordable bill, returning
+  `unpaidCount`/`cheapestUnpaid`, and distinguishes "Nothing to pay right
+  now." from "You can't cover any of it. Cheapest is X at $N, and you have
+  $M."; `doPayBillsFromWorld` (`ui.js`) reports partial payment honestly.
+  **Verified with exact values:** nothing-owed → correct message;
+  cut-off-and-broke ($50 vs Electric $260+$40) → names the $300 shortfall,
+  money untouched; partial ($150) → pays Internet $80, Electric stays cut
+  off, money 150→70; affluent ($5000) → pays $300 incl. reconnection,
+  money 5000→4700.
+
+**Phase 1 status: complete**, all five items (1.1–1.5) verified against
+running code.
+
+## BrineOS Phase 2 — the phone as a world object
+
+**Plan:** `ref/BrineOS-The-Phone-plan.md`. No shell yet — this phase gives
+the phone a physical existence: an object with identity, location, and
+battery, spawned once and never duplicated.
+
+- **`OBJECT_DEFS.phone`** (`defs.world.js:71`), placed in
+  `APARTMENT_LAYOUT.bedroom_player` (`:467`), `APARTMENT_LAYOUT_VERSION`
+  bumped 2→3 (`:457`). Deliberately no `dirtyWhen`/`cleanlinessWeight` (a
+  housekeeper visit must not silently reset `lock` to its "clean" enum
+  value) and no `evidenceKinds` yet (withheld until Phase 9, so the phone
+  isn't a `LEAVE_EVIDENCE` target for the player's own sneaking before
+  snooping exists).
+- **Pickup / set-down / plug-in / unplug** (`defs.actions.js:182-203`) are
+  trusted-producer actions — they call `applyEffects` directly rather than
+  going through the LLM-facing `MOVE_OBJECT` validator, because that
+  validator's reach set is room-scoped by design (the anti-hallucination
+  wall) and would never include `carry_player`. `effects.js` needed zero
+  changes.
+- **Battery** is numeric `flags.battery` (0–100), not a `state` enum
+  (`obj.state` values must stay string enums — `cleanRoomObjects` depends on
+  it). `advancePhoneBattery`/`isPhoneCharging` (`world.js`) hook into
+  `advanceAndResolve`, the single chokepoint both the continuous checkpoint
+  clock and every discrete action (sleep, work blocks, gigs) flow through —
+  so an 8-hour sleep still drains the phone rather than a checkpoint-only
+  hook silently costing nothing. Charging meters the existing `devices`
+  utility meter, so it shows up on the electric bill.
+- **`phonePresence(gs)`** → `'carried' | 'here' | 'elsewhere'`, derived from
+  the object's bucket vs `player.location`. **Not** stored on `world.phone`
+  — two sources of truth for the same fact was the exact bug below.
+- **Bug found and fixed during this phase:** the first implementation had
+  `findPhoneObject` discard the bucket *key* and return only the object, so
+  `phonePresence`/`isPhoneCharging` branched on the object's own denormalized
+  `obj.bucket` **field**. A stale field (left by any code path that touched
+  the object map without going through the mover) reported the phone
+  `elsewhere` while it physically sat in the room, and separately blocked
+  charging. A load-time canonicalization pass was added first, but that only
+  made the invariant true *at load* — the field was still what runtime logic
+  trusted between loads, and its own comment claimed the opposite of what it
+  did. **Fixed properly:** `findPhoneObject` now returns `{ obj, bucket }`
+  from the `Object.entries` key, and every consumer branches on that
+  structural key; `obj.bucket` is now a denormalized copy that cannot affect
+  behaviour even if it goes stale.
+- **`world.phone`** (shell nav state only — `{ navStack, openAppId }` at the
+  time; the object carries battery/plugged/lock) added to all three
+  `state.js` sites: `saveAtBoundary` (:434-436), `loadGameState` (:705),
+  `writeGeneratedGameState` (:777-778). **Phase 3 extended the shape** to
+  `{ power, openAppId, navStack, settings: { dnd } }` with
+  `normalizePhoneState` (`world.js`) back-filling `power`/`settings` on
+  pre-Phase-3 saves — `loadGameState` now routes through it.
+
+**Verified:** with a deliberately corrupted `obj.bucket` field, presence and
+charging both now follow the structural bucket, not the field (three cases
+checked, including "structure says pocket, field says a room" and the
+reverse). Charge/drain deltas match `PHONE` config exactly (+6/−2 per tick),
+the `devices` meter accrues while charging, and a pocketed-but-plugged phone
+correctly refuses to charge.
+
+**Not yet verified — needs a real save, not a static server:** an overnight
+charge and an 8-hour sleep run confirmed end-to-end in actual play. The unit
+-level checks above exercise the same functions but not the full
+`advanceAndResolveMinutes` path with a live `root.kv`, which a plain static
+file server can't provide (`root` is undefined there). Flagged in the plan
+doc; do this first thing in Phase 3 if it hasn't happened yet.
+
+**In-play verification (2026-08-04) — done, in a real kv-plugin save (day 5,
+solo, no NPCs).** Snapshot/restore technique: the entire kv DB (`meta`,
+`player`, `world`, `npcs`, `images`, `snapshots`, `objects` — 119 entries)
+was snapshotted via `entries()`, the tests ran, then every folder was
+`deleteMany`+`setMany`'d back and the page reloaded; the post-restore state
+matched the pre-test state (phone back in `room_hallway_a`, day 5, meters 0).
+
+- **Overnight charge.** Real actions (`phone.pickup` from the hallway →
+  `phone.drop` → `phone.plug` in the bedroom), then `doSleep` from an
+  exhausted player (energy 0.01 → natural 8h → **16 ticks** via the
+  discrete path; clock 02:01→10:01). Battery 20→**100** (capped, 16×+6
+  =+96) and `utilities.devices.count` rose by **exactly 8.0** (16×0.5).
+  `saveAtBoundary('sleep')` then a direct `root.kv.objects` read showed the
+  persisted phone object at `battery:100, plugged:'plugged'` in
+  `room_bedroom_player`.
+- **8-hour sleep drain.** `phone.unplug`, then another full 8h sleep (16
+  ticks). Battery 100→**68** (exactly 16×−2=32), `devices` delta 0 while
+  unplugged, persisted object showed `battery:68, plugged:'unplugged'`.
+  This is the discrete-path confirmation decision C asked for — the drain
+  really does ride `advanceAndResolve`, so a sleep costs battery.
+
+**Phase 2 status: complete.** Both in-play verifications done; no code
+changed for them.
+
+## BrineOS Phase 3 — the BrineOS shell
+
+**Plan:** `ref/BrineOS-The-Phone-plan.md`. The phone's first *shell*: an
+always-on-screen button (FAB) plus a phone-shaped overlay that opens over the
+game or over the computer. No new apps — the home grid reuses the computer's
+`COMPUTER_RENDERERS` unchanged, which is exactly what Phase 0.2's
+device-parameterised nav was built for.
+
+New files (load order in `index.html`):
+- **`phone.js`** (after `computer.js`) — domain: `PHONE_HOME_APPS` (fixed
+  roster; Phase 5 replaces with a `devices`-filter), `PHONE_SETTINGS_APP_ID`
+  (a phone-only shell app, deliberately NOT in `APP_DEFS` — adding it there
+  would surface Settings on the computer desktop/taskbar too, since both
+  iterate `APP_DEFS`), `getPhoneBattery`/`getPhoneBatteryBucket`,
+  `isPhoneScreenOn`, `getPhoneUnreadCount` (Phase 4 seam → 0),
+  `openPhone`/`closePhone` (close preserves the nav stack — reopening
+  returns to the app you were in), `phoneOpenApp` (funnels real apps through
+  `switchScreen`'s phone branch; Settings is a special case),
+  `phoneGoBack`/`phoneGoHome`/`phoneSetDnd`.
+- **`render.phone.js`** (after `render.computer.js`) — `renderPhoneScreen(gs)`:
+  FAB every pass (presence via `data-presence`, icon/badge injected once with
+  a `childElementCount` guard like the taskbar's Start button), overlay only
+  when `world.phone.power === 'on'`. Statusbar (clock, battery
+  `data-battery` bucket → pre-authored CSS widths, charging bolt from the
+  derived `isPhoneCharging`), app sub-nav (mirrors `renderWindowScreenNav`
+  but reads `world.phone.navStack`), content dispatch home / settings /
+  shared-app renderer. `#phone-screen` carries `data-device="phone"` so
+  sub-nav clicks route to the phone stack, never computer windows.
+- **`ui.phone.js`** (after `ui.computer.js`) — `doPhoneOpen` (refuses if
+  presence `elsewhere`, or if battery is 0 and not charging — the Phase 3
+  reading of decision F), `doPhoneClose`, `doPhoneOpenApp`, `doPhoneGoBack`,
+  `doPhoneGoHome`, `doPhoneSettingsDnd`. All save at boundary.
+  `handleAction` cases `phone.*` dispatch these; energy-gate exemption came
+  free from the existing `action.startsWith('phone.')` clause (plan 3.6).
+
+DOM/CSS: `#phone-fab` + `#phone-screen` are direct children of `#app`,
+siblings of `#computer-screen` (decision E — not nested, so the phone
+survives computer power state). Tiers `--z-phone-fab: 165` (above taskbar
+150/startmenu 160, below the phone) and `--z-phone: 170` (below modal/loading
+overlay 200). Both anchor bottom-right, `bottom` offset swaps from
+`--footer-h` to `--taskbar-h` in computer mode. No inline styles — battery
+and DND use `data-*` buckets with pre-authored CSS.
+
+**Verified live (2026-08-04, real kv save, snapshot/restore like Phase 2):**
+- Phone in another room → `phone.open` refused with "Your phone is in
+  another room — go get it first."; FAB shows `data-presence="elsewhere"`.
+- Full flow: open → home grid (9 tiles = 8 apps + Settings) → bank app
+  renders the computer's renderer with its real screennav
+  (Overview/Bills/Portfolia), nav clicks update `world.phone.navStack` and
+  leave computer windows at 0 — landmine L1 holds.
+- Back → home; Settings → DND toggle flips `world.phone.settings.dnd` and the
+  toggle's `data-on`; Home clears the stack; close sets `power:'off'`.
+- Over the computer: `#app[data-mode="computer"]`, both shells visible
+  simultaneously, computed z 165/170/150 (FAB/phone/taskbar), FAB bottom
+  64px = `--taskbar-h + 16`.
+- Death gate: battery 0, unplugged → open refused ("Your phone is dead…");
+  battery 5 + plugged → opens, `data-charging` set, bolt shown, 5% bucketed
+  to `data-battery="5"`. Badge hidden at unread 0.
+- Whole screen derives from `world.phone` + the phone object — nothing in
+  the DOM beyond the static shell.
+
+**Phase 3 status: complete.** Phase 2's `world.phone` shape was extended
+(see above) with `normalizePhoneState` migration; no other Phase 2 code
+changed.
+
+## BrineOS Phase 4 — the Tracker and notifications
+
+**Plan:** `ref/BrineOS-The-Phone-plan.md`. One pure derived pass turns game
+state into a flat list of obligations (decision D): nothing about an
+obligation is ever stored — only the player's dismiss/snooze intents live on
+`world.phone`. No LLM, no randomness, no persistence: the same save always
+yields the same entries, so the FAB badge is just
+`getTrackerNotifications(gs).length`.
+
+New files (load order in `index.html`):
+- **`tracker.js`** (between `computer.js` and `phone.js`) —
+  `buildTrackerEntries(gs)`: one read-adapter per source (rent, bills ×7,
+  quarterly taxes via `computeTaxOwed`/the synthesized quarter-end day, gigs
+  with fractional `blocksDone`, quests by expiry, in-flight deliveries,
+  service visits, IM unread, courses, functional-facility decay,
+  high-tension move-out), flattened in fixed order. Entry shape
+  `{ key, kind, urgency, title, detail, dueDay, daysUntil, deepLink }`.
+  `getTrackerNotifications(gs)` = urgent (`>= TRACKER.notifyThreshold`) minus
+  dismissed/snoozed intents, sorted urgency-desc / daysUntil-asc.
+  `sortTrackerEntries` shared by the agenda renderer.
+- **`phone.js`** additions: `PHONE_TRACKER_APP_ID` + `PHONE_TRACKER_SCREENS`
+  (a phone-only shell app like Settings — NOT in `APP_DEFS`, so it never
+  appears on the computer desktop), `getPhoneUnreadCount` now real (gated by
+  presence `elsewhere` and DND — decision C), `phoneTrackerDismiss` /
+  `phoneTrackerSnooze` (mutate `world.phone.dismissed`/`.snoozed` only),
+  `phoneOpenApp` tracker branch.
+- **`render.phone.js`** additions: Tracker sub-nav tabs (Notifications /
+  Agenda), `renderPhoneTracker` / `renderPhoneNotifications` /
+  `renderPhoneAgenda` (state→DOM only), Tracker tile on the home grid (10
+  tiles). **Also fixed a pre-existing Phase 3 bug:** the shared-app path now
+  clears `#phone-content` before invoking a `COMPUTER_RENDERERS` renderer
+  (computer window bodies are cleared by `renderWindows`; the persistent
+  phone content node wasn't, so shared-app content accumulated).
+- **`ui.phone.js`** additions: `doPhoneTrackerScreen` / `doPhoneTrackerDismiss`
+  / `doPhoneTrackerSnooze`, all save-at-boundary; new `phone.tracker-*`
+  `handleAction` cases + `data-key`/`data-days` in the click dispatcher
+  (ui.js).
+
+Config: `TRACKER` block in `config.js` — the urgency ladder,
+`notifyThreshold`, per-source urgencies/caps, `snoozeOptionsDays`. No magic
+numbers in tracker.js. `world.js`: `dismissed:{}`/`snoozed:{}` added to
+`defaultPhoneState` + `normalizePhoneState` (backfilled for old saves); the
+existing `world.phone` write sites in `state.js` persist them unchanged.
+CSS: `.phone-tracker-*` styles in index.html (notification cards, action
+buttons, agenda rows, empty states).
+
+**Design notes (recorded in the plan doc 4.5):**
+- The plan's "lock-screen preview list" is fulfilled by the Tracker app's
+  Notifications screen (no lock screen until Phase 9).
+- DND and presence silence the **Notifications screen and badge** but never
+  the **Agenda** — silencing blinds, never shields.
+- Deterministic keys embed the obligation's identity (posting day, gig id,
+  quarter-end day), so dismiss/snooze can't leak onto a future instance;
+  paying a bill removes the entry *and* its intent with no clear call.
+- Facility decay tracks functional+ tiers only — broken facilities are the
+  apartment's known opening state (RenoFix's job), not a phone notification.
+- Paid-up future charges (bills, service visits) are capped below
+  `notifyThreshold` so they're agenda items, never nags.
+
+**Verified live (2026-08-04, real kv save, snapshot/restore):** every
+adapter exercised against a synthetic state with exact expected values
+(rent overdue → 100, cutoff/good-grace bill detail lines, taxes unpaid +
+estimate, late + active gigs, expired + active quests, delivery day+1,
+capped service, IM unread scaling, course progress, facility warn/critical +
+broken-skip, tension countdown). Then in the real save: injected a rent debt
++ in-flight delivery → badge 2 → open Tracker → Notifications screen with
+both cards (bell icons, Dismiss/Snooze 1d/3d, deep-link titles) → dismiss
+rent → badge 1 → snooze delivery → badge 0 → reload → both intents persisted
+→ DND on → badge 0 + silenced screen, Agenda still full (8 rows) → deep-link
+rows navigate the phone to bank/bills and Back returns to the Tracker →
+phone elsewhere → badge 0 (decision C) → pay the debt → entry + notification
+gone with no clear call. Layout: 360×608 phone, all items fit, no overflow,
+10-tile 4-column home grid. Save restored byte-for-byte (day 5, phone back
+in `room_hallway_a`, battery 0, `world.phone` pristine, test delivery
+removed).
+
+**Phase 4 status: complete.** No Phase 3 code changed except the shared-app
+body-clear fix above; Phase 5 (app parity) now only needs the
+`devices:['computer','phone']` filter + porting work.
+
+## BrineOS Phase 5 — app parity and connectivity
+
+**Plan:** `ref/BrineOS-The-Phone-plan.md`. Two halves: make every shared app
+reachable from the phone (the registry is the single source of truth), and
+give phone + computer the asymmetric connectivity decision F specifies.
+No new files — all changes landed in existing ones (load order unchanged).
+
+**App parity (5.1–5.2).** Every `APP_DEFS` entry now carries
+`devices: ['computer','phone']`. `renderPhoneHome` and `phoneOpenApp`
+filter on it, so the fixed `PHONE_HOME_APPS` roster in `phone.js` is gone
+and the home grid is derived (now 12 tiles: the 10 apps + Tracker +
+Settings). The phone reuses the shared `COMPUTER_RENDERERS` unchanged —
+Phase 0.2's `data-device` routing plus Phase 4's `#phone-content` body-clear
+already make that work. `icons.js` grew a Lucide wrench for the `upgrades`
+app, which had been rendering a blank desktop/taskbar tile since Phase 4
+(it was always reachable on the computer, just iconless).
+
+**Connectivity (5.3).** `BILL_CUTOFF_EFFECTS`'s app-gating fields are now
+LIVE through one function: `appBlockedReason(gameState, appId, device)`
+(computer.js). Computer: a power cutoff kills the machine
+(`blocksComputer`); an internet cutoff blocks the online apps
+(`blocksApps: ['work','stream','browser']`). Phone: it rides cellular, so
+an online app is blocked only when **both** internet AND phone cutoffs are
+active (decision F); power cutoffs never touch it, and bank/upgrades/etc
+are never gated — bill payment stays reachable (Phase 1 softlock rule).
+The phone bill is a real cutoff now (`BILL_DEFS.phone.cutoff = 'phone'`),
+posted by the existing rollover path. Dead config fields
+(`power.blocksApps`, `power.spoilsFridge`, `internet.blocksGigWork`,
+`water.blocksActions`, `gas.blocksActions`, `rent.isEvictionLadder`) were
+deleted; action-level water/gas gating lives in
+`ACTION_REQUIREMENT_CHECKERS`, untouched.
+
+**Work-from-phone (5.4).** `computeFocusMultiplier(gameState, device)`
+applies `WORK_TUNING.phoneFocusMultiplier` (0.6) for the phone device;
+`workGigBlock`/`doGigWorkBlock` carry `device` through. Same gig, same
+energy/mood, 40% less progress per block on the phone.
+
+**L11 / AfterHours derivation (5.5).** The sticky
+`afterHoursMasturbating` boolean is replaced by a session record
+`apps.browser.afterHoursSession = { device, startedTick }`, and
+`isAfterHoursSessionActive(gs)` derives "still in use" from the owning
+device: computer → `computer.power === 'on'`; phone → `world.phone.power
+=== 'on'` AND presence `'here'` (a pocketed phone — presence `'carried'` —
+is NOT in use, the exact L11 bug) AND object not locked AND not
+battery-dead. `getPlayerVulnerableState`, the interruption pre-generation
+guard, and the AfterHours render all read it; `time.js` gained
+`reconcileTimeContext` so the `'masturbating'` time frame (3×) self-heals
+on a derived exit. Explicit terminators (Stop / Cum / Close-player) are the
+only clear sites; `closeComputer` clears nothing. Old saves with a stale
+flag and no session read inactive — no migration. `appBlockedReason` +
+`isAfterHoursSessionActive` both live next to `isCutoffActive` in
+computer.js.
+
+**Verified live (2026-08-04, real kv save, snapshot/restore):** home grid =
+12 tiles incl. classifieds + upgrades; upgrades opens on the phone with its
+icon; `appBlockedReason` matrix — computer (power→all blocked, internet→
+work/browser/stream blocked, bank/classes up), phone (single cutoff→null,
+both→work/browser/stream blocked, bank/shop/upgrades up); phone-bill cutoff
+activates via `processBillsForDay`; phone work progress = computer × 0.6;
+the full L11 acceptance — session active in-room (`getPlayerVulnerableState`
+= `'masturbating'`, Cum/Stop render on the phone, session timer ticking),
+pocket it → `null`, back in the room → active again, Close-player →
+record cleared; power-off / lock / battery-death all read inactive; stale
+legacy bool with no session reads inactive; time context = 'masturbating'
+(3×) during a session and self-heals to browsing on power-off with no
+terminator.
+
+**Phase 5 status: complete.**
+
+## BrineOS Phase 6 — Alarm and Clock
+
+**Plan:** `ref/BrineOS-The-Phone-plan.md`. Premise correction made at the
+start of this phase: the alarm mechanic was **not** unbuilt, and there was
+no computer-side surface to remove. `player.alarm`, `doSetAlarm` (ui.js),
+`resolveSleepHoursWithAlarm` (sim.js), and the free-text intent
+`matchAlarmIntent` ("set alarm for 7", intent.js) already existed and
+worked, reachable only by typing a command — `ref/sleep-and-alarm-plan.md`'s
+"Not built" header was stale. Grepping `computer.js`/`render.computer.js`
+for `alarm` found nothing real (a character-quirk string, an unrelated CSS
+comment). Real scope: a phone UI for the existing mechanic, plus the one
+piece that genuinely didn't exist — dependence on a live phone.
+
+**Clock app** (`phone.js`, `render.phone.js`). `PHONE_CLOCK_APP_ID`, the
+same phone-only shell-app pattern as Settings/Tracker (not in `APP_DEFS`).
+`renderPhoneClock` shows live time/date, current alarm status, and an
+hour-grid (`SLEEP.alarmMinHour..alarmMaxHour`, no hardcoded bounds) plus a
+clear button; both dispatch straight to the existing `doSetAlarm(hour)`
+(`phone.set-alarm`/`phone.clear-alarm` cases, ui.js) — no new domain logic,
+the phone is a face on `player.alarm`. `render()`'s existing sibling call to
+`renderPhoneScreen` means `doSetAlarm`'s own render/save already keeps the
+phone in sync; no wrapper needed. Home grid grew to 13 tiles.
+
+**Dead-phone dependency (6.4).** `doSleep` (ui.js) previously read
+`player.alarm` with zero dependency on the phone object. Added a
+battery-dead check using the same gate `doPhoneOpen` already uses
+(`getPhoneBattery(gs) <= 0 && !isPhoneCharging(...)`) — if the phone is dead
+and not charging at the moment the player falls asleep, that night's
+effective alarm hour is `null`; `player.alarm` itself is untouched, so
+charging the phone the next day restores it with no player action needed. A
+distinct narration line covers the case so the failure is legible rather
+than a silent no-op.
+
+**Consolidation.** The 12-hour formatting formula existed inline in both
+`doSetAlarm` and the HUD's alarm line; the Clock face would have been a
+third copy. Pulled into one `formatHour12(hour)` in `sim.js` (next to
+`formatTime`/`formatDate`), and the two existing call sites were switched
+over rather than left duplicated.
+
+**Verified (exact values, real function calls):** `resolveSleepHoursWithAlarm`
+against the sleep plan's stated bad case (energy 5 at bedtime, bedtime
+01:00, alarm 6am) — natural night `7.9h` uncapped, alarm caps it to exactly
+`5h` (`alarmFired: true`), energy recovered `62.5`, landing at `67.5` against
+`100` if the alarm hadn't fired — a real 32.5-point shortfall, matching the
+sleep plan's own "~62 energy" framing. (A first attempt at energy 15/bedtime
+23:30 only produced a 3.75-point shortfall because a near-full natural night
+also clamps at 100 — not a useful demonstration, so the inputs were
+corrected.) Phone-dead detection: dead+unplugged → gate fires (`alarmHour`
+resolves `null`); dead+**charging** → gate does not fire (booting off the
+cord is fine, matching Phase 3's decision-F reading). DOM-level render
+check: 9 hour buttons with correct 12-hour labels, correct button
+highlighted for the active alarm, clear button correctly (un)highlighted in
+both states, Clock tile present in the home grid with correct label and
+icon, home grid now 13 tiles.
+
+**Phase 6 status: complete.**
+
+## BrineOS Phase 7 — Autopay
+
+**Plan:** `ref/BrineOS-The-Phone-plan.md`. Deliberately its own phase,
+separate from Phase 1's bill-pay UI rewrite, so a regression in either is
+attributable to the right one.
+
+**Opt-in, per bill.** `world.bills[id].autopay` (default `false`,
+`initBillState` in sim.js; old saves read it defensively — no migration).
+`toggleBillAutopay` (computer.js) rejects rent (`split:'lease'` has its own
+cap/eviction path). The toggle in `renderBillsDashboard` renders regardless
+of current balance — it's a standing preference, not a payment action — so
+both devices get it for free via the shared renderer.
+
+**Ordering (decided and documented at the call site):**
+`processAutopayForDayUi(day)` runs immediately **after**
+`processBillsForDayUi(day)` in `processDayRollover` (ui.js), so it acts on
+the day's freshly posted charges and freshly evaluated cutoffs rather than
+stale pre-posting state. Kept as its own function, not folded into
+`processBillsForDay`.
+
+**The trap.** `processAutopayForDay` (computer.js) calls `payBill` — the
+same path a manual click uses, so it correctly clears an existing cutoff and
+pays the reconnection fee too. On failure, `AUTOPAY.bounceFee` ($30,
+config.js — flat, anchored to the existing $25–$40 `reconnectionFee` range)
+is added straight onto the balance, immediately compounding the debt in a
+way a manual miss never does. A one-shot gate (`bill.autopayAttempted`,
+reset only when a fresh charge posts) stops it from re-bouncing — and
+re-charging the fee — every day of the grace window; it waits for the next
+cycle, like a real bank draft. A bounce is a real log event, the same
+standard cutoff activations are already held to.
+
+**Verified (exact values, real function calls):** rent rejected; successful
+autopay $1000 bal → pays $260, money $1000→$740; bounce with $50 vs. $260
+owed → money untouched, balance $260→$290 exactly; re-running the same
+day's pass again produces zero results (no double-bounce); a new cycle
+(flag reset + fresh $100 charge on the still-bounced $290) attempts again
+and bounces again → $420 exactly; cutoff payoff ($5000 bal, $260 owed +
+cutoff) pays $300 (`260+40`), money→$4700, cutoff cleared — matching Phase
+1's own verified combo. DOM-level render check: Rent has no autopay button;
+a bill with `balance: 0` still shows its toggle with no Pay button; 6
+autopay buttons render for the 6 eligible bills (7 `BILL_DEFS` minus rent).
+
+**Phase 7 status: complete.**
+
+## BrineOS Phase 8 — Camera and Gallery
+
+**Plan:** `ref/BrineOS-The-Phone-plan.md`. A photo record deliberately does
+**not** store the rendered image — landmine L10 — because `IMAGE_CACHE` is a
+shared LRU across every scene/character image in the whole game, not just
+photos, and can evict a "memory" the player is holding onto at any time
+regardless of how few photos they've taken.
+
+**Photo record and capture.** `takePhoto(gameState, tags)` (image.js)
+freezes a prompt (built once, from the room/NPCs/objects at the moment of
+capture, via the same `buildImagePrompt` `getSceneImage` uses, plus a
+"candid smartphone photo" framing phrase) and a seed (`hashStr`, never
+`Date.now()`) into the record — the photo keeps looking like the room did
+when taken even after the room changes later. `getPhotoImage(photo)`
+regenerates on a cache miss using that frozen prompt+seed, the same
+determinism contract `getCharacterImage` relies on for NPC portraits
+(`getSceneImage` deliberately does not use this contract — scene art is
+allowed to drift; a photo cannot be). Keyed by the photo's own `id`, not a
+room/phase/npc composite, so two photos of the same room stay individually
+addressable.
+
+**Roll.** `world.phone.camera.roll` (added to `defaultPhoneState`/
+`normalizePhoneState`, world.js — old saves back-fill an empty roll).
+`CAMERA.rollCap = 30` (config.js); `takePhoto` unshifts newest-first and
+truncates the tail past the cap.
+
+**Camera app** (phone.js/render.phone.js/ui.phone.js). Same phone-only
+shell-app pattern as Clock — `PHONE_CAMERA_APP_ID`, not in `APP_DEFS`. Two
+screens: Gallery (grid + Take Photo button) and Detail (full image, caption,
+a Send-to row for every resident/prospective NPC), Detail reached by
+drill-down rather than a tab pair, so it's absent from the sub-nav bar by
+the existing fallback for an appId with no special case. Both async image
+loads use `renderScene`'s established placeholder-then-swap pattern
+(render.js), simplified: this grid is rebuilt from scratch on every render
+pass like every other phone screen, so a stale-node guard isn't needed — a
+resolved promise writing to a since-removed `<img>` is a harmless no-op.
+
+**Before/after (8.4).** A "Snap Photo" button on every facility card in
+`renderUpgradesDashboard`, tagging and captioning the photo with the
+facility+tier. RenoFix is a shared-device app whose renderer signature
+carries no `device` param, so this appears on both computer and phone
+rather than threading a device flag through all 23 shared renderers for one
+button — the fiction (you have your phone on you regardless of which screen
+you're looking at) already matches decision C's loose presence model.
+
+**Share into IM (8.5).** `sharePhotoToImThread` (computer.js) reuses
+`appendPlayerImMessage`/`resolveImReply` unmodified — the photo is
+described to the LLM as text (its caption; no vision capability needed for
+a plausible in-fiction reaction) — and tags the resulting bubble with
+`photoId` so `renderMessages` attaches a thumbnail. A photo that ages out of
+the roll after being shared degrades its bubble to explanatory text rather
+than a broken image.
+
+**Verified (real mocked `root.kv`/`root.generateImage`, tracking actual
+call counts):** first load → cache miss, 1 generate call; second load on
+the same photo → cache hit, still 1 call; simulated LRU eviction → cache
+miss, 2nd generate call, **seed and prompt byte-identical to the first
+call** — the exact L10 acceptance criterion. Roll-cap: `rollCap+5` photos
+taken → final length exactly 30, newest present, oldest evicted. DOM-level:
+gallery/detail/share-row/missing-photo/empty-state all correct; IM bubble
+renders one thumbnail for a shared photo, falls back to text once evicted;
+RenoFix snap buttons render one per actually-displayed facility card.
+
+**Bug found during verification, out of BrineOS scope, flagged separately**
+(not fixed here): `FACILITY_DEFS.bedroom_habitability.room` is `'bedroom'`,
+which matches no real `ROOMS` key (the real ids are `bedroom_player`,
+`bedroom_1/2/3`) — `renderUpgradesDashboard`'s room-grouping silently drops
+it, so 12 facilities are defined but only 11 ever render or are reachable to
+repair/upgrade. Pre-existing, unrelated to the Camera work that surfaced it.
+
+**Phase 8 status: complete.**
+
+## BrineOS Phase 9 — Privacy and snooping
+
+**Plan:** `ref/BrineOS-The-Phone-plan.md`. The final BrineOS phase — makes
+the phone's physicality (Phase 2) carry real stakes: an unlocked phone left
+somewhere is discoverable, and the discovery has consequences.
+
+**Lock and passcode (9.1).** `world.phone.settings.passcode` (default off,
+same discipline as the DND boolean). `setPhoneLock(gameState, locked)`
+(world.js) is a direct setter: `doPhoneOpen` always force-unlocks (it's the
+owner's own phone), `doPhoneClose` force-locks only when the passcode
+setting is on. `phone.state.lock` existed since Phase 2 with no consumer
+until now.
+
+**The snoop drive (9.2/9.3).** `DRIVE_DEFS.snoop_phone` (`isSnoopDrive:
+true`) dispatches through `evaluateDrives` exactly like `isPeepDrive` does.
+`trySnoopPhone` (drives.js) reuses `tryNpcPeep`'s curiosity formula
+verbatim, plus a bounded `curiousTrait` modifier — the first mechanical
+read of `personality.traits`, previously prompt-flavour only. Deliberately
+NOT a reuse of the `sim.js:617-638` evidence-discovery pass (landmine L8) —
+that one only scans a room's *owner* in their *own* room, which structurally
+can't find a phone in the *player's* bedroom. `trySnoopPhone` checks
+whatever room the NPC actually occupies, no ownership requirement, gated on
+the player not being present, the phone unlocked, and no existing evidence.
+
+**Evidence and consequences (9.4/9.5).** `evidenceKinds: ['phone_contents']`
+added to `OBJECT_DEFS.phone` at last (deferred since Phase 2 — L7 — so the
+phone wasn't a sneaking target before snooping existed to read it) plus a
+matching `EVIDENCE_KIND_TEXT` entry. One evidence record per phone
+(`obj.evidence` is a single slot, L9), gated so a second attempt on an
+already-flagged phone no-ops. Strength scales with what's actually on the
+phone — photo roll + open IM thread count, normalized and capped
+(`SNOOP_TUNING`, config.js). Writes a memory episode and
+`ADJUST_SUSPICION <npcId> general +delta` — recorded design call: this
+raises the *snooping NPC's own* `general` suspicion (there's no symmetric
+"player suspects this NPC" field anywhere), verified inert against today's
+confrontation trigger (`ui.js` hardcodes `boundary_violation`, not a generic
+subject read) — exactly matching `general`'s documented purpose as an
+allocated-but-unused catch-all for a future system.
+
+**A real bug hunted and cleared during verification.** Testing
+`trySnoopPhone` in isolation and checking a held NPC variable afterward
+showed zero memory episodes — looked broken. Traced to the aliasing gotcha
+`ref/HANDOFF.md` warns about: `applyMemoryEpisodeEffect` *replaces*
+`gameState.npcs[id]` rather than mutating in place, so a held reference
+goes stale. `sim.js` (lines 704-721) already documents and fixes this exact
+class of bug generically for every drive — it was written because it first
+broke `resolveNpcPeep`'s silent-success memory — and it covers
+`snoop_phone` for free. Reading `gameState.npcs[id]` fresh confirmed the
+episode was written correctly; nothing needed fixing.
+
+**Verified end-to-end (exact values, matching the plan's acceptance
+scenario literally):** unlocked phone, 3 photos + 2 IM threads, curious NPC
+alone with it while the player is elsewhere → discovery fires, evidence
+strength exactly `0.7167` (matching the richness formula), a memory episode
+lands (read fresh, not stale), suspicion.general → exactly `0.15`. Same
+setup with the phone locked (via the identical `setPhoneLock` call
+`doPhoneClose` makes) → discovery blocked, evidence stays `null`. Also
+individually verified: dull-personality NPC gated out even with a forced
+-pass rng; player-present blocks; already-evidenced phone blocks
+re-discovery; a borderline NPC crosses the threshold only with the
+`curious` trait bonus; lock force-set both directions; phone-state
+defaults/normalization correctly carry `settings.passcode`; Settings
+renders both toggle rows correctly wired.
+
+**Phase 9 status: complete. BrineOS is complete — all nine phases done.**

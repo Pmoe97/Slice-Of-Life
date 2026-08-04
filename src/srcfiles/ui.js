@@ -40,6 +40,14 @@ async function advanceAndResolve(ticks, opts = {}) {
   currentGameState = newState;
   appendWorldEvents(events);
 
+  // BrineOS Phase 2: the phone's battery lives on the world object and
+  // advances with the sim. Hooked here — not in the checkpoint path alone
+  // — because both the continuous clock's sim checkpoints and every
+  // discrete action (sleep, work blocks, gigs, all ACTION_DEFS verbs)
+  // resolve through this same function (decision C: an 8-hour sleep must
+  // still drain the battery).
+  advancePhoneBattery(currentGameState, ticks);
+
   // In-memory, not a kv round-trip via updateNpc: this loop used to read-
   // modify-write through kv per npc, which silently clobbered any earlier
   // in-memory-only mutation on the same npc this same call chain (e.g.
@@ -125,6 +133,10 @@ async function advanceAndResolve(ticks, opts = {}) {
 async function processDayRollover(day) {
   await processRentForDay(day);
   processBillsForDayUi(day);
+  // BrineOS Phase 7 (plan 7.2): after, not before — autopay must see this
+  // day's freshly posted charges and freshly evaluated cutoffs, not the
+  // state from before today's bills processed. See processAutopayForDayUi.
+  processAutopayForDayUi(day);
   processTaxesForDayUi(day);
   processDeliveriesForDay(day);
   processQuestsForDay(day);
@@ -431,6 +443,24 @@ function processBillsForDayUi(day) {
   }
 }
 
+// BrineOS Phase 7 (plan 7.2): called from processDayRollover AFTER
+// processBillsForDayUi, deliberately — autopay needs this day's charge
+// already posted and this day's cutoff check already run (processAutopayForDay's
+// own header explains why). A bounce is a real log event, same standard as
+// a cutoff activation above: the player needs to see it, not discover it
+// later as an inflated balance with no explanation.
+function processAutopayForDayUi(day) {
+  if (!currentGameState.world.bills) return;
+  for (const r of processAutopayForDay(currentGameState, day)) {
+    if (r.ok) {
+      const reconnectNote = r.reconnected ? ' (service restored)' : '';
+      addLogEntry('system', `Autopay: ${r.label} paid automatically — ${r.paid}${reconnectNote}.`);
+    } else {
+      addLogEntry('system', `Autopay failed on ${r.label} — insufficient funds. A $${r.bounceFee} bounce fee was added (balance now $${r.balance}).`);
+    }
+  }
+}
+
 // Phase 6: quarterly taxes bill at quarter end. Unlike utility bills
 // (which post on a cadence and have cutoffs), taxes are a single lump
 // obligation every 90 days. The player owes rate × (quarterGross −
@@ -656,9 +686,32 @@ async function doPayRent() {
   }
   player.money -= owed;
   player.rentOwed = 0;
-  addLogEntry('narration', `You pay $${owed} in rent. That's a relief.`);
+  addLogEntry('narration', `You pay ${owed} in rent. That's a relief.`);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('pay-rent', currentGameState);
+}
+
+// Shared by the world "Pay Bills" chip (BrineOS Phase 1 — the softlock fix
+// that lets the player pay bills even with power cut and the computer dead)
+// and the computer's Bills > Pay All button (ui.computer.js delegates
+// here). Logs the outcome and re-renders the scene; computer callers
+// re-render their own app screen afterwards.
+async function doPayBillsFromWorld(boundaryId = 'pay-bills') {
+  if (!currentGameState) return;
+  const result = payAllBills(currentGameState);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  // payAllBills pays what it can afford and skips the rest, so "all" is only
+  // true when nothing was left behind.
+  if (result.unpaidCount > 0) {
+    addLogEntry('narration', `You pay what you can: ${result.totalPaid} total. ${result.unpaidCount} bill${result.unpaidCount === 1 ? '' : 's'} still outstanding.`);
+  } else {
+    addLogEntry('narration', `You pay off all your bills: ${result.totalPaid} total.`);
+  }
+  const reconnected = [];
+  for (const r of result.results) if (r.reconnected) reconnected.push(BILL_DEFS[r.billId].label);
+  if (reconnected.length > 0) addLogEntry('system', `Service restored: ${reconnected.join(', ')}.`);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary(boundaryId, currentGameState);
 }
 
 // Move-out: minimal but real. Full move-IN (prospect generation, interview,
@@ -859,7 +912,7 @@ const MENU_ACTIONS = ['menu', 'new-game-solo', 'new-game-random', 'new-game-guid
 // stuck with no way to sleep. 'sleep' is the recovery action. 'look' is free
 // observation. Menu/save/debug actions are meta, not in-world actions.
 const ENERGY_GATE_EXEMPT = new Set([
-  'move', 'sleep', 'look',
+  'move', 'sleep', 'look', 'pay-bills',
   'menu', 'save', 'debug', 'debug-close',
   'new-game-solo', 'new-game-random', 'new-game-guided', 'new-game-manual', 'new-game-seed',
   'generate-cast', 'reroll-char', 'approve-cast', 'back-to-form', 'continue',
@@ -872,6 +925,10 @@ function isActionExemptFromEnergyGate(action) {
   // energy-costing computer apps will check separately. Let it through
   // so the player can at least open the computer.
   if (action === 'computer.use' || action.startsWith('computer.open')) return true;
+  // Phone actions are trivial (pickup/drop/plug) and Phase 3's phone.use
+  // must be glanceable regardless of exhaustion — same rationale as
+  // computer.use above.
+  if (action.startsWith('phone.')) return true;
   return false;
 }
 
@@ -917,7 +974,7 @@ async function handleAction(action, npcId, extra) {
       doComputerOpenApp(extra?.appId);
       break;
     case 'computer.open-screen':
-      doComputerOpenScreen(extra?.appId, extra?.screenId);
+      doComputerOpenScreen(extra?.appId, extra?.screenId, extra?.device);
       break;
     case 'computer.window-close':
       doComputerWindowClose(extra?.appId);
@@ -935,7 +992,52 @@ async function handleAction(action, npcId, extra) {
       doComputerToggleStart();
       break;
     case 'computer.gig-work-block':
-      await doGigWorkBlock(extra?.rowId);
+      await doGigWorkBlock(extra?.rowId, extra?.device);
+      break;
+    case 'phone.open':
+      await doPhoneOpen();
+      break;
+    case 'phone.close':
+      await doPhoneClose();
+      break;
+    case 'phone.open-app':
+      await doPhoneOpenApp(extra?.appId);
+      break;
+    case 'phone.back':
+      await doPhoneGoBack();
+      break;
+    case 'phone.home':
+      await doPhoneGoHome();
+      break;
+    case 'phone.settings-dnd':
+      await doPhoneSettingsDnd();
+      break;
+    case 'phone.settings-passcode':
+      await doPhoneSettingsPasscode();
+      break;
+    case 'phone.tracker-screen':
+      await doPhoneTrackerScreen(extra?.screenId);
+      break;
+    case 'phone.tracker-dismiss':
+      await doPhoneTrackerDismiss(extra?.key);
+      break;
+    case 'phone.tracker-snooze':
+      await doPhoneTrackerSnooze(extra?.key, extra?.days);
+      break;
+    case 'phone.set-alarm':
+      await doSetAlarm(extra?.amount);
+      break;
+    case 'phone.clear-alarm':
+      await doSetAlarm(null);
+      break;
+    case 'phone.camera-take':
+      await doPhoneTakePhoto();
+      break;
+    case 'phone.camera-view':
+      await doPhoneCameraView(extra?.rowId);
+      break;
+    case 'phone.camera-share':
+      await doPhoneCameraShare(extra?.rowId, npcId);
       break;
     case 'gig.accept':
       await doGigAccept(extra?.rowId);
@@ -956,7 +1058,7 @@ async function handleAction(action, npcId, extra) {
       await doShopCheckout();
       break;
     case 'browser.visit':
-      await doBrowserVisit(extra?.rowId);
+      await doBrowserVisit(extra?.rowId, extra?.device);
       break;
     case 'browser.back':
       doBrowserBack();
@@ -983,7 +1085,7 @@ async function handleAction(action, npcId, extra) {
       doAfterHoursClose();
       break;
     case 'browser.ah-masturbate':
-      doAfterHoursMasturbate();
+      doAfterHoursMasturbate(extra?.device);
       break;
     case 'browser.ah-cum':
       await doAfterHoursCum();
@@ -1064,7 +1166,7 @@ async function handleAction(action, npcId, extra) {
       await doImSend(extra?.rowId);
       break;
     case 'stream.watch':
-      await doStreamWatch(extra?.rowId);
+      await doStreamWatch(extra?.rowId, extra?.device);
       break;
     case 'bills.pay':
       await doBillsPay(extra?.rowId);
@@ -1072,11 +1174,17 @@ async function handleAction(action, npcId, extra) {
     case 'bills.pay-all':
       await doBillsPayAll();
       break;
+    case 'bills.toggle-autopay':
+      await doBillsToggleAutopay(extra?.rowId);
+      break;
     case 'upgrades.purchase':
       await doUpgradePurchase(extra?.rowId);
       break;
     case 'upgrades.repair':
       await doUpgradeRepair(extra?.rowId);
+      break;
+    case 'upgrades.snap-photo':
+      await doUpgradesSnapPhoto(extra?.rowId);
       break;
     case 'invest.buy':
       await doInvestBuy(extra?.rowId, extra?.amount);
@@ -1101,6 +1209,9 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'pay-rent':
       await doPayRent();
+      break;
+    case 'pay-bills':
+      await doPayBillsFromWorld();
       break;
     case 'ask-to-leave':
       if (npcId) await doAskToLeave(npcId);
@@ -1301,9 +1412,7 @@ async function doSetAlarm(hour) {
   } else {
     hour = Math.max(SLEEP.alarmMinHour, Math.min(SLEEP.alarmMaxHour, hour));
     currentGameState.player.alarm = hour;
-    const h12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
-    const ampm = hour < 12 ? 'am' : 'pm';
-    addLogEntry('system', `Alarm set for ${h12}:${'00'} ${ampm}. If you\'re still asleep then, it\'ll wake you.`);
+    addLogEntry('system', `Alarm set for ${formatHour12(hour)}. If you\'re still asleep then, it\'ll wake you.`);
   }
   render(currentGameState, currentSceneState);
   await saveAtBoundary('alarm', currentGameState);
@@ -1312,8 +1421,7 @@ async function doSetAlarm(hour) {
 async function doSleep() {
   showLoading();
   try {
-    const prevContext = getTimeContext();
-    setTimeContext('sleeping');
+    pushTimeContext('sleeping');
     // How long the night runs is decided by how drained the player is —
     // see SLEEP and resolveSleepHours. Turning in exhausted buys a full
     // 8 hours; turning in nearly rested is a short 6.
@@ -1321,7 +1429,14 @@ async function doSleep() {
     // Phase 8: the alarm caps the night — it can only shorten sleep,
     // never extend it. If the alarm would fire before the natural night
     // ends, the player is woken early and recovers less energy.
-    const alarmHour = currentGameState.player.alarm;
+    // BrineOS 6.4: a dead phone can't ring. This checks live battery at
+    // the moment of falling asleep, not at the moment the alarm was set —
+    // player.alarm (the preference) is untouched either way, so plugging
+    // the phone in tomorrow restores it without the player re-setting it.
+    const found = findPhoneObject(currentGameState);
+    const phoneDead = !!found && getPhoneBattery(currentGameState) <= 0
+      && !isPhoneCharging(currentGameState, found.obj, found.bucket);
+    const alarmHour = phoneDead ? null : currentGameState.player.alarm;
     const bedtimeMinutes = currentGameState.meta.clock.minutes;
     const energyMax = currentGameState.player.energyMax || NEEDS.energy.max;
     const { hours: sleepHours, alarmFired } = resolveSleepHoursWithAlarm(energyAtBedtime, bedtimeMinutes, alarmHour, energyMax);
@@ -1358,6 +1473,7 @@ async function doSleep() {
     }
     let sleepMsg = describeSleep(sleepHours, currentGameState.player.energy);
     if (alarmFired) sleepMsg += ' The alarm dragged you out of bed.';
+    else if (phoneDead && currentGameState.player.alarm != null) sleepMsg += ' Your phone died overnight — the alarm never went off.';
     addLogEntry('narration', sleepMsg);
     // Narrate some of what happened while asleep, most recent first. Marked
     // seen so a later visit to the same room doesn't repeat it as evidence.
@@ -1368,7 +1484,7 @@ async function doSleep() {
         evt.seenByPlayer = true;
       }
     }
-    setTimeContext(prevContext);
+    popTimeContext();
     render(currentGameState, currentSceneState);
     await saveAtBoundary('sleep', currentGameState);
   } finally {
@@ -1408,7 +1524,7 @@ function narrateDemotion(demotedId, promotedId) {
 // (callLLM/applyProposal) as doPlayerAction — the difference is purely
 // presentational: results render in the overlay's chat log, not the
 // scene viewer's narration log.
-let convState = null; // { npcId, prevTimeContext, sending }
+let convState = null; // { npcId, sending }
 
 function convEscapeHtml(s) {
   return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1520,7 +1636,7 @@ async function doTalk(npcId) {
 
   // Open the conversation overlay before any LLM call so the player sees
   // the interface immediately, not a loading screen.
-  convState = { npcId, prevTimeContext: getTimeContext(), sending: false };
+  convState = { npcId, sending: false };
   openConversationOverlay(npcId);
 
   // Deterministic confrontation, before the LLM ever runs — a suspicion
@@ -1539,7 +1655,7 @@ async function doTalk(npcId) {
   }
 
   // Time slows to real-time for the conversation
-  setTimeContext('conversation');
+  pushTimeContext('conversation');
 
   // Generate the opening exchange — "You approach [name] to talk."
   await doConvSend(`You approach ${npc.bible?.name || 'your roommate'} to talk.`);
@@ -1616,14 +1732,13 @@ async function doConvSend(forcedText) {
 
 function doConvLeave() {
   if (!convState) return;
-  const prevContext = convState.prevTimeContext;
   const npcId = convState.npcId;
   const npc = currentGameState?.npcs?.[npcId];
   closeConversationOverlay();
   // Step away from the active conversation.
   currentSceneState = demoteToAmbient(currentSceneState, npcId);
   if (npc) addLogEntry('narration', `You step away from ${npc.bible?.name || 'them'}.`);
-  setTimeContext(prevContext);
+  popTimeContext();
   render(currentGameState, currentSceneState);
   saveAtBoundary('step-away', currentGameState);
 }
@@ -1646,9 +1761,8 @@ function doConvAskLeave() {
 
 async function doConvConfirmAskLeave(npcId) {
   closeModal();
-  const prevContext = convState?.prevTimeContext;
+  if (convState) popTimeContext();
   closeConversationOverlay();
-  if (prevContext) setTimeContext(prevContext);
   await doAskToLeave(npcId);
 }
 
@@ -2048,7 +2162,7 @@ async function continueGame() {
       currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
       render(currentGameState, currentSceneState);
       startAutosave(() => currentGameState);
-      if (currentGameState.world.computer?.power === 'on') setTimeContext('browsing');
+      if (currentGameState.world.computer?.power === 'on') resetTimeContext(currentGameState);
       startClockLoop();
     } else {
       showMenuModal();
@@ -2241,7 +2355,7 @@ async function boot() {
       currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
       render(currentGameState, currentSceneState);
       startAutosave(() => currentGameState);
-      if (currentGameState.world.computer?.power === 'on') setTimeContext('browsing');
+      if (currentGameState.world.computer?.power === 'on') resetTimeContext(currentGameState);
       startClockLoop();
     } else {
       showMenuModal();
@@ -2293,6 +2407,14 @@ function attachEventHandlers() {
     if (target.hasAttribute('data-amount')) extra.amount = Number(target.getAttribute('data-amount'));
     if (target.hasAttribute('data-direction')) extra.direction = Number(target.getAttribute('data-direction'));
     if (target.hasAttribute('data-search-text')) extra.searchText = target.getAttribute('data-search-text');
+    if (target.hasAttribute('data-key')) extra.key = target.getAttribute('data-key');
+    if (target.hasAttribute('data-days')) extra.days = Number(target.getAttribute('data-days'));
+    // Device-parameterised nav (BrineOS 0.2): the shell that owns the node
+    // declares its device via data-device on itself or any ancestor, and
+    // computer.open-screen dispatches on it — the phone shell will emit
+    // data-device="phone" and route to phone nav, never computer windows.
+    const deviceNode = target.closest('[data-device]');
+    if (deviceNode) extra.device = deviceNode.getAttribute('data-device');
     handleAction(action, npcId || null, extra);
   });
 

@@ -58,8 +58,8 @@ function defaultComputerState() {
         afterHoursClipPage: 1,
         afterHoursSearchQuery: '',    // Phase 10: free-text search
         afterHoursTotalPages: 1,       // Phase 10: pagination
-        afterHoursWatching: null, afterHoursMasturbating: false,
-        afterHoursSessionStart: null, afterHoursWarmupUntilMs: 0,
+        afterHoursWatching: null, afterHoursSession: null,
+        afterHoursWarmupUntilMs: 0,
       },
       classes: { enrolled: [], completed: [] },
       services: { hired: [] },
@@ -123,12 +123,16 @@ function normalizeComputerState(raw) {
   // Strip any window that lacks a rect — a broken IM window was created
   // by an early version of the Phase 7 Interview handler that didn't go
   // through openApp, leaving a window object without the rect/zIndex the
-  // renderer needs.
+  // renderer needs. Also drop windows for appIds not in APP_DEFS (landmine
+  // L4): renderWindows skips them silently and renderTaskbar iterates
+  // APP_DEFS so no button exists for them, leaving a permanently invisible,
+  // uncloseable window entry if a later rename (e.g. bills→bank) orphans
+  // one.
   const windows = {};
   for (const [appId, win] of Object.entries(windowsRaw)) {
-    if (win && win.rect) windows[appId] = win;
+    if (win && win.rect && APP_DEFS[appId]) windows[appId] = win;
   }
-  if (!raw.windows && raw.view && raw.view.appId) {
+  if (!raw.windows && raw.view && raw.view.appId && APP_DEFS[raw.view.appId]) {
     windows[raw.view.appId] = {
       screenId: raw.view.screenId || APP_DEFS[raw.view.appId]?.entryScreen,
       params: raw.view.params || {},
@@ -139,7 +143,10 @@ function normalizeComputerState(raw) {
   return {
     power: raw.power || 'off',
     windows,
-    focusedAppId: raw.focusedAppId ?? (Object.keys(windows)[0] || null),
+    // Guard focusedAppId against pointing at a window the prune just
+    // dropped — a stale focus with no window under it would confuse
+    // whoever next asks topVisibleWindowAppId.
+    focusedAppId: (raw.focusedAppId && windows[raw.focusedAppId]) ? raw.focusedAppId : (Object.keys(windows)[0] || null),
     nextZIndex: raw.nextZIndex || (Object.keys(windows).length + 1),
     // Back-fill any app added to the roster since this save was written.
     // Deep-merge per-app: start from the fresh default, then overlay the
@@ -207,7 +214,25 @@ function openApp(gameState, appId) {
   focusWindow(gameState, appId);
 }
 
-function switchScreen(gameState, appId, screenId, params) {
+// Device-parameterised screen navigation (BrineOS 0.2). The default
+// 'computer' device navigates the desktop shell's windows exactly as
+// before. A phone device (data-device="phone" emitted by the phone shell)
+// navigates world.phone's own navStack instead — a phone back-press must
+// never mutate a computer window (landmine L1). world.phone doesn't exist
+// until Phase 3, so the phone branch is a safe no-op until then.
+function switchScreen(gameState, appId, screenId, params, device = 'computer') {
+  if (device !== 'computer') {
+    const phone = gameState.world?.phone;
+    if (!phone?.navStack) return;
+    phone.openAppId = appId;
+    const top = phone.navStack[phone.navStack.length - 1];
+    if (top && top.appId === appId && top.screenId === screenId) {
+      top.params = params || {};
+    } else {
+      phone.navStack.push({ appId, screenId, params: params || {} });
+    }
+    return;
+  }
   const win = gameState.world.computer.windows[appId];
   if (!win) return;
   win.screenId = screenId;
@@ -268,17 +293,15 @@ function closeComputer(gameState) {
   // where you left it, same as a real OS session.
   gameState.world.computer.power = 'off';
 
-  // The masturbating session is the one thing that does NOT survive
-  // walking away: it's a player state, not an app state. Left set, it
-  // desynced from the time context (doComputerClose puts that back to
-  // 'idle') and, worse, kept getPlayerVulnerableState reporting
-  // 'masturbating' forever — so NPCs went on peeping at a player who was
-  // fully dressed in the kitchen, permanently.
-  const browser = gameState.world.computer.apps?.browser;
-  if (browser) {
-    browser.afterHoursMasturbating = false;
-    browser.afterHoursSessionStart = null;
-  }
+  // A masturbating session needs no force-clear here (Phase 5.5, landmine
+  // L11): it is derived from { device, startedTick }, and this device's
+  // "in use" condition is precisely `computer.power === 'on'` — so
+  // powering off already makes isAfterHoursSessionActive return false and
+  // getPlayerVulnerableState stop reporting 'masturbating'. The session
+  // record survives in state (it reads as a paused session on reopen);
+  // the vulnerable state and time context self-heal with no clear site to
+  // forget. This is the bug-pattern fix the old sticky boolean required —
+  // see the plan's Phase 5.5.
 }
 
 // --- Gig board (Phase 2 — vocation rewrite) ---
@@ -291,7 +314,11 @@ function closeComputer(gameState) {
 // Kept from the old model — energy/mood scaling is the hook burnout
 // (Phase 9) needs, and it applies just as well to gig progress as to the
 // old flat pay. A bad night or a foul mood costs real throughput.
-function computeFocusMultiplier(gameState) {
+//
+// Phase 5 (decision F, 5.4): the `device` dimension applies WORK_TUNING's
+// phoneFocusMultiplier on top of the energy/mood product, so working from
+// the phone is slower — the PC is where real throughput lives.
+function computeFocusMultiplier(gameState, device = 'computer') {
   const player = gameState.player;
   // Relative to the player's OWN ceiling, not a hardcoded 100. energyMax
   // starts at 70 and grows (ENERGY.growthPerWorkout/growthPerGoodSleep),
@@ -309,7 +336,9 @@ function computeFocusMultiplier(gameState) {
   const burnoutPenalty = getBurnoutMoodPenalty(player);
   const effectiveMood = Math.max(-1, player.mood - burnoutPenalty);
   const moodFactor = clamp((effectiveMood + 1) / 2, WORK_TUNING.minMoodFocus, WORK_TUNING.maxMoodFocus);
-  return energyFactor * moodFactor;
+  let focus = energyFactor * moodFactor;
+  if (device === 'phone') focus *= WORK_TUNING.phoneFocusMultiplier;
+  return focus;
 }
 
 // Reputation tier for a given 0-100 rep score — the lowest tier whose
@@ -422,14 +451,15 @@ function acceptGig(gameState, gigId) {
 // focus — a tired player gets less done per block, so the same gig takes
 // more blocks and risks the deadline. Payout is a lump sum on delivery,
 // routed through EARN_MONEY (same path as the old model) so Phase 6's
-// quarterGross accumulator sees it.
-function workGigBlock(gameState, gigId) {
+// quarterGross accumulator sees it. `device` (Phase 5.4) feeds the
+// work-from-phone penalty through computeFocusMultiplier.
+function workGigBlock(gameState, gigId, device) {
   const gigs = gameState.world.computer.apps.gigs;
   const gig = gigs.accepted.find(g => g.gigId === gigId);
   if (!gig) return { ok: false, reason: 'You have no such gig.' };
   if (gig.blocksDone >= gig.blocks) return { ok: false, reason: 'That gig is already complete — deliver it.' };
   if (gameState.meta.clock.day > gig.deadlineDay) return { ok: false, reason: 'That gig has passed its deadline.' };
-  const focus = computeFocusMultiplier(gameState);
+  const focus = computeFocusMultiplier(gameState, device);
   // Phase 8: burnout makes grinding progressively less profitable. The
   // work-pay penalty scales progress down at high burnout levels — the
   // death-spiral is the feature.
@@ -1411,6 +1441,25 @@ function appendPlayerImMessage(gameState, npcId, text) {
   return { ok: true };
 }
 
+// BrineOS Phase 8.5: share a photo into an IM thread. Reuses
+// appendPlayerImMessage/resolveImReply unmodified rather than a parallel
+// send path — the photo is described to the LLM as text (its caption;
+// there's no vision capability here and none is needed for a plausible
+// in-fiction reaction), and the resulting player bubble is tagged with
+// photoId so the renderer attaches a thumbnail. Caller drives
+// resolveImReply exactly like doImSend does; this only does the append
+// half.
+function sharePhotoToImThread(gameState, npcId, photoId) {
+  const photo = gameState.world.phone?.camera?.roll?.find(p => p.id === photoId);
+  if (!photo) return { ok: false, reason: 'Photo not found.' };
+  const text = `[shared a photo: ${photo.caption}]`;
+  const result = appendPlayerImMessage(gameState, npcId, text);
+  if (!result.ok) return result;
+  const thread = ensureImThread(gameState, npcId);
+  thread.msgs[thread.msgs.length - 1].photoId = photoId;
+  return { ok: true, text };
+}
+
 async function resolveImReply(gameState, npcId, text) {
   const npc = gameState.npcs[npcId];
   if (!npc) return { ok: false, reason: 'No such contact.' };
@@ -1547,6 +1596,10 @@ function processBillsForDay(gameState, day) {
     bill.balance += amt;
     bill.status = 'due';
     bill.overdueDays = 0;
+    // BrineOS Phase 7: a fresh charge re-arms autopay for this cycle — see
+    // processAutopayForDay's comment for why this is the one-shot marker's
+    // reset point rather than a daily re-check.
+    bill.autopayAttempted = false;
     bill.dueDay = rescheduleDue(bill.dueDay, def.cadenceDays);
     // Phase 5: reset the meters that fed this bill so the next cycle
     // starts fresh. The bill just charged for the accumulated usage; if
@@ -1593,6 +1646,66 @@ function isCutoffActive(gameState, cutoffId) {
   return false;
 }
 
+// Phase 5 (decision F): device-aware reason why an app is currently
+// blocked, or null when it's usable. This is the real wiring for
+// BILL_CUTOFF_EFFECTS' blocksComputer / blocksApps / phone fields — the
+// gig, stream and browser handlers call it with their device so phone and
+// computer get the asymmetric connectivity the plan specifies:
+//   * computer — a power cutoff kills the whole machine (blocksComputer);
+//     an internet cutoff blocks the online apps (blocksApps).
+//   * phone — cellular service (the phone bill's cutoff) only matters
+//     when there's no home wifi either: an online app is blocked only
+//     when BOTH internet AND phone cutoffs are active (decision F). Power
+//     cutoffs never touch the phone (it runs on battery), and
+//     connectivity never gates bank/upgrades/etc — bill payment must stay
+//     reachable, the Phase 1 softlock rule.
+function appBlockedReason(gameState, appId, device) {
+  const eff = BILL_CUTOFF_EFFECTS;
+  if (device === 'phone') {
+    if (eff.internet?.blocksApps?.includes(appId)
+        && isCutoffActive(gameState, 'internet')
+        && isCutoffActive(gameState, 'phone')) {
+      return eff.phone?.label || 'Phone service is off';
+    }
+    return null;
+  }
+  if (eff.power?.blocksComputer && isCutoffActive(gameState, 'power')) {
+    return eff.power.label || 'Power is off';
+  }
+  if (eff.internet?.blocksApps?.includes(appId) && isCutoffActive(gameState, 'internet')) {
+    return eff.internet.label || 'Internet is down';
+  }
+  return null;
+}
+
+// Phase 5.5 (landmine L11): is an AfterHours session *actively* running
+// right now? Derived — never a stored boolean. A session { device,
+// startedTick } is active only while its owning device is still in use,
+// so every exit path (pocketing the phone, locking it, battery death,
+// power loss, closing the computer) self-heals with no force-clear call
+// to forget — see closeComputer's comment and the plan's 5.5.
+//   * computer — the machine is powered on.
+//   * phone — the shell is on, the phone is physically OUT in the room
+//     with the player (presence 'here' — 'carried' is the pocket, and
+//     L11's exact bug is being flagged masturbating *while walking
+//     through the kitchen* with the phone in your pocket), unlocked, and
+//     not battery-dead (the same gate doPhoneOpen uses, so a phone that
+//     couldn't turn on can't host a session).
+function isAfterHoursSessionActive(gameState) {
+  const session = gameState?.world?.computer?.apps?.browser?.afterHoursSession;
+  if (!session) return false;
+  if (session.device === 'phone') {
+    if (gameState?.world?.phone?.power !== 'on') return false;
+    if (phonePresence(gameState) !== 'here') return false;
+    const found = findPhoneObject(gameState);
+    if (found?.obj?.state?.lock === 'locked') return false;
+    const battery = getPhoneBattery(gameState);
+    if (battery != null && battery <= 0 && !isPhoneCharging(gameState, found?.obj, found?.bucket)) return false;
+    return true;
+  }
+  return gameState?.world?.computer?.power === 'on';
+}
+
 // Pay a single bill: clear its balance, deactivate its cutoff (service
 // restored), charge the reconnection fee if the cutoff was active. The
 // player must be able to afford balance + fee.
@@ -1623,14 +1736,85 @@ function payAllBills(gameState) {
   if (!bills) return { ok: false, reason: 'No bills.' };
   const results = [];
   let totalPaid = 0;
+  let owedCount = 0;
+  // Cheapest thing the player *could* clear if they had the money. "Nothing
+  // to pay" and "can't afford any of it" are opposite situations, and the
+  // Phase 1 world chip only appears when a bill is cut off — so the
+  // unaffordable branch is guaranteed reachable, and telling a broke player
+  // with no power that there's nothing to pay is a lie at the worst moment.
+  let cheapest = null;
   for (const def of Object.values(BILL_DEFS)) {
     const bill = bills[def.id];
     if (!bill || bill.balance <= 0) continue;
+    owedCount++;
     const r = payBill(gameState, def.id);
-    if (r.ok) { results.push(r); totalPaid += r.paid; }
+    if (r.ok) { results.push(r); totalPaid += r.paid; continue; }
+    const need = bill.balance + (bill.cutoffActive ? def.reconnectionFee : 0);
+    if (!cheapest || need < cheapest.need) cheapest = { need, label: def.label };
   }
-  if (results.length === 0) return { ok: false, reason: 'Nothing to pay right now.' };
-  return { ok: true, results, totalPaid };
+  const unpaidCount = owedCount - results.length;
+  if (results.length === 0) {
+    if (owedCount === 0) return { ok: false, reason: 'Nothing to pay right now.' };
+    return {
+      ok: false,
+      reason: `You can't cover any of it. Cheapest is ${cheapest.label} at $${Math.round(cheapest.need)}, and you have $${Math.round(gameState.player.money)}.`,
+    };
+  }
+  return { ok: true, results, totalPaid, unpaidCount, cheapestUnpaid: cheapest };
+}
+
+// --- Autopay (BrineOS Phase 7) ---
+
+// Flip a bill's autopay flag. Rent (split:'lease') is not eligible — it has
+// its own cap/eviction path, not this flat-balance model.
+function toggleBillAutopay(gameState, billId) {
+  const def = BILL_DEFS[billId];
+  if (!def || def.split === 'lease') return { ok: false, reason: 'Not eligible for autopay.' };
+  const bill = gameState.world.bills?.[billId];
+  if (!bill) return { ok: false, reason: 'No such bill.' };
+  bill.autopay = !bill.autopay;
+  return { ok: true, billId, autopay: bill.autopay };
+}
+
+// BrineOS Phase 7 (plan 7.2, ordering documented at the call site in ui.js
+// processDayRollover): runs AFTER processBillsForDayUi, so it acts on the
+// day's already-posted charges and already-evaluated cutoffs — the true
+// current balance, not a stale pre-posting one — rather than being folded
+// into processBillsForDay itself (kept separate on purpose: Phase 1's bill
+// -posting path stays untouched, so a regression in either is easy to
+// attribute to the right phase).
+//
+// One attempt per posting cycle via bill.autopayAttempted, reset to false
+// only when a fresh charge posts (processBillsForDay). Without that gate,
+// autopay would retry — and re-bounce, re-charging the fee — every single
+// day of the grace window, which is a runaway spiral the plan never asked
+// for; a real bank drafts once and waits for the next cycle.
+//
+// A success reuses payBill() itself (same path a manual click uses, so
+// reconnection fees on an already-cut-off bill are handled identically). A
+// failure (insufficient funds) does NOT retry or clamp — it adds
+// AUTOPAY.bounceFee straight onto the balance, compounding the debt. That
+// is deliberately worse than a manual miss, which just sits at its posted
+// amount until grace expires: autopay's whole design point (7.3) is that
+// it's the safe choice most months and the trap in a dry spell.
+function processAutopayForDay(gameState, day) {
+  const bills = gameState.world.bills;
+  if (!bills) return [];
+  const results = [];
+  for (const def of Object.values(BILL_DEFS)) {
+    if (def.split === 'lease') continue;
+    const bill = bills[def.id];
+    if (!bill || !bill.autopay || bill.balance <= 0 || bill.autopayAttempted) continue;
+    const attempt = payBill(gameState, def.id);
+    bill.autopayAttempted = true;
+    if (attempt.ok) {
+      results.push({ billId: def.id, label: def.label, ok: true, paid: attempt.paid, reconnected: attempt.reconnected });
+    } else {
+      bill.balance += AUTOPAY.bounceFee;
+      results.push({ billId: def.id, label: def.label, ok: false, bounceFee: AUTOPAY.bounceFee, balance: bill.balance });
+    }
+  }
+  return results;
 }
 
 // --- Phase 6: Quarterly taxes ---

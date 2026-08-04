@@ -112,6 +112,10 @@ function buildWindowShell(appId, app) {
   node.className = 'win';
   node.id = `win-${appId}`;
   node.dataset.app = appId;
+  // Device-parameterised nav (BrineOS 0.2): the shell that owns a node
+  // declares its device so computer.open-screen dispatch can route a click
+  // to the right nav stack (a descendant button inherits it via closest).
+  node.dataset.device = 'computer';
   node.innerHTML = `
     <div class="win-titlebar">
       ${svgIcon(appId, 'win-titlebar-icon')}

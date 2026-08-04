@@ -170,6 +170,55 @@ const ACTION_DEFS = {
     ],
     narration: { mode: 'template', templates: ['You settle in at the desk and focus. Quiet and productive.'] },
   },
+  // --- BrineOS phone object actions (Phase 2) ---
+  // Pickup / set-down / plug-in / unplug. These are the first-ever callers
+  // of the long-dormant MOVE_OBJECT effect (effects.js) and run as trusted
+  // producers through executeAction (effects applied directly, no LLM
+  // validation), so the L3 reach-set wall stays intact: the phone's bucket
+  // is legitimately NOT in the room's reach set when dropped from the
+  // pocket, and the trusted path doesn't need it to be. `phone.drop` is
+  // self-sourced (the phone is carried, not in the room) and gated by the
+  // phoneCarried checker. Moving to carry_player auto-unplugs (decision B).
+  'phone.pickup': {
+    id: 'phone.pickup', label: 'Pick Up Phone', verbs: ['pick up the phone', 'pick up phone', 'grab your phone'],
+    source: { kind: 'object', objDef: 'phone' },
+    group: 'phone', chipPriority: 60,
+    requires: [],
+    timeCost: { base: 1 },
+    prepare: preparePhone,
+    buildEffects: buildPhonePickupEffects,
+    narration: { mode: 'dynamic', build: phonePickupNarration },
+  },
+  'phone.drop': {
+    id: 'phone.drop', label: 'Put Down Phone', verbs: ['put down the phone', 'set down the phone', 'put the phone down'],
+    source: { kind: 'self' },
+    group: 'phone', chipPriority: 60,
+    requires: ['phoneCarried'],
+    timeCost: { base: 1 },
+    prepare: preparePhone,
+    buildEffects: buildPhoneDropEffects,
+    narration: { mode: 'dynamic', build: phoneDropNarration },
+  },
+  'phone.plug': {
+    id: 'phone.plug', label: 'Plug In Phone', verbs: ['plug in the phone', 'plug the phone in', 'charge the phone'],
+    source: { kind: 'object', objDef: 'phone' },
+    group: 'phone', chipPriority: 55,
+    requires: ['phoneUnplugged', 'powerNotCutoff'],
+    timeCost: { base: 1 },
+    prepare: preparePhone,
+    buildEffects: buildPhonePlugEffects,
+    narration: { mode: 'dynamic', build: phonePlugNarration },
+  },
+  'phone.unplug': {
+    id: 'phone.unplug', label: 'Unplug Phone', verbs: ['unplug the phone', 'unplug phone'],
+    source: { kind: 'object', objDef: 'phone' },
+    group: 'phone', chipPriority: 55,
+    requires: ['phonePlugged'],
+    timeCost: { base: 1 },
+    prepare: preparePhone,
+    buildEffects: buildPhoneUnplugEffects,
+    narration: { mode: 'dynamic', build: phoneUnplugNarration },
+  },
 };
 
 // Name→predicate registry, mirroring SIM's CAST_REQUIREMENT_CHECKERS
@@ -220,6 +269,23 @@ const ACTION_REQUIREMENT_CHECKERS = {
   gasNotCutoff: (ctx) => !isCutoffActive(ctx.gameState, 'gas') || 'Gas is shut off — the bill is unpaid.',
   powerNotCutoff: (ctx) => !isCutoffActive(ctx.gameState, 'power') || 'Power is shut off — the bill is unpaid.',
   internetNotCutoff: (ctx) => !isCutoffActive(ctx.gameState, 'internet') || 'Internet is down — the bill is unpaid.',
+  // BrineOS phone (Phase 2): presence is read from buckets (decision B).
+  // phoneCarried gates drop; phoneUnplugged/phonePlugged gate plug/unplug
+  // and keep the chips honest (the object's own state, not a guess).
+  phoneCarried: (ctx) => {
+    const carried = ctx.gameState.objects['carry_player'] || {};
+    return Object.values(carried).some(o => o.defId === 'phone') || `You don't have the phone with you.`;
+  },
+  phoneUnplugged: (ctx) => {
+    const p = findObjectInRoom(ctx, 'phone');
+    if (!p) return 'The phone is not here.';
+    return (p.state.plugged !== 'plugged') || 'The phone is already plugged in.';
+  },
+  phonePlugged: (ctx) => {
+    const p = findObjectInRoom(ctx, 'phone');
+    if (!p) return 'The phone is not here.';
+    return (p.state.plugged === 'plugged') || 'The phone is not plugged in.';
+  },
   // Phase 4: a facility must be at least 'functional' for the actions it
   // gates. 'broken' means the equipment is unusable — the stove doesn't
   // light, the treadmill motor is dead. The player must repair it via the
@@ -375,6 +441,58 @@ function buildLaundryEffects(ctx, prepared) {
 function laundryNarration(ctx, prepared) {
   if (!prepared?.hamper || !prepared?.washer) return 'No washer or hamper here.';
   return 'You load the washer and start a cycle. The machine hums to life.';
+}
+
+// --- BrineOS phone action runtime (Phase 2) ---
+// preparePhone resolves the phone from either surface: the current room
+// (pickup/plug/unplug) or the player's pocket (drop). buildEffects emit
+// MOVE_OBJECT / SET_OBJECT_STATE — applied by executeAction on the trusted
+// producer path, so the L3 room-scoped reach-set wall is never widened.
+function preparePhone(ctx) {
+  const roomPhone = findObjectInRoom(ctx, 'phone');
+  const carriedBucket = ctx.gameState.objects['carry_player'] || {};
+  const carriedPhone = Object.values(carriedBucket).find(o => o.defId === 'phone') || null;
+  return { phone: roomPhone || carriedPhone };
+}
+
+function buildPhonePickupEffects(ctx, prepared) {
+  const p = prepared?.phone;
+  if (!p) return [];
+  const lines = [`MOVE_OBJECT ${p.id} carry_player`];
+  // Moving to the pocket auto-unplugs (decision B).
+  if (p.state.plugged === 'plugged') lines.push(`SET_OBJECT_STATE ${p.id} plugged unplugged`);
+  return lines;
+}
+function buildPhoneDropEffects(ctx, prepared) {
+  const p = prepared?.phone;
+  if (!p) return [];
+  return [`MOVE_OBJECT ${p.id} room_${ctx.gameState.player.location}`];
+}
+function buildPhonePlugEffects(ctx, prepared) {
+  const p = prepared?.phone;
+  if (!p) return [];
+  return [`SET_OBJECT_STATE ${p.id} plugged plugged`];
+}
+function buildPhoneUnplugEffects(ctx, prepared) {
+  const p = prepared?.phone;
+  if (!p) return [];
+  return [`SET_OBJECT_STATE ${p.id} plugged unplugged`];
+}
+
+function phonePickupNarration(ctx, prepared) {
+  const p = prepared?.phone;
+  const bat = p && p.flags.battery != null ? Math.round(p.flags.battery) : 100;
+  return bat <= 20 ? `You pocket your phone. It is at ${bat}% — getting low.` : 'You pick up your phone and pocket it.';
+}
+function phoneDropNarration(ctx, prepared) {
+  const roomName = ROOMS[ctx.gameState.player.location]?.name || 'this room';
+  return `You set your phone down in ${roomName}.`;
+}
+function phonePlugNarration(ctx, prepared) {
+  return 'You plug the phone in to charge.';
+}
+function phoneUnplugNarration(ctx, prepared) {
+  return 'You unplug the phone.';
 }
 
 // Guard used before SKILLS (P3) exists — skillMod/skillLevel land then;

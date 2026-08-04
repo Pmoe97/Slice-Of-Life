@@ -16,7 +16,7 @@ async function doComputerOpen() {
   try {
     currentGameState.world.computer.power = 'on';
     document.getElementById('app')?.setAttribute('data-mode', 'computer');
-    setTimeContext('browsing');
+    pushTimeContext('browsing');
     renderComputerScreen(currentGameState);
     render(currentGameState, currentSceneState);
     await saveAtBoundary('computer-open', currentGameState);
@@ -32,7 +32,12 @@ async function doComputerClose() {
   closeComputer(currentGameState);
   pendingInterruption = null;
   document.getElementById('app')?.removeAttribute('data-mode');
-  setTimeContext('idle');
+  // Closing the computer pops the 'browsing' frame doComputerOpen pushed;
+  // if a masturbating session was on top (closed without stopping), it
+  // pops too — closeComputer powers the machine off, so
+  // isAfterHoursSessionActive reads false and the reconciled base says
+  // idle anyway (Phase 5.5).
+  popTimeContext();
   render(currentGameState, currentSceneState);
   await saveAtBoundary('computer-close', currentGameState);
 }
@@ -44,8 +49,17 @@ function doComputerOpenApp(appId) {
   renderComputerScreen(currentGameState);
 }
 
-function doComputerOpenScreen(appId, screenId) {
+function doComputerOpenScreen(appId, screenId, device) {
   if (!appId || !screenId) return;
+  // Device-parameterised nav (BrineOS 0.2): the phone shell emits
+  // data-device="phone" and navigates the phone's own navStack, never
+  // mutating computer window state. The computer shell defaults to
+  // 'computer' (or carries data-device="computer" explicitly).
+  if (device === 'phone') {
+    switchScreen(currentGameState, appId, screenId, undefined, 'phone');
+    if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+    return;
+  }
   switchScreen(currentGameState, appId, screenId);
   renderComputerScreen(currentGameState);
 }
@@ -105,25 +119,24 @@ async function doGigAccept(gigId) {
   await saveAtBoundary('gig-accept', currentGameState);
 }
 
-async function doGigWorkBlock(gigId) {
+async function doGigWorkBlock(gigId, device) {
   if (!gigId) return;
-  // Phase 3: gig work needs power (the computer is on) AND internet.
-  if (isCutoffActive(currentGameState, 'power')) {
-    addLogEntry('system', 'You can\'t work — power is shut off.');
-    return;
-  }
-  if (isCutoffActive(currentGameState, 'internet')) {
-    addLogEntry('system', 'You can\'t work gigs — internet is down. Pay the bill.');
+  // Phase 5: device-aware connectivity gating (decision F). The computer
+  // dies to a power cutoff and needs wifi (internet); the phone rides
+  // cellular, so it needs BOTH wifi and the phone bill down before the
+  // work app is blocked.
+  const blocked = appBlockedReason(currentGameState, 'work', device);
+  if (blocked) {
+    addLogEntry('system', `You can't work — ${blocked.toLowerCase()}. Pay the bill.`);
     return;
   }
   showLoading();
   try {
-    const result = workGigBlock(currentGameState, gigId);
+    const result = workGigBlock(currentGameState, gigId, device);
     if (!result.ok) { addLogEntry('system', result.reason); return; }
-    const prevContext = getTimeContext();
-    setTimeContext('working');
+    pushTimeContext('working');
     await advanceAndResolveMinutes(CLOCK.tickMinutes);
-    setTimeContext(prevContext);
+    popTimeContext();
     const pct = Math.round((result.gig.blocksDone / result.gig.blocks) * 100);
     addLogEntry('narration', `You work on "${result.gig.label}". Progress: ${pct}% (${result.gig.blocksDone.toFixed(2)}/${result.gig.blocks} blocks).`);
     renderComputerScreen(currentGameState);
@@ -182,10 +195,13 @@ async function doShopCheckout() {
   await saveAtBoundary('shop-checkout', currentGameState);
 }
 
-async function doBrowserVisit(siteId) {
+async function doBrowserVisit(siteId, device) {
   if (!siteId) return;
-  if (isCutoffActive(currentGameState, 'power') || isCutoffActive(currentGameState, 'internet')) {
-    addLogEntry('system', 'You can\'t browse — power or internet is down.');
+  // Phase 5: device-aware connectivity gating (decision F) — power/internet
+  // for the computer, wifi+cellular both down for the phone.
+  const blocked = appBlockedReason(currentGameState, 'browser', device);
+  if (blocked) {
+    addLogEntry('system', `You can't browse — ${blocked.toLowerCase()}.`);
     return;
   }
   showLoading();
@@ -303,40 +319,58 @@ function doAfterHoursRefresh() {
 function doAfterHoursClose() {
   const browser = currentGameState.world.computer.apps.browser;
   browser.afterHoursWatching = null;
-  // If was masturbating, stop that too — closing the player ends the session
-  if (browser.afterHoursMasturbating) {
-    browser.afterHoursMasturbating = false;
-    browser.afterHoursSessionStart = null;
-    setTimeContext('browsing');
+  // Closing the player ends the session too — an explicit terminator, the
+  // sanctioned kind of clear site (Phase 5.5): the session record is the
+  // only thing removed; the vulnerable state and time context derive from
+  // it and self-heal.
+  if (browser.afterHoursSession) {
+    browser.afterHoursSession = null;
+    popTimeContext();
     pendingInterruption = null;
   }
   renderComputerScreen(currentGameState);
+  renderPhoneScreen(currentGameState);
 }
 
 // Enter masturbating state — no time cost yet. Sets the time context to
 // 'masturbating' (3x scale — time crawls). The "Cum" button appears after
 // a warmup period (MASTURBATION.warmupSeconds of real time).
-function doAfterHoursMasturbate() {
+function doAfterHoursMasturbate(device) {
   const browser = currentGameState.world.computer.apps.browser;
   if (!browser.afterHoursWatching) return;
-  browser.afterHoursMasturbating = true;
-  // Absolute game-minute, so the session timer survives midnight.
-  browser.afterHoursSessionStart = clockToAbsolute(currentGameState.meta.clock);
+  // Phase 5.5: a phone session requires the phone to be *out* in the room
+  // (presence 'here') — pocketed, a session record would be inert (the
+  // derived active-check refuses 'carried', the L11 bug). Guard up front
+  // so the Masturbate button gives feedback instead of silently not
+  // starting.
+  if (device === 'phone' && phonePresence(currentGameState) !== 'here') {
+    addLogEntry('system', 'Set the phone down somewhere you can use it first.');
+    return;
+  }
+  // Phase 5.5: the session is { device, startedTick } — a record, not a
+  // sticky boolean. Device comes from the shell that hosted the click
+  // (data-device), so phone and computer each claim their own.
+  browser.afterHoursSession = {
+    device: device || 'computer',
+    startedTick: clockToAbsolute(currentGameState.meta.clock),
+  };
   // Wall-clock deadline the render reads to decide whether "Cum" is
   // enabled. Stored in state rather than closed over by a render-scheduled
   // timer, so re-renders can't restart the warmup. Date.now (not
   // performance.now) so a value that survives into a reloaded save is
   // still in the past and simply reads as already warmed up.
   browser.afterHoursWarmupUntilMs = Date.now() + MASTURBATION.warmupSeconds * 1000;
-  setTimeContext('masturbating');
+  pushTimeContext('masturbating');
   // Phase 5: start background pre-generation of the top interruption
   // candidate's line so the bubble appears instantly if that NPC wins.
   startInterruptionPreGeneration(currentGameState);
   renderComputerScreen(currentGameState);
+  renderPhoneScreen(currentGameState);
   // One re-render when the warmup elapses, to flip the button live.
   setTimeout(() => {
-    if (currentGameState?.world.computer.apps.browser.afterHoursMasturbating) {
+    if (isAfterHoursSessionActive(currentGameState)) {
       renderComputerScreen(currentGameState);
+      renderPhoneScreen(currentGameState);
     }
   }, MASTURBATION.warmupSeconds * 1000);
 }
@@ -344,11 +378,11 @@ function doAfterHoursMasturbate() {
 // Abort the session — no effects, no time. Return to browsing.
 function doAfterHoursStop() {
   const browser = currentGameState.world.computer.apps.browser;
-  browser.afterHoursMasturbating = false;
-  browser.afterHoursSessionStart = null;
-  setTimeContext('browsing');
+  browser.afterHoursSession = null;
+  popTimeContext();
   pendingInterruption = null;
   renderComputerScreen(currentGameState);
+  renderPhoneScreen(currentGameState);
 }
 
 // The climax action — the actual time + effects cost. Pauses the
@@ -358,7 +392,7 @@ function doAfterHoursStop() {
 // player, with an AI-generated line shown in a DOM-injected bubble.
 async function doAfterHoursCum() {
   const browser = currentGameState.world.computer.apps.browser;
-  if (!browser.afterHoursMasturbating) return;
+  if (!isAfterHoursSessionActive(currentGameState)) return;
   showLoading();
   try {
     const minutes = MASTURBATION.timeCostMinutes;
@@ -372,11 +406,11 @@ async function doAfterHoursCum() {
       applyEffects(effects, effCtx);
     }
 
-    browser.afterHoursMasturbating = false;
-    browser.afterHoursSessionStart = null;
-    setTimeContext('browsing');
+    browser.afterHoursSession = null;
+    popTimeContext();
     addLogEntry('narration', 'You finish, feeling a mix of relief and mild shame.');
     renderComputerScreen(currentGameState);
+    renderPhoneScreen(currentGameState);
     render(currentGameState, currentSceneState);
     await saveAtBoundary('ah-cum', currentGameState);
 
@@ -1009,10 +1043,13 @@ async function doImSend(npcId) {
   }
 }
 
-async function doStreamWatch(showId) {
+async function doStreamWatch(showId, device) {
   if (!showId) return;
-  if (isCutoffActive(currentGameState, 'power') || isCutoffActive(currentGameState, 'internet')) {
-    addLogEntry('system', 'You can\'t stream — power or internet is down.');
+  // Phase 5: device-aware connectivity gating (decision F) — power/internet
+  // for the computer, wifi+cellular both down for the phone.
+  const blocked = appBlockedReason(currentGameState, 'stream', device);
+  if (blocked) {
+    addLogEntry('system', `You can't stream — ${blocked.toLowerCase()}.`);
     return;
   }
   showLoading();
@@ -1050,15 +1087,19 @@ async function doBillsPay(billId) {
 }
 
 async function doBillsPayAll() {
-  const result = payAllBills(currentGameState);
-  if (!result.ok) { addLogEntry('system', result.reason); return; }
-  addLogEntry('narration', `You pay off all your bills: ${result.totalPaid} total.`);
-  let reconnected = [];
-  for (const r of result.results) if (r.reconnected) reconnected.push(BILL_DEFS[r.billId].label);
-  if (reconnected.length > 0) addLogEntry('system', `Service restored: ${reconnected.join(', ')}.`);
+  await doPayBillsFromWorld('bills-pay-all');
   renderComputerScreen(currentGameState);
-  render(currentGameState, currentSceneState);
-  await saveAtBoundary('bills-pay-all', currentGameState);
+}
+
+// BrineOS Phase 7: toggle a single bill's autopay flag. Rendered on both
+// devices for free (shared bills-dashboard renderer, Phase 1/5).
+async function doBillsToggleAutopay(billId) {
+  if (!billId) return;
+  const result = toggleBillAutopay(currentGameState, billId);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  addLogEntry('system', `Autopay ${result.autopay ? 'enabled' : 'disabled'} for ${BILL_DEFS[billId].label}.`);
+  renderComputerScreen(currentGameState);
+  await saveAtBoundary('bills-toggle-autopay', currentGameState);
 }
 
 // Phase 11: investing
@@ -1108,6 +1149,28 @@ async function doUpgradeRepair(facilityId) {
   renderComputerScreen(currentGameState);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('upgrade-repair', currentGameState);
+}
+
+// BrineOS Phase 8.4: a before/after restoration shot. Reuses the same
+// takePhoto (image.js) the phone's Camera app uses — the RenoFix screen is
+// shared across both devices (Phase 5), and rather than thread a device
+// param through every one of the 23 shared renderers just to hide this
+// button on the computer, the fiction is simply "you have your phone on
+// you regardless of which screen you're looking at" (decision C already
+// treats phone presence loosely — usable when carried or in the room).
+// The caption is overwritten with the facility+tier so a later gallery
+// browse reads as a restoration record, not just "Kitchen, Day 40".
+async function doUpgradesSnapPhoto(facilityId) {
+  if (!facilityId) return;
+  const def = FACILITY_DEFS[facilityId];
+  const upgrade = currentGameState.world.upgrades?.[facilityId];
+  if (!def || !upgrade) return;
+  const tierLabel = def.tiers.find(t => t.tier === upgrade.tier)?.label || upgrade.tier;
+  const photo = takePhoto(currentGameState, [`facility:${facilityId}`, `tier:${upgrade.tier}`]);
+  photo.caption = `${def.label} — ${tierLabel}, Day ${currentGameState.meta.clock.day}`;
+  addLogEntry('system', `Photo saved: ${photo.caption}`);
+  renderComputerScreen(currentGameState);
+  await saveAtBoundary('upgrades-snap-photo', currentGameState);
 }
 
 // --- Phase 6: Quarterly taxes ---

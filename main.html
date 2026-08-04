@@ -76,6 +76,14 @@
   --z-computer-taskbar: 150;
   --z-computer-startmenu: 160;
 
+  /* BrineOS Phase 3: phone shell tier — above the computer taskbar/start
+     menu (150/160) so the phone floats over a fullscreen computer, but
+     below --z-overlay (200) so global modals/loading always win. The FAB
+     sits under the open phone so the overlay never covers its own launch
+     button. */
+  --z-phone-fab: 165;
+  --z-phone: 170;
+
   /* Layout */
   --header-h: 56px;
   --footer-h: 56px;
@@ -970,6 +978,370 @@ body {
   .desktop-icon { padding: var(--space-3); }
 }
 
+/* --- BrineOS Phase 3: phone shell --- */
+/* The always-on phone button (plan 3.4): fixed bottom-right, above the
+   footer in normal mode and above the taskbar in computer mode. Hidden
+   until RENDER.PHONE stamps data-presence (i.e. only once a game exists);
+   presence 'elsewhere' dims it so it still reads as "your phone is not
+   here". */
+.phone-fab {
+  position: fixed;
+  right: var(--space-4);
+  bottom: calc(var(--footer-h) + var(--space-4));
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  box-shadow: var(--shadow-lg);
+  cursor: pointer;
+  z-index: var(--z-phone-fab);
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+.phone-fab[data-presence] { display: flex; }
+.phone-fab:hover { background: var(--color-surface-hover); }
+.phone-fab .phone-fab-icon { width: 24px; height: 24px; }
+.phone-fab[data-away] { color: var(--color-text-faint); border-color: var(--color-border); box-shadow: var(--shadow-sm); }
+.phone-fab-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 var(--space-1);
+  border-radius: 10px;
+  background: var(--color-negative);
+  color: #fff;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+}
+#app[data-mode="computer"] .phone-fab { bottom: calc(var(--taskbar-h) + var(--space-4)); }
+
+/* The phone device (plan 3.2): a phone-shaped panel anchored above the
+   FAB. Sibling of #computer-screen, so it's independent of computer power
+   state and floats over a fullscreen desktop (decision E). */
+.phone-device {
+  position: fixed;
+  right: var(--space-4);
+  bottom: calc(var(--footer-h) + var(--space-4) + 68px);
+  width: min(360px, calc(100vw - 2 * var(--space-4)));
+  height: min(640px, calc(100dvh - var(--header-h) - 32px));
+  display: none;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  z-index: var(--z-phone);
+  color: var(--color-text);
+}
+#phone-screen[data-open] { display: flex; }
+#app[data-mode="computer"] #phone-screen { bottom: calc(var(--taskbar-h) + var(--space-4) + 68px); }
+
+.phone-statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-alt);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+.phone-clock { font-size: var(--fs-sm); font-weight: 600; }
+.phone-battery { display: flex; align-items: center; gap: var(--space-2); }
+.phone-battery-bolt { display: none; font-size: var(--fs-sm); }
+#phone-screen[data-charging] .phone-battery-bolt { display: inline; }
+.phone-battery-track {
+  width: 36px;
+  height: 14px;
+  padding: 1px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+}
+.phone-battery-fill { height: 100%; border-radius: 2px; background: var(--color-positive); transition: width var(--transition-med); }
+.phone-battery-fill[data-battery="0"] { width: 0%; }
+.phone-battery-fill[data-battery="5"] { width: 5%; }
+.phone-battery-fill[data-battery="10"] { width: 10%; }
+.phone-battery-fill[data-battery="15"] { width: 15%; }
+.phone-battery-fill[data-battery="20"] { width: 20%; }
+.phone-battery-fill[data-battery="25"] { width: 25%; }
+.phone-battery-fill[data-battery="30"] { width: 30%; }
+.phone-battery-fill[data-battery="35"] { width: 35%; }
+.phone-battery-fill[data-battery="40"] { width: 40%; }
+.phone-battery-fill[data-battery="45"] { width: 45%; }
+.phone-battery-fill[data-battery="50"] { width: 50%; }
+.phone-battery-fill[data-battery="55"] { width: 55%; }
+.phone-battery-fill[data-battery="60"] { width: 60%; }
+.phone-battery-fill[data-battery="65"] { width: 65%; }
+.phone-battery-fill[data-battery="70"] { width: 70%; }
+.phone-battery-fill[data-battery="75"] { width: 75%; }
+.phone-battery-fill[data-battery="80"] { width: 80%; }
+.phone-battery-fill[data-battery="85"] { width: 85%; }
+.phone-battery-fill[data-battery="90"] { width: 90%; }
+.phone-battery-fill[data-battery="95"] { width: 95%; }
+.phone-battery-fill[data-battery="100"] { width: 100%; }
+.phone-battery-text { font-size: var(--fs-xs); color: var(--color-text-dim); min-width: 34px; text-align: right; }
+
+.phone-screennav {
+  display: flex;
+  gap: 2px;
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.phone-screennav:empty { display: none; }
+.phone-screennav-btn {
+  flex: 1;
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-dim);
+  font-size: var(--fs-xs);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.phone-screennav-btn[data-current] { color: var(--color-accent); background: var(--color-surface-alt); }
+
+.phone-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+#phone-screen[data-screen-state="home"] .phone-content {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3);
+  align-content: start;
+}
+.phone-app-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-1);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+.phone-app-tile:hover { background: var(--color-surface-hover); border-color: var(--color-accent-dim); }
+.phone-app-tile .icon { width: 28px; height: 28px; color: var(--color-accent); }
+.phone-app-tile-label { font-size: var(--fs-xs); text-align: center; line-height: var(--lh-tight); }
+
+.phone-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.phone-setting-label { font-size: var(--fs-sm); font-weight: 600; }
+.phone-setting-toggle {
+  min-width: 56px;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+.phone-setting-toggle[data-on="on"] { background: var(--color-accent-dim); color: #fff; }
+
+/* --- BrineOS Phase 4: Tracker screens --- */
+/* Notification cards and Agenda rows. Rows are also deep-links (the whole
+   agenda item opens the owning app); notification titles carry the deep
+   link while their action buttons stay separate (no button-in-button). */
+.phone-tracker-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.phone-tracker-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  text-align: left;
+  width: 100%;
+}
+.phone-tracker-item[data-urgent] { border-color: var(--color-negative); background: rgba(246, 109, 140, 0.06); }
+.phone-tracker-item > .icon { flex-shrink: 0; width: 20px; height: 20px; margin-top: 2px; color: var(--color-accent); }
+.phone-tracker-item[data-urgent] > .icon { color: var(--color-negative); }
+.phone-tracker-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.phone-tracker-title { font-size: var(--fs-sm); font-weight: 600; color: var(--color-text); background: none; border: none; padding: 0; text-align: left; cursor: pointer; font-family: var(--font-sans); }
+.phone-tracker-title:hover { color: var(--color-accent); }
+.phone-tracker-detail { font-size: var(--fs-xs); color: var(--color-text-dim); line-height: var(--lh-tight); }
+.phone-tracker-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+.phone-tracker-btn {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+.phone-tracker-btn:hover { border-color: var(--color-accent-dim); }
+.phone-tracker-btn[data-action="phone.tracker-dismiss"] { color: var(--color-negative); border-color: var(--color-negative); }
+.phone-tracker-due { flex-shrink: 0; font-size: var(--fs-xs); color: var(--color-text-faint); white-space: nowrap; }
+.phone-tracker-empty {
+  padding: var(--space-4);
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--color-text-dim);
+}
+
+/* --- BrineOS Phase 6: Clock app --- */
+.phone-clock-face {
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  text-align: center;
+  margin-top: var(--space-3);
+}
+.phone-clock-date { text-align: center; font-size: var(--fs-sm); color: var(--color-text-dim); margin-bottom: var(--space-3); }
+.phone-clock-alarm-status {
+  text-align: center;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  padding: var(--space-2);
+  color: var(--color-accent);
+}
+.phone-clock-hour-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.phone-clock-hour-btn {
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+.phone-clock-hour-btn[data-current] { background: var(--color-accent-dim); color: #fff; border-color: var(--color-accent-dim); }
+.phone-clock-clear-btn {
+  width: 100%;
+  margin-top: var(--space-3);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+.phone-clock-clear-btn[data-current] { background: var(--color-accent-dim); color: #fff; border-color: var(--color-accent-dim); }
+.phone-clock-hint {
+  margin-top: var(--space-3);
+  font-size: var(--fs-xs);
+  color: var(--color-text-faint);
+  text-align: center;
+  line-height: var(--lh-tight);
+}
+
+/* --- BrineOS Phase 8: Camera app --- */
+.phone-camera-take-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+  border: 1px solid var(--color-accent-dim);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-dim);
+  color: #fff;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+.phone-camera-take-btn .icon { width: 18px; height: 18px; }
+.phone-camera-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+}
+.phone-camera-thumb {
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--color-surface-alt);
+  cursor: pointer;
+}
+.phone-camera-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.phone-camera-full { width: 100%; border-radius: var(--radius-md); display: block; }
+.phone-camera-caption { margin-top: var(--space-2); font-size: var(--fs-sm); color: var(--color-text-dim); text-align: center; }
+.phone-camera-share-label { margin-top: var(--space-3); font-size: var(--fs-xs); color: var(--color-text-faint); }
+.phone-camera-share-row { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-1); }
+.phone-camera-share-btn {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+.phone-camera-share-btn:hover { border-color: var(--color-accent-dim); }
+
+.phone-navbar {
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  padding: var(--space-2);
+  background: var(--color-surface-alt);
+  border-top: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+.phone-nav-btn {
+  width: 44px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  cursor: pointer;
+}
+.phone-nav-btn .icon { width: 20px; height: 20px; }
+.phone-nav-btn:hover { background: var(--color-surface-hover); }
+/* Back is meaningless on the home screen; hide it there rather than
+   letting it no-op silently (render.phone.js also guards phoneGoBack). */
+#phone-screen[data-screen-state="home"] .phone-nav-btn[data-action="phone.back"] { display: none; }
+
 .drawer-toggle {
   display: none;
   background: var(--color-surface-alt);
@@ -1293,6 +1665,8 @@ body {
 .im-msg-bubble[data-from="npc"] { align-self: flex-start; background: var(--color-surface-alt); border: 1px solid var(--color-border); }
 .im-msg-bubble[data-from="system"] { align-self: center; background: transparent; }
 .im-msg-text { word-wrap: break-word; }
+/* BrineOS Phase 8.5: a shared photo's thumbnail, prepended into the bubble. */
+.im-msg-photo { display: block; width: 100%; max-width: 200px; border-radius: 6px; margin-bottom: var(--space-1); }
 .im-msg-time { font-size: 10px; opacity: 0.6; margin-top: 2px; }
 .im-input-row { display: flex; gap: 4px; flex-shrink: 0; }
 .im-input { flex: 1; padding: 6px 10px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-bg); color: var(--color-text); font-size: var(--fs-sm); }
@@ -1362,6 +1736,15 @@ body {
 .bills-status-pill.cutoff { background: var(--color-negative); color: #fff; }
 .bills-status-pill.paid { background: rgba(108, 246, 169, 0.15); color: var(--color-positive); }
 .bills-pay-btn { margin-top: var(--space-2); }
+/* BrineOS Phase 7: autopay toggle. Same on/off contract as .phone-setting-toggle. */
+.bills-autopay-btn {
+  margin-top: var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.bills-autopay-btn[data-on="on"] { background: var(--color-accent-dim); color: #fff; border-color: var(--color-accent-dim); }
 .bills-usage-breakdown { font-size: var(--fs-xs); color: var(--color-text-dim); margin-top: var(--space-1); padding-top: var(--space-1); border-top: 1px solid var(--color-border); }
 .bills-footer { margin-top: var(--space-3); display: flex; justify-content: center; }
 .bills-payall-btn { font-weight: 700; }
@@ -1409,7 +1792,7 @@ body {
 .upg-facility-card.maxed .upg-facility-status { color: var(--color-positive); }
 .upg-facility-desc { margin-top: 2px; }
 .upg-next-tier { margin-top: 2px; font-style: italic; }
-.upg-facility-action { margin-top: var(--space-1); }
+.upg-facility-action { margin-top: var(--space-1); display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
 .upg-buy-btn { font-weight: 600; }
 .upg-maxed-badge { font-size: var(--fs-xs); color: var(--color-positive); font-weight: 600; }
 .upg-condition { display: flex; align-items: center; gap: var(--space-1); margin-top: var(--space-1); }
@@ -1444,6 +1827,17 @@ body {
 .invest-buy-btn { font-weight: 600; }
 .invest-sell-btn { margin-left: auto; }
 .invest-disclaimer { margin-top: var(--space-2); padding: var(--space-1); text-align: center; font-style: italic; }
+/* Brine Bank Overview (BrineOS Phase 1) */
+.bank-balance-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--space-2); }
+.bank-balance-card { background: var(--color-surface-hover); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); }
+.bank-balance-value { font-size: var(--fs-lg); font-weight: 700; }
+.bank-balance-label { display: block; }
+.bank-owed-row { display: flex; justify-content: space-between; align-items: center; padding: var(--space-1) 0; border-bottom: 1px solid var(--color-border); }
+.bank-owed-row:last-child { border-bottom: none; }
+.bank-owed-label { font-size: var(--fs-sm); font-weight: 600; }
+.bank-owed-label .bills-status-pill { margin-left: 6px; }
+.bank-owed-value { font-size: var(--fs-sm); font-weight: 700; }
+.bank-owed-row.cutoff .bank-owed-value { color: var(--color-negative); }
 </style>
 <!-- ===== /SECTION: STYLES ===== -->
 
@@ -1569,6 +1963,31 @@ body {
       <input type="text" id="input-bar" placeholder="What do you do?" disabled>
     </div>
   </footer>
+
+  <!-- BrineOS Phase 3: the phone. Sibling of #computer-screen (NOT nested
+       inside it — decision E), so it floats over both shells, survives
+       computer power state, and stays in the DOM on every mode. -->
+  <button id="phone-fab" class="phone-fab" data-action="phone.open" aria-label="Open phone">
+    <span class="phone-fab-icon"></span>
+    <span class="phone-fab-badge" id="phone-fab-badge" hidden></span>
+  </button>
+  <section id="phone-screen" class="phone-device" data-device="phone" aria-label="Phone">
+    <div class="phone-statusbar">
+      <span class="phone-clock" id="phone-clock"></span>
+      <div class="phone-battery">
+        <span class="phone-battery-bolt">⚡</span>
+        <div class="phone-battery-track"><div class="phone-battery-fill" data-battery="80"></div></div>
+        <span class="phone-battery-text" id="phone-battery-text">—</span>
+      </div>
+    </div>
+    <nav class="phone-screennav" id="phone-screennav"></nav>
+    <div class="phone-content" id="phone-content"></div>
+    <div class="phone-navbar">
+      <button class="phone-nav-btn" data-action="phone.back" aria-label="Back"></button>
+      <button class="phone-nav-btn" data-action="phone.home" aria-label="Home"></button>
+      <button class="phone-nav-btn" data-action="phone.close" aria-label="Power off"></button>
+    </div>
+  </section>
 </div>
 
 <!-- Modal -->
@@ -1765,32 +2184,44 @@ body {
      UI.WINDOWMANAGER → BOOT. Functions calling into a LATER script are
      fine either way — those calls only happen at runtime, after every
      script below has finished loading. -->
-<script src="src/srcfiles/config.js?v=6"></script>
-<script src="src/srcfiles/icons.js?v=5"></script>
-<script src="src/srcfiles/defs.world.js?v=5"></script>
-<script src="src/srcfiles/defs.actions.js?v=5"></script>
-<script src="src/srcfiles/defs.computer.js?v=6"></script>
-<script src="src/srcfiles/state.js?v=5"></script>
-<script src="src/srcfiles/sim.js?v=5"></script>
-<script src="src/srcfiles/world.js?v=5"></script>
+<script src="src/srcfiles/config.js?v=12"></script>
+<script src="src/srcfiles/icons.js?v=11"></script>
+<script src="src/srcfiles/defs.world.js?v=7"></script>
+<script src="src/srcfiles/defs.actions.js?v=6"></script>
+<script src="src/srcfiles/defs.computer.js?v=8"></script>
+<script src="src/srcfiles/state.js?v=7"></script>
+<script src="src/srcfiles/sim.js?v=8"></script>
+<script src="src/srcfiles/world.js?v=12"></script>
 <script src="src/srcfiles/items.js?v=5"></script>
 <script src="src/srcfiles/effects.js?v=5"></script>
-<script src="src/srcfiles/drives.js?v=5"></script>
+<script src="src/srcfiles/drives.js?v=6"></script>
 <script src="src/srcfiles/actions.js?v=5"></script>
 <script src="src/srcfiles/intent.js?v=5"></script>
 <script src="src/srcfiles/skills.js?v=5"></script>
 <script src="src/srcfiles/stealth.js?v=5"></script>
-<script src="src/srcfiles/time.js?v=5"></script>
-<script src="src/srcfiles/computer.js?v=7"></script>
+<script src="src/srcfiles/time.js?v=8"></script>
+<script src="src/srcfiles/computer.js?v=12"></script>
+<!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
+     (needs computeTaxOwed/computeBillAmount at call time) and before
+     phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
+<script src="src/srcfiles/tracker.js?v=1"></script>
+<!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
+     switchScreen's phone device branch). -->
+<script src="src/srcfiles/phone.js?v=6"></script>
 <script src="src/srcfiles/npc.js?v=6"></script>
 <script src="src/srcfiles/prompt.js?v=5"></script>
 <script src="src/srcfiles/llm.js?v=5"></script>
-<script src="src/srcfiles/interruption.js?v=5"></script>
-<script src="src/srcfiles/image.js?v=5"></script>
-<script src="src/srcfiles/render.js?v=10"></script>
-<script src="src/srcfiles/render.computer.js?v=8"></script>
-<script src="src/srcfiles/render.desktop.js?v=5"></script>
-<script src="src/srcfiles/ui.js?v=8"></script>
-<script src="src/srcfiles/ui.computer.js?v=8"></script>
+<script src="src/srcfiles/interruption.js?v=6"></script>
+<script src="src/srcfiles/image.js?v=6"></script>
+<script src="src/srcfiles/render.js?v=13"></script>
+<script src="src/srcfiles/render.computer.js?v=12"></script>
+<script src="src/srcfiles/render.desktop.js?v=6"></script>
+<!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
+     COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
+<script src="src/srcfiles/render.phone.js?v=6"></script>
+<script src="src/srcfiles/ui.js?v=19"></script>
+<script src="src/srcfiles/ui.computer.js?v=13"></script>
 <script src="src/srcfiles/ui.windowmanager.js?v=6"></script>
+<!-- BrineOS Phase 3: phone shell orchestration — after ui.computer.js. -->
+<script src="src/srcfiles/ui.phone.js?v=4"></script>
 <!-- ===== /SECTION: SCRIPTS ===== -->

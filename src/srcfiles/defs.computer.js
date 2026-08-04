@@ -8,10 +8,20 @@
 // 'work', 'shop', and 'browser' exist so far — classes/services/
 // classifieds/im/stream land in later passes, each adding one APP_DEFS
 // entry and whatever data source it needs, following this same shape.
+//
+// Every entry carries a `devices` list (BrineOS Phase 5 app parity) saying
+// which devices host it: 'computer' for the desktop shell (desktop icons,
+// taskbar, start menu) and 'phone' for the BrineOS home grid. Both lists
+// currently coincide — full parity — because the phone renders every
+// shared app's screens through the exact same COMPUTER_RENDERERS, and the
+// Tracker's deep links navigate to apps like work/im/upgrades that the
+// phone must be able to open. render.phone.js derives the home grid from
+// this field; phone.js's phoneOpenApp refuses apps that don't list 'phone'.
 
 const APP_DEFS = {
   work: {
     id: 'work', label: 'WorkHub', category: 'productivity', requires: [],
+    devices: ['computer', 'phone'],
     entryScreen: 'board',
     screens: {
       board: { label: 'Gig Board', renderer: 'gigboard', source: 'state:apps.gigs.board' },
@@ -25,6 +35,7 @@ const APP_DEFS = {
   // rather than teleporting straight into your inventory).
   shop: {
     id: 'shop', label: 'Nile', category: 'shopping', requires: [],
+    devices: ['computer', 'phone'],
     entryScreen: 'browse',
     screens: {
       browse: { label: 'Browse', renderer: 'nile', source: 'SHOP_CATALOG_LIST', rowAction: 'shop.add-to-cart', rowActionLabel: 'Add to Cart' },
@@ -38,6 +49,7 @@ const APP_DEFS = {
   },
   browser: {
     id: 'browser', label: 'Browser', category: 'web', requires: [],
+    devices: ['computer', 'phone'],
     entryScreen: 'home',
     screens: {
       home: { label: 'Home', renderer: 'browser', source: 'SITE_DEFS_LIST', rowAction: 'browser.visit', rowActionLabel: 'Visit' },
@@ -49,6 +61,7 @@ const APP_DEFS = {
   // timed lessons to actually finish it.
   classes: {
     id: 'classes', label: 'EduStream', category: 'education', requires: [],
+    devices: ['computer', 'phone'],
     entryScreen: 'catalog',
     screens: {
       catalog: { label: 'Catalog', renderer: 'edustream-catalog' },
@@ -61,6 +74,7 @@ const APP_DEFS = {
   // each time.
   services: {
     id: 'services', label: 'HomeCare', category: 'services', requires: [],
+    devices: ['computer', 'phone'],
     entryScreen: 'catalog',
     screens: {
       catalog: { label: 'Available', renderer: 'homecare-catalog' },
@@ -76,6 +90,7 @@ const APP_DEFS = {
   // card with a "Load Full Profile" button).
   classifieds: {
     id: 'classifieds', label: 'RoomList', category: 'classifieds', requires: [],
+    devices: ['computer', 'phone'],
     entryScreen: 'browse',
     screens: {
       post: { label: 'My Listing', renderer: 'roomlist-post' },
@@ -98,6 +113,7 @@ const APP_DEFS = {
   // conversation the right-hand pane shows.
   im: {
     id: 'im', label: 'Messages', category: 'social', requires: [],
+    devices: ['computer', 'phone'],
     entryScreen: 'threads',
     screens: {
       threads: { label: 'Messages', renderer: 'messenger' },
@@ -109,20 +125,28 @@ const APP_DEFS = {
   // free to watch (the price column just renders empty).
   stream: {
     id: 'stream', label: 'Streamly', category: 'entertainment', requires: [],
+    devices: ['computer', 'phone'],
     entryScreen: 'browse',
     screens: {
       browse: { label: 'Browse', renderer: 'streamly', source: 'STREAM_DEFS_LIST', rowAction: 'stream.watch', rowActionLabel: 'Watch Episode' },
     },
   },
-  // Phase 3 bills dashboard. One screen showing every bill with its
-  // status, balance, due day, and a Pay button (or Pay All). The cutoff
-  // state is the most important thing on the screen — a red "POWER OFF"
-  // banner is what makes the cost stack feel real rather than a number.
-  bills: {
-    id: 'bills', label: 'Bills', category: 'finance', requires: [],
-    entryScreen: 'dashboard',
+  // Brine Bank — merge of the old Bills + Portfolia apps (BrineOS Phase 1).
+  // One finance app: an Overview screen (the whole money picture at a
+  // glance), plus the bills dashboard and the investing screens reused
+  // unchanged. Shared account data stays where it always lived — world.bills
+  // for the bills, computer.apps.invest for holdings — so the reused
+  // renderers and do* handlers work unmodified (decision A of
+  // ref/BrineOS-The-Phone-plan.md). Old saves with open bills/invest
+  // windows are handled by normalizeComputerState's unknown-appId prune.
+  bank: {
+    id: 'bank', label: 'Brine Bank', category: 'finance', requires: [],
+    devices: ['computer', 'phone'],
+    entryScreen: 'overview',
     screens: {
-      dashboard: { label: 'Bills', renderer: 'bills-dashboard' },
+      overview: { label: 'Overview', renderer: 'bank-overview' },
+      bills: { label: 'Bills', renderer: 'bills-dashboard' },
+      invest: { label: 'Portfolia', renderer: 'invest-dashboard' },
     },
   },
   // Phase 4 upgrades: the apartment disrepair/renovation screen. Shows
@@ -132,21 +156,15 @@ const APP_DEFS = {
   // back. See ref/apartment-upgrades-plan.md.
   upgrades: {
     id: 'upgrades', label: 'RenoFix', category: 'home', requires: [],
+    devices: ['computer', 'phone'],
     entryScreen: 'dashboard',
     screens: {
       dashboard: { label: 'Apartment', renderer: 'upgrades-dashboard' },
     },
   },
-  // Phase 11: investing. Buy fund shares, watch them grow (or shrink),
-  // sell when you need the money for upgrades. The accelerator for the
-  // renovation sink — idle surplus money should be working.
-  invest: {
-    id: 'invest', label: 'Portfolia', category: 'finance', requires: [],
-    entryScreen: 'dashboard',
-    screens: {
-      dashboard: { label: 'Portfolio', renderer: 'invest-dashboard' },
-    },
-  },
+  // Phase 11 investing now lives inside Brine Bank as its Portfolia screen
+  // (see the bank app above); the holdings data stayed in computer.apps
+  // .invest so invest-dashboard and the invest handlers work unmodified.
 };
 
 // --- Jobs: what WorkHub's board offers, and what working a block pays.

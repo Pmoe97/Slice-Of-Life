@@ -24,6 +24,11 @@ function render(gameState, sceneState) {
   // sync for free, rather than every computer action needing to remember
   // a second render call.
   if (gameState.world.computer) renderComputerScreen(gameState);
+  // BrineOS Phase 3 (plan 3.5): sibling call — the phone FAB renders on
+  // every pass, and the overlay when open. Decision E: it's an overlay,
+  // not a mode switch, so it must redraw here even while the computer is
+  // on (the phone can float over a fullscreen desktop).
+  if (gameState.world.phone) renderPhoneScreen(gameState);
 }
 
 // --- Header ---
@@ -171,9 +176,7 @@ function renderPlayerPanel(gs) {
   ];
   // Phase 8: show alarm and burnout status if active.
   if (player.alarm !== null && player.alarm !== undefined) {
-    const h12 = player.alarm === 0 ? 12 : player.alarm > 12 ? player.alarm - 12 : player.alarm;
-    const ampm = player.alarm < 12 ? 'am' : 'pm';
-    items.push({ label: 'Alarm', val: `${h12}:00 ${ampm}` });
+    items.push({ label: 'Alarm', val: formatHour12(player.alarm) });
   }
   const burnoutLevel = player.burnout?.burnoutLevel || 0;
   if (burnoutLevel > 0.01) {
@@ -497,6 +500,7 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
     hereChips.push({ label: avail.label, action: avail.actionId });
   }
   if ((player.rentOwed || 0) > 0) hereChips.push({ label: `Pay Rent (${player.rentOwed})`, action: 'pay-rent' });
+  if (Object.values(gs.world.bills || {}).some(b => b && b.cutoffActive)) hereChips.push({ label: 'Pay Bills (service cut off)', action: 'pay-bills' });
   if (roomId === 'hallway_a' || roomId === 'hallway_b') {
     for (const adjId of adjacentRooms) {
       const roomType = ROOMS[adjId]?.type;

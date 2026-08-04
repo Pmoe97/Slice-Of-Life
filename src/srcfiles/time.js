@@ -20,9 +20,15 @@
 // hasDayRolledOver so midnight is never processed twice.
 
 // --- Context state ---
-// The current time-flow context. Set by UI actions, read by the clock
-// loop to pick the timeScale. Default 'idle'.
-let currentTimeContext = 'idle';
+// The current time-flow context, as a STACK. The base is derived from
+// durable state (computeTimeContext), so loading a save with the computer
+// left powered on resumes at browsing scale with no call site remembering
+// to say so; transient surfaces (a conversation, a sleep, a work block,
+// an AfterHours session — and later the phone) push on top of it and pop
+// off when they close, so an overlay opened mid-conversation restores the
+// conversation's scale instead of the last-writer-wins scalar stomping it
+// back to idle. Read by the clock loop each frame to pick the timeScale.
+let timeContextStack = ['idle'];
 
 // --- Clock loop state (private) ---
 let clockLoopRunning = false;
@@ -37,17 +43,61 @@ let clockRafId = null;
 // sim checkpoint.
 let clockGeneration = 0;
 
-// --- Context setters (called by UI actions) ---
-function setTimeContext(ctx) {
-  currentTimeContext = ctx;
+// --- Context stack (transient surfaces push/pop; base is derived) ---
+// The base context, derived from durable state — never set by hand. What
+// wins is "the surface that is statically open," from state that a reload
+// reconstructs: an active AfterHours session overrides the computer being
+// open, which overrides idle.
+function computeTimeContext(gs) {
+  if (gs?.world?.computer?.power === 'on') return 'browsing';
+  return 'idle';
+}
+
+// Rebuild the stack from durable state — called when a save loads (BOOT),
+// so a computer left powered on resumes at browsing scale without a call
+// site remembering to set it.
+function resetTimeContext(gs) {
+  timeContextStack = [computeTimeContext(gs)];
+}
+
+// Push/pop a transient surface on top of the derived base. Pushing an
+// already-current context is a no-op, so double-opening a surface can't
+// double-nest it.
+function pushTimeContext(ctx) {
+  if (timeContextStack[timeContextStack.length - 1] !== ctx) {
+    timeContextStack.push(ctx);
+  }
+}
+
+function popTimeContext() {
+  if (timeContextStack.length > 1) timeContextStack.pop();
+}
+
+// Phase 5.5: keep the 'masturbating' frame in sync with the DERIVED
+// session state on every read. The frame is still pushed/pop'd by the
+// explicit terminators as the fast path, but a session that ends without
+// one — the phone gets pocketed, locks, dies, or the computer powers off
+// — would leave a stale frame behind (the exact bug pattern landmine L11
+// documents, just moved from state into the stack). Reconcile is the
+// safety net: if the derived session is active the frame exists, if not
+// it's gone, position in the stack irrelevant.
+function reconcileTimeContext(gs) {
+  const active = isAfterHoursSessionActive(gs);
+  const idx = timeContextStack.indexOf('masturbating');
+  if (active) {
+    if (idx === -1) timeContextStack.push('masturbating');
+  } else if (idx !== -1) {
+    timeContextStack.splice(idx, 1);
+  }
 }
 
 function getTimeContext() {
-  return currentTimeContext;
+  if (currentGameState) reconcileTimeContext(currentGameState);
+  return timeContextStack[timeContextStack.length - 1];
 }
 
 function getTimeScale() {
-  const ctx = currentTimeContext;
+  const ctx = getTimeContext();
   return TIME_DILATION.scales[ctx] ?? TIME_DILATION.scales.idle;
 }
 
@@ -262,6 +312,8 @@ function updateClockDisplay() {
   if (hdrDay) hdrDay.textContent = formatDate(currentGameState.meta.clock.day);
   const csClock = document.getElementById('cs-clock');
   if (csClock) csClock.textContent = `Day ${currentGameState.meta.clock.day} — ${formatTime(m)}`;
+  const phoneClock = document.getElementById('phone-clock');
+  if (phoneClock) phoneClock.textContent = formatTime(m);
 }
 
 // --- Start/stop the clock loop ---

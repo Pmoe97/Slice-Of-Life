@@ -428,6 +428,12 @@ async function saveAtBoundary(reason, gameState) {
     queueWrite('world', 'bills', gameState.world.bills || initBillState());
     queueWrite('world', 'upgrades', gameState.world.upgrades || initUpgradesState());
     queueWrite('world', 'utilities', gameState.world.utilities || initUtilitiesState());
+    // BrineOS Phase 2: the phone shell's nav state (navStack/openAppId,
+    // Phase 3). Decision B — presence is DERIVED from the object bucket,
+    // never stored here. Lazy-init in-memory so every later reader can
+    // trust world.phone exists.
+    gameState.world.phone = gameState.world.phone || defaultPhoneState();
+    queueWrite('world', 'phone', gameState.world.phone);
     // kv.npcs is one key per npc (brief: "appending an episode rewrites one
     // character, not the world"). Every tick resolves every NPC's
     // location/activity/needs/mood in-memory via resolveBatch, but until
@@ -694,6 +700,9 @@ async function loadGameState() {
   // bill amounts still apply as a fallback in computeBillAmount when
   // utilities is absent.
   const utilities = await getWorld('utilities') || initUtilitiesState();
+  // BrineOS Phase 2: phone shell nav state (Phase 3). Presence is derived
+  // from the object bucket, so this is the whole persisted shape.
+  const phone = normalizePhoneState(await getWorld('phone'));
 
   const gameState = {
     meta,
@@ -707,7 +716,7 @@ async function loadGameState() {
     npcIds: Object.keys(npcs).filter(id => id.startsWith('npc_')),
     // droppedConstraints is persisted in meta by writeGeneratedGameState.
     droppedConstraints: meta.droppedConstraints || [],
-    world: { rooms, castWeb, quests, events, deliveries, rent, computer, taxes, bills, upgrades, utilities },
+    world: { rooms, castWeb, quests, events, deliveries, rent, computer, taxes, bills, upgrades, utilities, phone },
   };
   // Lazily spawns any bucket missing from kv (a pre-WORLD save, or a
   // resident who moved in since the last full write) rather than needing a
@@ -763,6 +772,10 @@ async function writeGeneratedGameState(gameState) {
   await root.kv.world.set('bills', gameState.world.bills || initBillState());
   await root.kv.world.set('upgrades', gameState.world.upgrades || initUpgradesState());
   await root.kv.world.set('utilities', gameState.world.utilities || initUtilitiesState());
+  // BrineOS Phase 2: phone shell nav state (Phase 3); presence is derived
+  // from the object bucket, never stored here (decision B).
+  gameState.world.phone = gameState.world.phone || defaultPhoneState();
+  await root.kv.world.set('phone', gameState.world.phone);
 
   for (const [id, npc] of Object.entries(gameState.npcs)) {
     await root.kv.npcs.set(id, npc);

@@ -290,12 +290,30 @@ const BILL_DEFS = {
   },
   phone: {
     id: 'phone', label: 'Phone', cadenceDays: 30, split: 'personal', amount: 65,
-    graceDays: 10, reconnectionFee: 0, cutoff: null,
+    // Phase 5 (decision F): the phone bill now has a real cutoff — unpaid
+    // past grace kills the phone's cellular service. The phone still works
+    // on home wifi while the internet is up (degraded but survivable);
+    // only a total loss (wifi AND cellular down) blocks online apps.
+    graceDays: 10, reconnectionFee: 0, cutoff: 'phone',
   },
   insurance: {
     id: 'insurance', label: 'Renters Insurance', cadenceDays: 30, split: 'personal', amount: 25,
     graceDays: 15, reconnectionFee: 0, cutoff: null,
   },
+};
+
+// --- Autopay (BrineOS Phase 7) ---
+// Opt-in per bill, default off. A successful autopay pays through the same
+// payBill() path a manual click uses. A failed one (insufficient funds) is
+// worse than a manual miss: it compounds a flat bounce fee onto the balance
+// immediately rather than just sitting unpaid through the grace window —
+// that asymmetry is the whole point (economy-and-rent-plan.md: income is
+// lumpy, so a dry spell should be able to bite through autopay, not just
+// around it). Flat, not scaled to the bill — real NSF fees don't scale
+// either — and anchored to the existing reconnectionFee range above
+// ($25-$40) rather than invented from nothing.
+const AUTOPAY = {
+  bounceFee: 30,
 };
 
 // --- Taxes (Phase 6) ---
@@ -328,18 +346,30 @@ const TAX_CONFIG = {
 
 // Which utility a cutoff id maps to, for the requirement checkers and the
 // bill dashboard. A cutoff status of 'off' on any of these blocks the
-// systems listed in BILL_CUTOFF_EFFECTS.
-const BILL_CUTOFF_IDS = ['power', 'water', 'gas', 'internet', 'rent'];
+// systems listed in BILL_CUTOFF_EFFECTS. 'phone' is Phase 5 (decision F):
+// the phone bill's cutoff kills cellular service, but the phone still
+// works on home wifi — only wifi AND cellular both down blocks online
+// apps on the phone.
+const BILL_CUTOFF_IDS = ['power', 'water', 'gas', 'internet', 'phone', 'rent'];
 
-// What each utility cutoff actually blocks — read by
-// ACTION_REQUIREMENT_CHECKERS and the gig/stream/browser handlers. Each
-// entry lists the action ids / app ids / facilities that go dark.
+// What each utility cutoff actually blocks. Phase 5 wired the app-gating
+// fields up for real with a device dimension (COMPUTER's appBlockedReason,
+// read by the gig/stream/browser handlers) and deleted the dead ones:
+//   * `internet.blocksApps` — the online apps; the phone treats these as
+//     blocked only when wifi AND cellular are both down (decision F).
+//   * `power.blocksComputer` — a power cutoff kills the whole machine;
+//     per-app blocksApps under power would be redundant since the computer
+//     can't even open.
+//   * `label` — used by the bills dashboard and rollover log messages.
+//   * Action-level blocks (shower/dishes/laundry/cook) live in
+//     ACTION_REQUIREMENT_CHECKERS (waterNotCutoff/gasNotCutoff), not here.
 const BILL_CUTOFF_EFFECTS = {
-  power: { label: 'Power is off', blocksApps: ['work', 'classes', 'stream', 'shop', 'browser', 'im', 'classifieds', 'services'], blocksComputer: true, spoilsFridge: true },
-  internet: { label: 'Internet is down', blocksApps: ['work', 'stream', 'browser'], blocksGigWork: true },
-  water: { label: 'Water is off', blocksActions: ['self.shower', 'self.dishes', 'self.laundry'] },
-  gas: { label: 'Gas is off', blocksActions: ['self.cook'] },
-  rent: { label: 'Eviction risk', isEvictionLadder: true },
+  power: { label: 'Power is off', blocksComputer: true },
+  internet: { label: 'Internet is down', blocksApps: ['work', 'stream', 'browser'] },
+  phone: { label: 'Phone service is off' },
+  water: { label: 'Water is off' },
+  gas: { label: 'Gas is off' },
+  rent: { label: 'Eviction risk' },
 };
 
 // --- Utility metering (Phase 5) ---
@@ -977,6 +1007,76 @@ const TIME_DILATION = {
   // When the page is hidden (tab switch), freeze the clock so time
   // doesn't accumulate absurdly while away
   freezeWhenHidden: true,
+};
+
+// --- Phone (BrineOS Phase 2) ---
+// The phone is a world OBJECT (defs.world.js) whose battery is
+// flags.battery (0-100), advanced at sim checkpoints (every
+// simCheckpointMinutes of game-time). It drains unless it is plugged into
+// a room with power, in which case it charges AND meters the electric
+// bill's `devices` meter — the player's own "NPC behaviour must show up
+// on the bills" invariant applied to them. All numbers live here so
+// battery feel is a config knob, not a code edit.
+const PHONE = {
+  startingBattery: 80,                 // % on first spawn
+  batteryDrainPerCheckpoint: 2,        // % per 30 game-minutes ≈ 25h to empty
+  batteryChargePerCheckpoint: 6,       // % per 30 game-minutes plugged in
+  chargeMeterDevicesPerCheckpoint: 0.5, // hours of the `devices` meter per charging checkpoint
+};
+
+// --- Camera (BrineOS Phase 8) ---
+// A photo record is NOT the rendered blob (see landmine L10 in the plan) —
+// it's a frozen prompt + seed that regenerates the identical image on
+// demand, because the underlying blob cache (IMAGE_CACHE, shared across
+// every scene/character image in the whole game, not just photos) can
+// evict it at any time. rollCap is a SEPARATE, smaller cap: how many photo
+// RECORDS the player keeps at all, oldest evicted — a deliberate memento
+// limit distinct from the cache's storage-management eviction.
+const CAMERA = {
+  rollCap: 30,
+};
+
+// --- Tracker (BrineOS Phase 4) ---
+// The phone's obligation tracker (see ref/BrineOS-The-Phone-plan.md §Phase
+// 4): one pure derived pass turns game state into a flat list of entries.
+// Nothing about an obligation is ever stored — world.phone.dismissed /
+// .snoozed hold only the player's intent, keyed by the deterministic entry
+// key. All thresholds below are the notification-feel knobs (no magic
+// numbers in tracker.js).
+const TRACKER = {
+  // Entries with urgency >= this count as notifications (badge + the
+  // Tracker's Notifications screen). Below it they appear only on the
+  // Agenda.
+  notifyThreshold: 60,
+  // Urgency ladder by daysUntil (negative = already past, 0 = due today).
+  // First matching row wins. Overdue always tops out at 100.
+  urgencyByDaysUntil: [
+    { maxDays: -1, urgency: 100 },
+    { maxDays: 0, urgency: 90 },
+    { maxDays: 3, urgency: 75 },
+    { maxDays: 7, urgency: 55 },
+    { maxDays: 14, urgency: 35 },
+    { maxDays: 30, urgency: 20 },
+  ],
+  defaultUrgency: 10,
+  // A paid-up recurring charge (utility bill, service visit) auto-posts —
+  // there's nothing to act on until it lands, so cap its urgency so future
+  // cycles never nag; only the unpaid posting becomes a notification.
+  futureRecurringMaxUrgency: 30,
+  // Rent escalation tiers, mirroring UI's processRentForDay (overdue 7/14).
+  rentEscalationWarnAtDays: 7,
+  rentEscalationCriticalAtDays: 14,
+  // Date-less sources (no countdown — fixed urgencies).
+  imUnreadUrgency: 25,      // per unread message
+  imUnreadMax: 80,          // cap per thread
+  courseUrgency: 15,
+  facilityWarnUrgency: 35,
+  facilityCriticalUrgency: 65,
+  facilityWarnCondition: 40,
+  facilityCriticalCondition: 20,
+  highTensionUrgency: 75,
+  // Snooze lengths offered on each notification (integer days).
+  snoozeOptionsDays: [1, 3],
 };
 
 // --- Scene participation ---
@@ -1774,6 +1874,8 @@ const EVIDENCE_KIND_TEXT = {
   browser_history: "{name} noticed the browser history on the computer looked off.",
   open_app: "{name} noticed an app had been left open that they didn't open.",
   personal_item: "{name} noticed their things had been gone through.",
+  // BrineOS Phase 9 (9.4): a discovered, unlocked phone left somewhere.
+  phone_contents: "{name} noticed their phone had been picked up and gone through.",
 };
 
 // Stored verbatim as memory-episode text (not re-templated at read time,
@@ -1875,6 +1977,11 @@ const INTERRUPTION = {
 const WORK_TUNING = {
   minEnergyFocus: 0.4, maxEnergyFocus: 1.0,
   minMoodFocus: 0.5, maxMoodFocus: 1.0,
+  // Phase 5 (decision F, 5.4): working from the phone is deliberately
+  // worse — a config multiplier on top of focus, so phone gig progress is
+  // slow and costs more energy per unit of progress (each block still
+  // costs GIG_ENERGY_PER_BLOCK). The PC is where real throughput lives.
+  phoneFocusMultiplier: 0.6,
 };
 
 // --- Tone / content directives. PROMPT injects these into every narrative
@@ -2071,6 +2178,18 @@ const DRIVE_DEFS = {
     effects: [],              // no standard effects — resolution is custom
     isPeepDrive: true,        // flag for evaluateDrives to dispatch to resolveNpcPeep
   },
+  // BrineOS Phase 9: same isPeepDrive dispatch shape, different resolver
+  // (tryNpcSnoop). Any block works — unlike peeping (which needs the
+  // player in a vulnerable state at a specific moment), a phone can be
+  // found any time the NPC happens to be alone with it.
+  snoop_phone: {
+    gates: [],
+    weight: 0.0,
+    blockFilter: null,
+    cooldownTicks: 16,
+    effects: [],
+    isSnoopDrive: true,
+  },
 };
 
 // --- NPC Peeping (Phase 6): the mirror of the player's peep system.
@@ -2111,6 +2230,42 @@ const NPC_PEEP_TUNING = {
   // only as the documented baseline the response numbers are tuned around.
   caughtTensionDelta: 0.12,
   caughtAffectionDelta: -0.05,
+};
+
+// --- Phone snooping (BrineOS Phase 9) ---
+// The mirror of NPC_PEEP_TUNING's personality gate, reused deliberately
+// (plan 9.2) rather than invented fresh — same curiosity math, same shape.
+// No stealth/perception contest like peeping has: there's no equivalent of
+// "the player catches them in the act", because by construction the player
+// isn't in the room (decision C's 'elsewhere' case — the whole point is
+// leaving the phone somewhere). Un-derived, so it needed its own block
+// rather than reusing NPC_PEEP_TUNING directly.
+const SNOOP_TUNING = {
+  baseChance: 0.05,           // per-tick, after gates — slightly rarer than a peep attempt
+  chanceModifiers: {
+    openness: 0.3,
+    lowConscientiousness: 0.25,
+    affection: 0.2,
+    // First mechanical use of personality.traits (previously prompt-flavour
+    // only, plan 9.2) — a bounded modifier on top of the temperament
+    // formula, not a second gate, so a "curious"-tagged NPC with dull
+    // temperament numbers still needs the roll to clear minDrawn.
+    curiousTrait: 0.15,
+  },
+  minDrawn: 0.15,              // below this, don't even roll (mirrors tryNpcPeep's 0.15/0.1 floor)
+  // Evidence strength (9.5): scales with what's actually on the phone — a
+  // roll of photos and open IM threads is a bigger find than an empty one.
+  // richnessNormalizer caps the count that maxes out the bonus; tune here,
+  // never inline.
+  baseStrength: 0.3,
+  richnessNormalizer: 6,
+  richnessStrengthBonus: 0.5,
+  // 'general' (SUSPICION_SUBJECTS) — currently read by nothing (confirmed:
+  // ui.js's confrontation trigger hardcodes 'boundary_violation'), so this
+  // is deliberately an inert signal for now: the snooping NPC now carries
+  // private knowledge/guilt they didn't have before, available for a
+  // future system to build on, not wired to today's confrontation flow.
+  suspicionDelta: 0.15,
 };
 
 // Player response options when catching an NPC peeping

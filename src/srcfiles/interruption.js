@@ -154,11 +154,12 @@ function startInterruptionPreGeneration(gameState) {
 
   root.generateText(prompt).then(text => {
     // Guard: only store if the player is still masturbating (hasn't
-    // cum/stopped/closed). Check the LIVE currentGameState, not the
-    // captured one — resolveBatch replaces currentGameState with a new
-    // object, so the captured gameState's flag would be stale.
-    const stillMasturbating = currentGameState?.world?.computer?.apps?.browser?.afterHoursMasturbating;
-    if (!stillMasturbating) return;
+    // cum/stopped/closed, and hasn't pocketed/locked/killed the device —
+    // Phase 5.5 makes this a derived check). Check the LIVE
+    // currentGameState, not the captured one — resolveBatch replaces
+    // currentGameState with a new object, so the captured gameState's
+    // session would be stale.
+    if (!isAfterHoursSessionActive(currentGameState)) return;
 
     pendingInterruption = {
       npcId: topNpcId,

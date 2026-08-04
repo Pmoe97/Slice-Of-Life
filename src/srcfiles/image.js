@@ -181,6 +181,74 @@ function cleanupImageUrls(keepKeys) {
   }
 }
 
+// --- Camera (BrineOS Phase 8) ---
+// A photo record is deliberately NOT the rendered blob (landmine L10): the
+// image cache (IMAGE_CACHE) is a shared LRU that can evict a photo's pixels
+// at any time regardless of how few photos the player has taken — evicting
+// a "memory" the player is holding onto would be a narrative-correctness
+// bug, not just a cache miss. Instead a photo freezes what it takes to
+// reproduce the exact same image on demand: the prompt text (built once,
+// at capture time, from that moment's room/NPCs — NOT rebuilt later from
+// current state, so a photo still looks like the room did when it was
+// taken even after the room changes) and a seed (root.generateImage
+// reproduces the same image for the same seed, the same contract
+// getCharacterImage already relies on for NPC portraits).
+
+// Take a photo of the room the player is currently in. Returns the new
+// record; mutates world.phone.camera.roll (caller saves).
+function takePhoto(gameState, tags) {
+  const roomId = gameState.player.location;
+  const roomObjects = gameState.objects?.[`room_${roomId}`] || {};
+  const subjectNpcIds = getPresentNpcIds(gameState.npcs, roomId);
+  const activeNpcs = subjectNpcIds.map(id => gameState.npcs[id]).filter(Boolean);
+  const phase = getPhase(gameState.meta.clock.minutes);
+  const day = gameState.meta.clock.day;
+  const tick = getTickIndex(gameState.meta.clock.minutes);
+
+  const roll = gameState.world.phone.camera.roll;
+  const slot = roll.length;
+  // Seeded, never Date.now() — the same (save seed, day, tick, slot) tuple
+  // always names the same photo, matching genObjectId's (world.js) pattern.
+  const id = `photo_${hashStr(`${gameState.meta.seed}|camera|${day}|${tick}|${slot}`).toString(36)}`;
+  const seed = hashStr(`${gameState.meta.seed}|photo_seed|${id}`);
+
+  const prompt = buildImagePrompt(roomId, phase, activeNpcs, roomObjects)
+    + ' Candid smartphone photo, casual snapshot framing, slightly imperfect composition.';
+
+  const photo = {
+    id, day, tick, roomId, subjectNpcIds,
+    caption: `${ROOMS[roomId]?.name || roomId}, Day ${day}`,
+    prompt, seed, tags: tags || [],
+  };
+  roll.unshift(photo); // newest first
+  if (roll.length > CAMERA.rollCap) roll.length = CAMERA.rollCap; // 8.2: oldest evicted
+  return photo;
+}
+
+// Regenerate (or fetch from cache) the image for a photo record. Keyed by
+// the photo's own id, not by room/phase/npc composition — two photos of
+// the same room a day apart must stay visually distinct and individually
+// addressable, unlike getSceneImage's shared "current state of this room"
+// cache key.
+async function getPhotoImage(photo) {
+  const photoKey = `photo_${photo.id}`;
+  const cached = await getCachedImage(photoKey);
+  if (cached) return { url: createObjectUrl(photoKey, cached), cached: true };
+  try {
+    const result = await root.generateImage(photo.prompt, {
+      resolution: IMAGE_CACHE.resolutions.bg,
+      seed: photo.seed,
+      negativePrompt: 'blurry, distorted, extra limbs, low quality',
+    });
+    const blob = await canvasToBlob(result.canvas);
+    await setCachedImage(photoKey, blob);
+    return { url: createObjectUrl(photoKey, blob), cached: false };
+  } catch (e) {
+    console.warn('Photo generation failed:', e.message);
+    return { url: null, cached: false, error: e.message };
+  }
+}
+
 // --- Placeholder ---
 function getPlaceholder() {
   // Inline SVG placeholder

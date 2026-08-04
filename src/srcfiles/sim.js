@@ -177,6 +177,16 @@ function formatTime(minutes) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
+// 24h hour (0-23) -> "6:00 am" / "12:00 pm". Shared by the alarm HUD status
+// (RENDER), doSetAlarm's confirmation line (UI), and the Clock app
+// (RENDER.PHONE) so all three agree — was drifting toward three separate
+// copies of the same formula.
+function formatHour12(hour) {
+  const h12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+  const ampm = hour < 12 ? 'am' : 'pm';
+  return `${h12}:00 ${ampm}`;
+}
+
 function formatDate(day) {
   const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   // Render a real in-fiction date: weekday + month + day-of-month +
@@ -207,14 +217,17 @@ function getTickIndex(minutes) {
 
 // --- Player vulnerable state (Phase 6): determines what an NPC can peep
 // at. Returns a state key from the player's current activity + context, or
-// null if the player isn't in a vulnerable state. The computer's
-// afterHoursMasturbating flag is the masturbating signal; player.location
-// + schedule/clothing covers the rest. ---
+// null if the player isn't in a vulnerable state. The AfterHours session's
+// DERIVED active-ness (isAfterHoursSessionActive — device in use or not,
+// Phase 5.5) is the masturbating signal; player.location + schedule/
+// clothing covers the rest. ---
 function getPlayerVulnerableState(gameState) {
-  // Masturbating (AfterHours on the computer) — a real, explicit state
-  // flag the player enters and leaves deliberately.
-  const browser = gameState.world.computer?.apps?.browser;
-  if (browser?.afterHoursMasturbating) return 'masturbating';
+  // Masturbating (AfterHours session) — a real, explicit state the player
+  // enters and leaves deliberately. Derived, not a stored flag: pocketing
+  // the phone, locking it, battery death or a power loss all make
+  // isAfterHoursSessionActive return false with no force-clear call to
+  // forget (landmine L11).
+  if (isAfterHoursSessionActive(gameState)) return 'masturbating';
 
   // Everything else reads an explicit, transient flag set for the duration
   // of the action that causes it: ACTIONS' executeAction sets it from the
@@ -1725,6 +1738,11 @@ function initBillState() {
       status: 'current',
       overdueDays: 0,
       cutoffActive: false,
+      // BrineOS Phase 7: opt-in, default off. Rent (split:'lease') never
+      // reads this — it has its own cap/eviction path — but the field is
+      // set uniformly rather than special-cased out of this loop.
+      autopay: false,
+      autopayAttempted: false,
     };
   }
   return bills;

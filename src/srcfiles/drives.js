@@ -76,6 +76,21 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick)
       continue;
     }
 
+    // BrineOS Phase 9: phone snooping. Same dispatch shape as isPeepDrive —
+    // custom resolution replaces the weight roll, and a successful attempt
+    // (silent, unlike a peep — nobody "catches" someone reading a phone
+    // they found lying around, there's no player present to catch it) sets
+    // the cooldown itself. Unsuccessful attempts (gated out, or the roll
+    // failed) do NOT set a cooldown, matching tryNpcPeep's own behaviour —
+    // the NPC didn't do anything, so nothing to rate-limit yet.
+    if (drive.isSnoopDrive) {
+      const snoopResult = trySnoopPhone(updatedNpc, npcId, resolved, gameState, rng, currentTick);
+      if (snoopResult) {
+        updatedNpc = setCooldown(updatedNpc, driveId, currentTick);
+      }
+      continue;
+    }
+
     // Random roll against weight
     if (rng() > drive.weight) continue;
 
@@ -309,6 +324,80 @@ function tryNpcPeep(npc, npcId, resolved, gameState, rng, currentTick) {
 
   // Attempt the peep — resolveNpcPeep handles the stealth/perception contest
   return resolveNpcPeep(gameState, npcId, playerState);
+}
+
+// BrineOS Phase 9 (plan 9.2/9.3): can this NPC find and go through the
+// player's phone right now? Reuses tryNpcPeep's curiosity formula
+// (openness/low-conscientiousness/affection) plus a first-ever mechanical
+// read of personality.traits (previously prompt-flavour only) as a bonus,
+// not a second gate — a "curious"-tagged NPC with unremarkable temperament
+// numbers still has to clear minDrawn.
+//
+// Deliberately NOT the sim.js evidence-discovery pass (landmine L8) — that
+// one only scans a room's OWNER in their OWN room, so a phone left in the
+// player's own bedroom would never be found. This checks whatever room the
+// NPC actually occupies this tick, no ownership requirement — a nosy
+// roommate wandering into your room and finding it there is exactly the
+// scenario the plan wants.
+function trySnoopPhone(npc, npcId, resolved, gameState, rng, currentTick) {
+  const t = npc.bible.temperament;
+  const cfg = SNOOP_TUNING;
+
+  const curiosity = t.openness * cfg.chanceModifiers.openness + (1 - (t.conscientiousness + 1) / 2) * cfg.chanceModifiers.lowConscientiousness;
+  const attraction = (npc.relPlayer?.affection || 0) * cfg.chanceModifiers.affection;
+  const traitBonus = (npc.bible.personality?.traits || []).includes('curious') ? cfg.chanceModifiers.curiousTrait : 0;
+  const drawn = curiosity + attraction + traitBonus;
+  if (drawn < cfg.minDrawn) return null;
+
+  // The NPC must be alone with the phone — decision C's 'elsewhere' case
+  // (the player is not in this room) is exactly the tension this exists
+  // for. No "player catches them" contest like peeping has, because by
+  // construction the player isn't there to catch anyone.
+  const location = resolved.location;
+  if (!location || location === gameState.player.location) return null;
+
+  const bucket = gameState.objects?.[`room_${location}`];
+  const phone = bucket && Object.values(bucket).find(o => o.defId === 'phone');
+  if (!phone) return null;
+  if (phone.state?.lock === 'locked') return null; // 9.1: locked mostly defeats this
+  if (phone.evidence) return null;                  // L9: one record, not a growing pile
+
+  if (rng() > cfg.baseChance + drawn) return null;
+
+  return resolveSnoopPhone(gameState, npcId, phone);
+}
+
+// Writes the found-phone evidence record (a single slot — L9, not a
+// per-photo list) and the snooping NPC's own consequences. Strength scales
+// with what's actually on the phone (9.5) — a roll of photos and open IM
+// threads is a bigger find than an empty one, the same "what you actually
+// did shows up" instinct the utility-metering system applies to bills.
+function resolveSnoopPhone(gameState, npcId, phone) {
+  const day = gameState.meta.clock.day;
+  const cfg = SNOOP_TUNING;
+
+  const rollCount = gameState.world.phone?.camera?.roll?.length || 0;
+  const threadCount = Object.keys(gameState.world.computer?.apps?.im?.threads || {}).length;
+  const richness = Math.min(1, (rollCount + threadCount) / cfg.richnessNormalizer);
+  const strength = clamp(cfg.baseStrength + richness * cfg.richnessStrengthBonus, 0, EFFECT_LIMITS.evidenceStrengthCap);
+
+  phone.evidence = { kind: 'phone_contents', strength, day, discovered: false };
+
+  // 'general' (SUSPICION_SUBJECTS) is currently read by nothing — the
+  // confrontation trigger (ui.js) hardcodes 'boundary_violation' — so this
+  // is a deliberately inert signal for now: the snooping NPC carries
+  // private knowledge/guilt they didn't have before, available for a
+  // future system, not wired to today's confrontation flow (see
+  // SNOOP_TUNING's comment).
+  const effCtx = buildEffectContext(gameState, [npcId], [npcId], {}, []);
+  const lines = [
+    `MEMORY_EPISODE ${npcId} Went through the phone left lying around — saw more than they should have.`,
+    `ADJUST_SUSPICION ${npcId} general +${cfg.suspicionDelta}`,
+  ];
+  const effects = lines.map(l => parseEffectDSL(l)[0]).filter(Boolean);
+  applyEffects(effects, effCtx);
+
+  return { npcId, strength };
 }
 
 // Room adjacency: ROOM_ADJACENCY is now a first-class CONFIG constant
