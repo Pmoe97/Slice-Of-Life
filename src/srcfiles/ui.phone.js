@@ -10,6 +10,16 @@
 // glanceable even exhausted (same rationale as computer.use).
 
 async function doPhoneOpen() {
+  // Toggle: the FAB is the phone's launch button AND its power-off — the
+  // navbar's power icon is the only close affordance otherwise, and that
+  // was easy to miss. Tapping the FAB while the phone is already on
+  // closes it (including the passcode auto-lock, via doPhoneClose). This
+  // check runs before the presence gate so a phone left open in another
+  // room can still be switched off from the FAB.
+  if (currentGameState.world.phone?.power === 'on') {
+    await doPhoneClose();
+    return;
+  }
   const presence = phonePresence(currentGameState);
   if (presence === 'elsewhere') {
     addLogEntry('system', 'Your phone is in another room — go get it first.');

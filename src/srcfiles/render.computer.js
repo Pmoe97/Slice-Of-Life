@@ -1865,9 +1865,13 @@ function renderMessages(body, gs, app, screen) {
   const im = gs.world.computer.apps.im;
   // Phase 7: include prospective NPCs (applicants the player is interviewing)
   // alongside residents in the contact list, so the Interview button on a
-  // RoomList profile can open a real conversation with them.
-  const residentIds = Object.keys(gs.npcs).filter(id =>
-    gs.npcs[id].residency.status === 'resident' || gs.npcs[id].residency.status === 'prospective'
+  // RoomList profile can open a real conversation with them. Contractor
+  // Friend (Phase 1): 'visitor' NPCs are textable too — the Contractor
+  // exists only via IM and must appear here to be contactable at all.
+  const contactIds = Object.keys(gs.npcs).filter(id =>
+    gs.npcs[id].residency.status === 'resident'
+    || gs.npcs[id].residency.status === 'prospective'
+    || gs.npcs[id].residency.status === 'visitor'
   );
 
   const layout = document.createElement('div');
@@ -1875,8 +1879,8 @@ function renderMessages(body, gs, app, screen) {
 
   const sidebar = document.createElement('div');
   sidebar.className = 'im-sidebar';
-  if (residentIds.length === 0) sidebar.innerHTML = '<p class="dim tiny">No one to text yet.</p>';
-  for (const npcId of residentIds) {
+  if (contactIds.length === 0) sidebar.innerHTML = '<p class="dim tiny">No one to text yet.</p>';
+  for (const npcId of contactIds) {
     const npc = gs.npcs[npcId];
     const thread = im.threads[npcId];
     const unread = thread?.unread || 0;
@@ -2357,7 +2361,10 @@ function renderUpgradesDashboard(body, gs, app, screen) {
   `;
   body.appendChild(hero);
 
-  // Group facilities by room, in ROOMS order.
+  // Group facilities by room, in ROOMS order. Post-overhaul every facility
+  // (including the four bedrooms) maps to exactly one concrete room, so
+  // there are no type-wide sections left — each facility renders as an
+  // independent row under its own room.
   const roomOrder = Object.keys(ROOMS);
   const byRoom = {};
   for (const def of FACILITY_LIST) {
@@ -2365,16 +2372,19 @@ function renderUpgradesDashboard(body, gs, app, screen) {
     (byRoom[r] = byRoom[r] || []).push(def);
   }
 
+  const sections = [];
   for (const roomId of roomOrder) {
     const facilities = byRoom[roomId];
     if (!facilities || facilities.length === 0) continue;
-    const roomName = ROOMS[roomId]?.name || roomId;
+    sections.push({ label: ROOMS[roomId]?.name || roomId, facilities });
+  }
 
+  for (const { label, facilities } of sections) {
     const section = document.createElement('div');
     section.className = 'upg-room-section';
     const heading = document.createElement('div');
     heading.className = 'upg-room-heading';
-    heading.textContent = roomName;
+    heading.textContent = label;
     section.appendChild(heading);
 
     for (const def of facilities) {
@@ -2385,8 +2395,18 @@ function renderUpgradesDashboard(body, gs, app, screen) {
       const nextTier = currentTierIdx < def.tiers.length - 1 ? def.tiers[currentTierIdx + 1] : null;
       const isMaxed = !nextTier;
 
+      // Renovation overhaul Phase 3: an active job flips the card into its
+      // live job-board state — stage label / day-of / ETA, no purchase
+      // controls.
+      const activeJob = upgrade.activeJobId
+        ? (gs.world.renovationJobs || []).find(j => j.id === upgrade.activeJobId && j.status === 'active')
+        : null;
+
       const card = document.createElement('div');
-      card.className = 'upg-facility-card' + (isMaxed ? ' maxed' : '') + (upgrade.tier === 'broken' ? ' broken' : '');
+      card.className = 'upg-facility-card'
+        + (isMaxed ? ' maxed' : '')
+        + (upgrade.tier === 'broken' ? ' broken' : '')
+        + (activeJob ? ' working' : '');
 
       const tierDots = def.tiers.map((t, i) => {
         const filled = i <= currentTierIdx;
@@ -2394,11 +2414,31 @@ function renderUpgradesDashboard(body, gs, app, screen) {
       }).join('');
 
       let actionHtml = '';
-      if (isMaxed) {
+      if (activeJob) {
+        const stage = getRenovationJobStage(activeJob, gs.meta.clock.day);
+        const dayN = Math.max(1, Math.min(activeJob.durationDays, gs.meta.clock.day - activeJob.startDay + 1));
+        actionHtml = `
+          <div class="upg-job">
+            <span class="upg-job-stage">${stage.label}</span>
+            <span class="upg-job-progress">day ${dayN} of ${activeJob.durationDays}</span>
+            <span class="upg-job-eta dim tiny">ETA ${formatDate(activeJob.etaDay)}</span>
+          </div>`;
+      } else if (isMaxed) {
         actionHtml = '<span class="upg-maxed-badge">Fully Upgraded</span>';
       } else {
-        const affordable = gs.player.money >= nextTier.cost;
-        actionHtml = `<button class="btn tiny upg-buy-btn ${affordable ? '' : 'disabled'}" data-action="upgrades.purchase" data-row-id="${def.id}">Upgrade — ${nextTier.cost}</button>`;
+        // Phase 2 (contractor doc): the button advertises the Contractor's
+        // full price (materials + labor markup) and affordability checks
+        // against it, matching what bookRenovationJob actually charges.
+        // Phase 3: the tutorial's first auxiliary-bedroom job shows FREE
+        // and is always affordable (charged 0).
+        const tutorialFree = isTutorialFreeJob(gs, def.id);
+        const bookPrice = tutorialFree ? 0 : getContractorJobPrice(nextTier.cost);
+        const affordable = gs.player.money >= bookPrice;
+        const btnLabel = nextTier.tier === 'functional' ? 'Book Repair' : 'Book Upgrade';
+        const etaDay = gs.meta.clock.day + (nextTier.durationDays || 1);
+        actionHtml = `
+          <button class="btn tiny upg-book-btn ${affordable ? '' : 'disabled'}" data-action="upgrades.purchase" data-row-id="${def.id}">${btnLabel} — ${tutorialFree ? 'FREE' : bookPrice}</button>
+          <span class="upg-book-preview dim tiny">${nextTier.durationDays || 1}d job · done Day ${etaDay}${tutorialFree ? ' · on the house' : ''}</span>`;
       }
 
       // Phase 9: condition bar + repair button for functional+ facilities.

@@ -445,6 +445,10 @@ const UTILITY_BASE = {
 // `cost` is what the player pays to advance TO that tier from the
 // previous one. 'broken→functional' is a repair; 'functional→upgraded'
 // is an upgrade.
+// `durationDays` is how long that advance takes as a contracted
+// renovation job (0 on starting tiers, which are never booked to).
+// `residentCapacity` (bedroom facilities only) is reserved for the future
+// room-sharing plan — see ref/renovation-occupancy-overhaul-plan.md.
 //
 // `gatesActions`: action ids that require this facility to be at least
 // 'functional'. Checked by the 'facilityFunctional' requirement checker.
@@ -488,18 +492,282 @@ const MAINTENANCE = {
   },
 };
 
+// --- Renovation jobs (ref/renovation-occupancy-overhaul-plan.md) ---
+// Tier purchases are timed, contracted jobs rather than instant clicks.
+// v1 allows at most one active job at a time (locked decision #6); the
+// array is shaped to hold more so a future system can raise the cap
+// without a data-model change.
+const MAX_CONCURRENT_JOBS = 1;
+
+// Job stages are derived, not stored — a pure function of job + current
+// day (see getRenovationJobStage in computer.js), matching the same
+// derived-not-persisted pattern the tracker uses for the agenda.
+const RENOVATION_STAGE_TEMPLATES = {
+  repair:  ['Strip-out', 'Rebuild', 'Finish'],
+  upgrade: ['Demo', 'Install', 'Detail work', 'Finish'],
+};
+
+// Construction-scene narration (Phase 3). Both pools are keyed by job type
+// and indexed by STAGE — like RENOVATION_STAGE_TEMPLATES they are derived
+// (never stored, never LLM): SCENE lines play when the player enters a
+// room with an active job (see doMove, ui.js), PROGRESS lines play at day
+// rollover when a job advances a stage (see processRenovationJobsForDay,
+// ui.js). Counts intentionally match RENOVATION_STAGE_TEMPLATES.
+const RENOVATION_SCENE_TEMPLATES = {
+  repair: [
+    'Two guys in paint-spattered coveralls are arguing about the trim. You step around the drop cloths.',
+    'The place smells of joint compound and wet plaster. A sander drones behind the plastic sheeting.',
+    'The crew is packing up — a few last touches, then this room is yours again.',
+  ],
+  upgrade: [
+    'The room is gutted to the studs — a demo crew works under a cloud of drywall dust.',
+    'Half the room is taped off in plastic. A worker runs cabling along the baseboard.',
+    'Finishing touches everywhere — fresh caulk, wet paint, tools staged by the door.',
+    'The crew is buffing out the details. It looks like a different room.',
+  ],
+};
+
+// Stage-advance lines, indexed by the STAGE THAT JUST COMPLETED (so an
+// advance into stage N uses pool[N-1]). The final completion has its own
+// line in processRenovationJobsForDay, so these never cover the last stage.
+const RENOVATION_PROGRESS_TEMPLATES = {
+  repair: [
+    'The crew on {label} has finished the strip-out — the rebuild is starting.',
+    'The crew on {label} has finished the rebuild — they\'re on the finishing pass.',
+  ],
+  upgrade: [
+    'The demo on {label} is done — the install crew is moving in.',
+    'The install on {label} is done — detail work is underway.',
+    'The crew on {label} has finished the detail work — they\'re on the final finish.',
+  ],
+};
+
+// --- Contractor Friend (ref/contractor-tutorial-overhaul-plan.md) ---
+// The permanent, simulation-light contractor who performs every renovation
+// job and texts the player. NEVER a resident: `createNpcFromBible(..., 'visitor')`
+// gives them contributesRent=false and no room, and resolveTick skips
+// 'visitor' entirely (no schedule, no needs decay, no location, no drives).
+// They only "exist" via the IM thread, which buildGameState pre-seeds with
+// a welcome message (Phase 1). Identity finalized in the Phase 1 character
+// brief: DEL CONNORS — practical, ol'-coot old-timer, paternal and patient,
+// sounds like he's helping you even when the bill says otherwise. The
+// plumbing uses CONTRACTOR_ID as the stable key, so future identity changes
+// are bible-only.
+const CONTRACTOR_ID = 'contractor';
+const CONTRACTOR_WELCOME_MESSAGE = "Hey — you're the one who inherited the old place. I looked after it for your grandfather for years, so I know every creak and leak in it. I do the RenoFix work now — text me whenever something needs looking at.";
+const CONTRACTOR_BIBLE = {
+  name: 'Del Connors',
+  visual: '',
+  genSeed: 20260804,
+  age: 54,
+  gender: 'male',
+  physical: {
+    heightBuild: 'stocky and broad-shouldered',
+    hair: { color: 'salt-and-pepper', style: 'short', length: 'cropped', texture: 'thick' },
+    eyes: { color: 'grey', shape: 'hooded' },
+    skin: { tone: 'weathered', texture: 'leathery', ethnicity: '' },
+    face: { shape: 'square', nose: 'broad', lips: 'thin', cheekbones: 'high', jawline: 'strong', ears: 'unremarkable' },
+    body: { shape: 'solid', chestSize: 'barrel', buttSize: '', legs: 'sturdy', posture: 'slightly bowed from years on his knees' },
+    distinguishingFeatures: ['calloused hands', 'a faded scar across one knuckle'],
+    piercings: [],
+    tattoos: [],
+    fashion: 'carhartt coveralls and a worn ballcap',
+    accessories: 'a tape measure on his belt and a pencil behind his ear',
+    typicalAttire: { casual: 'flannel and work boots', work: 'coveralls', sleep: 't-shirt and sweatpants', formal: 'a clean button-down he clearly hates' },
+    voice: { pitch: 'low', texture: 'gravelly', accent: 'working-class' },
+    gait: 'deliberate, heavy-footed',
+    scent: 'sawdust and coffee',
+    genitals: '',
+  },
+  history: "Was the player's grandfather's contractor for over twenty years — the man who kept this crumbling building from actually falling down. He knows its rot firsthand: which walls have been re-framed, which pipes sing, which foundation crack the building manager swore was cosmetic. He watched the place slide into disrepair as the grandfather got older, and now he treats the player like the job his old friend left unfinished — part duty, part the closest thing he's got to a kid to pass it to. He'll get it sorted, and he'll sound like it's a favor he's doing you, because to him it is.",
+  temperament: { warmth: 0.7, volatility: -0.15, openness: 0.45, conscientiousness: 0.85, assertiveness: 0.6, selfAwareness: 0.6 },
+  personality: {
+    traits: ['practical', 'patient', 'paternal'],
+    coreTrait: 'practical',
+    hiddenTrait: 'sentimental about the old house',
+    quirks: ['gives advice whether or not it was asked for', 'refers to himself as "we" even when it is just him', 'talks up the expensive fix while grumbling about the price'],
+    likes: ['good tools', 'honest work', 'strong coffee'],
+    dislikes: ['cut corners', 'surprise inspections', 'haggling'],
+  },
+  occupation: { category: 'service', title: 'General Contractor', scheduleTemplate: 'irregular', incomeBand: 'high', stressProfile: 0.3, hours: 'flexible' },
+  interests: [
+    { name: 'old buildings', tags: ['craft', 'indoor'], skill: 90 },
+    { name: 'hand tools', tags: ['craft'], skill: 85 },
+    { name: 'renovation', tags: ['craft', 'indoor'], skill: 95 },
+  ],
+  values: [
+    { name: 'craftsmanship', opposition: 'cutting corners' },
+    { name: 'straight talk', opposition: 'polite evasion' },
+  ],
+  baggage: "Walked away from a long partnership after his partner started cutting corners on a school renovation — he still won't work with him.",
+  wound: "The grandfather's death hit him harder than he let on. The building was the last job they worked together.",
+  want: "To leave the place better than he found it — and to get paid properly for doing it.",
+  blindSpot: "Assumes everyone wants his advice as much as he wants to give it.",
+  boundary: "No haggling. His price is his price; he'll walk rather than argue.",
+  speech: { verbosity: 0.6, formality: 0.3, humorStyle: 'dry', profanityLevel: 0.2, verbalTics: ['says "yep" before answering', 'calls you "kid"'], textingStyle: 'helpful old-timer — sounds like he is doing you a favor even when the bill says otherwise', vocabularyLevel: 0.6, catchphrases: ['We\'ll get it sorted.', 'You don\'t have to fix that yet — but you will, and it\'s cheaper now.'] },
+  scheduleTemplate: 'irregular',
+  sketch: 'Salt-and-pepper contractor in coveralls, pencil behind the ear.',
+  sampleLines: [
+    'Yep — I remember this building when it had a working elevator.',
+    'You don\'t have to fix that yet — but you will, and it\'s cheaper if we do it now.',
+    'Your grandfather would\'ve laughed at the price of lumber these days.',
+    'We\'ll get it sorted, kid. Don\'t you worry about the how.',
+    'That\'s a ten-minute job. I\'ll take twenty and do it right.',
+  ],
+};
+
+// Contractor memory seeds (contractor doc Phase 4 — banter depth). Pre-seeded
+// into the Contractor's memory.facts at new-game setup (see buildGameState,
+// sim.js) so LLM-backed IM replies have grounded material to draw from: what
+// they knew about the grandfather, the apartment's real history, and their
+// opinions on the place — same memory.facts mechanism as any other NPC.
+// day 0 = shared history (never decays; see decayMemory). The live "what am I
+// working on right now" fact is maintained separately by setContractorJobFact
+// (computer.js) at booking / day-rollover / completion under the categories
+// 'renovation_job' (one valid at a time) and 'renovation_done' (accumulates).
+const CONTRACTOR_INITIAL_FACTS = [
+  // What they knew about the grandfather — his contractor for 20+ years.
+  { text: "The player's grandfather hired me as his contractor for over twenty years — I did every repair this building ever needed.", day: 0, importance: 0.9, category: 'history' },
+  { text: "The grandfather trusted me with the keys to this place; I know its rot firsthand — which walls were re-framed, which pipes sing, which foundation crack the building manager swore was cosmetic.", day: 0, importance: 0.9, category: 'history' },
+  { text: "The grandfather and I tore out the old water main and replaced it together one freezing weekend — he was down in the crawlspace himself, wouldn't trust it to anyone else.", day: 0, importance: 0.7, category: 'history' },
+  { text: "The grandfather slowed down hard in his last few years and wouldn't let me take on the big jobs — that's when the place really started going downhill.", day: 0, importance: 0.8, category: 'history' },
+  { text: "The grandfather's death hit me harder than I let on — this building was the last job we worked together, and it bothered me to watch it fall apart after.", day: 0, importance: 0.8, category: 'history' },
+  { text: "I take on the player's RenoFix work because the grandfather would've wanted the place kept in the family and fixed right — that's the whole reason I'm still doing it.", day: 0, importance: 0.7, category: 'history' },
+  // Opinions on the apartment — grounded in the game's starting disrepair.
+  { text: "The building's bones are good brick, but the guts are shot — the spare bedrooms have sat empty for years because none of them lock or light.", day: 0, importance: 0.8, category: 'apartment' },
+  { text: "The kitchen stove is the original — it's been a fire hazard since before the grandfather died.", day: 0, importance: 0.7, category: 'apartment' },
+  { text: "Both bathrooms are decades of patch-job plumbing that was never done right the first time.", day: 0, importance: 0.7, category: 'apartment' },
+  { text: "The building manager swore the foundation crack was cosmetic — it's not, but it's not collapsing either; it just needs watching.", day: 0, importance: 0.6, category: 'apartment' },
+  { text: "The grandfather kept this place alive on his own money long after it stopped making sense — the disrepair isn't because nobody cared, it's because he ran out of gas.", day: 0, importance: 0.6, category: 'apartment' },
+  { text: "The grandfather would've laughed at today's lumber prices.", day: 0, importance: 0.4, category: 'apartment' },
+];
+
+// --- Contractor tutorial (ref/contractor-tutorial-overhaul-plan.md, Phase 3) ---
+// The first job on an auxiliary bedroom is free — the one-time guided
+// tutorial that doubles as the opening's "you inherited this" framing
+// (ref/game-opening-plan.md). Only the three NON-player bedrooms qualify:
+// the player's own room starts functional (locked decision #3) and its
+// Upgrade is a paid luxury. The single tutorialRenoUsed flag is consumed on
+// the booking in bookRenovationJob — this is a flag, not a state machine.
+const TUTORIAL_FREE_FACILITIES = ['bedroom_habitability_1', 'bedroom_habitability_2', 'bedroom_habitability_3'];
+
+// One-shot milestone hint texts, keyed to world.flags.tutorial_<id> — each
+// pool fires exactly once ever via fireContractorMilestone at its natural
+// trigger point (RenoFix first opened, tutorial free job booked, tutorial
+// free job complete, first paid job, first Upgrade job, first roommate,
+// quality threshold). Deterministic template content — no LLM in ticks;
+// live LLM replies only when the player texts back. Same derived-not-
+// persisted flavor as RENOVATION_SCENE_TEMPLATES / RENOVATION_PROGRESS_TEMPLATES.
+const CONTRACTOR_TUTORIAL_MILESTONES = {
+  // First time RenoFix is opened — explains the board, points at the free
+  // tutorial job (which is always still available: booking requires opening
+  // RenoFix first, so the flag is unset on the very first open).
+  renofixOpened: [
+    "There she is — RenoFix. Every room's got a list of what's wrong with it, and my crew fixes 'em for a price. Start with a spare bedroom: that first one's on me, so you learn how it works before you're paying my rates.",
+    "Yep, that's the whole place, warts and all. One job at a time, kid — the crew can't be everywhere. Book a spare bedroom repair first; I'll do that one free so you get the hang of it.",
+    "That screen's the building's to-do list. The empty bedrooms are where you start — fix one up on my dime and you've got a room to rent out. After that, the meter runs.",
+  ],
+  // The free tutorial job was just booked — teaches what "day N of M" means.
+  tutorialJobBooked: [
+    "Good call. Job's in the book — it'll run a few days. You'll see it on RenoFix as 'day N of M' while it's underway, and the room's off-limits while we work, so don't book anything you need.",
+    "You're on the schedule, kid. Watch the counter on RenoFix — 'day 1 of 3', then on up. When it hits the end, the room's yours again, good as new.",
+    "Job's booked and the crew's got it. It'll tick through 'day N of M' on the RenoFix screen 'til it's done. Don't go in there while the dust is flying — that's a union rule.",
+  ],
+  // The free tutorial job completed — the "first one's on me" nudge.
+  tutorialJobComplete: [
+    "First one's on me — the rest, you're paying full price, so don't get used to it. That room's habitable now, and a habitable room is a room that pays rent. We'll get it sorted from here.",
+    "There you go — done and done. That one was my treat so you'd know what you're paying for. Next one's at my going rate, and you'll hear about it on the invoice.",
+    "She's shipshape, kid. One spare bedroom down, and you could fill the whole wing with paying roommates. Don't get comfortable with the freebie, though — the meter's running now.",
+  ],
+  // First paid job booked (any facility, either tier direction).
+  firstPaidJobBooked: [
+    "Yep, that one's on the meter — materials plus my labor, paid upfront. That's my going rate, and I don't haggle, but you're getting it done right the first time.",
+    "Now you're spending real money, kid — good. That means you're serious about this place. Paid up front, no refunds, and you'll get professional work.",
+    "Paying rates now, huh? Fair enough — that's the price of getting it done right. Money up front, that's how I do business. We'll get it sorted.",
+  ],
+  // First Upgrade-tier job booked (functional → upgraded).
+  firstUpgradeJobBooked: [
+    "Now that's a proper upgrade — not patching, making it better. A comfortable room commands real rent. Good instinct, kid.",
+    "An upgrade, huh? That's where the money's at — a nicer room rents for a real share of the load. Takes a little longer, but it's worth every day.",
+    "Upgrading instead of just patching — I like the way you think. Better rooms mean better rent, and nobody argues with a nice room. This one's worth the wait.",
+  ],
+  // First roommate moved in (acceptApplicant).
+  firstRoommateMovedIn: [
+    "So you've got a warm body splitting the rent — that's the game, kid. Keep fixing the place up and each new roommate pays more of the load. Don't let those empty rooms sit.",
+    "First roommate's in the books. Every empty room is money walking out the door — get 'em fixed up and filled, and the rent splits get better as the building works again.",
+    "Good — another roof on the bill. The more of this place actually works, the more they'll chip in. That's the whole trick right there.",
+  ],
+  // Apartment quality crossed CONTRACTOR_QUALITY_MILESTONE_THRESHOLD.
+  qualityThreshold: [
+    "Place is starting to turn a corner, I'll give it that. Your grandfather would've liked seeing it come back to life. Keep going — every room you fix raises what the whole building's worth.",
+    "Yep, I can feel it — the place has a pulse again. All this fixing is adding up, kid. A building like this one pays back whatever you put into it.",
+    "The building's waking up. Your granddad put twenty years into this place, and it's good to see someone carrying it on. Fix enough of it and it'll carry you.",
+  ],
+};
+
+// Apartment quality at/above which the qualityThreshold milestone fires.
+// Tunable during playtesting — a fresh wreck starts around 0.05, so this
+// fires only after a few real repairs.
+const CONTRACTOR_QUALITY_MILESTONE_THRESHOLD = 0.25;
+
 const FACILITY_DEFS = {
   // --- Bedroom: habitability (bed + door + light) ---
-  bedroom_habitability: {
-    id: 'bedroom_habitability', label: 'Bedroom Habability', room: 'bedroom',
-    qualityWeight: 3, gatesRecruitment: true,
+  // Split into four INDEPENDENT per-bedroom facilities (player + 3
+  // auxiliary) by the renovation & occupancy overhaul — each bedroom is its
+  // own project with its own tier, condition, and contracted job. The old
+  // type-wide shared facility and its RenoFix "Bedrooms" grouping are gone.
+  bedroom_habitability_player: {
+    id: 'bedroom_habitability_player', label: 'Your Bedroom', room: 'bedroom_player',
+    qualityWeight: 3, gatesRecruitment: false, // player's own room never gates recruitment
     appeal: { '*': 1.0 }, // everyone wants a habitable bedroom
     tiers: [
-      { tier: 'broken', label: 'Uninhabitable', qualityValue: 0, cost: 0,
+      { tier: 'broken', label: 'Uninhabitable', qualityValue: 0, cost: 0, durationDays: 0,
         desc: 'Bare mattress on the floor, no working light, door won\'t close.' },
-      { tier: 'functional', label: 'Habitable', qualityValue: 0.5, cost: 800,
+      // Unused at runtime — the player starts at 'functional' (locked
+      // decision #3). Kept for schema symmetry; cost 0 / 0 days because it
+      // is never a reachable job target.
+      { tier: 'functional', label: 'Habitable', qualityValue: 0.5, cost: 0, durationDays: 0, residentCapacity: 1,
         desc: 'A proper bed, working lamp, door that locks. Someone could live here.' },
-      { tier: 'upgraded', label: 'Comfortable', qualityValue: 1.0, cost: 4000,
+      { tier: 'upgraded', label: 'Comfortable', qualityValue: 1.0, cost: 4000, durationDays: 4, residentCapacity: 2,
+        desc: 'Quality mattress, blackout curtains, a real desk setup. A room worth renting.' },
+    ],
+  },
+  bedroom_habitability_1: {
+    id: 'bedroom_habitability_1', label: 'Bedroom 1', room: 'bedroom_1',
+    qualityWeight: 3, gatesRecruitment: true,
+    appeal: { '*': 1.0 },
+    tiers: [
+      { tier: 'broken', label: 'Uninhabitable', qualityValue: 0, cost: 0, durationDays: 0,
+        desc: 'Bare mattress on the floor, no working light, door won\'t close.' },
+      { tier: 'functional', label: 'Habitable', qualityValue: 0.5, cost: 800, durationDays: 3, residentCapacity: 1,
+        desc: 'A proper bed, working lamp, door that locks. Someone could live here.' },
+      { tier: 'upgraded', label: 'Comfortable', qualityValue: 1.0, cost: 4000, durationDays: 4, residentCapacity: 2,
+        desc: 'Quality mattress, blackout curtains, a real desk setup. A room worth renting.' },
+    ],
+  },
+  bedroom_habitability_2: {
+    id: 'bedroom_habitability_2', label: 'Bedroom 2', room: 'bedroom_2',
+    qualityWeight: 3, gatesRecruitment: true,
+    appeal: { '*': 1.0 },
+    tiers: [
+      { tier: 'broken', label: 'Uninhabitable', qualityValue: 0, cost: 0, durationDays: 0,
+        desc: 'Bare mattress on the floor, no working light, door won\'t close.' },
+      { tier: 'functional', label: 'Habitable', qualityValue: 0.5, cost: 800, durationDays: 3, residentCapacity: 1,
+        desc: 'A proper bed, working lamp, door that locks. Someone could live here.' },
+      { tier: 'upgraded', label: 'Comfortable', qualityValue: 1.0, cost: 4000, durationDays: 4, residentCapacity: 2,
+        desc: 'Quality mattress, blackout curtains, a real desk setup. A room worth renting.' },
+    ],
+  },
+  bedroom_habitability_3: {
+    id: 'bedroom_habitability_3', label: 'Bedroom 3', room: 'bedroom_3',
+    qualityWeight: 3, gatesRecruitment: true,
+    appeal: { '*': 1.0 },
+    tiers: [
+      { tier: 'broken', label: 'Uninhabitable', qualityValue: 0, cost: 0, durationDays: 0,
+        desc: 'Bare mattress on the floor, no working light, door won\'t close.' },
+      { tier: 'functional', label: 'Habitable', qualityValue: 0.5, cost: 800, durationDays: 3, residentCapacity: 1,
+        desc: 'A proper bed, working lamp, door that locks. Someone could live here.' },
+      { tier: 'upgraded', label: 'Comfortable', qualityValue: 1.0, cost: 4000, durationDays: 4, residentCapacity: 2,
         desc: 'Quality mattress, blackout curtains, a real desk setup. A room worth renting.' },
     ],
   },
@@ -509,11 +777,11 @@ const FACILITY_DEFS = {
     qualityWeight: 4, gatesActions: ['self.cook'],
     appeal: { 'cooking': 2.0, 'crafting': 0.5, '*': 0.5 },
     tiers: [
-      { tier: 'broken', label: 'Broken Stove', qualityValue: 0, cost: 0,
+      { tier: 'broken', label: 'Broken Stove', qualityValue: 0, cost: 0, durationDays: 0,
         desc: 'The stove doesn\'t light. No cooking until it\'s fixed.' },
-      { tier: 'functional', label: 'Working Stove', qualityValue: 0.5, cost: 1500,
+      { tier: 'functional', label: 'Working Stove', qualityValue: 0.5, cost: 1500, durationDays: 5,
         desc: 'A functional gas stove. You can cook proper meals.' },
-      { tier: 'upgraded', label: 'Proper Range', qualityValue: 1.0, cost: 6000,
+      { tier: 'upgraded', label: 'Proper Range', qualityValue: 1.0, cost: 6000, durationDays: 6,
         desc: 'A real range with oven, exhaust hood, and room for multiple pots.' },
     ],
   },
@@ -523,11 +791,11 @@ const FACILITY_DEFS = {
     qualityWeight: 3, gatesActions: ['self.shower'],
     appeal: { '*': 1.0 },
     tiers: [
-      { tier: 'broken', label: 'No Hot Water', qualityValue: 0, cost: 0,
+      { tier: 'broken', label: 'No Hot Water', qualityValue: 0, cost: 0, durationDays: 0,
         desc: 'The shower dribbles cold water. Pipes are corroded.' },
-      { tier: 'functional', label: 'Working Shower', qualityValue: 0.5, cost: 1200,
+      { tier: 'functional', label: 'Working Shower', qualityValue: 0.5, cost: 1200, durationDays: 4,
         desc: 'Hot water works, toilet flushes, sink drains. A functional bathroom.' },
-      { tier: 'upgraded', label: 'Modern Bath', qualityValue: 1.0, cost: 5000,
+      { tier: 'upgraded', label: 'Modern Bath', qualityValue: 1.0, cost: 5000, durationDays: 5,
         desc: 'Rainfall showerhead, new vanity, tiled floor. Actually nice.' },
     ],
   },
@@ -537,11 +805,11 @@ const FACILITY_DEFS = {
     qualityWeight: 3, gatesActions: ['self.shower'],
     appeal: { '*': 1.0 },
     tiers: [
-      { tier: 'broken', label: 'No Hot Water', qualityValue: 0, cost: 0,
+      { tier: 'broken', label: 'No Hot Water', qualityValue: 0, cost: 0, durationDays: 0,
         desc: 'The shower dribbles cold water. Pipes are corroded.' },
-      { tier: 'functional', label: 'Working Shower', qualityValue: 0.5, cost: 1200,
+      { tier: 'functional', label: 'Working Shower', qualityValue: 0.5, cost: 1200, durationDays: 4,
         desc: 'Hot water works, toilet flushes, sink drains. A functional bathroom.' },
-      { tier: 'upgraded', label: 'Modern Bath', qualityValue: 1.0, cost: 5000,
+      { tier: 'upgraded', label: 'Modern Bath', qualityValue: 1.0, cost: 5000, durationDays: 5,
         desc: 'Rainfall showerhead, new vanity, tiled floor. Actually nice.' },
     ],
   },
@@ -551,11 +819,11 @@ const FACILITY_DEFS = {
     qualityWeight: 2, gatesActions: ['self.watch_tv'],
     appeal: { 'film': 2.0, 'gaming': 1.5, 'partying': 1.0, 'comedy': 1.0, '*': 0.5 },
     tiers: [
-      { tier: 'broken', label: 'No TV', qualityValue: 0, cost: 0,
+      { tier: 'broken', label: 'No TV', qualityValue: 0, cost: 0, durationDays: 0,
         desc: 'A blank wall where a TV should be. The sofa faces nothing.' },
-      { tier: 'functional', label: 'TV Setup', qualityValue: 0.5, cost: 600,
+      { tier: 'functional', label: 'TV Setup', qualityValue: 0.5, cost: 600, durationDays: 3,
         desc: 'A TV mounted on the wall with a working streaming stick.' },
-      { tier: 'upgraded', label: 'Home Theater', qualityValue: 1.0, cost: 3000,
+      { tier: 'upgraded', label: 'Home Theater', qualityValue: 1.0, cost: 3000, durationDays: 4,
         desc: 'Large TV, soundbar, proper seating arrangement. Movie night.' },
     ],
   },
@@ -565,11 +833,11 @@ const FACILITY_DEFS = {
     qualityWeight: 2, gatesActions: ['self.workout'],
     appeal: { 'fitness': 2.0, 'yoga': 1.5, 'hiking': 1.0, '*': 0.2 },
     tiers: [
-      { tier: 'broken', label: 'Broken Equipment', qualityValue: 0, cost: 0,
+      { tier: 'broken', label: 'Broken Equipment', qualityValue: 0, cost: 0, durationDays: 0,
         desc: 'The treadmill motor is dead and the weights are rusted.' },
-      { tier: 'functional', label: 'Working Gym', qualityValue: 0.5, cost: 2000,
+      { tier: 'functional', label: 'Working Gym', qualityValue: 0.5, cost: 2000, durationDays: 4,
         desc: 'A working treadmill, dumbbells, and a bench. You can get a workout in.' },
-      { tier: 'upgraded', label: 'Full Gym', qualityValue: 1.0, cost: 8000,
+      { tier: 'upgraded', label: 'Full Gym', qualityValue: 1.0, cost: 8000, durationDays: 6,
         desc: 'Treadmill, weights, bench, rack, and a proper yoga corner.' },
     ],
   },
@@ -585,11 +853,11 @@ const FACILITY_DEFS = {
     qualityWeight: 5, gatesActions: ['self.swim'],
     appeal: { 'fitness': 2.0, 'yoga': 1.0, 'hiking': 0.5, '*': 1.2 },
     tiers: [
-      { tier: 'broken', label: 'Derelict Pool', qualityValue: 0, cost: 0,
+      { tier: 'broken', label: 'Derelict Pool', qualityValue: 0, cost: 0, durationDays: 0,
         desc: 'Torn liner, seized pump, filters full of ten-year-old leaves. It holds no water.' },
-      { tier: 'functional', label: 'Working Pool', qualityValue: 0.5, cost: 12000,
+      { tier: 'functional', label: 'Working Pool', qualityValue: 0.5, cost: 12000, durationDays: 8,
         desc: 'New liner, rebuilt pump, clean filtration. The water is clear and it circulates.' },
-      { tier: 'upgraded', label: 'Heated Pool', qualityValue: 1.0, cost: 34000,
+      { tier: 'upgraded', label: 'Heated Pool', qualityValue: 1.0, cost: 34000, durationDays: 12,
         desc: 'Heating, proper lighting, and a filtration system that runs itself. Swimmable year round.' },
     ],
   },
@@ -599,11 +867,11 @@ const FACILITY_DEFS = {
     qualityWeight: 2, gatesActions: ['self.laundry'],
     appeal: { '*': 0.8 }, // everyone needs laundry
     tiers: [
-      { tier: 'broken', label: 'Broken Machines', qualityValue: 0, cost: 0,
+      { tier: 'broken', label: 'Broken Machines', qualityValue: 0, cost: 0, durationDays: 0,
         desc: 'The washer doesn\'t drain and the dryer squeals. Useless.' },
-      { tier: 'functional', label: 'Working Machines', qualityValue: 0.5, cost: 1800,
+      { tier: 'functional', label: 'Working Machines', qualityValue: 0.5, cost: 1800, durationDays: 3,
         desc: 'Washer and dryer both work. You can do laundry at home.' },
-      { tier: 'upgraded', label: 'Laundry Suite', qualityValue: 1.0, cost: 4000,
+      { tier: 'upgraded', label: 'Laundry Suite', qualityValue: 1.0, cost: 4000, durationDays: 4,
         desc: 'Front-loaders, folding station, and a utility sink. Efficient.' },
     ],
   },
@@ -613,11 +881,11 @@ const FACILITY_DEFS = {
     qualityWeight: 1, gatesActions: ['self.play_games'],
     appeal: { 'gaming': 2.0, 'comedy': 1.0, 'partying': 1.0, '*': 0.3 },
     tiers: [
-      { tier: 'broken', label: 'Empty Room', qualityValue: 0, cost: 0,
+      { tier: 'broken', label: 'Empty Room', qualityValue: 0, cost: 0, durationDays: 0,
         desc: 'A pool table with no felt and a TV with no console.' },
-      { tier: 'functional', label: 'Game Room', qualityValue: 0.5, cost: 1000,
+      { tier: 'functional', label: 'Game Room', qualityValue: 0.5, cost: 1000, durationDays: 3,
         desc: 'A working console, pool table refelted, some board games.' },
-      { tier: 'upgraded', label: 'Entertainment Hub', qualityValue: 1.0, cost: 5000,
+      { tier: 'upgraded', label: 'Entertainment Hub', qualityValue: 1.0, cost: 5000, durationDays: 5,
         desc: 'Multiple consoles, arcade cabinet, dartboard, the works.' },
     ],
   },
@@ -627,11 +895,11 @@ const FACILITY_DEFS = {
     qualityWeight: 1, gatesActions: ['self.study'],
     appeal: { 'reading': 2.0, 'writing': 2.0, 'coding': 1.5, 'politics': 1.0, 'true crime': 0.5, '*': 0.2 },
     tiers: [
-      { tier: 'broken', label: 'Empty Study', qualityValue: 0, cost: 0,
+      { tier: 'broken', label: 'Empty Study', qualityValue: 0, cost: 0, durationDays: 0,
         desc: 'A desk with a broken lamp and empty bookshelves.' },
-      { tier: 'functional', label: 'Working Study', qualityValue: 0.5, cost: 500,
+      { tier: 'functional', label: 'Working Study', qualityValue: 0.5, cost: 500, durationDays: 2,
         desc: 'A proper desk, lamp, and stocked bookshelves. A quiet place to work.' },
-      { tier: 'upgraded', label: 'Library Study', qualityValue: 1.0, cost: 3000,
+      { tier: 'upgraded', label: 'Library Study', qualityValue: 1.0, cost: 3000, durationDays: 4,
         desc: 'Floor-to-ceiling shelves, leather armchair, reading nook.' },
     ],
   },
@@ -641,11 +909,11 @@ const FACILITY_DEFS = {
     qualityWeight: 1, gatesActions: [],
     appeal: { 'cooking': 1.5, 'crafting': 0.5, '*': 0.3 },
     tiers: [
-      { tier: 'broken', label: 'Old Fridge', qualityValue: 0, cost: 0,
+      { tier: 'broken', label: 'Old Fridge', qualityValue: 0, cost: 0, durationDays: 0,
         desc: 'The fridge hums loudly and the door seal is cracked.' },
-      { tier: 'functional', label: 'Working Fridge', qualityValue: 0.5, cost: 800,
+      { tier: 'functional', label: 'Working Fridge', qualityValue: 0.5, cost: 800, durationDays: 2,
         desc: 'A quiet, efficient fridge with working seals.' },
-      { tier: 'upgraded', label: 'Premium Kitchen', qualityValue: 1.0, cost: 4500,
+      { tier: 'upgraded', label: 'Premium Kitchen', qualityValue: 1.0, cost: 4500, durationDays: 3,
         desc: 'Stainless steel fridge, dishwasher, and a coffee bar.' },
     ],
   },
@@ -655,27 +923,83 @@ const FACILITY_DEFS = {
     qualityWeight: 1, gatesActions: [],
     appeal: { 'gardening': 2.0, 'yoga': 1.0, 'hiking': 0.5, 'photography': 0.5, '*': 0.3 },
     tiers: [
-      { tier: 'broken', label: 'Bare Balcony', qualityValue: 0, cost: 0,
+      { tier: 'broken', label: 'Bare Balcony', qualityValue: 0, cost: 0, durationDays: 0,
         desc: 'Empty concrete. The railing is rusted.' },
-      { tier: 'functional', label: 'Set Up Balcony', qualityValue: 0.5, cost: 400,
+      { tier: 'functional', label: 'Set Up Balcony', qualityValue: 0.5, cost: 400, durationDays: 1,
         desc: 'A bistro table, some potted plants, cleaned railing.' },
-      { tier: 'upgraded', label: 'Garden Balcony', qualityValue: 1.0, cost: 2500,
+      { tier: 'upgraded', label: 'Garden Balcony', qualityValue: 1.0, cost: 2500, durationDays: 3,
         desc: 'Potted garden, outdoor seating, string lights. A proper retreat.' },
+    ],
+  },
+  // --- Entry / dining / hallways (cosmetic, no action gate) ---
+  // These four rooms had no facility at all before the overhaul — no
+  // quality contribution, no reno hook. One low-weight facility each, with
+  // cheap and fast jobs (repair $200-600 / 1-2d, upgrade $1,000-2,500 /
+  // 2-3d), consistent with the balcony/kitchen_appliances cosmetic pattern.
+  entry_condition: {
+    id: 'entry_condition', label: 'Entry', room: 'entry',
+    qualityWeight: 1, gatesActions: [],
+    appeal: { '*': 0.3 },
+    tiers: [
+      { tier: 'broken', label: 'Bare Entry', qualityValue: 0, cost: 0, durationDays: 0,
+        desc: 'Cracked tile, a dead coat of paint, and a broken light fixture.' },
+      { tier: 'functional', label: 'Tidy Entry', qualityValue: 0.5, cost: 300, durationDays: 1,
+        desc: 'Fresh paint, a working light, and a mat that isn\'t threadbare.' },
+      { tier: 'upgraded', label: 'Welcoming Foyer', qualityValue: 1.0, cost: 1200, durationDays: 2,
+        desc: 'A console table, hooks for coats, and a shoe rack. Presentable.' },
+    ],
+  },
+  dining_setup: {
+    id: 'dining_setup', label: 'Dining Setup', room: 'dining',
+    qualityWeight: 1, gatesActions: [],
+    appeal: { 'cooking': 1.5, 'crafting': 0.5, '*': 0.4 },
+    tiers: [
+      { tier: 'broken', label: 'Empty Dining Room', qualityValue: 0, cost: 0, durationDays: 0,
+        desc: 'A bare table with mismatched chairs and a bare bulb.' },
+      { tier: 'functional', label: 'Set Up Dining Room', qualityValue: 0.5, cost: 400, durationDays: 2,
+        desc: 'Matching chairs, a proper overhead light, and a table that seats six.' },
+      { tier: 'upgraded', label: 'Host\'s Dining Room', qualityValue: 1.0, cost: 1500, durationDays: 2,
+        desc: 'A big table, soft lighting, and room for a dinner party worth throwing.' },
+    ],
+  },
+  hallway_a_upkeep: {
+    id: 'hallway_a_upkeep', label: 'Hallway A Upkeep', room: 'hallway_a',
+    qualityWeight: 1, gatesActions: [],
+    appeal: { '*': 0.2 },
+    tiers: [
+      { tier: 'broken', label: 'Worn Hallway', qualityValue: 0, cost: 0, durationDays: 0,
+        desc: 'Scuffed walls, a flickering fixture, and peeling baseboards.' },
+      { tier: 'functional', label: 'Tidy Hallway', qualityValue: 0.5, cost: 250, durationDays: 1,
+        desc: 'Clean walls, steady lighting, and baseboards that don\'t peel.' },
+      { tier: 'upgraded', label: 'Polished Hallway', qualityValue: 1.0, cost: 1000, durationDays: 2,
+        desc: 'Fresh paint, framed prints, and a runner that ties the wing together.' },
+    ],
+  },
+  hallway_b_upkeep: {
+    id: 'hallway_b_upkeep', label: 'Hallway B Upkeep', room: 'hallway_b',
+    qualityWeight: 1, gatesActions: [],
+    appeal: { '*': 0.2 },
+    tiers: [
+      { tier: 'broken', label: 'Worn Hallway', qualityValue: 0, cost: 0, durationDays: 0,
+        desc: 'Scuffed walls, a flickering fixture, and peeling baseboards.' },
+      { tier: 'functional', label: 'Tidy Hallway', qualityValue: 0.5, cost: 250, durationDays: 1,
+        desc: 'Clean walls, steady lighting, and baseboards that don\'t peel.' },
+      { tier: 'upgraded', label: 'Polished Hallway', qualityValue: 1.0, cost: 1000, durationDays: 2,
+        desc: 'Fresh paint, framed prints, and a runner that ties the wing together.' },
     ],
   },
 };
 
 const FACILITY_LIST = Object.values(FACILITY_DEFS);
 
-// Which facilities apply to a given room id. Multiple bedrooms share the
-// `bedroom_habitability` facility — it's parameterized by room at
-// upgrade-time via the facility's `roomPrefix` (if present) rather than
-// duplicated per bedroom, keeping the config DRY.
+// Which facilities apply to a given room id. Post-overhaul each bedroom
+// maps to its own independent habitability facility, and the entry /
+// dining / hallway rooms each carry a cosmetic facility of their own.
 const ROOM_FACILITIES = {
-  bedroom_player: ['bedroom_habitability'],
-  bedroom_1: ['bedroom_habitability'],
-  bedroom_2: ['bedroom_habitability'],
-  bedroom_3: ['bedroom_habitability'],
+  bedroom_player: ['bedroom_habitability_player'],
+  bedroom_1: ['bedroom_habitability_1'],
+  bedroom_2: ['bedroom_habitability_2'],
+  bedroom_3: ['bedroom_habitability_3'],
   kitchen: ['kitchen_stove', 'kitchen_appliances'],
   bathroom_a: ['bathroom_a_plumbing'],
   bathroom_b: ['bathroom_b_plumbing'],
@@ -686,15 +1010,24 @@ const ROOM_FACILITIES = {
   game_room: ['game_room_setup'],
   study: ['study_setup'],
   balcony: ['balcony_setup'],
+  entry: ['entry_condition'],
+  dining: ['dining_setup'],
+  hallway_a: ['hallway_a_upkeep'],
+  hallway_b: ['hallway_b_upkeep'],
 };
 
 // The starting tier for each facility in a new game. The apartment starts
-// in disrepair — see ref/game-opening-plan.md. Bedrooms start 'broken'
-// (the first objective is making one habitable); most facilities start
-// 'broken' too. A few start 'functional' so the opening isn't completely
-// paralyzed (kitchen_appliances: the fridge works, just old).
+// in disrepair — see ref/game-opening-plan.md. The player's own bedroom
+// starts 'functional' (habitable day one, not upgraded) while every other
+// bedroom and most facilities start 'broken' — the first objective is
+// making one auxiliary bedroom habitable so a roommate can move in.
+// A few start 'functional' so the opening isn't completely paralyzed
+// (kitchen_appliances: the fridge works, just old).
 const FACILITY_STARTING_TIERS = {
-  bedroom_habitability: 'broken',
+  bedroom_habitability_player: 'functional',
+  bedroom_habitability_1: 'broken',
+  bedroom_habitability_2: 'broken',
+  bedroom_habitability_3: 'broken',
   kitchen_stove: 'broken',
   kitchen_appliances: 'functional',
   bathroom_a_plumbing: 'broken',
@@ -706,6 +1039,10 @@ const FACILITY_STARTING_TIERS = {
   game_room_setup: 'broken',
   study_setup: 'broken',
   balcony_setup: 'broken',
+  entry_condition: 'broken',
+  dining_setup: 'broken',
+  hallway_a_upkeep: 'broken',
+  hallway_b_upkeep: 'broken',
 };
 
 // --- Daily goals (quests), sourced from resident wants/wounds/interests ---

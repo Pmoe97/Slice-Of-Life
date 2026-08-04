@@ -139,6 +139,12 @@ async function processDayRollover(day) {
   processAutopayForDayUi(day);
   processTaxesForDayUi(day);
   processDeliveriesForDay(day);
+  // Renovation overhaul: materials "arrive" with the day's deliveries, then
+  // any job whose ETA is today wraps up — grouping renovations next to
+  // deliveries keeps the day-rollover narrative order sensible.
+  processRenovationJobsForDay(day);
+  // Contractor tutorial (contractor doc Phase 3): one-shot quality-milestone hint once apartment quality crosses the threshold.
+  maybeFireContractorQualityMilestone();
   processQuestsForDay(day);
   processGigsForDay(day);
   // Phase 8: burnout updates at day rollover based on yesterday's work
@@ -506,6 +512,67 @@ function processDeliveriesForDay(day) {
     } else {
       addLogEntry('narration', `A delivery has arrived: ${label}.`);
     }
+  }
+}
+
+// Renovation overhaul: complete any active contracted job whose ETA day has
+// arrived — flips the facility to its target tier, resets condition, clears
+// the activeJobId pointer, and recomputes rent (the ceiling may have
+// changed). Mirrors processDeliveriesForDay's shape: an array of world
+// records with an etaDay, resolved at day rollover. See
+// ref/renovation-occupancy-overhaul-plan.md.
+function processRenovationJobsForDay(day) {
+  const jobs = currentGameState.world.renovationJobs || [];
+  for (const job of jobs) {
+    if (job.status !== 'active') continue;
+    const completing = day >= job.etaDay;
+    // Phase 3: a stage advance at day rollover gets a deterministic
+    // progress line (keyed by job type + the stage that just completed).
+    // Skipped on the completion day — the wrapped-up line below supersedes.
+    if (!completing && day > job.startDay) {
+      const prevStage = getRenovationJobStage(job, day - 1);
+      const newStage = getRenovationJobStage(job, day);
+      if (newStage.index > prevStage.index) {
+        const def = FACILITY_DEFS[job.facilityId];
+        const label = def ? def.label : job.facilityId;
+        const pool = RENOVATION_PROGRESS_TEMPLATES[job.jobType] || RENOVATION_PROGRESS_TEMPLATES.repair;
+        const line = pool[prevStage.index];
+        if (line) addLogEntry('narration', line.replace('{label}', label));
+        // Contractor memory (contractor doc Phase 4): keep the running
+        // commentary current as the job progresses — stage + "day N of M".
+        setContractorJobFact(currentGameState, 'renovation_job',
+          `I'm on ${label} — a ${job.jobType}, day ${day - job.startDay + 1} of ${job.durationDays}, currently ${newStage.label}. Due day ${job.etaDay}.`,
+          job.startDay);
+      }
+    }
+    if (!completing) continue;
+    job.status = 'complete';
+    const upgrade = currentGameState.world.upgrades[job.facilityId];
+    if (!upgrade) continue;
+    upgrade.tier = job.toTier;
+    upgrade.condition = MAINTENANCE.startingCondition;
+    upgrade.activeJobId = null;
+    currentGameState.world.rent = computeRent(currentGameState.npcs, currentGameState);
+    const def = FACILITY_DEFS[job.facilityId];
+    addLogEntry('narration', `The crew wrapped up on ${def ? def.label : job.facilityId} — ${job.toTier === 'upgraded' ? 'upgraded' : 'repaired'} and ready.`);
+    // Contractor tutorial (contractor doc Phase 3): completing the free tutorial job fires the "first one's on me" nudge. Paid jobs have no milestone — the wrapped-up narration line above covers them.
+    if (job.cost === 0) fireContractorMilestone(currentGameState, 'tutorialJobComplete');
+    // Contractor memory (contractor doc Phase 4): retire the live "working
+    // on" fact and record the completion so recent work stays recallable.
+    setContractorJobFact(currentGameState, 'renovation_done',
+      `I finished the ${def ? def.label : job.facilityId} ${job.jobType} on day ${day} — ${job.toTier === 'upgraded' ? 'upgraded and ready' : 'repaired and ready'}.`,
+      day);
+  }
+}
+
+// Contractor tutorial (contractor doc Phase 3): one-shot apartment-quality
+// milestone. Checked at day rollover (where every quality-affecting change
+// has just landed); fireContractorMilestone makes it exactly-once.
+function maybeFireContractorQualityMilestone() {
+  if (!currentGameState?.world) return;
+  if (currentGameState.world.flags?.tutorial_qualityThreshold) return;
+  if (getApartmentQuality(currentGameState) >= CONTRACTOR_QUALITY_MILESTONE_THRESHOLD) {
+    fireContractorMilestone(currentGameState, 'qualityThreshold');
   }
 }
 
@@ -1076,7 +1143,7 @@ async function handleAction(action, npcId, extra) {
       doAfterHoursPage(extra?.direction || 1);
       break;
     case 'browser.ah-watch':
-      await doAfterHoursWatch(extra?.rowId);
+      await doAfterHoursWatch(extra?.rowId, extra?.device);
       break;
     case 'browser.ah-refresh':
       doAfterHoursRefresh();
@@ -1179,6 +1246,9 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'upgrades.purchase':
       await doUpgradePurchase(extra?.rowId);
+      break;
+    case 'upgrades.book-confirm':
+      await doUpgradeBook(extra?.rowId);
       break;
     case 'upgrades.repair':
       await doUpgradeRepair(extra?.rowId);
@@ -1808,6 +1878,16 @@ async function doMove(roomId) {
     // populated (see getSceneParticipants) rather than empty.
     currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
     addLogEntry('narration', `You move to the ${ROOMS[roomId]?.name || roomId}.`);
+    // Renovation overhaul Phase 3: entering a room with an active contracted
+    // job gets a deterministic construction-scene line — template keyed by
+    // job type + current stage, no LLM call.
+    const constructionJob = getActiveJobForRoom(currentGameState, roomId);
+    if (constructionJob) {
+      const templates = RENOVATION_SCENE_TEMPLATES[constructionJob.jobType] || RENOVATION_SCENE_TEMPLATES.repair;
+      const stage = getRenovationJobStage(constructionJob, currentGameState.meta.clock.day);
+      const line = templates[Math.min(stage.index, templates.length - 1)];
+      if (line) addLogEntry('narration', line);
+    }
     if (stealthResult.witnessed) {
       const ownerId = roomOwnerId(roomId, currentGameState.npcs);
       const ownerName = currentGameState.npcs[ownerId]?.bible?.name;
@@ -2108,6 +2188,10 @@ async function approveCastAndStartGame() {
     // gate every construction path returns through) before it's allowed
     // into the bible; a player-authored name is never overwritten by prose.
     await Promise.all(Object.entries(pendingCast.npcs).map(async ([id, npc]) => {
+      // The Contractor Friend's bible is hand-authored (character brief,
+      // ref/contractor-tutorial-overhaul-plan.md Phase 1) — keep the
+      // prose-expansion pass from regenerating their identity.
+      if (id === CONTRACTOR_ID) return;
       const prose = await expandCharacterProse(npc.bible);
       const candidateBible = {
         ...npc.bible,

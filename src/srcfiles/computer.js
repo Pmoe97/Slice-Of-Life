@@ -212,6 +212,9 @@ function openApp(gameState, appId) {
     };
   }
   focusWindow(gameState, appId);
+  // Contractor tutorial (contractor doc Phase 3): the first RenoFix open
+  // fires the how-to-book hint (idempotent — the flag makes it one-shot).
+  if (appId === 'upgrades') fireContractorMilestone(gameState, 'renofixOpened');
 }
 
 // Device-parameterised screen navigation (BrineOS 0.2). The default
@@ -833,21 +836,31 @@ function processServiceVisitsForDay(gameState, day) {
 // first real objective.
 function findEmptyBed(gameState, opts = {}) {
   const requireHabitable = opts.requireHabitable !== false;
-  if (requireHabitable && !isFacilityFunctional(gameState, 'bedroom_habitability')) return null;
+  // Post-overhaul each bedroom has its own habitability facility, so the
+  // gate is applied per room (any liveable spare bed qualifies) instead of
+  // one shared early-out.
+  const isHabitable = (roomId) => !requireHabitable || isBedroomHabitable(gameState, roomId);
 
   const occupantsOf = (roomId) => Object.values(gameState.npcs)
     .filter(n => n.residency.room === roomId && n.residency.status === 'resident');
 
   const spare = ALL_ROOMS.filter(r => ROOMS[r].type === 'bedroom' && r !== 'bedroom_player');
+  // The player's spare bed (a partner moving in, never advertised) stays
+  // behind the same "some auxiliary bedroom is liveable" gate — otherwise
+  // the opening's first objective (repair an auxiliary bedroom before
+  // recruiting anyone) would be skippable from day one via the player's own
+  // always-functional room.
+  const anyAuxHabitable = spare.some(isHabitable);
   // Private beds first, then shared ones, then the player's spare bed.
-  for (const roomId of spare) if (occupantsOf(roomId).length === 0) return { roomId, bed: 'A', shared: false };
+  for (const roomId of spare) if (isHabitable(roomId) && occupantsOf(roomId).length === 0) return { roomId, bed: 'A', shared: false };
   for (const roomId of spare) {
+    if (!isHabitable(roomId)) continue;
     const taken = new Set(occupantsOf(roomId).map(n => n.residency.bed));
     if (taken.size < (ROOMS[roomId].capacity || 2)) {
       return { roomId, bed: taken.has('A') ? 'B' : 'A', shared: true };
     }
   }
-  if (opts.includePlayerRoom !== false && occupantsOf('bedroom_player').length === 0) {
+  if (opts.includePlayerRoom !== false && anyAuxHabitable && occupantsOf('bedroom_player').length === 0) {
     return { roomId: 'bedroom_player', bed: 'B', shared: true };
   }
   return null;
@@ -1258,7 +1271,10 @@ function postRoommateAd(gameState) {
     // Distinguish "full" from "nothing liveable to offer" — early on it is
     // almost always the latter, and that's the nudge toward the first
     // repair rather than a dead end.
-    const reason = isFacilityFunctional(gameState, 'bedroom_habitability')
+    // Post-overhaul the check is per auxiliary bedroom: any habitable room
+    // with a free bed means the house isn't full, just short on space.
+    const anyLiveable = ALL_ROOMS.some(r => ROOMS[r].type === 'bedroom' && r !== 'bedroom_player' && isBedroomHabitable(gameState, r));
+    const reason = anyLiveable
       ? 'Every bed is taken.'
       : 'No liveable room to offer — fix up a bedroom first.';
     return { ok: false, reason };
@@ -1339,8 +1355,8 @@ function acceptApplicant(gameState, npcId, roomId) {
   if (roomDef.isPlayer) return { ok: false, reason: 'You can\'t assign someone to your own room.' };
 
   // Phase 4: a bedroom must be habitable before someone can move in. The
-  // bedroom_habitability facility must be at least 'functional' — this is
-  // the first upgrade goal, because it points the player at recruiting,
+  // room's own habitability facility must be at least 'functional' — this
+  // is the first upgrade goal, because it points the player at recruiting,
   // which is the answer to rent. See ref/apartment-upgrades-plan.md.
   if (!isBedroomHabitable(gameState, roomId)) {
     return { ok: false, reason: 'That bedroom is uninhabitable — repair it via RenoFix first.' };
@@ -1395,6 +1411,10 @@ function acceptApplicant(gameState, npcId, roomId) {
   // doesn't linger as a stale favorite or a dead inbox entry
   classifieds.favorites = (classifieds.favorites || []).filter(id => id !== npcId);
   classifieds.fetchQueue = (classifieds.fetchQueue || []).filter(q => q.npcId !== npcId);
+
+  // Contractor tutorial (contractor doc Phase 3): first roommate in fires
+  // the one-shot rent/roommate hint.
+  fireContractorMilestone(gameState, 'firstRoommateMovedIn');
 
   return { ok: true, npc: gameState.npcs[npcId] };
 }
@@ -1973,28 +1993,206 @@ function getNextFacilityTier(def, currentTier) {
 function isFacilityFunctional(gameState, facilityId) {
   const upgrade = gameState.world.upgrades?.[facilityId];
   if (!upgrade) return true; // no upgrade state = old save, don't block
+  // Renovation overhaul: a facility with an active contracted job is under
+  // construction — reads as unavailable until the job completes.
+  if (upgrade.activeJobId) return false;
   return upgrade.tier === 'functional' || upgrade.tier === 'upgraded';
 }
 
-// Purchase the next tier of a facility. Deducts money, advances the tier,
-// recomputes apartment quality + rent. Returns a result record for the UI.
-function purchaseUpgrade(gameState, facilityId) {
+// Reverse-lookup a facility's room from ROOM_FACILITIES. Post-overhaul
+// every facility maps to exactly one room (the old type-wide bedroom
+// facility is gone), so the first match is the answer.
+function getRoomIdForFacility(facilityId) {
+  for (const [roomId, fids] of Object.entries(ROOM_FACILITIES)) {
+    if (fids.includes(facilityId)) return roomId;
+  }
+  return null;
+}
+
+// Renovation overhaul Phase 3: the active job for a room (if any) — the
+// first facility in ROOM_FACILITIES[roomId] whose activeJobId points at a
+// live active job record. Null when the room isn't under construction.
+// Used by the floor plan (render.js) and room-entry narration (ui.js).
+function getActiveJobForRoom(gameState, roomId) {
+  const upgrades = gameState.world?.upgrades;
+  const jobs = gameState.world?.renovationJobs || [];
+  for (const fid of (ROOM_FACILITIES[roomId] || [])) {
+    const jobId = upgrades?.[fid]?.activeJobId;
+    if (!jobId) continue;
+    return jobs.find(j => j.id === jobId && j.status === 'active') || null;
+  }
+  return null;
+}
+
+// --- Contractor Friend pricing (ref/contractor-tutorial-overhaul-plan.md) ---
+// The Contractor charges the facility's materials cost (the existing
+// per-tier `cost` field) plus a flat labor markup — "he's intended to make
+// a lot of money off the player." Kept as its own constant + function (not
+// baked into FACILITY_DEFS tier costs) so the pricing model can change
+// (a second contractor option, a loyalty reversal, whatever) without
+// touching the facility data model.
+const CONTRACTOR_LABOR_MARKUP = 0.35; // tune during playtesting — "makes real money off the player"
+function getContractorJobPrice(materialsCost) {
+  return Math.round(materialsCost * (1 + CONTRACTOR_LABOR_MARKUP));
+}
+
+// Tutorial free-job predicate (contractor doc Phase 3): the FIRST job on an
+// auxiliary bedroom is free — the one-time guided tutorial (the original
+// brainstorm: "the first auxiliary bedroom will be a free upgrade"). The
+// tutorialRenoUsed flag is consumed on the booking in bookRenovationJob, so
+// every subsequent bedroom job — including that bedroom's later Upgrade —
+// charges full price.
+function isTutorialFreeJob(gameState, facilityId) {
+  if (gameState?.world?.flags?.tutorialRenoUsed) return false;
+  return TUTORIAL_FREE_FACILITIES.includes(facilityId);
+}
+
+// The price a job actually books at — $0 for the tutorial free job, else
+// materials + labor markup. Single source of truth so the RenoFix card, the
+// booking modal, and bookRenovationJob all advertise and charge the same
+// number (Phase 2's price-advertised == price-charged invariant).
+function getRenovationJobCost(gameState, facilityId, jobType) {
+  const def = FACILITY_DEFS[facilityId];
+  const upgrade = gameState?.world?.upgrades?.[facilityId];
+  const nextTier = def && upgrade ? getNextFacilityTier(def, upgrade.tier) : null;
+  if (!nextTier) return null;
+  if (isTutorialFreeJob(gameState, facilityId)) return 0;
+  return getContractorJobPrice(nextTier.cost);
+}
+
+// Contractor memory of the current job (contractor doc Phase 4 — banter
+// depth). Keeps a live "what am I working on right now" fact in the
+// Contractor's memory.facts so LLM-backed IM replies about a job in progress
+// get grounded material to reference. Only ONE valid 'renovation_job' fact
+// exists at a time — every new job fact (booking, stage refresh, or the
+// completion that retires it) invalidates the previous active fact; completed
+// jobs accumulate as 'renovation_done' facts so recent work stays recallable.
+// No-ops when the Contractor NPC is missing (e.g. synthetic states).
+function setContractorJobFact(gameState, category, text, day) {
+  const npc = gameState?.npcs?.[CONTRACTOR_ID];
+  if (!npc || !Array.isArray(npc.memory?.facts)) return;
+  if (category === 'renovation_job' || category === 'renovation_done') {
+    for (const f of npc.memory.facts) {
+      if (f.category === 'renovation_job' && f.valid !== false) f.valid = false;
+    }
+  }
+  npc.memory.facts.push({ text, day: day || 0, importance: 0.9, category, valid: true });
+  // Respect the memory budget, preferring to drop the oldest completed-job
+  // fact over any static/seeded history fact (day 0, category 'history').
+  const cap = MEMORY_BUDGET ? MEMORY_BUDGET.maxFacts : 40;
+  if (npc.memory.facts.length > cap) {
+    const dropIdx = npc.memory.facts.findIndex(f => f.category === 'renovation_done');
+    npc.memory.facts.splice(dropIdx >= 0 ? dropIdx : 0, 1);
+  }
+}
+
+// Post a one-shot Contractor milestone text (contractor doc Phase 3). Each
+// milestone id fires at most once ever, keyed by world.flags.tutorial_<id>,
+// and posts through processNpcImMessages like any other NPC-initiated IM
+// (zero-LLM-in-ticks — deterministic template pools, see
+// CONTRACTOR_TUTORIAL_MILESTONES). When the IM app can't be reached
+// (synthetic/test states without world.computer) it returns false WITHOUT
+// setting the flag, so the text still fires once a real computer exists.
+function fireContractorMilestone(gameState, milestoneId) {
+  if (!gameState?.world) return false;
+  const flags = gameState.world.flags || (gameState.world.flags = {});
+  const key = `tutorial_${milestoneId}`;
+  if (flags[key]) return false;
+  const pool = CONTRACTOR_TUTORIAL_MILESTONES[milestoneId];
+  if (!pool || !gameState.world.computer?.apps?.im) return false;
+  flags[key] = true;
+  const text = pool[Math.floor(Math.random() * pool.length)];
+  processNpcImMessages(gameState, [{ npcId: CONTRACTOR_ID, text }]);
+  return true;
+}
+
+// Book a contracted renovation job (ref/renovation-occupancy-overhaul-plan.md).
+// Replaces the instant click of the old purchaseUpgrade: the player pays
+// the FULL contracted price UP FRONT (materials + the Contractor's labor
+// markup — no refund on cancel, locked decision), the job runs for
+// `durationDays`, and the tier only advances when
+// processRenovationJobsForDay completes it at day rollover. The job is
+// always performed by the Contractor, so it records contractorId.
+function bookRenovationJob(gameState, facilityId, jobType) {
   const def = FACILITY_DEFS[facilityId];
   if (!def) return { ok: false, reason: 'No such facility.' };
   const upgrades = gameState.world.upgrades;
   if (!upgrades) return { ok: false, reason: 'Upgrade system not initialized.' };
   const upgrade = upgrades[facilityId];
   if (!upgrade) return { ok: false, reason: 'No such facility.' };
+  if (upgrade.activeJobId) return { ok: false, reason: 'A job is already running on this — wait for it to finish.' };
+
+  const jobs = gameState.world.renovationJobs || (gameState.world.renovationJobs = []);
+  const activeCount = jobs.filter(j => j.status === 'active').length;
+  if (activeCount >= MAX_CONCURRENT_JOBS) return { ok: false, reason: 'Only one renovation at a time — let the crew finish first.' };
+
+  // jobType must match the facility's actual next transition.
+  const expectedType = upgrade.tier === 'broken' ? 'repair' : upgrade.tier === 'functional' ? 'upgrade' : null;
+  if (!expectedType) return { ok: false, reason: 'Already fully upgraded.' };
+  if (jobType !== expectedType) {
+    const want = expectedType === 'repair' ? 'a repair' : 'an upgrade';
+    return { ok: false, reason: `This facility needs ${want}, not a ${jobType}.` };
+  }
   const nextTier = getNextFacilityTier(def, upgrade.tier);
   if (!nextTier) return { ok: false, reason: 'Already fully upgraded.' };
-  if (gameState.player.money < nextTier.cost) return { ok: false, reason: `Can't afford ${nextTier.cost} (you have ${Math.round(gameState.player.money)}).` };
-  gameState.player.money -= nextTier.cost;
-  upgrade.tier = nextTier.tier;
-  // Phase 9: advancing a tier resets condition to full.
-  upgrade.condition = MAINTENANCE.startingCondition;
-  // Recompute rent immediately — the ceiling may have changed.
-  gameState.world.rent = computeRent(gameState.npcs, gameState);
-  return { ok: true, facilityId, newTier: nextTier.tier, cost: nextTier.cost, label: nextTier.label };
+
+  // Full contracted price = materials + labor markup — except the tutorial
+  // free job (contractor doc Phase 3): the first auxiliary-bedroom job
+  // books at $0 so the guided flow works even for a broke player.
+  const tutorialFree = isTutorialFreeJob(gameState, facilityId);
+  const cost = tutorialFree ? 0 : getContractorJobPrice(nextTier.cost);
+  if (gameState.player.money < cost) return { ok: false, reason: `Can't afford ${cost} (you have ${Math.round(gameState.player.money)}).` };
+
+  const startDay = gameState.meta.clock.day;
+  const durationDays = nextTier.durationDays || 1;
+  const jobId = `job_${startDay}_${jobs.length}`;
+  const job = {
+    id: jobId,
+    facilityId,
+    roomId: getRoomIdForFacility(facilityId),
+    jobType,
+    fromTier: upgrade.tier,
+    toTier: nextTier.tier,
+    startDay,
+    durationDays,
+    etaDay: startDay + durationDays,
+    cost,
+    status: 'active',
+    contractorId: CONTRACTOR_ID, // the Contractor performs every job (contractor doc)
+  };
+
+  gameState.player.money -= cost;
+  jobs.push(job);
+  upgrade.activeJobId = jobId;
+  // Tutorial flow (contractor doc Phase 3): consume the free-job flag and
+  // fire the milestone hints — the free job teaches what "day N of M"
+  // means; the first paid job (and first Upgrade, when that's the case)
+  // each get their own one-shot nudge.
+  if (tutorialFree) {
+    gameState.world.flags = gameState.world.flags || {};
+    gameState.world.flags.tutorialRenoUsed = true;
+    fireContractorMilestone(gameState, 'tutorialJobBooked');
+  } else {
+    fireContractorMilestone(gameState, 'firstPaidJobBooked');
+    if (jobType === 'upgrade') fireContractorMilestone(gameState, 'firstUpgradeJobBooked');
+  }
+  // Contractor memory (contractor doc Phase 4): record the live job so IM
+  // replies about work in progress have grounded material to reference.
+  setContractorJobFact(gameState, 'renovation_job',
+    `I just started on ${def.label} — ${jobType === 'upgrade' ? 'an' : 'a'} ${jobType} job, due day ${job.etaDay}.`,
+    startDay);
+  // Tier/condition do NOT change here — only at job completion.
+  return { ok: true, facilityId, jobId, jobType, fromTier: job.fromTier, toTier: job.toTier, cost, durationDays, etaDay: job.etaDay, label: nextTier.label };
+}
+
+// Pure stage derivation for an active job — stage label/index progress
+// through RENOVATION_STAGE_TEMPLATES as a function of elapsed days. Used by
+// the RenoFix dashboard (Phase 3) and narration; derived, never persisted.
+function getRenovationJobStage(job, day) {
+  const stages = RENOVATION_STAGE_TEMPLATES[job.jobType] || RENOVATION_STAGE_TEMPLATES.repair;
+  const elapsed = Math.max(0, day - job.startDay);
+  const idx = Math.min(stages.length - 1, Math.floor(elapsed / job.durationDays * stages.length));
+  return { label: stages[idx], index: idx, total: stages.length };
 }
 
 // Phase 9: repair a facility's condition without advancing the tier.
@@ -2036,7 +2234,11 @@ function decayFacilityCondition(gameState, facilityId) {
     // Drop a tier.
     const def = FACILITY_DEFS[facilityId];
     const tierIdx = def.tiers.findIndex(t => t.tier === upgrade.tier);
-    if (tierIdx > 0) {
+    // Locked decision #5: decay floors at 'functional'. 'upgraded' (idx 2)
+    // can still decay to 'functional' (idx 1), but 'functional' never drops
+    // to 'broken' — recovery from low condition is always the instant-money
+    // repairFacilityCondition path, never a re-reno.
+    if (tierIdx > 1) {
       upgrade.tier = def.tiers[tierIdx - 1].tier;
       upgrade.condition = MAINTENANCE.startingCondition;
       // Recompute rent — the quality may have changed.
@@ -2161,12 +2363,15 @@ function processInvestmentGrowth(gameState, day) {
 }
 
 // Check whether a bedroom is habitable enough for a roommate to move in.
-// The bedroom_habitability facility must be at least 'functional'.
+// Post-overhaul each bedroom has its own habitability facility, so the
+// check resolves against the per-bedroom facility id (ROOM_FACILITIES).
 function isBedroomHabitable(gameState, roomId) {
   // bedroom_player doesn't need habitability for recruitment (it's the
   // player's own room — the player sleeps there regardless).
   if (roomId === 'bedroom_player') return true;
-  return isFacilityFunctional(gameState, 'bedroom_habitability');
+  const facilityIds = ROOM_FACILITIES[roomId] || [];
+  if (facilityIds.length === 0) return true;
+  return facilityIds.some(fid => isFacilityFunctional(gameState, fid));
 }
 
 // ===== /SECTION: COMPUTER =====

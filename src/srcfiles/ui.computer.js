@@ -218,7 +218,11 @@ async function doBrowserVisit(siteId, device) {
     await advanceAndResolve(1);
     currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
 
-    switchScreen(currentGameState, 'browser', 'site');
+    // Phase 5 device parity: the phone's Browser app uses the SAME
+    // handlers, so the visit has to navigate whichever shell launched it —
+    // switchScreen without a device would silently open the site in the
+    // (hidden on mobile) computer window while the phone stayed put.
+    switchScreen(currentGameState, 'browser', 'site', undefined, device);
     renderComputerScreen(currentGameState);
     render(currentGameState, currentSceneState);
     await saveAtBoundary('browser-visit', currentGameState);
@@ -270,6 +274,7 @@ function doAfterHoursCategory(catId) {
   browser.afterHoursSearchQuery = ''; // Phase 10: clear search on category change
   browser.afterHoursTotalPages = 1;
   renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
   fetchAfterHoursClips(catId);
 }
 
@@ -283,6 +288,7 @@ function doAfterHoursSearch(query) {
   browser.afterHoursClipsError = null;
   browser.afterHoursClipPage = 1;
   renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
   fetchAfterHoursClips(browser.afterHoursCategory || 'featured');
 }
 
@@ -298,6 +304,7 @@ function doAfterHoursPage(direction) {
   browser.afterHoursClipsLoading = false;
   browser.afterHoursClipsError = null;
   renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
   fetchAfterHoursClips(catId);
 }
 
@@ -312,6 +319,7 @@ function doAfterHoursRefresh() {
   browser.afterHoursClipPage = (browser.afterHoursClipPage || 1) + 1;
   browser.afterHoursTotalPages = Math.max(browser.afterHoursClipPage + 1, browser.afterHoursTotalPages || 1);
   renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
   fetchAfterHoursClips(catId);
 }
 
@@ -432,7 +440,7 @@ async function doAfterHoursCum() {
 // actual Pornhub embed, so there's no image-gen latency — just the
 // iframe load time. Deliberately NOT triggered from inside
 // renderAfterHours (render gets called multiple times per action).
-async function doAfterHoursWatch(clipId) {
+async function doAfterHoursWatch(clipId, device) {
   if (!clipId) return;
   const browser = currentGameState.world.computer.apps.browser;
   const clips = browser.afterHoursClips;
@@ -456,12 +464,21 @@ async function doAfterHoursWatch(clipId) {
   // second renderComputerScreen() via render.js, which wipes the iframe
   // with body.innerHTML='' and recreates it before the previous iframe
   // could finish loading. The main game UI (needs bars, log) is hidden
-  // in computer mode anyway.
+  // in computer mode anyway. A phone-initiated watch ALSO renders the
+  // phone shell — without it the player appears on no screen at all
+  // (the phone shared-app content is only rebuilt by renderPhoneScreen).
   renderComputerScreen(currentGameState);
+  if (device === 'phone' && typeof renderPhoneScreen === 'function') {
+    renderPhoneScreen(currentGameState);
+  }
 
   // Scroll the player into view — the watch panel sits above the grid
-  // but the grid may have been scrolled during browsing.
-  const panel = document.getElementById('ah-watch-panel');
+  // but the grid may have been scrolled during browsing. getElementById
+  // finds the FIRST #ah-watch-panel in the document (the computer's, which
+  // is earlier in the DOM even when it's the hidden shell), so a
+  // phone-initiated watch has to target the phone's own panel instead.
+  const scope = device === 'phone' ? document.getElementById('phone-screen') : document;
+  const panel = scope?.querySelector?.('#ah-watch-panel') || scope?.getElementById?.('ah-watch-panel');
   if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -482,6 +499,7 @@ async function fetchAfterHoursClips(catId) {
   browser.afterHoursClipsLoading = true;
   browser.afterHoursClipsError = null;
   renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
 
   try {
     const page = browser.afterHoursClipPage || 1;
@@ -532,6 +550,7 @@ async function fetchAfterHoursClips(catId) {
     if (browser.afterHoursCategory === catId) {
       browser.afterHoursClipsLoading = false;
       renderComputerScreen(currentGameState);
+      if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
     }
   }
 }
@@ -1127,16 +1146,88 @@ async function doInvestSellAll(fundId) {
   await saveAtBoundary('invest-sell', currentGameState);
 }
 
-// --- Phase 4: Apartment upgrades ---
+// --- Phase 4: Apartment upgrades (RenoFix) ---
+// Renovation overhaul Phase 3: the dashboard's Book button now opens a
+// booking-confirmation modal (cost / duration / completion day / what
+// becomes unavailable / projected quality-rent change) instead of an
+// instant purchase; the booking itself runs in doUpgradeBook on confirm.
 async function doUpgradePurchase(facilityId) {
   if (!facilityId) return;
   const def = FACILITY_DEFS[facilityId];
-  const result = purchaseUpgrade(currentGameState, facilityId);
-  if (!result.ok) { addLogEntry('system', result.reason); return; }
-  addLogEntry('narration', `You upgrade the ${def.label} to "${result.label}" for ${result.cost}.`);
+  const upgrade = currentGameState?.world?.upgrades?.[facilityId];
+  if (!def || !upgrade) return;
+  const nextTier = getNextFacilityTier(def, upgrade.tier);
+  if (!nextTier) return;
+  showUpgradeBookingModal(def, nextTier);
+}
+
+// Booking-confirmation modal. The quality / rent-ceiling / roommate-rent
+// projections are computed against a scratch copy of world.upgrades with
+// the target tier substituted in — live state is never mutated here.
+function showUpgradeBookingModal(def, nextTier) {
+  const overlay = document.getElementById('modal-overlay');
+  const titleEl = document.getElementById('modal-title');
+  const bodyEl = document.getElementById('modal-body');
+  const actionsEl = document.getElementById('modal-actions');
+  if (!overlay || !titleEl || !bodyEl || !actionsEl) return;
+  const gs = currentGameState;
+  const day = gs.meta.clock.day;
+  const jobType = nextTier.tier === 'functional' ? 'repair' : 'upgrade';
+  const etaDay = day + (nextTier.durationDays || 1);
+  // Phase 2 (contractor doc): the player pays the Contractor's full price —
+  // materials + labor markup — not the bare materials cost. Phase 3: the
+  // tutorial's first auxiliary-bedroom job is free — advertised as FREE,
+  // charged 0.
+  const tutorialFree = isTutorialFreeJob(gs, def.id);
+  const totalCost = tutorialFree ? 0 : getContractorJobPrice(nextTier.cost);
+  const laborCost = tutorialFree ? 0 : totalCost - nextTier.cost;
+
+  const gated = (def.gatesActions || []).map(id => ACTION_DEFS[id]?.label || id);
+  const gatedTxt = gated.length > 0 ? gated.join(', ') : 'cosmetic only';
+
+  const scratch = JSON.parse(JSON.stringify(gs.world.upgrades));
+  scratch[def.id].tier = nextTier.tier;
+  const qNow = getApartmentQuality(gs);
+  const qAfter = getApartmentQuality({ world: { upgrades: scratch } });
+  const ceilNow = roommateShareCeiling(qNow);
+  const ceilAfter = roommateShareCeiling(qAfter);
+  const rentNow = computeRent(gs.npcs, gs);
+  const rentAfter = computeRent(gs.npcs, { ...gs, world: { ...gs.world, upgrades: scratch } });
+  const rentDelta = rentAfter.coveredByRoommates - rentNow.coveredByRoommates;
+
+  const pct = (v) => `${Math.round(v * 100)}%`;
+  const roomName = ROOMS[def.room]?.name || def.room;
+  titleEl.textContent = `${jobType === 'repair' ? 'Book Repair' : 'Book Upgrade'} — ${def.label}`;
+  bodyEl.innerHTML = `
+    <p class="dim tiny" style="margin-bottom: 10px;">${roomName}</p>
+    <div class="upg-booking-summary">
+      <div><span class="dim">Job:</span> <strong>${jobType === 'repair' ? 'Repair' : 'Upgrade'}</strong></div>
+      <div><span class="dim">Cost:</span> <strong>${tutorialFree ? 'FREE' : totalCost}</strong> — ${tutorialFree ? 'one-time tutorial job — the first bedroom repair is on the house' : 'paid upfront, no refund on cancel'} ${tutorialFree ? '' : `<span class="dim tiny">(materials ${nextTier.cost} + labor ${laborCost})</span>`}</div>
+      <div><span class="dim">Duration:</span> <strong>${nextTier.durationDays || 1} day${(nextTier.durationDays || 1) === 1 ? '' : 's'}</strong> — done ${formatDate(etaDay)}</div>
+      <div><span class="dim">Unavailable while working:</span> ${gatedTxt}</div>
+      <div><span class="dim">Quality:</span> ${pct(qNow)} → ${pct(qAfter)}</div>
+      <div><span class="dim">Rent ceiling:</span> ${pct(ceilNow)} → ${pct(ceilAfter)} per roommate</div>
+      ${rentDelta >= 0.5 ? `<div><span class="dim">Roommate rent:</span> <strong>+${Math.round(rentDelta)}/wk</strong></div>` : ''}
+    </div>
+  `;
+  actionsEl.innerHTML = `<button class="btn" data-action="upgrades.book-confirm" data-row-id="${def.id}">Book Job — ${tutorialFree ? 'FREE' : totalCost}</button><button class="btn btn-secondary" data-action="close-modal">Cancel</button>`;
+  overlay.setAttribute('data-open', '');
+}
+
+// Executes the booking after confirmation in the modal (upgrades.book-confirm).
+async function doUpgradeBook(facilityId) {
+  closeModal();
+  if (!facilityId) return;
+  const def = FACILITY_DEFS[facilityId];
+  const upgrade = currentGameState?.world?.upgrades?.[facilityId];
+  if (!def || !upgrade) return;
+  const jobType = upgrade.tier === 'broken' ? 'repair' : 'upgrade';
+  const result = bookRenovationJob(currentGameState, facilityId, jobType);
+  if (!result.ok) { addLogEntry('system', result.reason); renderComputerScreen(currentGameState); return; }
+  addLogEntry('narration', `You book a ${jobType === 'repair' ? 'repair' : 'upgrade'} on the ${def.label} — ${result.cost === 0 ? "FREE, the Contractor's tutorial job" : `${result.cost} paid upfront`}. The crew finishes ${formatDate(result.etaDay)}.`);
   renderComputerScreen(currentGameState);
   render(currentGameState, currentSceneState);
-  await saveAtBoundary('upgrade-purchase', currentGameState);
+  await saveAtBoundary('upgrade-book', currentGameState);
 }
 
 // Phase 9: repair facility condition (maintenance without tier upgrade).

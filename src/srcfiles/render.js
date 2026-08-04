@@ -85,6 +85,7 @@ function renderFloorPlan(gs) {
   const vbW = 160, vbH = 220;
 
   let svg = `<svg viewBox="0 0 ${vbW} ${vbH}" xmlns="http://www.w3.org/2000/svg">`;
+  svg += '<defs><pattern id="fp-hazard" patternUnits="userSpaceOnUse" width="7" height="7" patternTransform="rotate(45)"><rect width="7" height="7" fill="rgba(224,160,64,0.18)"/><line x1="0" y1="0" x2="0" y2="7" stroke="rgba(224,160,64,0.5)" stroke-width="2.5"/></pattern></defs>';
 
   // Connectors (drawn first, behind rooms)
   const drawn = new Set();
@@ -115,12 +116,22 @@ function renderFloorPlan(gs) {
     if (isCurrent) attrs += ' data-current=""';
     else if (isAdjacent) attrs += ' data-adjacent=""';
     if (isDistant) attrs += ' data-distant=""';
+    // Renovation overhaul Phase 3: any facility in this room with an active
+    // contracted job renders the room as a construction site.
+    const constructionJob = getActiveJobForRoom(gs, roomId);
+    if (constructionJob) attrs += ' data-construction=""';
     svg += `<rect ${attrs}/>`;
 
     // Label (shortened if room is small)
     const name = ROOMS[roomId].name;
     const label = r.w < 35 && name.length > 8 ? name.substring(0, 7) + '…' : name;
     svg += `<text class="fp-room-label" x="${r.x + r.w / 2}" y="${r.y + r.h / 2 - 2}">${escapeHtml(label)}</text>`;
+
+    // Under-construction tag, below the room name (hazard fill applied via
+    // CSS on .fp-room[data-construction]).
+    if (constructionJob) {
+      svg += `<text class="fp-construction-label" x="${r.x + r.w / 2}" y="${r.y + r.h + 8}">Under construction</text>`;
+    }
 
     // NPC dots
     const present = getPresentNpcIds(gs.npcs, roomId);

@@ -45,21 +45,29 @@ function renderPhoneScreen(gs) {
 
   const screen = document.getElementById('phone-screen');
   if (!screen) return;
-  if (gs.world.phone?.power !== 'on') {
+  // Decision C display corollary: a phone in another room is not readable
+  // even if its power was left on — the panel is hidden when presence is
+  // 'elsewhere'. Power stays 'on' in state, so returning to the room
+  // brings the screen right back (a phone left on in the kitchen is still
+  // on), and the FAB toggle (doPhoneOpen) can switch it off from afar.
+  if (gs.world.phone?.power !== 'on' || phonePresence(gs) === 'elsewhere') {
     screen.removeAttribute('data-open');
     return;
   }
   screen.setAttribute('data-open', '');
 
-  // Navbar icons injected once, same guard as the FAB.
+  // Navbar icons injected once, same guard as the FAB (the buttons
+  // themselves are always present in index.html's markup, so the guard is
+  // on the icon span, not the navbar container — the old guard
+  // `!navbar.childElementCount` was never true and left the buttons blank).
   const navbar = screen.querySelector('.phone-navbar');
-  if (navbar && !navbar.childElementCount) {
-    const back = navbar.querySelector('[data-action="phone.back"]');
-    const home = navbar.querySelector('[data-action="phone.home"]');
-    const close = navbar.querySelector('[data-action="phone.close"]');
-    if (back) back.innerHTML = svgIcon('back');
-    if (home) home.innerHTML = svgIcon('home');
-    if (close) close.innerHTML = svgIcon('power');
+  const backBtn = navbar?.querySelector('[data-action="phone.back"]');
+  if (backBtn && !backBtn.childElementCount) {
+    const homeBtn = navbar.querySelector('[data-action="phone.home"]');
+    const closeBtn = navbar.querySelector('[data-action="phone.close"]');
+    backBtn.innerHTML = svgIcon('back');
+    if (homeBtn) homeBtn.innerHTML = svgIcon('home');
+    if (closeBtn) closeBtn.innerHTML = svgIcon('power');
   }
 
   renderPhoneStatusbar(gs);
@@ -488,12 +496,12 @@ function renderPhoneCameraDetail(body, gs, photoId) {
   caption.textContent = photo.caption;
   body.appendChild(caption);
 
-  // Share row — same resident+prospective contact scope as Messages
-  // (render.computer.js's renderMessages), so anyone you could text you
-  // can also send a photo to.
+  // Share row — same contact scope as Messages (render.computer.js's
+  // renderMessages): anyone you could text you can also send a photo to.
+  // Includes 'visitor' NPCs (the Contractor Friend) for consistency.
   const npcIds = Object.keys(gs.npcs).filter(id => {
     const status = gs.npcs[id].residency?.status;
-    return status === 'resident' || status === 'prospective';
+    return status === 'resident' || status === 'prospective' || status === 'visitor';
   });
   if (npcIds.length > 0) {
     const shareLabel = document.createElement('div');

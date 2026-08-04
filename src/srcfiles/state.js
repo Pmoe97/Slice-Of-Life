@@ -421,6 +421,9 @@ async function saveAtBoundary(reason, gameState) {
     queueWrite('world', 'castWeb', gameState.world.castWeb);
     queueWrite('world', 'events', gameState.world.events);
     queueWrite('world', 'deliveries', gameState.world.deliveries);
+    queueWrite('world', 'renovationJobs', gameState.world.renovationJobs);
+    // Contractor tutorial (contractor doc Phase 3): one-shot tutorial/milestone flags.
+    queueWrite('world', 'flags', gameState.world.flags || {});
     queueWrite('world', 'quests', gameState.world.quests);
     queueWrite('world', 'rent', gameState.world.rent);
     queueWrite('world', 'computer', gameState.world.computer || defaultComputerState());
@@ -681,25 +684,23 @@ async function loadGameState() {
   // (everything broken) which the player then restores. This is a
   // playable but harsh fallback; the clean-break migration will discard
   // old saves entirely when it lands.
-  // Phase 9: backfill the `condition` field for saves that have upgrades
-  // but predate the maintenance/decay system. Broken → 0, functional+ → 100.
-  const rawUpgrades = await getWorld('upgrades');
-  const upgrades = rawUpgrades ? (() => {
-    const fixed = {};
-    for (const [id, upg] of Object.entries(rawUpgrades)) {
-      fixed[id] = {
-        ...upg,
-        condition: upg.condition !== undefined ? upg.condition
-          : (upg.tier === 'broken' ? 0 : MAINTENANCE.startingCondition),
-      };
-    }
-    return fixed;
-  })() : initUpgradesState();
+  // Renovation overhaul + Phase 9: normalize the persisted upgrades —
+  // prunes the dead shared `bedroom_habitability` key (its state maps onto
+  // the four per-bedroom facilities), backfills facilities a save predates
+  // from FACILITY_STARTING_TIERS so the RenoFix dashboard renders every
+  // facility, and backfills the `condition` field for pre-maintenance saves.
+  // See normalizeUpgrades (SIM).
+  const upgrades = normalizeUpgrades(await getWorld('upgrades'));
   // Phase 5 utility meters — falls back to fresh counters for a save from
   // before metering existed. Old saves had no `utilities` key; the flat
   // bill amounts still apply as a fallback in computeBillAmount when
   // utilities is absent.
   const utilities = await getWorld('utilities') || initUtilitiesState();
+  // Renovation overhaul: active/completed contracted jobs. Falls back to an
+  // empty array for saves written before renovationJobs existed.
+  const renovationJobs = await getWorld('renovationJobs') || [];
+  // Contractor tutorial (contractor doc Phase 3): one-shot tutorial/milestone flags.
+  const flags = await getWorld('flags') || {};
   // BrineOS Phase 2: phone shell nav state (Phase 3). Presence is derived
   // from the object bucket, so this is the whole persisted shape.
   const phone = normalizePhoneState(await getWorld('phone'));
@@ -716,7 +717,7 @@ async function loadGameState() {
     npcIds: Object.keys(npcs).filter(id => id.startsWith('npc_')),
     // droppedConstraints is persisted in meta by writeGeneratedGameState.
     droppedConstraints: meta.droppedConstraints || [],
-    world: { rooms, castWeb, quests, events, deliveries, rent, computer, taxes, bills, upgrades, utilities, phone },
+    world: { rooms, castWeb, quests, events, deliveries, renovationJobs, rent, computer, taxes, bills, upgrades, utilities, phone, flags },
   };
   // Lazily spawns any bucket missing from kv (a pre-WORLD save, or a
   // resident who moved in since the last full write) rather than needing a
@@ -766,6 +767,8 @@ async function writeGeneratedGameState(gameState) {
   await root.kv.world.set('quests', gameState.world.quests);
   await root.kv.world.set('events', gameState.world.events);
   await root.kv.world.set('deliveries', gameState.world.deliveries);
+  await root.kv.world.set('renovationJobs', gameState.world.renovationJobs || []);
+  await root.kv.world.set('flags', gameState.world.flags || {});
   await root.kv.world.set('rent', gameState.world.rent);
   await root.kv.world.set('computer', gameState.world.computer || defaultComputerState());
   await root.kv.world.set('taxes', gameState.world.taxes);

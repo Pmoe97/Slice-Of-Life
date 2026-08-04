@@ -485,7 +485,11 @@ function resolveTick(gameState) {
   // tick rather than where they were last tick.
   const resolved = {};
   for (const [id, npc] of Object.entries(npcs)) {
-    if (npc.residency.status === 'former' || npc.residency.status === 'prospective') continue;
+    // 'visitor' = external NPCs who never enter the simulation (the
+    // Contractor Friend — see ref/contractor-tutorial-overhaul-plan.md):
+    // no schedule, no needs decay, no location, no drives, no events.
+    // They only "exist" via IM, which is handled outside resolveTick.
+    if (npc.residency.status === 'former' || npc.residency.status === 'prospective' || npc.residency.status === 'visitor') continue;
 
     const { block } = resolveScheduleActivity(npc, meta.clock);
     let location = null;
@@ -585,12 +589,16 @@ function resolveTick(gameState) {
       const shareCount = Object.values(resolved).filter(r => r.location === location).length;
       if (shareCount > 1) needs.social = Math.min(NEEDS.npcSocialMax, needs.social + NEEDS.npcSocialRestore);
     }
-    // NPC Overhaul Phase 6 — restore comfort in comfortable rooms
-    if (location === 'living_room' || location === 'bedroom') {
-      const facilityTiers = gameState.upgrades || {};
+    // NPC Overhaul Phase 6 — restore comfort in comfortable rooms. A room
+    // must carry a comfort facility: the living room is comfortable when its
+    // entertainment setup is at least functional; a bedroom only when its bed
+    // is UPGRADED (a habitable-but-plain room isn't comfortable). Post-overhaul
+    // each bedroom resolves its own habitability facility — the old shared
+    // single id is gone.
+    if (location === 'living_room' || ROOMS[location]?.type === 'bedroom') {
       const hasComfortFacility = location === 'living_room'
-        ? (facilityTiers.living_room_entertainment?.tier || 'broken') !== 'broken'
-        : (facilityTiers.bedroom_habitability?.tier || 'broken') !== 'broken';
+        ? isFacilityFunctional(gameState, 'living_room_entertainment')
+        : (ROOM_FACILITIES[location] || []).some(fid => gameState.world.upgrades?.[fid]?.tier === 'upgraded');
       if (hasComfortFacility) {
         needs.comfort = Math.min(100, needs.comfort + NEEDS.npcComfortRestore);
       }
@@ -1672,6 +1680,14 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
       quests: { active: [], completed: [] },
       events: [],
       deliveries: [],
+      // Renovation overhaul: active/completed contracted jobs, one entry
+      // per job booked through bookRenovationJob (see
+      // ref/renovation-occupancy-overhaul-plan.md).
+      renovationJobs: [],
+      // Contractor tutorial (contractor doc Phase 3): one-shot tutorial /
+      // milestone flags (tutorialRenoUsed, tutorial_<milestoneId>) — see
+      // ref/contractor-tutorial-overhaul-plan.md.
+      flags: {},
       rent,
       // Phase 6 taxes: quarterly estimated tax. quarterGross accumulates
       // each quarter's gross gig income; the bill lands at quarter end.
@@ -1707,6 +1723,26 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
     objects,
     droppedConstraints,
   };
+
+  // Contractor Friend (ref/contractor-tutorial-overhaul-plan.md, Phase 1):
+  // a permanent, simulation-light NPC added at new-game setup so EVERY start
+  // path (solo + cast) gets them. 'visitor' status + the resolveTick skip
+  // keep them out of the sim entirely — never a room, never present,
+  // contributes no rent. Their IM thread is pre-seeded here (the computer
+  // state is part of world from day one) with a welcome message, which is
+  // the tutorial's entry point. computeRent below is unaffected: visitors
+  // don't contribute.
+  state.world.computer = defaultComputerState();
+  state.npcs[CONTRACTOR_ID] = createNpcFromBible(CONTRACTOR_BIBLE, 'visitor');
+  // Contractor Friend (contractor doc Phase 4): pre-seed the Contractor's
+  // memory with grounded facts — what they knew about the grandfather and
+  // their opinions on the apartment — so IM replies have real material to
+  // draw from (same memory.facts mechanism as any other NPC; the seeds live
+  // in CONTRACTOR_INITIAL_FACTS, config.js).
+  state.npcs[CONTRACTOR_ID].memory.facts = CONTRACTOR_INITIAL_FACTS.map(f => ({ ...f }));
+  const contractorThread = ensureImThread(state, CONTRACTOR_ID);
+  contractorThread.msgs.push({ from: 'npc', text: CONTRACTOR_WELCOME_MESSAGE, day: clock.day, tick: getTickIndex(clock.minutes) });
+  contractorThread.unread = 1;
 
   // Phase 7: recompute rent now that world.upgrades exists, so the
   // apartment quality (disrepair) is reflected in the starting rent split.
@@ -1765,6 +1801,56 @@ function initUpgradesState() {
     };
   }
   return upgrades;
+}
+
+
+// Renovation overhaul — migrate a persisted `world.upgrades` object to the
+// post-split schema. Old saves carry the dead shared `bedroom_habitability`
+// key: it was type-wide (one state for all four bedrooms), so its tier and
+// condition map onto each of the four per-bedroom facilities (the player's
+// own room floored at 'functional' — it's always habitable), then the dead
+// key is pruned. Facilities the save predates entirely (the four bedroom
+// facilities on a 12-facility save, plus the entry/dining/hallway additions)
+// backfill from FACILITY_STARTING_TIERS so the RenoFix dashboard renders every
+// facility instead of a partial list. Also backfills the Phase 9 `condition`
+// field for saves that predate maintenance/decay (broken → 0, functional+ →
+// startingCondition). Mirrors initUpgradesState's per-facility shape so the
+// result is indistinguishable from a fresh game.
+function normalizeUpgrades(rawUpgrades) {
+  if (!rawUpgrades) return initUpgradesState();
+  const fixed = {};
+  for (const [id, upg] of Object.entries(rawUpgrades)) {
+    if (id === 'bedroom_habitability') continue; // dead key — pruned
+    fixed[id] = {
+      ...upg,
+      condition: upg.condition !== undefined ? upg.condition
+        : (upg.tier === 'broken' ? 0 : MAINTENANCE.startingCondition),
+    };
+  }
+  const shared = rawUpgrades['bedroom_habitability'];
+  for (const def of FACILITY_LIST) {
+    if (fixed[def.id]) continue;
+    if (shared && def.id.startsWith('bedroom_habitability_')) {
+      const isPlayer = def.id === 'bedroom_habitability_player';
+      // The player's own room is ALWAYS habitable (locked decision #3 and
+      // the isBedroomHabitable player exemption) — the old shared facility
+      // only ever described the auxiliary bedrooms for the recruitment gate.
+      // So the player room floors at 'functional' (keeping an 'upgraded'
+      // the save actually had); the aux rooms inherit the shared tier as-is.
+      const tier = isPlayer
+        ? (shared.tier === 'broken' ? 'functional' : shared.tier || 'functional')
+        : (shared.tier || 'broken');
+      fixed[def.id] = {
+        tier,
+        condition: shared.condition !== undefined ? shared.condition
+          : (tier === 'broken' ? 0 : MAINTENANCE.startingCondition),
+      };
+    } else {
+      const tier = FACILITY_STARTING_TIERS[def.id] || 'broken';
+      fixed[def.id] = { tier, condition: tier === 'broken' ? 0 : MAINTENANCE.startingCondition };
+    }
+  }
+  return fixed;
 }
 
 // Phase 5: initialize per-meter utility counters. Each meter starts at

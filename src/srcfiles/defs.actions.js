@@ -293,6 +293,16 @@ const ACTION_REQUIREMENT_CHECKERS = {
   facilityFunctional: (ctx, facilityId) => {
     if (!isFacilityFunctional(ctx.gameState, facilityId)) {
       const def = FACILITY_DEFS[facilityId];
+      // Renovation overhaul: a mid-job facility reads as unavailable too,
+      // but it deserves its own message — it's coming back, not waiting
+      // to be booked. (An active job only ever runs on a functional+
+      // facility, so the 'broken' line still covers every genuinely
+      // broken case.)
+      const upgrade = ctx.gameState.world.upgrades?.[facilityId];
+      if (upgrade?.activeJobId) {
+        const job = (ctx.gameState.world.renovationJobs || []).find(j => j.id === upgrade.activeJobId && j.status === 'active');
+        if (job) return `${def?.label || 'That'} is under construction — the crew wraps up by day ${job.etaDay}.`;
+      }
       return `${def?.label || 'That'} is broken — repair it via RenoFix.`;
     }
     return true;
@@ -309,6 +319,13 @@ const ACTION_REQUIREMENT_CHECKERS = {
       const def = FACILITY_DEFS[fid];
       if (!def?.gatesActions?.includes(actionId)) continue;
       if (!isFacilityFunctional(ctx.gameState, fid)) {
+        // Same construction-aware variant as facilityFunctional — a room
+        // mid-job is coming back, not broken.
+        const upgrade = ctx.gameState.world.upgrades?.[fid];
+        if (upgrade?.activeJobId) {
+          const job = (ctx.gameState.world.renovationJobs || []).find(j => j.id === upgrade.activeJobId && j.status === 'active');
+          if (job) return `${def.label} is under construction — the crew wraps up by day ${job.etaDay}.`;
+        }
         return `${def.label} is broken — repair it via RenoFix.`;
       }
     }

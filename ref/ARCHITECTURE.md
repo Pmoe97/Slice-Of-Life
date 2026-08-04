@@ -2205,12 +2205,16 @@ gallery/detail/share-row/missing-photo/empty-state all correct; IM bubble
 renders one thumbnail for a shared photo, falls back to text once evicted;
 RenoFix snap buttons render one per actually-displayed facility card.
 
-**Bug found during verification, out of BrineOS scope, flagged separately**
-(not fixed here): `FACILITY_DEFS.bedroom_habitability.room` is `'bedroom'`,
-which matches no real `ROOMS` key (the real ids are `bedroom_player`,
-`bedroom_1/2/3`) — `renderUpgradesDashboard`'s room-grouping silently drops
-it, so 12 facilities are defined but only 11 ever render or are reachable to
-repair/upgrade. Pre-existing, unrelated to the Camera work that surfaced it.
+**Bug found during verification, out of BrineOS scope, flagged separately,**
+**fixed after Phase 8**: `FACILITY_DEFS.bedroom_habitability.room` was
+`'bedroom'`, which matches no real `ROOMS` key (the real ids are
+`bedroom_player`, `bedroom_1/2/3`) — `renderUpgradesDashboard`'s
+room-grouping silently dropped it, so 12 facilities were defined but only 11
+ever rendered or were reachable to repair/upgrade. Design decision: the
+facility is shared by all four bedrooms (one upgrade state), so it belongs
+to the `bedroom` room *type*; `renderUpgradesDashboard` now renders
+type-wide facilities once under a "Bedrooms" section prepended before the
+concrete room sections. All 12 facilities render and are repairable.
 
 **Phase 8 status: complete.**
 

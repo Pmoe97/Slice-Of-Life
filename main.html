@@ -155,6 +155,7 @@ body {
 }
 #header .h-group { display: flex; align-items: center; gap: var(--space-2); }
 #header .h-label { color: var(--color-text-dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.05em; }
+#header .h-label-emoji { font-size: var(--fs-md); text-transform: none; letter-spacing: 0; line-height: 1; }
 #header .h-value { font-size: var(--fs-md); font-weight: 600; }
 #header .h-sep { width: 1px; height: 28px; background: var(--color-border); }
 #header .spacer { flex: 1; }
@@ -275,6 +276,22 @@ body {
   stroke-dasharray: 2,2;
   fill: none;
   pointer-events: none;
+}
+/* Under-construction rooms (renovation overhaul Phase 3) — hazard-stripe
+   fill via the #fp-hazard pattern the renderer emits, warning stroke. */
+.fp-room[data-construction] {
+  fill: url(#fp-hazard);
+  stroke: var(--color-warning);
+  stroke-width: 1.5;
+}
+.fp-construction-label {
+  fill: var(--color-warning);
+  font-size: 5px;
+  font-weight: 700;
+  text-anchor: middle;
+  pointer-events: none;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
 }
 
 /* Player panel */
@@ -908,7 +925,7 @@ body {
   justify-content: center;
   gap: var(--space-2);
   background: var(--color-overlay);
-  z-index: var(--z-sticky);
+  z-index: var(--z-overlay);
 }
 .loading-overlay .loading-text { font-size: var(--fs-sm); color: var(--color-text-dim); }
 .spinner {
@@ -1024,13 +1041,17 @@ body {
 
 /* The phone device (plan 3.2): a phone-shaped panel anchored above the
    FAB. Sibling of #computer-screen, so it's independent of computer power
-   state and floats over a fullscreen desktop (decision E). */
+   state and floats over a fullscreen desktop (decision E). The height is
+   capped against the actual space above the anchor point (--phone-bottom),
+   so on short viewports the top of the screen never clips off-viewport
+   while the bottom stays anchored above the FAB. */
 .phone-device {
+  --phone-bottom: calc(var(--footer-h) + var(--space-4) + 68px);
   position: fixed;
   right: var(--space-4);
-  bottom: calc(var(--footer-h) + var(--space-4) + 68px);
+  bottom: var(--phone-bottom);
   width: min(360px, calc(100vw - 2 * var(--space-4)));
-  height: min(640px, calc(100dvh - var(--header-h) - 32px));
+  height: min(640px, calc(100dvh - var(--phone-bottom) - var(--space-2)));
   display: none;
   flex-direction: column;
   background: var(--color-surface);
@@ -1042,7 +1063,7 @@ body {
   color: var(--color-text);
 }
 #phone-screen[data-open] { display: flex; }
-#app[data-mode="computer"] #phone-screen { bottom: calc(var(--taskbar-h) + var(--space-4) + 68px); }
+#app[data-mode="computer"] #phone-screen { --phone-bottom: calc(var(--taskbar-h) + var(--space-4) + 68px); }
 
 .phone-statusbar {
   display: flex;
@@ -1806,6 +1827,17 @@ body {
 .upg-condition-bar.critical .upg-condition-fill { background: var(--color-negative, #f66d8c); }
 .upg-condition-label { white-space: nowrap; }
 .upg-repair-btn { margin-left: auto; }
+/* Renovation overhaul Phase 3: active-job card (live stage/day/ETA) and
+   the idle book button with its cost/duration/completion-day preview. */
+.upg-facility-card.working { border-color: rgba(224, 160, 64, 0.45); background: rgba(224, 160, 64, 0.04); }
+.upg-job { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: baseline; font-size: var(--fs-xs); }
+.upg-job-stage { font-weight: 700; color: var(--color-warning); text-transform: uppercase; letter-spacing: 0.04em; }
+.upg-job-progress { font-weight: 600; }
+.upg-job-eta { margin-left: auto; }
+.upg-book-btn { font-weight: 600; }
+.upg-book-preview { font-size: var(--fs-xs); white-space: nowrap; }
+.upg-booking-summary { display: grid; gap: 6px; font-size: var(--fs-sm); }
+.upg-booking-summary .dim { font-size: var(--fs-xs); }
 /* Phase 11: investing */
 .invest-hero { background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); margin-bottom: var(--space-2); display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
 .invest-value { font-size: var(--fs-xl); font-weight: 700; }
@@ -1875,10 +1907,10 @@ body {
     <!-- Need bars — also duplicated in the sidebar Player panel; hidden
          on mobile for the same reason as the status group above. -->
     <div class="h-group" id="hdr-needs">
-      <span class="h-label">E</span><div class="need-bar" data-need="energy" title="Energy"><div class="fill" data-fill="100"></div></div>
-      <span class="h-label">H</span><div class="need-bar" data-need="hunger" title="Hunger"><div class="fill" data-fill="100"></div></div>
-      <span class="h-label">G</span><div class="need-bar" data-need="hygiene" title="Hygiene"><div class="fill" data-fill="100"></div></div>
-      <span class="h-label">M</span><div class="need-bar" data-need="mood" title="Mood"><div class="fill" data-fill="100"></div></div>
+      <span class="h-label h-label-emoji">⚡</span><div class="need-bar" data-need="energy" title="Energy"><div class="fill" data-fill="100"></div></div>
+      <span class="h-label h-label-emoji">🍔</span><div class="need-bar" data-need="hunger" title="Hunger"><div class="fill" data-fill="100"></div></div>
+      <span class="h-label h-label-emoji">🚿</span><div class="need-bar" data-need="hygiene" title="Hygiene"><div class="fill" data-fill="100"></div></div>
+      <span class="h-label h-label-emoji">😊</span><div class="need-bar" data-need="mood" title="Mood"><div class="fill" data-fill="100"></div></div>
     </div>
     <div class="h-sep" id="hdr-needs-sep"></div>
     <button class="btn btn-secondary" id="save-btn" data-action="save">Save</button>
@@ -2184,44 +2216,44 @@ body {
      UI.WINDOWMANAGER → BOOT. Functions calling into a LATER script are
      fine either way — those calls only happen at runtime, after every
      script below has finished loading. -->
-<script src="src/srcfiles/config.js?v=12"></script>
-<script src="src/srcfiles/icons.js?v=11"></script>
-<script src="src/srcfiles/defs.world.js?v=7"></script>
-<script src="src/srcfiles/defs.actions.js?v=6"></script>
-<script src="src/srcfiles/defs.computer.js?v=8"></script>
-<script src="src/srcfiles/state.js?v=7"></script>
-<script src="src/srcfiles/sim.js?v=8"></script>
-<script src="src/srcfiles/world.js?v=12"></script>
-<script src="src/srcfiles/items.js?v=5"></script>
-<script src="src/srcfiles/effects.js?v=5"></script>
-<script src="src/srcfiles/drives.js?v=6"></script>
-<script src="src/srcfiles/actions.js?v=5"></script>
-<script src="src/srcfiles/intent.js?v=5"></script>
-<script src="src/srcfiles/skills.js?v=5"></script>
-<script src="src/srcfiles/stealth.js?v=5"></script>
-<script src="src/srcfiles/time.js?v=8"></script>
-<script src="src/srcfiles/computer.js?v=12"></script>
+<script src="src/srcfiles/config.js?v=16"></script>
+<script src="src/srcfiles/icons.js?v=12"></script>
+<script src="src/srcfiles/defs.world.js?v=8"></script>
+<script src="src/srcfiles/defs.actions.js?v=7"></script>
+<script src="src/srcfiles/defs.computer.js?v=9"></script>
+<script src="src/srcfiles/state.js?v=9"></script>
+<script src="src/srcfiles/sim.js?v=11"></script>
+<script src="src/srcfiles/world.js?v=13"></script>
+<script src="src/srcfiles/items.js?v=6"></script>
+<script src="src/srcfiles/effects.js?v=6"></script>
+<script src="src/srcfiles/drives.js?v=7"></script>
+<script src="src/srcfiles/actions.js?v=6"></script>
+<script src="src/srcfiles/intent.js?v=6"></script>
+<script src="src/srcfiles/skills.js?v=6"></script>
+<script src="src/srcfiles/stealth.js?v=6"></script>
+<script src="src/srcfiles/time.js?v=9"></script>
+<script src="src/srcfiles/computer.js?v=15"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
-<script src="src/srcfiles/tracker.js?v=1"></script>
+<script src="src/srcfiles/tracker.js?v=2"></script>
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
-<script src="src/srcfiles/phone.js?v=6"></script>
-<script src="src/srcfiles/npc.js?v=6"></script>
-<script src="src/srcfiles/prompt.js?v=5"></script>
-<script src="src/srcfiles/llm.js?v=5"></script>
-<script src="src/srcfiles/interruption.js?v=6"></script>
-<script src="src/srcfiles/image.js?v=6"></script>
-<script src="src/srcfiles/render.js?v=13"></script>
-<script src="src/srcfiles/render.computer.js?v=12"></script>
-<script src="src/srcfiles/render.desktop.js?v=6"></script>
+<script src="src/srcfiles/phone.js?v=8"></script>
+<script src="src/srcfiles/npc.js?v=7"></script>
+<script src="src/srcfiles/prompt.js?v=6"></script>
+<script src="src/srcfiles/llm.js?v=6"></script>
+<script src="src/srcfiles/interruption.js?v=7"></script>
+<script src="src/srcfiles/image.js?v=7"></script>
+<script src="src/srcfiles/render.js?v=14"></script>
+<script src="src/srcfiles/render.computer.js?v=16"></script>
+<script src="src/srcfiles/render.desktop.js?v=7"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
-<script src="src/srcfiles/render.phone.js?v=6"></script>
-<script src="src/srcfiles/ui.js?v=19"></script>
-<script src="src/srcfiles/ui.computer.js?v=13"></script>
-<script src="src/srcfiles/ui.windowmanager.js?v=6"></script>
+<script src="src/srcfiles/render.phone.js?v=10"></script>
+<script src="src/srcfiles/ui.js?v=23"></script>
+<script src="src/srcfiles/ui.computer.js?v=17"></script>
+<script src="src/srcfiles/ui.windowmanager.js?v=7"></script>
 <!-- BrineOS Phase 3: phone shell orchestration — after ui.computer.js. -->
-<script src="src/srcfiles/ui.phone.js?v=4"></script>
+<script src="src/srcfiles/ui.phone.js?v=6"></script>
 <!-- ===== /SECTION: SCRIPTS ===== -->

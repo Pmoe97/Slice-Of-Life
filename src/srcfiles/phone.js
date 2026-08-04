@@ -118,6 +118,9 @@ function phoneOpenApp(gameState, appId) {
   const def = APP_DEFS[appId];
   if (!def || !(def.devices || []).includes('phone')) return;
   switchScreen(gameState, appId, def.entryScreen, undefined, 'phone');
+  // Contractor tutorial (contractor doc Phase 3): the first RenoFix open
+  // fires the how-to-book hint, phone or computer (idempotent one-shot).
+  if (appId === 'upgrades') fireContractorMilestone(gameState, 'renofixOpened');
 }
 
 // Phase 4: the Tracker's player intents. Mutate world.phone only — the

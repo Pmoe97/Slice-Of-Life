@@ -56,6 +56,15 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick)
     // Block filter
     if (drive.blockFilter && !drive.blockFilter.includes(block)) continue;
 
+    // Renovation overhaul (Phase 2): a drive that targets a facility under
+    // construction (active renovation job) can't fire — the crew is in the
+    // room, so the NPC can't use it, mirroring the player's action gate.
+    // Reuses MAINTENANCE.npcDecayActions as the drive→facility table (the
+    // same ids decayFacilityCondition below decays). A drive with no entry
+    // here has no facility association, so nothing to block (v1 scope).
+    const decayFacilities = MAINTENANCE.npcDecayActions[driveId];
+    if (decayFacilities && decayFacilities.some(fid => !isFacilityFunctional(gameState, fid))) continue;
+
     // Gate check
     if (!checkDriveGates(drive, updatedNpc)) continue;
 
@@ -130,7 +139,6 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick)
     // Phase 9: NPC actions decay facility condition too. A full house
     // degrades facilities faster — the roommate-friction beat. A daily
     // gym user is wearing out equipment everyone paid for.
-    const decayFacilities = MAINTENANCE.npcDecayActions[driveId];
     if (decayFacilities) {
       for (const facilityId of decayFacilities) {
         decayFacilityCondition(gameState, facilityId);

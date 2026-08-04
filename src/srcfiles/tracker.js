@@ -230,6 +230,33 @@ function trackerDeliveries(gs) {
 // Hired services. Visits happen on the service's own cadence (day
 // rollover), so a scheduled visit is informational — capped at
 // futureRecurringMaxUrgency like paid-up bills.
+
+// Active renovation jobs (renovation overhaul Phase 3). One entry per
+// active job; the title's "day N of M" reads as a live construction log
+// that updates day to day and disappears when the job completes at day
+// rollover (status flips to 'complete'). dueDay is the job's ETA, so the
+// urgency ladder treats a due-soon job like a delivery.
+function trackerRenovationJobs(gs) {
+  const day = gs.meta.clock.day;
+  const jobs = gs.world.renovationJobs || [];
+  return jobs.filter(j => j.status === 'active').map(j => {
+    const def = FACILITY_DEFS[j.facilityId];
+    const label = def?.label || j.facilityId;
+    const dayN = Math.max(1, Math.min(j.durationDays, day - j.startDay + 1));
+    const daysUntil = j.etaDay - day;
+    return {
+      key: `reno:${j.id}`,
+      kind: 'reno',
+      urgency: trackerUrgencyFromDaysUntil(daysUntil),
+      title: `${label} — day ${dayN} of ${j.durationDays}`,
+      detail: `${j.jobType === 'upgrade' ? 'Upgrade' : 'Repair'} in progress${daysUntil === 0 ? ' — finishes today' : ` — done ${formatDate(j.etaDay)}`}`,
+      dueDay: j.etaDay,
+      daysUntil,
+      deepLink: { appId: 'upgrades', screenId: 'dashboard', params: {} },
+    };
+  });
+}
+
 function trackerServices(gs) {
   const day = gs.meta.clock.day;
   const hired = gs.world.computer?.apps?.services?.hired || [];
@@ -364,8 +391,8 @@ function trackerTension(gs) {
 function buildTrackerEntries(gs) {
   const adapters = [
     trackerRent, trackerBills, trackerTaxes, trackerGigs, trackerQuests,
-    trackerDeliveries, trackerServices, trackerImUnread, trackerCourses,
-    trackerFacilities, trackerTension,
+    trackerDeliveries, trackerRenovationJobs, trackerServices, trackerImUnread,
+    trackerCourses, trackerFacilities, trackerTension,
   ];
   const out = [];
   for (const fn of adapters) {
