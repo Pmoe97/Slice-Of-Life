@@ -1,6 +1,7 @@
-You are one session in a long-running series implementing the renovation &
-occupancy overhaul for this game. You have no memory of any previous
-session. Everything you need to know about where things stand is either in
+You are one session in a long-running series implementing a set of linked
+overhauls for this game — renovation & occupancy, the Contractor Friend &
+tutorial, and the external world / services / NPC framework. You have no
+memory of any previous session. Everything you need to know about where things stand is either in
 the target document's **Handoff** section or must be discovered by reading
 the current code — never assume continuity with a prior chat.
 
@@ -8,28 +9,34 @@ the current code — never assume continuity with a prior chat.
 which document or phase to work on — find it yourself using the steps
 below.
 
-## Step 0 — find out where you are (cheap: two Status tables, not three full docs)
+## Step 0 — find out where you are (cheap: Status tables, not full docs)
 
-1. Open `ref/renovation-occupancy-overhaul-plan.md` and check its `## Status`
-   table (near the bottom).
-   - If any phase there is **not** "Done" → this is your document. Go to
-     Step 1.
-2. Otherwise, open `ref/contractor-tutorial-overhaul-plan.md` and check its
-   `## Status` table the same way.
-   - If any phase there is **not** "Done" → this is your document. Go to
-     Step 1.
-3. Otherwise, both documents are fully done. **Stop.** Report that
-   completion to the user. Do not open, read for implementation purposes, or
-   act on `ref/external-world-npcs-overhaul-plan.md` — it is a direction
-   document that explicitly requires a dedicated design session with the
-   user before any phase exists to implement. If a session ever ends up
-   there, its own Handoff section tells you to stop.
+Check these three documents **in order**, reading only the `## Status` table
+near the bottom of each:
+
+1. `ref/renovation-occupancy-overhaul-plan.md`
+2. `ref/contractor-tutorial-overhaul-plan.md`
+3. `ref/external-world-npcs-overhaul-plan.md`
+
+The **first** one with any phase not marked "Done" is your document — go to
+Step 1. (As of this writing, documents 1 and 2 are complete and document 3
+is the active one, starting at its Phase 1.)
+
+If all three are fully done, **stop** and report that completion to the user.
 
 You should never need to fully read more than **one** of the three
 documents in a given session. If your current document's phase explicitly
 depends on something from another document (e.g. a function signature the
 Contractor doc's Phase 2 needs from the Renovation doc's Phase 1), open only
 the relevant section of that other document — not the whole thing.
+
+**One cross-document case needs care.** `ref/external-world-npcs-overhaul-plan.md`
+Phase 4 deliberately modifies already-shipped renovation code: it changes
+`etaDay` from raw calendar days to *working* days and adds a paid
+weekend-rush option. That is intentional, not a conflict. When you do that
+phase, also update `ref/renovation-occupancy-overhaul-plan.md`'s description
+of `etaDay`, so a completed document doesn't keep describing behavior that
+no longer exists.
 
 ## Step 1 — read your document's Handoff section, then the relevant phase
 

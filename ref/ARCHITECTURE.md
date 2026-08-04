@@ -13,13 +13,14 @@ rather than here, so they survive across sessions:
 | Plan doc | Covers |
 |---|---|
 | `ref/economy-and-rent-plan.md` | Rent, cost stack, metered utilities, quarterly taxes, investing |
-| `ref/vocation-and-gigs-plan.md` | The freelancer gig board that replaces `JOB_DEFS` |
 | `ref/apartment-upgrades-plan.md` | Disrepair start, facility repair, quality → rent leverage |
-| `ref/sleep-and-alarm-plan.md` | Alarm system, burnout, energy as a levelled stat |
 | `ref/game-opening-plan.md` | The Stardew-like intro and how the player acquires the apartment |
 | `ref/apartment-expansion-plan.md` | The Mirrored H layout (built — kept for the adjacency/room rationale) |
-| `ref/adult-content-overhaul-plan.md` | AfterHours; the API-host-alike redesign is still pending |
-| `ref/BrineOS-The-Phone-plan.md` | The phone ("BrineOS"): Tracker, notifications, banking, app parity, alarm, camera, snooping |
+| `ref/npc-overhaul-plan.md` | NPC bible/personality/memory system (built — kept for design rationale; no summary row below) |
+| `ref/renovation-occupancy-overhaul-plan.md` | Timed staged renovation jobs, per-bedroom facilities (**built** — all 4 phases) |
+| `ref/contractor-tutorial-overhaul-plan.md` | Del Connors, job pricing, the tutorial he anchors (**built** — all 4 phases) |
+| `ref/external-world-npcs-overhaul-plan.md` | External world: visit spine, contacts, maid, food delivery, friends-of-roommates, escorts, move-in advocacy — **planned, not built** (8 phases) |
+| `ref/perchance-agent-handoff-prompt.md` | The one-phase-per-session protocol the implementing agent runs |
 
 > An earlier revision of this file cited `ref/Original Prompt and Response
 > Train.txt`, `ref/Perchance Helper AI - Next Steps.md` and `ref/Perchance
@@ -27,6 +28,21 @@ rather than here, so they survive across sessions:
 > still-relevant content is either in the phase sections below or in the
 > plan docs above. The design brief now lives in this file and those docs,
 > not in a chat transcript.
+>
+> A later cleanup (2026-08-04) deleted `ref/HANDOFF.md`,
+> `ref/vocation-and-gigs-plan.md`, `ref/sleep-and-alarm-plan.md`,
+> `ref/adult-content-overhaul-plan.md`, and `ref/BrineOS-The-Phone-plan.md` —
+> each was fully built with a corresponding row already in the Status table
+> below (Economy 2, Sleep & alarm, AfterHours redesign, and the nine BrineOS
+> Phase rows respectively), so the plan docs had become pure duplication.
+> `ref/HANDOFF.md`'s operational notes (iframe testing technique, load
+> order, hard invariants) are folded into this file already.
+>
+> **The per-phase writeups below still cite those deleted docs on their
+> `**Plan:**` lines.** Those citations are historical — they record which
+> design doc a phase was built from, not a file you can open. The phase
+> writeup itself is now the record. Don't go looking for the file, and
+> don't treat a dangling citation as a missing document.
 
 ## Status
 
