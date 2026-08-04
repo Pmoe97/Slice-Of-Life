@@ -18,9 +18,11 @@ near the bottom of each:
 2. `ref/contractor-tutorial-overhaul-plan.md`
 3. `ref/external-world-npcs-overhaul-plan.md`
 
-The **first** one with any phase not marked "Done" is your document — go to
-Step 1. (As of this writing, documents 1 and 2 are complete and document 3
-is the active one, starting at its Phase 1.)
+The **first** one with any phase not marked "Done" is your document, and the
+first not-Done phase in it is your phase — go to Step 1. Documents 1 and 2
+were complete when this protocol was written, so in practice you will
+usually land in document 3; confirm that from the tables rather than
+assuming it.
 
 If all three are fully done, **stop** and report that completion to the user.
 
