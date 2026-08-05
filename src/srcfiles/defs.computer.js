@@ -165,6 +165,24 @@ const APP_DEFS = {
       dashboard: { label: 'Apartment', renderer: 'upgrades-dashboard' },
     },
   },
+  // "DoorDrop" — the food-delivery app (external-world plan Phase 5). Pick a
+  // restaurant, fill a cart, choose when you want it, then watch a real
+  // driver's ETA count down. Unlike Nile (next-day, materialises on the
+  // doormat), the food arrives with a person: the order schedules a
+  // purpose:'delivery' visit at the entry, and the handover happens when
+  // they get there — see placeFoodOrder (COMPUTER) and processFoodOrdersNow
+  // (UI).
+  food: {
+    id: 'food', label: 'DoorDrop', category: 'food', requires: [],
+    devices: ['computer', 'phone'],
+    entryScreen: 'browse',
+    screens: {
+      browse: { label: 'Restaurants', renderer: 'doordrop-browse' },
+      menu: { label: 'Menu', renderer: 'doordrop-menu', hideFromNav: true },
+      cart: { label: 'Cart', renderer: 'doordrop-cart' },
+      orders: { label: 'Orders', renderer: 'doordrop-orders' },
+    },
+  },
   // Phase 11 investing now lives inside Brine Bank as its Portfolia screen
   // (see the bank app above); the holdings data stayed in computer.apps
   // .invest so invest-dashboard and the invest handlers work unmodified.
@@ -399,6 +417,82 @@ const MAID_ADDONS = {
 };
 const MAID_ADDONS_LIST = Object.values(MAID_ADDONS);
 const SERVICE_DEFS_LIST = Object.values(SERVICE_DEFS);
+
+// --- Restaurants: what DoorDrop delivers (external-world plan Phase 5) ---
+// `menu` entries are { itemId, price }: the DISH is a real ITEM_DEFS entry
+// (defs.world.js) but its PRICE lives here, per restaurant, deliberately —
+// a `price` on the item def would enrol takeout in Nile's catalog, which
+// builds itself from every priced item (SHOP_CATALOG_LIST). This is the one
+// place the plan's sketched `menu: [itemIds]` had to grow a field.
+//
+// `prepMinutes` is the kitchen's own turnaround, added to travel time
+// (FOOD_TUNING) to produce the ETA. `hours` is [openTick, closeTick] in the
+// same 0-47 half-hour ticks everything else uses — a closed kitchen refuses
+// the order rather than quietly delivering at 4am.
+const RESTAURANT_DEFS = {
+  golden_wok: {
+    id: 'golden_wok', label: 'Golden Wok', cuisine: 'Chinese',
+    blurb: 'Takeout cartons, chili oil, and a wok that has never once been off the heat.',
+    deliveryFeeBase: 3, prepMinutes: 20, hours: [22, 44],
+    menu: [
+      { itemId: 'dish_kung_pao', price: 14 },
+      { itemId: 'dish_chow_mein', price: 13 },
+      { itemId: 'dish_dumplings', price: 9 },
+      { itemId: 'dish_egg_rolls', price: 6 },
+    ],
+  },
+  sals_pizzeria: {
+    id: 'sals_pizzeria', label: "Sal's Pizzeria", cuisine: 'Italian',
+    blurb: 'A whole pie in a box that barely fits through the door. Sal does not do half-portions.',
+    deliveryFeeBase: 4, prepMinutes: 30, hours: [22, 46],
+    menu: [
+      { itemId: 'dish_pepperoni_pizza', price: 19 },
+      { itemId: 'dish_calzone', price: 15 },
+      { itemId: 'dish_garlic_knots', price: 7 },
+    ],
+  },
+  big_bite: {
+    id: 'big_bite', label: 'Big Bite Burgers', cuisine: 'American',
+    blurb: 'Fast, greasy, open late. The fries arrive lukewarm and nobody has ever complained.',
+    deliveryFeeBase: 3, prepMinutes: 15, hours: [20, 47],
+    menu: [
+      { itemId: 'dish_double_burger', price: 15 },
+      { itemId: 'dish_fries', price: 6 },
+      { itemId: 'dish_milkshake', price: 7 },
+    ],
+  },
+  kaisen_sushi: {
+    id: 'kaisen_sushi', label: 'Kaisen Sushi', cuisine: 'Japanese',
+    blurb: 'The expensive one. Everything comes in a lacquered box and travels badly.',
+    deliveryFeeBase: 6, prepMinutes: 35, hours: [23, 43],
+    menu: [
+      { itemId: 'dish_salmon_roll', price: 24 },
+      { itemId: 'dish_tempura_udon', price: 18 },
+      { itemId: 'dish_miso_soup', price: 5 },
+    ],
+  },
+  el_camino: {
+    id: 'el_camino', label: 'El Camino Taqueria', cuisine: 'Mexican',
+    blurb: 'Foil-wrapped, cheap, and enormous. The salsa comes in a container that always leaks.',
+    deliveryFeeBase: 3, prepMinutes: 18, hours: [21, 46],
+    menu: [
+      { itemId: 'dish_al_pastor', price: 12 },
+      { itemId: 'dish_burrito', price: 14 },
+      { itemId: 'dish_chips_guac', price: 8 },
+    ],
+  },
+  bangkok_house: {
+    id: 'bangkok_house', label: 'Bangkok House', cuisine: 'Thai',
+    blurb: 'Asks how spicy you want it and then ignores the answer.',
+    deliveryFeeBase: 4, prepMinutes: 25, hours: [22, 44],
+    menu: [
+      { itemId: 'dish_pad_thai', price: 15 },
+      { itemId: 'dish_green_curry', price: 16 },
+      { itemId: 'dish_spring_rolls', price: 7 },
+    ],
+  },
+};
+const RESTAURANT_DEFS_LIST = Object.values(RESTAURANT_DEFS);
 
 // --- Shows: free to watch, cost time, lift mood. ---
 const STREAM_DEFS = {

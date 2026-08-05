@@ -420,15 +420,139 @@ function scheduleContractorVisitsForJob(gameState, job) {
   }
 }
 
+// --- Friends of roommates (external-world plan Phase 6) ---
+// Each resident gets a deterministic circle of 2-4 friend stubs the first time
+// anything asks. Called at day rollover rather than wired into every NPC
+// creation path, so a roommate who moves in through Classifieds on day 40
+// grows a circle exactly like the founding cast did — and saves written before
+// this phase pick one up without a migration.
+function ensureSocialCircles(gameState) {
+  for (const [npcId, npc] of Object.entries(gameState.npcs)) {
+    if (!npc || npc.residency?.status !== 'resident') continue;
+    if (npc.socialCircle && npc.socialCircle.length > 0) continue;
+    // Same raw-vs-wrapped tolerance as generateFriendStub: this also runs on
+    // the freshly generated state at new-game write time.
+    const rng = seededRng(gameState.meta?.seed ?? gameState.seed, `circle_${npcId}`);
+    const size = FRIEND_TUNING.circleMin
+      + Math.floor(rng() * (FRIEND_TUNING.circleMax - FRIEND_TUNING.circleMin + 1));
+    const circle = [];
+    for (let i = 0; i < size; i++) {
+      circle.push(generateFriendStub(gameState, npcId, i).stubId);
+    }
+    npc.socialCircle = circle;
+  }
+}
+
+// How likely this resident is to have someone over today. Warmth and openness
+// are the whole model (locked decision 13) — a household's social life is a
+// property of who lives in it, not a global rate.
+function friendHostChance(npc) {
+  const t = npc.bible?.temperament || {};
+  const raw = FRIEND_TUNING.baseHostChance
+    + FRIEND_TUNING.warmthWeight * (t.warmth || 0)
+    + FRIEND_TUNING.opennessWeight * (t.openness || 0);
+  return Math.max(FRIEND_TUNING.minHostChance, Math.min(FRIEND_TUNING.maxHostChance, raw));
+}
+
+// How many separate people are already booked to be here today. Used for the
+// soft cap: organic visits stand down when the place is already busy, paid and
+// scheduled ones never do (locked decision 6).
+function countVisitorsForDay(gameState, day) {
+  const ids = new Set();
+  for (const v of gameState.world.visits || []) {
+    if (v.day !== day) continue;
+    if (v.status === 'done' || v.status === 'deferred') continue;
+    ids.add(v.npcId);
+  }
+  return ids.size;
+}
+
+// Plan today's organic visits: one roll per resident, and a hit promotes the
+// chosen friend to a full NPC BEFORE scheduling the visit, so generation is
+// never in the way of an arrival. Pure planning — returns what happened and
+// leaves narration to the caller (UI), the same split resolveTick/events uses.
+function planFriendVisitsForDay(gameState, day) {
+  const results = [];
+  ensureSocialCircles(gameState);
+  const residentIds = Object.keys(gameState.npcs)
+    .filter(id => gameState.npcs[id]?.residency?.status === 'resident');
+
+  for (const hostId of residentIds) {
+    const host = gameState.npcs[hostId];
+    const rng = seededRng(gameState.meta.seed, `hosting_${hostId}_${day}`);
+    if (rng() >= friendHostChance(host)) continue;
+
+    // Pick from the friends who aren't inside their own cooldown.
+    const candidates = (host.socialCircle || [])
+      .map(sid => gameState.world.externalStubs?.[sid])
+      .filter(s => s && (s.lastVisitDay == null || day - s.lastVisitDay >= FRIEND_TUNING.perFriendCooldownDays));
+    if (candidates.length === 0) continue;
+    const stub = candidates[Math.floor(rng() * candidates.length)];
+
+    const startTick = FRIEND_TUNING.startTickMin
+      + Math.floor(rng() * (FRIEND_TUNING.startTickMax - FRIEND_TUNING.startTickMin + 1));
+    const duration = FRIEND_TUNING.durationTicksMin
+      + Math.floor(rng() * (FRIEND_TUNING.durationTicksMax - FRIEND_TUNING.durationTicksMin + 1));
+
+    // Soft cap: check BEFORE promoting, so a deferred visit costs nothing.
+    const deferred = countVisitorsForDay(gameState, day) >= VISIT_TUNING.softCap;
+    const promoted = deferred ? null : promoteFriendStub(gameState, stub.stubId);
+    if (!deferred && !promoted?.ok) continue;
+
+    const visit = scheduleVisit(gameState, `friend_${stub.stubId}_${day}`, day, {
+      npcId: deferred ? null : promoted.npcId,
+      purpose: 'social',
+      startTick,
+      endTick: Math.min(48, startTick + duration),
+      roomId: 'living_room',
+      hostNpcId: hostId,
+    });
+    if (deferred) {
+      // A real record with the plan's own 'deferred' status rather than a
+      // silent skip — getActiveVisits ignores it, and it leaves a trace of a
+      // night the house was too busy for one more guest.
+      visit.status = 'deferred';
+      results.push({ deferred: true, hostId, stubId: stub.stubId, day });
+      continue;
+    }
+    stub.lastVisitDay = day;
+    results.push({
+      deferred: false, hostId, stubId: stub.stubId, day,
+      npcId: promoted.npcId,
+      guestName: gameState.npcs[promoted.npcId]?.bible?.name || stub.name,
+      hostName: host.bible?.name || 'Someone',
+      startTick,
+    });
+  }
+  return results;
+}
+
 // Purpose-driven presence for a visitor inside their active visit window.
 // location comes from the visit (the contractor sits in his job's room; a
 // future maid will rotate her cleaning scope, a social guest will use
 // ACTIVITY_ROOM_PREFERENCES — see the plan's Phase 3/6 sections); activity
 // is drawn from a purpose-specific pool.
-function resolveVisitPresence(npcId, gameState, activeVisits, rng) {
+function resolveVisitPresence(npcId, gameState, activeVisits, rng, resolved) {
   const visit = activeVisits.find(v => v.npcId === npcId);
   const pool = (visit && VISIT_TUNING.activities[visit.purpose]) || VISIT_TUNING.activities.default;
   const activity = pool[Math.floor(rng() * pool.length)];
+  // A roommate's friend (Phase 6) is here to see their HOST, so they follow
+  // them around the common areas rather than sitting in one room all evening.
+  // `resolved` is this tick's in-progress resolution map — residents come
+  // first in the active index, so the host's location for THIS tick is
+  // already in there; npc.location would be a tick stale. If the host is
+  // off-screen (at work) or shut in a bedroom, the guest waits in the room
+  // the visit was booked into.
+  if (visit && visit.purpose === 'social' && visit.hostNpcId) {
+    const hostLoc = resolved?.[visit.hostNpcId]?.location ?? gameState.npcs[visit.hostNpcId]?.location;
+    const followable = hostLoc && ROOMS[hostLoc]?.type === 'common';
+    return {
+      block: 'leisure',
+      location: followable ? hostLoc : visit.roomId,
+      activity,
+      transit: null,
+    };
+  }
   // The maid (Phase 3) works her way through the apartment rather than
   // standing in one room all day: her location walks her cleaning scope,
   // one room per tick elapsed. Scope matches what the contract pays for —
@@ -660,7 +784,7 @@ function resolveTick(gameState) {
     // of the old unconditional 'visitor' skip: an external WITH an active
     // visit resolves; one without is simply absent from the active index.
     if (visitingIds.has(id)) {
-      resolved[id] = resolveVisitPresence(id, gameState, activeVisits, rng);
+      resolved[id] = resolveVisitPresence(id, gameState, activeVisits, rng, resolved);
       continue;
     }
     if (npc.residency.status !== 'resident') continue;
@@ -1909,6 +2033,17 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
       // lands here and nothing else. getActiveVisits (SIM) is the only
       // reader; statuses are scheduled → done (see processVisitsForDay).
       visits: [],
+      // Food delivery (external-world plan Phase 5): placed DoorDrop orders,
+      // one record per order, resolved intra-day by processFoodOrdersNow (UI)
+      // when the driver's visit window opens. World state rather than app
+      // state because the driver and the handover outlive the app session.
+      foodOrders: [],
+      // Friends of roommates (external-world plan Phase 6): cheap
+      // deterministic stubs for every resident's social circle, keyed by
+      // stubId. A stub becomes a real NPC only when a visit is planned
+      // (promoteFriendStub) — new-game generation never pays for the whole
+      // extended cast. See ensureSocialCircles.
+      externalStubs: {},
       // Contractor tutorial (contractor doc Phase 3): one-shot tutorial /
       // milestone flags (tutorialRenoUsed, tutorial_<milestoneId>) — see
       // ref/contractor-tutorial-overhaul-plan.md.
@@ -2137,6 +2272,11 @@ function createNpcFromBible(bible, residencyStatus) {
     // NPC round-trips through validateCharacter with the field present.
     // Del is flipped true at new-game setup; everyone else earns it.
     contactKnown: false,
+    // Friends of roommates (external-world plan Phase 6): stubIds of this
+    // character's own circle, filled by ensureSocialCircles once they're a
+    // resident. Externals keep an empty circle — a delivery driver's friends
+    // are not the household's business.
+    socialCircle: [],
     // P6: suspicion[subject] (0..1). Additive default, same precedent as
     // player.skills (SKILLS) — every read/write guards with `|| {}`, so no
     // FOLDER_VERSIONS migration is needed for existing saves.

@@ -40,6 +40,10 @@ const COMPUTER_RENDERERS = {
   'roomlist-queue': renderRoomListQueue,
   'roomlist-studio': renderRoomListStudio,
   'roomlist-assign': renderRoomListAssign,
+  'doordrop-browse': renderDoorDropBrowse,
+  'doordrop-menu': renderDoorDropMenu,
+  'doordrop-cart': renderDoorDropCart,
+  'doordrop-orders': renderDoorDropOrders,
   messenger: renderMessages,
   'bank-overview': renderBankOverview,
   'bills-dashboard': renderBillsDashboard,
@@ -1192,6 +1196,196 @@ function renderHomeCareHired(body, gs, app, screen) {
     btn.textContent = 'Cancel';
     row.appendChild(btn);
     body.appendChild(row);
+  }
+}
+
+// --- DoorDrop: food delivery (external-world plan Phase 5) ---
+// Four screens in the shape of every delivery app the player has ever used:
+// restaurants → a menu → a cart with the fee stack spelled out → orders with
+// a live ETA. The fees are itemised deliberately: "ordering in is expensive"
+// only lands as a decision if you can see what you're paying for.
+function renderDoorDropBrowse(body, gs, app, screen) {
+  const nowTick = getTickIndex(gs.meta.clock.minutes);
+  const cartId = getFoodCartRestaurantId(gs);
+  const grid = document.createElement('div');
+  grid.className = 'dd-grid';
+  for (const def of RESTAURANT_DEFS_LIST) {
+    const open = isRestaurantOpen(def, nowTick);
+    const card = document.createElement('div');
+    card.className = `dd-card${open ? '' : ' dd-closed'}`;
+    card.innerHTML = `
+      <div class="dd-card-head">
+        <span class="hc-card-title">${def.label}</span>
+        <span class="dim tiny">${def.cuisine}</span>
+      </div>
+      <div class="dim tiny">${def.blurb}</div>
+      <div class="dim tiny">~${def.prepMinutes} min prep — $${def.deliveryFeeBase} delivery — ${formatTime(def.hours[0] * 30)}–${formatTime(def.hours[1] * 30)}</div>
+    `;
+    if (!open) {
+      card.innerHTML += '<div class="cs-status-pill">Closed</div>';
+    } else {
+      const btn = document.createElement('button');
+      btn.className = 'btn tiny';
+      btn.setAttribute('data-action', 'food.open-restaurant');
+      btn.setAttribute('data-row-id', def.id);
+      btn.textContent = cartId === def.id ? 'Back to Menu' : 'View Menu';
+      card.appendChild(btn);
+    }
+    grid.appendChild(card);
+  }
+  body.appendChild(grid);
+}
+
+function renderDoorDropMenu(body, gs, app, screen) {
+  const foodApp = gs.world.computer.apps.food;
+  const def = RESTAURANT_DEFS[foodApp?.openRestaurantId];
+  if (!def) { body.innerHTML = '<p class="dim tiny">Pick a restaurant first.</p>'; return; }
+  const cart = foodApp.cart || [];
+
+  const head = document.createElement('div');
+  head.className = 'dd-menu-head';
+  head.innerHTML = `<div class="hc-card-title">${def.label}</div><div class="dim tiny">${def.cuisine} — ${def.blurb}</div>`;
+  body.appendChild(head);
+
+  for (const entry of def.menu) {
+    const item = ITEM_DEFS[entry.itemId];
+    if (!item) continue;
+    const inCart = cart.find(c => c.itemId === entry.itemId);
+    const row = document.createElement('div');
+    row.className = 'dd-menu-row';
+    const hunger = item.consumable?.hunger || 0;
+    row.innerHTML = `
+      <div>
+        <div class="dd-dish">${item.label}${inCart ? ` <span class="dim tiny">×${inCart.qty} in cart</span>` : ''}</div>
+        <div class="dim tiny">$${entry.price} — restores ${hunger} hunger</div>
+      </div>
+    `;
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny';
+    btn.setAttribute('data-action', 'food.add-to-cart');
+    btn.setAttribute('data-row-id', entry.itemId);
+    btn.textContent = 'Add';
+    row.appendChild(btn);
+    body.appendChild(row);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'dd-actions';
+  const toCart = document.createElement('button');
+  toCart.className = 'btn tiny';
+  toCart.setAttribute('data-action', 'computer.open-screen');
+  toCart.setAttribute('data-app', 'food');
+  toCart.setAttribute('data-screen', 'cart');
+  toCart.textContent = `View Cart (${cart.reduce((n, c) => n + c.qty, 0)})`;
+  actions.appendChild(toCart);
+  body.appendChild(actions);
+}
+
+function renderDoorDropCart(body, gs, app, screen) {
+  const foodApp = gs.world.computer.apps.food;
+  const cart = foodApp?.cart || [];
+  if (cart.length === 0) { body.innerHTML = '<p class="dim tiny">Your cart is empty.</p>'; return; }
+  const restaurantId = getFoodCartRestaurantId(gs);
+  const def = RESTAURANT_DEFS[restaurantId];
+  const totals = getFoodOrderTotals(gs);
+
+  const head = document.createElement('div');
+  head.className = 'dd-menu-head';
+  head.innerHTML = `<div class="hc-card-title">${def?.label || 'Order'}</div>`;
+  body.appendChild(head);
+
+  for (const line of cart) {
+    const item = ITEM_DEFS[line.itemId];
+    const price = foodMenuEntry(line.restaurantId, line.itemId)?.price || 0;
+    const row = document.createElement('div');
+    row.className = 'dd-menu-row';
+    row.innerHTML = `<div><div class="dd-dish">${item?.label || line.itemId} × ${line.qty}</div><div class="dim tiny">$${price * line.qty}</div></div>`;
+    const minus = document.createElement('button');
+    minus.className = 'btn tiny btn-secondary';
+    minus.setAttribute('data-action', 'food.remove-from-cart');
+    minus.setAttribute('data-row-id', line.itemId);
+    minus.textContent = '−';
+    row.appendChild(minus);
+    body.appendChild(row);
+  }
+
+  // Delivery time. The earliest option is the kitchen's prep plus travel —
+  // the same number placeFoodOrder will use, since both are seeded on the
+  // day and the order count (see getFoodEarliestArrivalTick).
+  const seq = (gs.world.foodOrders || []).length;
+  const earliest = getFoodEarliestArrivalTick(gs, restaurantId, seq);
+  const timeWrap = document.createElement('div');
+  timeWrap.className = 'dd-time';
+  let opts = `<option value="${earliest}">ASAP — ${formatTime(earliest * 30)}</option>`;
+  for (let t = earliest + 1; t <= Math.min(47, earliest + FOOD_TUNING.maxScheduleAheadTicks); t++) {
+    opts += `<option value="${t}">${formatTime(t * 30)}</option>`;
+  }
+  timeWrap.innerHTML = `<label class="dim tiny">Deliver at</label> <select id="food-time">${opts}</select>`;
+  body.appendChild(timeWrap);
+
+  const tipWrap = document.createElement('div');
+  tipWrap.className = 'dd-tips';
+  tipWrap.innerHTML = '<span class="dim tiny">Tip</span>';
+  for (const pct of FOOD_TUNING.tipOptions) {
+    const btn = document.createElement('button');
+    btn.className = `btn tiny${pct === totals.tipPct ? '' : ' btn-secondary'}`;
+    btn.setAttribute('data-action', 'food.set-tip');
+    btn.setAttribute('data-amount', String(Math.round(pct * 100)));
+    btn.textContent = pct === 0 ? 'None' : `${Math.round(pct * 100)}%`;
+    tipWrap.appendChild(btn);
+  }
+  body.appendChild(tipWrap);
+
+  const summary = document.createElement('div');
+  summary.className = 'dd-summary';
+  summary.innerHTML = `
+    <div><span>Subtotal</span><span>$${totals.subtotal}</span></div>
+    <div><span>Delivery</span><span>$${totals.deliveryFee}</span></div>
+    <div><span>Service fee</span><span>$${totals.serviceFee}</span></div>
+    <div><span>Tip</span><span>$${totals.tip}</span></div>
+    <div class="dd-total"><span>Total</span><span>$${totals.total}</span></div>
+  `;
+  body.appendChild(summary);
+
+  const actions = document.createElement('div');
+  actions.className = 'dd-actions';
+  const place = document.createElement('button');
+  place.className = 'btn tiny';
+  place.setAttribute('data-action', 'food.place-order');
+  place.textContent = `Place Order — $${totals.total}`;
+  actions.appendChild(place);
+  const clear = document.createElement('button');
+  clear.className = 'btn tiny btn-secondary';
+  clear.setAttribute('data-action', 'food.clear-cart');
+  clear.textContent = 'Clear Cart';
+  actions.appendChild(clear);
+  body.appendChild(actions);
+}
+
+function renderDoorDropOrders(body, gs, app, screen) {
+  const orders = [...(gs.world.foodOrders || [])].reverse();
+  if (orders.length === 0) { body.innerHTML = '<p class="dim tiny">No orders yet.</p>'; return; }
+  for (const order of orders.slice(0, 10)) {
+    const def = RESTAURANT_DEFS[order.restaurantId];
+    const driver = gs.npcs[order.driverNpcId];
+    const eta = getFoodOrderEtaMinutes(order, gs.meta.clock);
+    const lines = order.items.map(i => `${ITEM_DEFS[i.itemId]?.label || i.itemId}${i.qty > 1 ? ` ×${i.qty}` : ''}`).join(', ');
+    const card = document.createElement('div');
+    card.className = 'dd-order';
+    // The ETA is the app's live surface: a placed order is a thing you sit
+    // and wait for, so it counts down rather than just saying "ordered".
+    const status = order.status === 'delivered'
+      ? `<span class="cs-status-pill done">Delivered${order.handedTo === 'doormat' ? ' — left at the door' : ''}</span>`
+      : eta > 0
+        ? `<span class="cs-status-pill active">${eta} min away — arriving ${formatTime(order.arrivalTick * 30)}</span>`
+        : '<span class="cs-status-pill active">At your door</span>';
+    card.innerHTML = `
+      <div class="dd-card-head"><span class="hc-card-title">${def?.label || order.restaurantId}</span><span class="dim tiny">$${order.total}</span></div>
+      <div class="dim tiny">${lines}</div>
+      <div class="dim tiny">Driver: ${driver?.bible?.name || 'assigned'}${order.tip ? ` — $${order.tip} tip` : ' — no tip'}</div>
+      ${status}
+    `;
+    body.appendChild(card);
   }
 }
 

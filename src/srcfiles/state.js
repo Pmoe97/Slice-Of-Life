@@ -426,6 +426,13 @@ async function saveAtBoundary(reason, gameState) {
     // state like any other — visitors' presence windows must survive a
     // reload mid-visit so Del doesn't vanish from the site mid-shift.
     queueWrite('world', 'visits', gameState.world.visits || []);
+    // Food delivery (external-world plan Phase 5): an order in flight has
+    // real money in it — it must survive a reload as reliably as the
+    // driver's visit does.
+    queueWrite('world', 'foodOrders', gameState.world.foodOrders || []);
+    // Friends of roommates (external-world plan Phase 6): the stub table is
+    // the only record of who a resident's friends ARE until one is promoted.
+    queueWrite('world', 'externalStubs', gameState.world.externalStubs || {});
     // Contractor tutorial (contractor doc Phase 3): one-shot tutorial/milestone flags.
     queueWrite('world', 'flags', gameState.world.flags || {});
     queueWrite('world', 'quests', gameState.world.quests);
@@ -708,6 +715,14 @@ async function loadGameState() {
   // existed — an in-flight job on such a save gets its crew visits via
   // processVisitsForDay's rollover backstop, no migration needed.
   const visits = await getWorld('visits') || [];
+  // Food delivery (external-world plan Phase 5): placed DoorDrop orders.
+  // Empty for saves written before food existed; an order in flight survives
+  // a reload because its driver's visit is in `visits` alongside it.
+  const foodOrders = await getWorld('foodOrders') || [];
+  // Friends of roommates (external-world plan Phase 6): the friend-stub table.
+  // Empty for saves written before Phase 6 — ensureSocialCircles refills it at
+  // the next day rollover, so no migration is needed.
+  const externalStubs = await getWorld('externalStubs') || {};
   // Contractor tutorial (contractor doc Phase 3): one-shot tutorial/milestone flags.
   const flags = await getWorld('flags') || {};
   // BrineOS Phase 2: phone shell nav state (Phase 3). Presence is derived
@@ -726,7 +741,7 @@ async function loadGameState() {
     npcIds: Object.keys(npcs).filter(id => id.startsWith('npc_')),
     // droppedConstraints is persisted in meta by writeGeneratedGameState.
     droppedConstraints: meta.droppedConstraints || [],
-    world: { rooms, castWeb, quests, events, deliveries, renovationJobs, visits, rent, computer, taxes, bills, upgrades, utilities, phone, flags },
+    world: { rooms, castWeb, quests, events, deliveries, renovationJobs, visits, foodOrders, externalStubs, rent, computer, taxes, bills, upgrades, utilities, phone, flags },
   };
   // Lazily spawns any bucket missing from kv (a pre-WORLD save, or a
   // resident who moved in since the last full write) rather than needing a
@@ -755,6 +770,12 @@ async function newGameState(seed, residentCount, partials) {
 async function writeGeneratedGameState(gameState) {
   await initStorage();
 
+  // Friends of roommates (external-world plan Phase 6): give the founding
+  // cast their social circles before the first write, so a brand-new game
+  // ships with them rather than growing them at the first day rollover (the
+  // rollover call stays, as the backstop for later move-ins and old saves).
+  ensureSocialCircles(gameState);
+
   await setMeta({
     versions: { ...FOLDER_VERSIONS },
     seed: gameState.seed,
@@ -778,6 +799,8 @@ async function writeGeneratedGameState(gameState) {
   await root.kv.world.set('deliveries', gameState.world.deliveries);
   await root.kv.world.set('renovationJobs', gameState.world.renovationJobs || []);
   await root.kv.world.set('visits', gameState.world.visits || []);
+  await root.kv.world.set('foodOrders', gameState.world.foodOrders || []);
+  await root.kv.world.set('externalStubs', gameState.world.externalStubs || {});
   await root.kv.world.set('flags', gameState.world.flags || {});
   await root.kv.world.set('rent', gameState.world.rent);
   await root.kv.world.set('computer', gameState.world.computer || defaultComputerState());

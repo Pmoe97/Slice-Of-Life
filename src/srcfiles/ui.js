@@ -101,6 +101,11 @@ async function advanceAndResolve(ticks, opts = {}) {
   // Fires when a need hits 0 — real mechanical effects, not just a red bar.
   processNeedConsequences();
 
+  // Food delivery (external-world plan Phase 5): a driver arrives at a TICK,
+  // not at day rollover, so the handover is checked on every clock advance —
+  // discrete actions and the continuous loop's sim checkpoints both land here.
+  processFoodOrdersNow();
+
   // Day-rollover economy: rent due/overdue, delivery arrivals, quest
   // generation/expiry. Runs once per calendar day crossed (a single
   // advanceAndResolve call can span at most one day boundary today given
@@ -154,6 +159,12 @@ async function processDayRollover(day) {
   // processVisitsForDay so today's fresh visit isn't swept by the retirement
   // pass in the same rollover.
   processMaidForDay(day);
+  // Friends of roommates (external-world plan Phase 6): roll each resident's
+  // hosting chance for today. AFTER the maid and the contractor backstop so
+  // the soft cap counts today's paid, already-committed visitors first —
+  // organic visits are the ones that stand down when the place is busy, never
+  // the other way round (locked decision 6).
+  processFriendVisitsForDay(day);
   // Contractor tutorial (contractor doc Phase 3): one-shot quality-milestone hint once apartment quality crosses the threshold.
   maybeFireContractorQualityMilestone();
   processQuestsForDay(day);
@@ -702,6 +713,152 @@ function processMaidForDay(day) {
   if (r.laundrySteps) bits.push(`laundry ${r.laundrySteps === 1 ? 'a load' : `${r.laundrySteps} loads`} down`);
   if (r.mealsCooked) bits.push(`${r.mealsCooked} meals in the fridge`);
   addLogEntry('narration', bits.join(', ') + '.');
+}
+
+// Friends of roommates (external-world plan Phase 6): the day-rollover half
+// of the household's own social life. SIM's planFriendVisitsForDay does the
+// deciding (who hosts, who they invite, whether the soft cap defers it) and
+// returns records; this narrates them, the same split resolveTick/events uses
+// everywhere else. The player finds out the way you find out in a shared
+// apartment — someone mentions it.
+function processFriendVisitsForDay(day) {
+  if (!currentGameState) return;
+  const planned = planFriendVisitsForDay(currentGameState, day);
+  for (const p of planned) {
+    if (p.deferred) {
+      const host = currentGameState.npcs[p.hostId]?.bible?.name || 'Someone';
+      addLogEntry('narration', `${host} thought about having someone over, then looked at how many people are already in and out today and left it.`);
+      continue;
+    }
+    addLogEntry('narration', `${p.hostName} mentions that their friend ${p.guestName} is coming by around ${formatTime(p.startTick * 30)}.`);
+  }
+}
+
+// --- Food delivery: DoorDrop (external-world plan Phase 5) ---
+// The handover, and the handlers behind the app's buttons. Unlike a Nile
+// package (which materialises on the doormat at day rollover), food arrives
+// with a person at a specific TICK, so this is driven from advanceAndResolve
+// rather than processDayRollover — every path that moves the clock goes
+// through there, including the continuous loop's sim checkpoints.
+function processFoodOrdersNow() {
+  if (!currentGameState?.world) return;
+  const orders = currentGameState.world.foodOrders || [];
+  if (orders.length === 0) return;
+  const { day, minutes } = currentGameState.meta.clock;
+  const tick = getTickIndex(minutes);
+  for (const order of orders) {
+    if (order.status !== 'ordered') continue;
+    if (day < order.day) continue;
+    if (day === order.day && tick < order.arrivalTick) continue;
+    handOverFoodOrder(order, day);
+  }
+}
+
+// The driver is at the door. If the player is there to meet them the bag
+// goes straight into their hands; if not, it's left on the doormat — the
+// booking is never wasted for lack of the player's attendance (locked
+// decision 3), it just gets colder and anyone in the apartment could reach
+// it first, exactly like a Nile package.
+function handOverFoodOrder(order, day) {
+  order.status = 'delivered';
+  order.deliveredDay = day;
+  const driver = currentGameState.npcs[order.driverNpcId];
+  const name = driver?.bible?.name || 'The driver';
+  const def = RESTAURANT_DEFS[order.restaurantId];
+  const toPlayer = currentGameState.player.location === 'entry';
+  order.handedTo = toPlayer ? 'player' : 'doormat';
+
+  const doormat = Object.values(currentGameState.objects?.room_entry || {}).find(o => o.defId === 'doormat');
+  for (const line of order.items) {
+    if (!ITEM_DEFS[line.itemId]) continue;
+    if (toPlayer) {
+      currentGameState.player.inventory = addStack(currentGameState.player.inventory, line.itemId, line.qty, 'player', {});
+    } else if (doormat) {
+      doormat.contents = addStack(doormat.contents, line.itemId, line.qty, null, {});
+    }
+  }
+
+  // The tip is remembered by the person who carried it up the stairs — a
+  // driver you tip well starts out warmer next time they're the one assigned.
+  if (driver) {
+    const delta = (order.tipPct || 0) >= FOOD_TUNING.tipRelThreshold
+      ? FOOD_TUNING.tipRelDelta
+      : (order.tipPct || 0) === 0 ? FOOD_TUNING.stiffRelDelta : null;
+    if (delta) currentGameState.npcs[order.driverNpcId] = applyRelDelta(driver, delta, day);
+  }
+
+  const lines = order.items.map(i => `${ITEM_DEFS[i.itemId]?.label || i.itemId}${i.qty > 1 ? ` ×${i.qty}` : ''}`).join(', ');
+  addLogEntry('narration', toPlayer
+    ? `${name} hands over the ${def?.label || 'delivery'} order at the door — ${lines}.`
+    : `${name} dropped off the ${def?.label || 'delivery'} order — ${lines}, left on the doormat.`);
+}
+
+function doFoodOpenRestaurant(restaurantId, device) {
+  if (!restaurantId || !currentGameState) return;
+  const foodApp = currentGameState.world.computer?.apps?.food;
+  if (!foodApp) return;
+  foodApp.openRestaurantId = restaurantId;
+  switchScreen(currentGameState, 'food', 'menu', undefined, device === 'phone' ? 'phone' : 'computer');
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+}
+
+async function doFoodAddToCart(itemId) {
+  if (!itemId || !currentGameState) return;
+  const foodApp = currentGameState.world.computer?.apps?.food;
+  const result = addToFoodCart(currentGameState, foodApp?.openRestaurantId, itemId);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('food-add', currentGameState);
+}
+
+async function doFoodRemoveFromCart(itemId) {
+  if (!itemId || !currentGameState) return;
+  removeFromFoodCart(currentGameState, itemId);
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('food-remove', currentGameState);
+}
+
+async function doFoodClearCart() {
+  if (!currentGameState) return;
+  clearFoodCart(currentGameState);
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('food-clear-cart', currentGameState);
+}
+
+async function doFoodSetTip(pctWhole) {
+  if (!currentGameState) return;
+  const foodApp = currentGameState.world.computer?.apps?.food;
+  if (!foodApp || !Number.isFinite(pctWhole)) return;
+  foodApp.tipPct = pctWhole / 100;
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('food-tip', currentGameState);
+}
+
+// The chosen delivery time is read off the select at submit time — the same
+// "transient form state stays in the DOM until it's committed" pattern
+// doMaidSave uses. Scoped by device because the computer and phone shells
+// both live in the document and getElementById would always find the
+// computer's copy first.
+async function doFoodPlaceOrder(device) {
+  if (!currentGameState) return;
+  const scope = device === 'phone' ? document.getElementById('phone-screen') : document;
+  const select = scope?.querySelector?.('#food-time') || document.getElementById('food-time');
+  const requestedTick = select ? Number(select.value) : undefined;
+  const result = placeFoodOrder(currentGameState, { requestedTick });
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  const driver = currentGameState.npcs[result.order.driverNpcId];
+  const eta = getFoodOrderEtaMinutes(result.order, currentGameState.meta.clock);
+  addLogEntry('system', `Order placed with ${result.restaurant.label} — $${result.totals.total}. ${driver?.bible?.name || 'A driver'} is bringing it, about ${Math.max(0, eta)} minutes out.`);
+  switchScreen(currentGameState, 'food', 'orders', undefined, device === 'phone' ? 'phone' : 'computer');
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('food-order', currentGameState);
 }
 
 // Contacts (external-world plan Phase 2): ask someone for their number.
@@ -1396,6 +1553,24 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'services.maid-save':
       await doMaidSave();
+      break;
+    case 'food.open-restaurant':
+      doFoodOpenRestaurant(extra?.rowId, extra?.device);
+      break;
+    case 'food.add-to-cart':
+      await doFoodAddToCart(extra?.rowId);
+      break;
+    case 'food.remove-from-cart':
+      await doFoodRemoveFromCart(extra?.rowId);
+      break;
+    case 'food.clear-cart':
+      await doFoodClearCart();
+      break;
+    case 'food.set-tip':
+      await doFoodSetTip(extra?.amount);
+      break;
+    case 'food.place-order':
+      await doFoodPlaceOrder(extra?.device);
       break;
     case 'classifieds.post':
       await doClassifiedsPost();

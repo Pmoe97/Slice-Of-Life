@@ -1564,6 +1564,24 @@ body {
 .hc-maid-addon { display: flex; align-items: flex-start; gap: var(--space-2); cursor: pointer; }
 .hc-maid-actions { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
 
+/* DoorDrop (external-world plan Phase 5): restaurant cards, menu/cart rows,
+   the itemised fee summary, and the live-ETA order cards. */
+.dd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-3); }
+.dd-card { background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.dd-card.dd-closed { opacity: 0.55; }
+.dd-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); width: 100%; }
+.dd-menu-head { margin-bottom: var(--space-3); }
+.dd-menu-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); margin-bottom: var(--space-2); }
+.dd-dish { font-size: var(--fs-sm); font-weight: 600; }
+.dd-time { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-3) 0; }
+.dd-time select { background: var(--color-card); color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 2px var(--space-2); }
+.dd-tips { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
+.dd-summary { display: flex; flex-direction: column; gap: 2px; background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); font-size: var(--fs-sm); }
+.dd-summary > div { display: flex; justify-content: space-between; }
+.dd-summary .dd-total { font-weight: 700; border-top: 1px solid var(--color-border); margin-top: var(--space-2); padding-top: var(--space-2); }
+.dd-actions { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-3); }
+.dd-order { background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); display: flex; flex-direction: column; gap: 4px; align-items: flex-start; margin-bottom: var(--space-2); }
+
 /* RoomList */
 .rl-hero { background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); align-items: flex-start; }
 .rl-hero-title { font-size: var(--fs-md); font-weight: 700; }
@@ -2228,13 +2246,13 @@ body {
      UI.WINDOWMANAGER → BOOT. Functions calling into a LATER script are
      fine either way — those calls only happen at runtime, after every
      script below has finished loading. -->
-<script src="src/srcfiles/config.js?v=20"></script>
+<script src="src/srcfiles/config.js?v=23"></script>
 <script src="src/srcfiles/icons.js?v=12"></script>
-<script src="src/srcfiles/defs.world.js?v=8"></script>
+<script src="src/srcfiles/defs.world.js?v=9"></script>
 <script src="src/srcfiles/defs.actions.js?v=7"></script>
-<script src="src/srcfiles/defs.computer.js?v=10"></script>
-<script src="src/srcfiles/state.js?v=10"></script>
-<script src="src/srcfiles/sim.js?v=16"></script>
+<script src="src/srcfiles/defs.computer.js?v=11"></script>
+<script src="src/srcfiles/state.js?v=13"></script>
+<script src="src/srcfiles/sim.js?v=19"></script>
 <script src="src/srcfiles/world.js?v=13"></script>
 <script src="src/srcfiles/items.js?v=6"></script>
 <script src="src/srcfiles/effects.js?v=6"></script>
@@ -2244,7 +2262,7 @@ body {
 <script src="src/srcfiles/skills.js?v=6"></script>
 <script src="src/srcfiles/stealth.js?v=6"></script>
 <script src="src/srcfiles/time.js?v=9"></script>
-<script src="src/srcfiles/computer.js?v=18"></script>
+<script src="src/srcfiles/computer.js?v=21"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -2258,13 +2276,13 @@ body {
 <script src="src/srcfiles/interruption.js?v=7"></script>
 <script src="src/srcfiles/image.js?v=7"></script>
 <script src="src/srcfiles/render.js?v=15"></script>
-<script src="src/srcfiles/render.computer.js?v=18"></script>
+<script src="src/srcfiles/render.computer.js?v=21"></script>
 <script src="src/srcfiles/render.desktop.js?v=7"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
 <script src="src/srcfiles/render.phone.js?v=11"></script>
-<script src="src/srcfiles/ui.js?v=27"></script>
-<script src="src/srcfiles/ui.computer.js?v=18"></script>
+<script src="src/srcfiles/ui.js?v=29"></script>
+<script src="src/srcfiles/ui.computer.js?v=21"></script>
 <script src="src/srcfiles/ui.windowmanager.js?v=7"></script>
 <!-- BrineOS Phase 3: phone shell orchestration — after ui.computer.js. -->
 <script src="src/srcfiles/ui.phone.js?v=6"></script>

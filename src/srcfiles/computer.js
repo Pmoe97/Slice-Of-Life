@@ -100,6 +100,14 @@ function defaultComputerState() {
         // applicants they're interested in and come back to them later.
         favorites: [],
       },
+      // DoorDrop (external-world plan Phase 5). `cart` entries are
+      // { restaurantId, itemId, qty } — one restaurant per cart, same as a
+      // real delivery app. `openRestaurantId` is which menu the detail
+      // screen is showing (the same "app state, never DOM state" pattern
+      // classifieds.viewingApplicantId uses). Placed orders do NOT live
+      // here: they're world.foodOrders, because a driver's visit and the
+      // handover are world events that outlive the app session.
+      food: { cart: [], openRestaurantId: null, tipPct: FOOD_TUNING.defaultTipPct },
       im: { threads: {}, viewingNpcId: null },
       stream: { subscriptions: [], watchHistory: [], resumePoints: {} },
       // Phase 11: investing portfolio. `holdings` is { fundId: { shares,
@@ -993,22 +1001,14 @@ function getVisibleStubs(gameState) {
   return stubs;
 }
 
-// Promote a stub to a full NPC (Phase 3 will make this async via the fetch
-// queue, but the core generation is here). Uses rollCastSlot with a
-// partial pre-filled from the stub's deterministic fields so the full
-// NPC matches the stub's identity. Returns the npcId on success.
-function promoteStubToNpc(gameState, stubId) {
-  const classifieds = gameState.world.computer.apps.classifieds;
-  // Find the stub across all stub days
-  let stub = null;
-  for (const day of Object.keys(classifieds.stubs)) {
-    stub = classifieds.stubs[day].find(s => s.stubId === stubId);
-    if (stub) break;
-  }
-  if (!stub || stub.status === 'ready' && stub.fullNpcId) {
-    return { ok: false, reason: 'Stub not found or already promoted.' };
-  }
-
+// Turn a stub record into a full NPC. Extracted from promoteStubToNpc so the
+// external-world plan's friend stubs (Phase 6) grow into real characters
+// through the exact same path a RoomList applicant does — one stub shape, one
+// promotion, two callers. Uses rollCastSlot with a partial pre-filled from the
+// stub's deterministic fields so the full NPC matches the card the player
+// already saw. `residencyStatus` is what separates the callers: an applicant
+// arrives 'prospective', a roommate's friend arrives 'visitor'.
+function createNpcFromStub(gameState, stub, residencyStatus, tag) {
   const npcId = genSeededNpcId(stub.seed, stub.slot);
   if (gameState.npcs[npcId]) return { ok: false, reason: 'Already generated.' };
 
@@ -1023,7 +1023,7 @@ function promoteStubToNpc(gameState, stubId) {
     partial.temperament = { warmth: stub.warmth };
   }
 
-  const rolled = rollCastSlot(stub.seed, stub.slot, npcId, `stub_promote_${stubId}`, new Set([stub.occupation.category]), [], partial);
+  const rolled = rollCastSlot(stub.seed, stub.slot, npcId, tag, new Set([stub.occupation.category]), [], partial);
   if (!rolled) return { ok: false, reason: 'Generation failed.' };
 
   const structured = rolled.normalized.bible;
@@ -1049,10 +1049,26 @@ function promoteStubToNpc(gameState, stubId) {
   const check = validateCharacter({ bible });
   if (!check.valid) return { ok: false, reason: 'Validation failed: ' + check.errors.join('; ') };
 
-  gameState.npcs[npcId] = createNpcFromBible(check.normalized.bible, 'prospective');
+  gameState.npcs[npcId] = createNpcFromBible(check.normalized.bible, residencyStatus);
   stub.status = 'ready';
   stub.fullNpcId = npcId;
   return { ok: true, npcId };
+}
+
+// Promote a RoomList stub to a full applicant NPC (Phase 3 will make this
+// async via the fetch queue, but the core generation is here).
+function promoteStubToNpc(gameState, stubId) {
+  const classifieds = gameState.world.computer.apps.classifieds;
+  // Find the stub across all stub days
+  let stub = null;
+  for (const day of Object.keys(classifieds.stubs)) {
+    stub = classifieds.stubs[day].find(s => s.stubId === stubId);
+    if (stub) break;
+  }
+  if (!stub || stub.status === 'ready' && stub.fullNpcId) {
+    return { ok: false, reason: 'Stub not found or already promoted.' };
+  }
+  return createNpcFromStub(gameState, stub, 'prospective', `stub_promote_${stubId}`);
 }
 
 // Phase 4: Build a full NPC from a Studio draft (partial bible). Uses
@@ -2162,6 +2178,72 @@ function createExternalNpc(gameState, npcId, seedKey, occupationTitle) {
   return npc;
 }
 
+// --- Friends of roommates (external-world plan Phase 6) ---
+// A resident's social circle is 2-4 friend STUBS, not 2-4 NPCs: the same
+// cheap deterministic record generateApplicantStubsForDay builds for the
+// RoomList browse grid (name/age/gender/occupation/traits/warmth/sketch,
+// zero LLM), parked in world.externalStubs until someone actually comes over.
+// Only then does it become a full bible, through createNpcFromStub — the
+// identical promotion path a RoomList applicant takes.
+//
+// Slots sit at FRIEND_STUB_SLOT_BASE, far clear of the cast (0..n), of
+// applicant stubs (2000 + day*100 + i, which climbs with the calendar) and of
+// Studio builds (5000+), so genSeededNpcId can never collide across sources.
+const FRIEND_STUB_SLOT_BASE = 900000;
+
+function generateFriendStub(gameState, hostNpcId, index) {
+  const stubs = gameState.world.externalStubs || (gameState.world.externalStubs = {});
+  const stubId = `friend_${hostNpcId}_${index}`;
+  if (stubs[stubId]) return stubs[stubId];
+  // Tolerates both state shapes: a live gameState carries the seed on `meta`,
+  // but the freshly generated state writeGeneratedGameState seeds circles into
+  // still has it at the top level (buildGameState hasn't been wrapped yet).
+  const seed = gameState.meta?.seed ?? gameState.seed;
+  const rng = seededRng(seed, stubId);
+
+  const gender = rollGender(rng);
+  const age = rollAge(rng);
+  const occ = weightedPick(rng, OCCUPATION_POOL);
+  const traits = pickUnique(rng, PERSONALITY_TRAITS_POOL, 2 + Math.floor(rng() * 2));
+  const coreTrait = traits[Math.floor(rng() * traits.length)] || 'easygoing';
+  const useNeutral = rng() < 0.2;
+  const namePool = useNeutral ? CHAR_GEN.namePools.first_n
+    : (gender === 'male' || gender === 'trans_male') ? CHAR_GEN.namePools.first_m
+    : CHAR_GEN.namePools.first_f;
+  const name = namePool[Math.floor(rng() * namePool.length)];
+  const warmth = rollAxis(rng);
+
+  const stub = {
+    stubId,
+    hostNpcId,
+    seed,
+    slot: FRIEND_STUB_SLOT_BASE + Object.keys(stubs).length,
+    name,
+    age,
+    gender,
+    occupation: { category: occ.category, title: occ.title, incomeBand: occ.incomeBand, hours: occ.hours },
+    coreTrait,
+    traits,
+    warmth,
+    sketch: `${age}-year-old ${occ.title}, ${warmth > 0 ? 'warm' : 'reserved'} and ${coreTrait}`,
+    status: 'stub',        // stub | ready (mirrors the applicant stub lifecycle)
+    fullNpcId: null,
+    lastVisitDay: null,
+  };
+  stubs[stubId] = stub;
+  return stub;
+}
+
+// Promote a friend stub ahead of their visit. Same contract as
+// promoteStubToNpc, different source table and residency: they arrive as a
+// 'visitor', which is what the visit spine resolves presence for.
+function promoteFriendStub(gameState, stubId) {
+  const stub = gameState.world.externalStubs?.[stubId];
+  if (!stub) return { ok: false, reason: 'Stub not found.' };
+  if (stub.fullNpcId && gameState.npcs[stub.fullNpcId]) return { ok: true, npcId: stub.fullNpcId, existing: true };
+  return createNpcFromStub(gameState, stub, 'visitor', `friend_promote_${stubId}`);
+}
+
 // --- The maid (external-world plan Phase 3) ---
 // Weekly price: every booked day's hours × the hourly rate, multiplied by
 // each add-on. Charged per visit (the day's share), not weekly, so a
@@ -2269,6 +2351,191 @@ function performMaidVisit(gameState, contract, entry) {
     }
   }
   return result;
+}
+
+// --- Food delivery: DoorDrop (external-world plan Phase 5) ---
+// Orders reuse the shape of the Nile delivery pipeline (a world-level array
+// of records with an arrival time, resolved by a processor) but not its
+// mechanism: a package materialises on the doormat at day rollover, whereas
+// food arrives WITH SOMEONE — the order schedules a purpose:'delivery' visit
+// and the handover happens when that visit's window opens, mid-day, through
+// processFoodOrdersNow (UI). That difference is the whole point of the phase.
+
+function foodMenuEntry(restaurantId, itemId) {
+  return (RESTAURANT_DEFS[restaurantId]?.menu || []).find(m => m.itemId === itemId) || null;
+}
+
+// A kitchen that's closed refuses the order outright rather than silently
+// delivering at 4am. Hours are [openTick, closeTick] in 0-47 half-hour ticks.
+function isRestaurantOpen(def, tick) {
+  if (!def) return false;
+  const [open, close] = def.hours || [0, 47];
+  return tick >= open && tick < close;
+}
+
+function getFoodApp(gameState) {
+  return gameState.world.computer?.apps?.food || null;
+}
+
+// One restaurant per cart, same as every real delivery app — you can't
+// combine Sal's and the sushi place into one driver's run.
+function getFoodCartRestaurantId(gameState) {
+  const app = getFoodApp(gameState);
+  return app?.cart?.[0]?.restaurantId || null;
+}
+
+function addToFoodCart(gameState, restaurantId, itemId) {
+  const app = getFoodApp(gameState);
+  if (!app) return { ok: false, reason: 'DoorDrop is unavailable.' };
+  const entry = foodMenuEntry(restaurantId, itemId);
+  if (!entry) return { ok: false, reason: "That's not on the menu." };
+  const current = getFoodCartRestaurantId(gameState);
+  if (current && current !== restaurantId) {
+    return { ok: false, reason: `Your cart already has ${RESTAURANT_DEFS[current]?.label || 'another restaurant'} in it — clear it first.` };
+  }
+  const existing = app.cart.find(c => c.itemId === itemId);
+  if (existing) existing.qty += 1;
+  else app.cart.push({ restaurantId, itemId, qty: 1 });
+  return { ok: true };
+}
+
+function removeFromFoodCart(gameState, itemId) {
+  const app = getFoodApp(gameState);
+  if (!app) return;
+  const existing = app.cart.find(c => c.itemId === itemId);
+  if (!existing) return;
+  existing.qty -= 1;
+  if (existing.qty <= 0) app.cart = app.cart.filter(c => c.itemId !== itemId);
+}
+
+function clearFoodCart(gameState) {
+  const app = getFoodApp(gameState);
+  if (app) app.cart = [];
+}
+
+// Subtotal + the restaurant's delivery fee + the platform's cut + tip.
+// Ordering in is meant to read as visibly bad value next to cooking; the
+// fee stack is where that lands.
+function getFoodOrderTotals(gameState, tipPctOverride) {
+  const app = getFoodApp(gameState);
+  const cart = app?.cart || [];
+  const restaurantId = getFoodCartRestaurantId(gameState);
+  const def = RESTAURANT_DEFS[restaurantId];
+  const subtotal = cart.reduce((sum, c) => sum + (foodMenuEntry(c.restaurantId, c.itemId)?.price || 0) * c.qty, 0);
+  const deliveryFee = cart.length > 0 ? (def?.deliveryFeeBase || 0) : 0;
+  const serviceFee = Math.round(subtotal * FOOD_TUNING.serviceFeeRate);
+  const tipPct = tipPctOverride != null ? tipPctOverride : (app?.tipPct ?? FOOD_TUNING.defaultTipPct);
+  const tip = Math.round(subtotal * tipPct);
+  return { subtotal, deliveryFee, serviceFee, tip, tipPct, total: subtotal + deliveryFee + serviceFee + tip };
+}
+
+// The soonest the food could physically arrive: the kitchen's prep time plus
+// travel, rounded up to the next whole tick. Seeded on the day and the order
+// number so the ETA quoted on the cart screen is exactly the ETA the order is
+// placed with — a quote that shifted when you clicked would be a lie.
+function getFoodTravelMinutes(gameState, seq) {
+  const rng = seededRng(gameState.meta.seed, `foodtravel_${gameState.meta.clock.day}_${seq}`);
+  return FOOD_TUNING.travelMinutesBase + Math.floor(rng() * FOOD_TUNING.travelMinutesVariance);
+}
+
+function getFoodEarliestArrivalTick(gameState, restaurantId, seq) {
+  const def = RESTAURANT_DEFS[restaurantId];
+  if (!def) return null;
+  const nowMinutes = gameState.meta.clock.minutes;
+  const minutes = nowMinutes + (def.prepMinutes || 0) + getFoodTravelMinutes(gameState, seq);
+  return Math.ceil(minutes / 30);
+}
+
+// Drivers are a small persistent pool rather than a fresh stranger per order:
+// repeat drivers are what let a delivery person become someone you know (and
+// eventually ask for a number — Phase 2's ask-contact works on them
+// unmodified, since contactKnown defaults false for everyone but Del).
+function pickFoodDriver(gameState, seq) {
+  const rng = seededRng(gameState.meta.seed, `fooddriver_${gameState.meta.clock.day}_${seq}`);
+  const n = 1 + Math.floor(rng() * FOOD_TUNING.driverPoolSize);
+  const npcId = `driver_${n}`;
+  createExternalNpc(gameState, npcId, npcId, 'Delivery Driver');
+  return npcId;
+}
+
+// Place the order: charge, pick the driver, schedule their visit at the
+// entry, and record the order. Nothing enters inventory here — the handover
+// is processFoodOrdersNow's job when the driver actually turns up.
+// `requestedTick` (optional) is a scheduled delivery time; the order still
+// can't beat the kitchen, so the real arrival is the later of the two.
+function placeFoodOrder(gameState, opts = {}) {
+  const app = getFoodApp(gameState);
+  if (!app) return { ok: false, reason: 'DoorDrop is unavailable.' };
+  if (!app.cart || app.cart.length === 0) return { ok: false, reason: 'Your cart is empty.' };
+  const restaurantId = getFoodCartRestaurantId(gameState);
+  const def = RESTAURANT_DEFS[restaurantId];
+  if (!def) return { ok: false, reason: 'That restaurant is gone.' };
+
+  const { day, minutes } = gameState.meta.clock;
+  const nowTick = getTickIndex(minutes);
+  if (!isRestaurantOpen(def, nowTick)) {
+    return { ok: false, reason: `${def.label} is closed right now (${formatTime(def.hours[0] * 30)}–${formatTime(def.hours[1] * 30)}).` };
+  }
+
+  const orders = gameState.world.foodOrders || (gameState.world.foodOrders = []);
+  const seq = orders.length;
+  const totals = getFoodOrderTotals(gameState, opts.tipPct);
+  if (gameState.player.money < totals.total) {
+    return { ok: false, reason: `Can't afford $${totals.total} (you have $${Math.round(gameState.player.money)}).` };
+  }
+
+  const earliest = getFoodEarliestArrivalTick(gameState, restaurantId, seq);
+  const requested = Number(opts.requestedTick);
+  let arrivalTick = Number.isFinite(requested) ? Math.max(earliest, requested) : earliest;
+  arrivalTick = Math.min(arrivalTick, earliest + FOOD_TUNING.maxScheduleAheadTicks);
+  // A same-day-only queue: an arrival past midnight would need a visit on
+  // tomorrow's day record, and "order at 11pm for 12:30am" is a corner the
+  // kitchen hours already mostly close. Clamp to the last tick of the day.
+  arrivalTick = Math.min(arrivalTick, 47);
+
+  gameState.player.money -= totals.total;
+  const driverNpcId = pickFoodDriver(gameState, seq);
+  const order = {
+    id: `food_${day}_${seq}`,
+    restaurantId,
+    items: app.cart.map(c => ({ itemId: c.itemId, qty: c.qty })),
+    subtotal: totals.subtotal,
+    deliveryFee: totals.deliveryFee,
+    serviceFee: totals.serviceFee,
+    tip: totals.tip,
+    tipPct: totals.tipPct,
+    total: totals.total,
+    day,
+    orderedTick: nowTick,
+    arrivalTick,
+    driverNpcId,
+    status: 'ordered',
+  };
+  orders.push(order);
+  // The driver's presence is a visit like any other — same queue the
+  // contractor, the maid and invited guests use (locked decision 1). Short
+  // window at the entry: they're handing over a bag, not moving in.
+  scheduleVisit(gameState, order.id, day, {
+    npcId: driverNpcId,
+    purpose: 'delivery',
+    startTick: arrivalTick,
+    endTick: Math.min(48, arrivalTick + FOOD_TUNING.driverWindowTicks),
+    roomId: 'entry',
+  });
+  app.cart = [];
+  app.openRestaurantId = null;
+  return { ok: true, order, restaurant: def, totals };
+}
+
+// Minutes until the food is at the door, for the live ETA. Negative once the
+// arrival tick has passed (the driver is here / has been).
+function getFoodOrderEtaMinutes(order, clock) {
+  const dayDelta = (order.day - clock.day) * 24 * 60;
+  return dayDelta + order.arrivalTick * 30 - clock.minutes;
+}
+
+function getActiveFoodOrders(gameState) {
+  return (gameState.world.foodOrders || []).filter(o => o.status === 'ordered');
 }
 
 // Book a contracted renovation job (ref/renovation-occupancy-overhaul-plan.md).

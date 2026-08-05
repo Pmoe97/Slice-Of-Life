@@ -21,82 +21,121 @@ table at the bottom, as the very last thing you do each session — see
 
 ## Handoff — read this first
 
-**Resume at:** Phase 5 (food delivery). Phases 1-4 are implemented and
-verified. Phase 5 needs `RESTAURANT_DEFS` + dish `ITEM_DEFS` + its own app,
-with the driver as a `purpose:'delivery'` visit at the `entry` — the visit
-spine, the external-NPC generator, and the contact flow it needs all exist.
+**Resume at:** Phase 7 (escorts). Phases 1-6 are implemented and verified.
+Phase 7 needs `ESCORT_SERVICE_DEFS` + a persistent `world.escortRoster[]` of
+full NPCs with `offeredServices`, its own app, and **dual** enforcement of the
+booked set (in the scene prompt as in-fiction boundaries *and* as action
+gating). The visit spine, the external-NPC generator (`createExternalNpc`),
+the stub→NPC promotion path (`createNpcFromStub`) and the contact flow all
+exist and are the pieces to build on.
 
-**Last session's notes (Phases 1-4):**
-- **Phase 1 (visit spine)** was implemented by a previous session that ran
-  out of tool budget mid-verification and never wrote a handoff note; the
-  code was on disk while this doc still said "nothing implemented." It was
-  verified this session and is correct. `world.visits[]`, `getActiveVisits`,
-  `getActiveNpcIds` (the mandatory active-NPC index), `scheduleVisit`,
-  `scheduleContractorVisitsForJob`, `resolveVisitPresence`,
-  `processVisitsForDay`. Verified live: Del onsite in his job's room ticks
-  18-33 on weekdays, absent outside the window/at weekends, needs never
-  decay, no non-allowlisted drive fires for him, a roommate in the same room
-  sees him as a chat partner, dormant visitors stay out of the active index,
-  and past visits retire (clearing lingering location) without duplicating.
-- **Generalised presence beyond `'visitor'` status.** `resolveTick` keyed
-  visitor resolution off `residency.status === 'visitor'`, which would have
-  silently broken Phase 2 invitations: an invited *applicant*
-  (`'prospective'`) landed in the active index but hit the
-  `status !== 'resident'` guard and never resolved, so they'd never appear.
-  Presence now follows a `visitingIds` set built from the active visits, so
-  anyone with a visit turns up regardless of status. Verified with a
-  `'prospective'` guest.
-- **Phase 2 (contacts).** `contactKnown` on the NPC schema *and* explicitly
-  in `createNpcFromBible` (the schema default alone left it `undefined`).
-  Both contact filters (`render.computer.js` Messages, `render.phone.js`
-  camera share row) now key off `contactKnown` instead of a blanket
-  `'visitor'` clause — that clause would have auto-populated the list with
-  every driver and escort once Phases 5/7 land. `ask-contact` scene chip →
-  `doAskContact`, personality-weighted via `CONTACT_TUNING` (warmth +
-  openness lower the required rapport; residents get a large discount).
-  Verified: an open NPC (0.9/0.9, requirement −0.24) shares at rapport 0.2
-  while a guarded one (−0.8/−0.8, requirement 0.78) refuses at the same
-  rapport, the retry cooldown blocks an immediate re-ask, and rapport growth
-  flips the refusal. `doInviteOver` writes a `purpose:'social'` visit for
-  tomorrow; verified the guest actually turns up and leaves.
-- **Phase 3 (maid).** `MAID_TUNING` + `MAID_ADDONS`; contract lives in the
-  existing `services.hired[]` with its own record shape (deliberately NOT a
-  `SERVICE_DEFS` entry — those are flat cadence hires). `createExternalNpc`
-  is a **reusable** generator built here for the maid and intended for
-  Phases 5-7's drivers/friends/escorts. Own HomeCare screen with a per-day
-  grid; `renderHomeCareHired` special-cases her so the contract isn't
-  invisible. Verified: 6.5h/wk × $26 = $169 base, ×2.36 with all add-ons =
-  $399/wk; schedule normalisation clamps out-of-window times, drops
-  duplicate/invalid weekdays, enforces the 1h minimum; a Monday visit
-  charged $184, cleaned, stepped the hamper `full`→`partial` (throughput
-  cap — a full hamper needs a second visit), left 2 meals in the fridge, and
-  she rotated rooms across her window then vanished after it; no charge on
-  an uncontracted day; too broke = she doesn't come.
-- **Phase 4 (working days).** `addWorkingDays`/`workingDaysBetween` (SIM);
-  `bookRenovationJob` takes `{ rush }`, stores `job.rush`, and computes
-  `etaDay` accordingly; `getRenovationJobStage` counts working days so a job
-  parked over a weekend holds its stage; contractor visits skip weekends
-  unless rushed; booking modal gained a rush toggle showing both dates and
-  prices. Verified: a 3-day job booked Friday completes Wednesday normally
-  (crew days 5/8/9) vs Monday when rushed (crew days 5/6/7) at exactly
-  1.6× cost. `ref/renovation-occupancy-overhaul-plan.md` updated with a
-  superseded-note on `etaDay`, per the protocol's cross-document rule.
-- **Testing gotchas for the next session:** `buildGameState` returns a raw
-  state with top-level `clock` — wrap `gs.meta = { clock: gs.clock,
-  contentConfig: null, sessionLog: [], seed: gs.seed }` before calling
-  anything that reads `meta.clock`. `currentGameState` is a top-level `let`,
-  so `window.currentGameState = x` does NOT work — assign it bare
-  (`currentGameState = x`) from page scope. Stub `saveAtBoundary`, `render`,
-  and `addLogEntry` (no Perchance `root`, no booted DOM). Bump the
-  `?v=` query on every changed script in `main.html` or the browser serves
-  stale code.
+**Last session's notes (Phase 6 — friends of roommates, built and verified):**
+- **Circles.** `ensureSocialCircles` (sim.js) gives every resident 2-4 friend
+  stubs, seeded `circle_<npcId>`. Called from `writeGeneratedGameState` so a
+  new game ships with them, *and* at day rollover as the backstop for later
+  move-ins and pre-Phase-6 saves. Externals (Del, drivers, the maid) keep an
+  empty circle — `socialCircle: []` is now an explicit field in
+  `createNpcFromBible`, same precedent as `contactKnown`.
+- **Stubs are genuinely cheap.** `generateFriendStub` (computer.js) mirrors
+  `generateApplicantStubsForDay`'s record shape and pools exactly; a
+  3-resident new game creates 11 stubs and **zero** extra NPCs. Friend stub
+  slots sit at `FRIEND_STUB_SLOT_BASE = 900000` — deliberately clear of
+  applicant slots (`2000 + day*100 + i`, which climbs with the calendar and
+  would otherwise have collided around day 70) and Studio's 5000+.
+- **Shared promotion.** `promoteStubToNpc`'s body became
+  `createNpcFromStub(gameState, stub, residencyStatus, tag)`; `promoteStubToNpc`
+  (→ `'prospective'`) and the new `promoteFriendStub` (→ `'visitor'`) both
+  call it. The RoomList path was re-verified after the extraction: promotes,
+  matches the stub's name/age/traits, still refuses a double promotion.
+- **Planning.** `planFriendVisitsForDay` (sim.js) rolls once per resident per
+  day at `friendHostChance` = base 0.07 + 0.09·warmth + 0.07·openness,
+  clamped [0.01, 0.30]; picks a friend outside their 3-day cooldown; promotes
+  **before** scheduling so generation never blocks an arrival; writes a
+  `purpose:'social'` visit carrying `hostNpcId`. It returns records and
+  narrates nothing — `processFriendVisitsForDay` (ui.js) does the log lines,
+  the same split resolveTick/events uses. It runs *after* the maid and
+  contractor passes in `processDayRollover` so the soft cap counts committed
+  paid visitors first.
+- **The soft cap is finally live.** `countVisitorsForDay` ≥
+  `VISIT_TUNING.softCap` (3) makes the visit record with status `'deferred'`
+  and skips promotion entirely, so a deferred night costs nothing.
+  `getActiveVisits` already ignored that status.
+- **Guests follow their host.** `resolveVisitPresence` gained a `resolved`
+  argument (this tick's in-progress resolution map, passed from `resolveTick`)
+  so a social guest with a `hostNpcId` uses the host's location for THIS tick
+  rather than a tick-stale `npc.location`. Falls back to the visit's room when
+  the host is off-screen at work or shut in a bedroom.
+- **Verified live:** new-game circles 4/3/4 with all stubs still stubs; over
+  200 days a 0.9/0.9 resident hosted 32 times vs 4 for a −0.9/−0.9 one (0.214
+  vs 0.010 per day) and 11 for a neutral one; the same roll that produced a
+  visit on a quiet day produced a `deferred` record with three visitors
+  already booked; a promoted guest matched their stub and arrived as a
+  `'visitor'`; across five consecutive ticks the guest was in the same room as
+  their host every tick (hallway → kitchen → dining → living room → balcony)
+  with social activities and needs frozen at 50; they were `present` *and*
+  `active` in `getSceneParticipants` with `canTalk: true`; `doAskContact`
+  turned one into a real contact and they entered the IM-eligible list; 19
+  consecutive `processDayRollover` days ran clean; `externalStubs`,
+  `socialCircle`, the promoted NPC and its `contactKnown` all round-tripped
+  through save/load.
+- **One tuning change during verification:** the visit window was 15:00-19:00,
+  which had guests arriving while a `day_shift` host was still at work
+  (SCHEDULES: work ends tick 34, evening starts 36). Moved to 17:30-20:00
+  (`FRIEND_TUNING.startTickMin/Max` 35/40), after which the guest was with
+  their host from arrival.
+
+**Previous session's notes (Phase 5 — food delivery, built and verified):**
+- **Shape.** 19 dish `ITEM_DEFS` (defs.world.js) with **no `price` field** —
+  price lives per restaurant in `RESTAURANT_DEFS.menu` as `{ itemId, price }`,
+  because `SHOP_CATALOG_LIST` (items.js) builds Nile's catalog from *every*
+  priced item. Six restaurants with `hours: [openTick, closeTick]`; a closed
+  kitchen refuses the order. The `food` app ("DoorDrop", both devices) has
+  browse / menu / cart / orders screens.
+- **Where things live.** Placed orders are `world.foodOrders[]` (world state,
+  persisted in state.js, initialised in `buildGameState`), NOT app state — the
+  driver and the handover outlive the app session. Cart/openRestaurantId/
+  tipPct are app state under `apps.food`.
+- **The handover is tick-driven, not rollover-driven.** `processFoodOrdersNow`
+  runs from `advanceAndResolve` (ui.js), because a driver arrives at a *tick*;
+  every path that moves the clock passes through there. Player in the `entry`
+  → straight into inventory, otherwise the doormat. Drivers are a persistent
+  pool (`driver_1`..`driver_5`); tipping moves their `relPlayer`.
+
+**Testing gotchas (carried forward, still true):**
+- `buildGameState` returns a raw state with top-level `clock`/`seed` — wrap
+  `gs.meta = { clock: gs.clock, contentConfig: null, sessionLog: [],
+  seed: gs.seed }` before calling anything that reads `meta.clock`.
+  `currentGameState` is a top-level `let`, so assign it bare, not via
+  `window.`. Stub `saveAtBoundary`/`render`/`addLogEntry`. Bump the `?v=`
+  query on every changed script in `main.html` or the browser serves stale
+  code.
+- Serve the repo (`.claude/launch.json` → python http.server on 8734) and load
+  `dev-harness.html`. The harness injects scripts after DOMContentLoaded, so
+  `attachEventHandlers()` may need calling by hand — but if `boot()` already
+  ran, calling it again **double-binds the delegated click listener** and
+  every UI click fires twice (this is what made one "Add" click put 2 in the
+  cart — not an app bug). Synthetic coordinate clicks don't land while the
+  browser pane isn't compositing; `element.click()` on the real node
+  exercises the same delegated path.
+- `SIM_generateHouse` in the harness produces residents with empty
+  `bible.name` (names come from the LLM prose pass, which the harness stubs
+  out) — set names by hand when checking narration text.
 
 **Blockers / flagged deviations:**
-- None blocking. Two notes: (1) the maid's room rotation always starts at
-  the first room of her scope, so with the bedrooms add-on she begins in the
-  player's bedroom every visit — cosmetic, could be offset by weekday.
-  (2) `VISIT_TUNING.softCap` is defined but not yet enforced; it only
-  matters once organic visits exist, which is Phase 6.
+- None blocking. Notes: (1) **`perishable` is data-only engine-wide** — no
+  spoilage system exists anywhere in the codebase (the field appears in
+  defs.world.js and nowhere else), and no action or NPC drive consumes a
+  stored food item, so Phase 5's "can … spoil, and be eaten by someone else"
+  is *shape parity* with existing meal items, not a live mechanic. Same
+  pre-existing gap as the maid's cooked meals from Phase 3; fixing it means a
+  real item-consumption path (an inventory/fridge eat action + an NPC drive
+  that draws from the fridge), which is not food-specific work. (2) The maid's
+  room rotation always starts at the first room of her scope. (3) DoorDrop has
+  no Tracker card and organic visits post no Tracker entry either — both
+  surface only through `addLogEntry` narration and the app itself. (4) Nothing
+  yet surfaces a resident's social circle in the UI; the stubs are invisible
+  until someone actually comes over, which is by design but worth knowing if
+  Phase 8's move-in advocacy wants to reference a friend by name.
 
 ---
 
@@ -300,8 +339,13 @@ proposed default; tune in Phase 3.
 
 ### Food
 
-- `RESTAURANT_DEFS` (new, defs.computer.js): `{ id, label, cuisine, menu:
-  [itemIds], deliveryFeeBase, prepMinutes }`.
+- `RESTAURANT_DEFS` (new, defs.computer.js): `{ id, label, cuisine, blurb,
+  menu: [{ itemId, price }], deliveryFeeBase, prepMinutes, hours }` — **as
+  built.** `menu` had to carry the price (this section originally sketched
+  bare `[itemIds]`): a `price` on the dish's ITEM_DEFS entry would enrol
+  takeout in Nile's catalog, which builds itself from every priced item
+  (`SHOP_CATALOG_LIST`, items.js). `hours` is `[openTick, closeTick]` — a
+  closed kitchen refuses the order.
 - Dishes are **new `ITEM_DEFS` entries** (defs.world.js:553) — real items with
   hunger restore, quality, and spoilage, so delivered food can sit getting
   cold and a roommate can eat your leftovers.
@@ -309,16 +353,28 @@ proposed default; tune in Phase 3.
   `processDeliveriesForDay`, ui.js) but arrive **via a driver visit** rather
   than materializing on the doormat: the driver is a `purpose:'delivery'`
   visit with a short window at the `entry`, and hands over the items.
+  **As built:** orders live in `world.foodOrders[]`, and the handover runs
+  from `processFoodOrdersNow` (ui.js) called on every `advanceAndResolve` —
+  a driver arrives at a TICK, so this could not hang off day rollover the
+  way Nile packages do.
 
 ### Friends of roommates
 
 - **Social network**, generated deterministically when a resident's bible is
-  created: `npc.socialCircle = [friendStubId, ...]` (2–4 entries).
+  created: `npc.socialCircle = [friendStubId, ...]` (2–4 entries). **As
+  built:** `ensureSocialCircles` (sim.js) fills any resident missing one —
+  called from `writeGeneratedGameState` (so a new game ships with circles)
+  *and* at day rollover (so a roommate who moves in on day 40, or a save
+  written before this phase, grows one without a migration).
 - **Friend stubs** live in `world.externalStubs{}`, reusing the shape and
   seeded-RNG approach of `generateApplicantStubsForDay` (computer.js:889) —
   cheap deterministic fields, no LLM.
 - **Promotion to a full NPC** happens when a visit is *planned*, ahead of
   arrival, via the existing `promoteStubToNpc` pattern (computer.js:1000).
+  **As built:** that function's body was extracted into
+  `createNpcFromStub(gameState, stub, residencyStatus, tag)` and both callers
+  now share it — an applicant promotes to `'prospective'`, a friend to
+  `'visitor'`. One stub shape, one promotion path, no second copy to drift.
 - **Hosting frequency** from the host's `bible.temperament.warmth` and
   `.openness`. High/high fills the living room; low/low almost never hosts.
 - Once promoted, they are ordinary NPCs: `relPlayer`, memory, IM (once you
@@ -432,7 +488,10 @@ in-flight jobs don't break.
 **Files:** `defs.computer.js` (`RESTAURANT_DEFS`, new app),
 `defs.world.js:553` (dish `ITEM_DEFS`), `computer.js` (ordering, ETA,
 driver-visit scheduling), `render.*` (menus, cart, live ETA), `ui.js`
-(handover on driver arrival).
+(handover on driver arrival). **As built, also:** `config.js`
+(`FOOD_TUNING`, `VISIT_TUNING.activities.delivery`), `sim.js` +
+`state.js` (`world.foodOrders` init and persistence), `main.html`
+(`.dd-*` styles).
 
 **Verification:** An order schedules a driver visit at the chosen time; the
 ETA counts down; the driver appears at the entry, is talkable, and hands over
@@ -447,6 +506,9 @@ someone else.
 visit planning from warmth/openness, background promotion), `computer.js`
 (external stub generation/promotion reusing computer.js:889/1000),
 `config.js` (circle size, frequency tuning, soft-cap deferral).
+**As built, also:** `state.js` (`world.externalStubs` persistence + the
+new-game `ensureSocialCircles` call), `ui.js` (`processFriendVisitsForDay`
+narration wrapper in the day-rollover chain).
 
 **Verification:** Each resident has 2–4 stubbed friends at new-game.
 A high-warmth/high-openness roommate hosts noticeably more than a closed one.
@@ -498,8 +560,8 @@ organically becomes a contact, a romance, and finally a housemate.
 | 2 | **Done** | `contactKnown`, ask-for-contact action, IM filter, invitations |
 | 3 | **Done** | The maid: contract grid, add-ons, laundry throughput |
 | 4 | **Done** | Working-day `etaDay` + weekend rush (modifies shipped code) |
-| 5 | Not started | Food: restaurants, dish items, driver NPC, ETA |
-| 6 | Not started | Friends of roommates: circles, organic visits, background promotion |
+| 5 | **Done** | Food: DoorDrop app, restaurants, dish items, driver visits, live ETA |
+| 6 | **Done** | Friends of roommates: circles, organic visits, background promotion, soft cap |
 | 7 | Not started | Escorts: roster, à la carte booking, dual-enforced limits |
 | 8 | Not started | Move-in advocacy, integration playtest |
 
