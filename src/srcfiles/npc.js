@@ -487,10 +487,22 @@ function assembleContext(gameState, sceneState) {
   const time = formatTime(meta.clock.minutes);
   const day = meta.clock.day;
 
+  // Escorts (external-world plan Phase 7): map any active escort visit to its
+  // booking so the scene prompt can inject the purchased set as that
+  // character's in-fiction boundaries. Computed once for the whole scene
+  // (getActiveVisits is the same call the tick loop already makes).
+  const activeEscortBookings = {};
+  for (const v of getActiveVisits(gameState)) {
+    if (v.purpose !== 'escort') continue;
+    const b = (world.escortBookings || []).find(bk => bk.id === v.sourceId && bk.status === 'active');
+    if (b) activeEscortBookings[v.npcId] = b;
+  }
+
   // Active NPCs: full bible + relationship + memory
   const activeContext = sceneState.active.map(id => {
     const npc = npcs[id];
     if (!npc) return null;
+    const escortBooking = activeEscortBookings[id] || null;
     return {
       id,
       name: npc.bible.name || 'Unknown',
@@ -505,6 +517,14 @@ function assembleContext(gameState, sceneState) {
       clothing: npc.clothing,                   // NPC Overhaul — for clothingLabel
       moodReason: npc.moodReason || '',         // NPC Overhaul
       schedule: npc.schedule || null,           // NPC Overhaul Phase 7.2
+      // Escorts (external-world plan Phase 7): the live booking, if this NPC
+      // is mid-appointment. buildNpcBlockV2 reads boundaryText; the services
+      // array is also what the scene chips are built from.
+      escortSession: escortBooking ? {
+        services: escortBooking.services || [],
+        labels: (escortBooking.services || []).map(sid => ESCORT_SERVICE_DEFS[sid]?.label || sid),
+        boundaryText: buildEscortBoundaryText(escortBooking),
+      } : null,
     };
   }).filter(Boolean);
 
@@ -622,6 +642,105 @@ function getRecentEvents(events, count, npcs) {
   }));
 }
 
+// --- Move-in advocacy (ref/external-world-npcs-overhaul-plan.md, Phase 8) ---
+// The proposal contract gains an optional `advocateFor` field: a resident (or
+// the player) organically suggests someone should move in, and the player then
+// runs the existing offer flow against that external NPC. Everything for the
+// suggestion side lives here so the scene and IM paths behave identically;
+// the ACCEPT side (COMPUTER's acceptApplicant) re-checks eligibility
+// independently — recording an offer never bypasses it.
+
+const PHASE_ORDER = ['early', 'familiar', 'close', 'intimate'];
+function phaseAtLeast(phase, min) {
+  return PHASE_ORDER.indexOf(phase) >= PHASE_ORDER.indexOf(min);
+}
+
+// The player's relationship with an NPC as a phase comparison — the same
+// ladder deriveConversationPhase produces from trust/affection/comfort.
+function hasPlayerPhaseAtLeast(npc, min) {
+  return !!npc?.relPlayer && phaseAtLeast(npc.relPlayer.conversationPhase || 'early', min);
+}
+
+// Resident→external bond as scored on castWeb, in the direction where the
+// resident is the subject — "close enough that THIS resident would vouch for
+// them." CastWeb entries exist only between NPCs who have actually met (the
+// social drives write them), so a missing pair is simply not close.
+function hasStrongNpcRelationship(gameState, residentId, targetId) {
+  const pairKey = [residentId, targetId].sort().join('|');
+  const pair = gameState.world.castWeb?.[pairKey];
+  if (!pair?.axes) return false;
+  const dirKey = `${residentId}→${targetId}`;
+  const axes = pair.axes[dirKey] || {};
+  return (axes.affection || 0) >= MOVE_IN_TUNING.residentAffectionMin
+    && (axes.trust || 0) >= MOVE_IN_TUNING.residentTrustMin;
+}
+
+// Move-in eligibility (locked decision 15): the player is close to them, OR
+// any current resident is. This is the acceptance gate the offer flow
+// (acceptApplicant) enforces — a Classifieds applicant ('prospective') is
+// already eligible by virtue of being interviewed through the posted ad.
+function isMoveInEligible(gameState, npcId) {
+  const npc = gameState.npcs?.[npcId];
+  if (!npc) return false;
+  if (npc.residency?.status === 'prospective') return true;
+  if (hasPlayerPhaseAtLeast(npc, MOVE_IN_TUNING.playerPhaseMin)) return true;
+  for (const [rid, rnpc] of Object.entries(gameState.npcs || {})) {
+    if (rid === npcId || rnpc?.residency?.status !== 'resident') continue;
+    if (hasStrongNpcRelationship(gameState, rid, npcId)) return true;
+  }
+  return false;
+}
+
+// Resolve the LLM's `advocateFor` value to a real external NPC id. The value
+// is almost always a NAME — the model only ever sees the target's name in the
+// advocate's [Relationships with others] block, never their id — so name
+// resolution is the common path, with a direct id match as the shortcut.
+// Returns null when unresolvable, already a resident, or a 'prospective'
+// applicant (they already have the RoomList flow; no offer needed).
+function resolveAdvocateTargetId(gameState, value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const npcs = gameState.npcs || {};
+  if (npcs[value]) {
+    return (npcs[value].residency?.status === 'resident') ? null : value;
+  }
+  const name = value.trim();
+  for (const [id, npc] of Object.entries(npcs)) {
+    if ((npc.bible?.name || '').toLowerCase() === name.toLowerCase()) {
+      const status = npc.residency?.status;
+      if (status === 'resident' || status === 'prospective') return null;
+      return id;
+    }
+  }
+  return null;
+}
+
+// Which NPC raised the advocacy — the first dialogue line spoken by a scene
+// NPC, falling back to 'player' (e.g. an IM reply with the player as the
+// only obvious party, or an advocateFor emitted without dialogue).
+function resolveAdvocacySpeaker(proposal, context) {
+  for (const d of proposal.dialogue || []) {
+    const match = (context.activeNpcs || []).find(n => n.id === d.speaker || n.name === d.speaker);
+    if (match) return match.id;
+  }
+  return 'player';
+}
+
+// Record a pending move-in offer so the external surfaces in RoomList's
+// Offers screen. Idempotent per target — a second resident vouching for the
+// same person updates the advocate rather than duplicating the row.
+function recordMoveInOffer(gameState, npcId, advocatedBy) {
+  const offers = gameState.world.moveInOffers || (gameState.world.moveInOffers = []);
+  const existing = offers.find(o => o.npcId === npcId);
+  if (existing) { existing.advocatedBy = advocatedBy; return existing; }
+  const offer = {
+    npcId,
+    advocatedBy,                 // 'player' or a resident npcId — who vouched
+    day: gameState.meta?.clock?.day ?? gameState.clock?.day ?? 1,
+  };
+  offers.push(offer);
+  return offer;
+}
+
 // --- LLM Proposal validation and application ---
 // LLM returns a proposal; NPC validates and applies via STATE adapter.
 // LLM never writes to state directly.
@@ -719,6 +838,20 @@ function validateProposal(proposal, context) {
   if (proposal.topic !== undefined && proposal.topic !== null) {
     if (typeof proposal.topic !== 'string' || proposal.topic.length > 60) {
       errors.push('Topic must be a string (max 60 chars)');
+    }
+  }
+
+  // Move-in advocacy (external-world plan Phase 8): optional `advocateFor`
+  // carrying the NAME (or id) of someone the speaker suggests should move
+  // in. Untrusted input, so the shape is checked here; the name→NPC
+  // resolution and the relationship gate happen in applyProposal where the
+  // full gameState is in scope — a name nobody can resolve is dropped
+  // there, not rejected here (the dialogue can still narrate the idea).
+  if (proposal.advocateFor !== undefined && proposal.advocateFor !== null) {
+    if (typeof proposal.advocateFor !== 'string' || proposal.advocateFor.trim().length === 0) {
+      errors.push('advocateFor must be a non-empty name');
+    } else if (proposal.advocateFor.length > 80) {
+      errors.push('advocateFor name too long (max 80 chars)');
     }
   }
 
@@ -853,6 +986,37 @@ async function applyProposal(proposal, context, gameState, playerAction) {
     // here costs nothing beyond the traversal.
     const { valid } = validateEffects(normalizeProposal(proposal).effects, effCtx, 'llm');
     effectNpcIds = applyEffects(valid, effCtx).touchedNpcIds;
+  }
+
+  // Move-in advocacy (external-world plan Phase 8): a resident (or the
+  // player) suggests someone move in, carried as the optional `advocateFor`
+  // field (name or npcId). Resolve it to an external NPC and, when the bond
+  // is real — the advocate is the player, or a resident with a strong
+  // relationship to the target who is at least familiar with the player —
+  // record a pending move-in offer; RoomList's Offers screen then surfaces
+  // it for the player to act on. An unresolvable or unearned advocacy is
+  // dropped silently: the suggestion may still exist as narration/dialogue,
+  // it just never becomes an offer (and the acceptance gate in
+  // acceptApplicant re-checks eligibility anyway).
+  if (proposal.advocateFor) {
+    const targetId = resolveAdvocateTargetId(gameState, proposal.advocateFor);
+    if (targetId) {
+      const speaker = resolveAdvocacySpeaker(proposal, context);
+      let earned = speaker === 'player';
+      if (!earned) {
+        const sp = gameState.npcs[speaker];
+        earned = !!sp && sp.residency.status === 'resident'
+          && hasPlayerPhaseAtLeast(sp, MOVE_IN_TUNING.advocatePlayerPhaseMin)
+          && hasStrongNpcRelationship(gameState, speaker, targetId);
+      }
+      if (earned) {
+        const offer = recordMoveInOffer(gameState, targetId, speaker);
+        const targetName = gameState.npcs[targetId]?.bible?.name || 'Someone';
+        const speakerName = speaker === 'player' ? 'You' : (gameState.npcs[speaker]?.bible?.name || 'They');
+        logEntries.push({ type: 'system', text: `${speakerName} vouched for ${targetName} moving in — an offer is waiting in RoomList.` });
+        events.push({ type: 'moveInOffer', npcId: targetId, advocatedBy: speaker, offer });
+      }
+    }
   }
 
   // Narration/dialogue: handed back as data. UI's addLogEntry is the single

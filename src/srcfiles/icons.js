@@ -36,6 +36,11 @@ const ICONS = {
     <path d="M13 9 17.5 3.5a1.5 1.5 0 0 1 2.6 1.5L17 9"/>
     <path d="M13 9a2.5 2.5 0 0 0-4 3l1 1"/>
   `),
+  // Escorts (external-world plan Phase 7): a heart — reads as companionship
+  // at a glance, distinct from HomeCare's wrench.
+  escorts: () => svgWrap(`
+    <path d="M12 20.5S4.5 15.9 2.3 11.6A5.4 5.4 0 0 1 12 7.4a5.4 5.4 0 0 1 9.7 4.2C19.5 15.9 12 20.5 12 20.5Z"/>
+  `),
   classifieds: () => svgWrap(`
     <circle cx="8" cy="15" r="3.5"/>
     <path d="M10.5 12.5 19 4"/>

@@ -1582,6 +1582,17 @@ body {
 .dd-actions { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-3); }
 .dd-order { background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); display: flex; flex-direction: column; gap: 4px; align-items: flex-start; margin-bottom: var(--space-2); }
 
+/* Escorts */
+.esc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-3); }
+.esc-card { background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.esc-profile-head { margin-bottom: var(--space-2); }
+.esc-bio { margin: var(--space-2) 0; }
+.esc-check-list { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-2); }
+.esc-check-item { display: flex; align-items: flex-start; gap: var(--space-2); cursor: pointer; }
+.esc-total { display: block; margin-bottom: var(--space-3); }
+.esc-time-row { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-3) 0; }
+.esc-time-row select { background: var(--color-card); color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 2px var(--space-2); }
+
 /* RoomList */
 .rl-hero { background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); align-items: flex-start; }
 .rl-hero-title { font-size: var(--fs-md); font-weight: 700; }
@@ -1607,6 +1618,11 @@ body {
 .rl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--space-3); }
 .rl-card { background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); display: flex; flex-direction: column; align-items: center; gap: 2px; text-align: center; cursor: pointer; transition: border-color 0.15s; }
 .rl-card:hover { border-color: var(--color-accent); }
+/* Move-in offers (external-world plan Phase 8): a horizontal row per
+   offered external — card on the left, the offer button on the right,
+   so a row reads as "someone worth considering," not a browse tile. */
+.rl-offer-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2); background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
+.rl-offer-row .rl-card { border: none; background: none; padding: var(--space-1); align-items: flex-start; text-align: left; }
 .rl-card-avatar { width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.9); font-weight: 700; font-size: var(--fs-lg); margin-bottom: var(--space-1); }
 .rl-card-name { font-size: var(--fs-sm); font-weight: 600; }
 .rl-card-status { font-size: var(--fs-xs); color: var(--color-positive); }
@@ -2246,13 +2262,13 @@ body {
      UI.WINDOWMANAGER → BOOT. Functions calling into a LATER script are
      fine either way — those calls only happen at runtime, after every
      script below has finished loading. -->
-<script src="src/srcfiles/config.js?v=23"></script>
-<script src="src/srcfiles/icons.js?v=12"></script>
+<script src="src/srcfiles/config.js?v=25"></script>
+<script src="src/srcfiles/icons.js?v=13"></script>
 <script src="src/srcfiles/defs.world.js?v=9"></script>
-<script src="src/srcfiles/defs.actions.js?v=7"></script>
-<script src="src/srcfiles/defs.computer.js?v=11"></script>
-<script src="src/srcfiles/state.js?v=13"></script>
-<script src="src/srcfiles/sim.js?v=19"></script>
+<script src="src/srcfiles/defs.actions.js?v=8"></script>
+<script src="src/srcfiles/defs.computer.js?v=13"></script>
+<script src="src/srcfiles/state.js?v=15"></script>
+<script src="src/srcfiles/sim.js?v=21"></script>
 <script src="src/srcfiles/world.js?v=13"></script>
 <script src="src/srcfiles/items.js?v=6"></script>
 <script src="src/srcfiles/effects.js?v=6"></script>
@@ -2262,7 +2278,7 @@ body {
 <script src="src/srcfiles/skills.js?v=6"></script>
 <script src="src/srcfiles/stealth.js?v=6"></script>
 <script src="src/srcfiles/time.js?v=9"></script>
-<script src="src/srcfiles/computer.js?v=21"></script>
+<script src="src/srcfiles/computer.js?v=23"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -2270,19 +2286,19 @@ body {
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
 <script src="src/srcfiles/phone.js?v=8"></script>
-<script src="src/srcfiles/npc.js?v=7"></script>
-<script src="src/srcfiles/prompt.js?v=6"></script>
-<script src="src/srcfiles/llm.js?v=6"></script>
+<script src="src/srcfiles/npc.js?v=9"></script>
+<script src="src/srcfiles/prompt.js?v=7"></script>
+<script src="src/srcfiles/llm.js?v=8"></script>
 <script src="src/srcfiles/interruption.js?v=7"></script>
 <script src="src/srcfiles/image.js?v=7"></script>
-<script src="src/srcfiles/render.js?v=15"></script>
-<script src="src/srcfiles/render.computer.js?v=21"></script>
+<script src="src/srcfiles/render.js?v=16"></script>
+<script src="src/srcfiles/render.computer.js?v=23"></script>
 <script src="src/srcfiles/render.desktop.js?v=7"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
 <script src="src/srcfiles/render.phone.js?v=11"></script>
-<script src="src/srcfiles/ui.js?v=29"></script>
-<script src="src/srcfiles/ui.computer.js?v=21"></script>
+<script src="src/srcfiles/ui.js?v=30"></script>
+<script src="src/srcfiles/ui.computer.js?v=22"></script>
 <script src="src/srcfiles/ui.windowmanager.js?v=7"></script>
 <!-- BrineOS Phase 3: phone shell orchestration — after ui.computer.js. -->
 <script src="src/srcfiles/ui.phone.js?v=6"></script>

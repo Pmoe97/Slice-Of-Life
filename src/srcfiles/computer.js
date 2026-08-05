@@ -108,6 +108,10 @@ function defaultComputerState() {
       // here: they're world.foodOrders, because a driver's visit and the
       // handover are world events that outlive the app session.
       food: { cart: [], openRestaurantId: null, tipPct: FOOD_TUNING.defaultTipPct },
+      // Escorts (external-world plan Phase 7): which profile is open.
+      // Bookings themselves live in world.escortBookings (they outlive the
+      // app session — the visit does too).
+      escorts: { viewingNpcId: null },
       im: { threads: {}, viewingNpcId: null },
       stream: { subscriptions: [], watchHistory: [], resumePoints: {} },
       // Phase 11: investing portfolio. `holdings` is { fundId: { shares,
@@ -1361,7 +1365,17 @@ function claimRoomPersonalItems(gameState, roomId, npcId) {
 
 function acceptApplicant(gameState, npcId, roomId) {
   const npc = gameState.npcs[npcId];
-  if (!npc || npc.residency.status !== 'prospective') return { ok: false, reason: 'No such applicant.' };
+  // Move-in offers (external-world plan Phase 8): the offer flow is no
+  // longer Classifieds-only — any eligible external NPC (a roommate's
+  // friend, an escort you've gotten close to) can move in through the same
+  // assign path, gated by isMoveInEligible (locked decision 15: a strong
+  // relationship with the player OR a resident). Classifieds applicants
+  // ('prospective') remain eligible by virtue of the posted ad.
+  if (!npc) return { ok: false, reason: 'No such person.' };
+  if (npc.residency.status === 'resident') return { ok: false, reason: 'They already live here.' };
+  if (npc.residency.status !== 'prospective' && !isMoveInEligible(gameState, npcId)) {
+    return { ok: false, reason: `You don't know ${npc.bible?.name || 'them'} well enough to ask them to move in — it takes a close relationship (yours or a roommate's).` };
+  }
 
   // The player must explicitly choose a room — see renderRoomListAssign.
   if (!roomId) return { ok: false, reason: 'Choose a room for them.' };
@@ -1427,6 +1441,16 @@ function acceptApplicant(gameState, npcId, roomId) {
   // doesn't linger as a stale favorite or a dead inbox entry
   classifieds.favorites = (classifieds.favorites || []).filter(id => id !== npcId);
   classifieds.fetchQueue = (classifieds.fetchQueue || []).filter(q => q.npcId !== npcId);
+
+  // Move-in offers (external-world plan Phase 8): accepting clears any
+  // pending offers for this person, and retires their visit records so
+  // they stop being a visitor — a resident resolves from their schedule,
+  // not from a visit window (resolveTick's visitingIds already excludes
+  // residents; retiring the records keeps the queue honest).
+  gameState.world.moveInOffers = (gameState.world.moveInOffers || []).filter(o => o.npcId !== npcId);
+  for (const v of gameState.world.visits || []) {
+    if (v.npcId === npcId && v.status !== 'done') v.status = 'done';
+  }
 
   // Contractor tutorial (contractor doc Phase 3): first roommate in fires
   // the one-shot rent/roommate hint.
@@ -2134,7 +2158,12 @@ function fireContractorMilestone(gameState, milestoneId) {
 // and escorts rather than each inventing their own generator.
 function createExternalNpc(gameState, npcId, seedKey, occupationTitle) {
   if (gameState.npcs[npcId]) return gameState.npcs[npcId];
-  const rng = seededRng(gameState.meta.seed, seedKey);
+  // Same raw-vs-wrapped tolerance as generateFriendStub/ensureSocialCircles:
+  // Phase 7's ensureEscortRoster calls this from writeGeneratedGameState,
+  // which still holds the freshly generated, unwrapped state (top-level
+  // `seed`, no `.meta` yet) — `gameState.meta.seed` threw there.
+  const seed = gameState.meta?.seed ?? gameState.seed;
+  const rng = seededRng(seed, seedKey);
   const gender = rollGender(rng);
   const age = rollAge(rng);
   const useNeutral = rng() < 0.2;
@@ -2536,6 +2565,113 @@ function getFoodOrderEtaMinutes(order, clock) {
 
 function getActiveFoodOrders(gameState) {
   return (gameState.world.foodOrders || []).filter(o => o.status === 'ordered');
+}
+
+// --- Escorts (external-world plan Phase 7) ---
+// Roster read (idempotently backfills on old saves via ensureEscortRoster),
+// à la carte pricing, and booking. The booking record shape matches the
+// plan's data model — { escortNpcId, services, day, startTick, endTick,
+// price } — plus status and bookedDay for the app's My Bookings screen and
+// the day-rollover lifecycle. bookEscort is the ONE place a visit is created
+// from a booking: the purchased set becomes the visit's dual enforcement
+// (prompt boundaries in PROMPT/LLM, mechanical gating in DEFS.ACTIONS/RENDER).
+
+function getEscortRoster(gameState) {
+  return ensureEscortRoster(gameState);
+}
+
+function getEscortEntry(gameState, npcId) {
+  return getEscortRoster(gameState).find(e => e.npcId === npcId) || null;
+}
+
+// Total for a booking: the escort's base rate plus each purchased service.
+// Per-service, à la carte — exactly what the checklist computes and what the
+// book button charges, so the quote on the profile IS the charge.
+function getEscortVisitCost(gameState, entry, services) {
+  return (entry?.rate || 0) + (services || []).reduce((sum, sid) => sum + (ESCORT_SERVICE_DEFS[sid]?.rate || 0), 0);
+}
+
+function bookEscort(gameState, opts = {}) {
+  const entry = getEscortEntry(gameState, opts.npcId);
+  if (!entry) return { ok: false, reason: 'No such escort.' };
+  const npc = gameState.npcs[entry.npcId];
+  const name = npc?.bible?.name || 'They';
+
+  const requested = [...new Set(opts.services || [])];
+  if (requested.length === 0) return { ok: false, reason: 'Pick at least one service.' };
+  const offered = new Set(entry.offeredServices);
+  for (const sid of requested) {
+    if (!offered.has(sid)) return { ok: false, reason: `${ESCORT_SERVICE_DEFS[sid]?.label || sid} isn't on ${name}'s menu.` };
+    const def = ESCORT_SERVICE_DEFS[sid];
+    if (def?.requiresContentFlag && !activeContentFlags(gameState)[def.requiresContentFlag]) {
+      return { ok: false, reason: `${def.label} isn't available with your current content settings.` };
+    }
+  }
+
+  const { day: nowDay, minutes } = gameState.meta.clock;
+  const nowTick = getTickIndex(minutes);
+  const day = Number(opts.day);
+  const startTick = Number(opts.startTick);
+  if (day !== nowDay && day !== nowDay + 1) return { ok: false, reason: 'Bookings are for today or tomorrow.' };
+  if (!Number.isFinite(startTick)) return { ok: false, reason: 'Pick a start time.' };
+  if (day === nowDay) {
+    if (startTick < nowTick + ESCORT_TUNING.earliestLeadTicks) return { ok: false, reason: 'Too soon — they need time to get over.' };
+  } else if (startTick < ESCORT_TUNING.tomorrowStartTickMin || startTick > ESCORT_TUNING.tomorrowStartTickMax) {
+    return { ok: false, reason: 'Pick a start time.' };
+  }
+
+  // No double-booking: an escort can only have one live booking (today or
+  // tomorrow) at a time — the same person can't be in two places.
+  const bookings = gameState.world.escortBookings || (gameState.world.escortBookings = []);
+  const conflict = bookings.find(b => b.escortNpcId === entry.npcId && b.day === day && b.status === 'active');
+  if (conflict) return { ok: false, reason: `${name} is already booked then.` };
+
+  const cost = getEscortVisitCost(gameState, entry, requested);
+  if (gameState.player.money < cost) {
+    return { ok: false, reason: `Can't afford ${cost} (you have ${Math.round(gameState.player.money)}).` };
+  }
+
+  // The visit spans the longest purchased service's window (one session,
+  // not one service glued to another); clamped so it never crosses into a
+  // day-record the visit spine wouldn't see (getActiveVisits is same-day).
+  const duration = Math.max(ESCORT_TUNING.minVisitTicks, ...requested.map(sid => ESCORT_SERVICE_DEFS[sid]?.durationTicks || 0));
+  const endTick = Math.min(48, startTick + duration);
+
+  gameState.player.money -= cost;
+  const booking = {
+    id: `escort_${day}_${bookings.length}`,
+    escortNpcId: entry.npcId,
+    services: requested,
+    day,
+    startTick,
+    endTick,
+    price: cost,
+    bookedDay: nowDay,
+    status: 'active',
+  };
+  bookings.push(booking);
+  scheduleVisit(gameState, booking.id, day, {
+    npcId: entry.npcId,
+    purpose: 'escort',
+    startTick,
+    endTick,
+    roomId: gameState.player.location,
+  });
+  return { ok: true, booking, npc, cost };
+}
+
+// Active booking for an escort NPC right now. The visit spine's active visit
+// for them whose SOURCE is a live booking — bookEscort schedules the visit
+// with sourceId === booking.id, so this is a join, not a scan. Returns the
+// booking (or null), which is what both halves of the dual enforcement read.
+function getActiveEscortVisit(gameState, npcId) {
+  const visit = getActiveVisits(gameState).find(v => v.purpose === 'escort' && v.npcId === npcId);
+  if (!visit) return null;
+  return (gameState.world.escortBookings || []).find(b => b.id === visit.sourceId && b.status === 'active') || null;
+}
+
+function isEscortServiceBooked(booking, serviceId) {
+  return !!booking && (booking.services || []).includes(serviceId);
 }
 
 // Book a contracted renovation job (ref/renovation-occupancy-overhaul-plan.md).

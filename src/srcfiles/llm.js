@@ -69,6 +69,7 @@ CHARACTERS PRESENT (these are the ONLY people who can speak):
     "${activeNpcs[0]?.id || 'npc_id'}": { "facts": [], "episodes": [], "grievances": [], "resolveGrievances": [] }
   },
   "topic": "optional: what this exchange was about (e.g. 'cooking', 'personal/feelings')",
+  "advocateFor": "optional: use ONLY if an NPC present (or you, as the player) naturally suggests someone should move into the apartment. Set it to that person's NAME as listed in the speaker's [Relationships with others] section, and write the suggestion into their dialogue. Only use it when the speaker is close to that person (high affection/trust there) — a stranger shouldn't be vouched for. If set, narrate the suggestion in dialogue; the game turns it into a real move-in offer.",
   "effects": []
 }
 
@@ -82,6 +83,7 @@ CRITICAL RULES:
 - If nothing changes, set all deltas to 0.0 or omit the field.
 - memoryAdditions: facts/episodes/grievances the NPC should remember from this exchange. resolveGrievances: text of grievances that were addressed this turn. Omit if nothing notable.
 - effects is optional: a list of world-change lines drawn ONLY from the OPTIONAL WORLD CHANGES list above (e.g. "ADJUST_NEED player hunger +10"). Omit it or leave it empty if nothing applies. Never invent a new effect type or reference someone not listed above.
+- advocateFor is optional and RARE — only when someone naturally suggests moving in (usually a resident close to their friend/partner). One NPC can raise it per turn, max. Omit unless it genuinely fits the conversation.
 - Keep it SHORT. One narration paragraph, 1-3 dialogue lines max.
 - Do not break the fourth wall. Do not describe the format. Just tell the story.`;
 
@@ -112,7 +114,8 @@ RESPOND WITH VALID JSON IN THIS EXACT FORMAT (no other text, no markdown):
   "moodDeltas": { "${npc.id}": 0.0 },
   "moodReasons": { "${npc.id}": "optional: why their mood changed" },
   "memoryAdditions": { "${npc.id}": { "facts": [], "episodes": [] } },
-  "topic": "optional: what this exchange was about"
+  "topic": "optional: what this exchange was about",
+  "advocateFor": "optional: use ONLY if the NPC naturally suggests in their reply that someone should move into the apartment — set it to that person's NAME as listed in their [Relationships with others] section. Only when they're close to that person. Omit otherwise."
 }
 
 CRITICAL RULES:
@@ -121,6 +124,7 @@ CRITICAL RULES:
 - moodReasons: optional — why their mood changed. Omit if no mood delta.
 - memoryAdditions: optional — facts/episodes worth remembering. Omit if nothing notable.
 - topic is optional — a short label for what this exchange was about.
+- advocateFor is optional and RARE — only a natural, earned suggestion from this NPC, never forced.
 - 1-3 short messages max, not a paragraph. No narration field — dialogue only.`;
 
   return prompt;
@@ -245,6 +249,14 @@ function buildNpcBlockV2(npc, query) {
     block += '.';
   }
   block += '\n';
+
+  // Escorts (external-world plan Phase 7): the purchased service set as this
+  // NPC's explicit in-fiction boundaries for the active visit (the
+  // in-character half of the dual enforcement — the scene chips gate the
+  // mechanical half). Attached to the context object by NPC.assembleContext.
+  if (npc.escortSession?.boundaryText) {
+    block += `[Current booking]: ${npc.escortSession.boundaryText}\n`;
+  }
 
   // [Needs]
   block += needsLine(npc.needs);

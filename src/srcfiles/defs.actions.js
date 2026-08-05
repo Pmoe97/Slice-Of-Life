@@ -331,6 +331,22 @@ const ACTION_REQUIREMENT_CHECKERS = {
     }
     return true;
   },
+  // Escorts (external-world plan Phase 7): the mechanical half of the
+  // dual-enforced booking limits. escortVisitActive requires a live
+  // purpose:'escort' visit whose booking is active for that NPC;
+  // escortServiceBooked narrows further to EXACTLY the purchased set.
+  // Consumed by the escort.request-service chip handler (UI) — the prompt
+  // boundary (PROMPT's buildEscortBoundaryText) is the in-character half,
+  // and the chips themselves only render from the booking, so everything
+  // outside the set is both refused and unreachable.
+  escortVisitActive: (ctx, npcId) => {
+    const booking = getActiveEscortVisit(ctx.gameState, npcId);
+    return booking ? true : `${ctx.gameState.npcs?.[npcId]?.bible?.name || 'They'} isn't booked with you right now.`;
+  },
+  escortServiceBooked: (ctx, npcId, serviceId) => {
+    const booking = getActiveEscortVisit(ctx.gameState, npcId);
+    return isEscortServiceBooked(booking, serviceId) || `That wasn't part of what you booked.`;
+  },
 };
 
 // --- self.cook's runtime logic (ITEMS-backed: ITEM_DEFS/RECIPES) ---

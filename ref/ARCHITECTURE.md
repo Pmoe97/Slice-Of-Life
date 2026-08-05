@@ -19,7 +19,7 @@ rather than here, so they survive across sessions:
 | `ref/npc-overhaul-plan.md` | NPC bible/personality/memory system (built — kept for design rationale; no summary row below) |
 | `ref/renovation-occupancy-overhaul-plan.md` | Timed staged renovation jobs, per-bedroom facilities (**built** — all 4 phases) |
 | `ref/contractor-tutorial-overhaul-plan.md` | Del Connors, job pricing, the tutorial he anchors (**built** — all 4 phases) |
-| `ref/external-world-npcs-overhaul-plan.md` | External world: visit spine, contacts, maid, food delivery, friends-of-roommates, escorts, move-in advocacy — **planned, not built** (8 phases) |
+| `ref/external-world-npcs-overhaul-plan.md` | External world: visit spine, contacts, maid, food delivery, friends-of-roommates, escorts, move-in advocacy (**built** — all 8 phases) |
 | `ref/perchance-agent-handoff-prompt.md` | The one-phase-per-session protocol the implementing agent runs |
 
 > An earlier revision of this file cited `ref/Original Prompt and Response

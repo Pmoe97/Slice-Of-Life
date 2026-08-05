@@ -165,6 +165,11 @@ async function processDayRollover(day) {
   // organic visits are the ones that stand down when the place is busy, never
   // the other way round (locked decision 6).
   processFriendVisitsForDay(day);
+  // Escorts (external-world plan Phase 7): retire yesterday's bookings and
+  // narrate tonight's advance bookings, the same announce-ahead pattern as
+  // friends. The visit itself is already scheduled (bookEscort); this is
+  // lifecycle + narration only.
+  processEscortBookingsForDay(day);
   // Contractor tutorial (contractor doc Phase 3): one-shot quality-milestone hint once apartment quality crosses the threshold.
   maybeFireContractorQualityMilestone();
   processQuestsForDay(day);
@@ -732,6 +737,86 @@ function processFriendVisitsForDay(day) {
     }
     addLogEntry('narration', `${p.hostName} mentions that their friend ${p.guestName} is coming by around ${formatTime(p.startTick * 30)}.`);
   }
+}
+
+// Escorts (external-world plan Phase 7): the day-rollover half of booking
+// lifecycle. Retire yesterday's bookings (status → 'done', mirroring how
+// processVisitsForDay retires the visits themselves) and narrate tonight's
+// advance bookings so the player knows who's coming and when. The visit was
+// already scheduled by bookEscort — this is bookkeeping and narration only.
+function processEscortBookingsForDay(day) {
+  if (!currentGameState?.world) return;
+  ensureEscortRoster(currentGameState);
+  const bookings = currentGameState.world.escortBookings || (currentGameState.world.escortBookings = []);
+  for (const b of bookings) {
+    if (b.status !== 'active') continue;
+    if (b.day < day) { b.status = 'done'; continue; }
+    if (b.day === day && b.bookedDay < day) {
+      const npc = currentGameState.npcs[b.escortNpcId];
+      const name = npc?.bible?.name || 'An escort';
+      const labels = (b.services || []).map(sid => ESCORT_SERVICE_DEFS[sid]?.label || sid).join(', ');
+      addLogEntry('narration', `${name} confirmed for ${formatTime(b.startTick * 30)} tonight — ${labels}.`);
+    }
+  }
+}
+
+// --- Escorts (external-world plan Phase 7): app + chip handlers ---
+
+function doEscortViewProfile(npcId, device) {
+  if (!npcId || !currentGameState) return;
+  const escApp = currentGameState.world.computer?.apps?.escorts;
+  if (!escApp) return;
+  escApp.viewingNpcId = npcId;
+  switchScreen(currentGameState, 'escorts', 'profile', undefined, device === 'phone' ? 'phone' : 'computer');
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+}
+
+// Read the profile screen's transient form state (the service checklist +
+// start-time select) and commit it as a booking. Same DOM-on-submit pattern
+// as doMaidSave; the committed booking lives in world.escortBookings. The
+// select value is "<day>:<tick>" (today or tomorrow), built by the renderer.
+async function doEscortBook(npcId, device) {
+  if (!currentGameState || !npcId) return;
+  const scope = device === 'phone' ? document.getElementById('phone-screen') : document;
+  const checklist = scope.querySelector('.esc-check-list');
+  const timeSel = scope.querySelector('.esc-time-select');
+  const services = [...(checklist?.querySelectorAll('input:checked') || [])]
+    .map(cb => cb.getAttribute('data-service'));
+  const val = timeSel?.value || '';
+  const [day, tick] = val.split(':');
+  const res = bookEscort(currentGameState, { npcId, services, day: Number(day), startTick: Number(tick) });
+  if (!res.ok) { addLogEntry('system', res.reason); render(currentGameState, currentSceneState); return; }
+  const npc = res.npc;
+  const name = npc?.bible?.name || 'An escort';
+  const labels = (res.booking.services || []).map(sid => ESCORT_SERVICE_DEFS[sid]?.label || sid).join(', ');
+  const tonight = res.booking.day === currentGameState.meta.clock.day;
+  addLogEntry('narration', `Booked ${name} for ${formatTime(res.booking.startTick * 30)}${tonight ? ' tonight' : ' tomorrow'} — ${labels}. ${res.booking.price} paid up front.`);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('escort-book', currentGameState);
+}
+
+// The chip behind a booked service. The chip is only rendered from the live
+// booking, but that render is not the gate — the LIVE booking is re-checked
+// here via the same requirement checkers a registered action's `requires`
+// would run (the mechanical half of the dual enforcement), then routed into
+// the normal free-text LLM path so the exchange gets full relationship and
+// memory treatment. An unbooked request is declined in-character.
+async function doEscortRequestService(npcId, serviceId) {
+  if (!currentGameState || !npcId || !serviceId) return;
+  const npc = currentGameState.npcs[npcId];
+  const name = npc?.bible?.name || 'They';
+  const def = ESCORT_SERVICE_DEFS[serviceId];
+  const ctx = buildActionContext(currentGameState);
+  const active = ACTION_REQUIREMENT_CHECKERS.escortVisitActive(ctx, npcId);
+  if (active !== true) { addLogEntry('system', String(active)); render(currentGameState, currentSceneState); return; }
+  const booked = ACTION_REQUIREMENT_CHECKERS.escortServiceBooked(ctx, npcId, serviceId);
+  if (booked !== true) {
+    addLogEntry('narration', `${name} holds up a hand. "That isn't part of what we agreed on."`);
+    render(currentGameState, currentSceneState);
+    return;
+  }
+  await doPlayerAction(`Ask ${name} for ${(def?.label || 'a service').toLowerCase()}`);
 }
 
 // --- Food delivery: DoorDrop (external-world plan Phase 5) ---
@@ -1571,6 +1656,15 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'food.place-order':
       await doFoodPlaceOrder(extra?.device);
+      break;
+    case 'escorts.view-profile':
+      doEscortViewProfile(extra?.rowId, extra?.device);
+      break;
+    case 'escorts.book':
+      await doEscortBook(extra?.rowId, extra?.device);
+      break;
+    case 'escort.request-service':
+      if (npcId && extra?.rowId) await doEscortRequestService(npcId, extra.rowId);
       break;
     case 'classifieds.post':
       await doClassifiedsPost();

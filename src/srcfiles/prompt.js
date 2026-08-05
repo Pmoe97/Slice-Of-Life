@@ -48,3 +48,17 @@ function buildEffectVocabSection() {
 }
 
 // ===== /SECTION: PROMPT =====
+
+// Escorts (external-world plan Phase 7): the in-character half of the
+// dual-enforced booking limits. The purchased services become this NPC's
+// explicit in-fiction boundaries for the visit — exactly what was paid for
+// is on offer, anything else is declined in-character (politely, firmly, in
+// their own words), and WITHIN the purchased set interaction is deliberately
+// free-form and unsanitized (decision 14: "interaction is otherwise
+// free-form"). The mechanical half (unreachable actions) is DEFS.ACTIONS'
+// escortServiceBooked checker + the scene chips.
+function buildEscortBoundaryText(booking) {
+  const labels = (booking?.services || []).map(sid => ESCORT_SERVICE_DEFS[sid]?.label || sid);
+  if (labels.length === 0) return '';
+  return `You are on a booked appointment with the player. What they have purchased for this visit is exactly: ${labels.join(', ')}. ONLY the purchased services are on offer — politely but firmly decline anything outside that set, in your own words, without hostility and without breaking character. Within the purchased set you are fully present and free-form.`;
+}
