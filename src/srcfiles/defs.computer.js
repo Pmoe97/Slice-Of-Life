@@ -84,6 +84,24 @@ const APP_DEFS = {
       maid: { label: 'Housekeeper', renderer: 'homecare-maid' },
     },
   },
+  // Escorts (external-world plan Phase 7): a small persistent roster of full
+  // NPCs, each with their own advertised à la carte menu (decision 14). The
+  // profile screen's checklist renders ONLY that escort's offered services
+  // (mature ones filtered by content flags); the purchased set becomes the
+  // visit's dual enforcement (prompt boundaries + mechanical gating). Same
+  // app-shape convention as the maid: booking state lives in
+  // world.escortBookings, not here — this object is just which profile is
+  // open, so navigation survives a reload (viewingNpcId).
+  escorts: {
+    id: 'escorts', label: 'Escorts', category: 'services', requires: [],
+    devices: ['computer', 'phone'],
+    entryScreen: 'browse',
+    screens: {
+      browse: { label: 'Browse', renderer: 'escorts-browse' },
+      profile: { label: 'Profile', renderer: 'escorts-profile', hideFromNav: true },
+      bookings: { label: 'My Bookings', renderer: 'escorts-bookings' },
+    },
+  },
   // Roommate-wanted ads (RoomList). Phase 1 upgrade: the browse grid now
   // shows 30 cheap deterministic stubs per day (generated at day rollover
   // — no LLM). Full NPCs are created on-demand when the player loads a
@@ -101,6 +119,11 @@ const APP_DEFS = {
       queue: { label: 'Inbox', renderer: 'roomlist-queue', hideFromNav: false },
       studio: { label: 'Studio', renderer: 'roomlist-studio' },
       applicants: { label: 'Applicants', renderer: 'roomlist-applicants', hideFromNav: true },
+      // Move-in offers (external-world plan Phase 8): external NPCs a
+      // resident (or the player) vouched for in conversation, routed into
+      // the same assign flow a Classifieds applicant uses. Nav-visible so
+      // the player can find a waiting offer without hunting.
+      offers: { label: 'Offers', renderer: 'roomlist-offers' },
       detail: { label: 'Profile', renderer: 'applicant', hideFromNav: true },
       assign: { label: 'Assign Room', renderer: 'roomlist-assign', hideFromNav: true },
     },
@@ -493,6 +516,60 @@ const RESTAURANT_DEFS = {
   },
 };
 const RESTAURANT_DEFS_LIST = Object.values(RESTAURANT_DEFS);
+
+// --- Escorts (external-world plan Phase 7) ---
+// The à la carte catalogue. Each service has its own rate (on top of the
+// escort's base) and its own visit length in ticks; `requiresContentFlag`
+// gates the mature ones behind CONTENT_CONFIG's 'mature' flag the same way
+// AfterHours is gated — an escort's advertised set is filtered at render,
+// and bookEscort re-checks authoritatively. `company`/`dinner` are the
+// always-available, non-gated floor every escort's menu must include (so a
+// roster is never empty when the mature flag is off).
+const ESCORT_SERVICE_DEFS = {
+  company: {
+    id: 'company', label: 'Companionship', rate: 120, durationTicks: 4,
+    desc: 'Conversation, a drink, an evening that isn\u2019t quiet.',
+  },
+  dinner: {
+    id: 'dinner', label: 'Dinner Date', rate: 160, durationTicks: 4,
+    desc: 'A real meal out, or they cook \u2014 a night that reads as a date.',
+  },
+  massage: {
+    id: 'massage', label: 'Massage', rate: 200, durationTicks: 3,
+    requiresContentFlag: 'mature',
+    desc: 'Lotion, hands, and an hour that exists to unwind.',
+  },
+  gfe: {
+    id: 'gfe', label: 'Girlfriend Experience', rate: 280, durationTicks: 4,
+    requiresContentFlag: 'mature',
+    desc: 'Affection and intimacy, the full boyfriend-for-the-evening treatment.',
+  },
+  full: {
+    id: 'full', label: 'Full Service', rate: 420, durationTicks: 4,
+    requiresContentFlag: 'mature',
+    desc: 'Everything on the menu. No exceptions, no surprises.',
+  },
+  overnight: {
+    id: 'overnight', label: 'Overnight', rate: 900, durationTicks: 8,
+    requiresContentFlag: 'mature',
+    desc: 'From late evening through breakfast. The whole night.',
+  },
+};
+const ESCORT_SERVICE_DEFS_LIST = Object.values(ESCORT_SERVICE_DEFS);
+
+// Deterministic per-roster-slot menu rotation (decision 14: two escorts have
+// genuinely different menus). Six distinct subsets of the six services; each
+// includes at least one non-mature service (company/dinner) so the checklist
+// is never empty under any content-flag setting. ensureEscortRoster (SIM)
+// assigns slot i this rotation, so roster and menu are both seed-stable.
+const ESCORT_OFFERED_ROTATION = [
+  ['company', 'dinner', 'massage', 'gfe'],
+  ['company', 'dinner', 'gfe', 'full'],
+  ['company', 'massage', 'full', 'overnight'],
+  ['dinner', 'massage', 'gfe', 'overnight'],
+  ['company', 'dinner', 'massage', 'full'],
+  ['company', 'gfe', 'full', 'overnight'],
+];
 
 // --- Shows: free to watch, cost time, lift mood. ---
 const STREAM_DEFS = {

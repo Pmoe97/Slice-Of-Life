@@ -477,6 +477,7 @@ function _renderTabsAndChips(groups, energyDepleted) {
       btn.setAttribute('data-action', chip.action);
       if (chip.npcId) btn.setAttribute('data-npc', chip.npcId);
       if (chip.extra?.roomId) btn.setAttribute('data-room-id', chip.extra.roomId);
+      if (chip.extra?.rowId) btn.setAttribute('data-row-id', chip.extra.rowId);
       btn.textContent = chip.label;
       if (energyDepleted && !isActionExemptFromEnergyGate(chip.action)) btn.disabled = true;
       chipContainer.appendChild(btn);
@@ -558,6 +559,22 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
     const npc = gs.npcs[npcId];
     if (npc.contactKnown) continue;
     socialChips.push({ label: `Ask ${npc.bible.name || 'Them'} for Their Number`, action: 'ask-contact', npcId });
+  }
+  // Escorts (external-world plan Phase 7): during an active booked visit,
+  // each purchased service becomes a chip — the mechanical half of the dual
+  // enforcement. Only the booked set is ever reachable (the in-character
+  // half is the prompt boundary, PROMPT.buildEscortBoundaryText). The
+  // handler re-checks against the LIVE booking regardless, so a stale chip
+  // from a just-ended visit can't actually do anything.
+  for (const npcId of presentNpcIds) {
+    const npc = gs.npcs[npcId];
+    const booking = getActiveEscortVisit(gs, npcId);
+    if (!booking) continue;
+    for (const serviceId of booking.services || []) {
+      const def = ESCORT_SERVICE_DEFS[serviceId];
+      if (!def) continue;
+      socialChips.push({ label: `${def.label} with ${npc.bible.name || 'Them'}`, action: 'escort.request-service', npcId, extra: { rowId: serviceId } });
+    }
   }
   for (const npcId of presentNpcIds) {
     const quest = (gs.world.quests?.active || []).find(q =>

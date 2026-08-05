@@ -1,8 +1,10 @@
 # External World / Services / NPCs Overhaul
 
-Status: **planned — not built.** Design session complete 2026-08-04; every
-open question from the previous direction-only revision is now decided.
-Last updated 2026-08-04.
+Status: **complete** — all eight phases implemented and verified (Phase 7
+escorts, Phase 8 move-in advocacy and integration). Design session complete
+2026-08-04; every open question from the previous direction-only revision
+is now decided.
+Last updated 2026-08-05.
 
 Companions: `ref/contractor-tutorial-overhaul-plan.md` (built — the pilot
 external NPC this plan generalizes; Del's presence rules are defined here,
@@ -21,13 +23,135 @@ table at the bottom, as the very last thing you do each session — see
 
 ## Handoff — read this first
 
-**Resume at:** Phase 7 (escorts). Phases 1-6 are implemented and verified.
-Phase 7 needs `ESCORT_SERVICE_DEFS` + a persistent `world.escortRoster[]` of
-full NPCs with `offeredServices`, its own app, and **dual** enforcement of the
-booked set (in the scene prompt as in-fiction boundaries *and* as action
-gating). The visit spine, the external-NPC generator (`createExternalNpc`),
-the stub→NPC promotion path (`createNpcFromStub`) and the contact flow all
-exist and are the pieces to build on.
+**Resume at:** none — all eight phases are built and verified. Phase 8
+(move-in advocacy and integration) is complete; the doc is done.
+
+**Last session's notes (Phase 8 — move-in advocacy and integration, built and verified):**
+- **Advocacy in the proposal contract.** Both `buildScenePrompt` and
+  `buildImPrompt` (llm.js — the plan's `prompt.js` citation is STALE: the
+  actual proposal schema lives in llm.js, prompt.js is untouched) gained an
+  optional `advocateFor` field: the NAME of someone the speaker naturally
+  suggests should move in, used only when the speaker is close to that
+  person (their [Relationships with others] block is the name source).
+  RARE/optional rules added to both contracts. `validateProposal` (npc.js)
+  shape-checks it (non-empty string, ≤80 chars); name resolution and the
+  relationship gate run in `applyProposal` where the full gameState is in
+  scope — an unresolvable or unearned name is dropped, never rejected, so
+  the dialogue can still narrate the idea.
+- **Recording the offer.** `applyProposal` resolves name→npcId
+  (`resolveAdvocateTargetId`: direct id shortcut, else case-insensitive
+  `bible.name` match; residents and 'prospective' applicants return null —
+  they already have flows) and the speaker (`resolveAdvocacySpeaker`: first
+  dialogue line spoken by a scene NPC, else 'player'). Earned = speaker is
+  the player, OR a resident at least `familiar` with the player
+  (`hasPlayerPhaseAtLeast`, MOVE_IN_TUNING.advocatePlayerPhaseMin) who has a
+  strong castWeb bond to the target (`hasStrongNpcRelationship`: affection ≥
+  `residentAffectionMin` AND trust ≥ `residentTrustMin` on the
+  resident→target axis). `recordMoveInOffer` appends `{npcId, advocatedBy,
+  day}` to `world.moveInOffers`, idempotent per target (a second advocate
+  updates rather than duplicates). Emits a system log line ("<speaker>
+  vouched for <name> moving in — an offer is waiting in RoomList.") and a
+  `{type:'moveInOffer'}` event.
+- **Acceptance gate.** `acceptApplicant` (computer.js) no longer assumes a
+  Classifieds applicant. Guards: unknown → "No such person."; resident →
+  "They already live here."; non-'prospective' externals must pass
+  `isMoveInEligible` — player phase ≥ 'close' (MOVE_IN_TUNING.playerPhaseMin),
+  OR any resident has a strong castWeb bond to them ('prospective' always
+  eligible) — or they get the "You don't know X well enough to ask them to
+  move in…" refusal. Accepting now clears `world.moveInOffers` for that npc
+  and retires their `world.visits` records (status → 'done') so a new
+  resident never lingers as a visitor.
+- **Surfacing — no new conversation UI.** RoomList gained a nav-visible
+  **Offers** screen (`defs.computer.js` `offers: { label:'Offers',
+  renderer:'roomlist-offers' }`, registered in render.computer.js).
+  `renderRoomListOffers` filters `world.moveInOffers` to non-resident /
+  non-prospective NPCs and renders `.rl-offer-row` cards (avatar, name,
+  advocate, your phase with them) with an "Offer a Room" button that routes
+  through the EXISTING `classifieds.assign-room` → renderRoomListAssign
+  flow. `renderRoomListAssign`'s Back button is now context-aware: externals
+  go back to Offers, applicants to Profile. `doClassifiedsAccept`
+  (ui.computer.js) captures `wasProspective` before accepting so the player
+  lands on Offers (non-applicant) vs Browse (applicant) afterwards.
+- **Tuning.** `MOVE_IN_TUNING` (config.js): `residentTrustMin 0.3`,
+  `residentAffectionMin 0.3`, `advocatePlayerPhaseMin 'familiar'`,
+  `playerPhaseMin 'close'` — proposed defaults, named here so a future
+  balance pass has one knob.
+- **Verified live:** shape checks (empty / 81-char rejected, good accepted);
+  strong-bond resident advocate records the offer with correct advocatedBy +
+  log entry + event; weak bond (trust 0.05) does NOT record; unresolvable
+  name dropped without error; player advocacy always earned. acceptApplicant:
+  eligible external → resident (room + bed assigned, rent recomputed, offer
+  cleared, visit retired); ineligible external refused with the close-reason
+  message; resident refused; prospective applicant path intact; unknown
+  refused. renderRoomListOffers renders rows + assign buttons (residents
+  filtered out) and the empty-state message; back buttons route
+  external→Offers and applicant→Profile; doClassifiedsAccept returns to
+  Offers for non-applicants. New-game world init (buildGameState) plus
+  state.js load/save/writeGeneratedGameState all carry `moveInOffers`.
+
+**Last session's notes (Phase 7 — escorts, built and verified):**
+- **Data.** `ESCORT_SERVICE_DEFS` (defs.computer.js): six à la carte services
+  (`company` $120 / `dinner` $160 — always available, no flag; `massage`
+  $200 / `gfe` $280 / `full` $420 / `overnight` $900 — `requiresContentFlag:
+  'mature'`, the same CONTENT_CONFIG gate AfterHours uses). Each has its own
+  `rate` (on top of the escort's base) and `durationTicks`. `ESCORT_TUNING`
+  (config.js): `rosterSize` 6, per-escort base rate 90-150, `earliestLeadTicks`
+  2, tonight's window to tick 44, tomorrow's 30-44, `minVisitTicks` 2. A
+  booking's visit length is the LONGEST purchased service's duration.
+- **Roster.** `ensureEscortRoster` (sim.js) deterministically pre-generates 6
+  full NPCs via `createExternalNpc(...,'Escort')` with ids `escort_1..6`,
+  each with a seeded `bio`, base `rate`, and `offeredServices` drawn from
+  `ESCORT_OFFERED_ROTATION` (defs.computer.js) — six genuinely distinct menus,
+  and every menu includes at least one non-gated service so a roster is never
+  empty when the mature flag is off. Idempotent + backfilled (new-game write,
+  day rollover, first browse), so pre-Phase-7 saves pick it up with no
+  migration. Persisted as `world.escortRoster[]` alongside
+  `world.escortBookings[]` (state.js load/save/writeGeneratedGameState;
+  `buildGameState` inits both).
+- **Booking.** `bookEscort` (computer.js): validates offered-set membership,
+  mature content flag, day (today or tomorrow only), lead time, no
+  double-booking the same escort the same day, and funds; charges up front
+  (`base + Σ service rates`); pushes the booking record
+  `{ id, escortNpcId, services, day, startTick, endTick, price, bookedDay,
+  status:'active' }`; schedules the `purpose:'escort'` visit with
+  `sourceId = booking.id` and `roomId = the player's location at book time`.
+  Rebooking the same person for a different day works.
+- **Dual enforcement, both halves shipped.** (1) *Mechanical*: `RENDER`
+  builds a scene chip per BOOKED service only (the `[Current booking]` block
+  is unreachable otherwise), and `DEFS.ACTIONS` gained `escortVisitActive` /
+  `escortServiceBooked` requirement checkers — consumed by the chip handler
+  `doEscortRequestService` (ui.js), which re-checks the LIVE booking before
+  routing into `doPlayerAction`. An offered-but-unbooked request is declined
+  in-character and never reaches the LLM. (2) *In-fiction*:
+  `PROMPT.buildEscortBoundaryText` builds the boundary line; `NPC.assembleContext`
+  attaches it as `escortSession` on any NPC mid-appointment (via
+  `getActiveEscortVisit`); `LLM.buildNpcBlockV2` injects it as
+  `[Current booking]`. Inside the purchased set interaction is free-form.
+  NOTE: the plan's file list said actions.js for the gating helpers — they
+  landed in computer.js next to `bookEscort` (`getActiveEscortVisit`,
+  `isEscortServiceBooked`) for cohesion; the checkers in defs.actions.js
+  call them.
+- **App.** `APP_DEFS.escorts` ("Escorts", both devices): browse / profile /
+  bookings screens. Renderers in render.computer.js: `escorts-browse`
+  (roster cards), `escorts-profile` (bio + à la carte checklist filtered by
+  content flags + Tonight/Tomorrow start-time `<select>` with a live cost
+  total), `escorts-bookings`. App state is just `apps.escorts.viewingNpcId`.
+  Handlers `doEscortViewProfile` / `doEscortBook` (ui.js); the Book button
+  reads the transient DOM checklist + time select (the maid precedent) and
+  commits through `bookEscort`. `processEscortBookingsForDay` (ui.js, in
+  `processDayRollover` after friends) retires past bookings (`status →
+  'done'`) and narrates tonight's advance bookings. An escort's presence
+  follows the player through common rooms and their own bedroom, but not
+  other residents' rooms (resolveVisitPresence).
+- **Verified live:** 6 rosters / 6 distinct menus / deterministic rates;
+  booking charged exactly `base+Σrates` ($416) and scheduled the right
+  purpose:'escort' visit; unoffered service refused ("isn't on ...'s menu"),
+  double-booking refused, tomorrow+2 refused; with an active visit, exactly
+  the booked service appeared as a scene chip ("Companionship with Zane"),
+  `escortVisitActive`/`escortServiceBooked` checkers behaved, and
+  `buildScenePrompt` contained the boundary; roster + booking + escort NPC
+  round-tripped a real save/reload; mature flag off hid exactly the gated
+  services from the checklist; the app rendered on both computer and phone.
 
 **Last session's notes (Phase 6 — friends of roommates, built and verified):**
 - **Circles.** `ensureSocialCircles` (sim.js) gives every resident 2-4 friend
@@ -562,8 +686,8 @@ organically becomes a contact, a romance, and finally a housemate.
 | 4 | **Done** | Working-day `etaDay` + weekend rush (modifies shipped code) |
 | 5 | **Done** | Food: DoorDrop app, restaurants, dish items, driver visits, live ETA |
 | 6 | **Done** | Friends of roommates: circles, organic visits, background promotion, soft cap |
-| 7 | Not started | Escorts: roster, à la carte booking, dual-enforced limits |
-| 8 | Not started | Move-in advocacy, integration playtest |
+| 7 | **Done** | Escorts: roster, à la carte booking, dual-enforced limits |
+| 8 | **Done** | Move-in advocacy, integration playtest |
 
 ## Dependency order
 

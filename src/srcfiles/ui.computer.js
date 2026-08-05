@@ -746,6 +746,10 @@ async function doClassifiedsAccept(npcId, roomId) {
   if (!npcId) return;
   showLoading();
   try {
+    // Move-in offers (external-world plan Phase 8): a non-applicant accepted
+    // through the offers flow returns to the Offers screen, not Browse
+    // (which needs a posted ad) — capture their pre-accept status first.
+    const wasProspective = currentGameState.npcs[npcId]?.residency?.status === 'prospective';
     const result = acceptApplicant(currentGameState, npcId, roomId);
     if (!result.ok) { addLogEntry('system', result.reason); return; }
     addLogEntry('narration', `${result.npc.bible.name} moves in. Rent shifts to reflect the new headcount.`);
@@ -753,7 +757,7 @@ async function doClassifiedsAccept(npcId, roomId) {
     // already set — the new resident can show up in the room list/scene
     // immediately without a separate sync step.
     currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
-    switchScreen(currentGameState, 'classifieds', 'browse');
+    switchScreen(currentGameState, 'classifieds', wasProspective ? 'browse' : 'offers');
     renderComputerScreen(currentGameState);
     render(currentGameState, currentSceneState);
     await saveAtBoundary('classifieds-accept', currentGameState);

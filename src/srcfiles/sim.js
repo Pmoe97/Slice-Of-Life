@@ -443,6 +443,45 @@ function ensureSocialCircles(gameState) {
   }
 }
 
+// --- Escorts (external-world plan Phase 7) ---
+// Pre-generate the persistent roster: a fixed set of full NPCs (via
+// createExternalNpc — the exact generator drivers and the maid use, so they
+// are full NPCs, never vendor bots, design invariant 6), each with a
+// deterministic base rate, bio, and advertised service menu (the rotation
+// guarantees two escorts genuinely differ, decision 14). Idempotent like
+// ensureSocialCircles: called at new-game write, at day rollover, and on
+// first browse — so a save written before this phase picks the roster up
+// without a migration. NPC ids are the fixed slots 'escort_1'..'escort_n',
+// so the same seed always produces the same people, rates, and menus.
+const ESCORT_BIO_POOL = [
+  'Discreet, punctual, and unnervingly good with people.',
+  'Keeps their own hours and a strict policy about boundaries.',
+  'Friends first; everything else is on the table once it\u2019s agreed.',
+  'Easy to talk to, considerably harder to read.',
+  'Charges by the service, not by the hour, and sticks to the menu.',
+  'All business at first. Give it an evening and that changes.',
+];
+
+function ensureEscortRoster(gameState) {
+  const roster = gameState.world.escortRoster || (gameState.world.escortRoster = []);
+  if (roster.length > 0) return roster;
+  // Same raw-vs-wrapped tolerance as generateFriendStub: this also runs on
+  // the freshly generated state at new-game write time.
+  const seed = gameState.meta?.seed ?? gameState.seed;
+  for (let i = 0; i < ESCORT_TUNING.rosterSize; i++) {
+    const npcId = `escort_${i + 1}`;
+    createExternalNpc(gameState, npcId, npcId, 'Escort');
+    const rng = seededRng(seed, `escortroster_${i}`);
+    roster.push({
+      npcId,
+      bio: ESCORT_BIO_POOL[Math.floor(rng() * ESCORT_BIO_POOL.length)],
+      rate: ESCORT_TUNING.baseRateMin + Math.floor(rng() * (ESCORT_TUNING.baseRateMax - ESCORT_TUNING.baseRateMin + 1)),
+      offeredServices: [...(ESCORT_OFFERED_ROTATION[i % ESCORT_OFFERED_ROTATION.length] || [])],
+    });
+  }
+  return roster;
+}
+
 // How likely this resident is to have someone over today. Warmth and openness
 // are the whole model (locked decision 13) — a household's social life is a
 // property of who lives in it, not a global rate.
@@ -565,6 +604,23 @@ function resolveVisitPresence(npcId, gameState, activeVisits, rng, resolved) {
     return {
       block: 'leisure',
       location: scope[elapsed % scope.length],
+      activity,
+      transit: null,
+    };
+  }
+  // An escort (Phase 7) is here for the PLAYER, so they follow the player
+  // around the shared space the way a guest follows their host — and, unlike
+  // a social guest, into the player's own bedroom (that's the point of the
+  // appointment). Other residents' private rooms are off-limits: a booked
+  // session respects closed doors until it's actually underway, so if the
+  // player is in someone else's room the escort waits where the booking put
+  // them (the player's location at book time).
+  if (visit && visit.purpose === 'escort') {
+    const pLoc = gameState.player.location;
+    const followable = (pLoc && (ROOMS[pLoc]?.type === 'common' || pLoc === 'bedroom_player'));
+    return {
+      block: 'leisure',
+      location: followable ? pLoc : visit.roomId,
       activity,
       transit: null,
     };
@@ -2044,6 +2100,22 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
       // (promoteFriendStub) — new-game generation never pays for the whole
       // extended cast. See ensureSocialCircles.
       externalStubs: {},
+      // Escorts (external-world plan Phase 7): the persistent pre-generated
+      // roster and every booking. The roster is deterministic (see
+      // ensureEscortRoster) so it survives reloads and rebooking the same
+      // person works; a booking record is { id, escortNpcId, services,
+      // day, startTick, endTick, price, bookedDay, status } and schedules
+      // a purpose:'escort' visit (bookEscort). Both live here, world-level,
+      // because the visit and the person outlive the app session.
+      escortRoster: [],
+      escortBookings: [],
+      // Move-in offers (external-world plan Phase 8): pending vouches for an
+      // external NPC to move in, recorded when a resident (or the player)
+      // advocates for them in conversation (applyProposal). Each record is
+      // { npcId, advocatedBy: 'player' | residentNpcId, day }. The offer is
+      // the admission ticket into RoomList's Offers screen and the assign
+      // flow; it's cleared when the person moves in (acceptApplicant).
+      moveInOffers: [],
       // Contractor tutorial (contractor doc Phase 3): one-shot tutorial /
       // milestone flags (tutorialRenoUsed, tutorial_<milestoneId>) — see
       // ref/contractor-tutorial-overhaul-plan.md.

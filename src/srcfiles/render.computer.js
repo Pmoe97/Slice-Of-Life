@@ -40,10 +40,14 @@ const COMPUTER_RENDERERS = {
   'roomlist-queue': renderRoomListQueue,
   'roomlist-studio': renderRoomListStudio,
   'roomlist-assign': renderRoomListAssign,
+  'roomlist-offers': renderRoomListOffers,
   'doordrop-browse': renderDoorDropBrowse,
   'doordrop-menu': renderDoorDropMenu,
   'doordrop-cart': renderDoorDropCart,
   'doordrop-orders': renderDoorDropOrders,
+  'escorts-browse': renderEscortsBrowse,
+  'escorts-profile': renderEscortsProfile,
+  'escorts-bookings': renderEscortsBookings,
   messenger: renderMessages,
   'bank-overview': renderBankOverview,
   'bills-dashboard': renderBillsDashboard,
@@ -1389,6 +1393,166 @@ function renderDoorDropOrders(body, gs, app, screen) {
   }
 }
 
+// --- Escorts (external-world plan Phase 7) ---
+// Three screens in the shape of every dating-ish app the player has used:
+// browse the roster, read a profile and pick services + a start time, and a
+// bookings list. The booking checklist renders ONLY the profile's advertised
+// services (mature ones filtered by content flags, like AfterHours); the
+// DOM checkboxes + time select are transient form state read at Book (the
+// same exception the maid's grid already makes — committed state lives in
+// world.escortBookings).
+
+function renderEscortsBrowse(body, gs, app, screen) {
+  const roster = getEscortRoster(gs);
+  if (roster.length === 0) { body.innerHTML = '<p class="dim tiny">No escorts listed right now.</p>'; return; }
+  const head = document.createElement('div');
+  head.className = 'dd-menu-head';
+  head.innerHTML = `<div class="hc-card-title">Escorts</div><div class="dim tiny">A small, discreet roster. Browse a profile, pick a service, book a time.</div>`;
+  body.appendChild(head);
+  const grid = document.createElement('div');
+  grid.className = 'esc-grid';
+  for (const entry of roster) {
+    const npc = gs.npcs[entry.npcId];
+    if (!npc) continue;
+    const visible = entry.offeredServices.filter(sid => {
+      const def = ESCORT_SERVICE_DEFS[sid];
+      return !def?.requiresContentFlag || activeContentFlags(gs)[def.requiresContentFlag];
+    });
+    const card = document.createElement('div');
+    card.className = 'esc-card';
+    card.innerHTML = `
+      <div class="dd-card-head">
+        <span class="hc-card-title">${npc.bible.name}</span>
+        <span class="dim tiny">${npc.bible.age}, ${npc.bible.gender}</span>
+      </div>
+      <div class="dim tiny">${entry.bio}</div>
+      <div class="dim tiny">${entry.rate}/base — ${visible.length} service${visible.length === 1 ? '' : 's'} offered</div>
+    `;
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny';
+    btn.setAttribute('data-action', 'escorts.view-profile');
+    btn.setAttribute('data-row-id', entry.npcId);
+    btn.textContent = 'View Profile';
+    card.appendChild(btn);
+    grid.appendChild(card);
+  }
+  body.appendChild(grid);
+}
+
+function renderEscortsProfile(body, gs, app, screen) {
+  const escApp = gs.world.computer?.apps?.escorts;
+  const entry = getEscortRoster(gs).find(e => e.npcId === escApp?.viewingNpcId);
+  if (!entry) { body.innerHTML = '<p class="dim tiny">Pick an escort first.</p>'; return; }
+  const npc = gs.npcs[entry.npcId];
+  if (!npc) { body.innerHTML = '<p class="dim tiny">Profile unavailable.</p>'; return; }
+  const offered = entry.offeredServices.map(sid => ESCORT_SERVICE_DEFS[sid]).filter(Boolean);
+  const visible = offered.filter(d => !d.requiresContentFlag || activeContentFlags(gs)[d.requiresContentFlag]);
+
+  const head = document.createElement('div');
+  head.className = 'esc-profile-head';
+  head.innerHTML = `<div class="hc-card-title">${npc.bible.name}</div><div class="dim tiny">${npc.bible.age}, ${npc.bible.gender} — ${entry.rate}/booking base</div>`;
+  body.appendChild(head);
+
+  const bio = document.createElement('p');
+  bio.className = 'esc-bio dim';
+  bio.textContent = entry.bio;
+  body.appendChild(bio);
+
+  const checklist = document.createElement('div');
+  checklist.className = 'esc-check-list';
+  const totalSpan = document.createElement('span');
+  totalSpan.className = 'esc-total dim tiny';
+  const updateTotal = () => {
+    const checked = [...checklist.querySelectorAll('input:checked')].map(cb => cb.getAttribute('data-service'));
+    const cost = getEscortVisitCost(gs, entry, checked);
+    totalSpan.textContent = checked.length ? `Total: ${cost}` : `Base rate: ${entry.rate}`;
+  };
+  for (const def of visible) {
+    const label = document.createElement('label');
+    label.className = 'esc-check-item';
+    const duration = def.durationTicks / 2;
+    const durLabel = Number.isInteger(duration) ? `${duration}h` : `${Math.floor(duration)}h${duration % 1 ? ':30' : ''}`;
+    label.innerHTML = `
+      <input type="checkbox" class="esc-svc" data-service="${def.id}">
+      <span><strong>${def.label}</strong> — ${def.rate} <span class="dim tiny">(${durLabel})</span><br><span class="dim tiny">${def.desc}</span></span>
+    `;
+    label.querySelector('.esc-svc').addEventListener('change', updateTotal);
+    checklist.appendChild(label);
+  }
+  body.appendChild(checklist);
+  body.appendChild(totalSpan);
+
+  // Start-time select: tonight (needs the lead-time gap) or tomorrow
+  // afternoon-evening. The visit must fit inside its day, so the last
+  // selectable start is 48 − the longest purchased service's duration.
+  const { day, minutes } = gs.meta.clock;
+  const nowTick = getTickIndex(minutes);
+  const maxDuration = Math.max(ESCORT_TUNING.minVisitTicks, ...visible.map(d => d.durationTicks || 0));
+  const lastStart = Math.min(47, 48 - maxDuration);
+  let opts = '<optgroup label="Tonight">';
+  let anyToday = false;
+  for (let t = nowTick + ESCORT_TUNING.earliestLeadTicks; t <= Math.min(ESCORT_TUNING.todayStartTickMax, lastStart); t++) {
+    opts += `<option value="${day}:${t}">${formatTime(t * 30)}</option>`;
+    anyToday = true;
+  }
+  if (!anyToday) opts += '<option value="" disabled>none left tonight</option>';
+  opts += '</optgroup><optgroup label="Tomorrow">';
+  for (let t = ESCORT_TUNING.tomorrowStartTickMin; t <= Math.min(ESCORT_TUNING.tomorrowStartTickMax, lastStart); t++) {
+    opts += `<option value="${day + 1}:${t}">${formatTime(t * 30)}</option>`;
+  }
+  opts += '</optgroup>';
+  const timeRow = document.createElement('div');
+  timeRow.className = 'esc-time-row';
+  timeRow.innerHTML = `<label class="dim tiny">Start:</label> <select class="esc-time-select">${opts}</select>`;
+  body.appendChild(timeRow);
+
+  const actions = document.createElement('div');
+  actions.className = 'hc-maid-actions';
+  const book = document.createElement('button');
+  book.className = 'btn tiny';
+  book.setAttribute('data-action', 'escorts.book');
+  book.setAttribute('data-row-id', entry.npcId);
+  book.textContent = 'Book';
+  actions.appendChild(book);
+  const back = document.createElement('button');
+  back.className = 'btn tiny btn-secondary';
+  back.setAttribute('data-action', 'computer.open-screen');
+  back.setAttribute('data-app', 'escorts');
+  back.setAttribute('data-screen', 'browse');
+  back.textContent = 'Back';
+  actions.appendChild(back);
+  body.appendChild(actions);
+  updateTotal();
+}
+
+function renderEscortsBookings(body, gs, app, screen) {
+  const bookings = gs.world.escortBookings || [];
+  if (bookings.length === 0) { body.innerHTML = '<p class="dim tiny">No bookings yet.</p>'; return; }
+  const { day, minutes } = gs.meta.clock;
+  const tick = getTickIndex(minutes);
+  const sorted = [...bookings].sort((a, b) => (a.day - b.day) || (a.startTick - b.startTick));
+  for (const b of sorted) {
+    const npc = gs.npcs[b.escortNpcId];
+    const name = npc?.bible?.name || 'An escort';
+    const labels = (b.services || []).map(sid => ESCORT_SERVICE_DEFS[sid]?.label || sid).join(', ');
+    const when = b.day === day
+      ? `Today ${formatTime(b.startTick * 30)}`
+      : b.day === day + 1 ? `Tomorrow ${formatTime(b.startTick * 30)}`
+      : `Day ${b.day}, ${formatTime(b.startTick * 30)}`;
+    const status = b.status !== 'active' ? 'done'
+      : (b.day === day && tick >= b.startTick) ? 'onsite'
+      : b.day < day ? 'done' : 'upcoming';
+    const row = document.createElement('div');
+    row.className = 'hc-hired-row';
+    row.innerHTML = `<div><div class="hc-card-title">${name}</div><div class="dim tiny">${when} — ${labels} — ${b.price}</div></div>`;
+    const pill = document.createElement('span');
+    pill.className = `cs-status-pill${status === 'done' ? ' done' : ' active'}`;
+    pill.textContent = status;
+    row.appendChild(pill);
+    body.appendChild(row);
+  }
+}
+
 // --- RoomList: listing-status hero, then applicant cards; the profile
 // detail view (renderApplicantProfile, below) gets the same card
 // treatment as its own screen. ---
@@ -1563,6 +1727,59 @@ function renderRoomListApplicants(body, gs, app, screen) {
     grid.appendChild(card);
   }
   body.appendChild(grid);
+}
+
+// Move-in offers (external-world plan Phase 8): external NPCs a resident
+// (or the player) vouched for in conversation. Each row routes into the SAME
+// assign flow a Classifieds applicant uses (renderRoomListAssign) — "no new
+// UI" for the offer itself, just a different entry point. Prospective
+// applicants never appear here; they already have the Applicants flow.
+function renderRoomListOffers(body, gs, app, screen) {
+  const offers = (gs.world.moveInOffers || []).filter(o => {
+    const npc = gs.npcs[o.npcId];
+    return npc && npc.residency?.status !== 'resident' && npc.residency?.status !== 'prospective';
+  });
+  if (offers.length === 0) {
+    body.innerHTML = '<p class="dim tiny">No move-in offers yet. When a roommate close to someone — or you, close to an external — brings up moving in during conversation, the offer shows up here to act on.</p>';
+    return;
+  }
+  const hero = document.createElement('div');
+  hero.className = 'rl-hero';
+  hero.innerHTML = `
+    <div class="rl-hero-title">Move-in Offers</div>
+    <div class="dim tiny">People vouched for in conversation. Offer them a room through the same flow as a RoomList applicant.</div>
+  `;
+  body.appendChild(hero);
+
+  for (const offer of offers) {
+    const npc = gs.npcs[offer.npcId];
+    if (!npc) continue;
+    const b = npc.bible;
+    const advocate = offer.advocatedBy === 'player'
+      ? 'You'
+      : (gs.npcs[offer.advocatedBy]?.bible?.name || 'A roommate');
+    const rel = npc.relPlayer || {};
+    const phase = rel.conversationPhase || 'early';
+
+    const row = document.createElement('div');
+    row.className = 'rl-offer-row';
+    const card = document.createElement('div');
+    card.className = 'rl-card';
+    card.innerHTML = `
+      <div class="rl-card-avatar" style="background: ${hashToColor(b.name)};">${b.name.charAt(0)}</div>
+      <div class="rl-card-name">${b.name}</div>
+      <div class="dim tiny">${b.occupation.title || ''}${advocate !== 'You' ? ` · advocated by ${advocate}` : ''}</div>
+      <div class="dim tiny" style="margin-top:2px;">${b.age || ''} · you're ${phase} with them</div>
+    `;
+    row.appendChild(card);
+    const offerBtn = document.createElement('button');
+    offerBtn.className = 'btn tiny';
+    offerBtn.setAttribute('data-action', 'classifieds.assign-room');
+    offerBtn.setAttribute('data-row-id', offer.npcId);
+    offerBtn.textContent = 'Offer a Room';
+    row.appendChild(offerBtn);
+    body.appendChild(row);
+  }
 }
 
 // --- Phase 1/2: RoomList browse grid — 30 cheap deterministic stubs per
@@ -2136,13 +2353,17 @@ function renderRoomListAssign(body, gs, app, screen) {
     body.appendChild(card);
   }
 
-  // Back button
+  // Back button — for an external offered a room via the Phase 8 offers
+  // flow, going back lands on the Offers screen (the 'detail' profile
+  // screen is applicant-shaped — its Reject button would try to delete a
+  // non-applicant). Classifieds applicants still go back to their profile.
+  const fromOffers = npc.residency?.status !== 'prospective';
   const backBtn = document.createElement('button');
   backBtn.className = 'btn btn-secondary tiny';
   backBtn.setAttribute('data-action', 'computer.open-screen');
   backBtn.setAttribute('data-app', app.id);
-  backBtn.setAttribute('data-screen', 'detail');
-  backBtn.textContent = 'Back to Profile';
+  backBtn.setAttribute('data-screen', fromOffers ? 'offers' : 'detail');
+  backBtn.textContent = fromOffers ? 'Back to Offers' : 'Back to Profile';
   body.appendChild(backBtn);
 }
 

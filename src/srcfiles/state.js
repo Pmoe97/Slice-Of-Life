@@ -433,6 +433,15 @@ async function saveAtBoundary(reason, gameState) {
     // Friends of roommates (external-world plan Phase 6): the stub table is
     // the only record of who a resident's friends ARE until one is promoted.
     queueWrite('world', 'externalStubs', gameState.world.externalStubs || {});
+    // Escorts (external-world plan Phase 7): the roster and booking ledger —
+    // a booking in flight has real money in it and a visit scheduled against
+    // it, so it must survive a reload as reliably as the visit does.
+    queueWrite('world', 'escortRoster', gameState.world.escortRoster || []);
+    queueWrite('world', 'escortBookings', gameState.world.escortBookings || []);
+    // Move-in offers (external-world plan Phase 8): a pending vouch survives
+    // a reload like any other world fact — the player may come back to
+    // RoomList days later and still find the offer waiting.
+    queueWrite('world', 'moveInOffers', gameState.world.moveInOffers || []);
     // Contractor tutorial (contractor doc Phase 3): one-shot tutorial/milestone flags.
     queueWrite('world', 'flags', gameState.world.flags || {});
     queueWrite('world', 'quests', gameState.world.quests);
@@ -723,6 +732,15 @@ async function loadGameState() {
   // Empty for saves written before Phase 6 — ensureSocialCircles refills it at
   // the next day rollover, so no migration is needed.
   const externalStubs = await getWorld('externalStubs') || {};
+  // Escorts (external-world plan Phase 7): the persistent roster and booking
+  // ledger. Empty for saves written before Phase 7 — ensureEscortRoster
+  // backfills the roster on first browse/day rollover, so no migration.
+  const escortRoster = await getWorld('escortRoster') || [];
+  const escortBookings = await getWorld('escortBookings') || [];
+  // Move-in offers (external-world plan Phase 8): pending vouches for an
+  // external NPC to move in. Empty for saves written before Phase 8 — an
+  // offer is created live in conversation, so there is nothing to backfill.
+  const moveInOffers = await getWorld('moveInOffers') || [];
   // Contractor tutorial (contractor doc Phase 3): one-shot tutorial/milestone flags.
   const flags = await getWorld('flags') || {};
   // BrineOS Phase 2: phone shell nav state (Phase 3). Presence is derived
@@ -741,7 +759,7 @@ async function loadGameState() {
     npcIds: Object.keys(npcs).filter(id => id.startsWith('npc_')),
     // droppedConstraints is persisted in meta by writeGeneratedGameState.
     droppedConstraints: meta.droppedConstraints || [],
-    world: { rooms, castWeb, quests, events, deliveries, renovationJobs, visits, foodOrders, externalStubs, rent, computer, taxes, bills, upgrades, utilities, phone, flags },
+    world: { rooms, castWeb, quests, events, deliveries, renovationJobs, visits, foodOrders, externalStubs, escortRoster, escortBookings, moveInOffers, rent, computer, taxes, bills, upgrades, utilities, phone, flags },
   };
   // Lazily spawns any bucket missing from kv (a pre-WORLD save, or a
   // resident who moved in since the last full write) rather than needing a
@@ -775,6 +793,10 @@ async function writeGeneratedGameState(gameState) {
   // ships with them rather than growing them at the first day rollover (the
   // rollover call stays, as the backstop for later move-ins and old saves).
   ensureSocialCircles(gameState);
+  // Escorts (external-world plan Phase 7): pre-generate the roster before the
+  // first write so a brand-new game ships with escorts in the app (the day-
+  // rollover / first-browse call stays, as the backstop for old saves).
+  ensureEscortRoster(gameState);
 
   await setMeta({
     versions: { ...FOLDER_VERSIONS },
@@ -801,6 +823,9 @@ async function writeGeneratedGameState(gameState) {
   await root.kv.world.set('visits', gameState.world.visits || []);
   await root.kv.world.set('foodOrders', gameState.world.foodOrders || []);
   await root.kv.world.set('externalStubs', gameState.world.externalStubs || {});
+  await root.kv.world.set('escortRoster', gameState.world.escortRoster || []);
+  await root.kv.world.set('escortBookings', gameState.world.escortBookings || []);
+  await root.kv.world.set('moveInOffers', gameState.world.moveInOffers || []);
   await root.kv.world.set('flags', gameState.world.flags || {});
   await root.kv.world.set('rent', gameState.world.rent);
   await root.kv.world.set('computer', gameState.world.computer || defaultComputerState());

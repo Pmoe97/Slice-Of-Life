@@ -736,6 +736,10 @@ const VISIT_TUNING = {
     // Food drivers (Phase 5) — they're at the door with a bag, not settling
     // in, so the pool reads as a handover in progress.
     delivery: ['holding a warm paper bag', 'checking the order slip', 'waiting by the door', 'balancing a stacked delivery bag'],
+    // Escorts (Phase 7) — here on a booked appointment, present until the
+    // session's window ends. The floor-plan/ambient reading stays suggestive
+    // but PG: the explicit content lives in conversation, not in a room label.
+    escort: ['waiting by the sofa', 'glancing at the door as you come in', 'settling in like the night has started', 'looking at you like they already know how this goes'],
     default: ['visiting', 'hanging around'],
   },
 };
@@ -838,6 +842,54 @@ const FRIEND_TUNING = {
   durationTicksMax: 8,       // 4h
   // The same friend doesn't turn up two days running.
   perFriendCooldownDays: 3,
+};
+
+// --- Escorts (external-world plan Phase 7) ---
+// A persistent pre-generated roster of full NPCs, each with their own base
+// rate and advertised service menu (decision 14). Booking is à la carte and
+// per-service; the purchased set becomes the visit's dual enforcement.
+// Escorts work evenings/nights — deliberately OUTSIDE the 09:00-16:30 window
+// every other paid service works (locked decision 11) and after a
+// day_shift resident's commute home — so the start-time select offers
+// tonight (with a lead-time gap) and tomorrow's afternoon-evening window.
+const ESCORT_TUNING = {
+  rosterSize: 6,
+  // Per-escort base rate (service rates are added on top), rolled
+  // deterministically so the roster is stable across sessions.
+  baseRateMin: 90,
+  baseRateMax: 150,
+  // Minimum lead time between booking and visit start — they have to get
+  // there — and the floor for any visit's length.
+  earliestLeadTicks: 2,
+  minVisitTicks: 2,
+  // Tonight's window: any start from now+lead up to this tick. A service's
+  // duration caps the actual last start (the visit must fit inside the day).
+  todayStartTickMax: 44,       // 22:00
+  // Tomorrow's window, offered the day before.
+  tomorrowStartTickMin: 30,    // 15:00
+  tomorrowStartTickMax: 44,    // 22:00
+};
+
+// --- Move-in advocacy (ref/external-world-npcs-overhaul-plan.md, Phase 8) ---
+// External NPCs become residents when a resident (or the player) vouches for
+// them in conversation and the player then runs the existing offer flow.
+// "Strong relationship" is the gate on BOTH sides, per locked decision 15:
+// a resident who advocates must genuinely be close to the person they're
+// vouching for, and the acceptance gate requires the player OR some resident
+// to be close to the incoming NPC. Thresholds are proposed defaults — tune
+// during the Phase 8 playtest. castWeb axes are the NPC↔NPC relationship
+// surface (applyNpcToNpcDelta); the phase levels are the same ladder
+// deriveConversationPhase uses ('early' < 'familiar' < 'close' < 'intimate').
+const MOVE_IN_TUNING = {
+  // A resident vouching for someone must have at least this much bond with
+  // them (castWeb, resident→target direction), AND be at least this
+  // familiar with the player — "strong ties to both" (phase 8 verification).
+  residentTrustMin: 0.3,
+  residentAffectionMin: 0.3,
+  advocatePlayerPhaseMin: 'familiar',
+  // Acceptance-side eligibility: the player's own phase with the external
+  // OR any resident's strong bond is enough to extend an offer.
+  playerPhaseMin: 'close',
 };
 
 // Visitor drive allowlist (external-world plan Phase 1): while an external
