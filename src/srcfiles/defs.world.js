@@ -592,6 +592,40 @@ const ITEM_DEFS = {
   meal_soup: { id: 'meal_soup', label: 'Tomato Soup', nouns: ['soup', 'tomato soup'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 4 }, consumable: { hunger: 28, mood: 0.02 } },
   meal_potato: { id: 'meal_potato', label: 'Loaded Potato', nouns: ['potato', 'baked potato'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, consumable: { hunger: 30, mood: 0.03 } },
 
+  // Delivered restaurant dishes (external-world plan Phase 5). Real items,
+  // not a "you ate out" abstraction: a delivered dish lands in inventory or
+  // on the doormat like any other object, can go in the fridge, and carries
+  // the same perishable/consumable fields as a home-cooked meal. Deliberately
+  // NO `price` field — price is per-restaurant and lives in RESTAURANT_DEFS'
+  // menu (DEFS.COMPUTER); a `price` here would put takeout in Nile's catalog,
+  // which builds itself from every priced ITEM_DEF (SHOP_CATALOG_LIST, ITEMS).
+  // Restaurant food beats home cooking on hunger and mood — that's what the
+  // markup buys — and spoils faster, so ordering ahead has a real cost.
+  dish_kung_pao: { id: 'dish_kung_pao', label: 'Kung Pao Chicken', nouns: ['kung pao', 'kung pao chicken'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 45, mood: 0.05 } },
+  dish_chow_mein: { id: 'dish_chow_mein', label: 'Beef Chow Mein', nouns: ['chow mein', 'noodles'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 44, mood: 0.04 } },
+  dish_dumplings: { id: 'dish_dumplings', label: 'Pork Dumplings', nouns: ['dumplings'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 30, mood: 0.05 } },
+  dish_egg_rolls: { id: 'dish_egg_rolls', label: 'Egg Rolls', nouns: ['egg rolls'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 2 }, consumable: { hunger: 18, mood: 0.03 } },
+
+  dish_pepperoni_pizza: { id: 'dish_pepperoni_pizza', label: 'Pepperoni Pizza', nouns: ['pizza', 'pepperoni pizza'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, consumable: { hunger: 55, mood: 0.06 } },
+  dish_garlic_knots: { id: 'dish_garlic_knots', label: 'Garlic Knots', nouns: ['garlic knots', 'knots'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 2 }, consumable: { hunger: 20, mood: 0.04 } },
+  dish_calzone: { id: 'dish_calzone', label: 'Calzone', nouns: ['calzone'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 2 }, consumable: { hunger: 46, mood: 0.05 } },
+
+  dish_double_burger: { id: 'dish_double_burger', label: 'Double Cheeseburger', nouns: ['burger', 'cheeseburger'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 50, mood: 0.05 } },
+  dish_fries: { id: 'dish_fries', label: 'Basket of Fries', nouns: ['fries'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 22, mood: 0.04 } },
+  dish_milkshake: { id: 'dish_milkshake', label: 'Milkshake', nouns: ['milkshake', 'shake'], category: 'drink', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 15, mood: 0.06 } },
+
+  dish_salmon_roll: { id: 'dish_salmon_roll', label: 'Salmon Roll Set', nouns: ['sushi', 'salmon roll'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 40, mood: 0.07 } },
+  dish_tempura_udon: { id: 'dish_tempura_udon', label: 'Tempura Udon', nouns: ['udon', 'tempura udon'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 46, mood: 0.05 } },
+  dish_miso_soup: { id: 'dish_miso_soup', label: 'Miso Soup', nouns: ['miso', 'miso soup'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 16, mood: 0.03 } },
+
+  dish_al_pastor: { id: 'dish_al_pastor', label: 'Al Pastor Tacos', nouns: ['tacos', 'al pastor'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 42, mood: 0.06 } },
+  dish_burrito: { id: 'dish_burrito', label: 'Carne Asada Burrito', nouns: ['burrito'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 2 }, consumable: { hunger: 52, mood: 0.05 } },
+  dish_chips_guac: { id: 'dish_chips_guac', label: 'Chips & Guac', nouns: ['chips and guac', 'guacamole'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 20, mood: 0.04 } },
+
+  dish_pad_thai: { id: 'dish_pad_thai', label: 'Pad Thai', nouns: ['pad thai'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 44, mood: 0.06 } },
+  dish_green_curry: { id: 'dish_green_curry', label: 'Green Curry', nouns: ['green curry', 'curry'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 46, mood: 0.05 } },
+  dish_spring_rolls: { id: 'dish_spring_rolls', label: 'Fresh Spring Rolls', nouns: ['spring rolls'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 18, mood: 0.04 } },
+
   // Snacks/drinks (directly consumable, no cooking needed)
   instant_noodles: { id: 'instant_noodles', label: 'Instant Noodles', nouns: ['instant noodles', 'ramen'], category: 'food', stackable: true, maxStack: 12, consumable: { hunger: 20 }, price: 2, buyQty: 4 },
   energy_drink: { id: 'energy_drink', label: 'Energy Drink', nouns: ['energy drink'], category: 'drink', stackable: true, maxStack: 12, consumable: { energy: 15, hygiene: -1 }, price: 3, buyQty: 4 },

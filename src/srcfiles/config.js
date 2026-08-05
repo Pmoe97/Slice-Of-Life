@@ -733,6 +733,9 @@ const VISIT_TUNING = {
     // to be sociable, so the pool reads as hanging out rather than working.
     social: ['catching up', 'chatting', 'hanging out', 'laughing at something', 'lounging around'],
     maid: ['wiping down surfaces', 'running the vacuum', 'scrubbing the counters', 'folding things', 'carrying a laundry basket', 'working through the dishes'],
+    // Food drivers (Phase 5) — they're at the door with a bag, not settling
+    // in, so the pool reads as a handover in progress.
+    delivery: ['holding a warm paper bag', 'checking the order slip', 'waiting by the door', 'balancing a stacked delivery bag'],
     default: ['visiting', 'hanging around'],
   },
 };
@@ -771,6 +774,70 @@ const MAID_TUNING = {
   cookingHoursRequired: 2,
   cookingMealsPerVisit: 2,
   cookingMealItems: ['meal_pasta', 'meal_soup', 'meal_stirfry', 'meal_salad'],
+};
+
+// --- Food delivery (ref/external-world-npcs-overhaul-plan.md, Phase 5) ---
+// A DoorDash-alike: the restaurant's prepMinutes plus travel is how long the
+// food takes, and a real driver brings it. Everything here is per-ORDER
+// tuning; per-restaurant numbers (prep time, delivery fee, hours, menu
+// prices) live with the restaurant in RESTAURANT_DEFS (DEFS.COMPUTER).
+const FOOD_TUNING = {
+  // Travel on top of the kitchen's prep time. The seeded variance is what
+  // makes two identical orders arrive at different times.
+  travelMinutesBase: 20,
+  travelMinutesVariance: 20,
+  // Platform's cut, on top of the restaurant's own delivery fee. Ordering in
+  // is meant to be visibly worse value than cooking (design invariant: money
+  // pressure is the engine) — the fees are where that shows up.
+  serviceFeeRate: 0.15,
+  tipOptions: [0, 0.10, 0.18, 0.25],
+  defaultTipPct: 0.18,
+  // A generous tip is remembered by the person who carried it up the stairs.
+  // Applied to the driver's relPlayer on handover — small, but it means the
+  // regular who keeps showing up starts out warmer than a stranger.
+  tipRelThreshold: 0.18,
+  tipRelDelta: { trust: 0.04, affection: 0.04 },
+  stiffRelDelta: { trust: -0.02, affection: -0.03 },
+  // Drivers are a small persistent pool, not one throwaway NPC per order —
+  // "everyone persists forever" (locked decision 5) plus repeat drivers is
+  // what makes a delivery person someone you can actually get to know.
+  driverPoolSize: 5,
+  // The handover window, in ticks. Two (one hour) rather than one: ticks are
+  // 30 minutes, and a single-tick window would mean the player had to already
+  // be standing in the entry to ever meet the driver.
+  driverWindowTicks: 2,
+  // How far ahead a scheduled order can be placed, in ticks past the
+  // earliest possible arrival.
+  maxScheduleAheadTicks: 12,
+};
+
+// --- Friends of roommates (ref/external-world-npcs-overhaul-plan.md, Phase 6) ---
+// Every resident carries a small deterministic circle of friends, stubbed at
+// new-game and promoted to full bibles only when a visit is actually planned.
+// How often someone hosts is a personality fact, not a global rate: warmth and
+// openness are what make a household's social life busy or quiet (locked
+// decision 13), so a high/high roommate fills the living room and a low/low one
+// almost never has anyone over.
+const FRIEND_TUNING = {
+  circleMin: 2,
+  circleMax: 4,
+  // Per resident, per day. base + warmth·w + openness·w, clamped — a 0.9/0.9
+  // host lands near 22%/day, a -0.9/-0.9 one at the floor.
+  baseHostChance: 0.07,
+  warmthWeight: 0.09,
+  opennessWeight: 0.07,
+  minHostChance: 0.01,
+  maxHostChance: 0.30,
+  // Evening, 2-4 hours. Deliberately after the 09:00-16:30 window every paid
+  // service works, and after a day_shift resident's commute home (SCHEDULES:
+  // work ends tick 34, evening starts 36) — a guest who arrives while their
+  // host is still at the office would just stand in the living room alone.
+  startTickMin: 35,          // 17:30
+  startTickMax: 40,          // 20:00
+  durationTicksMin: 4,       // 2h
+  durationTicksMax: 8,       // 4h
+  // The same friend doesn't turn up two days running.
+  perFriendCooldownDays: 3,
 };
 
 // Visitor drive allowlist (external-world plan Phase 1): while an external
