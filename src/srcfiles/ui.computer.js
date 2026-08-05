@@ -1173,7 +1173,13 @@ function showUpgradeBookingModal(def, nextTier) {
   const gs = currentGameState;
   const day = gs.meta.clock.day;
   const jobType = nextTier.tier === 'functional' ? 'repair' : 'upgrade';
-  const etaDay = day + (nextTier.durationDays || 1);
+  // Working-day scheduling (external-world plan Phase 4): the crew works
+  // weekdays only, so show the real completion date — a Friday booking
+  // lands after the weekend. The rush option prices the alternative.
+  const durationDays = nextTier.durationDays || 1;
+  const etaDay = addWorkingDays(day, durationDays);
+  const rushEtaDay = day + durationDays;
+  const skipsWeekend = etaDay !== rushEtaDay;
   // Phase 2 (contractor doc): the player pays the Contractor's full price —
   // materials + labor markup — not the bare materials cost. Phase 3: the
   // tutorial's first auxiliary-bedroom job is free — advertised as FREE,
@@ -1203,7 +1209,8 @@ function showUpgradeBookingModal(def, nextTier) {
     <div class="upg-booking-summary">
       <div><span class="dim">Job:</span> <strong>${jobType === 'repair' ? 'Repair' : 'Upgrade'}</strong></div>
       <div><span class="dim">Cost:</span> <strong>${tutorialFree ? 'FREE' : totalCost}</strong> — ${tutorialFree ? 'one-time tutorial job — the first bedroom repair is on the house' : 'paid upfront, no refund on cancel'} ${tutorialFree ? '' : `<span class="dim tiny">(materials ${nextTier.cost} + labor ${laborCost})</span>`}</div>
-      <div><span class="dim">Duration:</span> <strong>${nextTier.durationDays || 1} day${(nextTier.durationDays || 1) === 1 ? '' : 's'}</strong> — done ${formatDate(etaDay)}</div>
+      <div><span class="dim">Duration:</span> <strong>${durationDays} working day${durationDays === 1 ? '' : 's'}</strong> — done ${formatDate(etaDay)}${skipsWeekend ? ' <span class="dim tiny">(crew is off at the weekend)</span>' : ''}</div>
+      ${(!tutorialFree && skipsWeekend) ? `<div class="upg-rush-row"><label><input type="checkbox" id="upg-rush-toggle"> <span>Weekend rush — <strong>${Math.round(totalCost * RENOVATION_RUSH_MULTIPLIER)}</strong> instead, done ${formatDate(rushEtaDay)}</span></label></div>` : ''}
       <div><span class="dim">Unavailable while working:</span> ${gatedTxt}</div>
       <div><span class="dim">Quality:</span> ${pct(qNow)} → ${pct(qAfter)}</div>
       <div><span class="dim">Rent ceiling:</span> ${pct(ceilNow)} → ${pct(ceilAfter)} per roommate</div>
@@ -1216,15 +1223,17 @@ function showUpgradeBookingModal(def, nextTier) {
 
 // Executes the booking after confirmation in the modal (upgrades.book-confirm).
 async function doUpgradeBook(facilityId) {
+  // Read the rush toggle BEFORE closeModal tears the modal DOM down.
+  const rush = !!document.getElementById('upg-rush-toggle')?.checked;
   closeModal();
   if (!facilityId) return;
   const def = FACILITY_DEFS[facilityId];
   const upgrade = currentGameState?.world?.upgrades?.[facilityId];
   if (!def || !upgrade) return;
   const jobType = upgrade.tier === 'broken' ? 'repair' : 'upgrade';
-  const result = bookRenovationJob(currentGameState, facilityId, jobType);
+  const result = bookRenovationJob(currentGameState, facilityId, jobType, { rush });
   if (!result.ok) { addLogEntry('system', result.reason); renderComputerScreen(currentGameState); return; }
-  addLogEntry('narration', `You book a ${jobType === 'repair' ? 'repair' : 'upgrade'} on the ${def.label} — ${result.cost === 0 ? "FREE, the Contractor's tutorial job" : `${result.cost} paid upfront`}. The crew finishes ${formatDate(result.etaDay)}.`);
+  addLogEntry('narration', `You book a ${jobType === 'repair' ? 'repair' : 'upgrade'} on the ${def.label} — ${result.cost === 0 ? "FREE, the Contractor's tutorial job" : `${result.cost} paid upfront`}${rush ? ', crew working through the weekend' : ''}. The crew finishes ${formatDate(result.etaDay)}.`);
   renderComputerScreen(currentGameState);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('upgrade-book', currentGameState);

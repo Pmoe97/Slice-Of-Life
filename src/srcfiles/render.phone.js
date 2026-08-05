@@ -498,10 +498,12 @@ function renderPhoneCameraDetail(body, gs, photoId) {
 
   // Share row — same contact scope as Messages (render.computer.js's
   // renderMessages): anyone you could text you can also send a photo to.
-  // Includes 'visitor' NPCs (the Contractor Friend) for consistency.
+  // Contacts (external-world plan Phase 2): externals qualify by earned
+  // contactKnown rather than by 'visitor' status, so this stays in lockstep
+  // with the Messages list instead of drifting into a wider scope.
   const npcIds = Object.keys(gs.npcs).filter(id => {
     const status = gs.npcs[id].residency?.status;
-    return status === 'resident' || status === 'prospective' || status === 'visitor';
+    return status === 'resident' || status === 'prospective' || gs.npcs[id].contactKnown === true;
   });
   if (npcIds.length > 0) {
     const shareLabel = document.createElement('div');

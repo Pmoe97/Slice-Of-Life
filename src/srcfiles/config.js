@@ -710,6 +710,77 @@ const CONTRACTOR_TUTORIAL_MILESTONES = {
 // fires only after a few real repairs.
 const CONTRACTOR_QUALITY_MILESTONE_THRESHOLD = 0.25;
 
+// --- Visit spine (ref/external-world-npcs-overhaul-plan.md, Phase 1) ---
+// world.visits[] is the single source of truth for "who is onsite and why",
+// written by every source (renovation jobs today; maid contracts, food
+// orders, roommates' friends, player invitations in later phases) and read
+// by one question: SIM's getActiveVisits. Ticks are 0-47 half-hour
+// increments (getTickIndex, matching SCHEDULES). The soft cap applies to
+// ORGANIC visits only — paid/scheduled visits always honor their booking.
+const VISIT_TUNING = {
+  softCap: 3,               // concurrent visitors that triggers organic-visit deferral (Phase 6)
+  contractor: {
+    startTick: 18,          // 09:00 — Del's locked presence window (decision 10)
+    endTick: 33,            // 16:30 — weekday only, see isWeekend
+  },
+  // Purpose-derived activity strings, picked per tick with the tick's
+  // seeded rng. The plan's example phrasing ("scrubbing the counters",
+  // "running cable") — each purpose gets its own pool so the visitor's
+  // activity matches why they're here.
+  activities: {
+    contractor: ['running cable', 'hanging drywall', 'sanding trim', 'painting the walls', 'fixing the wiring', 'repairing the frame', 'measuring up for trim'],
+    // Invited guests and roommates' friends (Phases 2 and 6) — they're here
+    // to be sociable, so the pool reads as hanging out rather than working.
+    social: ['catching up', 'chatting', 'hanging out', 'laughing at something', 'lounging around'],
+    maid: ['wiping down surfaces', 'running the vacuum', 'scrubbing the counters', 'folding things', 'carrying a laundry basket', 'working through the dishes'],
+    default: ['visiting', 'hanging around'],
+  },
+};
+
+// Weekend rush (ref/external-world-npcs-overhaul-plan.md, Phase 4). Del's
+// crew works weekdays only, so a job's durationDays are WORKING days and a
+// booking made late in the week stretches across the weekend. Paying the
+// rush premium keeps them working through it, turning durationDays back
+// into plain calendar days — money bought back time, which is the trade
+// the whole economy is built on.
+const RENOVATION_RUSH_MULTIPLIER = 1.6;
+
+// --- The maid (ref/external-world-npcs-overhaul-plan.md, Phase 3) ---
+// The contract is alarm-shaped: a per-day grid where each selected weekday
+// carries its own start/end time, bounded to the same 09:00-16:30 daytime
+// window everyone works (locked decision 11). Priced per onsite HOUR and
+// multiplied by each add-on, so the cost scales with both how often she
+// comes and how much she does — "expensive quickly by design".
+//
+// Base scope is common areas only, mirroring SERVICE_DEFS.standard_cleaning's
+// accessScope:'common'. The bedrooms add-on maps to accessScope:'all', which
+// already carries the boundary-violation/suspicion consequences STEALTH
+// models for letting someone into a resident's room.
+const MAID_TUNING = {
+  ratePerHour: 26,
+  // Multiplicative, so stacking add-ons compounds rather than adds.
+  addonRateMultipliers: { bedrooms: 1.35, laundry: 1.25, cooking: 1.40 },
+  windowMinTick: 18,          // 09:00
+  windowMaxTick: 33,          // 16:30
+  minVisitTicks: 2,           // one hour minimum per booked day
+  // Laundry throughput: the hamper is a 3-state fill (full → partial →
+  // empty), and she works it down one step per this many onsite hours.
+  // A week of neglect genuinely takes more than one short visit to clear.
+  laundryHoursPerStep: 2,
+  // Cooking: needs a real stretch onsite before any food gets left behind.
+  cookingHoursRequired: 2,
+  cookingMealsPerVisit: 2,
+  cookingMealItems: ['meal_pasta', 'meal_soup', 'meal_stirfry', 'meal_salad'],
+};
+
+// Visitor drive allowlist (external-world plan Phase 1): while an external
+// NPC resolves through an active visit, only these drives may fire —
+// reacting to the player, plus the NPC-to-NPC social drives. Self-care and
+// chore drives never run for a visitor: they have no needs to maintain (no
+// decay) and no chores to do. Enforced in DRIVES' evaluateDrives alongside
+// the renovation construction gate.
+const VISITOR_DRIVE_ALLOWLIST = ['react_to_player', 'seek_company', 'chat_with_roommate'];
+
 const FACILITY_DEFS = {
   // --- Bedroom: habitability (bed + door + light) ---
   // Split into four INDEPENDENT per-bedroom facilities (player + 3
@@ -1318,6 +1389,12 @@ const CALENDAR = {
   monthNames: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
 };
 
+// Weekday labels, indexed by getWeekday(day) (0=Mon .. 6=Sun). Promoted out
+// of a local array inside formatDate when the maid's schedule grid needed
+// the same names (external-world plan Phase 3) — one source, per the
+// no-magic-outside-config rule.
+const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
 // --- Time Dilation ---
 // Continuous clock: a rAF loop adds game-minutes based on the current
 // context's timeScale. The NPC simulation runs at fixed checkpoints
@@ -1622,8 +1699,29 @@ const CHARACTER_SCHEMA = {
       }
     },
     arcs:           { type: 'array', default: [] },
+    // Contacts (external-world plan Phase 2): do you have this person's
+    // number? Gates the IM contact list and invitations. Earned by asking
+    // in conversation — hiring someone through a service never grants it.
+    // Del is the sole day-one exception (seeded true at new-game setup).
+    contactKnown:   { type: 'boolean', default: false },
     flags:           { type: 'object', default: {} },
   }
+};
+
+// --- Contacts (ref/external-world-npcs-overhaul-plan.md, Phase 2) ---
+// Asking for someone's number is a social beat, not a threshold check.
+// Willingness is personality-weighted (locked decision 7): a warm, open
+// person shares early; a guarded one needs real rapport first. The rapport
+// score blends the relationship axes that actually mean "I like and trust
+// you"; the requirement it must clear is lowered by temperament.
+const CONTACT_TUNING = {
+  baseRequired: 0.30,        // rapport a perfectly neutral-temperament NPC needs
+  warmthWeight: 0.35,        // warm people hand it over sooner
+  opennessWeight: 0.25,      // open people too, slightly less strongly
+  retryCooldownDays: 2,      // days before you can ask again after a refusal
+  // Residents already live with you — sharing a number is a formality, so
+  // they clear a much lower bar than someone you just met.
+  residentRequirementMultiplier: 0.4,
 };
 
 // --- Temperament axes pools (weighted) ---

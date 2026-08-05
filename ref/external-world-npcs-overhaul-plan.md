@@ -21,12 +21,82 @@ table at the bottom, as the very last thing you do each session — see
 
 ## Handoff — read this first
 
-**Resume at:** Phase 1. No session has implemented against this document yet.
+**Resume at:** Phase 5 (food delivery). Phases 1-4 are implemented and
+verified. Phase 5 needs `RESTAURANT_DEFS` + dish `ITEM_DEFS` + its own app,
+with the driver as a `purpose:'delivery'` visit at the `entry` — the visit
+spine, the external-NPC generator, and the contact flow it needs all exist.
 
-**Last session's notes:** Document rewritten from direction-only into this
-phased plan following a full design session. No code written.
+**Last session's notes (Phases 1-4):**
+- **Phase 1 (visit spine)** was implemented by a previous session that ran
+  out of tool budget mid-verification and never wrote a handoff note; the
+  code was on disk while this doc still said "nothing implemented." It was
+  verified this session and is correct. `world.visits[]`, `getActiveVisits`,
+  `getActiveNpcIds` (the mandatory active-NPC index), `scheduleVisit`,
+  `scheduleContractorVisitsForJob`, `resolveVisitPresence`,
+  `processVisitsForDay`. Verified live: Del onsite in his job's room ticks
+  18-33 on weekdays, absent outside the window/at weekends, needs never
+  decay, no non-allowlisted drive fires for him, a roommate in the same room
+  sees him as a chat partner, dormant visitors stay out of the active index,
+  and past visits retire (clearing lingering location) without duplicating.
+- **Generalised presence beyond `'visitor'` status.** `resolveTick` keyed
+  visitor resolution off `residency.status === 'visitor'`, which would have
+  silently broken Phase 2 invitations: an invited *applicant*
+  (`'prospective'`) landed in the active index but hit the
+  `status !== 'resident'` guard and never resolved, so they'd never appear.
+  Presence now follows a `visitingIds` set built from the active visits, so
+  anyone with a visit turns up regardless of status. Verified with a
+  `'prospective'` guest.
+- **Phase 2 (contacts).** `contactKnown` on the NPC schema *and* explicitly
+  in `createNpcFromBible` (the schema default alone left it `undefined`).
+  Both contact filters (`render.computer.js` Messages, `render.phone.js`
+  camera share row) now key off `contactKnown` instead of a blanket
+  `'visitor'` clause — that clause would have auto-populated the list with
+  every driver and escort once Phases 5/7 land. `ask-contact` scene chip →
+  `doAskContact`, personality-weighted via `CONTACT_TUNING` (warmth +
+  openness lower the required rapport; residents get a large discount).
+  Verified: an open NPC (0.9/0.9, requirement −0.24) shares at rapport 0.2
+  while a guarded one (−0.8/−0.8, requirement 0.78) refuses at the same
+  rapport, the retry cooldown blocks an immediate re-ask, and rapport growth
+  flips the refusal. `doInviteOver` writes a `purpose:'social'` visit for
+  tomorrow; verified the guest actually turns up and leaves.
+- **Phase 3 (maid).** `MAID_TUNING` + `MAID_ADDONS`; contract lives in the
+  existing `services.hired[]` with its own record shape (deliberately NOT a
+  `SERVICE_DEFS` entry — those are flat cadence hires). `createExternalNpc`
+  is a **reusable** generator built here for the maid and intended for
+  Phases 5-7's drivers/friends/escorts. Own HomeCare screen with a per-day
+  grid; `renderHomeCareHired` special-cases her so the contract isn't
+  invisible. Verified: 6.5h/wk × $26 = $169 base, ×2.36 with all add-ons =
+  $399/wk; schedule normalisation clamps out-of-window times, drops
+  duplicate/invalid weekdays, enforces the 1h minimum; a Monday visit
+  charged $184, cleaned, stepped the hamper `full`→`partial` (throughput
+  cap — a full hamper needs a second visit), left 2 meals in the fridge, and
+  she rotated rooms across her window then vanished after it; no charge on
+  an uncontracted day; too broke = she doesn't come.
+- **Phase 4 (working days).** `addWorkingDays`/`workingDaysBetween` (SIM);
+  `bookRenovationJob` takes `{ rush }`, stores `job.rush`, and computes
+  `etaDay` accordingly; `getRenovationJobStage` counts working days so a job
+  parked over a weekend holds its stage; contractor visits skip weekends
+  unless rushed; booking modal gained a rush toggle showing both dates and
+  prices. Verified: a 3-day job booked Friday completes Wednesday normally
+  (crew days 5/8/9) vs Monday when rushed (crew days 5/6/7) at exactly
+  1.6× cost. `ref/renovation-occupancy-overhaul-plan.md` updated with a
+  superseded-note on `etaDay`, per the protocol's cross-document rule.
+- **Testing gotchas for the next session:** `buildGameState` returns a raw
+  state with top-level `clock` — wrap `gs.meta = { clock: gs.clock,
+  contentConfig: null, sessionLog: [], seed: gs.seed }` before calling
+  anything that reads `meta.clock`. `currentGameState` is a top-level `let`,
+  so `window.currentGameState = x` does NOT work — assign it bare
+  (`currentGameState = x`) from page scope. Stub `saveAtBoundary`, `render`,
+  and `addLogEntry` (no Perchance `root`, no booted DOM). Bump the
+  `?v=` query on every changed script in `main.html` or the browser serves
+  stale code.
 
-**Blockers / flagged deviations:** None.
+**Blockers / flagged deviations:**
+- None blocking. Two notes: (1) the maid's room rotation always starts at
+  the first room of her scope, so with the bedrooms add-on she begins in the
+  player's bedroom every visit — cosmetic, could be offset by weekday.
+  (2) `VISIT_TUNING.softCap` is defined but not yet enforced; it only
+  matters once organic visits exist, which is Phase 6.
 
 ---
 
@@ -424,10 +494,10 @@ organically becomes a contact, a romance, and finally a housemate.
 
 | Phase | Status | What it does |
 |---|---|---|
-| 1 | Not started | `world.visits[]` spine, windowed visitor presence, Del onsite, active-NPC index |
-| 2 | Not started | `contactKnown`, ask-for-contact action, IM filter, invitations |
-| 3 | Not started | The maid: contract grid, add-ons, laundry throughput |
-| 4 | Not started | Working-day `etaDay` + weekend rush (modifies shipped code) |
+| 1 | **Done** | `world.visits[]` spine, windowed visitor presence, Del onsite, active-NPC index |
+| 2 | **Done** | `contactKnown`, ask-for-contact action, IM filter, invitations |
+| 3 | **Done** | The maid: contract grid, add-ons, laundry throughput |
+| 4 | **Done** | Working-day `etaDay` + weekend rush (modifies shipped code) |
 | 5 | Not started | Food: restaurants, dish items, driver NPC, ETA |
 | 6 | Not started | Friends of roommates: circles, organic visits, background promotion |
 | 7 | Not started | Escorts: roster, à la carte booking, dual-enforced limits |

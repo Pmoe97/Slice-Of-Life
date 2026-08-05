@@ -2051,13 +2051,15 @@ function isTutorialFreeJob(gameState, facilityId) {
 // materials + labor markup. Single source of truth so the RenoFix card, the
 // booking modal, and bookRenovationJob all advertise and charge the same
 // number (Phase 2's price-advertised == price-charged invariant).
-function getRenovationJobCost(gameState, facilityId, jobType) {
+function getRenovationJobCost(gameState, facilityId, jobType, opts = {}) {
   const def = FACILITY_DEFS[facilityId];
   const upgrade = gameState?.world?.upgrades?.[facilityId];
   const nextTier = def && upgrade ? getNextFacilityTier(def, upgrade.tier) : null;
   if (!nextTier) return null;
   if (isTutorialFreeJob(gameState, facilityId)) return 0;
-  return getContractorJobPrice(nextTier.cost);
+  const base = getContractorJobPrice(nextTier.cost);
+  // Weekend rush (Phase 4) is a premium on the whole job, labor included.
+  return opts.rush ? Math.round(base * RENOVATION_RUSH_MULTIPLIER) : base;
 }
 
 // Contractor memory of the current job (contractor doc Phase 4 — banter
@@ -2106,6 +2108,169 @@ function fireContractorMilestone(gameState, milestoneId) {
   return true;
 }
 
+// --- External NPCs (ref/external-world-npcs-overhaul-plan.md) ---
+// Spawn a full, persistent external NPC deterministically from the world
+// seed. Reuses the exact pools generateApplicantStubsForDay draws from, so
+// an external is built the same way any other character is — they are full
+// NPCs, never vendor bots (design invariant 6). Created as 'visitor':
+// present only inside a visit window, never a resident, no rent.
+// Phase 3 uses this for the maid; Phases 5-7 reuse it for drivers, friends
+// and escorts rather than each inventing their own generator.
+function createExternalNpc(gameState, npcId, seedKey, occupationTitle) {
+  if (gameState.npcs[npcId]) return gameState.npcs[npcId];
+  const rng = seededRng(gameState.meta.seed, seedKey);
+  const gender = rollGender(rng);
+  const age = rollAge(rng);
+  const useNeutral = rng() < 0.2;
+  const namePool = useNeutral ? CHAR_GEN.namePools.first_n
+    : (gender === 'male' || gender === 'trans_male') ? CHAR_GEN.namePools.first_m
+    : CHAR_GEN.namePools.first_f;
+  const name = namePool[Math.floor(rng() * namePool.length)];
+  const traits = pickUnique(rng, PERSONALITY_TRAITS_POOL, 2 + Math.floor(rng() * 2));
+  const occ = weightedPick(rng, OCCUPATION_POOL);
+  const bible = {
+    name,
+    genSeed: Math.floor(rng() * 1e9),
+    age,
+    gender,
+    history: '',
+    temperament: {
+      warmth: rollAxis(rng), volatility: rollAxis(rng), openness: rollAxis(rng),
+      conscientiousness: rollAxis(rng), assertiveness: rollAxis(rng), selfAwareness: rollAxis(rng),
+    },
+    personality: { traits, coreTrait: traits[0] || 'easygoing', hiddenTrait: '', quirks: [], likes: [], dislikes: [] },
+    occupation: {
+      category: 'service',
+      title: occupationTitle || occ.title,
+      scheduleTemplate: 'day_shift',
+      incomeBand: 'low',
+      stressProfile: 0.4,
+      hours: '9-17',
+    },
+    interests: [], values: [],
+    baggage: '', wound: '', want: '', blindSpot: '', boundary: '',
+    speech: {
+      verbosity: rng(), formality: rng(), humorStyle: 'dry', profanityLevel: rng() * 0.5,
+      verbalTics: [], textingStyle: 'casual', vocabularyLevel: 0.5, catchphrases: [],
+    },
+    scheduleTemplate: 'day_shift',
+    sketch: `${age}-year-old ${occupationTitle || occ.title}`,
+    sampleLines: [],
+  };
+  const npc = createNpcFromBible(bible, 'visitor');
+  gameState.npcs[npcId] = npc;
+  return npc;
+}
+
+// --- The maid (external-world plan Phase 3) ---
+// Weekly price: every booked day's hours × the hourly rate, multiplied by
+// each add-on. Charged per visit (the day's share), not weekly, so a
+// contract costs exactly what it used.
+function maidAddonMultiplier(addons) {
+  let mult = 1;
+  for (const a of addons || []) mult *= (MAID_TUNING.addonRateMultipliers[a] || 1);
+  return mult;
+}
+
+function maidEntryHours(entry) {
+  return Math.max(0, (entry.endTick - entry.startTick)) / 2; // 2 ticks = 1 hour
+}
+
+function getMaidVisitCost(entry, addons) {
+  return Math.round(maidEntryHours(entry) * MAID_TUNING.ratePerHour * maidAddonMultiplier(addons));
+}
+
+function getMaidWeeklyCost(schedule, addons) {
+  return (schedule || []).reduce((sum, e) => sum + getMaidVisitCost(e, addons), 0);
+}
+
+// Validate + normalise a submitted schedule grid: one entry per weekday,
+// clamped to the daytime window, minimum length enforced.
+function normaliseMaidSchedule(schedule) {
+  const out = [];
+  const seen = new Set();
+  for (const e of schedule || []) {
+    const weekday = Number(e.weekday);
+    if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6 || seen.has(weekday)) continue;
+    let startTick = Math.max(MAID_TUNING.windowMinTick, Math.min(MAID_TUNING.windowMaxTick - MAID_TUNING.minVisitTicks, Number(e.startTick)));
+    let endTick = Math.min(MAID_TUNING.windowMaxTick, Math.max(startTick + MAID_TUNING.minVisitTicks, Number(e.endTick)));
+    if (!Number.isFinite(startTick) || !Number.isFinite(endTick)) continue;
+    seen.add(weekday);
+    out.push({ weekday, startTick, endTick });
+  }
+  return out.sort((a, b) => a.weekday - b.weekday);
+}
+
+function getMaidContract(gameState) {
+  const services = gameState.world.computer?.apps?.services;
+  return services?.hired.find(h => h.serviceId === MAID_SERVICE_ID) || null;
+}
+
+// Hire or update the maid contract. The same NPC persists across edits —
+// you don't get a new stranger because you changed Tuesday's hours.
+function setMaidContract(gameState, schedule, addons) {
+  const services = gameState.world.computer?.apps?.services;
+  if (!services) return { ok: false, reason: 'Services unavailable.' };
+  const normalised = normaliseMaidSchedule(schedule);
+  const validAddons = (addons || []).filter(a => MAID_ADDONS[a]);
+  let contract = getMaidContract(gameState);
+  if (normalised.length === 0) {
+    // Empty grid = cancel. The NPC persists (everyone persists forever) —
+    // you keep the relationship, you just stop paying her.
+    if (contract) services.hired = services.hired.filter(h => h.serviceId !== MAID_SERVICE_ID);
+    return { ok: true, cancelled: true };
+  }
+  if (!contract) {
+    const npc = createExternalNpc(gameState, 'maid_1', 'maid_1', 'Housekeeper');
+    contract = { serviceId: MAID_SERVICE_ID, schedule: normalised, addons: validAddons, npcId: 'maid_1' };
+    services.hired.push(contract);
+    return { ok: true, created: true, contract, npcName: npc.bible.name, weeklyCost: getMaidWeeklyCost(normalised, validAddons) };
+  }
+  contract.schedule = normalised;
+  contract.addons = validAddons;
+  return { ok: true, updated: true, contract, weeklyCost: getMaidWeeklyCost(normalised, validAddons) };
+}
+
+// Do the work for one maid visit. Cleaning always happens; add-ons layer on
+// top and are gated by how long she was actually onsite that day.
+function performMaidVisit(gameState, contract, entry) {
+  const hours = maidEntryHours(entry);
+  const scope = (contract.addons || []).includes('bedrooms') ? 'all' : 'common';
+  const itemsCleaned = performCleaningVisit(gameState, { accessScope: scope });
+  const result = { itemsCleaned, scope, hours, laundrySteps: 0, mealsCooked: 0 };
+
+  // Laundry: step the hamper down (full → partial → empty), capped by hours.
+  if ((contract.addons || []).includes('laundry')) {
+    const steps = Math.floor(hours / MAID_TUNING.laundryHoursPerStep);
+    const bucket = gameState.objects?.room_laundry || {};
+    const hamper = Object.values(bucket).find(o => o.defId === 'laundry_hamper');
+    if (hamper && steps > 0) {
+      const ladder = ['empty', 'partial', 'full'];
+      let idx = ladder.indexOf(hamper.state?.fill || 'empty');
+      if (idx < 0) idx = 0;
+      const newIdx = Math.max(0, idx - steps);
+      result.laundrySteps = idx - newIdx;
+      hamper.state = { ...(hamper.state || {}), fill: ladder[newIdx] };
+    }
+  }
+
+  // Cooking: leaves real meal items in the kitchen for anyone to eat.
+  if ((contract.addons || []).includes('cooking') && hours >= MAID_TUNING.cookingHoursRequired) {
+    const rng = seededRng(gameState.meta.seed, `maidcook_${gameState.meta.clock.day}`);
+    const fridgeBucket = gameState.objects?.room_kitchen || {};
+    const fridge = Object.values(fridgeBucket).find(o => o.defId === 'fridge');
+    for (let i = 0; i < MAID_TUNING.cookingMealsPerVisit; i++) {
+      const itemId = MAID_TUNING.cookingMealItems[Math.floor(rng() * MAID_TUNING.cookingMealItems.length)];
+      if (!ITEM_DEFS[itemId]) continue;
+      if (fridge) {
+        fridge.contents = addStack(fridge.contents, itemId, 1, null, {});
+        result.mealsCooked++;
+      }
+    }
+  }
+  return result;
+}
+
 // Book a contracted renovation job (ref/renovation-occupancy-overhaul-plan.md).
 // Replaces the instant click of the old purchaseUpgrade: the player pays
 // the FULL contracted price UP FRONT (materials + the Contractor's labor
@@ -2113,7 +2278,7 @@ function fireContractorMilestone(gameState, milestoneId) {
 // `durationDays`, and the tier only advances when
 // processRenovationJobsForDay completes it at day rollover. The job is
 // always performed by the Contractor, so it records contractorId.
-function bookRenovationJob(gameState, facilityId, jobType) {
+function bookRenovationJob(gameState, facilityId, jobType, opts = {}) {
   const def = FACILITY_DEFS[facilityId];
   if (!def) return { ok: false, reason: 'No such facility.' };
   const upgrades = gameState.world.upgrades;
@@ -2140,7 +2305,10 @@ function bookRenovationJob(gameState, facilityId, jobType) {
   // free job (contractor doc Phase 3): the first auxiliary-bedroom job
   // books at $0 so the guided flow works even for a broke player.
   const tutorialFree = isTutorialFreeJob(gameState, facilityId);
-  const cost = tutorialFree ? 0 : getContractorJobPrice(nextTier.cost);
+  // Weekend rush (external-world plan Phase 4): the crew works through the
+  // weekend for a premium. Never charged on the free tutorial job.
+  const rush = !!opts.rush && !tutorialFree;
+  const cost = tutorialFree ? 0 : getRenovationJobCost(gameState, facilityId, jobType, { rush });
   if (gameState.player.money < cost) return { ok: false, reason: `Can't afford ${cost} (you have ${Math.round(gameState.player.money)}).` };
 
   const startDay = gameState.meta.clock.day;
@@ -2155,7 +2323,10 @@ function bookRenovationJob(gameState, facilityId, jobType) {
     toTier: nextTier.tier,
     startDay,
     durationDays,
-    etaDay: startDay + durationDays,
+    // durationDays are WORKING days unless the rush premium was paid, in
+    // which case the crew works weekends too and they're calendar days.
+    etaDay: rush ? startDay + durationDays : addWorkingDays(startDay, durationDays),
+    rush,
     cost,
     status: 'active',
     contractorId: CONTRACTOR_ID, // the Contractor performs every job (contractor doc)
@@ -2164,6 +2335,11 @@ function bookRenovationJob(gameState, facilityId, jobType) {
   gameState.player.money -= cost;
   jobs.push(job);
   upgrade.activeJobId = jobId;
+  // Visit spine (external-world plan Phase 1): schedule the crew's onsite
+  // windows for the whole job — every working day from today through the
+  // day before etaDay, 09:00-16:30 in the job's room (see
+  // scheduleContractorVisitsForJob). Del proves the visit mechanism.
+  scheduleContractorVisitsForJob(gameState, job);
   // Tutorial flow (contractor doc Phase 3): consume the free-job flag and
   // fire the milestone hints — the free job teaches what "day N of M"
   // means; the first paid job (and first Upgrade, when that's the case)
@@ -2190,7 +2366,13 @@ function bookRenovationJob(gameState, facilityId, jobType) {
 // the RenoFix dashboard (Phase 3) and narration; derived, never persisted.
 function getRenovationJobStage(job, day) {
   const stages = RENOVATION_STAGE_TEMPLATES[job.jobType] || RENOVATION_STAGE_TEMPLATES.repair;
-  const elapsed = Math.max(0, day - job.startDay);
+  // Progress counts WORK done, not days sat through (external-world plan
+  // Phase 4): a non-rush job parked over a weekend holds its stage, because
+  // nobody was on site to advance it. A rush job works every day, so its
+  // elapsed time is plain calendar days.
+  const elapsed = job.rush
+    ? Math.max(0, day - job.startDay)
+    : workingDaysBetween(job.startDay, day);
   const idx = Math.min(stages.length - 1, Math.floor(elapsed / job.durationDays * stages.length));
   return { label: stages[idx], index: idx, total: stages.length };
 }

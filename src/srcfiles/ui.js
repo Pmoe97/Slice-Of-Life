@@ -143,6 +143,17 @@ async function processDayRollover(day) {
   // any job whose ETA is today wraps up — grouping renovations next to
   // deliveries keeps the day-rollover narrative order sensible.
   processRenovationJobsForDay(day);
+  // Visit spine (external-world plan Phase 1): retire yesterday's visits and
+  // (re)ensure today's contractor visits for any job still active — a
+  // backstop so saves with in-flight jobs get their crew onsite for the
+  // remaining working days. Runs after the jobs rollover so a job that
+  // completes today schedules nothing (its last work day was yesterday).
+  processVisitsForDay(day);
+  // The maid (external-world plan Phase 3): charge + perform + schedule her
+  // presence for today, if today is one of her contracted days. After
+  // processVisitsForDay so today's fresh visit isn't swept by the retirement
+  // pass in the same rollover.
+  processMaidForDay(day);
   // Contractor tutorial (contractor doc Phase 3): one-shot quality-milestone hint once apartment quality crosses the threshold.
   maybeFireContractorQualityMilestone();
   processQuestsForDay(day);
@@ -574,6 +585,217 @@ function maybeFireContractorQualityMilestone() {
   if (getApartmentQuality(currentGameState) >= CONTRACTOR_QUALITY_MILESTONE_THRESHOLD) {
     fireContractorMilestone(currentGameState, 'qualityThreshold');
   }
+}
+
+// Visit spine (external-world plan Phase 1): maintain world.visits at day
+// rollover. Retires every visit whose day has passed (status scheduled →
+// done, clearing the visitor's lingering location so they can't stay
+// "present" off-window), then re-ensures contractor visits for any job
+// still active — scheduleContractorVisitsForJob already covered the full
+// run at booking, so this is purely the backstop for saves that have an
+// in-flight job but predate visits. Mirrors processRenovationJobsForDay's
+// shape (an array of world records resolved at day rollover).
+function processVisitsForDay(day) {
+  if (!currentGameState?.world) return;
+  const visits = currentGameState.world.visits || (currentGameState.world.visits = []);
+  // Retire past visits; a visit whose window has passed must not leave its
+  // visitor lingering in the room they were in.
+  for (const v of visits) {
+    if (v.day >= day) continue;
+    if (v.status === 'done' || v.status === 'deferred') continue;
+    v.status = 'done';
+    const visitor = currentGameState.npcs[v.npcId];
+    if (visitor && visitor.location === v.roomId) {
+      visitor.location = null;
+      visitor.activity = '';
+      visitor.transit = null;
+    }
+  }
+  // Re-ensure today's contractor windows for still-active jobs.
+  for (const job of currentGameState.world.renovationJobs || []) {
+    if (job.status !== 'active') continue;
+    if (!job.rush && isWeekend(day)) continue;
+    if (day < job.startDay || day >= job.etaDay) continue;
+    const win = VISIT_TUNING.contractor;
+    scheduleVisit(currentGameState, job.id, day, {
+      npcId: job.contractorId || CONTRACTOR_ID,
+      purpose: 'contractor',
+      startTick: win.startTick,
+      endTick: win.endTick,
+      roomId: job.roomId,
+    });
+  }
+}
+
+// The maid (external-world plan Phase 3): read the schedule grid out of the
+// DOM at save time and commit it. Reading inputs on submit is the existing
+// pattern for transient form state (see the IM composer's textarea) — the
+// committed contract lives in world state, so nothing app-level is stored
+// only in the DOM.
+async function doMaidSave() {
+  if (!currentGameState) return;
+  const grid = document.getElementById('maid-grid');
+  const addonsBox = document.getElementById('maid-addons');
+  if (!grid) return;
+  const schedule = [];
+  for (const cb of grid.querySelectorAll('.maid-day-on')) {
+    if (!cb.checked) continue;
+    const wd = Number(cb.getAttribute('data-weekday'));
+    const start = grid.querySelector(`.maid-start[data-weekday="${wd}"]`);
+    const end = grid.querySelector(`.maid-end[data-weekday="${wd}"]`);
+    schedule.push({ weekday: wd, startTick: Number(start?.value), endTick: Number(end?.value) });
+  }
+  const addons = [...(addonsBox?.querySelectorAll('.maid-addon') || [])]
+    .filter(cb => cb.checked)
+    .map(cb => cb.getAttribute('data-addon'));
+
+  const res = setMaidContract(currentGameState, schedule, addons);
+  if (!res.ok) { addLogEntry('system', res.reason); return; }
+  if (res.cancelled) {
+    addLogEntry('system', 'Housekeeping contract cancelled.');
+  } else {
+    const npc = currentGameState.npcs[res.contract.npcId];
+    const name = npc?.bible?.name || 'A housekeeper';
+    addLogEntry('system', res.created
+      ? `${name} takes the job — $${res.weeklyCost}/week.`
+      : `Contract updated — $${res.weeklyCost}/week.`);
+  }
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('maid-contract', currentGameState);
+}
+
+// The maid (external-world plan Phase 3): one processor that both schedules
+// her presence for today and does the work. Charging + performing at day
+// rollover matches the existing service system (processServiceVisitsForDay
+// has always cleaned at rollover); the visit record is what makes her
+// visibly onsite during her window on top of that.
+function processMaidForDay(day) {
+  if (!currentGameState?.world?.computer) return;
+  const contract = getMaidContract(currentGameState);
+  if (!contract) return;
+  const weekday = getWeekday(day);
+  const entry = (contract.schedule || []).find(e => e.weekday === weekday);
+  if (!entry) return;
+
+  const cost = getMaidVisitCost(entry, contract.addons);
+  const npc = currentGameState.npcs[contract.npcId];
+  const name = npc?.bible?.name || 'The housekeeper';
+  if (currentGameState.player.money < cost) {
+    addLogEntry('system', `${name} didn't come — you couldn't cover the $${cost} visit.`);
+    return;
+  }
+  currentGameState.player.money -= cost;
+
+  // Presence: she rotates her cleaning scope during the window (see
+  // resolveVisitPresence's maid branch), so roomId is just where she starts.
+  scheduleVisit(currentGameState, `maid_${day}`, day, {
+    npcId: contract.npcId,
+    purpose: 'maid',
+    startTick: entry.startTick,
+    endTick: entry.endTick,
+    roomId: 'living_room',
+  });
+
+  const r = performMaidVisit(currentGameState, contract, entry);
+  const bits = [`${name} came by for ${r.hours}h — $${cost}`];
+  if (r.itemsCleaned) bits.push(`${r.itemsCleaned} things tidied`);
+  if (r.laundrySteps) bits.push(`laundry ${r.laundrySteps === 1 ? 'a load' : `${r.laundrySteps} loads`} down`);
+  if (r.mealsCooked) bits.push(`${r.mealsCooked} meals in the fridge`);
+  addLogEntry('narration', bits.join(', ') + '.');
+}
+
+// Contacts (external-world plan Phase 2): ask someone for their number.
+// Willingness is personality-weighted rather than a flat threshold (locked
+// decision 7) — warmth and openness lower the rapport an NPC needs before
+// they'll share, so a guarded person takes real relationship-building and an
+// open one says yes early. A refusal isn't permanent: it sets a short
+// retry cooldown so you can try again once things have warmed up.
+function contactRapport(npc) {
+  const rel = npc.relPlayer || {};
+  // trust/affection are -1..1, comfort is 0..1 — average them onto a single
+  // "do they like and trust you" scale.
+  return ((rel.trust || 0) + (rel.affection || 0) + (rel.comfort || 0)) / 3;
+}
+
+function contactRequirement(npc) {
+  const t = npc.bible?.temperament || {};
+  const willingness = CONTACT_TUNING.warmthWeight * (t.warmth || 0)
+    + CONTACT_TUNING.opennessWeight * (t.openness || 0);
+  let required = CONTACT_TUNING.baseRequired - willingness;
+  // Housemates share numbers as a matter of course.
+  if (npc.residency?.status === 'resident') required *= CONTACT_TUNING.residentRequirementMultiplier;
+  return required;
+}
+
+async function doAskContact(npcId) {
+  const npc = currentGameState?.npcs[npcId];
+  if (!npc) return;
+  const name = npc.bible?.name || 'They';
+  if (npc.contactKnown) {
+    addLogEntry('system', `You already have ${name}'s number.`);
+    return;
+  }
+  const day = currentGameState.meta.clock.day;
+  const lastAsked = npc.flags?._askedContactDay;
+  if (lastAsked !== undefined && day - lastAsked < CONTACT_TUNING.retryCooldownDays) {
+    addLogEntry('narration', `You just asked ${name} for their number. Pushing again this soon would be a bad look.`);
+    return;
+  }
+  const rapport = contactRapport(npc);
+  const required = contactRequirement(npc);
+  const ok = rapport >= required;
+  npc.flags = npc.flags || {};
+  npc.flags._askedContactDay = day;
+  if (ok) {
+    npc.contactKnown = true;
+    // Open the thread so the contact is immediately usable.
+    if (currentGameState.world.computer) ensureImThread(currentGameState, npcId);
+    addLogEntry('narration', `${name} gives you their number. You can text them now.`);
+  } else {
+    addLogEntry('narration', `${name} deflects — you don't know each other well enough for that yet.`);
+  }
+  await advanceAndResolve(1);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('ask-contact', currentGameState);
+}
+
+// Invitations (external-world plan Phase 2): invite a contact over. Writes a
+// purpose:'social' visit into the same world.visits[] queue every other
+// source uses — the player's invitation is not a special case. Scheduled for
+// the next day inside the standard daytime window so there's always a real
+// wait between inviting and their arrival.
+async function doInviteOver(npcId) {
+  const npc = currentGameState?.npcs[npcId];
+  if (!npc) return;
+  const name = npc.bible?.name || 'They';
+  // Residency first: someone who lives here can't be "invited over" whether
+  // or not you happen to have their number.
+  if (npc.residency?.status === 'resident') {
+    addLogEntry('system', `${name} already lives here.`);
+    return;
+  }
+  if (!npc.contactKnown) {
+    addLogEntry('system', `You don't have ${name}'s number.`);
+    return;
+  }
+  const day = currentGameState.meta.clock.day + 1;
+  const existing = (currentGameState.world.visits || []).find(v =>
+    v.npcId === npcId && v.day === day && v.status !== 'done' && v.status !== 'deferred');
+  if (existing) {
+    addLogEntry('system', `${name} is already coming over that day.`);
+    return;
+  }
+  const win = VISIT_TUNING.contractor; // shared daytime window
+  scheduleVisit(currentGameState, `invite_${npcId}_${day}`, day, {
+    npcId,
+    purpose: 'social',
+    startTick: win.startTick,
+    endTick: win.endTick,
+    roomId: 'living_room',
+  });
+  addLogEntry('narration', `${name} says they'll come by tomorrow.`);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('invite-over', currentGameState);
 }
 
 // Daily goals sourced from resident wants/wounds/interests (brief §Identity:
@@ -1172,6 +1394,9 @@ async function handleAction(action, npcId, extra) {
     case 'services.cancel':
       await doServicesCancel(extra?.rowId);
       break;
+    case 'services.maid-save':
+      await doMaidSave();
+      break;
     case 'classifieds.post':
       await doClassifiedsPost();
       break;
@@ -1273,6 +1498,12 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'talk':
       if (npcId) await doTalk(npcId);
+      break;
+    case 'ask-contact':
+      if (npcId) await doAskContact(npcId);
+      break;
+    case 'im.invite':
+      if (extra?.rowId) await doInviteOver(extra.rowId);
       break;
     case 'step-away':
       if (npcId) await doStepAway(npcId);

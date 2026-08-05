@@ -79,6 +79,9 @@ const APP_DEFS = {
     screens: {
       catalog: { label: 'Available', renderer: 'homecare-catalog' },
       hired: { label: 'Hired', renderer: 'homecare-hired' },
+      // The maid (external-world plan Phase 3) gets her own screen: a
+      // per-day schedule grid doesn't fit the flat catalog rows.
+      maid: { label: 'Housekeeper', renderer: 'homecare-maid' },
     },
   },
   // Roommate-wanted ads (RoomList). Phase 1 upgrade: the browse grid now
@@ -381,6 +384,20 @@ const SERVICE_DEFS = {
     costPerVisit: 90, cadenceDays: 7, accessScope: 'all',
   },
 };
+
+// The maid (external-world plan Phase 3) is deliberately NOT a SERVICE_DEFS
+// entry: those are fire-and-forget cadence hires with a flat per-visit cost,
+// and hers is a scheduled contract with a per-day window grid, add-ons, and
+// an actual person attached. It lives in the same HomeCare app and the same
+// services.hired[] array, but carries its own record shape — see
+// MAID_TUNING (config.js) and hireMaidContract (COMPUTER).
+const MAID_SERVICE_ID = 'maid';
+const MAID_ADDONS = {
+  bedrooms: { id: 'bedrooms', label: 'Bedrooms & private rooms', desc: 'She cleans the whole apartment, not just shared space. She will be in your roommates’ rooms.' },
+  laundry:  { id: 'laundry',  label: 'Laundry', desc: 'She works the hamper down while she’s here. Real loads take real time.' },
+  cooking:  { id: 'cooking',  label: 'Meal prep', desc: 'She leaves prepared food in the kitchen on longer visits.' },
+};
+const MAID_ADDONS_LIST = Object.values(MAID_ADDONS);
 const SERVICE_DEFS_LIST = Object.values(SERVICE_DEFS);
 
 // --- Shows: free to watch, cost time, lift mood. ---

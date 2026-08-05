@@ -422,6 +422,10 @@ async function saveAtBoundary(reason, gameState) {
     queueWrite('world', 'events', gameState.world.events);
     queueWrite('world', 'deliveries', gameState.world.deliveries);
     queueWrite('world', 'renovationJobs', gameState.world.renovationJobs);
+    // Visit spine (external-world plan Phase 1): the visit queue is world
+    // state like any other — visitors' presence windows must survive a
+    // reload mid-visit so Del doesn't vanish from the site mid-shift.
+    queueWrite('world', 'visits', gameState.world.visits || []);
     // Contractor tutorial (contractor doc Phase 3): one-shot tutorial/milestone flags.
     queueWrite('world', 'flags', gameState.world.flags || {});
     queueWrite('world', 'quests', gameState.world.quests);
@@ -699,6 +703,11 @@ async function loadGameState() {
   // Renovation overhaul: active/completed contracted jobs. Falls back to an
   // empty array for saves written before renovationJobs existed.
   const renovationJobs = await getWorld('renovationJobs') || [];
+  // Visit spine (external-world plan Phase 1): the "who is onsite and why"
+  // queue. Falls back to an empty array for saves written before visits
+  // existed — an in-flight job on such a save gets its crew visits via
+  // processVisitsForDay's rollover backstop, no migration needed.
+  const visits = await getWorld('visits') || [];
   // Contractor tutorial (contractor doc Phase 3): one-shot tutorial/milestone flags.
   const flags = await getWorld('flags') || {};
   // BrineOS Phase 2: phone shell nav state (Phase 3). Presence is derived
@@ -717,7 +726,7 @@ async function loadGameState() {
     npcIds: Object.keys(npcs).filter(id => id.startsWith('npc_')),
     // droppedConstraints is persisted in meta by writeGeneratedGameState.
     droppedConstraints: meta.droppedConstraints || [],
-    world: { rooms, castWeb, quests, events, deliveries, renovationJobs, rent, computer, taxes, bills, upgrades, utilities, phone, flags },
+    world: { rooms, castWeb, quests, events, deliveries, renovationJobs, visits, rent, computer, taxes, bills, upgrades, utilities, phone, flags },
   };
   // Lazily spawns any bucket missing from kv (a pre-WORLD save, or a
   // resident who moved in since the last full write) rather than needing a
@@ -768,6 +777,7 @@ async function writeGeneratedGameState(gameState) {
   await root.kv.world.set('events', gameState.world.events);
   await root.kv.world.set('deliveries', gameState.world.deliveries);
   await root.kv.world.set('renovationJobs', gameState.world.renovationJobs || []);
+  await root.kv.world.set('visits', gameState.world.visits || []);
   await root.kv.world.set('flags', gameState.world.flags || {});
   await root.kv.world.set('rent', gameState.world.rent);
   await root.kv.world.set('computer', gameState.world.computer || defaultComputerState());

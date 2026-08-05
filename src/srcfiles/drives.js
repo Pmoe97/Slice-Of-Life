@@ -38,7 +38,11 @@ function setCooldown(npc, driveId, currentTick) {
 
 // Evaluate all drives for a single NPC during a tick. Returns:
 // { npcUpdates, events, imMessages, relDeltas, activityOverride, clothingState }
-function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick) {
+// opts.isVisitor (external-world plan Phase 1) marks a visitor — an external
+// NPC resolving through an active visit — whose drives are restricted to
+// VISITOR_DRIVE_ALLOWLIST (see below).
+function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick, opts = {}) {
+  const isVisitor = !!opts.isVisitor;
   const events = [];
   const imMessages = [];
   const relDeltas = [];
@@ -55,6 +59,14 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick)
   for (const [driveId, drive] of Object.entries(DRIVE_DEFS)) {
     // Block filter
     if (drive.blockFilter && !drive.blockFilter.includes(block)) continue;
+
+    // Visitor drive allowlist (external-world plan Phase 1): a visitor's
+    // drives are limited to reacting to the player plus the NPC-to-NPC
+    // social drives. They have no needs to maintain (no decay) and no
+    // chores to do — self-care, chore, IM, peep, and snoop drives never
+    // fire for them. Lives alongside the construction gate below as the
+    // second drive-level restriction on who may act how.
+    if (isVisitor && !VISITOR_DRIVE_ALLOWLIST.includes(driveId)) continue;
 
     // Renovation overhaul (Phase 2): a drive that targets a facility under
     // construction (active renovation job) can't fire — the crew is in the
@@ -222,9 +234,14 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick)
 
     // NPC-to-NPC social interaction
     if (drive.npcToNpc) {
+      // Chat partners: residents AND active visitors physically in the same
+      // room. A dormant visitor has location null, so the location check
+      // alone excludes everyone not currently onsite — this is what lets a
+      // roommate sharing a room with Del (or a visiting friend, Phase 6)
+      // strike up a conversation with them (external-world plan Phase 1).
       const otherIds = Object.keys(npcs).filter(id =>
         id !== npcId &&
-        npcs[id].residency.status === 'resident' &&
+        (npcs[id].residency.status === 'resident' || npcs[id].residency.status === 'visitor') &&
         npcs[id].location === location &&
         !isOnCooldown(npcs[id], driveId, currentTick)
       );

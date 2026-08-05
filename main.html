@@ -1551,6 +1551,18 @@ body {
 .hc-scope-common { background: var(--color-surface-hover); color: var(--color-text-dim); }
 .hc-scope-all { background: rgba(246, 109, 140, 0.15); color: var(--color-negative); }
 .hc-hired-row { display: flex; align-items: center; justify-content: space-between; background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); }
+/* Housekeeper contract grid (external-world plan Phase 3): one row per
+   weekday, each with its own start/end time, plus the add-on list. */
+.upg-rush-row { margin-top: 4px; }
+.upg-rush-row label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.hc-maid-intro { margin-bottom: var(--space-3); }
+.hc-maid-grid { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-3); }
+.hc-maid-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.hc-maid-day { display: flex; align-items: center; gap: var(--space-2); min-width: 110px; cursor: pointer; }
+.hc-maid-row select { background: var(--color-card); color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 2px var(--space-2); }
+.hc-maid-addons { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-3); }
+.hc-maid-addon { display: flex; align-items: flex-start; gap: var(--space-2); cursor: pointer; }
+.hc-maid-actions { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
 
 /* RoomList */
 .rl-hero { background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); align-items: flex-start; }
@@ -2216,23 +2228,23 @@ body {
      UI.WINDOWMANAGER → BOOT. Functions calling into a LATER script are
      fine either way — those calls only happen at runtime, after every
      script below has finished loading. -->
-<script src="src/srcfiles/config.js?v=16"></script>
+<script src="src/srcfiles/config.js?v=20"></script>
 <script src="src/srcfiles/icons.js?v=12"></script>
 <script src="src/srcfiles/defs.world.js?v=8"></script>
 <script src="src/srcfiles/defs.actions.js?v=7"></script>
-<script src="src/srcfiles/defs.computer.js?v=9"></script>
-<script src="src/srcfiles/state.js?v=9"></script>
-<script src="src/srcfiles/sim.js?v=11"></script>
+<script src="src/srcfiles/defs.computer.js?v=10"></script>
+<script src="src/srcfiles/state.js?v=10"></script>
+<script src="src/srcfiles/sim.js?v=16"></script>
 <script src="src/srcfiles/world.js?v=13"></script>
 <script src="src/srcfiles/items.js?v=6"></script>
 <script src="src/srcfiles/effects.js?v=6"></script>
-<script src="src/srcfiles/drives.js?v=7"></script>
+<script src="src/srcfiles/drives.js?v=8"></script>
 <script src="src/srcfiles/actions.js?v=6"></script>
 <script src="src/srcfiles/intent.js?v=6"></script>
 <script src="src/srcfiles/skills.js?v=6"></script>
 <script src="src/srcfiles/stealth.js?v=6"></script>
 <script src="src/srcfiles/time.js?v=9"></script>
-<script src="src/srcfiles/computer.js?v=15"></script>
+<script src="src/srcfiles/computer.js?v=18"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -2245,14 +2257,14 @@ body {
 <script src="src/srcfiles/llm.js?v=6"></script>
 <script src="src/srcfiles/interruption.js?v=7"></script>
 <script src="src/srcfiles/image.js?v=7"></script>
-<script src="src/srcfiles/render.js?v=14"></script>
-<script src="src/srcfiles/render.computer.js?v=16"></script>
+<script src="src/srcfiles/render.js?v=15"></script>
+<script src="src/srcfiles/render.computer.js?v=18"></script>
 <script src="src/srcfiles/render.desktop.js?v=7"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
-<script src="src/srcfiles/render.phone.js?v=10"></script>
-<script src="src/srcfiles/ui.js?v=23"></script>
-<script src="src/srcfiles/ui.computer.js?v=17"></script>
+<script src="src/srcfiles/render.phone.js?v=11"></script>
+<script src="src/srcfiles/ui.js?v=27"></script>
+<script src="src/srcfiles/ui.computer.js?v=18"></script>
 <script src="src/srcfiles/ui.windowmanager.js?v=7"></script>
 <!-- BrineOS Phase 3: phone shell orchestration — after ui.computer.js. -->
 <script src="src/srcfiles/ui.phone.js?v=6"></script>

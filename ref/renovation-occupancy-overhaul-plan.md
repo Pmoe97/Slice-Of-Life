@@ -287,12 +287,23 @@ rollover." Canonical array of job records:
   fromTier: 'broken', toTier: 'functional',
   startDay: 12,
   durationDays: 3,
-  etaDay: 15,                     // startDay + durationDays, same shape as delivery.etaDay
+  etaDay: 15,                     // completion day, same shape as delivery.etaDay — see note below
+  rush: false,                    // weekend-rush premium paid? (added by the external-world plan, Phase 4)
   cost: 800,                      // materials cost — see companion doc for labor markup
   status: 'active' | 'complete',
   contractorId: '<contractor npc id>', // see contractor-tutorial-overhaul-plan.md
 }
 ```
+
+> **`durationDays` are WORKING days, not calendar days** — superseded by
+> `ref/external-world-npcs-overhaul-plan.md` Phase 4, which shipped after
+> this document was completed. Del's crew works weekdays only, so `etaDay`
+> is computed with `addWorkingDays(startDay, durationDays)` (SIM): a 3-day
+> job booked on a Friday finishes the following Wednesday. Paying the
+> weekend-rush premium (`RENOVATION_RUSH_MULTIPLIER`) sets `rush: true`,
+> which puts the crew on site every day and makes `etaDay` plain
+> `startDay + durationDays` again. Staged progress counts working days too
+> (`workingDaysBetween`), so a job parked over a weekend holds its stage.
 
 Also store a pointer on the facility's live state for O(1) lookup:
 `world.upgrades[facilityId].activeJobId = 'job_<n>'` (cleared on completion).

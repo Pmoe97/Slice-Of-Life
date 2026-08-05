@@ -550,6 +550,15 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
     const npc = gs.npcs[npcId];
     socialChips.push({ label: `Talk to ${npc.bible.name || 'Someone'}`, action: 'talk', npcId });
   }
+  // Contacts (external-world plan Phase 2): ask for someone's number. Only
+  // offered for people you don't already have — residents included, since
+  // living together doesn't mean you can text them. Whether they say yes is
+  // personality-weighted, not a flat threshold (see doAskContact, UI).
+  for (const npcId of presentNpcIds) {
+    const npc = gs.npcs[npcId];
+    if (npc.contactKnown) continue;
+    socialChips.push({ label: `Ask ${npc.bible.name || 'Them'} for Their Number`, action: 'ask-contact', npcId });
+  }
   for (const npcId of presentNpcIds) {
     const quest = (gs.world.quests?.active || []).find(q =>
       q.type === 'chain' && q.npcId === npcId &&

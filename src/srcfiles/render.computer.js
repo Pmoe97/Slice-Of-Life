@@ -33,6 +33,7 @@ const COMPUTER_RENDERERS = {
   'edustream-enrolled': renderEduStreamEnrolled,
   'homecare-catalog': renderHomeCareCatalog,
   'homecare-hired': renderHomeCareHired,
+  'homecare-maid': renderHomeCareMaid,
   'roomlist-post': renderRoomListPost,
   'roomlist-applicants': renderRoomListApplicants,
   'roomlist-browse': renderRoomListBrowse,
@@ -1081,10 +1082,103 @@ function renderHomeCareCatalog(body, gs, app, screen) {
   body.appendChild(grid);
 }
 
+// The maid (external-world plan Phase 3): the alarm-shaped contract grid.
+// Each weekday can be enabled independently with its own start/end time,
+// bounded to the daytime window. Price is per onsite hour × add-on
+// multipliers, shown live so the cost of "every day, everything" is
+// obvious before you commit to it.
+function renderHomeCareMaid(body, gs, app, screen) {
+  const contract = getMaidContract(gs);
+  const npc = contract ? gs.npcs[contract.npcId] : null;
+
+  const intro = document.createElement('div');
+  intro.className = 'hc-maid-intro';
+  intro.innerHTML = contract
+    ? `<div class="hc-card-title">${npc?.bible?.name || 'Your housekeeper'}</div><div class="dim tiny">Contracted — $${getMaidWeeklyCost(contract.schedule, contract.addons)}/week across ${contract.schedule.length} day${contract.schedule.length === 1 ? '' : 's'}.</div>`
+    : `<div class="hc-card-title">Hire a housekeeper</div><div class="dim tiny">Pick the days and hours you want her here. Billed by the hour, per visit.</div>`;
+  body.appendChild(intro);
+
+  const timeOpts = (sel) => {
+    let out = '';
+    for (let t = MAID_TUNING.windowMinTick; t <= MAID_TUNING.windowMaxTick; t++) {
+      out += `<option value="${t}"${t === sel ? ' selected' : ''}>${formatTime(t * 30)}</option>`;
+    }
+    return out;
+  };
+
+  const grid = document.createElement('div');
+  grid.className = 'hc-maid-grid';
+  grid.id = 'maid-grid';
+  for (let wd = 0; wd < 7; wd++) {
+    const entry = (contract?.schedule || []).find(e => e.weekday === wd);
+    const row = document.createElement('div');
+    row.className = 'hc-maid-row';
+    row.innerHTML = `
+      <label class="hc-maid-day">
+        <input type="checkbox" class="maid-day-on" data-weekday="${wd}"${entry ? ' checked' : ''}>
+        <span>${WEEKDAY_NAMES[wd]}</span>
+      </label>
+      <select class="maid-start" data-weekday="${wd}">${timeOpts(entry ? entry.startTick : MAID_TUNING.windowMinTick)}</select>
+      <span class="dim tiny">to</span>
+      <select class="maid-end" data-weekday="${wd}">${timeOpts(entry ? entry.endTick : MAID_TUNING.windowMaxTick)}</select>
+    `;
+    grid.appendChild(row);
+  }
+  body.appendChild(grid);
+
+  const addons = document.createElement('div');
+  addons.className = 'hc-maid-addons';
+  addons.id = 'maid-addons';
+  for (const a of MAID_ADDONS_LIST) {
+    const on = (contract?.addons || []).includes(a.id);
+    const mult = MAID_TUNING.addonRateMultipliers[a.id];
+    const label = document.createElement('label');
+    label.className = 'hc-maid-addon';
+    label.innerHTML = `
+      <input type="checkbox" class="maid-addon" data-addon="${a.id}"${on ? ' checked' : ''}>
+      <span><strong>${a.label}</strong> <span class="dim tiny">×${mult}</span><br><span class="dim tiny">${a.desc}</span></span>
+    `;
+    addons.appendChild(label);
+  }
+  body.appendChild(addons);
+
+  const actions = document.createElement('div');
+  actions.className = 'hc-maid-actions';
+  const save = document.createElement('button');
+  save.className = 'btn tiny';
+  save.setAttribute('data-action', 'services.maid-save');
+  save.textContent = contract ? 'Update Contract' : 'Hire';
+  actions.appendChild(save);
+  const note = document.createElement('span');
+  note.className = 'dim tiny';
+  note.textContent = 'Unchecking every day cancels the contract.';
+  actions.appendChild(note);
+  body.appendChild(actions);
+}
+
 function renderHomeCareHired(body, gs, app, screen) {
   const services = gs.world.computer.apps.services;
   if (services.hired.length === 0) { body.innerHTML = '<p class="dim tiny">No services hired.</p>'; return; }
   for (const hire of services.hired) {
+    // The maid is a scheduled contract, not a cadence hire — she has her
+    // own screen, so summarise her here rather than skipping her entirely
+    // (SERVICE_DEFS has no 'maid' entry by design).
+    if (hire.serviceId === MAID_SERVICE_ID) {
+      const npc = gs.npcs[hire.npcId];
+      const row = document.createElement('div');
+      row.className = 'hc-hired-row';
+      const days = (hire.schedule || []).map(e => WEEKDAY_NAMES[e.weekday].slice(0, 3)).join(', ');
+      row.innerHTML = `<div><div class="hc-card-title">${npc?.bible?.name || 'Housekeeper'}</div><div class="dim tiny">${days || 'No days set'} — $${getMaidWeeklyCost(hire.schedule, hire.addons)}/week</div></div>`;
+      const edit = document.createElement('button');
+      edit.className = 'btn tiny btn-secondary';
+      edit.setAttribute('data-action', 'computer.open-screen');
+      edit.setAttribute('data-app', 'services');
+      edit.setAttribute('data-screen', 'maid');
+      edit.textContent = 'Edit';
+      row.appendChild(edit);
+      body.appendChild(row);
+      continue;
+    }
     const service = SERVICE_DEFS[hire.serviceId];
     if (!service) continue;
     const daysUntil = Math.max(0, hire.nextDay - gs.meta.clock.day);
@@ -1865,13 +1959,16 @@ function renderMessages(body, gs, app, screen) {
   const im = gs.world.computer.apps.im;
   // Phase 7: include prospective NPCs (applicants the player is interviewing)
   // alongside residents in the contact list, so the Interview button on a
-  // RoomList profile can open a real conversation with them. Contractor
-  // Friend (Phase 1): 'visitor' NPCs are textable too — the Contractor
-  // exists only via IM and must appear here to be contactable at all.
+  // RoomList profile can open a real conversation with them.
+  // Contacts (external-world plan Phase 2): externals are listed by earned
+  // contact, NOT by status. This replaced a blanket 'visitor' clause — with
+  // externals persisting forever, that would have auto-populated the list
+  // with every delivery driver and escort the player ever saw. Del still
+  // appears because he's seeded contactKnown at new-game setup.
   const contactIds = Object.keys(gs.npcs).filter(id =>
     gs.npcs[id].residency.status === 'resident'
     || gs.npcs[id].residency.status === 'prospective'
-    || gs.npcs[id].residency.status === 'visitor'
+    || gs.npcs[id].contactKnown === true
   );
 
   const layout = document.createElement('div');
@@ -1914,6 +2011,18 @@ function renderMessages(body, gs, app, screen) {
       <div class="im-avatar" style="background: ${hashToColor(npc.bible?.name || im.viewingNpcId)};">${(npc.bible?.name || '?').charAt(0)}</div>
       <div class="im-chat-name">${npc.bible?.name || 'Unknown'}</div>
     `;
+    // Invitations (external-world plan Phase 2): inviting someone over is a
+    // messaging-app action — you need their number first, which is exactly
+    // what being in this list means. Residents already live here, and Del
+    // comes when there's a job, so neither is invitable.
+    if (npc.residency?.status !== 'resident' && im.viewingNpcId !== CONTRACTOR_ID) {
+      const invite = document.createElement('button');
+      invite.className = 'btn tiny im-invite-btn';
+      invite.setAttribute('data-action', 'im.invite');
+      invite.setAttribute('data-row-id', im.viewingNpcId);
+      invite.textContent = 'Invite Over';
+      header.appendChild(invite);
+    }
     pane.appendChild(header);
 
     const log = document.createElement('div');

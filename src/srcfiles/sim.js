@@ -109,6 +109,32 @@ function isWeekend(day) {
   return getWeekday(day) >= 5;
 }
 
+// Working-day arithmetic (external-world plan Phase 4). Del's crew works
+// weekdays only, so a renovation job's durationDays are WORKING days: this
+// returns the calendar day on which `workingDays` of actual work have been
+// completed, starting from (and including) `startDay` if it's a weekday.
+// A 3-day job booked on a Friday finishes the following Wednesday.
+function addWorkingDays(startDay, workingDays) {
+  let day = startDay;
+  let remaining = workingDays;
+  while (remaining > 0) {
+    if (!isWeekend(day)) remaining--;
+    day++;
+  }
+  // Skip any trailing weekend so the completion day is a day work happened.
+  while (isWeekend(day)) day++;
+  return day;
+}
+
+// How many working days have elapsed between two days (excludes `to`).
+// Drives staged progress so "day 2 of 5" counts work done, not calendar
+// days sat through — a job idle over a weekend doesn't advance its stage.
+function workingDaysBetween(from, to) {
+  let count = 0;
+  for (let d = from; d < to; d++) if (!isWeekend(d)) count++;
+  return count;
+}
+
 // --- Calendar helpers (Phase 1) ---
 // Layered on top of getWeekday — day-of-week is unchanged; the year is a
 // 360-day cycle of 4 quarters/seasons. All are pure functions of `day`,
@@ -188,7 +214,9 @@ function formatHour12(hour) {
 }
 
 function formatDate(day) {
-  const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  // Abbreviated from the shared WEEKDAY_NAMES (config) so the maid's
+  // schedule grid and this date line can never disagree about day order.
+  const weekdays = WEEKDAY_NAMES.map(n => n.slice(0, 3));
   // Render a real in-fiction date: weekday + month + day-of-month +
   // year. The month/day cycle is cosmetic (30-day months), so this is
   // "Wed Mar 24, Year 1" instead of "Wed Day 84". Keeps the weekday
@@ -302,6 +330,131 @@ function getPresentNpcIds(npcs, roomId) {
     const n = npcs[id];
     return n && n.location === roomId && n.residency.status !== 'former';
   });
+}
+
+// --- Visits (ref/external-world-npcs-overhaul-plan.md, Phase 1) ---
+// world.visits[] is the single source of truth for "who is onsite and why".
+// A visit is the presence window of an external NPC: their location and
+// activity are purpose-driven, they don't decay needs, and outside their
+// window they are fully dormant. getActiveVisits is the ONLY door
+// consumers use — the tick loop, scene layer, and floor plan all ask this
+// one question rather than scanning individual sources (renovation jobs,
+// and later contracts/orders/bookings/invites).
+function getActiveVisits(gameState) {
+  const visits = gameState.world?.visits;
+  if (!visits || visits.length === 0) return [];
+  const { day, minutes } = gameState.meta.clock;
+  const tick = getTickIndex(minutes);
+  return visits.filter(v =>
+    v.day === day &&
+    v.status !== 'done' && v.status !== 'deferred' &&
+    tick >= v.startTick && tick < v.endTick
+  );
+}
+
+// Active-NPC index (external-world plan Phase 1): residents + NPCs with an
+// active visit. Required by the "everyone persists forever" decision — with
+// unbounded externals, the per-tick resolution loops must not scan the
+// whole npcs map. resolveTick iterates THIS; castWeb stays pairwise (never
+// eagerly built across the roster, see Performance in the plan).
+function getActiveNpcIds(gameState, activeVisits) {
+  const npcs = gameState.npcs;
+  const ids = [];
+  for (const [id, npc] of Object.entries(npcs)) {
+    if (npc && npc.residency.status === 'resident') ids.push(id);
+  }
+  for (const v of activeVisits) {
+    const npcId = v.npcId;
+    if (npcId && npcs[npcId] && !ids.includes(npcId)) ids.push(npcId);
+  }
+  return ids;
+}
+
+// Create (or keep) a visit record. Idempotent per source+day: sources call
+// this every rollover for their recurring shapes (a renovation job's crew
+// visits on every working day), so an existing record for the same
+// source+day must not be duplicated. Record shape matches the plan's Data
+// model; status is 'scheduled' on creation and flips to 'done' by
+// processVisitsForDay once the day passes.
+function scheduleVisit(gameState, sourceId, day, visit) {
+  const visits = gameState.world.visits || (gameState.world.visits = []);
+  const existing = visits.find(v => v.sourceId === sourceId && v.day === day);
+  if (existing) return existing;
+  const record = {
+    id: `visit_${day}_${visits.length}`,
+    npcId: visit.npcId,
+    purpose: visit.purpose,
+    sourceId,
+    day,
+    startTick: visit.startTick,
+    endTick: visit.endTick,
+    roomId: visit.roomId,
+    status: 'scheduled',
+    hostNpcId: visit.hostNpcId || null,
+  };
+  visits.push(record);
+  return record;
+}
+
+// Contractor visits (external-world plan Phase 1): the crew is onsite in
+// the job's room during VISIT_TUNING.contractor's window (09:00-16:30) on
+// every WORKING day of an active renovation job — from the booking day
+// through the day before etaDay (the job completes at etaDay's rollover),
+// weekends off. Called at booking (bookRenovationJob schedules the whole
+// run) and as a day-rollover backstop (processVisitsForDay) so saves with
+// in-flight jobs — booked before visits existed — get their crew onsite
+// for the remaining days without a migration.
+function scheduleContractorVisitsForJob(gameState, job) {
+  const win = VISIT_TUNING.contractor;
+  for (let d = job.startDay; d < job.etaDay; d++) {
+    // Weekends off — unless the rush premium was paid (Phase 4), which is
+    // exactly what that money buys: the crew on site seven days a week.
+    if (!job.rush && isWeekend(d)) continue;
+    scheduleVisit(gameState, job.id, d, {
+      npcId: job.contractorId || CONTRACTOR_ID,
+      purpose: 'contractor',
+      startTick: win.startTick,
+      endTick: win.endTick,
+      roomId: job.roomId,
+    });
+  }
+}
+
+// Purpose-driven presence for a visitor inside their active visit window.
+// location comes from the visit (the contractor sits in his job's room; a
+// future maid will rotate her cleaning scope, a social guest will use
+// ACTIVITY_ROOM_PREFERENCES — see the plan's Phase 3/6 sections); activity
+// is drawn from a purpose-specific pool.
+function resolveVisitPresence(npcId, gameState, activeVisits, rng) {
+  const visit = activeVisits.find(v => v.npcId === npcId);
+  const pool = (visit && VISIT_TUNING.activities[visit.purpose]) || VISIT_TUNING.activities.default;
+  const activity = pool[Math.floor(rng() * pool.length)];
+  // The maid (Phase 3) works her way through the apartment rather than
+  // standing in one room all day: her location walks her cleaning scope,
+  // one room per tick elapsed. Scope matches what the contract pays for —
+  // common rooms, or everywhere with the bedrooms add-on.
+  if (visit && visit.purpose === 'maid') {
+    const contract = gameState.world.computer?.apps?.services?.hired
+      ?.find(h => h.serviceId === MAID_SERVICE_ID);
+    const scope = (contract?.addons || []).includes('bedrooms') ? ALL_ROOMS : COMMON_ROOMS;
+    const elapsed = Math.max(0, getTickIndex(gameState.meta.clock.minutes) - visit.startTick);
+    return {
+      block: 'leisure',
+      location: scope[elapsed % scope.length],
+      activity,
+      transit: null,
+    };
+  }
+  return {
+    // 'leisure' rather than a dedicated 'visit' block so the allowlisted
+    // social drives (react_to_player/seek_company/chat_with_roommate, whose
+    // blockFilters all include leisure) are genuinely reachable; every
+    // other drive stays blocked by VISITOR_DRIVE_ALLOWLIST in DRIVES.
+    block: 'leisure',
+    location: visit ? visit.roomId : null,
+    activity,
+    transit: null,
+  };
 }
 
 // --- Schedule resolution ---
@@ -480,16 +633,37 @@ function resolveTick(gameState) {
   const newEvents = [];
   const npcUpdates = {};
 
+  // Visit spine (external-world plan Phase 1): the active-NPC index is the
+  // union of residents and NPCs with an active visit. The tick loop
+  // iterates THIS, not the whole npcs map — externals persist forever
+  // ("everyone persists forever" decision), so scanning every npc every
+  // tick would grow without limit as the cast accumulates visitors.
+  const activeVisits = getActiveVisits(gameState);
+  const activeNpcIds = getActiveNpcIds(gameState, activeVisits);
+  // Who is here on a visit right now. Presence follows the VISIT, not the
+  // residency status: an invited applicant ('prospective', external-world
+  // plan Phase 2) turns up exactly like a 'visitor' friend does. Residents
+  // are never visitors — they have their own schedule-driven resolution.
+  const visitingIds = new Set(
+    activeVisits.map(v => v.npcId).filter(id => npcs[id] && npcs[id].residency.status !== 'resident')
+  );
+
   // Pass 1: resolve where everyone ends up THIS tick first, so pass 2's
   // social-need restoration can check who's actually sharing a room this
   // tick rather than where they were last tick.
   const resolved = {};
-  for (const [id, npc] of Object.entries(npcs)) {
-    // 'visitor' = external NPCs who never enter the simulation (the
-    // Contractor Friend — see ref/contractor-tutorial-overhaul-plan.md):
-    // no schedule, no needs decay, no location, no drives, no events.
-    // They only "exist" via IM, which is handled outside resolveTick.
-    if (npc.residency.status === 'former' || npc.residency.status === 'prospective' || npc.residency.status === 'visitor') continue;
+  for (const id of activeNpcIds) {
+    const npc = npcs[id];
+    if (!npc) continue;
+    // Visitor: resolve from their active visit — purpose-driven
+    // location/activity, no schedule lookup. This is the windowed version
+    // of the old unconditional 'visitor' skip: an external WITH an active
+    // visit resolves; one without is simply absent from the active index.
+    if (visitingIds.has(id)) {
+      resolved[id] = resolveVisitPresence(id, gameState, activeVisits, rng);
+      continue;
+    }
+    if (npc.residency.status !== 'resident') continue;
 
     const { block } = resolveScheduleActivity(npc, meta.clock);
     let location = null;
@@ -559,9 +733,30 @@ function resolveTick(gameState) {
   }
 
   // Pass 2: needs, events, mood — using this tick's resolved locations.
-  for (const [id, npc] of Object.entries(npcs)) {
+  for (const id of activeNpcIds) {
     if (!resolved[id]) continue;
+    const npc = npcs[id];
     const { block, location, activity } = resolved[id];
+
+    // Visitors (external-world plan Phase 1): no needs decay, no random
+    // events, no evidence discovery, no clothing transitions — they're
+    // here for a purpose, and their sim is fully dormant outside the
+    // visit. Only location/activity/mood are carried into the update so
+    // they resolve as present for the scene layer and floor plan.
+    if (visitingIds.has(id)) {
+      npcUpdates[id] = {
+        location,
+        activity,
+        mood: npc.mood,
+        // Schedule label is 'visit' (distinct from the drive-routing block
+        // 'leisure' in the resolved record) so the LLM's scene context reads
+        // sensibly — Del mid-visit is "in 'visit'", not "in leisure".
+        schedule: { currentBlock: 'visit', nextBlock: '', willReturnAt: null },
+        transit: null,
+        clothing: npc.clothing || 'dressed',
+      };
+      continue;
+    }
 
     // Decay needs
     const needs = {
@@ -687,9 +882,11 @@ function resolveTick(gameState) {
   const allImMessages = [];
   const allRelDeltas = [];
   const allPeepResults = [];
-  for (const [id, npc] of Object.entries(npcs)) {
+  for (const id of activeNpcIds) {
     if (!resolved[id]) continue;
-    if (npc.residency.status !== 'resident') continue;
+    const npc = npcs[id];
+    const isVisitor = visitingIds.has(id);
+    if (!isVisitor && npc.residency.status !== 'resident') continue;
     // Skip sleeping NPCs — they can't act on drives
     if (resolved[id].block === 'sleep') continue;
     // Skip NPCs in transit — they're walking, not doing activities.
@@ -698,8 +895,11 @@ function resolveTick(gameState) {
     // appear to cook in a hallway.
     if (resolved[id].transit) continue;
 
+    // Visitors (external-world plan Phase 1) pass their status through so
+    // DRIVES' evaluateDrives can enforce VISITOR_DRIVE_ALLOWLIST — only
+    // react_to_player + the social drives may fire for them.
     const driveResult = evaluateDrives(
-      npc, id, npcs, resolved[id], gameState, rng, currentTick
+      npc, id, npcs, resolved[id], gameState, rng, currentTick, { isVisitor }
     );
 
     // Merge drive effects into npcUpdates
@@ -765,6 +965,24 @@ function resolveTick(gameState) {
   // Process NPC-to-NPC and NPC-to-player relationship deltas
   if (allRelDeltas.length > 0) {
     processNpcRelDeltas(gameState, allRelDeltas);
+  }
+
+  // Visitor dormancy (external-world plan Phase 1): a visitor resolves only
+  // during an active visit. When their window closes (or the day passes),
+  // a lingering location would keep them "present" on the floor plan and in
+  // scenes after they left. This is a maintenance sweep over externals
+  // only — it is deliberately separate from the resolution loops above,
+  // which run strictly on the active index. The `npc.location !== null`
+  // guard keeps it a no-op for the near-universal case (no visitor has
+  // ever been onsite, or none are onsite right now).
+  const activeVisitNpcIds = new Set(activeVisits.map(v => v.npcId));
+  for (const [id, npc] of Object.entries(npcs)) {
+    const st = npc?.residency.status;
+    // Externals only — anyone who lives here (resident, or a resident's
+    // partner) keeps their location from the normal resolution above.
+    if ((st !== 'visitor' && st !== 'prospective') || npc.location === null) continue;
+    if (activeVisitNpcIds.has(id)) continue;
+    npcUpdates[id] = { location: null, activity: '', transit: null };
   }
 
   return { npcUpdates, newEvents, peepResults: allPeepResults };
@@ -1684,6 +1902,13 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
       // per job booked through bookRenovationJob (see
       // ref/renovation-occupancy-overhaul-plan.md).
       renovationJobs: [],
+      // Visit spine (ref/external-world-npcs-overhaul-plan.md, Phase 1):
+      // the single queue of "who is onsite and why" — every external-NPC
+      // presence window (contractor jobs today; maid contracts, food
+      // orders, roommates' friends, player invitations in later phases)
+      // lands here and nothing else. getActiveVisits (SIM) is the only
+      // reader; statuses are scheduled → done (see processVisitsForDay).
+      visits: [],
       // Contractor tutorial (contractor doc Phase 3): one-shot tutorial /
       // milestone flags (tutorialRenoUsed, tutorial_<milestoneId>) — see
       // ref/contractor-tutorial-overhaul-plan.md.
@@ -1740,6 +1965,11 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
   // draw from (same memory.facts mechanism as any other NPC; the seeds live
   // in CONTRACTOR_INITIAL_FACTS, config.js).
   state.npcs[CONTRACTOR_ID].memory.facts = CONTRACTOR_INITIAL_FACTS.map(f => ({ ...f }));
+  // Contacts (external-world plan Phase 2): Del is the ONE day-one contact —
+  // he was your grandfather's contractor and reached out first, so his
+  // thread exists before you've ever met him. Every other external NPC
+  // must be asked for their number (see doAskContact, UI).
+  state.npcs[CONTRACTOR_ID].contactKnown = true;
   const contractorThread = ensureImThread(state, CONTRACTOR_ID);
   contractorThread.msgs.push({ from: 'npc', text: CONTRACTOR_WELCOME_MESSAGE, day: clock.day, tick: getTickIndex(clock.minutes) });
   contractorThread.unread = 1;
@@ -1902,6 +2132,11 @@ function createNpcFromBible(bible, residencyStatus) {
     },
     arcs: [],
     flags: {},
+    // Contacts (external-world plan Phase 2): do you have their number?
+    // Explicit here rather than relying on the schema default, so a fresh
+    // NPC round-trips through validateCharacter with the field present.
+    // Del is flipped true at new-game setup; everyone else earns it.
+    contactKnown: false,
     // P6: suspicion[subject] (0..1). Additive default, same precedent as
     // player.skills (SKILLS) — every read/write guards with `|| {}`, so no
     // FOLDER_VERSIONS migration is needed for existing saves.
