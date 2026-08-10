@@ -375,8 +375,8 @@ directly without any kv or LLM dependency):
   requirement checker (backed by `pickAvailableRecipe` against the
   kitchen's fridge+pantry contents — "Nothing to cook" is now a real,
   reachable state, not a fallback that never fires). `prepareCook` picks
-  the recipe once; `buildCookEffects` emits `CONSUME_ITEM` lines split
-  across fridge/pantry as needed (`ingredientConsumeLines`), `SPAWN_ITEM`s
+  the recipe once; `buildCookEffects` emits `DESTROY_ITEM` lines split
+  across fridge/pantry as needed (`ingredientDestroyLines`), `SPAWN_ITEM`s
   the full batch into inventory, immediately `CONSUME_ITEM`s one portion
   (so clicking Cook still satisfies hunger in one action, with leftovers
   staying in inventory when a recipe yields more than one), then applies

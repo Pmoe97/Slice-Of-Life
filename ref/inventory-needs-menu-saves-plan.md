@@ -1,7 +1,8 @@
 # Inventory, Needs, Main Menu & Save System Overhaul
 
-Status: **planned — not started.** Design session complete 2026-08-09; all
-thirteen decisions locked, no open questions blocking Phase 1.
+Status: **complete — all ten phases done and verified.** Design session
+complete 2026-08-09; all thirteen decisions locked. No open questions
+blocking any phase.
 Last updated 2026-08-09.
 
 Companions: `ref/perchance-menu-conventions.md` (**landed 2026-08-09** — the
@@ -28,32 +29,224 @@ protocol.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 1 (Inventory core). Nothing has been built yet.
+**Resume at:** **Live verification of the 2026-08-09 post-completion fixes**
+(see the first "Last session's notes" block below) — they were written
+outside a browser session. Drive the menu on the live page: boot cover, the
+`fullscreenButton` render, slideshow pacing/wrapping, and the 100-image
+pool's rehydration. All ten phases are otherwise complete; Phase 10 landed
+and verified 2026-08-09. If a future session
+touches the menu, the entry points are `menu.js` (the component),
+`image.js` (`titleGallery` slideshow), `defs.menu.js` (rated trait lists +
+`genTitlePrompt`) and the menu markup/CSS in `index.html`; the Phase-10
+block below documents the deliberate deviations this session implemented.
 
-**Last session's notes (design session, 2026-08-09 — no code written):**
-- Full design conversation with the user; all thirteen decisions in "Locked
-  decisions" below are settled and should not be relitigated.
-- Code audit performed against the working tree — see "Code audit" below. The
-  three findings that most change the shape of the work: the item **effects
-  layer is already complete and idling** (`CONSUME_ITEM` et al. are
-  `implemented: true` and `applyConsumeItem` already reads `def.consumable`),
-  **mood is the real failure, not "all needs"** (−0.64/day against a best
-  ungated restore of +0.16, with AfterHours' `+0.25` the largest source in the
-  game), and **two latent bugs (B1, B2) block Phases 8 and 4** respectively.
-- Every file:line citation in this document was verified on 2026-08-09.
-  Several other overhauls are in flight on the same files — expect drift.
-- `ref/perchance-menu-discovery-prompt.md` was written alongside this plan, run
-  by the user, and its findings **have landed** in
-  `ref/perchance-menu-conventions.md`. **Phase 10 is no longer blocked.** Three
-  of the plan's original Phase 10 assumptions were wrong and have been
-  corrected against the real source — see that phase's "Deliberate deviations."
-  The short version: the reference slideshows carry **no rating tags and no
-  content gating at all**, so `contentConfig` gating is new work, not a port;
-  their failure path is an uncapped 500 ms retry loop that must not be copied;
-  and they store full ~1–2 MB data-URLs in kv, which this game will not do.
+**Last session's notes (post-completion audit + fixes, 2026-08-09):**
+An independent audit of all ten phases against this document. Everything
+mechanically checkable held: B1/B2 both genuinely fixed (and all 7 `addStack`
+callers pass the new `day` arg), `SAVE_KEYS` is a single table read by all
+three paths, ZERO direct `player.mood =` writes anywhere, only the clock loop
+passes `{idle:true}`, freshness is derived, `restoreSave → loadGameState →
+initStorage` really does run the migration chain over a restored snapshot, all
+21 changed scripts had `?v=` bumps, `boot()` is invoked exactly once, and all
+35 files pass `node --check`. Four things were then fixed:
 
-**Blockers / flagged deviations:** None.
+1. **The LLM could conjure free meals.** `ADJUST_NEED` is `llm:true` and the
+   scene-prompt's worked example was literally `"ADJUST_NEED player hunger
+   +10"`. Phase 5 made this worse, not better: `applyAdjustNeed` treats ANY
+   positive player-hunger delta as a whole meal (resets `hoursSinceLastMeal`,
+   +1 `mealsToday`), so magnitude is discarded and `+1` fed you exactly as
+   much as `+40` — design invariant 3 bypassed through the narration path.
+   **Fix:** `hunger` removed from `validateNeedName`'s player list (NPC hunger
+   kept — the drive fallback is a trusted producer), prompt example changed to
+   an energy line, plus an explicit "never emit a hunger change for the
+   player" rule in the contract.
+2. **`initStorage` carried a second copy of `FOLDER_VERSIONS` and it had
+   already drifted** (`npcs: 2` after the Phase 8 bump to 3). Benign only
+   because the folder is empty there and `seedNpcInventory` is idempotent.
+   **Fix:** `versions: { ...FOLDER_VERSIONS }`.
+3. **Perchance shortcode leak (visible bug).** Both `[fullscreenButton(...)]`
+   calls passed a CSS string containing `var(--…)`; the bracket parser breaks
+   on the nested parens and spilled the tail as literal text on the page.
+   **Fix:** literal values, no `var()`, no `--`. **Rule: never put `var(...)`
+   — or any parentheses — inside a Perchance `[shortcode(...)]` argument.**
+4. **Game shell flashed before the menu.** `#main-menu` is `hidden` until
+   `menu.js` (the last script) runs `boot()`, so the play screen painted for
+   the whole parse+load window. **Fix:** `data-app-hidden` on `#app` in the
+   MARKUP (covered from first paint), CSS `visibility:hidden` — not
+   `display:none`, so layout still resolves for anything that measures while
+   covered. `closeMainMenu()` is the single uncover point; `showMainMenu`
+   re-covers in the boot context only. All five entry paths into play route
+   through `closeMainMenu`.
 
+Also this session (requested changes, not audit findings):
+- **Slideshow now generates forever** instead of stopping at 3. New
+  `scheduleNextGeneration` pacer: `fastFillMs` (800ms) below `bufferTarget`,
+  then `steadyGenMs` (15s) indefinitely while the menu is open; the ring
+  prunes its own oldest beyond `maxPersistedImages`. `maxSessionImages` 12 →
+  100 to match the ring, with `hydrateRemainingTitleImages` pulling the older
+  remainder out of the LRU in background batches so opening the menu still
+  paints fast. The cycle now WRAPS (there's a real back catalogue) instead of
+  driving generation. `stopTitleAutoCycle` kills all three timers;
+  `stopTitleCycleOnly` is what manual prev/next uses, so clicking through the
+  catalogue doesn't silently end generation for the session.
+- **Cross-gender clothing.** `rollClothing` was blind to the wearer. Clothing
+  entries gained a SOFT `lean: 'f'|'m'` (not a gate) weighted at
+  `crossLeanWeight` 0.08, and masculine-leaning entries were added so
+  down-weighting doesn't just funnel men into the few unisex items. Measured
+  over 20k rolls: feminine items on male actors **~1-in-5 → 2.2%**, masculine
+  items on men 25%. Non-binary actors treat everything as unisex.
+  **Landmine avoided:** the weighted picker is `menuWeightedPick`, NOT
+  `weightedPick` — SIM already defines a global `weightedPick(rng, items, fn)`
+  and loads AFTER defs.menu.js, so a same-named declaration is silently
+  replaced and called with the wrong arguments.
+- **Framing: whole image, never cropped or stretched.** `.title-bg-img` is
+  `object-fit: contain` (was `cover`), so the entire generated frame is always
+  visible and the leftover space becomes a letterbox/pillarbox bar showing the
+  `.title-bg-layer` gradient — the menu's designed no-image state, so the bars
+  read as framing rather than as missing content. More importantly the
+  `cropCanvasToViewport` step was **deleted**: it centre-cropped the canvas to
+  the viewport aspect *before* the blob was cached, baking the crop in
+  permanently, so those pixels could never be recovered by a resize or on
+  another device. `menuViewportAspect` and `MENU_SLIDESHOW.maxCropAspect` went
+  with it. **Rule: never trim an image on the way INTO the cache — fit at
+  display time, in CSS.** Orientation-matched generation resolutions stay, now
+  purely to keep the bars small.
+  - Note for whoever verifies: images already in the ring from before this
+    change are still stored pre-cropped. They'll display contained at their
+    baked aspect and age out naturally as the forever-generator churns the
+    100-image pool; no migration needed.
+  - `#scene-img` (the in-game scene image) is still `object-fit: cover`
+    inside a fixed 360px box. Left alone deliberately — this change was
+    scoped to the menu — but it's the same trade-off if it ever comes up.
+- **Hand anomalies.** `negativePrompt` now enumerates concrete hand/limb
+  failures (count, fusion, length, extra arms) instead of relying on the
+  catch-all `bad anatomy, mutated hands` pair.
+- Re-verified after the changes: rating cap still holds (0 real leaks in 3000
+  sfw-capped draws — an apparent 1.5% was the audit regex matching "blowing
+  bubbles in a mug of cocoa"), all touched files pass `node --check`, `?v=`
+  bumped for config 52, defs.menu 8, state 27, effects 15, llm 13, image 11,
+  menu 6.
+
+**NOT verified live** — these changes were made outside a browser session.
+The next session should drive the menu on the live page before trusting the
+slideshow pacing, the boot cover, and the fullscreenButton fix.
+
+**Last session's notes (Phase 10, D11 — DONE, verified):**
+- **Boot flow:** `boot()` (ui.js) no longer auto-loads a save — it always
+  presents the menu. `showMenuModal` is retired. The `boot()` INVOCATION
+  moved from the bottom of ui.js to the bottom of `menu.js` (the last
+  script to load), because boot() now calls MENU/IMAGE functions defined
+  after ui.js. If the game ever boots straight into play again, check that
+  menu.js still calls boot() at its bottom.
+- **menu.js (new):** the component, two contexts — `showMainMenu('boot')`
+  (startup) and `showMainMenu('pause')` (header Menu button). Pause context
+  genuinely pauses the game: `pauseClockLoop()` on open; `resumeClockLoop()`
+  ONLY in `doMenuResume()`/Escape. `closeMainMenu()` deliberately does NOT
+  touch the clock (resuming there would skip startClockLoop's
+  lastRolledOverDay adoption and risks a double start). Game-start/load
+  paths call closeMainMenu themselves: resumeFromRecord, startSoloGame,
+  approveCastAndStartGame, continueGame.
+- **Continue** (`refreshMenuContinue`/`doMenuContinue`): enabled from
+  `kv.saveIndex` when a save exists, pointing at the most recent save in
+  the most recent run (`latestContinueEntry` — run-head grouping, not just
+  index[0], so an imported older-run save can't shadow the active run). It
+  loads the RECORD via `resumeFromRecord`, never the live folders. Verified
+  disabled with an empty index, enabled + loads the right record with one.
+- **Exit Game** (`doExitGame`): pause context = best-effort
+  `saveToSlot(gs,'exit')` + drop the game + back to the boot menu; boot
+  context = `window.close()` attempt + a 4s "you can close this tab" note
+  (`#menu-exit-note`).
+- **Options screen** (`#menu-options-screen`, toggled from the title
+  screen): Background art (slideshow on/off — off is the pure gradient) and
+  Autosave (on/off). Both persist in `kv.menu` 'options'
+  (`MENU_GALLERY_OPTIONS_KEY`) — browser-local like the image LRU, NOT in
+  SAVE_KEYS, deliberately not part of save records. `startAutosave`
+  (state.js) now consults `isAutosaveEnabled()` (menu.js, runtime
+  forward-reference). The Debug Panel entry lives on the Options screen now
+  (`menu.debug` → toggleDebugPanel). Verified both options persist across a
+  reload.
+- **Slideshow** (image.js, `titleGallery`): reference §3.4–3.8 two-layer
+  crossfade (set the hidden layer's src + `await decode()` BEFORE the class
+  flip), 8s cycle, lazy 3-image buffer, exactly-one-in-flight via
+  `generating`, manual prev/next stop+restart the timer. Caching per
+  deviation 4: images live in the shared LRU under `menu_<rating>_<ts>_<r>`
+  keys; a bounded ring (`MENU_SLIDESHOW.maxPersistedImages` = 12) persists
+  in `kv.menu` 'ring'; evicted ring keys are hard-deleted via new
+  `deleteCachedImage` (state.js). Failure per deviation 3: exponential
+  backoff (2s·2^n) up to `retryMax` (4), then a quiet "Background art
+  unavailable" line (`#menuUnavailable`) and the gradient — no uncapped
+  retry loop, no blank frame.
+- **Content gating (deviation 2):** every `MENU_ART` trait entry carries an
+  `r` rating (sfw/suggestive/explicit); `genTitlePrompt(contentConfig)`
+  filters every pool by `menuRatingCap` (mature:false → sfw; romance:false
+  → suggestive; default → explicit). The cache KEY encodes the rating, and
+  both the persisted ring and the in-memory session buffer are re-filtered
+  to the current cap on every menu open, so a restricted save never shows
+  looser art. Verified: 100 draws under the sfw cap never contain a mature
+  word; the full-range mix demonstrably reaches explicit prompts.
+- **Discord:** column button + fixed bottom-right badge, both
+  `https://discord.com/invite/E6N9WKpGPA`, `target="_blank"`
+  `rel="noopener noreferrer"`. Badge = inline SVG data URI, gold #d9b871
+  FA-discord glyph on a dark tile (reference §4 recoloured). Verified the
+  glyph renders (canvas pixel check + vision).
+- **Menu markup/CSS live in the primary HTML document.** Naming note, since
+  this has already confused one review: Perchance's editor calls that living
+  text field **`index.html`**, and the same field is checked into this repo as
+  **`main.html`**. One file, two names — `main.html` is the one on disk to
+  edit; there is no separate `index.html`. (The other Perchance field is
+  `main.pjs`, checked in as `perchance.pjs`.)
+  `#main-menu` sits at z-index 190 (above phone 170, below modal/save/
+  loading 200). Google Fonts added: Cinzel + Cormorant Garamond. `?v=`
+  bumps this session: config 49, state 26, image 9, render 27, ui 46,
+  menu 2, defs.menu 1. Load-order comment updated (DEFS.MENU after
+  DEFS.COMPUTER; …→ UI.PHONE → MENU → BOOT).
+- **Verification summary (browser_eval on the live page):** boots to menu,
+  not play; Continue no-save/save states; slideshow paints gradient → first
+  image → crossfades on the 8s cycle through distinct slides
+  (vision-verified); manual nav stops/restarts the timer; forced
+  generateImage failures retry with visible backoff then settle on the
+  gradient; ring capped at 12 with oldest evicted; sfw/suggestive/full
+  mixes; Discord button + badge; pause menu is the same component with
+  Resume, clock paused while open and restarted on Resume/Escape; Exit
+  writes an exit record and returns to the boot menu; Continue after exit
+  loads it; Options (bg-art off = pure gradient, on = cold-start reload
+  from ring; autosave toggle flips isAutosaveEnabled) persist across a
+  reload; loading overlay paints above the menu; save index consistent (no
+  dupes; 1 exit + 5 autos + 2 manual after testing); zero
+  syntaxErrors/perchanceErrors on fresh loads. The test session left an
+  'exit' record of the user's real state in the exit slot and the live
+  folders restored from their newest save — harmless, keep or delete from
+  the grid.
+
+**Blockers / flagged deviations:**
+1. **All-SFW mode has no in-UI path yet.** The slideshow honors
+   `contentFlags.mature:false` (sfw-only), but the char-creation form's
+   content-prefs field only turns flags ON (they default on), so no
+   player-reachable configuration produces it today. Wiring a
+   "mild"/"sfw" pref that turns mature/romance OFF would make it reachable
+   — but that also changes LLM content directives for the whole save, so
+   it's a product decision, not a Phase-10 coding gap. Filed as an open
+   question.
+2. **`hasSave()` (state.js) is now dead** (boot no longer checks it) — left
+   in place, harmless.
+3. **The `continue` action (continueGame) is kept for compat** and now also
+   closes the menu; the menu's Continue is `menu.continue`.
+4. Legacy note carried forward: single-quoted JS strings with apostrophes
+   are a SyntaxError with a real line number — prefer double quotes.
+4b. **Never put `var(...)`, or any parentheses, inside a Perchance
+   `[shortcode(...)]` argument.** The bracket parser breaks on the nested
+   parens and spills the remainder of the argument onto the page as literal
+   text. Cost a visible render bug in both `[fullscreenButton(...)]` calls;
+   use literal CSS values there, or a class plus a stylesheet rule.
+4c. **Check for an existing global before naming a new top-level function.**
+   These are plain scripts sharing one global scope, so a duplicate name is
+   silently resolved in load order with no error — `menuWeightedPick` exists
+   under that name because SIM's `weightedPick` would otherwise have
+   swallowed it.
+5. Harness note: browser_eval occasionally races a hard reload (the eval
+   runs mid-script-load and reports "X is not defined" for a function in a
+   later script) — harmless, re-run the eval.
+---
 ---
 
 ## The thesis
@@ -201,6 +394,11 @@ Decided with the user 2026-08-09. Settled — do not relitigate mid-phase.
 - **D6 — Rot creates mess on a timer.** Past its window an item goes Rotten;
   after a grace period it emits odor and drags room cleanliness down. Cleared
   by hand or by the maid.
+- **D14 — Cooking destroys ingredients without restoring hunger.** A cooked
+  meal restores exactly its own `consumable` values; the raw ingredients are
+  transformed, not eaten (resolved in Phase 3: `buildCookEffects` emits
+  `DESTROY_ITEM` for ingredients instead of `CONSUME_ITEM`). This kills the
+  double-count where a cooked dish restored ingredient hunger AND its own.
 
 ### Social dining
 
@@ -214,6 +412,11 @@ Decided with the user 2026-08-09. Settled — do not relitigate mid-phase.
 - **D8 — NPC inventories do all four jobs:** ground LLM prose, source two-way
   gifts, get really consumed by NPC needs (your groceries disappear), and be
   snoopable/stealable through the existing stealth system.
+- **D15 — NPCs don't contribute groceries.** Shopping stays the player's
+  burden (that's the rent-pressure invariant at work); hungry NPCs raid the
+  fridge, the pantry, and their own bags, and only fall back to an abstract
+  scrounge when every reachable source is genuinely empty (so nobody starves
+  because the player forgot to shop). Resolved in Phase 8 (`tryEatFood`).
 
 ### Saves and menu
 
@@ -804,6 +1007,19 @@ draft of this phase, and each one is a decision, not an oversight:**
    returns a constant and only "works" because `sort` is stable) and flag §6.2
    (the loading text never clears on the first-ever run). Neither should be
    reproduced here.
+6. **Viewport-orientation-aware generation (post-completion refinement).**
+   The reference games always generate landscape 768×512 and let
+   `object-fit: cover` blow it up on portrait/phone viewports, cropping away
+   most of the frame. This game detects the viewport orientation and asks the
+   plugin for the matching resolution (`768x512` landscape / `512x768`
+   portrait), appends a composition hint to the prompt, and centre-crops the
+   returned canvas to the viewport's exact aspect ratio (capped at ±3.2:1) so
+   `object-fit: cover` never crops further — the frame fills edge-to-edge.
+   Cache keys are tagged with orientation (`menu_<rating>_<l|p>_…`) and both
+   the persisted ring and the in-session buffer are filtered by orientation,
+   so a portrait phone never displays a landscape image; legacy untagged keys
+   (pre-refinement, all landscape) are treated as landscape. A resize listener
+   restarts the gallery when the orientation flips while the menu is open.
 
 **Files:**
 - `src/srcfiles/menu.js` **(new)**: the menu component, used in both contexts —
@@ -851,16 +1067,16 @@ Options changes persist across a reload.
 
 | Phase | Status | What it does |
 |---|---|---|
-| 1 | Not started | Inventory core: stack meta contract, `inventory.js` helpers, interactive panel, use/drop/trash verbs |
-| 2 | Not started | Containers as chests: fridge/pantry/doormat transfer UI, preservation multipliers, recipe choice |
-| 3 | Not started | Eating: item-driven `self.eat`, eat from nearby containers, servings and leftovers |
-| 4 | Not started | Spoilage: B2 fix, derived freshness, rot → mess → odor, maid clears it |
-| 5 | Not started | Needs rebalance: rhythm hunger, derived mood, idle-decay multiplier |
-| 6 | Not started | Happiness content: comfort consumables, hobby objects, social time, ambient actions, progress impulses |
-| 7 | Not started | Set Meal: `world.commitments[]`, invitations, schedule override, shared dinner + mess |
-| 8 | Not started | NPC inventories: B1 fix, lifestyle seeding, prose grounding, two-way gifts, NPCs eat your food, theft |
-| 9 | Not started | Save system v2: `SAVE_KEYS`, slot grid, autosave ring, thumbnails, export/import |
-| 10 | Not started | Main menu: boot screen, slideshow, Discord, pause menu (unblocked — implements against `ref/perchance-menu-conventions.md`) |
+| 1 | **Done** | Inventory core: stack meta contract, `inventory.js` helpers, interactive panel, use/drop/trash verbs |
+| 2 | **Done** | Containers as chests: fridge/pantry/doormat transfer UI, preservation multipliers, recipe choice |
+| 3 | **Done** | Eating: item-driven `self.eat`, eat from nearby containers, servings and leftovers |
+| 4 | **Done** | Spoilage: B2 cohort-aware merge, derived freshness + retimeStack, rot → mess → odor, maid + player clear it, spoiled-eating penalties |
+| 5 | **Done** | Needs rebalance: rhythm hunger, derived mood, idle-decay multiplier |
+| 6 | **Done** | Happiness content: comfort consumables, hobby objects, social time, ambient actions, progress impulses |
+| 7 | **Done** | Set Meal: `world.commitments[]`, invitations, schedule override, shared dinner + mess |
+| 8 | **Done** | NPC inventories: B1 fix, lifestyle seeding, prose grounding, two-way gifts, NPCs eat your food, theft |
+| 9 | **Done** | Save system v2: `SAVE_KEYS`, slot grid, autosave ring, thumbnails, export/import |
+| 10 | **Done** | Main menu: boot screen, slideshow, Discord, pause menu, Options (slideshow implements against `ref/perchance-menu-conventions.md`, deviations 1–5) |
 
 ## Dependency order
 
@@ -892,15 +1108,23 @@ a temporary shim.
 ## Open questions (parked, none blocking)
 
 - **Cooking for storage** — can the player batch-cook meals into the fridge, or
-  only cook to eat? Affects Phase 3's serving model. Recommend allowing it.
-- **Do NPCs contribute groceries**, or is shopping entirely the player's
-  burden? Phase 8 step 5 makes this a live economic question and either answer
-  is defensible against the rent-pressure invariant. Decide during Phase 8.
+  only cook to eat? Phase 3's serving model is in place (EAT_ITEM +
+  meta.servingsLeft) and doesn't foreclose either; only the feature itself is
+  unimplemented. Recommend allowing it.
+
 - **Does the branching-tree save view ship at all**, or is the grouped list
   enough in practice? Decide after playing with Phase 9's grouped view — the
   data model supports either.
 - **A needs-intensity slider in Options** — cheap once the Phase 5 constants
   are centralized, and it makes the original complaint self-serviceable.
+- **How does the player reach the all-SFW mode?** Phase 10 implemented the
+  mechanism (the slideshow honors `contentFlags.mature:false` and
+  `romance:false`), but the char-creation form's content-prefs field only
+  turns flags ON (they default on), so no player-reachable configuration
+  produces a restrictive mix yet. Wiring a "mild"/"sfw" pref that turns
+  mature/romance OFF would make it reachable — but that also changes LLM
+  content directives for the whole save, so it needs a product decision
+  before implementation.
 - **All numeric values in this document are proposed defaults**, tunable, and
   flagged inline.
 
