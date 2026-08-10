@@ -432,15 +432,30 @@ function decayMemory(npc, ticks) {
 function clampAxis(v) { return Math.max(-1, Math.min(1, v)); }
 function clamp01(v) { return Math.max(0, Math.min(1, v)); }
 
-// NPC Overhaul — derive intimacyLevel and conversationPhase from relationship axes
+// NPC Overhaul — derive intimacyLevel and conversationPhase from relationship
+// axes. Correctness plan Phase 2 (D1/D2) rebased the formula; see
+// PHASE_THRESHOLDS in CONFIG for what was wrong with the old one.
+//
+//   raw   = trust + affection + (2 × comfort) − tension     // range [−3, 4]
+//   level = clamp(raw / 4, 0, 1) × 100
+//
+// A stranger (all axes 0) now scores 0 and reads `early`, which is the whole
+// point. Fully positive scores 100. `familiar` now costs a real
+// trust + affection + 2·comfort − tension ≥ 0.8.
+//
+// D2: tension SUBTRACTS. Someone who is furious with you is not `intimate`
+// however much they also trust you — the old formula ignored tension
+// entirely, so a relationship could be simultaneously at maximum hostility
+// and reading as "deeply connected, physical and emotional closeness colors
+// everything" in the prompt.
 function deriveConversationPhase(rel) {
-  const intimacyLevel = Math.round(
-    ((rel.trust + 1) + (rel.affection + 1) + (rel.comfort * 2)) / 4 * 50
-  );
+  const raw = (rel.trust || 0) + (rel.affection || 0)
+            + (2 * (rel.comfort || 0)) - (rel.tension || 0);
+  const intimacyLevel = Math.round(Math.max(0, Math.min(1, raw / 4)) * 100);
   let phase = 'early';
-  if (intimacyLevel >= 70) phase = 'intimate';
-  else if (intimacyLevel >= 40) phase = 'close';
-  else if (intimacyLevel >= 20) phase = 'familiar';
+  if (intimacyLevel >= PHASE_THRESHOLDS.intimate) phase = 'intimate';
+  else if (intimacyLevel >= PHASE_THRESHOLDS.close) phase = 'close';
+  else if (intimacyLevel >= PHASE_THRESHOLDS.familiar) phase = 'familiar';
   return { intimacyLevel, conversationPhase: phase };
 }
 

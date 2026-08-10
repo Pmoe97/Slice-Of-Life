@@ -1,7 +1,7 @@
 # NPC Correctness Fixes
 
-Status: **in progress — Phase 1 done**. Design session complete 2026-08-10;
-all decisions locked. Phases 2–5 outstanding.
+Status: **in progress — Phases 1–2 done**. Design session complete
+2026-08-10; all decisions locked. Phases 3–5 outstanding.
 Last updated 2026-08-10.
 
 Companions:
@@ -18,10 +18,29 @@ near the bottom, as the very last thing you do each session.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 2 (relationship phase derivation). Phase 1 is done and
-verified.
+**Resume at:** Phase 3 (memory importance and eviction). Phases 1 and 2 are
+done and verified.
 
-**Last session's notes (2026-08-10 — Phase 1 implemented):**
+**Phase 2 notes (2026-08-10):**
+- Landed in full; 26 assertions pass at `scratchpad/verify-p2.js`. The ladder
+  now spans usefully: the four sample relationships in the harness score 8 /
+  25 / 48 / 85, one per rung.
+- **`state.js` cannot be loaded into the harness with a `DEV` stub** — it
+  declares the real `const DEV` and `function assert` itself, and derives DEV
+  from `window`. Provide `window = { generatorPublicId, generatorIsUnsaved:
+  false }` instead. `verify-p2.js` does this; copy that preamble for any
+  future harness that needs `state.js`.
+- The `npcs` 3→4 migration calls `deriveConversationPhase`, which lives in
+  `npc.js` — a file that loads *after* `state.js`. This is fine and has
+  precedent (`migrateNpcToV2` and `seedNpcInventory` are called the same way):
+  migration bodies only run at `loadGameState` time, long after every script
+  has executed.
+- Checked as part of this phase: `MOVE_IN_TUNING`'s two phase gates are now
+  real without being impossible — `familiar` passes the advocate gate and
+  fails the stricter move-in gate, `close` passes both. The audit flagged both
+  as silently loosened; they now bite.
+
+**Phase 1 notes (2026-08-10):**
 - **Phase 1 landed in full.** 23 assertions pass in a Node `vm` harness at
   `scratchpad/verify-p1.js`. **This is a better verification route than the
   iframe technique ARCHITECTURE.md describes** — `config.js` and `npc.js`
@@ -373,7 +392,7 @@ pre-prune save and assert the same.
 | Phase | Status | What it does |
 |---|---|---|
 | 1 | **Done** | Conversation transcript order, depth, channel separation; real IM thread in the IM prompt. 23 assertions pass (`scratchpad/verify-p1.js`) |
-| 2 | Not started | Rebase the intimacy formula so a stranger reads as `early`; re-derive on load |
+| 2 | **Done** | Rebase the intimacy formula so a stranger reads as `early`; re-derive on load. 26 assertions pass (`scratchpad/verify-p2.js`) |
 | 3 | Not started | Source-keyed episode importance; evict by `importance × decay` instead of FIFO |
 | 4 | Not started | Rebalance the six NPC need rates against the real schedule blocks |
 | 5 | Not started | Triage all 34 dead fields; prune the ones no roadmap plan claims |

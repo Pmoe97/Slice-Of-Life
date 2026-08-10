@@ -28,7 +28,7 @@ const FOLDER_VERSIONS = {
   meta: 1,
   player: 4,
   world: 3,
-  npcs: 3,
+  npcs: 4,
   images: 1,
   snapshots: 1,
   objects: 2,
@@ -195,6 +195,22 @@ const MIGRATIONS = {
     // backfill ages their snack stash from move-in, not day one. An NPC
     // that somehow already carries an inventory passes through untouched.
     { from: 2, to: 3, fn: (npc) => seedNpcInventory(npc, npc?.residency?.since ?? 1) },
+    // npcs 3->4 (correctness plan Phase 2, D3): re-derive relPlayer's
+    // intimacyLevel/conversationPhase from the stored axes under the rebased
+    // formula. Both are DERIVED state, so this recomputes rather than
+    // patching — the migration must never be able to disagree with
+    // deriveConversationPhase, which is exactly what hand-editing a derived
+    // field in a migration would allow.
+    //
+    // Without this, an existing save keeps its inflated phase (every NPC sat
+    // at `familiar` or better from their first exchange) until some later
+    // delta happens to re-derive it. Most saves visibly drop a rung here;
+    // that is the bug being corrected, not data loss.
+    { from: 3, to: 4, fn: (npc) => {
+      if (!npc || typeof npc !== 'object' || !npc.relPlayer) return npc;
+      const { intimacyLevel, conversationPhase } = deriveConversationPhase(npc.relPlayer);
+      return { ...npc, relPlayer: { ...npc.relPlayer, intimacyLevel, conversationPhase } };
+    } },
   ],
   images: [],
   snapshots: [],

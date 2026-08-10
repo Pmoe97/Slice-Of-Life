@@ -1857,6 +1857,25 @@ const SCENE = {
   crowdAvoidanceWeight: 3, // multiplier applied to rooms at/above soft capacity
 };
 
+// --- Relationship phase ladder (correctness plan Phase 2, D1/D2) ---
+// intimacyLevel buckets into the conversationPhase the prompt turns into a
+// behavioural directive ("You barely know them" vs "You're deeply
+// connected") — the single strongest lever in the whole NPC block.
+//
+// The old formula was ((trust+1) + (affection+1) + comfort*2) / 4 * 50, which
+// scored a brand-new NPC at 25 — already past the `familiar` gate at 20. The
+// bottom rung was unreachable for anyone neutral: you had to score
+// trust + affection + 2*comfort < -0.4, i.e. actively dislike the player, to
+// read as a stranger. And since applyRelDelta re-derives on every call and
+// the scene prompt requests a relationshipDeltas object every single turn,
+// every NPC flipped to `familiar` on exchange one and started referencing
+// shared history with someone they'd just met.
+const PHASE_THRESHOLDS = {
+  intimate: 70,
+  close: 40,
+  familiar: 20,
+};
+
 // --- IM prompt (correctness plan Phase 1, D7) ---
 // How much of the REAL persisted thread (world.computer.apps.im.threads[id])
 // buildImPrompt renders back to the model. Before this, an IM reply saw only
