@@ -30,6 +30,17 @@ let currentGameState = null;
 //   don't pause the very loop that is calling us. Pausing mid-frame left an
 //   orphan rAF chain alive that resumeClockLoop then ran alongside a fresh
 //   one, gaining a chain per checkpoint.
+// Correctness plan Phase 3 (D8) — how memorable was this world event?
+// Precedence: an explicit `importance` on the event object wins (so a drive
+// or a future emitter can override), then the EVENT_IMPORTANCE band for its
+// type, then `ambient`. Falling back to ambient is the safe direction: an
+// unclassified background event must never outrank a real conversation.
+function eventImportance(evt) {
+  if (typeof evt?.importance === 'number') return evt.importance;
+  const band = EVENT_IMPORTANCE[evt?.type];
+  return MEMORY_IMPORTANCE[band] ?? MEMORY_IMPORTANCE.ambient;
+}
+
 async function advanceAndResolve(ticks, opts = {}) {
   const advanceClockToo = opts.advanceClock !== false;
   const wasRunning = !opts.fromClockLoop && clockLoopRunning;
@@ -62,7 +73,11 @@ async function advanceAndResolve(ticks, opts = {}) {
     const npc = currentGameState.npcs[evt.npcId];
     if (!npc) continue;
     const text = formatEventText(evt, currentGameState.npcs);
-    currentGameState.npcs[evt.npcId] = addMemoryEpisode(npc, evt.day, text, 0.5);
+    // Correctness plan Phase 3 (D8): importance comes from what KIND of thing
+    // happened, not a hardcoded 0.5. An NPC generates 3-7 ambient events a
+    // day; at a flat 0.5 against FIFO eviction, a week of laundry and naps
+    // pushed out every conversation that mattered.
+    currentGameState.npcs[evt.npcId] = addMemoryEpisode(npc, evt.day, text, eventImportance(evt));
     // STEALTH (P6): SIM's resolveTick only decides/records evidence
     // discovery (stays synchronous/LLM-free); the suspicion bump itself is
     // a trusted-producer effect application, same tier as everywhere else

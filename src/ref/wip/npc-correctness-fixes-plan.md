@@ -1,7 +1,7 @@
 # NPC Correctness Fixes
 
-Status: **in progress — Phases 1–2 done**. Design session complete
-2026-08-10; all decisions locked. Phases 3–5 outstanding.
+Status: **in progress — Phases 1–3 done**. Design session complete
+2026-08-10; all decisions locked. Phases 4–5 outstanding.
 Last updated 2026-08-10.
 
 Companions:
@@ -18,8 +18,30 @@ near the bottom, as the very last thing you do each session.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 3 (memory importance and eviction). Phases 1 and 2 are
-done and verified.
+**Resume at:** Phase 4 (need economy rebalance). Phases 1–3 are done and
+verified.
+
+**Phase 3 notes (2026-08-10):**
+- Landed in full; 23 assertions pass at `scratchpad/verify-p3.js`.
+- **Deviation from the Files list, deliberate.** The plan said drives would
+  carry an explicit `importance` on each event object. Shipped instead as a
+  central `EVENT_IMPORTANCE` type→band table in `config.js`, with
+  `eventImportance()` (UI) reading an explicit `evt.importance` first if one
+  is present. Same outcome, one place to look, and `drives.js` needed no
+  edit at all. The per-event override is still available for a future emitter
+  that needs it.
+- **Found and fixed in passing:** `addMemoryFact` ran its budget check
+  *before* the push (`if (length >= max) shift()`), so the facts tier settled
+  at `maxFacts` but dropped one entry early on every add once full. Now
+  evicts after the push, and fills to exactly 40.
+- Invalidated facts (`valid: false`) score −1 and are always evicted first —
+  they are the cheapest thing in the tier to lose.
+- `applyProposal` **clamps** a model-declared episode importance to
+  `MEMORY_IMPORTANCE.significant`. A proposal is untrusted input and must not
+  be able to mint a memory that outranks everything and never evicts.
+- The all-exempt case is handled: if every episode is day-0 shared history,
+  the tier overflows its budget rather than dropping something declared
+  permanent. Asserted.
 
 **Phase 2 notes (2026-08-10):**
 - Landed in full; 26 assertions pass at `scratchpad/verify-p2.js`. The ladder
@@ -393,7 +415,7 @@ pre-prune save and assert the same.
 |---|---|---|
 | 1 | **Done** | Conversation transcript order, depth, channel separation; real IM thread in the IM prompt. 23 assertions pass (`scratchpad/verify-p1.js`) |
 | 2 | **Done** | Rebase the intimacy formula so a stranger reads as `early`; re-derive on load. 26 assertions pass (`scratchpad/verify-p2.js`) |
-| 3 | Not started | Source-keyed episode importance; evict by `importance × decay` instead of FIFO |
+| 3 | **Done** | Source-keyed episode importance; evict by `importance × decay` instead of FIFO. 23 assertions pass (`scratchpad/verify-p3.js`) |
 | 4 | Not started | Rebalance the six NPC need rates against the real schedule blocks |
 | 5 | Not started | Triage all 34 dead fields; prune the ones no roadmap plan claims |
 

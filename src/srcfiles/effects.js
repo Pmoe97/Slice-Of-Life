@@ -264,7 +264,10 @@ function applyMemoryFactEffect(p, ctx) {
 }
 function applyMemoryEpisodeEffect(p, ctx) {
   const npc = ctx.gameState.npcs[p.npcId];
-  if (npc) ctx.gameState.npcs[p.npcId] = addMemoryEpisode(npc, ctx.gameState.meta.clock.day, p.text, 0.5);
+  // Correctness plan Phase 3 (D8): a MEMORY_EPISODE line is emitted either by
+  // the model during a scene or by a trusted producer marking a real beat —
+  // both are conversation-tier, well above ambient background noise.
+  if (npc) ctx.gameState.npcs[p.npcId] = addMemoryEpisode(npc, ctx.gameState.meta.clock.day, p.text, MEMORY_IMPORTANCE.conversational);
 }
 
 // --- Object/item appliers (WORLD/ITEMS-backed) ---
@@ -488,7 +491,10 @@ function applyWitness(p, ctx) {
   const npc = ctx.gameState.npcs[p.npcId];
   if (!npc) return;
   const text = WITNESS_MEMORY_TEMPLATES[p.certainty];
-  ctx.gameState.npcs[p.npcId] = addMemoryEpisode(npc, ctx.gameState.meta.clock.day, text, p.certainty === 'certain' ? 0.8 : 0.5);
+  // Correctness plan Phase 3 (D8): witnessing a boundary violation outright
+  // is a defining beat; merely suspecting one is conversation-tier.
+  ctx.gameState.npcs[p.npcId] = addMemoryEpisode(npc, ctx.gameState.meta.clock.day, text,
+    p.certainty === 'certain' ? MEMORY_IMPORTANCE.significant : MEMORY_IMPORTANCE.conversational);
   const flagKey = p.certainty === 'certain' ? `noticed_boundary_${p.subjectRef}` : `suspects_${p.subjectRef}`;
   applyAddFlag({ who: p.npcId, key: flagKey, value: true }, ctx);
 }

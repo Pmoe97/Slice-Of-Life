@@ -1857,6 +1857,49 @@ const SCENE = {
   crowdAvoidanceWeight: 3, // multiplier applied to rooms at/above soft capacity
 };
 
+// --- Memory importance (correctness plan Phase 3, D8) ---
+// Every episode used to land at a hardcoded 0.5 regardless of where it came
+// from, and eviction was pure FIFO — so an NPC generating 3-7 ambient events
+// a day (laundry, naps, packages) pushed out the conversation the player
+// actually cared about within a week of game time. `importance` was stored on
+// every episode and never consulted when deciding what to forget, even though
+// retrieveRelevantMemories already ranked BY it. The ranking function and the
+// eviction function held two contradictory theories of what memory is.
+//
+// Source decides weight. EVENT_IMPORTANCE maps world-event types onto these
+// bands; anything unlisted falls back to `ambient`, which is the safe
+// direction — an unclassified background event should not outrank a
+// conversation.
+const MEMORY_IMPORTANCE = {
+  ambient:        0.15,  // OFFSCREEN_EVENTS draws — laundry, naps, packages, shopping
+  social:         0.30,  // drive-produced: npc_chat, eat, gift
+  conversational: 0.50,  // LLM-proposed episodes; the default when unspecified
+  significant:    0.80,  // grievance, confrontation, caught peeping, evidence, move-in
+};
+
+// World-event type → importance band. Read by UI's eventImportance(). A drive
+// or event that sets its own `importance` on the event object wins over this
+// table — this is only the fallback for events that don't declare one.
+const EVENT_IMPORTANCE = {
+  // Deliberate beats the player would remember being part of.
+  evidence_discovered: 'significant',
+  gift:                'significant',
+  moveInOffer:         'significant',
+  argument:            'significant',
+  // Social contact — real, but not defining.
+  npc_chat:            'social',
+  eat:                 'social',
+  guest:               'social',
+  date:                'social',
+  phone_call:          'social',
+  good_news:           'social',
+  bad_day:             'social',
+  sick:                'social',
+  // Everything else (cooking, cleaning, laundry, nap, package, breakage,
+  // shopping, hobby, burnt_food, late_night_snack, repair, eat_fallback)
+  // falls through to `ambient`.
+};
+
 // --- Relationship phase ladder (correctness plan Phase 2, D1/D2) ---
 // intimacyLevel buckets into the conversationPhase the prompt turns into a
 // behavioural directive ("You barely know them" vs "You're deeply

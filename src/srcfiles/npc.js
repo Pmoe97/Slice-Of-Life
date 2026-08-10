@@ -191,7 +191,6 @@ function seedNpcInventory(npc, day) {
 // object { text, day, importance, category }. NPC Overhaul: added category + valid.
 function addMemoryFact(npc, fact) {
   const facts = [...(npc.memory.facts || [])];
-  if (facts.length >= MEMORY_BUDGET.maxFacts) facts.shift();
   if (typeof fact === 'string') {
     facts.push({ text: fact, day: 0, importance: 1, category: 'other', valid: true });
   } else {
@@ -203,20 +202,67 @@ function addMemoryFact(npc, fact) {
       valid: fact.valid !== undefined ? fact.valid : true,
     });
   }
-  return { ...npc, memory: { ...npc.memory, facts } };
+  // Correctness plan Phase 3 (D9): evict by importance rather than FIFO. Also
+  // fixes an off-by-one — the old `if (length >= max) shift()` ran BEFORE the
+  // push, so the tier actually settled at maxFacts, dropping one entry early
+  // on every add once full. Facts don't decay, so importance alone is the
+  // score. Invalidated facts (valid:false) are the cheapest thing to lose and
+  // sort to the bottom on their own.
+  const kept = evictLowestScored(
+    facts,
+    MEMORY_BUDGET.maxFacts,
+    f => (f.valid === false ? -1 : (f.importance ?? 1)),
+    null,
+  );
+  return { ...npc, memory: { ...npc.memory, facts: kept } };
+}
+
+// Correctness plan Phase 3 (D9) — evict the LEAST valuable entry, not the
+// oldest. `score` is the same `importance × decay` product
+// retrieveRelevantMemories already ranks by, so the tier is now surfaced and
+// forgotten by one consistent theory of what matters. Facts have no decay, so
+// their score is importance alone.
+//
+// Day-0 episodes are shared history seeded at cast generation — the beats
+// that define who these people were to each other before play started. They
+// are exempt, exactly as decayMemory already exempts them from decay.
+// If every entry is exempt, the budget is allowed to overflow rather than
+// dropping something that was declared permanent.
+function evictLowestScored(list, budget, scoreFn, isExempt) {
+  const out = [...list];
+  while (out.length > budget) {
+    let worstIdx = -1;
+    let worstScore = Infinity;
+    for (let i = 0; i < out.length; i++) {
+      if (isExempt && isExempt(out[i])) continue;
+      const s = scoreFn(out[i]);
+      if (s < worstScore) { worstScore = s; worstIdx = i; }
+    }
+    if (worstIdx < 0) break; // everything left is exempt — keep it all
+    out.splice(worstIdx, 1);
+  }
+  return out;
 }
 
 // Add an episode to an NPC's memory. NPC Overhaul: added emotionalTag + participants.
+// Correctness plan Phase 3: `importance` now comes from the caller's source
+// band (MEMORY_IMPORTANCE) rather than everything landing at 0.5, and
+// eviction drops the lowest importance × decay instead of the oldest.
 function addMemoryEpisode(npc, day, text, importance, emotionalTag, participants) {
   const episodes = [...(npc.memory.episodes || [])];
   episodes.push({
     day, text, decay: 1.0,
-    importance: importance || 0.5,
+    importance: importance !== undefined && importance !== null ? importance : MEMORY_IMPORTANCE.conversational,
     emotionalTag: emotionalTag || '',
     participants: Array.isArray(participants) ? participants : [],
   });
-  while (episodes.length > MEMORY_BUDGET.maxEpisodes) episodes.shift();
-  return { ...npc, memory: { ...npc.memory, episodes } };
+  const kept = evictLowestScored(
+    episodes,
+    MEMORY_BUDGET.maxEpisodes,
+    e => (e.importance ?? MEMORY_IMPORTANCE.conversational) * (e.decay ?? 1),
+    e => e.day === 0,
+  );
+  return { ...npc, memory: { ...npc.memory, episodes: kept } };
 }
 
 // NPC Overhaul — Add a grievance to an NPC's relationship with the player
@@ -1066,7 +1112,16 @@ async function applyProposal(proposal, context, gameState, playerAction) {
         for (const f of additions.facts) updated = addMemoryFact(updated, f);
       }
       if (additions.episodes) {
-        for (const e of additions.episodes) updated = addMemoryEpisode(updated, gameState.meta.clock.day, e.text || e, e.importance || 0.5, e.emotionalTag || '', e.participants || []);
+        // Correctness plan Phase 3 (D8): an episode the model proposed during
+        // a player-facing exchange is conversation-tier unless it declares
+        // otherwise. Clamped — a proposal is untrusted input and must not be
+        // able to mint a permanently unevictable memory.
+        for (const e of additions.episodes) {
+          const declared = typeof e.importance === 'number'
+            ? Math.max(0, Math.min(MEMORY_IMPORTANCE.significant, e.importance))
+            : MEMORY_IMPORTANCE.conversational;
+          updated = addMemoryEpisode(updated, gameState.meta.clock.day, e.text || e, declared, e.emotionalTag || '', e.participants || []);
+        }
       }
       if (additions.grievances) {                                      // NPC Overhaul
         for (const g of additions.grievances) {
