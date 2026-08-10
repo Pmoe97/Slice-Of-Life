@@ -49,7 +49,7 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
   let activityOverride = null;
   let locationOverride = null;
   let clothingState = null;
-  let clothingRestore = false;
+
   let updatedNpc = npc;
 
   const block = resolved.block;
@@ -196,11 +196,11 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
     }
 
     // Clothing state
+    // Correctness plan Phase 4: `restoresClothing` is gone. It set a flag that
+    // resolveTick applied in the same tick as setsClothing, cancelling it.
+    // Reversion is TRANSIENT_CLOTHING's job, on the following tick.
     if (drive.setsClothing) {
       clothingState = drive.setsClothing;
-    }
-    if (drive.restoresClothing) {
-      clothingRestore = true;
     }
 
     // Move to common area — actually relocate the NPC to a common room
@@ -339,7 +339,7 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
     }
   }
 
-  return { updatedNpc, events, imMessages, relDeltas, activityOverride, locationOverride, clothingState, clothingRestore, peepResults };
+  return { updatedNpc, events, imMessages, relDeltas, activityOverride, locationOverride, clothingState, peepResults };
 }
 
 // --- Phase 6: NPC peep attempt ---

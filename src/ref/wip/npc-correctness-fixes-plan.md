@@ -1,7 +1,7 @@
 # NPC Correctness Fixes
 
-Status: **in progress — Phases 1–3 done**. Design session complete
-2026-08-10; all decisions locked. Phases 4–5 outstanding.
+Status: **in progress — Phases 1–4 done**. Design session complete
+2026-08-10; all decisions locked. Phase 5 (dead-field triage) outstanding.
 Last updated 2026-08-10.
 
 Companions:
@@ -18,8 +18,45 @@ near the bottom, as the very last thing you do each session.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 4 (need economy rebalance). Phases 1–3 are done and
-verified.
+**Resume at:** Phase 5 (dead-field triage). Phases 1–4 are done and verified.
+
+**Phase 4 notes (2026-08-10):**
+- Landed; 40 assertions pass at `scratchpad/verify-p4.js`. **The whole engine
+  (27 files, through `interruption.js`) loads into a bare Node `vm`** — see
+  `scratchpad/loadgame.js`. That means `resolveTick`, `SIM_generateHouse` and
+  `evaluateDrives` can be driven for real, over real generated houses, with no
+  browser. This is now the best verification route in the project by a wide
+  margin; prefer it to the iframe technique for anything below the render
+  layer. `scratchpad/measure.js` is the tuning instrument (prints need ranges
+  against drive gates); `verify-p4.js` is the assertion harness.
+- **Do not tune these numbers by reasoning alone.** Every rate here was set by
+  measuring, and the first pass was wrong in both directions: the planned
+  values fixed the pinned-at-zero needs and promptly pinned `stimulation` and
+  `comfort` at the *ceiling* instead (avg 84 and 75, their drives never
+  firing) — the identical bug mirrored. Re-run `measure.js` after any change.
+- **Two blocking discoveries, neither in the plan:**
+  1. **The apartment opens with facilities `broken`**, and the `shower` drive
+     is facility-gated on bathroom plumbing via `MAINTENANCE.npcDecayActions`.
+     So D10 (removing passive hygiene restore) would have left hygiene sliding
+     to an unrecoverable zero for the entire early game. Fixed with a new
+     `wash_up` drive — no facility gate, half a shower's restore, longer
+     cooldown, no towel state, no utility metering. Disrepair still costs you
+     a household of grubby roommates; it just no longer bottoms out.
+  2. **`setsClothing` and `restoresClothing` cancelled each other.** Both came
+     off the same `driveResult` in the same tick, so `resolveTick` set
+     `clothing = 'towel'` and overwrote it with `'dressed'` three lines later.
+     **The towel state has never once been observable** — not by the prompt,
+     the peep system, or the floor plan. `restoresClothing`/`clothingRestore`
+     are deleted; reversion is now `TRANSIENT_CLOTHING` in pass 2, on the
+     following tick, which is what the old comment always claimed happened.
+- **`sleep_recover` and `seek_company` correctly do NOT fire** in a
+  well-provisioned three-person house, and that is not a bug — they are relief
+  valves. The harness asserts they remain *reachable*: a lone resident does
+  fall below the `seek_company` gate, and `sleep_recover`'s gate passes for an
+  exhausted NPC. Do not "fix" them by inflating decay.
+- `seek_comfort`'s gate moved 25 → 40. Comfort is quality-of-life, not
+  survival: "I'd like to sit somewhere nice" is a mid-range motivation, and at
+  25 the drive never fired at all.
 
 **Phase 3 notes (2026-08-10):**
 - Landed in full; 23 assertions pass at `scratchpad/verify-p3.js`.
@@ -101,6 +138,19 @@ verified.
 ---
 
 ## Deviations from the locked plan
+
+- **Phase 4, two additions D10 did not anticipate.** (a) A new `wash_up`
+  drive, because the `shower` drive is facility-gated and the apartment opens
+  broken — without it, deleting the passive hygiene restore made the early
+  game strictly worse than before the fix. (b) `TRANSIENT_CLOTHING` plus the
+  removal of `restoresClothing`/`clothingRestore`, because reviving the shower
+  drive revealed that the towel state it sets was being destroyed in the same
+  tick. Both are required for D10 to actually deliver what it claimed; neither
+  is scope creep.
+
+- **Phase 4, the rates themselves differ from the plan's table.** The planned
+  values were derived by arithmetic and were wrong — see the Phase 4 handoff
+  notes. Shipped values are in `NEEDS` with the measurement rationale inline.
 
 - **Phase 1, grievance matching.** Planned: word-boundary match. Shipped:
   word-boundary match **plus** a 0.5 coverage ratio
@@ -416,7 +466,7 @@ pre-prune save and assert the same.
 | 1 | **Done** | Conversation transcript order, depth, channel separation; real IM thread in the IM prompt. 23 assertions pass (`scratchpad/verify-p1.js`) |
 | 2 | **Done** | Rebase the intimacy formula so a stranger reads as `early`; re-derive on load. 26 assertions pass (`scratchpad/verify-p2.js`) |
 | 3 | **Done** | Source-keyed episode importance; evict by `importance × decay` instead of FIFO. 23 assertions pass (`scratchpad/verify-p3.js`) |
-| 4 | Not started | Rebalance the six NPC need rates against the real schedule blocks |
+| 4 | **Done** | Rebalance the six NPC need rates against the real schedule blocks. 40 assertions pass (`scratchpad/verify-p4.js`), driving the real `resolveTick` over two apartment states |
 | 5 | Not started | Triage all 34 dead fields; prune the ones no roadmap plan claims |
 
 ---

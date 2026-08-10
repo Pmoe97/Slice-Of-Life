@@ -1384,10 +1384,37 @@ const NEEDS = {
   // NPC Overhaul Phase 6 — comfort + stimulation needs
   comfort:    { decayPerTick: 0.5, max: 100, warnBelow: 20, warnAbove: 80 },
   stimulation: { decayPerTick: 1,   max: 100, warnBelow: 20, warnAbove: 80 },
+  // --- NPC need economy (correctness plan Phase 4, D10-D14) ---
+  //
+  // These rates were rebalanced because five of the six needs sat permanently
+  // at a floor or a ceiling, which made needsLine (LLM) read almost
+  // identically for every NPC on every turn, and made the drives gated on
+  // them unreachable. The audit numbers, per 48-tick day, before:
+  //
+  //   hygiene     -48  vs +112 restore  → pinned at 100; `shower` (gate <30)
+  //                                       could NEVER fire
+  //   social      -96  vs +4/tick only when co-located → pinned near 0
+  //   stimulation -48  vs leisure-block only, and no weekday shift template
+  //                                       HAS a leisure block → pinned at 0
+  //   hunger     -144  vs +72 passive    → chronically low
+  //   comfort     -24  vs +3/tick but only with an upgraded facility → 0
+  //   energy      -96  vs +90 on sleep   → roughly balanced (left alone)
+  //
+  // D10/D11: hunger and hygiene have NO passive restore any more. Both are
+  // drive-serviced — the eat drive really consumes food from the fridge, and
+  // showering is what makes you clean. A block-keyed passive restore was
+  // doing the drive's job better than the drive could, which is why the
+  // shower drive had been mechanically dead since it was written (and with
+  // it the towel clothing state, NPC water metering, and a peep target).
   npcEnergyDecay: 2,
-  npcHungerDecay: 3,
-  npcHygieneDecay: 1,
-  npcSocialDecay: 2,
+  // D11: 3 → 1.5. Tuned against measured drive throughput, not by feel: the
+  // eat drive can only fire on non-transit ticks inside its blockFilter, which
+  // works out to roughly one meal a day per NPC. At 2/tick a meal (which tops
+  // out at NPC_INVENTORY.eatUntilHunger = 65) burned off in ~33 ticks and the
+  // cast lived at an average hunger of 20.
+  npcHungerDecay: 1.5,
+  npcHygieneDecay: 1,       // ~1 shower/day needed at 48 ticks (D10)
+  npcSocialDecay: 1,        // D12: 2 → 1
   // NPC Overhaul Phase 6 — NPC comfort + stimulation decay rates
   npcComfortDecay: 0.5,
   npcStimulationDecay: 1,
@@ -1396,14 +1423,33 @@ const NEEDS = {
   // parsing activity strings (activity labels are flavor text, not a
   // structured need signal). Without these, NPC needs only ever decayed —
   // written but never read back into consequence.
+  //
+  // npcEatRestore and npcHygieneRestore are GONE (D10/D11) — deleting the
+  // rates alongside the code that read them, so a future reader can't
+  // reintroduce a passive restore by wiring up an orphaned constant.
   npcSleepRestore: 6,    // per tick while in the 'sleep' block
-  npcEatRestore: 8,      // per tick during 'morning'/'evening' blocks
-  npcHygieneRestore: 8,  // per tick during 'morning'/'wind_down' blocks
-  npcSocialRestore: 4,   // per tick when sharing a common room with another resident
+  // A committed dinner (inventory overhaul Phase 7, D7) survives D11's
+  // removal of passive hunger restore: a 'meal' block is an NPC actually
+  // sitting down at the table, which is a real act with a real commitment
+  // record behind it, not background topping-up.
+  npcMealRestore: 12,    // per tick while in the 'meal' block
+  npcSocialRestore: 5,   // D12: 4 → 5, per tick sharing a room with another resident
   // NPC Overhaul Phase 6 — comfort + stimulation restore
-  npcComfortRestore: 3,     // per tick when in a comfortable room (living room with entertainment tier >= 1, bedroom with upgraded bed)
+  npcComfortRestore: 2,     // per tick in a comfortable room (living room with working entertainment, or an UPGRADED bedroom)
+  // D14: a small unconditional floor in the living room or your own bedroom,
+  // regardless of upgrade tier. The upgrade incentive is preserved (2 vs 0.5);
+  // what's removed is the pre-upgrade state where comfort could only ever
+  // fall, so every NPC in a starting apartment read as permanently miserable.
+  // 0.5 exactly cancels npcComfortDecay, so a comfortable room HOLDS comfort
+  // rather than raising it — the facility upgrade is what actually restores.
+  npcComfortBaselineRestore: 0.5,
   npcComfortProximityBonus: 2, // extra comfort when sharing a room with a trusted NPC (comfort > 0.5 in castWeb)
-  npcStimulationRestore: 4,   // per tick during leisure/entertainment activities
+  // D13: 4 → 2. The passive restore is deliberately smaller than the
+  // seek_stimulation drive's +20, so the DRIVE is what relieves boredom and
+  // the passive trickle only slows the slide. At 4/tick over the widened
+  // block set the need pinned at ~84 and its drive never fired — the same
+  // failure as the old hygiene ceiling, just in a different need.
+  npcStimulationRestore: 2,
 };
 
 // --- Hunger rhythm (Phase 5, D1) ---
@@ -1856,6 +1902,14 @@ const SCENE = {
   ambientSketchOnly: true,
   crowdAvoidanceWeight: 3, // multiplier applied to rooms at/above soft capacity
 };
+
+// --- Transient clothing states (correctness plan Phase 4) ---
+// Clothing states that describe a passing moment rather than how someone is
+// dressed. They survive exactly the tick that caused them and revert to
+// 'dressed' on the next one, in resolveTick's pass 2 — 'sleepwear' was
+// already handled this way inline; 'towel' was supposed to be and wasn't.
+// A drive sets one via `setsClothing`; nothing needs to un-set it.
+const TRANSIENT_CLOTHING = ['sleepwear', 'towel'];
 
 // --- Memory importance (correctness plan Phase 3, D8) ---
 // Every episode used to land at a hardcoded 0.5 regardless of where it came
@@ -3204,8 +3258,17 @@ const DRIVE_DEFS = {
   // the same dispatch shape as the peep/snoop drives — the `effects` list
   // is deliberately empty.
   eat: {
-    gates: [{ need: 'hunger', op: 'below', threshold: 25 }], weight: 0.3,
-    blockFilter: ['morning', 'evening', 'leisure', 'midday'],
+    // D11: gate raised 25 → 35. With no passive hunger restore, this drive is
+    // now the only thing that feeds an NPC, so it has to fire before they're
+    // desperate. tryEatFood's scrounge fallback still means an empty kitchen
+    // can't starve anyone.
+    gates: [{ need: 'hunger', op: 'below', threshold: 35 }], weight: 0.5,
+    // 'wind_down' added and weight raised 0.3 → 0.5: a drive can only fire on
+    // a tick where the NPC is neither asleep nor in transit, and NPCs move
+    // rooms constantly during evening blocks, so the effective firing rate is
+    // far below the nominal weight. Measured at 0.3 the cast averaged one meal
+    // every three days.
+    blockFilter: ['morning', 'evening', 'wind_down', 'leisure', 'midday'],
     effects: [],
     cooldownTicks: 8,
     isEatDrive: true,
@@ -3225,9 +3288,38 @@ const DRIVE_DEFS = {
     eventMood: 0.02,
     cooldownTicks: 10,
     // Showering makes the NPC undressed during the activity — see clothing state
+    // Correctness plan Phase 4. `restoresClothing: true` used to sit here
+    // alongside setsClothing, and the two cancelled each other out: both flags
+    // came off the SAME driveResult in the SAME tick, so resolveTick set
+    // clothing to 'towel' and then immediately overwrote it with 'dressed'
+    // three lines later. The towel state was never observable by anything —
+    // not the prompt, not the peep system, not the floor plan. Reversion is
+    // now handled generically by TRANSIENT_CLOTHING on the NEXT tick, which
+    // is what the old comment claimed was happening.
     setsClothing: 'towel',
-    restoresClothing: true,
     meters: [['showers', 1], ['waterHeating', 1]],
+  },
+  // Correctness plan Phase 4 (D10 follow-on). The `shower` drive is
+  // facility-gated on bathroom plumbing (MAINTENANCE.npcDecayActions), and
+  // the apartment OPENS with its facilities broken — so for the whole early
+  // game there is no shower. That was survivable while a passive block-keyed
+  // restore existed; D10 deleted it, which would have left hygiene sliding to
+  // zero with no recovery path at all during the exact stretch of the game
+  // the player spends repairing the place.
+  //
+  // Washing at a sink needs no working plumbing fixture and is deliberately
+  // worse than a shower: half the restore, a longer cooldown, a lower gate,
+  // and no towel state or utility metering. Disrepair still costs you a
+  // household of visibly grubby roommates — it just no longer bottoms out at
+  // an unrecoverable zero where every NPC reads identically.
+  wash_up: {
+    gates: [{ need: 'hygiene', op: 'below', threshold: 25 }], weight: 0.25,
+    blockFilter: ['morning', 'wind_down', 'leisure', 'evening'],
+    effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'hygiene', delta: 20 } }],
+    activityOverride: 'washing up at the sink',
+    eventTemplate: '{name} washed up as best they could.',
+    eventMood: -0.01,
+    cooldownTicks: 14,
   },
   sleep_recover: {
     gates: [{ need: 'energy', op: 'below', threshold: 20 }],
@@ -3328,7 +3420,12 @@ const DRIVE_DEFS = {
 
   // NPC Overhaul Phase 6 — comfort + stimulation drives
   seek_comfort: {
-    gates: [{ need: 'comfort', op: 'below', threshold: 25 }],
+    // D14: gate 25 → 40. Comfort is a quality-of-life need, not a survival
+    // one — "I'd like to go sit somewhere nice" is a mid-range motivation,
+    // where hunger at 25 is genuine deprivation. Measured against the rebased
+    // rates, comfort settles in the 30s-60s, so a gate of 25 meant this drive
+    // never fired at all and NPCs never chose to go and relax.
+    gates: [{ need: 'comfort', op: 'below', threshold: 40 }],
     weight: 0.2,
     blockFilter: ['leisure', 'wind_down', 'evening', 'morning'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'comfort', delta: 15 } }],
@@ -3341,7 +3438,10 @@ const DRIVE_DEFS = {
   seek_stimulation: {
     gates: [{ need: 'stimulation', op: 'below', threshold: 25 }],
     weight: 0.2,
-    blockFilter: ['leisure', 'evening', 'afternoon', 'midday'],
+    // D15: 'afternoon' is not a block any SCHEDULES template defines — it was
+    // dead weight in this filter. The real block names are sleep/morning/
+    // prep/commute/work/commute_home/midday/evening/leisure/wind_down/meal.
+    blockFilter: ['leisure', 'evening', 'wind_down', 'midday'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'stimulation', delta: 20 } }],
     activityOverride: 'looking for something to do',
     cooldownTicks: 10,

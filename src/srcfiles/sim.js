@@ -1035,13 +1035,24 @@ function resolveTick(gameState) {
     if (block === 'sleep') {
       needs.energy = Math.min(NEEDS.energy.max, needs.energy + NEEDS.npcSleepRestore);
     }
-    // Phase 7 (D7): a 'meal' block is a committed dinner — the attendee
-    // eats there, so it restores hunger like the morning/evening blocks.
-    if (block === 'morning' || block === 'evening' || block === 'meal') {
-      needs.hunger = Math.min(NEEDS.hunger.max, needs.hunger + NEEDS.npcEatRestore);
-    }
-    if (block === 'morning' || block === 'wind_down' || block === 'evening') {
-      needs.hygiene = Math.min(NEEDS.hygiene.max, needs.hygiene + NEEDS.npcHygieneRestore);
+    // Correctness plan Phase 4 (D10/D11): the passive hunger and hygiene
+    // restores that used to live here are GONE. Both needs are drive-serviced
+    // now — the `eat` drive really consumes food from the fridge and pantry,
+    // and the `shower` drive is what makes an NPC clean.
+    //
+    // The hygiene restore was the worse of the two: +8/tick across
+    // morning/wind_down/evening is +112/day against 48/day of decay, so
+    // hygiene never left 100 and the `shower` drive (gate: below 30) could
+    // not fire in any reachable game state. That silently killed the towel
+    // clothing state, NPC-sourced water/shower utility metering, and one of
+    // the peep system's target conditions — three features dead because of
+    // one restore rate.
+    //
+    // Phase 7 (D7)'s committed-dinner exception survives: a 'meal' block is
+    // an NPC actually sitting down to eat, which is a real act, not passive
+    // background topping-up.
+    if (block === 'meal') {
+      needs.hunger = Math.min(NEEDS.hunger.max, needs.hunger + NEEDS.npcMealRestore);
     }
     if (location) {
       const shareCount = Object.values(resolved).filter(r => r.location === location).length;
@@ -1053,13 +1064,20 @@ function resolveTick(gameState) {
     // is UPGRADED (a habitable-but-plain room isn't comfortable). Post-overhaul
     // each bedroom resolves its own habitability facility — the old shared
     // single id is gone.
-    if (location === 'living_room' || ROOMS[location]?.type === 'bedroom') {
+    // Correctness plan Phase 4 (D14): a comfortable room now pays a small
+    // unconditional baseline, with the facility bonus stacking on top rather
+    // than being the only source. Previously comfort could ONLY rise in an
+    // upgraded room, so in a starting apartment it fell monotonically to zero
+    // and every NPC read as permanently uncomfortable. The upgrade incentive
+    // survives intact — the facility path is 3/tick against a baseline of 1.
+    // An NPC's own bedroom counts even unupgraded; someone else's does not.
+    const ownBedroom = ROOMS[location]?.type === 'bedroom' && npc.residency?.room === location;
+    if (location === 'living_room' || ownBedroom) {
       const hasComfortFacility = location === 'living_room'
         ? isFacilityFunctional(gameState, 'living_room_entertainment')
         : (ROOM_FACILITIES[location] || []).some(fid => gameState.world.upgrades?.[fid]?.tier === 'upgraded');
-      if (hasComfortFacility) {
-        needs.comfort = Math.min(100, needs.comfort + NEEDS.npcComfortRestore);
-      }
+      const restore = hasComfortFacility ? NEEDS.npcComfortRestore : NEEDS.npcComfortBaselineRestore;
+      needs.comfort = Math.min(100, needs.comfort + restore);
     }
     // NPC Overhaul Phase 6 — extra comfort from trusted NPC proximity
     if (location) {
@@ -1076,8 +1094,14 @@ function resolveTick(gameState) {
         }
       }
     }
-    // NPC Overhaul Phase 6 — restore stimulation during leisure
-    if (block === 'leisure') {
+    // NPC Overhaul Phase 6 — restore stimulation during leisure.
+    // Correctness plan Phase 4 (D13): 'evening' and 'wind_down' count too.
+    // Gating on 'leisure' alone made this unreachable for most of the cast —
+    // NO weekday shift template (day_shift, morning_shift, evening_shift,
+    // night_shift) defines a leisure block at all, so anyone on a normal job
+    // could only ever restore stimulation at the weekend, and it sat pinned
+    // at zero the rest of the time.
+    if (block === 'leisure' || block === 'evening' || block === 'wind_down') {
       needs.stimulation = Math.min(100, needs.stimulation + NEEDS.npcStimulationRestore);
     }
 
@@ -1119,10 +1143,14 @@ function resolveTick(gameState) {
     // Clothing state based on schedule block: sleeping → sleepwear,
     // everything else → dressed (unless a drive overrides it, e.g. shower
     // → towel). This runs before drives so drive overrides win.
+    // Correctness plan Phase 4: generalised from a 'sleepwear'-only check to
+    // every TRANSIENT_CLOTHING state, so a towel reverts the tick after the
+    // shower that produced it. Pass 3 runs after this and may set a fresh
+    // transient state for THIS tick; next tick's pass 2 clears it.
     let clothing = npc.clothing || 'dressed';
     if (block === 'sleep') {
       clothing = 'sleepwear';
-    } else if (clothing === 'sleepwear') {
+    } else if (TRANSIENT_CLOTHING.includes(clothing)) {
       clothing = 'dressed';
     }
 
@@ -1206,14 +1234,15 @@ function resolveTick(gameState) {
       npcUpdates[id].flags = { ...(postDrive?.flags || {}), ...driveResult.updatedNpc.flags };
     }
 
-    // Clothing state from drives (e.g., showering → towel)
+    // Clothing state from drives (e.g., showering → towel). Correctness plan
+    // Phase 4: the `clothingRestore` branch that used to follow this one is
+    // gone. It set clothing back to 'dressed' in the SAME tick that set it to
+    // 'towel' — both flags came off the same driveResult — so the towel state
+    // was written and immediately destroyed, and nothing ever saw it. Its
+    // comment said "on the next non-showering tick", which is now genuinely
+    // what happens: pass 2 reverts TRANSIENT_CLOTHING next tick.
     if (driveResult.clothingState) {
       npcUpdates[id].clothing = driveResult.clothingState;
-    }
-    if (driveResult.clothingRestore) {
-      // Restore clothing after the drive activity ends — we set it
-      // back to 'dressed' on the next non-showering tick
-      npcUpdates[id].clothing = 'dressed';
     }
 
     // Merge events, IM messages, and rel deltas
