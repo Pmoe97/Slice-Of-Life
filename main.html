@@ -3457,7 +3457,7 @@ body {
      MENU/IMAGE). Functions calling into a LATER script are fine either way
      — those calls only happen at runtime, after every script below has
      finished loading. -->
-<script src="src/srcfiles/config.js?v=58"></script>
+<script src="src/srcfiles/config.js?v=59"></script>
 <script src="src/srcfiles/icons.js?v=14"></script>
 <script src="src/srcfiles/defs.world.js?v=16"></script>
 <script src="src/srcfiles/defs.actions.js?v=14"></script>
@@ -3470,7 +3470,7 @@ body {
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/srcfiles/orbital.js?v=1"></script>
 <script src="src/srcfiles/state.js?v=28"></script>
-<script src="src/srcfiles/sim.js?v=32"></script>
+<script src="src/srcfiles/sim.js?v=33"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
@@ -3488,7 +3488,7 @@ body {
 <script src="src/srcfiles/skills.js?v=8"></script>
 <script src="src/srcfiles/stealth.js?v=7"></script>
 <script src="src/srcfiles/time.js?v=13"></script>
-<script src="src/srcfiles/computer.js?v=35"></script>
+<script src="src/srcfiles/computer.js?v=36"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -3496,9 +3496,9 @@ body {
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
 <script src="src/srcfiles/phone.js?v=9"></script>
-<script src="src/srcfiles/npc.js?v=15"></script>
+<script src="src/srcfiles/npc.js?v=16"></script>
 <script src="src/srcfiles/prompt.js?v=8"></script>
-<script src="src/srcfiles/llm.js?v=14"></script>
+<script src="src/srcfiles/llm.js?v=15"></script>
 <script src="src/srcfiles/interruption.js?v=11"></script>
 <script src="src/srcfiles/image.js?v=13"></script>
 <script src="src/srcfiles/render.js?v=27"></script>

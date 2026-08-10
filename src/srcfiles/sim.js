@@ -1901,6 +1901,10 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
       verbalTics: pickUnique(charRng, VERBAL_TICS, 1 + Math.floor(charRng() * 2)),
       textingStyle: weightedPick(charRng, TEXTING_STYLES.map(x => ({ val: x, weight: 1 }))).val,
       vocabularyLevel: charRng(),
+      // Empty for a generated NPC — no pool exists to roll from yet. Authored
+      // characters (Del) carry real ones, and buildNpcBlockV2 prints the line
+      // only when the array is non-empty, so this costs a generated NPC
+      // nothing. Filling it for rolled characters is roadmap Plan 4's job.
       catchphrases: [],
     };
 
@@ -1946,8 +1950,11 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
       piercings: charRng() < 0.4 ? [{ location: pickPhys(PHYS_POOL_PIERCING_LOC), type: pickPhys(PHYS_POOL_PIERCING_TYPE), description: '' }] : [],
       tattoos: charRng() < 0.35 ? [{ location: pickPhys(PHYS_POOL_TATTOO_LOC), description: '', style: pickPhys(PHYS_POOL_TATTOO_STYLE) }] : [],
       fashion: pickPhys(PHYS_POOL_FASHION),
+      // Filled by the prose expansion (LLM's expandCharacterProse merges its
+      // `accessories` field in here) and read by
+      // getPhysicalDescriptionForPrompt — which feeds both the conversation
+      // prompt and image.js's character prompts.
       accessories: '',
-      typicalAttire: { casual: '', work: '', sleep: '', formal: '' },
       voice: {
         pitch: pickPhys(PHYS_POOL_VOICE_PITCH),
         texture: pickPhys(PHYS_POOL_VOICE_TEXTURE),
@@ -1955,7 +1962,6 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
       },
       gait: pickPhys(PHYS_POOL_GAIT),
       scent: pickPhys(PHYS_POOL_SCENT),
-      genitals: '',
     };
 
     // Build structured character (name/visual/history/sketch/sampleLines
@@ -2667,10 +2673,9 @@ function createNpcFromBible(bible, residencyStatus) {
     memory: {
       facts: [], episodes: [], summary: '',
       summaryRevision: 0,                              // NPC Overhaul
-      recent: [],                                      // NPC Overhaul — last ~10 exchanges
-      styleCounters: { total: 0, sincePersonal: 0, recentTopics: [], lastJobMention: -1, lastHobbyMention: -1 }, // NPC Overhaul
+      recent: [],                                      // NPC Overhaul — the conversation buffer (MEMORY_BUDGET.maxRecent)
+      styleCounters: { total: 0, sincePersonal: 0, recentTopics: [] }, // NPC Overhaul
     },
-    arcs: [],
     flags: {},
     // Contacts (external-world plan Phase 2): do you have their number?
     // Explicit here rather than relying on the schema default, so a fresh

@@ -279,11 +279,17 @@ function buildNpcBlockV2(npc, query, channel) {
   // [Backstory]
   block += `[Backstory]: Want: ${b.want}. Wound: ${b.wound}. Blind spot: ${b.blindSpot}. Boundary: ${b.boundary}.\n`;
 
-  // [Speech]
+  // [Speech]. Correctness plan Phase 5 wired vocabularyLevel and catchphrases
+  // in — both were generated (and, for authored characters like Del,
+  // hand-written) and never reached a prompt.
   block += `[Speech]: verbosity ${b.speech.verbosity}, formality ${b.speech.formality}, humor ${b.speech.humorStyle}, profanity ${b.speech.profanityLevel}`;
+  if (typeof b.speech.vocabularyLevel === 'number') block += `, vocabulary ${b.speech.vocabularyLevel}`;
   if (b.speech.verbalTics?.length > 0) block += `, tics: ${b.speech.verbalTics.join(', ')}`;
   if (b.speech.textingStyle) block += `, texting: ${b.speech.textingStyle}`;
   block += '\n';
+  if (b.speech.catchphrases?.length > 0) {
+    block += `  Things they say: ${b.speech.catchphrases.map(c => `"${c}"`).join(' ')}\n`;
+  }
 
   // [Current state]
   block += `[Current state]: Mood: ${moodLabel(npc.mood)}`;

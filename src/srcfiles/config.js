@@ -616,11 +616,11 @@ const CONTRACTOR_BIBLE = {
     tattoos: [],
     fashion: 'carhartt coveralls and a worn ballcap',
     accessories: 'a tape measure on his belt and a pencil behind his ear',
+    // Reserved for roadmap Plan 2 — authored now, consumed there.
     typicalAttire: { casual: 'flannel and work boots', work: 'coveralls', sleep: 't-shirt and sweatpants', formal: 'a clean button-down he clearly hates' },
     voice: { pitch: 'low', texture: 'gravelly', accent: 'working-class' },
     gait: 'deliberate, heavy-footed',
     scent: 'sawdust and coffee',
-    genitals: '',
   },
   history: "Was the player's grandfather's contractor for over twenty years — the man who kept this crumbling building from actually falling down. He knows its rot firsthand: which walls have been re-framed, which pipes sing, which foundation crack the building manager swore was cosmetic. He watched the place slide into disrepair as the grandfather got older, and now he treats the player like the job his old friend left unfinished — part duty, part the closest thing he's got to a kid to pass it to. He'll get it sorted, and he'll sound like it's a favor he's doing you, because to him it is.",
   temperament: { warmth: 0.7, volatility: -0.15, openness: 0.45, conscientiousness: 0.85, assertiveness: 0.6, selfAwareness: 0.6 },
@@ -632,7 +632,7 @@ const CONTRACTOR_BIBLE = {
     likes: ['good tools', 'honest work', 'strong coffee'],
     dislikes: ['cut corners', 'surprise inspections', 'haggling'],
   },
-  occupation: { category: 'service', title: 'General Contractor', scheduleTemplate: 'irregular', incomeBand: 'high', stressProfile: 0.3, hours: 'flexible' },
+  occupation: { category: 'service', title: 'General Contractor', scheduleTemplate: 'irregular', incomeBand: 'high', hours: 'flexible' },
   interests: [
     { name: 'old buildings', tags: ['craft', 'indoor'], skill: 90 },
     { name: 'hand tools', tags: ['craft'], skill: 85 },
@@ -2092,13 +2092,23 @@ const CHARACTER_SCHEMA = {
         tattoos:              { type: 'array', default: [] },
         fashion:              { type: 'string', default: '' },
         accessories:          { type: 'string', default: '' },
+        // RESERVED for roadmap Plan 2 (the scene reader). No reader today, but
+        // unlike the fields Phase 5 pruned this one has real authored content
+        // — Del Connors carries all four slots — and "what are they wearing
+        // right now" is precisely the question the sensory layer will ask, off
+        // the back of the existing `clothing` state machine. rollCastSlot no
+        // longer emits four empty strings for it; the schema default covers a
+        // generated NPC until something fills it.
+        //
+        // `genitals` was declared here and IS pruned: mature-gated content
+        // that no generator, authored character, or prompt ever wrote to or
+        // read — no producer and no consumer.
         typicalAttire:        { type: 'object', default: {},
           fields: { casual: { type: 'string', default: '' }, work: { type: 'string', default: '' }, sleep: { type: 'string', default: '' }, formal: { type: 'string', default: '' } } },
         voice:                { type: 'object', default: {},
           fields: { pitch: { type: 'string', default: '' }, texture: { type: 'string', default: '' }, accent: { type: 'string', default: '' } } },
         gait:                 { type: 'string', default: '' },
         scent:                { type: 'string', default: '' },
-        genitals:             { type: 'string', default: '' }, // gated by contentConfig.mature
       }
     },
     history:       { type: 'string', required: true, default: '', maxLength: 600 },  // one paragraph
@@ -2128,8 +2138,12 @@ const CHARACTER_SCHEMA = {
         title:            { type: 'string', required: true },
         scheduleTemplate: { type: 'string', required: true },  // key into SCHEDULES
         incomeBand:       { type: 'string', required: true },   // low|mid|high
-        stressProfile:    { type: 'number', range: [0, 1] },
         hours:            { type: 'string', required: true },
+        // `stressProfile` was here, set on all 20 OCCUPATION_POOL entries and
+        // read by nothing (correctness plan Phase 5). resolveTick's random-
+        // event roll carries a comment claiming to be "weighted by stress +
+        // low needs" and is in fact a flat `rng() < 0.15` — if that weighting
+        // is ever built, reintroduce the field WITH its reader, per RI6.
       }
     },
     interests:     { type: 'array', required: true, default: [], maxItems: 3,
@@ -2149,8 +2163,15 @@ const CHARACTER_SCHEMA = {
         profanityLevel:  { type: 'number', range: [0, 1] },
         verbalTics:     { type: 'array', default: [] },
         textingStyle:   { type: 'string', default: 'casual' },
-        vocabularyLevel: { type: 'number', range: [0, 1], default: 0.5 },  // NPC Overhaul
-        catchphrases:   { type: 'array', default: [] },                   // NPC Overhaul
+        // Both of these were dead at the start of the correctness plan's
+        // Phase 5 and are now WIRED (buildNpcBlockV2's [Speech] line) rather
+        // than pruned. The triage nearly deleted them — until a completeness
+        // grep found that Del Connors, the hand-authored contractor below,
+        // carries a real vocabularyLevel of 0.6 and two genuinely good
+        // catchphrases. Authored content with no consumer is a stronger
+        // argument for wiring than for deleting.
+        vocabularyLevel: { type: 'number', range: [0, 1], default: 0.5 },
+        catchphrases:   { type: 'array', default: [] },
       }
     },
     scheduleTemplate: { type: 'string', required: true, default: 'standard' },
@@ -2215,11 +2236,20 @@ const CHARACTER_SCHEMA = {
         summary:  { type: 'string', default: '' },
         summaryRevision: { type: 'number', default: 0 },                    // NPC Overhaul
         recent:  { type: 'array', default: [] },                            // NPC Overhaul — last ~10 exchanges
-        styleCounters: { type: 'object', default: {},                       // NPC Overhaul — anti-repetition
-          fields: { total: { type: 'number', default: 0 }, sincePersonal: { type: 'number', default: 0 }, recentTopics: { type: 'array', default: [] }, lastJobMention: { type: 'number', default: -1 }, lastHobbyMention: { type: 'number', default: -1 } } },
+        // NPC Overhaul — anti-repetition. `lastJobMention`/`lastHobbyMention`
+        // were here and are pruned (correctness plan Phase 5): both were
+        // initialised to -1 on every NPC and never written or read again.
+        // `recentTopics` does the same job generically and IS read, by
+        // getStyleDirective.
+        styleCounters: { type: 'object', default: {},
+          fields: { total: { type: 'number', default: 0 }, sincePersonal: { type: 'number', default: 0 }, recentTopics: { type: 'array', default: [] } } },
       }
     },
-    arcs:           { type: 'array', default: [] },
+    // `arcs` was here (correctness plan Phase 5): initialised to `[]` at
+    // creation and referenced by nothing else in the codebase — no writer, no
+    // reader, no roadmap plan claiming it. Character change over time is
+    // roadmap Plan 4's territory and will want a shape designed against its
+    // own needs, not this placeholder.
     // Contacts (external-world plan Phase 2): do you have this person's
     // number? Gates the IM contact list and invitations. Earned by asking
     // in conversation — hiring someone through a service never grants it.
@@ -2253,26 +2283,26 @@ const TEMPERAMENT_POOL = [
 
 // --- Occupation pool with schedule templates, income, stress, hours ---
 const OCCUPATION_POOL = [
-  { category: 'tech',       title: 'Software Developer',       scheduleTemplate: 'day_shift', incomeBand: 'high', stressProfile: 0.4, hours: '9-17' },
-  { category: 'tech',       title: 'QA Tester',                scheduleTemplate: 'day_shift', incomeBand: 'mid', stressProfile: 0.5, hours: '9-17' },
-  { category: 'food',       title: 'Line Cook',                scheduleTemplate: 'evening_shift', incomeBand: 'low', stressProfile: 0.7, hours: '16-23' },
-  { category: 'food',       title: 'Barista',                  scheduleTemplate: 'morning_shift', incomeBand: 'low', stressProfile: 0.3, hours: '6-14' },
-  { category: 'health',     title: 'Nurse',                    scheduleTemplate: 'night_shift', incomeBand: 'mid', stressProfile: 0.8, hours: '19-07' },
-  { category: 'health',     title: 'Therapist',                 scheduleTemplate: 'day_shift', incomeBand: 'mid', stressProfile: 0.5, hours: '9-17' },
-  { category: 'arts',       title: 'Freelance Designer',        scheduleTemplate: 'irregular', incomeBand: 'mid', stressProfile: 0.4, hours: 'flexible' },
-  { category: 'arts',       title: 'Musician',                  scheduleTemplate: 'evening_shift', incomeBand: 'low', stressProfile: 0.6, hours: 'flexible' },
-  { category: 'service',    title: 'Retail Manager',           scheduleTemplate: 'day_shift', incomeBand: 'mid', stressProfile: 0.6, hours: '10-19' },
-  { category: 'service',    title: 'Bartender',                 scheduleTemplate: 'night_shift', incomeBand: 'mid', stressProfile: 0.7, hours: '18-02' },
-  { category: 'education',  title: 'Teacher',                  scheduleTemplate: 'day_shift', incomeBand: 'mid', stressProfile: 0.6, hours: '8-16' },
-  { category: 'education',  title: 'Grad Student',             scheduleTemplate: 'irregular', incomeBand: 'low', stressProfile: 0.8, hours: 'flexible' },
-  { category: 'finance',    title: 'Accountant',                scheduleTemplate: 'day_shift', incomeBand: 'high', stressProfile: 0.5, hours: '9-17' },
-  { category: 'finance',    title: 'Barista-Entrepreneur',      scheduleTemplate: 'morning_shift', incomeBand: 'low', stressProfile: 0.7, hours: '6-14' },
-  { category: 'trades',     title: 'Electrician',              scheduleTemplate: 'day_shift', incomeBand: 'mid', stressProfile: 0.4, hours: '7-15' },
-  { category: 'trades',     title: 'Plumber',                  scheduleTemplate: 'day_shift', incomeBand: 'mid', stressProfile: 0.5, hours: '8-16' },
-  { category: 'media',      title: 'Journalist',                scheduleTemplate: 'irregular', incomeBand: 'mid', stressProfile: 0.6, hours: 'flexible' },
-  { category: 'media',      title: 'Podcaster',                 scheduleTemplate: 'irregular', incomeBand: 'low', stressProfile: 0.4, hours: 'flexible' },
-  { category: 'legal',      title: 'Paralegal',                 scheduleTemplate: 'day_shift', incomeBand: 'mid', stressProfile: 0.7, hours: '9-18' },
-  { category: 'science',    title: 'Lab Researcher',            scheduleTemplate: 'day_shift', incomeBand: 'mid', stressProfile: 0.5, hours: '9-17' },
+  { category: 'tech',       title: 'Software Developer',       scheduleTemplate: 'day_shift', incomeBand: 'high', hours: '9-17' },
+  { category: 'tech',       title: 'QA Tester',                scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '9-17' },
+  { category: 'food',       title: 'Line Cook',                scheduleTemplate: 'evening_shift', incomeBand: 'low', hours: '16-23' },
+  { category: 'food',       title: 'Barista',                  scheduleTemplate: 'morning_shift', incomeBand: 'low', hours: '6-14' },
+  { category: 'health',     title: 'Nurse',                    scheduleTemplate: 'night_shift', incomeBand: 'mid', hours: '19-07' },
+  { category: 'health',     title: 'Therapist',                 scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '9-17' },
+  { category: 'arts',       title: 'Freelance Designer',        scheduleTemplate: 'irregular', incomeBand: 'mid', hours: 'flexible' },
+  { category: 'arts',       title: 'Musician',                  scheduleTemplate: 'evening_shift', incomeBand: 'low', hours: 'flexible' },
+  { category: 'service',    title: 'Retail Manager',           scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '10-19' },
+  { category: 'service',    title: 'Bartender',                 scheduleTemplate: 'night_shift', incomeBand: 'mid', hours: '18-02' },
+  { category: 'education',  title: 'Teacher',                  scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '8-16' },
+  { category: 'education',  title: 'Grad Student',             scheduleTemplate: 'irregular', incomeBand: 'low', hours: 'flexible' },
+  { category: 'finance',    title: 'Accountant',                scheduleTemplate: 'day_shift', incomeBand: 'high', hours: '9-17' },
+  { category: 'finance',    title: 'Barista-Entrepreneur',      scheduleTemplate: 'morning_shift', incomeBand: 'low', hours: '6-14' },
+  { category: 'trades',     title: 'Electrician',              scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '7-15' },
+  { category: 'trades',     title: 'Plumber',                  scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '8-16' },
+  { category: 'media',      title: 'Journalist',                scheduleTemplate: 'irregular', incomeBand: 'mid', hours: 'flexible' },
+  { category: 'media',      title: 'Podcaster',                 scheduleTemplate: 'irregular', incomeBand: 'low', hours: 'flexible' },
+  { category: 'legal',      title: 'Paralegal',                 scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '9-18' },
+  { category: 'science',    title: 'Lab Researcher',            scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '9-17' },
 ];
 
 // --- Schedule templates: [weekday/weekend] → tick → activity weight table ---

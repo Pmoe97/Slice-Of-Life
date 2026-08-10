@@ -46,8 +46,7 @@ folders as a pair.
 | Doc | Status |
 |---|---|
 | `SENSORY-AND-SOCIAL-ROADMAP.md` | **The umbrella for six linked overhauls.** Start here for anything NPC- or sensory-related — it holds the cross-cutting decisions (`R1`–`R8`) all six plans inherit, and the theses for the four not yet written. |
-| `npc-correctness-fixes-plan.md` | Roadmap Plan 0. Five defects the NPC audit found. Written, not started. Should land before the rest. |
-| `perception-and-signals-plan.md` | Roadmap Plan 1. The signal substrate every later plan consumes. Written, not started. |
+| `perception-and-signals-plan.md` | Roadmap Plan 1. The signal substrate every later plan consumes. **Next up.** Written, not started. |
 | `prompt-generator-v2.md` | Engine + authoring + preferences UI + gender-aware refinement all shipped; optional pool expansion outstanding. |
 
 The roadmap's Plans 2–5 (`scene-reader-ui`, `npc-cognition`,
@@ -63,6 +62,7 @@ lands** — its real shape is not knowable yet.
 | `afterhours-redesign-plan.md` | `afterhours-redesign-handoff-prompt.md` |
 | `inventory-needs-menu-saves-plan.md` | `inventory-needs-menu-saves-handoff-prompt.md` |
 | `restaurant-network-expansion-plan.md` | `restaurant-expansion-handoff-prompt.md` |
+| `npc-correctness-fixes-plan.md` | — (roadmap Plan 0; carries the dead-field disposition table) |
 | `renovation-occupancy-overhaul-plan.md` | — |
 | `contractor-tutorial-overhaul-plan.md` | — |
 | `npc-overhaul-plan.md` | — |

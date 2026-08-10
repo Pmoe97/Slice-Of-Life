@@ -1,7 +1,7 @@
 # NPC Correctness Fixes
 
-Status: **in progress — Phases 1–4 done**. Design session complete
-2026-08-10; all decisions locked. Phase 5 (dead-field triage) outstanding.
+Status: **complete** — all five phases implemented and verified, 2026-08-10.
+151 assertions pass across `scratchpad/verify-p1..p5.js`.
 Last updated 2026-08-10.
 
 Companions:
@@ -18,7 +18,34 @@ near the bottom, as the very last thing you do each session.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 5 (dead-field triage). Phases 1–4 are done and verified.
+**Resume at:** nothing — this plan is **complete**. All five phases are
+implemented and verified (151 assertions across
+`scratchpad/verify-p1..p5.js`). The next work is roadmap **Plan 1,
+`perception-and-signals-plan.md`**.
+
+**Phase 5 notes (2026-08-10):**
+- Landed; 39 assertions pass at `scratchpad/verify-p5.js`. The disposition
+  table is a section of this document (above the Deviations section) and is
+  now the authoritative record — **the audit artifact's dead-field list is
+  superseded and was wrong in both directions.**
+- **Four fields the audit called dead have real readers**, and would have been
+  deleted by a triage that trusted the artifact: `facts[].category` (drives
+  renovation-fact invalidation in `computer.js`), `values[].opposition` (feeds
+  `computeFriction`, not just the profile view), `selfAwareness` (rendered in
+  the character studio), and `facts[].importance` (became the eviction score in
+  Phase 3). Re-audit against the code, never against a prior audit.
+- **Three more were saved by a completeness grep**, not by the plan. Del
+  Connors (`CONTRACTOR_BIBLE`, `config.js`) is hand-authored and carries a real
+  `vocabularyLevel` of 0.6, two genuinely good `catchphrases`, and all four
+  `typicalAttire` slots. Authored content with no consumer is an argument for
+  wiring, not deleting — so `vocabularyLevel` and `catchphrases` were wired
+  into `[Speech]` and `typicalAttire` reserved for Plan 2. **When triaging,
+  check the authored data, not only the generator.**
+- Net: 5 pruned, 9 wired, 12 reserved, 4 corrected. The 34-field figure in the
+  audit was an overcount by roughly half.
+- `getPhysicalDescriptionForPrompt` turned out to feed `image.js` as well as
+  the conversation prompt, so wiring the seven physical fields improved
+  character art and prose in one edit.
 
 **Phase 4 notes (2026-08-10):**
 - Landed; 40 assertions pass at `scratchpad/verify-p4.js`. **The whole engine
@@ -134,6 +161,77 @@ near the bottom, as the very last thing you do each session.
   Phase 5 triages them into keep/reserve/prune rather than deleting on sight.
 
 **Blockers / flagged deviations:** One deviation, recorded below. No blockers.
+
+---
+
+## Phase 5 — the disposition table
+
+The audit that produced this plan listed 34 fields as "written, never read".
+Re-checked against the code as it stands *after* Phases 1–4, that list was
+wrong in both directions. Four fields had real readers all along and were
+mis-marked; three more had authored content that made pruning them the wrong
+call. This table is the record — the audit artifact is superseded by it.
+
+**Pruned (5).** No producer, no consumer, no roadmap claim.
+
+| Field | Why it went |
+|---|---|
+| `bible.occupation.stressProfile` | Set on all 20 `OCCUPATION_POOL` entries and in `createExternalNpc`; read by nothing. `resolveTick`'s event roll still carries a comment claiming to be "weighted by stress + low needs" and is a flat `rng() < 0.15`. If that weighting is built, reintroduce the field *with* its reader. |
+| `bible.physical.genitals` | Declared as mature-gated content. No generator, no authored character, and no prompt ever wrote to or read it. |
+| `styleCounters.lastJobMention` | Initialised to `-1` on every NPC, never written or read again. |
+| `styleCounters.lastHobbyMention` | Same. `recentTopics` does the job generically and *is* read, by `getStyleDirective`. |
+| `npc.arcs` | `[]` at creation, referenced nowhere else. Character change over time is Plan 4's, and it will want a shape designed for its own needs. |
+
+**Wired now (9).** Dead when the phase started, live when it ended.
+
+| Field | Now read by |
+|---|---|
+| `speech.vocabularyLevel` | `buildNpcBlockV2` → `[Speech]` |
+| `speech.catchphrases` | `buildNpcBlockV2` → `Things they say:` |
+| `physical.accessories` | `getPhysicalDescriptionForPrompt` |
+| `physical.skin.ethnicity` | ″ |
+| `physical.face.cheekbones` | ″ |
+| `physical.face.jawline` | ″ |
+| `physical.face.ears` | ″ |
+| `physical.body.buttSize` | ″ |
+| `physical.body.posture` | ″ |
+
+`getPhysicalDescriptionForPrompt` feeds **both** the conversation prompt and
+`image.js`'s character image prompts, so wiring these improved prose and art
+in one edit.
+
+**Reserved (12).** No reader today; a named plan claims each one. Left exactly
+as-is.
+
+| Field | Claimed by |
+|---|---|
+| `physical.typicalAttire` | Plan 2 — "what are they wearing right now" is the sensory layer's question |
+| `bible.sampleLines` | Plan 4 — few-shot voice examples (audit Finding 06) |
+| `bible.history` | Plan 4 — compressed into the prompt |
+| `bible.interests[].skill` | Plan 5 — shared activities |
+| `episodes[].emotionalTag` | Plan 4 — rumination weight |
+| `episodes[].participants` | Plan 4 — co-memory and gossip transmission |
+| `relPlayer.firstMetDay` | Plan 4 — `daysKnown` in the player model |
+| `relPlayer.lastInteractionDay` | Plan 4/5 — "we haven't spoken in nine days" |
+| `castWeb.compatibility` | Plan 3 — live behaviour input, not generation-only |
+| `castWeb.friction` | Plan 3 — ″ |
+| `castWeb.beatPositive` | Plan 3 — ″ |
+| `bibleRevision` / `bibleChanges` | Plan 4 — recording character change |
+
+**Keep — the audit was wrong (4).** These have real readers and never should
+have been on the dead list.
+
+| Field | Actual reader |
+|---|---|
+| `facts[].category` | `computer.js` invalidates `renovation_job` / `renovation_done` facts by it |
+| `values[].opposition` | `computeFriction` (`sim.js`) *and* the RoomList profile view |
+| `bible.temperament.selfAwareness` | Rendered in the character studio (`render.computer.js`) |
+| `facts[].importance` | Became live in **Phase 3** — it is now the eviction score |
+
+**Not migrated on purpose.** Saves written before the prune keep the five
+removed properties as inert extras. `validateCharacter` only copies fields the
+schema declares, so anything regenerated drops them naturally; a migration to
+strip five unread properties would be churn with no behavioural change.
 
 ---
 
@@ -467,7 +565,7 @@ pre-prune save and assert the same.
 | 2 | **Done** | Rebase the intimacy formula so a stranger reads as `early`; re-derive on load. 26 assertions pass (`scratchpad/verify-p2.js`) |
 | 3 | **Done** | Source-keyed episode importance; evict by `importance × decay` instead of FIFO. 23 assertions pass (`scratchpad/verify-p3.js`) |
 | 4 | **Done** | Rebalance the six NPC need rates against the real schedule blocks. 40 assertions pass (`scratchpad/verify-p4.js`), driving the real `resolveTick` over two apartment states |
-| 5 | Not started | Triage all 34 dead fields; prune the ones no roadmap plan claims |
+| 5 | **Done** | Triage every flagged field: 5 pruned, 9 wired, 12 reserved, 4 corrected. Table above. 39 assertions pass (`scratchpad/verify-p5.js`) |
 
 ---
 

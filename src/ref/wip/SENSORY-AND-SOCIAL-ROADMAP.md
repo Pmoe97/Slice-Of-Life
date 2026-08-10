@@ -1,9 +1,18 @@
 # Sensory & Social Roadmap
 
 Status: **active** — the umbrella for six linked overhauls. Design session
-2026-08-10. Plans 0 and 1 are written; 2–5 are theses + locked decisions
-awaiting their own design sessions.
+2026-08-10. **Plan 0 is complete**; Plan 1 is written and is the next work;
+2–5 are theses awaiting their own design sessions.
 Last updated 2026-08-10.
+
+**Verification note for every plan below.** Plan 0 established that the whole
+engine — all 27 files through `interruption.js` — loads into a bare Node `vm`
+with five stubs, so `resolveTick`, `SIM_generateHouse`, `evaluateDrives` and
+every pure function are directly callable against real generated houses with
+no browser and no Perchance runtime. See `scratchpad/loadgame.js`. **Prefer
+this to the iframe technique in `ARCHITECTURE.md`** for anything below the
+render layer; it is faster, has no snapshot-staleness problem, and it is what
+made Plan 0's need rebalance tunable at all.
 
 This is an **index and an argument**, not a plan. It holds the vision that
 spans six overhaul plans so no single plan has to carry it, and it records
@@ -147,8 +156,8 @@ own `D`-numbers.
 
 | # | Plan | Status | What it establishes |
 |---|---|---|---|
-| 0 | [`npc-correctness-fixes-plan.md`](npc-correctness-fixes-plan.md) | **Written — not started** | Fixes the five defects the audit found, so later plans build on a working relationship and memory layer |
-| 1 | [`perception-and-signals-plan.md`](perception-and-signals-plan.md) | **Written — not started** | The signal substrate: emission, propagation, decay, perception by player and NPC |
+| 0 | [`../complete/npc-correctness-fixes-plan.md`](../complete/npc-correctness-fixes-plan.md) | **Complete** (2026-08-10) | Fixed the five defects the audit found. Later plans build on a working relationship and memory layer. Carries the authoritative dead-field disposition table |
+| 1 | [`perception-and-signals-plan.md`](perception-and-signals-plan.md) | **Written — next up** | The signal substrate: emission, propagation, decay, perception by player and NPC |
 | 2 | `scene-reader-ui-plan.md` | Thesis only | The interactive-novel main UI, awareness indicators, demoted log, delineated conversation history |
 | 3 | `npc-cognition-plan.md` | Thesis only | Utility-scored intent selection, committed multi-tick plans, NPCs consuming perception |
 | 4 | `knowledge-gossip-memory-plan.md` | Thesis only | Facts with provenance and confidence, NPC-to-NPC transmission, rumination, the player model |

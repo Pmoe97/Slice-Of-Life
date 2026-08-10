@@ -70,7 +70,8 @@ function migrateNpcToV2(npc) {
     }
   }
 
-  // bible.speech — add vocabularyLevel + catchphrases
+  // bible.speech — vocabularyLevel + catchphrases. Both are read by
+  // buildNpcBlockV2's [Speech] line as of the correctness plan's Phase 5.
   if (b.speech && typeof b.speech === 'object') {
     if (b.speech.vocabularyLevel === undefined) b.speech.vocabularyLevel = 0.5;
     if (!Array.isArray(b.speech.catchphrases)) b.speech.catchphrases = [];
@@ -116,15 +117,15 @@ function migrateNpcToV2(npc) {
   } else {
     mem.episodes = [];
   }
-  // styleCounters
+  // styleCounters. lastJobMention/lastHobbyMention were backfilled here and
+  // are pruned (correctness plan Phase 5) — never written after init, never
+  // read. recentTopics covers the same ground and is read by getStyleDirective.
   if (!mem.styleCounters || typeof mem.styleCounters !== 'object') {
-    mem.styleCounters = { total: 0, sincePersonal: 0, recentTopics: [], lastJobMention: -1, lastHobbyMention: -1 };
+    mem.styleCounters = { total: 0, sincePersonal: 0, recentTopics: [] };
   } else {
     mem.styleCounters.total = mem.styleCounters.total || 0;
     mem.styleCounters.sincePersonal = mem.styleCounters.sincePersonal || 0;
     mem.styleCounters.recentTopics = Array.isArray(mem.styleCounters.recentTopics) ? mem.styleCounters.recentTopics : [];
-    mem.styleCounters.lastJobMention = mem.styleCounters.lastJobMention !== undefined ? mem.styleCounters.lastJobMention : -1;
-    mem.styleCounters.lastHobbyMention = mem.styleCounters.lastHobbyMention !== undefined ? mem.styleCounters.lastHobbyMention : -1;
   }
   npc.memory = mem;
 
@@ -1326,16 +1327,32 @@ function getPhysicalDescriptionForPrompt(npc) {
   const eyeBits = [p.eyes.color, p.eyes.shape].filter(Boolean);
   if (eyeBits.length > 0) parts.push(`${eyeBits.join(' ')} eyes`);
 
-  // Skin
+  // Skin. Correctness plan Phase 5 wired `ethnicity` in — it was generated on
+  // every NPC and read by nothing.
   const skinBits = [p.skin.tone, p.skin.texture].filter(Boolean);
   if (skinBits.length > 0) parts.push(`${skinBits.join(' ')} skin`);
+  if (p.skin.ethnicity) parts.push(p.skin.ethnicity);
 
-  // Face
-  const faceBits = [p.face.shape && `${p.face.shape} face`, p.face.nose && `a ${p.face.nose} nose`, p.face.lips && `${p.face.lips} lips`].filter(Boolean);
+  // Face. Phase 5 wired in cheekbones/jawline/ears — all three were rolled
+  // from their own pools at generation and never reached a prompt.
+  const faceBits = [
+    p.face.shape && `${p.face.shape} face`,
+    p.face.nose && `a ${p.face.nose} nose`,
+    p.face.lips && `${p.face.lips} lips`,
+    p.face.cheekbones && `${p.face.cheekbones} cheekbones`,
+    p.face.jawline && `a ${p.face.jawline} jawline`,
+    p.face.ears && `${p.face.ears} ears`,
+  ].filter(Boolean);
   if (faceBits.length > 0) parts.push(faceBits.join(', '));
 
-  // Body
-  const bodyBits = [p.body.shape && `${p.body.shape} build`, p.body.chestSize && `${p.body.chestSize} chest`, p.body.legs && `${p.body.legs} legs`].filter(Boolean);
+  // Body. Phase 5 wired in buttSize/posture, same story.
+  const bodyBits = [
+    p.body.shape && `${p.body.shape} build`,
+    p.body.chestSize && `${p.body.chestSize} chest`,
+    p.body.buttSize && `${p.body.buttSize} hips`,
+    p.body.legs && `${p.body.legs} legs`,
+    p.body.posture && `${p.body.posture} posture`,
+  ].filter(Boolean);
   if (bodyBits.length > 0) parts.push(bodyBits.join(', '));
 
   // Distinguishing features
@@ -1353,8 +1370,11 @@ function getPhysicalDescriptionForPrompt(npc) {
     parts.push(p.tattoos.map(t => `a ${t.style} tattoo on the ${t.location}`).join(', '));
   }
 
-  // Fashion
+  // Fashion. Phase 5 wired in `accessories` — the prose expansion has been
+  // generating real content for it ("jewelry, watches, bags…") since the NPC
+  // overhaul, and nothing has ever read it back out.
   if (p.fashion) parts.push(`typically wears ${p.fashion}`);
+  if (p.accessories) parts.push(`accessorises with ${p.accessories}`);
 
   // Voice
   const voiceBits = [p.voice?.pitch, p.voice?.texture, p.voice?.accent && `${p.voice.accent} accent`].filter(Boolean);

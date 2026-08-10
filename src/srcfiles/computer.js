@@ -2281,7 +2281,6 @@ function createExternalNpc(gameState, npcId, seedKey, occupationTitle, opts = {}
       title: occupationTitle || occ.title,
       scheduleTemplate: 'day_shift',
       incomeBand: 'low',
-      stressProfile: 0.4,
       hours: '9-17',
     },
     interests: [], values: [],
