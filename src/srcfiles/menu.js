@@ -87,6 +87,16 @@ function fitMenuScale() {
   for (const id of ['menu-title-screen', 'menu-options-screen']) {
     const el = document.getElementById(id);
     if (!el || el.hidden) continue;
+    if (id === 'menu-options-screen') {
+      // The options list is tall and must stay readable, so never scale it:
+      // scaling-and-clipping loses the rows below the viewport fold with no
+      // way to scroll (the box is already capped at 100vh, so the clip wins).
+      // Instead let its CSS max-height + overflow-y:auto scroll — every row
+      // and the Back button stay reachable at full size.
+      el.style.transform = 'translateY(-50%)';
+      el.style.overflow = '';
+      continue;
+    }
     const naturalH = el.scrollHeight;
     const naturalW = el.scrollWidth;
     const scale = Math.min(1, (innerHeight - 20) / naturalH, innerWidth / naturalW);

@@ -262,7 +262,7 @@ function getPlaceholder() {
 
 // ===== MENU TITLE GALLERY (Phase 10) =====
 // The boot-menu slideshow — the reference games' component
-// (ref/perchance-menu-conventions.md §3.4–3.8) adapted onto this game's
+// (src/ref/structural/perchance-menu-conventions.md §3.4–3.8) adapted onto this game's
 // image pipeline. Two absolutely-positioned <img> layers crossfade on an
 // 8 s cycle; a `generating` boolean keeps exactly one generation in flight;
 // the auto-cycle tick that finds no next image calls the generator WITHOUT
@@ -270,7 +270,7 @@ function getPlaceholder() {
 //
 // Three deliberate deviations from the reference:
 //  - Caching: images live in the shared LRU (kv.images, capped) under a
-//    `menu_<rating>_<ts>_<rand>` key, and a bounded ring of those keys is
+//    `menu_<gen>_<rating>_<orient>_<ts>_<rand>` key, and a bounded ring of those keys is
 //    persisted in kv.menu so the art survives reloads without a second
 //    copy. The menu deletes its evicted keys itself (state.deleteCachedImage)
 //    so its generation can never churn the LRU against scene images.
@@ -333,27 +333,44 @@ const MENU_GALLERY_KV_FOLDER = 'menu';
 const MENU_GALLERY_RING_KEY = 'ring';
 const MENU_GALLERY_OPTIONS_KEY = 'options';
 
+// Cache-key generation token. Bump this whenever a change makes previously
+// STORED pixels wrong — not merely different. Everything from an older
+// generation is purged on the next menu open rather than displayed.
+//
+// g2: the pre-crop purge. Until the crop step was removed, every image was
+// centre-cropped to the viewport's aspect (clamped to a 3.2 maximum) BEFORE
+// being cached, so a wide window baked a 3.2:1 letterbox strip into the
+// stored pixels permanently. Shown honestly with object-fit: contain, those
+// strips render as a thin band across the middle of the screen with the
+// subject's head and legs already missing — there is nothing to fit, the
+// content is simply gone. They cannot be repaired, only replaced.
+const MENU_GALLERY_GENERATION = 'g2';
+
 function menuGalleryKeyPrefix(rating) {
-  return `menu_${rating}_`;
+  return `menu_${MENU_GALLERY_GENERATION}_${rating}_`;
+}
+
+// A key from the current generation. Anything else — including every
+// pre-token key, which is by definition pre-crop-removal — is stale.
+function isCurrentGenerationKey(key) {
+  return typeof key === 'string' && key.startsWith(`menu_${MENU_GALLERY_GENERATION}_`);
 }
 
 function menuGalleryKeyRating(key) {
-  const m = /^menu_(sfw|suggestive|explicit)_/.exec(key || '');
+  const m = /^menu_g\d+_(sfw|suggestive|explicit)_/.exec(key || '');
   return m ? m[1] : 'explicit'; // unknown/legacy keys assumed permissive
 }
 
 function genMenuGalleryKey(rating) {
   const o = titleGallery.orientation === 'portrait' ? 'p' : 'l';
-  return `menu_${rating}_${o}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  return `${menuGalleryKeyPrefix(rating)}${o}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
 function menuGalleryKeyOrientation(key) {
-  const m = /^menu_(sfw|suggestive|explicit)_(l|p)_/.exec(key || '');
+  const m = /^menu_g\d+_(sfw|suggestive|explicit)_(l|p)_/.exec(key || '');
   return m ? m[2] : null;
 }
 
-// Legacy keys (generated before orientation tagging) carry no orientation
-// and are all landscape (768x512), so they're treated as landscape.
 function keyMatchesOrientation(key, orientation) {
   const ko = menuGalleryKeyOrientation(key);
   if (ko) return ko === (orientation === 'portrait' ? 'p' : 'l');
@@ -391,7 +408,30 @@ async function loadMenuGalleryRing() {
   } catch (e) {
     titleGallery.ring = [];
   }
+  await purgeStaleGenerationImages();
   return titleGallery.ring;
+}
+
+// Drop — and hard-delete — every ring entry from an older key generation.
+// These are not merely differently-shaped images that a better fit could
+// rescue; their pixels were destructively cropped before storage, so the
+// only correct handling is to evict them and regenerate. Runs on every ring
+// load, so a player who never clears their cache still self-heals on the
+// next menu open; a no-op once the pool has turned over.
+//
+// Deliberately deletes from the image cache too, not just the ring: leaving
+// the blobs behind would keep occupying the menu's LRU share with pixels
+// nothing can ever display again.
+async function purgeStaleGenerationImages() {
+  const stale = titleGallery.ring.filter(k => !isCurrentGenerationKey(k));
+  if (stale.length === 0) return 0;
+  titleGallery.ring = titleGallery.ring.filter(isCurrentGenerationKey);
+  await saveMenuGalleryRing();
+  for (const k of stale) {
+    try { await deleteCachedImage(k); } catch (e) {}
+  }
+  console.debug(`Menu gallery: purged ${stale.length} pre-${MENU_GALLERY_GENERATION} image(s).`);
+  return stale.length;
 }
 
 async function saveMenuGalleryRing() {
@@ -666,6 +706,7 @@ async function initTitleGallery() {
   // restricted save now owns the pause menu), or the viewport orientation
   // flipped since it was generated.
   const kept = titleGallery.images.filter(img =>
+    isCurrentGenerationKey(img.key) &&
     RATING_ORDER[menuGalleryKeyRating(img.key)] <= RATING_ORDER[cap] &&
     keyMatchesOrientation(img.key, titleGallery.orientation));
   if (kept.length > 0) {
