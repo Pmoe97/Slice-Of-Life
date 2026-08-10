@@ -1962,6 +1962,43 @@ const SIGNAL_DEFS = {
       strong: ['the sink has disappeared under dishes'],
     },
   },
+  // --- Phase 2 additions: one per remaining dirtyWhen-carrying object ---
+  bathroom_grime: {
+    channel: 'smell',
+    salience: 0.55,
+    phrases: {
+      faint:  ['the bathroom could do with a wipe-down'],
+      clear:  ['the sharp, unmistakable smell of a bathroom nobody has cleaned'],
+      strong: ['the bathroom smells genuinely bad'],
+    },
+  },
+  unmade_bed: {
+    channel: 'sight',
+    salience: 0.2,
+    phrases: {
+      faint:  ['the bed is unmade'],
+      clear:  ['the bed is unmade, sheets shoved to one side'],
+      strong: ['the bed looks slept in and abandoned'],
+    },
+  },
+  clutter: {
+    channel: 'sight',
+    salience: 0.3,
+    phrases: {
+      faint:  ['a few things left out'],
+      clear:  ['the surfaces have disappeared under clutter'],
+      strong: ['there is nowhere clear to put anything down'],
+    },
+  },
+  stagnant_water: {
+    channel: 'smell',
+    salience: 0.6,
+    phrases: {
+      faint:  ['a faint chlorine-and-something-else smell off the water'],
+      clear:  ['the pool has gone cloudy and it smells like it'],
+      strong: ['the pool is green, and the smell carries'],
+    },
+  },
 };
 
 const SIGNAL_TUNING = {

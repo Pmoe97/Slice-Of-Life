@@ -165,7 +165,8 @@ async function processDayRollover(day) {
   processDeliveriesForDay(day);
   // Spoilage (inventory overhaul Phase 4): stacks past shelf life +
   // graceDays convert to a mess — ROTTEN_FOOD on their container + room
-  // odor — feeding the existing cleanliness machinery. Before the maid so
+  // container state — feeding the cleanliness machinery and, since Phase 2,
+  // the derived room smell. Before the maid so
   // a visit hired for today can clean a mess that formed at this
   // rollover.
   processSpoilageForDay(currentGameState, day);
@@ -1817,10 +1818,11 @@ async function doContainerTransferAll(objId, direction) {
 
 // --- Rot-mess cleanup (inventory overhaul Phase 4) ---
 // The container panel's "throw out the spoiled food" button. A mess is the
-// container's `rotten_food: 'rotten'` state + the room's odor flag (both
-// written by the daily spoilage pass); this reverses exactly those two
-// writes and pays ROT.clearMessMinutes — the same act-then-decay-once
-// rule as every other verb, so clearing a mess is never a free action.
+// container's `rotten_food: 'rotten'` state, written by the daily spoilage
+// pass. This reverses that one write and pays ROT.clearMessMinutes — the same
+// act-then-decay-once rule as every other verb, so clearing a mess is never a
+// free action. Since perception plan Phase 2 the room's smell is DERIVED from
+// that state, so there is no second write to reverse and none to forget.
 async function doClearContainerMess(objId) {
   if (!currentGameState) return;
   const obj = openContainerObject(objId);
@@ -1830,12 +1832,11 @@ async function doClearContainerMess(objId) {
   const name = containerLabel(obj);
   const roomId = obj.bucket.replace(/^room_/, '');
   // The container state routes through applyEffects (SET_OBJECT_STATE) so
-  // player-driven mutation stays on the effects path; the room odor has no
-  // effect verb (SET_ROOM_STATE is declared but unimplemented) and is the
-  // spoilage pass's own field, so it's written directly here — the same
-  // two-writer contract cleanRoomObjects uses.
+  // player-driven mutation stays on the effects path. Perception plan Phase 2
+  // (D10): that single write is now the whole job — the room-level odor flag
+  // this used to have to clear alongside it is gone, because the smell is
+  // derived from the container state rather than mirrored beside it.
   applyEffects([parseEffectDSL(`SET_OBJECT_STATE ${objId} rotten_food none`)[0]].filter(Boolean), ctx);
-  if (currentGameState.world.rooms?.[roomId]) currentGameState.world.rooms[roomId].odor = 'none';
   refreshRoomCleanliness(currentGameState, roomId);
   addLogEntry('narration', `You throw out the spoiled food and wipe down the ${name.toLowerCase()}.`);
   await advanceAndResolveMinutes(ROT.clearMessMinutes);

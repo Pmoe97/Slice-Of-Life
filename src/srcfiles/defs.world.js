@@ -29,6 +29,18 @@
 // recomputeRoomCleanliness (WORLD) reads — data-driven, so "what makes a
 // room feel dirty" is a CONFIG-shaped fact about each object, not a
 // hardcoded formula.
+//
+// `emits: { stateKey: { value: { signal, intensity } } }` is the SAME shape,
+// deliberately, and is what SIGNALS' deriveStandingSignals reads (perception
+// plan D9). One convention covers both questions an object's state answers:
+// does this make the room feel dirty, and can anyone smell/see/hear it.
+//
+// A container going rotten is the single most repeated emitter in the file —
+// every food-holding def carries the identical `rotten_food: 'rotten'` state,
+// and it always means the same thing to the nose. Spread EMITS_ROT rather
+// than restating it fifteen times, so the intensity of rot lives in exactly
+// one place.
+const EMITS_ROT = { rotten_food: { rotten: { signal: 'rot', intensity: 0.8 } } };
 
 const OBJECT_DEFS = {
   // --- Bedroom furniture (instanced once per bedroom via APARTMENT_LAYOUT) ---
@@ -37,6 +49,7 @@ const OBJECT_DEFS = {
     portable: false, breakable: false, container: false, private: true,
     states: { made: ['made', 'unmade'] }, defaultState: { made: 'made' },
     dirtyWhen: { made: { unmade: 0.15 } }, cleanlinessWeight: 2,
+    emits: { made: { unmade: { signal: 'unmade_bed', intensity: 0.5 } } },
     affords: ['bed.sleep', 'inspect.object'],
     imagePhrase: 'a single bed with rumpled sheets',
   },
@@ -53,6 +66,7 @@ const OBJECT_DEFS = {
     states: { rotten_food: ['none', 'rotten'], door: ['closed', 'open'] },
     defaultState: { rotten_food: 'none', door: 'closed' },
     dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 0,
+    emits: EMITS_ROT,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a wardrobe',
   },
@@ -62,6 +76,7 @@ const OBJECT_DEFS = {
     states: { rotten_food: ['none', 'rotten'], door: ['closed', 'open'] },
     defaultState: { rotten_food: 'none', door: 'closed' },
     dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 0,
+    emits: EMITS_ROT,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a nightstand with a lamp',
   },
@@ -115,6 +130,7 @@ const OBJECT_DEFS = {
     id: 'jewelry_box', label: 'Jewelry Box', nouns: ['jewelry box', 'jewelry'],
     portable: true, breakable: false, container: { capacity: null, preservation: 1.0, label: 'Jewelry Box' }, private: true,
     states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 0,
+    emits: EMITS_ROT,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a small jewelry box',
   },
@@ -192,6 +208,7 @@ const OBJECT_DEFS = {
     states: { rotten_food: ['none', 'rotten'], door: ['closed', 'open'] },
     defaultState: { rotten_food: 'none', door: 'closed' },
     dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
+    emits: EMITS_ROT,
     // Perception plan Phase 1 (D9). Same shape as dirtyWhen above — state key
     // → state value → payload — deliberately, so there is one convention to
     // learn rather than two. Read by SIGNALS' deriveStandingSignals.
@@ -215,6 +232,7 @@ const OBJECT_DEFS = {
     states: { rotten_food: ['none', 'rotten'], door: ['closed', 'open'] },
     defaultState: { rotten_food: 'none', door: 'closed' },
     dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
+    emits: EMITS_ROT,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a small pantry shelf',
   },
@@ -239,6 +257,14 @@ const OBJECT_DEFS = {
     states: { rotten_food: ['none', 'rotten'], fill: ['empty', 'partial', 'full'] },
     defaultState: { rotten_food: 'none', fill: 'empty' },
     dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime }, fill: { partial: 0.3, full: 0.8 } }, cleanlinessWeight: 2,
+    // A bin that needs taking out smells of the same thing rot does, just
+    // less — so `fill` emits `rot` at reduced intensity rather than earning a
+    // signal of its own. Two keys can name the same signal; mergePerceived
+    // collapses them to the strongest, which is the right answer for a full
+    // bin that ALSO has something properly rotten in it.
+    emits: { ...EMITS_ROT,
+             fill: { partial: { signal: 'rot', intensity: 0.25 },
+                     full:    { signal: 'rot', intensity: 0.5 } } },
     affords: ['container.open', 'container.take', 'container.put', 'clean.object', 'inspect.object'],
     imagePhrase: 'a kitchen trash can',
   },
@@ -249,6 +275,7 @@ const OBJECT_DEFS = {
     portable: false, breakable: true, container: false, private: false,
     states: { power: ['off', 'on'], grime: ['clean', 'soap-scummed'] }, defaultState: { power: 'off', grime: 'clean' },
     dirtyWhen: { grime: { 'soap-scummed': 0.6 } }, cleanlinessWeight: 2,
+    emits: { grime: { 'soap-scummed': { signal: 'bathroom_grime', intensity: 0.35 } } },
     affords: ['shower.use', 'clean.object', 'inspect.object'],
     imagePhrase: 'a shower with a frosted glass door',
   },
@@ -257,6 +284,7 @@ const OBJECT_DEFS = {
     portable: false, breakable: false, container: false, private: false,
     states: { clean: ['clean', 'dirty'] }, defaultState: { clean: 'clean' },
     dirtyWhen: { clean: { dirty: 0.7 } }, cleanlinessWeight: 2,
+    emits: { clean: { dirty: { signal: 'bathroom_grime', intensity: 0.7 } } },
     affords: ['clean.object', 'inspect.object'],
     imagePhrase: 'a toilet',
   },
@@ -265,6 +293,7 @@ const OBJECT_DEFS = {
     portable: false, breakable: false, container: false, private: false,
     states: { clutter: ['tidy', 'cluttered'] }, defaultState: { clutter: 'tidy' },
     dirtyWhen: { clutter: { cluttered: 0.4 } }, cleanlinessWeight: 1,
+    emits: { clutter: { cluttered: { signal: 'clutter', intensity: 0.4 } } },
     affords: ['clean.object', 'inspect.object'],
     imagePhrase: 'a bathroom sink with a foggy mirror above it',
   },
@@ -281,6 +310,7 @@ const OBJECT_DEFS = {
     states: { rotten_food: ['none', 'rotten'], fill: ['empty', 'partial', 'full'] },
     defaultState: { rotten_food: 'none', fill: 'empty' },
     dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
+    emits: EMITS_ROT,
     emits: { rotten_food: { rotten: { signal: 'rot', intensity: 0.8 } },
              fill: { partial: { signal: 'stale_laundry', intensity: 0.2 },
                      full:    { signal: 'stale_laundry', intensity: 0.5 } } },
@@ -309,6 +339,7 @@ const OBJECT_DEFS = {
     portable: false, breakable: true, container: false, private: false,
     states: { clutter: ['tidy', 'cluttered'] }, defaultState: { clutter: 'tidy' },
     dirtyWhen: { clutter: { cluttered: 0.3 } }, cleanlinessWeight: 2,
+    emits: { clutter: { cluttered: { signal: 'clutter', intensity: 0.45 } } },
     affords: ['inspect.object', 'clean.object'],
     imagePhrase: 'a coffee table scattered with mail and remotes',
   },
@@ -316,6 +347,7 @@ const OBJECT_DEFS = {
     id: 'bookshelf', label: 'Bookshelf', nouns: ['bookshelf', 'shelf'],
     portable: false, breakable: false, container: { capacity: null, preservation: 1.0, label: 'Bookshelf' }, private: false,
     states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
+    emits: EMITS_ROT,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a bookshelf crammed with paperbacks',
   },
@@ -341,6 +373,7 @@ const OBJECT_DEFS = {
     id: 'doormat', label: 'Doormat', nouns: ['doormat', 'mat'],
     portable: false, breakable: false, container: { capacity: null, preservation: 0.5, label: 'Doormat' }, private: false,
     states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 0,
+    emits: EMITS_ROT,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a doormat by the front door, the kind packages get left on',
   },
@@ -348,6 +381,7 @@ const OBJECT_DEFS = {
     id: 'coat_rack', label: 'Coat Rack', nouns: ['coat rack', 'rack'],
     portable: false, breakable: false, container: { capacity: null, preservation: 1.0, label: 'Coat Rack' }, private: false,
     states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 0,
+    emits: EMITS_ROT,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a coat rack by the door',
   },
@@ -374,6 +408,7 @@ const OBJECT_DEFS = {
     portable: false, breakable: false, container: false, private: false,
     states: { clutter: ['tidy', 'cluttered'] }, defaultState: { clutter: 'tidy' },
     dirtyWhen: { clutter: { cluttered: 0.2 } }, cleanlinessWeight: 2,
+    emits: { clutter: { cluttered: { signal: 'clutter', intensity: 0.4 } } },
     affords: ['inspect.object', 'clean.object'],
     imagePhrase: 'a large dining table with mismatched chairs',
   },
@@ -391,6 +426,7 @@ const OBJECT_DEFS = {
     id: 'shoe_rack', label: 'Shoe Rack', nouns: ['shoe rack', 'shoes'],
     portable: false, breakable: false, container: { capacity: null, preservation: 1.0, label: 'Shoe Rack' }, private: false,
     states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 0,
+    emits: EMITS_ROT,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a shoe rack by the door',
   },
@@ -438,6 +474,8 @@ const OBJECT_DEFS = {
     states: { water: ['filled', 'empty'], clarity: ['clear', 'cloudy', 'green'] },
     defaultState: { water: 'empty', clarity: 'green' },
     dirtyWhen: { clarity: { cloudy: 0.5, green: 1.0 } }, cleanlinessWeight: 4,
+    emits: { clarity: { cloudy: { signal: 'stagnant_water', intensity: 0.4 },
+                        green:  { signal: 'stagnant_water', intensity: 0.85 } } },
     affords: ['self.swim', 'clean.object', 'inspect.object'],
     imagePhrase: 'an indoor swimming pool',
   },
@@ -483,6 +521,7 @@ const OBJECT_DEFS = {
     id: 'study_bookshelf', label: 'Bookshelf', nouns: ['bookshelf', 'shelf', 'books'],
     portable: false, breakable: false, container: { capacity: null, preservation: 1.0, label: 'Bookshelf' }, private: false,
     states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
+    emits: EMITS_ROT,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'floor-to-ceiling bookshelves lined with well-worn books',
   },
@@ -518,6 +557,7 @@ const OBJECT_DEFS = {
     states: { rotten_food: ['none', 'rotten'], power: ['off', 'on'], cycle: ['empty', 'running', 'done'] },
     defaultState: { rotten_food: 'none', power: 'off', cycle: 'empty' },
     dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
+    emits: EMITS_ROT,
     affords: ['self.laundry', 'container.open', 'container.put', 'inspect.object'],
     imagePhrase: 'a front-loading washing machine',
   },
@@ -527,6 +567,7 @@ const OBJECT_DEFS = {
     states: { rotten_food: ['none', 'rotten'], power: ['off', 'on'], cycle: ['empty', 'running', 'done'] },
     defaultState: { rotten_food: 'none', power: 'off', cycle: 'empty' },
     dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
+    emits: EMITS_ROT,
     affords: ['container.open', 'container.take', 'inspect.object'],
     imagePhrase: 'a dryer next to the washer',
   },
@@ -540,6 +581,7 @@ const OBJECT_DEFS = {
     id: 'floor', label: 'Floor', nouns: ['floor', 'ground'],
     portable: false, breakable: false, container: { capacity: null, preservation: 0.5, label: 'Floor' }, private: false,
     states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 0,
+    emits: EMITS_ROT,
     affords: ['container.open', 'container.take', 'container.put'],
   },
 };

@@ -811,11 +811,10 @@ function cleanRoomObjects(gameState, roomId) {
     }
   }
   refreshRoomCleanliness(gameState, roomId);
-  // Phase 4: a rot mess leaves a room-level odor behind — cleaning the
-  // room clears it too. The object states above reset the container's
-  // rotten_food; this is the room flag's only writer besides the
-  // spoilage pass.
-  if (gameState.world.rooms?.[roomId]) gameState.world.rooms[roomId].odor = 'none';
+  // Perception plan Phase 2 (D10): a room-level `odor = 'none'` write used to
+  // sit here. Resetting the object states above is now sufficient — the smell
+  // is DERIVED from those states, so clearing the cause clears the effect and
+  // there is nothing left to forget to clear.
   return cleanedCount;
 }
 

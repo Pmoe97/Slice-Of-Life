@@ -3,6 +3,29 @@
 // LLM never writes to state directly — returns a proposal that NPC validates and applies.
 
 // --- Build the scene prompt from assembled context ---
+// Perception plan Phase 2 (D10): the composed sensory line, built from what
+// the player can actually perceive right now (SIGNALS' perceiveSignals) using
+// the authored phrase tables. This replaces a hardcoded binary odor line that
+// could only ever say one of two things and only about this exact room.
+//
+// Phrases are authored and composed deterministically rather than generated
+// (roadmap R1), so the line costs nothing, cannot contradict mechanical state,
+// and reads the same all day. A signal drifting in from elsewhere says so.
+//
+// The prose is resolved upstream in NPC's assembleContext, which has gameState
+// in scope, and arrives here as `rec.phrase`. Same reason getRecentEvents
+// resolves its own text there rather than handing this file a raw template:
+// prompt builders stay pure functions of their context.
+function buildSensoryLine(scene) {
+  const signals = scene.signals || [];
+  const parts = signals.slice(0, 4).map(rec => {
+    if (!rec.phrase) return null;
+    return rec.here ? rec.phrase : `${rec.phrase} (drifting in from the ${ROOMS[rec.sourceRoomId]?.name || rec.sourceRoomId})`;
+  }).filter(Boolean);
+  if (parts.length === 0) return '- Nothing much registers — no smells, nothing out of place.';
+  return `- What you can sense: ${parts.join('; ')}.`;
+}
+
 function buildScenePrompt(context, playerAction) {
   const { scene, player, activeNpcs, ambientNpcs, worldEvents } = context;
 
@@ -15,7 +38,7 @@ CURRENT SCENE:
 - Location: ${scene.room}
 - Time: ${scene.phase}, ${scene.time}, Day ${scene.day}
 - Cleanliness: ${scene.cleanliness > 70 ? 'tidy' : scene.cleanliness > 40 ? 'lived-in' : 'messy'}
-- Odor: ${scene.odor === 'smelly' ? 'a sour, rotten smell lingers in the air' : 'no bad smells'}
+${buildSensoryLine(scene)}
 
 PLAYER:
 - Current mood: ${moodLabel(player.mood)}

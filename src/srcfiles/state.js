@@ -27,7 +27,7 @@ function assert(cond, msg, context) {
 const FOLDER_VERSIONS = {
   meta: 1,
   player: 4,
-  world: 3,
+  world: 4,
   npcs: 4,
   images: 1,
   snapshots: 1,
@@ -177,6 +177,27 @@ const MIGRATIONS = {
         } else {
           migrated[roomId] = room;
         }
+      }
+      return migrated;
+    } },
+    // world 3->4 (perception plan Phase 2, D10): strip the dead `odor` key
+    // from room shells. Room smell is now DERIVED from the container states
+    // that cause it (SIGNALS' deriveStandingSignals), so a stored mirror of it
+    // could only ever drift — and nothing reads it any more.
+    //
+    // Same "only touch things that structurally look like a room-shell map"
+    // guard as the two migrations above: the `world` folder holds several
+    // differently-shaped keys (rooms/castWeb/quests/events/deliveries/rent)
+    // under one migration pass, and this function cannot tell which key it is
+    // being handed.
+    { from: 3, to: 4, fn: (data) => {
+      if (!data || typeof data !== 'object') return data;
+      const looksLikeRooms = Object.values(data).some(v => v && typeof v === 'object' && 'capacity' in v);
+      if (!looksLikeRooms) return data;
+      const migrated = {};
+      for (const [roomId, room] of Object.entries(data)) {
+        const { odor, ...rest } = room;
+        migrated[roomId] = rest;
       }
       return migrated;
     } },

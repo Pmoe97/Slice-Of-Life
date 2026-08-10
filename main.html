@@ -3461,9 +3461,9 @@ body {
      MENU/IMAGE). Functions calling into a LATER script are fine either way
      — those calls only happen at runtime, after every script below has
      finished loading. -->
-<script src="src/srcfiles/config.js?v=60"></script>
+<script src="src/srcfiles/config.js?v=61"></script>
 <script src="src/srcfiles/icons.js?v=14"></script>
-<script src="src/srcfiles/defs.world.js?v=17"></script>
+<script src="src/srcfiles/defs.world.js?v=18"></script>
 <script src="src/srcfiles/defs.actions.js?v=14"></script>
 <script src="src/srcfiles/defs.computer.js?v=15"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
@@ -3473,8 +3473,8 @@ body {
 <!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/srcfiles/orbital.js?v=1"></script>
-<script src="src/srcfiles/state.js?v=28"></script>
-<script src="src/srcfiles/sim.js?v=34"></script>
+<script src="src/srcfiles/state.js?v=29"></script>
+<script src="src/srcfiles/sim.js?v=35"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
@@ -3493,7 +3493,7 @@ body {
 <script src="src/srcfiles/skills.js?v=8"></script>
 <script src="src/srcfiles/stealth.js?v=7"></script>
 <script src="src/srcfiles/time.js?v=13"></script>
-<script src="src/srcfiles/computer.js?v=36"></script>
+<script src="src/srcfiles/computer.js?v=37"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -3501,18 +3501,18 @@ body {
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
 <script src="src/srcfiles/phone.js?v=9"></script>
-<script src="src/srcfiles/npc.js?v=16"></script>
+<script src="src/srcfiles/npc.js?v=17"></script>
 <script src="src/srcfiles/prompt.js?v=8"></script>
-<script src="src/srcfiles/llm.js?v=15"></script>
+<script src="src/srcfiles/llm.js?v=16"></script>
 <script src="src/srcfiles/interruption.js?v=11"></script>
 <script src="src/srcfiles/image.js?v=13"></script>
-<script src="src/srcfiles/render.js?v=27"></script>
+<script src="src/srcfiles/render.js?v=28"></script>
 <script src="src/srcfiles/render.computer.js?v=29"></script>
 <script src="src/srcfiles/render.desktop.js?v=8"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
 <script src="src/srcfiles/render.phone.js?v=12"></script>
-<script src="src/srcfiles/ui.js?v=49"></script>
+<script src="src/srcfiles/ui.js?v=50"></script>
 <script src="src/srcfiles/ui.computer.js?v=27"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),

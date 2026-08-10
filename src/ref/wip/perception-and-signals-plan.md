@@ -1,7 +1,8 @@
 # Perception & Signals
 
-Status: **in progress — Phase 1 done**. Design session complete 2026-08-10;
-decisions D1–D14 locked, five phases drawn. Phases 2–5 outstanding.
+Status: **in progress — Phases 1–2 done**. Design session complete
+2026-08-10; decisions D1–D14 locked, five phases drawn. Phases 3–5
+outstanding.
 Last updated 2026-08-10.
 
 Companions:
@@ -19,9 +20,45 @@ near the bottom, as the very last thing you do each session.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 2 (object emitters + retiring `room.odor`). Phase 1 is
-done and verified — 37 assertions at `scratchpad/verify-s1.js`, plus
-`scratchpad/measure-signals.js` as the tuning instrument.
+**Resume at:** Phase 3 (transient signals). Phases 1–2 are done and verified —
+38 + 26 assertions at `scratchpad/verify-s1.js` / `verify-s2.js`, plus
+`scratchpad/measure-signals.js` as the tuning instrument. The whole suite
+across both plans is 215 assertions and green.
+
+**Phase 2 notes (2026-08-10):**
+- All 24 `dirtyWhen`-carrying objects now emit; four new signals joined the
+  four from Phase 1 (`bathroom_grime`, `unmade_bed`, `clutter`,
+  `stagnant_water`). A harness assertion fails if a dirty object ever ships
+  without an `emits` table.
+- **`EMITS_ROT` is a shared constant, not fifteen copies.** Every food-holding
+  container carries the identical `rotten_food: 'rotten'` state and it always
+  means the same thing to the nose, so the intensity of rot lives in one
+  place. 14 defs spread it.
+- **`room.odor` is fully gone** — both writers, the reader in
+  `resolveMoodTarget`, the room-shell field, and the scene-prompt line. A
+  `world` 3->4 migration strips the key. The mood penalty now scales with the
+  strongest smell the player can actually perceive, so a faint whiff and an
+  unlivable stench no longer cost the same, and the smell follows you into the
+  hallway instead of ceasing to exist at the doorway.
+- **The scene prompt's sensory line is composed upstream.**
+  `assembleContext` resolves each signal's prose (it has `gameState` in scope)
+  and `buildSensoryLine` reads `rec.phrase` — the same reason `getRecentEvents`
+  resolves event text there rather than handing `llm.js` a raw template. Prompt
+  builders stay pure functions of their context.
+- **A fresh apartment is NOT silent, and that is correct.** The swimming pool
+  defaults to `clarity: 'green'`, so day one opens with a real smell coming off
+  the neglected recreation wing. A Phase 1 assertion asserting global silence
+  had to be corrected — it was written before the pool had an emitter.
+- **`swimming_pool.water: 'filled'` is an unreachable state.** The def's own
+  comment says it becomes `'filled'` once the pool systems facility is
+  repaired; nothing in the codebase ever sets it. Same class of dead state as
+  the shower's `power: 'on'` found in Phase 1. `stagnant_water` is therefore
+  keyed on `clarity` alone, which is also the truthful reading — an abandoned
+  pool is not bone dry.
+- **`emits` cannot express a conjunction** of two state keys (`green` AND
+  `filled`). It did not need to here, and a `when:` guard was deliberately NOT
+  added — an unused mechanism is the same R8 sin as an unread field. Add it
+  with its first real consumer.
 
 **Phase 1 notes (2026-08-10):**
 - Landed in full. `src/srcfiles/signals.js` is new and loads after `world.js`.
@@ -493,7 +530,7 @@ unbounded allocation.
 | Phase | Status | What it does |
 |---|---|---|
 | 1 | **Done** | `SIGNAL_DEFS`, standing derivation, propagation, perception query, debug readout. 37 assertions pass (`scratchpad/verify-s1.js`) |
-| 2 | Not started | Object `emits` tables; retire `room.odor` into the signal model |
+| 2 | **Done** | Object `emits` tables on all 24 dirty objects; `room.odor` retired. 26 assertions pass (`scratchpad/verify-s2.js`) |
 | 3 | Not started | Transient signals from acts and movement; ring buffer with decay |
 | 4 | Not started | Notes — placeable, sightable, readable |
 | 5 | Not started | NPC perception through the same query, plus one signal-gated drive |

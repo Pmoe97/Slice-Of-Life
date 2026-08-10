@@ -1478,11 +1478,26 @@ function resolveMoodTarget(player, gameState, eventTerm, hoursSinceLastMeal) {
     }
   }
 
-  // comfortTerm — the player's current room: cleanliness + odor.
+  // comfortTerm — the player's current room: cleanliness + what it smells of.
   const room = gameState?.world?.rooms?.[player.location];
   if (room) {
     target += ((room.cleanliness ?? cfg.comfort.cleanlinessMid) - cfg.comfort.cleanlinessMid) * cfg.comfort.cleanlinessScale;
-    if (room.odor === 'smelly') target += cfg.comfort.odorPenalty;
+  }
+  // Perception plan Phase 2 (D10). This used to read a room-scoped boolean,
+  // `room.odor === 'smelly'`, and apply the penalty flat. Two things were
+  // wrong with that: a faint whiff and an unlivable stench cost exactly the
+  // same, and the moment you stepped into the hallway the smell ceased to
+  // exist. It now scales with the strongest smell the player can ACTUALLY
+  // perceive from where they are standing, which follows them down the
+  // corridor and fades with distance because propagation says it should.
+  // typeof-guarded because resolveMoodTarget is called from paths that build a
+  // partial gameState (no objects bucket) — those simply get no smell term.
+  if (typeof perceiveSignals === 'function' && gameState?.objects) {
+    let worstSmell = 0;
+    for (const rec of perceiveSignals(gameState, 'player', player.location)) {
+      if (rec.channel === 'smell' && rec.intensity > worstSmell) worstSmell = rec.intensity;
+    }
+    if (worstSmell > 0) target += cfg.comfort.odorPenalty * worstSmell;
   }
 
   // stressTerm — rent, burnout, unpaid bills.
@@ -1508,11 +1523,11 @@ function resolveMoodTarget(player, gameState, eventTerm, hoursSinceLastMeal) {
 // ROT.graceDays converts to a MESS — it's removed from its container, the
 // container's `rotten_food` state flips to 'rotten' (feeding the EXISTING
 // cleanliness machinery via the def's dirtyWhen/cleanlinessWeight), and
-// the room gains an `odor` flag. A Rotten-but-within-grace stack stays
+// the container's own state carries it. A Rotten-but-within-grace stack stays
 // put (still eatable, with the Rotten eating penalties in applyEatItem),
 // so "throwing it out" during the Rotten window prevents the mess. The
 // maid (cleanRoomObjects) and the player's throw-out button clear both the
-// container state and the room odor. Synchronous by design — it's a
+// container state alone. Synchronous by design — it's a
 // rollover hook like the others.
 function processSpoilageForDay(gameState, day) {
   if (!gameState?.objects) return;
@@ -1536,10 +1551,13 @@ function processSpoilageForDay(gameState, day) {
       }
       if (kept.length !== obj.contents.length) obj.contents = kept;
       if (anyMess) {
+        // Perception plan Phase 2 (D10): setting the container's state is now
+        // the WHOLE job. The room-level `odor = 'smelly'` write that used to
+        // sit here is gone — the smell is derived from this state by SIGNALS'
+        // deriveStandingSignals, so a second mirrored flag could only ever
+        // drift from it. Nothing has to remember to clear it either.
         obj.state = { ...obj.state, rotten_food: 'rotten' };
-        const roomId = bucket.replace(/^room_/, '');
-        if (gameState.world.rooms?.[roomId]) gameState.world.rooms[roomId].odor = 'smelly';
-        refreshRoomCleanliness(gameState, roomId);
+        refreshRoomCleanliness(gameState, bucket.replace(/^room_/, ''));
       }
     }
   }
@@ -2344,7 +2362,8 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
   const rooms = {};
   for (const roomId of ALL_ROOMS) {
     const bucket = objects[`room_${roomId}`];
-    rooms[roomId] = { capacity: ROOMS[roomId].capacity, cleanliness: recomputeRoomCleanliness(bucket), lastEvent: null, odor: 'none' };
+    // `odor` was a field here until perception plan Phase 2 (D10) — now derived.
+    rooms[roomId] = { capacity: ROOMS[roomId].capacity, cleanliness: recomputeRoomCleanliness(bucket), lastEvent: null };
   }
 
   // Seed episode logs with backdated shared-history beats

@@ -722,9 +722,13 @@ function assembleContext(gameState, sceneState) {
       time,
       day,
       cleanliness: room.cleanliness,
-      // Phase 4: room odor (a rot mess in this room) so narration can
-      // mention the smell. 'none' or 'smelly'.
-      odor: room.odor || 'none',
+      // Perception plan Phase 2 (D10): replaces the old `odor: 'none'|'smelly'`
+      // boolean. What the PLAYER can actually sense standing here, merged to
+      // one record per signal and already sorted by salience — so the prompt
+      // can describe a smell drifting in from the next room, which the room-
+      // scoped flag could not represent at all.
+      signals: mergePerceived(perceiveSignals(gameState, 'player', roomId))
+        .map(rec => ({ ...rec, phrase: signalPhrase(rec, gameState) })),
     },
     player: {
       name: 'You',

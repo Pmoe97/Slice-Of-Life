@@ -573,7 +573,8 @@ function renderContainerPanel(gs) {
   }
   // Phase 4: the throw-out button for a rot mess — visible only when this
   // container holds one (rotten_food: 'rotten'). Cleaning it resets the
-  // container state AND the room's odor (UI's doClearContainerMess).
+  // container state (UI's doClearContainerMess) — the room smell is derived
+  // from that state, so clearing the cause clears the smell.
   const messBtn = document.getElementById('ctr-mess-btn');
   if (messBtn) {
     const messy = obj.state?.rotten_food === 'rotten';
