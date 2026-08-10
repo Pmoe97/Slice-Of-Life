@@ -1,12 +1,12 @@
 # Perception & Signals
 
-Status: **planned — not started**. Design session complete 2026-08-10;
-decisions D1–D14 locked, five phases drawn.
+Status: **in progress — Phase 1 done**. Design session complete 2026-08-10;
+decisions D1–D14 locked, five phases drawn. Phases 2–5 outstanding.
 Last updated 2026-08-10.
 
 Companions:
 - `src/ref/wip/SENSORY-AND-SOCIAL-ROADMAP.md` (the umbrella — this is Plan 1 of six and the substrate Plans 2–5 all consume).
-- `src/ref/wip/npc-correctness-fixes-plan.md` (Plan 0 — should land first, though nothing here strictly blocks on it).
+- `src/ref/complete/npc-correctness-fixes-plan.md` (Plan 0 — **complete**; this plan builds on a working relationship and memory layer).
 - `src/ref/complete/apartment-expansion-plan.md` (owns `ROOM_ADJACENCY`, which the propagation model walks).
 - `src/ref/complete/inventory-needs-menu-saves-plan.md` (owns spoilage and `room.odor`, which Phase 2 subsumes into the signal model).
 
@@ -19,9 +19,57 @@ near the bottom, as the very last thing you do each session.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 1. Nothing has been built yet.
+**Resume at:** Phase 2 (object emitters + retiring `room.odor`). Phase 1 is
+done and verified — 37 assertions at `scratchpad/verify-s1.js`, plus
+`scratchpad/measure-signals.js` as the tuning instrument.
 
-**Last session's notes (design session, 2026-08-10 — no code written):**
+**Phase 1 notes (2026-08-10):**
+- Landed in full. `src/srcfiles/signals.js` is new and loads after `world.js`.
+  All of Plan 0's 151 assertions still pass, so nothing regressed.
+- **`running_water` moved out of Phase 1 into Phase 3, and it was right to.**
+  It cannot be a standing signal: the `shower` object has a `power` state, but
+  **nothing in the codebase ever sets it to `'on'`** — so a signal derived from
+  it would have been unreachable, which is exactly the dead-emitter mistake RI1
+  exists to catch. A running shower is a moment, not a persistent world fact,
+  so it belongs with the transients. Phase 1 ships four standing signals with
+  genuinely reachable emitters instead: `rot`, `stale_laundry`, `grease`,
+  `dirty_dishes` (smell ×3, sight ×1).
+- **Door multipliers are PER CHANNEL, not one number (deviation from D6).**
+  Measured, not assumed: a flat 0.35 made a running shower inaudible from the
+  hallway directly outside the bathroom — the example the plan's own thesis
+  opens with — while simultaneously letting sight leak through a closed door.
+  A door blocks sight outright, muffles sound, and barely troubles smell, which
+  goes under it. `SIGNAL_TUNING.doorMultiplier` is now `{channel: {unlocked,
+  locked}}`.
+- **D6's `{open, closed, locked}` was aspirational.** Door objects only carry
+  `lock: ['unlocked','locked']`; nothing models a door standing open. The
+  tuning table is keyed to the two states that exist. When doors gain an open
+  state, add the key *with* its reader.
+- **`roomDoorFactor` must not reuse `getDoorState`.** That returns `'unlocked'`
+  for a room with no door at all, which would have muffled every hallway hop as
+  though a door were standing there. `signals.js` checks for the door object
+  explicitly and returns 1 when there isn't one. Asserted.
+- **Propagation is a relaxation to a fixed point, not a hop-count BFS.** Door
+  factors mean the fewest-hops path is not always the strongest — a longer way
+  round through open space can beat a short hop through a locked bedroom door —
+  and a depth-first BFS would silently take the weaker one.
+- **`getNpcPerception` damps raw curiosity by
+  `NPC_PEEP_TUNING.perception.npcCuriosityWeight` (0.5).** Applied undamped,
+  `npcCuriosity`'s [-0.3, +0.55] range clamped an incurious NPC to the 0.05
+  floor — functionally blind to every signal in the game. The cast now spans
+  ~0.15–0.58 against a player's 0.30–0.45.
+- **The curiosity formula existed twice, inline and identically**, in
+  `tryNpcPeep` and `trySnoopPhone`. Extracted to SIM's `npcCuriosity` and both
+  now call it; a harness assertion fails if an inline copy reappears.
+- Cost: ~75µs per `perceiveSignals` call, so a 5-NPC tick costs ~0.4ms. Phase 5
+  can call it per NPC per tick without concern.
+- Attention **gates** perception and does not scale it (D8), so the reported
+  intensity is the world's truth and identical for every perceiver — a keen
+  observer notices faint things a dull one misses, but both call a strong smell
+  strong. Verified against the debug readout: two characters standing in the
+  same room, one smelling the laundry two rooms away and one not.
+
+**Design-session notes (2026-08-10 — superseded above where they disagree):**
 - This plan deliberately ships **almost no player-visible change**. Phase 2's
   odor migration is the only thing a player would notice, and only barely.
   The payoff is Plan 2 (the scene reader) and Plan 3 (NPC cognition), both of
@@ -32,11 +80,16 @@ near the bottom, as the very last thing you do each session.
   set by `processSpoilageForDay`), `surfaceRoomEvidence` (`ui.js`),
   `getPlayerPerception` (`sim.js`), `getDoorState` (`interruption.js`), and
   the `dirtyWhen` convention on `OBJECT_DEFS`.
-- `getDoorState(gameState, roomId)` already exists and returns the lock state
-  for a room's door object. It is the attenuation hook in D6 — do not write a
-  second one.
+- ~~`getDoorState` is the attenuation hook in D6 — do not write a second one.~~
+  **Wrong, and Phase 1 had to work around it:** `getDoorState` returns
+  `'unlocked'` for a room that has no door at all, so using it directly muffles
+  every doorless hop. `signals.js`'s `roomDoorFactor` checks for the door
+  object explicitly.
 
-**Blockers / flagged deviations:** None.
+**Blockers / flagged deviations:** Three Phase 1 deviations, all recorded in
+the notes above: `running_water` deferred to Phase 3, per-channel door
+multipliers replacing D6's single number, and the `npcCuriosityWeight` damping.
+No blockers.
 
 ---
 
@@ -439,7 +492,7 @@ unbounded allocation.
 
 | Phase | Status | What it does |
 |---|---|---|
-| 1 | Not started | `SIGNAL_DEFS`, standing derivation, propagation, perception query, debug readout |
+| 1 | **Done** | `SIGNAL_DEFS`, standing derivation, propagation, perception query, debug readout. 37 assertions pass (`scratchpad/verify-s1.js`) |
 | 2 | Not started | Object `emits` tables; retire `room.odor` into the signal model |
 | 3 | Not started | Transient signals from acts and movement; ring buffer with decay |
 | 4 | Not started | Notes — placeable, sightable, readable |

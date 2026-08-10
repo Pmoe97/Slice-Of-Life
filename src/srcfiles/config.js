@@ -1903,6 +1903,111 @@ const SCENE = {
   crowdAvoidanceWeight: 3, // multiplier applied to rooms at/above soft capacity
 };
 
+// ===================== SIGNALS (perception plan Phase 1) =====================
+// A thing that happens or persists in a room emits a SIGNAL on a sense
+// channel. The signal propagates outward along ROOM_ADJACENCY, attenuating per
+// hop and attenuating harder through a door, and anyone in range — the player
+// or an NPC, through the same query — may perceive it.
+//
+// Two kinds, and only two (plan D1):
+//   STANDING signals are DERIVED from world state every time they're queried,
+//     never stored. Rot in a container, dishes in a sink, grease on a stove.
+//     Because they *are* the world, they cannot desynchronise from it: clear
+//     the mess and the signal is simply no longer derivable. No cleanup path
+//     exists because none can be needed.
+//   TRANSIENT signals are emitted by an act at a moment and stored with a
+//     decay — footsteps, a door closing, a shower running. Phase 3 builds
+//     them; nothing here emits one yet.
+//
+// `running_water` was listed as a Phase 1 def in the plan and has moved to
+// Phase 3. It cannot be standing: the shower object has a `power` state, but
+// NOTHING in the codebase ever sets it to 'on', so a derived signal keyed to
+// it would be unreachable — precisely the dead-emitter mistake RI1 exists to
+// prevent. A running shower is a moment, not a persistent world fact.
+
+const SIGNAL_DEFS = {
+  rot: {
+    channel: 'smell',
+    salience: 0.75,
+    phrases: {
+      faint:  ['a faint sourness underneath everything', 'something in the air is very slightly off'],
+      clear:  ['something in here has gone over', 'a sour, turned smell hangs in the room'],
+      strong: ['the smell of rot is impossible to ignore', 'something has gone badly wrong in here, and you can smell it'],
+    },
+  },
+  stale_laundry: {
+    channel: 'smell',
+    salience: 0.35,
+    phrases: {
+      faint:  ['a faint mustiness'],
+      clear:  ['the warm, stale smell of a full laundry hamper'],
+      strong: ['the laundry has been sitting long enough to announce itself'],
+    },
+  },
+  grease: {
+    channel: 'smell',
+    salience: 0.4,
+    phrases: {
+      faint:  ['a trace of old cooking grease'],
+      clear:  ['the stove has that burnt-on smell'],
+      strong: ['scorched grease, thick enough to taste'],
+    },
+  },
+  dirty_dishes: {
+    channel: 'sight',
+    salience: 0.5,
+    phrases: {
+      faint:  ['a couple of things sitting in the sink'],
+      clear:  ['dishes stacked in the sink'],
+      strong: ['the sink has disappeared under dishes'],
+    },
+  },
+};
+
+const SIGNAL_TUNING = {
+  // Stop propagating once a signal falls under this. Guards the walk and
+  // keeps a strong source from technically reaching the whole apartment.
+  floor: 0.05,
+  // Per adjacency hop, by channel (plan D5). These numbers are what make the
+  // three channels feel different without any extra machinery: smell drifts,
+  // sound carries less, sight essentially does not leave its room.
+  attenuation: {
+    smell: 0.55,
+    sound: 0.50,
+    sight: 0.10,
+  },
+  // Applied when a hop enters or leaves a room that HAS a door object (plan
+  // D6). Keyed by what WORLD's getDoorState actually returns — the plan's
+  // {open, closed, locked} was aspirational, since door objects only carry
+  // `lock: ['unlocked','locked']` and nothing models a door standing open. A
+  // room with no door object at all is unaffected, not multiplied by
+  // `unlocked` — see SIGNALS' roomDoorFactor.
+  //
+  // PER CHANNEL, because a door does genuinely different things to the three
+  // senses and a single factor got all three wrong at once: it blocks sight
+  // outright, muffles sound, and barely troubles smell, which goes under it.
+  // Measured, not assumed — a flat 0.35 made a running shower inaudible from
+  // the hallway directly outside the bathroom, which is the exact example the
+  // plan's thesis opens with.
+  doorMultiplier: {
+    smell: { unlocked: 0.60, locked: 0.50 },
+    sound: { unlocked: 0.45, locked: 0.30 },
+    sight: { unlocked: 0.05, locked: 0.02 },
+  },
+  // Below this, after the perceiver's attention is applied, the signal is not
+  // noticed. Attention GATES perception; it does not scale how intense the
+  // thing seems (plan D8) — a keen observer notices faint things a dull one
+  // misses, but both describe a strong smell as strong.
+  noticeFloor: {
+    smell: 0.05,
+    sound: 0.04,
+    sight: 0.08,
+  },
+  // Intensity bands for prose (plan D3). Phrase tables are keyed by BAND, not
+  // by raw value, so retuning a number never means rewriting the writing.
+  bands: { faint: 0.33, clear: 0.66 },
+};
+
 // --- Transient clothing states (correctness plan Phase 4) ---
 // Clothing states that describe a passing moment rather than how someone is
 // dressed. They survive exactly the tick that caused them and revert to
@@ -3548,6 +3653,14 @@ const NPC_PEEP_TUNING = {
     moodLowPenalty: 0.1,      // -0.1 if mood < -0.5
     min: 0.05,
     max: 0.95,
+    // Perception plan Phase 1 (D8): how hard temperament pushes an NPC's
+    // general attention, in SIM's getNpcPerception. Raw npcCuriosity spans
+    // [-0.3, +0.55] — applied undamped that clamped an incurious NPC to the
+    // 0.05 floor, i.e. functionally blind to every signal in the game, and
+    // sent a nosy one past the player's own ceiling. At 0.5 the cast spans
+    // roughly 0.15-0.58 against a player's 0.30-0.45: real spread, nobody
+    // blind, and being perceptive is a genuine character difference.
+    npcCuriosityWeight: 0.5,
   },
   // Silent success consequences (player never knows)
   silentRelDelta: {

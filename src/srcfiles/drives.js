@@ -348,12 +348,13 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
 // the peep result for the caller to surface (detected → bubble, silent →
 // nothing visible to player). Returns null if the attempt doesn't fire.
 function tryNpcPeep(npc, npcId, resolved, gameState, rng, currentTick) {
-  const t = npc.bible.temperament;
   const cfg = NPC_PEEP_TUNING;
 
   // Personality gate: curious (high openness + low conscientiousness)
-  // OR attracted (high affection toward player)
-  const curiosity = t.openness * cfg.chanceModifiers.openness + (1 - (t.conscientiousness + 1) / 2) * cfg.chanceModifiers.lowConscientiousness;
+  // OR attracted (high affection toward player). The curiosity half is SIM's
+  // npcCuriosity — the same function getNpcPerception uses, extracted from the
+  // two identical inline copies that used to live here and in trySnoopPhone.
+  const curiosity = npcCuriosity(npc);
   const attraction = (npc.relPlayer?.affection || 0) * cfg.chanceModifiers.affection;
 
   if (curiosity < 0.15 && attraction < 0.1) return null;
@@ -398,10 +399,14 @@ function tryNpcPeep(npc, npcId, resolved, gameState, rng, currentTick) {
 // roommate wandering into your room and finding it there is exactly the
 // scenario the plan wants.
 function trySnoopPhone(npc, npcId, resolved, gameState, rng, currentTick) {
-  const t = npc.bible.temperament;
   const cfg = SNOOP_TUNING;
 
-  const curiosity = t.openness * cfg.chanceModifiers.openness + (1 - (t.conscientiousness + 1) / 2) * cfg.chanceModifiers.lowConscientiousness;
+  // SIM's npcCuriosity — the second of the two identical inline copies this
+  // formula used to have. SNOOP_TUNING's openness/lowConscientiousness weights
+  // are deliberately the same numbers as NPC_PEEP_TUNING's (the plan reused
+  // them on purpose), so sharing the function loses nothing and stops the two
+  // from drifting.
+  const curiosity = npcCuriosity(npc);
   const attraction = (npc.relPlayer?.affection || 0) * cfg.chanceModifiers.affection;
   const traitBonus = (npc.bible.personality?.traits || []).includes('curious') ? cfg.chanceModifiers.curiousTrait : 0;
   const drawn = curiosity + attraction + traitBonus;

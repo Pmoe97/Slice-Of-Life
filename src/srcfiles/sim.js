@@ -297,6 +297,37 @@ function getPlayerPerception(player) {
   return Math.max(cfg.min, Math.min(cfg.max, p));
 }
 
+// How inclined an NPC is to notice things — high openness (curious) and low
+// conscientiousness (unbothered about where attention belongs).
+//
+// This formula was written twice, inline and identically, in DRIVES'
+// tryNpcPeep and trySnoopPhone. Extracted here so the perception layer reuses
+// the one the game already had rather than inventing a second model of
+// curiosity that could drift from it.
+function npcCuriosity(npc) {
+  const t = npc?.bible?.temperament || {};
+  const mods = NPC_PEEP_TUNING.chanceModifiers;
+  const openness = t.openness || 0;
+  const consc = t.conscientiousness || 0;
+  return openness * mods.openness
+       + (1 - (consc + 1) / 2) * mods.lowConscientiousness;
+}
+
+// The NPC counterpart of getPlayerPerception (perception plan Phase 1, D8) —
+// same tuning block, same clamp, so "how much attention does this character
+// have" means one thing across the game. Temperament replaces the player's
+// mood term; tiredness dulls both.
+function getNpcPerception(npc) {
+  const cfg = NPC_PEEP_TUNING.perception;
+  let p = cfg.base + npcCuriosity(npc) * cfg.npcCuriosityWeight;
+  const energy = npc?.needs?.energy;
+  if (typeof energy === 'number') {
+    if (energy > 70) p += cfg.energyHighBonus;
+    if (energy < 20) p -= cfg.energyLowPenalty;
+  }
+  return Math.max(cfg.min, Math.min(cfg.max, p));
+}
+
 // --- Pathfinding (Phase 4) ---
 
 // BFS shortest path on the room adjacency graph. The graph is tiny (17

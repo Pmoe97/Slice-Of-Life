@@ -3269,6 +3269,10 @@ body {
     <div class="dbg-title" data-debug="telemetry">LLM Telemetry ▸</div>
     <pre id="dbg-telemetry" class="hidden"></pre>
   </div>
+  <div class="dbg-section">
+    <div class="dbg-title" data-debug="perception">Perception ▸</div>
+    <pre id="dbg-perception" class="hidden"></pre>
+  </div>
 </aside>
 
 <!-- Templates -->
@@ -3457,9 +3461,9 @@ body {
      MENU/IMAGE). Functions calling into a LATER script are fine either way
      — those calls only happen at runtime, after every script below has
      finished loading. -->
-<script src="src/srcfiles/config.js?v=59"></script>
+<script src="src/srcfiles/config.js?v=60"></script>
 <script src="src/srcfiles/icons.js?v=14"></script>
-<script src="src/srcfiles/defs.world.js?v=16"></script>
+<script src="src/srcfiles/defs.world.js?v=17"></script>
 <script src="src/srcfiles/defs.actions.js?v=14"></script>
 <script src="src/srcfiles/defs.computer.js?v=15"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
@@ -3470,19 +3474,20 @@ body {
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/srcfiles/orbital.js?v=1"></script>
 <script src="src/srcfiles/state.js?v=28"></script>
-<script src="src/srcfiles/sim.js?v=33"></script>
+<script src="src/srcfiles/sim.js?v=34"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
 <script src="src/srcfiles/commitments.js?v=1"></script>
 <script src="src/srcfiles/world.js?v=15"></script>
+<script src="src/srcfiles/signals.js?v=1"></script>
 <script src="src/srcfiles/items.js?v=10"></script>
 <!-- Inventory overhaul Phase 1: pure inventory query/sort/describe helpers
      (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
      time) and before render.js/ui.js, which call it at runtime. -->
 <script src="src/srcfiles/inventory.js?v=5"></script>
 <script src="src/srcfiles/effects.js?v=16"></script>
-<script src="src/srcfiles/drives.js?v=11"></script>
+<script src="src/srcfiles/drives.js?v=12"></script>
 <script src="src/srcfiles/actions.js?v=11"></script>
 <script src="src/srcfiles/intent.js?v=7"></script>
 <script src="src/srcfiles/skills.js?v=8"></script>
@@ -3507,7 +3512,7 @@ body {
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
 <script src="src/srcfiles/render.phone.js?v=12"></script>
-<script src="src/srcfiles/ui.js?v=48"></script>
+<script src="src/srcfiles/ui.js?v=49"></script>
 <script src="src/srcfiles/ui.computer.js?v=27"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),

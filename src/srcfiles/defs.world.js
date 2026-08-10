@@ -181,6 +181,8 @@ const OBJECT_DEFS = {
     portable: false, breakable: true, container: false, private: false,
     states: { power: ['off', 'on'], burner: ['clean', 'crusty', 'filthy'] }, defaultState: { power: 'off', burner: 'clean' },
     dirtyWhen: { burner: { crusty: 0.5, filthy: 1.0 } }, cleanlinessWeight: 3,
+    emits: { burner: { crusty: { signal: 'grease', intensity: 0.3 },
+                       filthy: { signal: 'grease', intensity: 0.55 } } },
     affords: ['cook.meal', 'clean.object', 'inspect.object'],
     imagePhrase: 'a small gas stove',
   },
@@ -190,6 +192,10 @@ const OBJECT_DEFS = {
     states: { rotten_food: ['none', 'rotten'], door: ['closed', 'open'] },
     defaultState: { rotten_food: 'none', door: 'closed' },
     dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
+    // Perception plan Phase 1 (D9). Same shape as dirtyWhen above — state key
+    // → state value → payload — deliberately, so there is one convention to
+    // learn rather than two. Read by SIGNALS' deriveStandingSignals.
+    emits: { rotten_food: { rotten: { signal: 'rot', intensity: 0.8 } } },
     affords: ['container.open', 'container.take', 'container.put', 'clean.object', 'inspect.object'],
     imagePhrase: 'a refrigerator covered in magnets',
   },
@@ -198,6 +204,8 @@ const OBJECT_DEFS = {
     portable: false, breakable: false, container: false, private: false,
     states: { dishes: ['clean', 'few', 'many'] }, defaultState: { dishes: 'clean' },
     dirtyWhen: { dishes: { few: 0.4, many: 0.9 } }, cleanlinessWeight: 3,
+    emits: { dishes: { few:  { signal: 'dirty_dishes', intensity: 0.3 },
+                       many: { signal: 'dirty_dishes', intensity: 0.65 } } },
     affords: ['self.dishes', 'clean.object', 'inspect.object'],
     imagePhrase: 'a kitchen sink',
   },
@@ -273,6 +281,9 @@ const OBJECT_DEFS = {
     states: { rotten_food: ['none', 'rotten'], fill: ['empty', 'partial', 'full'] },
     defaultState: { rotten_food: 'none', fill: 'empty' },
     dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
+    emits: { rotten_food: { rotten: { signal: 'rot', intensity: 0.8 } },
+             fill: { partial: { signal: 'stale_laundry', intensity: 0.2 },
+                     full:    { signal: 'stale_laundry', intensity: 0.5 } } },
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a laundry hamper in the corner',
   },

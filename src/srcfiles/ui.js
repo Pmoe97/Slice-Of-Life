@@ -3870,6 +3870,46 @@ async function updateDebugPanel() {
   // section) — "you cannot tune what you don't measure."
   const telemetryEl = document.getElementById('dbg-telemetry');
   if (telemetryEl) telemetryEl.textContent = JSON.stringify(LLM_TELEMETRY, null, 2);
+
+  // Perception (SIGNALS) — Phase 1's only surface, and the same instrument for
+  // the same reason as the telemetry block above. Shows what is being emitted
+  // anywhere in the apartment, then what the player and each present NPC can
+  // actually sense from where they are standing. A signal that never appears
+  // in the "perceived" lists is dead weight (RI1).
+  const perceptionEl = document.getElementById('dbg-perception');
+  if (perceptionEl) perceptionEl.textContent = describePerceptionDebug(currentGameState);
+}
+
+// Human-readable perception dump. Built as text rather than JSON because the
+// useful thing here is a comparison — who senses what, from where — and a
+// nested object buries that.
+function describePerceptionDebug(gs) {
+  const lines = [];
+  const emitted = deriveStandingSignals(gs);
+  lines.push(`EMITTED (${emitted.length} standing)`);
+  if (emitted.length === 0) lines.push('  (nothing — the apartment is clean)');
+  for (const s of emitted) {
+    lines.push(`  ${s.signalId.padEnd(14)} ${String(s.intensity).padEnd(5)} in ${ROOMS[s.roomId]?.name || s.roomId}  <- ${s.sourceId}`);
+  }
+
+  const report = (label, id, roomId) => {
+    lines.push('');
+    const att = perceptionOf(gs, id);
+    lines.push(`${label} — in ${ROOMS[roomId]?.name || roomId}, attention ${att.toFixed(2)}`);
+    const perceived = mergePerceived(perceiveSignals(gs, id, roomId));
+    if (perceived.length === 0) { lines.push('  (senses nothing)'); return; }
+    for (const r of perceived) {
+      const where = r.here ? 'here' : `from ${ROOMS[r.sourceRoomId]?.name || r.sourceRoomId}`;
+      lines.push(`  [${r.channel}] ${r.signalId} — ${r.band} (${r.intensity.toFixed(3)}), ${where}`);
+      lines.push(`      "${signalPhrase(r, gs)}"`);
+    }
+  };
+
+  report('PLAYER', 'player', gs.player.location);
+  for (const npcId of getPresentNpcIds(gs.npcs, gs.player.location)) {
+    report(gs.npcs[npcId]?.bible?.name || npcId, npcId, gs.npcs[npcId].location);
+  }
+  return lines.join('\n');
 }
 
 // ===== /SECTION: UI =====
