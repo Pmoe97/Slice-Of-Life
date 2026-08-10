@@ -30,6 +30,9 @@ between folders together.
 | `src/ref/complete/restaurant-network-expansion-plan.md` | 12-restaurant roster, full menus, wrap-aware hours, cross-midnight deliveries (**built** — all 4 phases) |
 | `src/ref/complete/afterhours-redesign-plan.md` | AfterHours site expansion: PH+EP blended feed, routed mini-site, player page + related rail, parody ads, watch persistence, Hot Singles NPCs (**built** — all 8 phases + audit) |
 | `src/ref/complete/inventory-needs-menu-saves-plan.md` | Inventory, containers, eating, spoilage, needs rebalance, Set Meal, NPC inventories, save system v2, main menu (**built** — all 10 phases) |
+| `src/ref/wip/SENSORY-AND-SOCIAL-ROADMAP.md` | **Umbrella for six linked overhauls** turning the apartment sensory and the NPCs autonomous. Holds the cross-cutting decisions `R1`–`R8` and the theses for Plans 2–5. Read before any NPC or presentation work. |
+| `src/ref/wip/npc-correctness-fixes-plan.md` | Roadmap Plan 0 — the five defects the 2026-08-10 NPC audit found: reversed conversation buffer, unreachable `early` relationship phase, FIFO memory eviction, pinned need economy, dead-field triage (**written, not started**) |
+| `src/ref/wip/perception-and-signals-plan.md` | Roadmap Plan 1 — the signal substrate: emission, propagation over `ROOM_ADJACENCY`, decay, and one perception query shared by the player and NPCs (**written, not started**) |
 | `src/ref/wip/prompt-generator-v2.md` | Decision-vector prompt architecture for the menu slideshow (**engine + 4 passes shipped**; optional pool expansion outstanding) |
 | `src/ref/patterns/perchance-agent-handoff-prompt.md` | The original generic one-phase-per-session protocol (each overhaul now has its own; this is the ancestor) |
 

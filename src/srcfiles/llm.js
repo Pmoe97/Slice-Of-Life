@@ -26,7 +26,10 @@ CHARACTERS PRESENT (these are the ONLY people who can speak):
 `;
 
   for (const npc of activeNpcs) {
-    prompt += buildNpcBlockV2(npc, playerAction);  // NPC Overhaul Phase 2 + Phase 4 (query for retrieval)
+    // NPC Overhaul Phase 2 + Phase 4 (query for retrieval). Correctness plan
+    // Phase 1 (D6): 'scene' selects the in-person half of memory.recent, so
+    // this prompt never shows text messages back as spoken dialogue.
+    prompt += buildNpcBlockV2(npc, playerAction, 'scene');
   }
 
   if (ambientNpcs.length > 0) {
@@ -100,13 +103,23 @@ CRITICAL RULES:
 function buildImPrompt(context, message) {
   const npc = context.activeNpcs[0];
 
+  // Correctness plan Phase 1 (D7): the real persisted thread, assembled onto
+  // the context by assembleImContext. Before this, an IM reply's only sense
+  // of the conversation was the five-entry shared memory.recent buffer — so
+  // a long text exchange was invisible to the model writing the next line.
+  const thread = context.imThread || [];
+  const transcript = thread
+    .filter(m => m.from === 'player' || m.from === 'npc')
+    .map(m => `${m.from === 'player' ? 'Them' : 'You'}: ${m.text}`)
+    .join('\n');
+
   let prompt = `You are the narrator for a slice-of-life apartment simulation, writing ${npc.name}'s side of a text-message conversation with the player. This is texting, not a scene — no narration, no scene-setting, just their reply.
 
 ${buildStyleSection(context.contentConfig)}
 ${buildContentSection(context.contentConfig)}
-${buildNpcBlockV2(npc, message)}  // NPC Overhaul Phase 2 + Phase 4 (query for retrieval)
+${buildNpcBlockV2(npc, message, 'im')}
 Texting style: ${npc.bible.speech.textingStyle}.
-
+${transcript ? `\nTHE CONVERSATION SO FAR (oldest first — "You" is ${npc.name}, "Them" is the player):\n${transcript}\n` : ''}
 THE PLAYER JUST TEXTED: "${message}"
 
 RESPOND WITH VALID JSON IN THIS EXACT FORMAT (no other text, no markdown):
@@ -213,9 +226,11 @@ function possessionsLine(npc) {
 // NPC Overhaul Phase 4: accepts optional query for memory retrieval.
 // NPC Overhaul Audit Fix: buildMemorySliceV2 is called HERE with the query
 // (not pre-built with null in assembleContext) so retrieval actually fires.
-function buildNpcBlockV2(npc, query) {
+// Correctness plan Phase 1 (D6): `channel` ('scene' | 'im') selects which
+// conversation surface's history the [Memories — recent] line draws from.
+function buildNpcBlockV2(npc, query, channel) {
   const b = npc.bible;
-  const memV2 = buildMemorySliceV2(npc, query);  // retrieval fires with real query
+  const memV2 = buildMemorySliceV2(npc, query, channel || 'scene');  // retrieval fires with real query
   const rel = npc.relPlayer;
 
   let block = `\n=== ${npc.name} (ID: ${npc.id}) ===\n`;

@@ -1857,6 +1857,15 @@ const SCENE = {
   crowdAvoidanceWeight: 3, // multiplier applied to rooms at/above soft capacity
 };
 
+// --- IM prompt (correctness plan Phase 1, D7) ---
+// How much of the REAL persisted thread (world.computer.apps.im.threads[id])
+// buildImPrompt renders back to the model. Before this, an IM reply saw only
+// the shared memory.recent buffer — so a forty-message text conversation was
+// presented as five interleaved lines that also contained in-person dialogue.
+const IM_PROMPT = {
+  threadDepth: 12,         // trailing messages of the real thread shown to the model
+};
+
 // Demotion (active -> ambient) must always be narrated as an in-fiction
 // beat, never a silent swap. {name} = the demoted NPC, {other} = whoever
 // they're being displaced by (falls back to "you" if omitted).

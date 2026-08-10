@@ -45,7 +45,16 @@ folders as a pair.
 ### `wip/`
 | Doc | Status |
 |---|---|
+| `SENSORY-AND-SOCIAL-ROADMAP.md` | **The umbrella for six linked overhauls.** Start here for anything NPC- or sensory-related — it holds the cross-cutting decisions (`R1`–`R8`) all six plans inherit, and the theses for the four not yet written. |
+| `npc-correctness-fixes-plan.md` | Roadmap Plan 0. Five defects the NPC audit found. Written, not started. Should land before the rest. |
+| `perception-and-signals-plan.md` | Roadmap Plan 1. The signal substrate every later plan consumes. Written, not started. |
 | `prompt-generator-v2.md` | Engine + authoring + preferences UI + gender-aware refinement all shipped; optional pool expansion outstanding. |
+
+The roadmap's Plans 2–5 (`scene-reader-ui`, `npc-cognition`,
+`knowledge-gossip-memory`, `npc-initiative`) exist as theses inside
+`SENSORY-AND-SOCIAL-ROADMAP.md` and get their own documents at the point the
+plan beneath each one ships. **Do not write plan N+1's phases before plan N
+lands** — its real shape is not knowable yet.
 
 ### `complete/`
 | Plan | Paired prompt |

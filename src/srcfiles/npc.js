@@ -9,6 +9,14 @@ const MEMORY_BUDGET = {
   maxEpisodes: 30,    // NPC Overhaul Phase 4.3 — increased from 15 for tiered system
   maxSummaryLen: 500,
   episodeDecayPerTick: 0.002,
+  // Correctness plan Phase 1 (D5). A single conversational turn writes one
+  // player line plus up to three NPC dialogue lines, so the old cap of 10
+  // held roughly two and a half exchanges — an NPC's working memory of a
+  // conversation reset every couple of messages, which is exactly the "why
+  // does she keep re-introducing herself" feeling. 40 is ~10 real exchanges;
+  // the prompt shows the trailing 16 (~4 exchanges) of the matching channel.
+  maxRecent: 40,
+  promptRecentCount: 16,
 };
 
 // --- NPC Overhaul migration: backfill all new fields for existing saves ---
@@ -218,10 +226,39 @@ function addGrievance(npc, text, severity, day) {
   return { ...npc, relPlayer: { ...npc.relPlayer, grievances } };
 }
 
-// NPC Overhaul Phase 3 — Resolve a grievance by index or text match
-// NPC Overhaul Audit Fix: use exact-ish matching instead of includes()
-// to avoid "dishes" matching "washed dishes" — match if the grievance
-// text contains the query as a whole word/phrase, not a substring.
+// NPC Overhaul Phase 3 — Resolve a grievance by index or text match.
+//
+// Correctness plan Phase 1. The previous "audit fix" claimed to stop "dishes"
+// from matching "washed dishes", and did not: its three clauses were
+// `gText === query`, `query.length >= 4 && gText.includes(query)`, and
+// `gText.includes(query) && query.length > 8`. The third is fully subsumed by
+// the second (anything over 8 chars is also at least 4), so it could never
+// change the outcome — and the second is a bare substring test, which is
+// exactly what the comment said had been removed. "washed dishes".includes
+// ("dishes") is true at 6 chars, so the documented case still matched.
+//
+// Two conditions now, because word boundaries alone are NOT enough — that
+// was the first attempt here and it failed its own test case. `\bdishes\b`
+// still matches "washed dishes", since "dishes" genuinely IS a whole word
+// there. Whole-word matching answers "does this phrase occur", and the
+// question we actually need answered is "is this the same grievance".
+//
+// So: the query must occur on word boundaries AND cover at least
+// GRIEVANCE_MIN_COVERAGE of the grievance text. A model echoing a grievance
+// back in order to resolve it reproduces most of it ("left dirty dishes in
+// the sink" → "dirty dishes in the sink", 83%); a vague one-word query that
+// would otherwise clear half the list does not ("dishes" vs "washed dishes",
+// 46%). Exact equality always wins regardless of length.
+const GRIEVANCE_MIN_QUERY_LEN = 4;
+const GRIEVANCE_MIN_COVERAGE = 0.5;
+function grievanceTextMatches(grievanceText, query) {
+  if (grievanceText === query) return true;
+  if (query.length < GRIEVANCE_MIN_QUERY_LEN) return false;
+  if (query.length / grievanceText.length < GRIEVANCE_MIN_COVERAGE) return false;
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b`).test(grievanceText);
+}
+
 function resolveGrievance(npc, indexOrText) {
   const grievances = [...(npc.relPlayer?.grievances || [])];
   if (typeof indexOrText === 'number') {
@@ -230,11 +267,7 @@ function resolveGrievance(npc, indexOrText) {
     const query = String(indexOrText).toLowerCase().trim();
     for (let i = 0; i < grievances.length; i++) {
       if (grievances[i].resolved) continue;
-      const gText = grievances[i].text.toLowerCase();
-      // Match if the grievance text equals the query, or the query is a
-      // significant word in the grievance (at least 4 chars to avoid
-      // matching "the"/"a"), or the grievance contains the full query phrase
-      if (gText === query || (query.length >= 4 && gText.includes(query)) || gText.includes(query) && query.length > 8) {
+      if (grievanceTextMatches(grievances[i].text.toLowerCase(), query)) {
         grievances[i] = { ...grievances[i], resolved: true };
       }
     }
@@ -247,11 +280,23 @@ function getUnresolvedGrievances(npc) {
   return (npc.relPlayer?.grievances || []).filter(g => !g.resolved);
 }
 
-// NPC Overhaul — Add a recent exchange to the conversation buffer
-function addRecentExchange(npc, speaker, text, type, day, tick) {
+// NPC Overhaul — Add a recent exchange to the conversation buffer.
+// Correctness plan Phase 1 (D5/D6): the cap moved to MEMORY_BUDGET.maxRecent,
+// and every entry now records which `channel` it belongs to — 'scene' for an
+// in-person exchange, 'im' for a text. Both surfaces share one buffer, so
+// without the tag, texting someone and then talking to them in person fed the
+// model a single transcript with two unrelated conversations interleaved.
+// Defaults to 'scene' so any caller that predates the parameter is unchanged.
+function addRecentExchange(npc, speaker, text, type, day, tick, channel) {
   const recent = [...(npc.memory?.recent || [])];
-  recent.push({ speaker, text, type: type || 'dialogue', day: day || 0, tick: tick || 0 });
-  while (recent.length > 10) recent.shift();
+  recent.push({
+    speaker, text,
+    type: type || 'dialogue',
+    day: day || 0,
+    tick: tick || 0,
+    channel: channel || 'scene',
+  });
+  while (recent.length > MEMORY_BUDGET.maxRecent) recent.shift();
   return { ...npc, memory: { ...npc.memory, recent } };
 }
 
@@ -291,11 +336,22 @@ function getStyleDirective(npc) {
   return parts.join(' ');
 }
 
-// NPC Overhaul Phase 4 — Get recent exchanges as formatted text
-function getRecentExchanges(npc, count) {
+// NPC Overhaul Phase 4 — Get recent exchanges as formatted text.
+// Correctness plan Phase 1 (D6): filters to one channel before slicing, so
+// the scene prompt never shows text messages and the IM prompt never shows
+// in-person dialogue. Entries written before the channel field existed have
+// no `channel` and are treated as 'scene' — the only surface that could
+// produce them in bulk, since the IM path was comparatively new.
+function getRecentExchanges(npc, count, channel) {
   const recent = npc.memory?.recent;
   if (!Array.isArray(recent) || recent.length === 0) return '';
-  return recent.slice(-(count || 5)).map(e => `${e.speaker}: ${e.text}`).join(' | ');
+  const want = channel || 'scene';
+  const inChannel = recent.filter(e => (e.channel || 'scene') === want);
+  if (inChannel.length === 0) return '';
+  return inChannel
+    .slice(-(count || MEMORY_BUDGET.promptRecentCount))
+    .map(e => `${e.speaker}: ${e.text}`)
+    .join(' | ');
 }
 
 // NPC Overhaul Phase 4 — Keyword-scored memory retrieval
@@ -342,12 +398,15 @@ function retrieveRelevantMemories(npc, query, limit) {
   };
 }
 
-// NPC Overhaul Phase 4 — Full tiered memory slice for V2 prompts
-function buildMemorySliceV2(npc, query) {
+// NPC Overhaul Phase 4 — Full tiered memory slice for V2 prompts.
+// Correctness plan Phase 1: `channel` selects which conversation surface's
+// history is shown (D6), and the slice depth comes from MEMORY_BUDGET rather
+// than a literal 5 (D5).
+function buildMemorySliceV2(npc, query, channel) {
   const retrieved = query ? retrieveRelevantMemories(npc, query, 5) : { facts: [], episodes: [] };
   const mem = npc.memory || {};
   return {
-    recent: getRecentExchanges(npc, 5),
+    recent: getRecentExchanges(npc, MEMORY_BUDGET.promptRecentCount, channel),
     facts: (mem.facts || []).filter(f => f.valid !== false).map(f => typeof f === 'string' ? f : f.text),
     retrievedFacts: retrieved.facts,
     episodes: (mem.episodes || []).filter(e => e.decay > 0.2).map(e => e.text),
@@ -590,6 +649,10 @@ function assembleContext(gameState, sceneState) {
 
   return {
     contentConfig: meta.contentConfig || null,
+    // Correctness plan Phase 1 (D6): which conversation surface this context
+    // belongs to. applyProposal reads it to tag memory.recent entries, and the
+    // prompt builders read it to filter that buffer back down to one channel.
+    channel: 'scene',
     scene: {
       room: ROOMS[roomId]?.name || roomId,
       roomId,
@@ -632,8 +695,18 @@ function assembleContext(gameState, sceneState) {
 function assembleImContext(gameState, npcId) {
   const npc = gameState.npcs[npcId];
   if (!npc) return null;
+  // Correctness plan Phase 1 (D7): the real persisted thread, trailing
+  // IM_PROMPT.threadDepth messages. buildImPrompt renders it as the actual
+  // conversation history — previously an IM reply saw only the shared
+  // memory.recent buffer, which held five entries of MIXED scene and IM
+  // dialogue. Assembled here rather than reached for inside the prompt
+  // builder so the builder stays a pure function of its context.
+  const thread = gameState.world.computer?.apps?.im?.threads?.[npcId];
+  const threadTail = (thread?.msgs || []).slice(-IM_PROMPT.threadDepth);
   return {
     contentConfig: gameState.meta.contentConfig || null,
+    channel: 'im',
+    imThread: threadTail,
     player: {
       name: 'You', mood: gameState.player.mood, money: gameState.player.money, flags: gameState.player.flags,
     },
@@ -935,6 +1008,9 @@ async function applyProposal(proposal, context, gameState, playerAction) {
   const events = [];
   const updatedNpcIds = new Set();
   const logEntries = [];
+  // Correctness plan Phase 1 (D6): which conversation surface this proposal
+  // came from, stamped onto every memory.recent entry written below.
+  const channel = context.channel || 'scene';
 
   // Apply relationship deltas — in-memory on gameState (the same object
   // reference as UI's currentGameState), not via kv round-trip. The clock
@@ -990,7 +1066,7 @@ async function applyProposal(proposal, context, gameState, playerAction) {
       // outside the memoryAdditions loop in Audit Fix so all active NPCs
       // get them, not just ones with memoryAdditions)
       if (additions.recentExchanges) {
-        for (const ex of additions.recentExchanges) updated = addRecentExchange(updated, ex.speaker, ex.text, ex.type, gameState.meta.clock.day, gameState.meta.clock.minutes);
+        for (const ex of additions.recentExchanges) updated = addRecentExchange(updated, ex.speaker, ex.text, ex.type, gameState.meta.clock.day, gameState.meta.clock.minutes, channel);
       }
       gameState.npcs[npcId] = updated;
       updatedNpcIds.add(npcId);
@@ -1089,25 +1165,32 @@ async function applyProposal(proposal, context, gameState, playerAction) {
   // NPC Overhaul Audit Fix: auto-populate memory.recent from dialogue so
   // the conversation buffer fills without relying on the LLM to produce
   // recentExchanges in memoryAdditions (which it was never told to do).
-  // Each NPC's dialogue lines are pushed to their own recent buffer.
+  //
+  // Correctness plan Phase 1 (D4) — ORDER IS LOAD-BEARING. The player's line
+  // is recorded FIRST, then the NPC dialogue it provoked. These two blocks
+  // used to run the other way round, and since both append to the same
+  // buffer, every turn stored the answer above the question: the next prompt
+  // read back `Hana: I'm fine, just tired. | player: Hey, how was your day?`.
+  // The model was being shown its own reply as the thing it had to respond
+  // to. Do not reorder these blocks. Both tag entries with the context's
+  // channel (D6) so the scene and IM transcripts stay separable.
+  const recentDay = gameState.meta.clock.day;
+  const recentTick = gameState.meta.clock.minutes;
+
+  if (playerAction) {
+    for (const npcCtx of context.activeNpcs) {
+      const npc = gameState.npcs[npcCtx.id];
+      if (npc) gameState.npcs[npcCtx.id] = addRecentExchange(npc, 'player', playerAction, 'player_input', recentDay, recentTick, channel);
+    }
+  }
+
   if (proposal.dialogue) {
-    const day = gameState.meta.clock.day;
-    const tick = gameState.meta.clock.minutes;
     for (const d of proposal.dialogue) {
       const npcMatch = context.activeNpcs.find(n => n.id === d.speaker || n.name === d.speaker);
       if (npcMatch) {
         const npc = gameState.npcs[npcMatch.id];
-        if (npc) gameState.npcs[npcMatch.id] = addRecentExchange(npc, d.speaker, d.text, 'dialogue', day, tick);
+        if (npc) gameState.npcs[npcMatch.id] = addRecentExchange(npc, d.speaker, d.text, 'dialogue', recentDay, recentTick, channel);
       }
-    }
-  }
-  // Also push the player's action as a recent exchange for all active NPCs
-  if (playerAction) {
-    const day = gameState.meta.clock.day;
-    const tick = gameState.meta.clock.minutes;
-    for (const npcCtx of context.activeNpcs) {
-      const npc = gameState.npcs[npcCtx.id];
-      if (npc) gameState.npcs[npcCtx.id] = addRecentExchange(npc, 'player', playerAction, 'player_input', day, tick);
     }
   }
 
