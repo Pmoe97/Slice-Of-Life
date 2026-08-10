@@ -75,7 +75,7 @@ const OBJECT_DEFS = {
     imagePhrase: 'a desktop computer on the desk',
   },
   // The BrineOS phone — a world OBJECT per decision B of
-  // ref/BrineOS-The-Phone-plan.md, NOT an inventory item: only objects
+  // src/ref/BrineOS-The-Phone-plan.md, NOT an inventory item: only objects
   // have per-instance identity, mutable state/flags, and can sit alone in
   // a room bucket (a carried phone on the kitchen counter needs a floor).
   // `unique` stops a layout bump ever spawning a second one (L5).

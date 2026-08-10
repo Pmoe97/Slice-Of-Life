@@ -6,18 +6,18 @@ escorts, Phase 8 move-in advocacy and integration). Design session complete
 is now decided.
 Last updated 2026-08-05.
 
-Companions: `ref/contractor-tutorial-overhaul-plan.md` (built — the pilot
+Companions: `src/ref/complete/contractor-tutorial-overhaul-plan.md` (built — the pilot
 external NPC this plan generalizes; Del's presence rules are defined here,
 everything else about him already shipped),
-`ref/renovation-occupancy-overhaul-plan.md` (built — this plan changes its
+`src/ref/complete/renovation-occupancy-overhaul-plan.md` (built — this plan changes its
 `etaDay` math to working days, and puts Del onsite in the room being worked),
-`ref/economy-and-rent-plan.md` (the cost stack these services add to).
+`src/ref/complete/economy-and-rent-plan.md` (the cost stack these services add to).
 
 This is a living document, worked one phase per session. **Read the Handoff
 section immediately below before anything else** — it is the single source
 of truth for where the last session left off. Update it, and the Status
 table at the bottom, as the very last thing you do each session — see
-`ref/perchance-agent-handoff-prompt.md` for the full session protocol.
+`src/ref/patterns/perchance-agent-handoff-prompt.md` for the full session protocol.
 
 ---
 
@@ -598,7 +598,7 @@ takes multiple visits; cooking leaves real food. Cost scales as configured.
 **Files:** `computer.js` (`bookRenovationJob` — `etaDay` from a working-day
 calculation, optional rush premium), `ui.js` (`processRenovationJobsForDay`),
 `render.computer.js` (booking modal shows the rush option and the true
-completion date), `ref/renovation-occupancy-overhaul-plan.md` (update its
+completion date), `src/ref/complete/renovation-occupancy-overhaul-plan.md` (update its
 `etaDay` description — it currently documents raw calendar days).
 
 **Verification:** A 3-day job booked Friday completes Wednesday. The same job

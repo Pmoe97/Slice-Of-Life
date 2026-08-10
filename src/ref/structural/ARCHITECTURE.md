@@ -7,37 +7,46 @@ that followed it. This document — plus the section-header comments in each
 has **already been built**. Keep it current as work lands; don't let it
 drift.
 
-Designs that are decided but **not yet built** live in their own plan docs
-rather than here, so they survive across sessions:
+Designs live in their own plan docs rather than here, so they survive across
+sessions. **`src/ref/README.md` is the index of record** — it lists every
+document, its folder, and its lifecycle. The table below is a summary of the
+overhaul plans only; when the two disagree, the README wins.
+
+Docs are sorted into `structural/` (always-current reference), `patterns/`
+(the reusable Plan and Handoff-Prompt architectures), `wip/`, `complete/`,
+and `archive/`. A plan and its `*-handoff-prompt.md` are a pair and move
+between folders together.
 
 | Plan doc | Covers |
 |---|---|
-| `ref/economy-and-rent-plan.md` | Rent, cost stack, metered utilities, quarterly taxes, investing |
-| `ref/apartment-upgrades-plan.md` | Disrepair start, facility repair, quality → rent leverage |
-| `ref/game-opening-plan.md` | The Stardew-like intro and how the player acquires the apartment |
-| `ref/apartment-expansion-plan.md` | The Mirrored H layout (built — kept for the adjacency/room rationale) |
-| `ref/npc-overhaul-plan.md` | NPC bible/personality/memory system (built — kept for design rationale; no summary row below) |
-| `ref/renovation-occupancy-overhaul-plan.md` | Timed staged renovation jobs, per-bedroom facilities (**built** — all 4 phases) |
-| `ref/contractor-tutorial-overhaul-plan.md` | Del Connors, job pricing, the tutorial he anchors (**built** — all 4 phases) |
-| `ref/external-world-npcs-overhaul-plan.md` | External world: visit spine, contacts, maid, food delivery, friends-of-roommates, escorts, move-in advocacy (**built** — all 8 phases) |
-| `ref/perchance-agent-handoff-prompt.md` | The one-phase-per-session protocol the implementing agent runs |
-| `ref/afterhours-redesign-plan.md` | AfterHours site expansion: PH+EP blended feed, routed mini-site, player page + related rail, parody ads, watch persistence, Hot Singles NPCs (**not started** — 8 phases) |
-| `ref/afterhours-redesign-handoff-prompt.md` | The one-phase-per-session protocol for the AfterHours expansion |
+| `src/ref/complete/economy-and-rent-plan.md` | Rent, cost stack, metered utilities, quarterly taxes, investing |
+| `src/ref/complete/apartment-upgrades-plan.md` | Disrepair start, facility repair, quality → rent leverage |
+| `src/ref/complete/game-opening-plan.md` | The Stardew-like intro and how the player acquires the apartment |
+| `src/ref/complete/apartment-expansion-plan.md` | The Mirrored H layout (built — kept for the adjacency/room rationale) |
+| `src/ref/complete/npc-overhaul-plan.md` | NPC bible/personality/memory system (built — kept for design rationale; no summary row below) |
+| `src/ref/complete/renovation-occupancy-overhaul-plan.md` | Timed staged renovation jobs, per-bedroom facilities (**built** — all 4 phases) |
+| `src/ref/complete/contractor-tutorial-overhaul-plan.md` | Del Connors, job pricing, the tutorial he anchors (**built** — all 4 phases) |
+| `src/ref/complete/external-world-npcs-overhaul-plan.md` | External world: visit spine, contacts, maid, food delivery, friends-of-roommates, escorts, move-in advocacy (**built** — all 8 phases) |
+| `src/ref/complete/restaurant-network-expansion-plan.md` | 12-restaurant roster, full menus, wrap-aware hours, cross-midnight deliveries (**built** — all 4 phases) |
+| `src/ref/complete/afterhours-redesign-plan.md` | AfterHours site expansion: PH+EP blended feed, routed mini-site, player page + related rail, parody ads, watch persistence, Hot Singles NPCs (**built** — all 8 phases + audit) |
+| `src/ref/complete/inventory-needs-menu-saves-plan.md` | Inventory, containers, eating, spoilage, needs rebalance, Set Meal, NPC inventories, save system v2, main menu (**built** — all 10 phases) |
+| `src/ref/wip/prompt-generator-v2.md` | Decision-vector prompt architecture for the menu slideshow (**engine + 4 passes shipped**; optional pool expansion outstanding) |
+| `src/ref/patterns/perchance-agent-handoff-prompt.md` | The original generic one-phase-per-session protocol (each overhaul now has its own; this is the ancestor) |
 
-> An earlier revision of this file cited `ref/Original Prompt and Response
-> Train.txt`, `ref/Perchance Helper AI - Next Steps.md` and `ref/Perchance
+> An earlier revision of this file cited `src/ref/Original Prompt and Response
+> Train.txt`, `src/ref/Perchance Helper AI - Next Steps.md` and `src/ref/Perchance
 > Helper AI - P0 - P6 Audit + Plan.txt`. Those files were deleted; their
 > still-relevant content is either in the phase sections below or in the
 > plan docs above. The design brief now lives in this file and those docs,
 > not in a chat transcript.
 >
-> A later cleanup (2026-08-04) deleted `ref/HANDOFF.md`,
-> `ref/vocation-and-gigs-plan.md`, `ref/sleep-and-alarm-plan.md`,
-> `ref/adult-content-overhaul-plan.md`, and `ref/BrineOS-The-Phone-plan.md` —
+> A later cleanup (2026-08-04) deleted `src/ref/HANDOFF.md`,
+> `src/ref/vocation-and-gigs-plan.md`, `src/ref/sleep-and-alarm-plan.md`,
+> `src/ref/adult-content-overhaul-plan.md`, and `src/ref/BrineOS-The-Phone-plan.md` —
 > each was fully built with a corresponding row already in the Status table
 > below (Economy 2, Sleep & alarm, AfterHours redesign, and the nine BrineOS
 > Phase rows respectively), so the plan docs had become pure duplication.
-> `ref/HANDOFF.md`'s operational notes (iframe testing technique, load
+> `src/ref/HANDOFF.md`'s operational notes (iframe testing technique, load
 > order, hard invariants) are folded into this file already.
 >
 > **The per-phase writeups below still cite those deleted docs on their
@@ -1273,7 +1282,7 @@ their abstractions.
 
 ## Apartment Expansion v2 — the Mirrored H
 
-8 rooms → 17. See `ref/apartment-expansion-plan.md` for the layout
+8 rooms → 17. See `src/ref/complete/apartment-expansion-plan.md` for the layout
 rationale; the architectural facts:
 
 - **`ROOM_ADJACENCY` (CONFIG) is the authoritative spatial graph.** It must
@@ -1339,8 +1348,8 @@ Two failure modes worth remembering:
 ## Sleep and rent (current numbers)
 
 Both are pressure systems and both were re-tuned after the expansion; the
-designs they are heading toward live in `ref/sleep-and-alarm-plan.md` and
-`ref/economy-and-rent-plan.md`.
+designs they are heading toward live in `src/ref/sleep-and-alarm-plan.md` and
+`src/ref/complete/economy-and-rent-plan.md`.
 
 - **Sleep** is 6–8 hours scaled by energy at bedtime (drained → long night),
   and energy recovered is proportional to hours *actually* slept. That
@@ -1363,7 +1372,7 @@ designs they are heading toward live in `ref/sleep-and-alarm-plan.md` and
   webmaster API, fetched through `superFetch` and embedded as iframe
   players; `SITE_DEFS.afterhours.adultContent.entries` no longer exists.
   Some clips return an embed refusal — a redesign to behave more like the
-  host's own site is planned (`ref/adult-content-overhaul-plan.md`).
+  host's own site is planned (`src/ref/adult-content-overhaul-plan.md`).
   Everything on a clip is third-party text: build those nodes with
   `textContent`, never an `innerHTML` template.
 - **Browsing is free; cumming is the action.** Watching costs nothing.
@@ -1396,7 +1405,7 @@ outlives its bubble means the next Escape applies the consequences again.
 
 ## The opening — solo start (Phase 7)
 
-**Plan:** `ref/game-opening-plan.md`.
+**Plan:** `src/ref/complete/game-opening-plan.md`.
 
 The game no longer generates a full household at new-game. Instead the
 player inherits a luxury apartment alone — empty bedrooms, everything in
@@ -1449,7 +1458,7 @@ Classifieds listing → accept a roommate) writes itself.
 
 ## Sleep, alarm, burnout, energy levelling (Phase 8)
 
-**Plan:** `ref/sleep-and-alarm-plan.md`.
+**Plan:** `src/ref/sleep-and-alarm-plan.md`.
 
 The sleep duration model (6–8 hours scaled by energy at bedtime) was
 already built. This phase adds the three systems the plan called for:
@@ -1532,7 +1541,7 @@ the player sees both the current level and the ceiling.
 
 ## Apartment upgrades deepening — maintenance, appeal (Phase 9)
 
-**Plan:** `ref/apartment-upgrades-plan.md`.
+**Plan:** `src/ref/complete/apartment-upgrades-plan.md`.
 
 The facility system (facilities, tiers, disrepair, quality→rent
 leverage) was built in Economy 4. This phase adds the three missing
@@ -1586,7 +1595,7 @@ condition is below 100. The bar uses `.upg-condition-bar.good/.worn/
 
 ## AfterHours redesign (Phase 10)
 
-**Plan:** `ref/adult-content-overhaul-plan.md` ("Still open" section).
+**Plan:** `src/ref/adult-content-overhaul-plan.md` ("Still open" section).
 
 The AfterHours porn-browser app was functional but lacked search and
 graceful embed-refusal handling. This phase adds:
@@ -1616,7 +1625,7 @@ present.
 
 ## Investing — the money accelerator (Phase 11)
 
-**Plan:** `ref/economy-and-rent-plan.md` (investing as accelerator).
+**Plan:** `src/ref/complete/economy-and-rent-plan.md` (investing as accelerator).
 
 The economy plan says "idle reserve money should be working" and
 "investing becomes the accelerator for [apartment upgrades] rather
@@ -1663,7 +1672,7 @@ realized gains), fund cards with buy/sell buttons, risk disclaimer.
 
 ## BrineOS Phase 0 — pre-flight refactors
 
-**Plan:** `ref/BrineOS-The-Phone-plan.md`. These land first so the phone
+**Plan:** `src/ref/BrineOS-The-Phone-plan.md`. These land first so the phone
 (Phase 3+) can't silently break a live game later. No visible change.
 
 - **Time-context stack** (`time.js`). The old `setTimeContext` was a
@@ -1702,7 +1711,7 @@ unique guard spawns-when-absent, skips-when-present, and skips-when-carried
 
 ## BrineOS Phase 1 — banking merge + the electric-bill softlock fix
 
-**Plan:** `ref/BrineOS-The-Phone-plan.md`. Done on the computer only, while
+**Plan:** `src/ref/BrineOS-The-Phone-plan.md`. Done on the computer only, while
 exactly one device reads `APP_DEFS`.
 
 - **One `bank` app** (`defs.computer.js`). `bills` + `invest` removed from
@@ -1758,7 +1767,7 @@ running code.
 
 ## BrineOS Phase 2 — the phone as a world object
 
-**Plan:** `ref/BrineOS-The-Phone-plan.md`. No shell yet — this phase gives
+**Plan:** `src/ref/BrineOS-The-Phone-plan.md`. No shell yet — this phase gives
 the phone a physical existence: an object with identity, location, and
 battery, spawned once and never duplicated.
 
@@ -1847,7 +1856,7 @@ changed for them.
 
 ## BrineOS Phase 3 — the BrineOS shell
 
-**Plan:** `ref/BrineOS-The-Phone-plan.md`. The phone's first *shell*: an
+**Plan:** `src/ref/BrineOS-The-Phone-plan.md`. The phone's first *shell*: an
 always-on-screen button (FAB) plus a phone-shaped overlay that opens over the
 game or over the computer. No new apps — the home grid reuses the computer's
 `COMPUTER_RENDERERS` unchanged, which is exactly what Phase 0.2's
@@ -1912,7 +1921,7 @@ changed.
 
 ## BrineOS Phase 4 — the Tracker and notifications
 
-**Plan:** `ref/BrineOS-The-Phone-plan.md`. One pure derived pass turns game
+**Plan:** `src/ref/BrineOS-The-Phone-plan.md`. One pure derived pass turns game
 state into a flat list of obligations (decision D): nothing about an
 obligation is ever stored — only the player's dismiss/snooze intents live on
 `world.phone`. No LLM, no randomness, no persistence: the same save always
@@ -1992,7 +2001,7 @@ body-clear fix above; Phase 5 (app parity) now only needs the
 
 ## BrineOS Phase 5 — app parity and connectivity
 
-**Plan:** `ref/BrineOS-The-Phone-plan.md`. Two halves: make every shared app
+**Plan:** `src/ref/BrineOS-The-Phone-plan.md`. Two halves: make every shared app
 reachable from the phone (the registry is the single source of truth), and
 give phone + computer the asymmetric connectivity decision F specifies.
 No new files — all changes landed in existing ones (load order unchanged).
@@ -2061,12 +2070,12 @@ terminator.
 
 ## BrineOS Phase 6 — Alarm and Clock
 
-**Plan:** `ref/BrineOS-The-Phone-plan.md`. Premise correction made at the
+**Plan:** `src/ref/BrineOS-The-Phone-plan.md`. Premise correction made at the
 start of this phase: the alarm mechanic was **not** unbuilt, and there was
 no computer-side surface to remove. `player.alarm`, `doSetAlarm` (ui.js),
 `resolveSleepHoursWithAlarm` (sim.js), and the free-text intent
 `matchAlarmIntent` ("set alarm for 7", intent.js) already existed and
-worked, reachable only by typing a command — `ref/sleep-and-alarm-plan.md`'s
+worked, reachable only by typing a command — `src/ref/sleep-and-alarm-plan.md`'s
 "Not built" header was stale. Grepping `computer.js`/`render.computer.js`
 for `alarm` found nothing real (a character-quirk string, an unrelated CSS
 comment). Real scope: a phone UI for the existing mechanic, plus the one
@@ -2118,7 +2127,7 @@ icon, home grid now 13 tiles.
 
 ## BrineOS Phase 7 — Autopay
 
-**Plan:** `ref/BrineOS-The-Phone-plan.md`. Deliberately its own phase,
+**Plan:** `src/ref/BrineOS-The-Phone-plan.md`. Deliberately its own phase,
 separate from Phase 1's bill-pay UI rewrite, so a regression in either is
 attributable to the right one.
 
@@ -2162,7 +2171,7 @@ autopay buttons render for the 6 eligible bills (7 `BILL_DEFS` minus rent).
 
 ## BrineOS Phase 8 — Camera and Gallery
 
-**Plan:** `ref/BrineOS-The-Phone-plan.md`. A photo record deliberately does
+**Plan:** `src/ref/BrineOS-The-Phone-plan.md`. A photo record deliberately does
 **not** store the rendered image — landmine L10 — because `IMAGE_CACHE` is a
 shared LRU across every scene/character image in the whole game, not just
 photos, and can evict a "memory" the player is holding onto at any time
@@ -2238,7 +2247,7 @@ concrete room sections. All 12 facilities render and are repairable.
 
 ## BrineOS Phase 9 — Privacy and snooping
 
-**Plan:** `ref/BrineOS-The-Phone-plan.md`. The final BrineOS phase — makes
+**Plan:** `src/ref/BrineOS-The-Phone-plan.md`. The final BrineOS phase — makes
 the phone's physicality (Phase 2) carry real stakes: an unlocked phone left
 somewhere is discoverable, and the discovery has consequences.
 
@@ -2278,7 +2287,7 @@ allocated-but-unused catch-all for a future system.
 **A real bug hunted and cleared during verification.** Testing
 `trySnoopPhone` in isolation and checking a held NPC variable afterward
 showed zero memory episodes — looked broken. Traced to the aliasing gotcha
-`ref/HANDOFF.md` warns about: `applyMemoryEpisodeEffect` *replaces*
+`src/ref/HANDOFF.md` warns about: `applyMemoryEpisodeEffect` *replaces*
 `gameState.npcs[id]` rather than mutating in place, so a held reference
 goes stale. `sim.js` (lines 704-721) already documents and fixes this exact
 class of bug generically for every drive — it was written because it first

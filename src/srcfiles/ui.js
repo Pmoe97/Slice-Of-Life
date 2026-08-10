@@ -575,7 +575,7 @@ function processDeliveriesForDay(day) {
 // the activeJobId pointer, and recomputes rent (the ceiling may have
 // changed). Mirrors processDeliveriesForDay's shape: an array of world
 // records with an etaDay, resolved at day rollover. See
-// ref/renovation-occupancy-overhaul-plan.md.
+// src/ref/complete/renovation-occupancy-overhaul-plan.md.
 function processRenovationJobsForDay(day) {
   const jobs = currentGameState.world.renovationJobs || [];
   for (const job of jobs) {
@@ -3297,7 +3297,7 @@ async function approveCastAndStartGame() {
     // into the bible; a player-authored name is never overwritten by prose.
     await Promise.all(Object.entries(pendingCast.npcs).map(async ([id, npc]) => {
       // The Contractor Friend's bible is hand-authored (character brief,
-      // ref/contractor-tutorial-overhaul-plan.md Phase 1) — keep the
+      // src/ref/complete/contractor-tutorial-overhaul-plan.md Phase 1) — keep the
       // prose-expansion pass from regenerating their identity.
       if (id === CONTRACTOR_ID) return;
       const prose = await expandCharacterProse(npc.bible);

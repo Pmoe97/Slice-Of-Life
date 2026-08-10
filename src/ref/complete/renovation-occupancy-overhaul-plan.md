@@ -5,11 +5,11 @@ construction gating, presentation (floor plan / RenoFix job board / tracker /
 narration), and integration polish + old-save migration all built & verified.
 Last updated 2026-08-04.
 
-Companions: `ref/apartment-upgrades-plan.md` (the facility model this extends —
+Companions: `src/ref/complete/apartment-upgrades-plan.md` (the facility model this extends —
 tier structure, cost bands, quality formula, and design invariants 1-3 carry
-over unchanged), `ref/economy-and-rent-plan.md` (rent math), `ref/contractor-tutorial-overhaul-plan.md`
+over unchanged), `src/ref/complete/economy-and-rent-plan.md` (rent math), `src/ref/complete/contractor-tutorial-overhaul-plan.md`
 (who performs and prices these jobs, and the tutorial that teaches them),
-`ref/external-world-npcs-overhaul-plan.md` (future off-site substitutes for
+`src/ref/complete/external-world-npcs-overhaul-plan.md` (future off-site substitutes for
 comfort-tier rooms; future room-sharing assignment logic that consumes the
 `residentCapacity` field reserved here).
 
@@ -17,7 +17,7 @@ This is a living document, worked one phase per session. **Read the Handoff
 section immediately below before anything else** — it is the single source
 of truth for where the last session left off. Update it, and the Status
 table at the bottom, as the very last thing you do each session — see
-`ref/perchance-agent-handoff-prompt.md` for the full session protocol.
+`src/ref/patterns/perchance-agent-handoff-prompt.md` for the full session protocol.
 
 ---
 
@@ -53,7 +53,7 @@ so a mid-job entertainment setup doesn't count. (3) **Old-model reference sweep*
 computer.js `findEmptyBed` comment rewritten without naming the dead id; the only
 remaining mentions are intentional (the migration code + historical docstrings at
 computer.js:1996/2021, config.js:550, render.computer.js:2362).
-`src/ref/ARCHITECTURE.md:2209` left untouched — it's a past-tense historical bug-fix
+`src/ref/structural/ARCHITECTURE.md:2209` left untouched — it's a past-tense historical bug-fix
 record, not a dangling reference. (4) **Construction-aware blocked messages** —
 `facilityFunctional`/`facilityFunctionalHere` (defs.actions.js) now report "{label} is
 under construction — the crew wraps up by day {eta}." for a mid-job facility; the
@@ -259,7 +259,7 @@ bedroom_3: ['bedroom_habitability_3'],
 `bedroom_habitability_player: 'functional'` (locked decision #3); the other
 three bedroom facilities and every new entry/dining/hallway facility start
 `'broken'`, matching the existing wreck-opening pattern
-(`ref/game-opening-plan.md`).
+(`src/ref/complete/game-opening-plan.md`).
 
 ### New facilities (entry, dining, hallway_a, hallway_b)
 
@@ -296,7 +296,7 @@ rollover." Canonical array of job records:
 ```
 
 > **`durationDays` are WORKING days, not calendar days** — superseded by
-> `ref/external-world-npcs-overhaul-plan.md` Phase 4, which shipped after
+> `src/ref/complete/external-world-npcs-overhaul-plan.md` Phase 4, which shipped after
 > this document was completed. Del's crew works weekdays only, so `etaDay`
 > is computed with `addWorkingDays(startDay, durationDays)` (SIM): a 3-day
 > job booked on a Friday finishes the following Wednesday. Paying the

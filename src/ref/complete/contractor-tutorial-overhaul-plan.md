@@ -4,10 +4,10 @@ Status: **ALL PHASES DONE (1-4)** — character brief & bible (Del Connors),
 plumbing, 35% labor pricing, free tutorial job + milestone hints, and banter/
 memory depth all built & verified. Last updated 2026-08-04.
 
-Companions: `ref/renovation-occupancy-overhaul-plan.md` (the jobs this
+Companions: `src/ref/complete/renovation-occupancy-overhaul-plan.md` (the jobs this
 character performs and prices — read that doc first, this one assumes its
-data model), `ref/external-world-npcs-overhaul-plan.md` (the broader
-non-resident-NPC framework this character pilots), `ref/game-opening-plan.md`
+data model), `src/ref/complete/external-world-npcs-overhaul-plan.md` (the broader
+non-resident-NPC framework this character pilots), `src/ref/complete/game-opening-plan.md`
 (names "the tutorial/onboarding surface, which doesn't exist at all yet" as
 open work — this doc fills that gap).
 
@@ -15,7 +15,7 @@ This is a living document, worked one phase per session. **Read the Handoff
 section immediately below before anything else** — it is the single source
 of truth for where the last session left off. Update it, and the Status
 table at the bottom, as the very last thing you do each session — see
-`ref/perchance-agent-handoff-prompt.md` for the full session protocol.
+`src/ref/patterns/perchance-agent-handoff-prompt.md` for the full session protocol.
 
 ---
 
@@ -242,7 +242,7 @@ upgrade, the process guided by a tutorial"). Concretely:
   — this is a single flag, not a whole tutorial state machine.
 - The Contractor's IM thread walks the player through: why the place is a
   wreck (in-fiction exposition, doubles as the opening's "you inherited
-  this" framing per `ref/game-opening-plan.md`), how to open RenoFix, what
+  this" framing per `src/ref/complete/game-opening-plan.md`), how to open RenoFix, what
   booking a job does, what "day N of M" means, and a nudge when the job
   completes ("first one's on me — the rest, you're paying full price, don't
   get used to it").

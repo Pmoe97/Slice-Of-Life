@@ -345,7 +345,7 @@ function getPresentNpcIds(npcs, roomId) {
   });
 }
 
-// --- Visits (ref/external-world-npcs-overhaul-plan.md, Phase 1) ---
+// --- Visits (src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 1) ---
 // world.visits[] is the single source of truth for "who is onsite and why".
 // A visit is the presence window of an external NPC: their location and
 // activity are purpose-driven, they don't decay needs, and outside their
@@ -1643,7 +1643,7 @@ function roommateShareCeiling(quality) {
 // A wreck (everything broken) is 0; a fully restored apartment is 1.
 // This is what makes the upgrade system pay back: it raises the rent
 // ceiling via roommateShareCeiling, so investing in the building is an
-// investment in income. See ref/apartment-upgrades-plan.md.
+// investment in income. See src/ref/complete/apartment-upgrades-plan.md.
 //
 // Falls back to 1 (full quality) when world.upgrades is absent (a save
 // from before Phase 4) so old saves stay playable — the clean-break
@@ -2343,7 +2343,7 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
     // Phase 8: burnout tracking. consecutiveWorkDays counts days where
     // the player worked above the burnout threshold; burnoutLevel is the
     // accumulated penalty (0-1) that scales mood loss and work pay down.
-    // Recovery happens on rest days. See ref/sleep-and-alarm-plan.md.
+    // Recovery happens on rest days. See src/ref/sleep-and-alarm-plan.md.
     burnout: { consecutiveWorkDays: 0, burnoutLevel: 0, lastWorkDay: 0 },
     // Nothing is owed until the first due date actually passes — see
     // UI's processRentForDay, which charges rent every ECONOMY.payPeriodDays
@@ -2372,9 +2372,9 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
       deliveries: [],
       // Renovation overhaul: active/completed contracted jobs, one entry
       // per job booked through bookRenovationJob (see
-      // ref/renovation-occupancy-overhaul-plan.md).
+      // src/ref/complete/renovation-occupancy-overhaul-plan.md).
       renovationJobs: [],
-      // Visit spine (ref/external-world-npcs-overhaul-plan.md, Phase 1):
+      // Visit spine (src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 1):
       // the single queue of "who is onsite and why" — every external-NPC
       // presence window (contractor jobs today; maid contracts, food
       // orders, roommates' friends, player invitations in later phases)
@@ -2422,7 +2422,7 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
       moveInOffers: [],
       // Contractor tutorial (contractor doc Phase 3): one-shot tutorial /
       // milestone flags (tutorialRenoUsed, tutorial_<milestoneId>) — see
-      // ref/contractor-tutorial-overhaul-plan.md.
+      // src/ref/complete/contractor-tutorial-overhaul-plan.md.
       flags: {},
       rent,
       // Phase 6 taxes: quarterly estimated tax. quarterGross accumulates
@@ -2446,7 +2446,7 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
       bills: initBillState(),
       // Phase 4 upgrades: one entry per FACILITY_DEFS. `tier` is the
       // facility's current condition ('broken'/'functional'/'upgraded').
-      // The apartment starts in disrepair — see ref/game-opening-plan.md.
+      // The apartment starts in disrepair — see src/ref/complete/game-opening-plan.md.
       // Initialized by initUpgradesState below.
       upgrades: initUpgradesState(),
       // Phase 5 utility metering: one entry per UTILITY_METER key. Each
@@ -2460,7 +2460,7 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
     droppedConstraints,
   };
 
-  // Contractor Friend (ref/contractor-tutorial-overhaul-plan.md, Phase 1):
+  // Contractor Friend (src/ref/complete/contractor-tutorial-overhaul-plan.md, Phase 1):
   // a permanent, simulation-light NPC added at new-game setup so EVERY start
   // path (solo + cast) gets them. 'visitor' status + the resolveTick skip
   // keep them out of the sim entirely — never a room, never present,

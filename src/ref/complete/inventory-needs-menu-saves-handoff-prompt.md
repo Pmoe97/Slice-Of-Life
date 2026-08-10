@@ -16,7 +16,7 @@ which phase to work on — find it yourself using the steps below.
 ## Step 0 — find out where you are (cheap: the Status table, not the full doc)
 
 Read only the `## Handoff — read this first` section and the `## Status` table
-in `ref/inventory-needs-menu-saves-plan.md`.
+in `src/ref/complete/inventory-needs-menu-saves-plan.md`.
 
 The first phase not marked "Done" is your phase — go to Step 1. The phases
 must be done in order, with two deliberate exceptions:
@@ -35,7 +35,7 @@ core). Never skip Phase 3 before Phase 7 (Set Meal needs eating to exist).
 Never skip Phase 5 before Phase 6 (the happiness content has nothing to feed
 until mood is an impulse system).
 
-**Phase 10 has a required companion read:** `ref/perchance-menu-conventions.md`
+**Phase 10 has a required companion read:** `src/ref/structural/perchance-menu-conventions.md`
 is a source-level record of how the user's other generators build their menu
 and slideshow, and it is the style authority for that phase. Read the sections
 Phase 10 names before writing menu code — but read Phase 10's **"Deliberate
@@ -137,7 +137,7 @@ sections once so you understand the shape, then the specific phase block
     image layers permanently, so zero images is a designed state. The slideshow
     degrades generation failure → cache → gradient with **bounded** retries;
     never reproduce the reference games' uncapped 500 ms retry loop.
-  - **`ref/perchance-menu-conventions.md` is a reference, not a spec.** It
+  - **`src/ref/structural/perchance-menu-conventions.md` is a reference, not a spec.** It
     documents real published code including its bugs, and the doc's own
     section 6 flags eight of them. Phase 10 lists exactly what to adopt and
     what to deviate from — follow that list, not the reference doc's defaults.

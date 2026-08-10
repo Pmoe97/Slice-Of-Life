@@ -2,9 +2,9 @@
 
 Hand the block below to the Perchance AI helper verbatim. It can read the
 source of the referenced generators directly, which this repo's agent cannot.
-Its output feeds **Phase 10** of `ref/inventory-needs-menu-saves-plan.md`.
+Its output feeds **Phase 10** of `src/ref/complete/inventory-needs-menu-saves-plan.md`.
 
-Paste its returned markdown into `ref/perchance-menu-conventions.md`, then
+Paste its returned markdown into `src/ref/structural/perchance-menu-conventions.md`, then
 re-run Phase 10.
 
 ---

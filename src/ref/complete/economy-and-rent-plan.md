@@ -3,7 +3,7 @@
 Status: **rent model, calendar, flat cost stack, gig board, upgrades,
 usage metering, and taxes built.** Last updated 2026-08-01.
 
-Companion doc: `ref/vocation-and-gigs-plan.md` (where income comes from).
+Companion doc: `src/ref/vocation-and-gigs-plan.md` (where income comes from).
 
 ---
 
@@ -68,7 +68,7 @@ burden, which is what makes restoration an investment rather than a drain.
 At the top of the curve **the apartment pays for itself**: break-even lands
 around four roommates, and a full house of seven clears roughly $9,000/month
 in profit. `playerShare` goes negative there, and callers must treat that as
-income rather than clamping it — see `ref/apartment-upgrades-plan.md`.
+income rather than clamping it — see `src/ref/complete/apartment-upgrades-plan.md`.
 
 ---
 
@@ -246,7 +246,7 @@ Each step is independently shippable and useful on its own.
 3. **Usage metering** — replace the flat utility amounts with accumulated
    counters. Purely a swap behind the same bill. **Built (Phase 5).**
 4. **Taxes** — quarterly, deductions, reserve toggle. **Built (Phase 6).**
-5. **Gig board** — see `ref/vocation-and-gigs-plan.md`. Last because the
+5. **Gig board** — see `src/ref/vocation-and-gigs-plan.md`. Last because the
    costs need to exist before variable income means anything. **Built
    (Phase 2).**
 
@@ -267,7 +267,7 @@ Each step is independently shippable and useful on its own.
 - ~~Late-game money sinks.~~ **Answered:** apartment upgrades. The place
   starts in disrepair and restoring it is the primary sink — and it pays
   back, because facilities raise how much rent roommates will carry. See
-  `ref/apartment-upgrades-plan.md`. Investing becomes the accelerator for
+  `src/ref/complete/apartment-upgrades-plan.md`. Investing becomes the accelerator for
   that project rather than a parallel score.
 
 ## Design invariants
@@ -278,7 +278,7 @@ Each step is independently shippable and useful on its own.
 2. **Solo living is not sustainable at any apartment quality.** If a build
    makes it viable, the numbers are wrong.
 3. **Overwork must be possible and must hurt.** See
-   `ref/sleep-and-alarm-plan.md`.
+   `src/ref/sleep-and-alarm-plan.md`.
 4. **Every recurring cost has a cutoff consequence** that reaches into a
    system other than money.
 5. **NPC behaviour must show up on the bills.** A cost the household

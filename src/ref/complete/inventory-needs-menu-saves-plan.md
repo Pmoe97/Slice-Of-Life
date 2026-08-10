@@ -5,24 +5,24 @@ complete 2026-08-09; all thirteen decisions locked. No open questions
 blocking any phase.
 Last updated 2026-08-09.
 
-Companions: `ref/perchance-menu-conventions.md` (**landed 2026-08-09** — the
+Companions: `src/ref/structural/perchance-menu-conventions.md` (**landed 2026-08-09** — the
 source-level read of `lusthaven` / `stellar-lust` / `hedonism-island`; Phase 10
 implements against it, and section 5 of it is explicitly **not** a reference
 for Phase 9 — see that phase's note),
-`ref/external-world-npcs-overhaul-plan.md` (built — the maid,
+`src/ref/complete/external-world-npcs-overhaul-plan.md` (built — the maid,
 DoorDrop, and `world.visits[]`; this plan makes its ~200 delivered dishes
 edible and gives its maid a new mess to clean),
-`ref/afterhours-redesign-plan.md` (built — the source of the `+0.25` mood
+`src/ref/complete/afterhours-redesign-plan.md` (built — the source of the `+0.25` mood
 spike this plan re-bases onto a decaying impulse),
-`ref/economy-and-rent-plan.md` (the cost stack roommates eating your
-groceries adds to), `ref/apartment-expansion-plan.md` (the facility tiers
+`src/ref/complete/economy-and-rent-plan.md` (the cost stack roommates eating your
+groceries adds to), `src/ref/complete/apartment-expansion-plan.md` (the facility tiers
 that currently gate every large mood source).
 
 This is a living document, worked one phase per session. **Read the Handoff
 section immediately below before anything else** — it is the single source of
 truth for where the last session left off. Update it, and the Status table
 near the bottom, as the very last thing you do each session — see
-`ref/inventory-needs-menu-saves-handoff-prompt.md` for the full session
+`src/ref/complete/inventory-needs-menu-saves-handoff-prompt.md` for the full session
 protocol.
 
 ---
@@ -111,10 +111,25 @@ Also this session (requested changes, not audit findings):
   with it. **Rule: never trim an image on the way INTO the cache — fit at
   display time, in CSS.** Orientation-matched generation resolutions stay, now
   purely to keep the bars small.
-  - Note for whoever verifies: images already in the ring from before this
-    change are still stored pre-cropped. They'll display contained at their
-    baked aspect and age out naturally as the forever-generator churns the
-    100-image pool; no migration needed.
+  - **Follow-up (same day): "age out naturally" was wrong, and the pool had
+    to be purged.** With `contain` now rendering them honestly, the
+    pre-cropped images showed as a thin full-width band across the middle of
+    the screen with the subject's head and legs already missing — a viewport
+    of 1331x835 displaying a strip of aspect 3.2, i.e. exactly the old
+    `maxCropAspect`. Nothing was left to fit; the content was gone. And they
+    would not have aged out on any useful timescale: the ring holds 100 and
+    the steady pacer replaces one per 15s of menu-open time.
+    **Fix:** cache keys carry a generation token —
+    `menu_<gen>_<rating>_<orient>_<ts>_<rand>`, currently `g2` — and
+    `purgeStaleGenerationImages` (run on every ring load) drops and
+    hard-deletes every entry from an older generation, from the image cache
+    as well as the ring, so it self-heals on the next menu open with no user
+    action. `bufferTarget` 3 -> 6 so a purged pool is watchable in about a
+    minute instead of showing one repeated image. **Rule: bump
+    `MENU_GALLERY_GENERATION` whenever a change makes previously STORED
+    pixels wrong rather than merely different** — a display-side fix cannot
+    repair destroyed data, and leaving it in place means shipping the bug
+    with a new coat of paint.
   - `#scene-img` (the in-game scene image) is still `object-fit: cover`
     inside a fixed 360px box. Left alone deliberately — this change was
     scoped to the menu — but it's the same trade-off if it ever comes up.
@@ -891,7 +906,7 @@ per-folder migration spine with real migrations in it, and `saveAtBoundary`
 this — wrap it.
 
 > **This save system is novel. It is not ported from anything.** Section 5 of
-> `ref/perchance-menu-conventions.md` documents `hedonism-island`'s
+> `src/ref/structural/perchance-menu-conventions.md` documents `hedonism-island`'s
 > `SaveManager` and the two RPGs' single-localStorage-key saves. That section
 > is **background only and is not a model for this phase** — the user has
 > explicitly ruled it out as a basis. Those games save one blob of a live
@@ -941,7 +956,7 @@ deleting a slot frees it.
 **Goal:** a full-screen boot menu with a live slideshow background and a
 Discord link (D11).
 
-**Reference:** `ref/perchance-menu-conventions.md` is the source-level record
+**Reference:** `src/ref/structural/perchance-menu-conventions.md` is the source-level record
 of how the user's other generators do this, and is the style authority for
 this phase. Read these sections rather than re-deriving anything: **§1.3**
 (hedonism-island's persistent-DOM + ES-class screen structure — the one to
@@ -1076,7 +1091,7 @@ Options changes persist across a reload.
 | 7 | **Done** | Set Meal: `world.commitments[]`, invitations, schedule override, shared dinner + mess |
 | 8 | **Done** | NPC inventories: B1 fix, lifestyle seeding, prose grounding, two-way gifts, NPCs eat your food, theft |
 | 9 | **Done** | Save system v2: `SAVE_KEYS`, slot grid, autosave ring, thumbnails, export/import |
-| 10 | **Done** | Main menu: boot screen, slideshow, Discord, pause menu, Options (slideshow implements against `ref/perchance-menu-conventions.md`, deviations 1–5) |
+| 10 | **Done** | Main menu: boot screen, slideshow, Discord, pause menu, Options (slideshow implements against `src/ref/structural/perchance-menu-conventions.md`, deviations 1–5) |
 
 ## Dependency order
 

@@ -9,8 +9,8 @@ the Handoff note below.
 Last updated 2026-08-05.
 
 Session protocol: this plan is implemented one phase per session under
-`ref/restaurant-expansion-handoff-prompt.md` (the restaurant-specific
-variant of `ref/perchance-agent-handoff-prompt.md`). Read its Step 0/Step 1
+`src/ref/complete/restaurant-expansion-handoff-prompt.md` (the restaurant-specific
+variant of `src/ref/patterns/perchance-agent-handoff-prompt.md`). Read its Step 0/Step 1
 before starting any phase, and write this document's Handoff note as the
 last thing you do every session.
 

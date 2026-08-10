@@ -2,9 +2,9 @@
 
 Status: **built.** Last updated 2026-08-01.
 
-Companions: `ref/economy-and-rent-plan.md` (where the money comes from),
-`ref/game-opening-plan.md` (why the place is a wreck),
-`ref/apartment-expansion-plan.md` (the 17-room layout being repaired).
+Companions: `src/ref/complete/economy-and-rent-plan.md` (where the money comes from),
+`src/ref/complete/game-opening-plan.md` (why the place is a wreck),
+`src/ref/complete/apartment-expansion-plan.md` (the 17-room layout being repaired).
 
 ---
 

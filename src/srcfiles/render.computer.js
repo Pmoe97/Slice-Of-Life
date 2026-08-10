@@ -2489,10 +2489,10 @@ function renderTaxPanel(body, gs) {
 }
 
 // The whole money picture at a glance. Four real numbers, all drawn
-// straight from live state (decision A of ref/BrineOS-The-Phone-plan.md):
+// straight from live state (decision A of src/ref/BrineOS-The-Phone-plan.md):
 // --- Brine Bank Overview (BrineOS Phase 1) ---
 // The whole money picture at a glance. Four real numbers, all drawn
-// straight from live state (decision A of ref/BrineOS-The-Phone-plan.md):
+// straight from live state (decision A of src/ref/BrineOS-The-Phone-plan.md):
 // checking balance, the tax reserve, portfolio value, and total
 // outstanding bills. No new account types — getting to Bills or Portfolia
 // is the shell's screen tabs' job, so this screen is all-numbers.

@@ -1,7 +1,7 @@
 // ===== SECTION: DEFS.MENU =====
 // Menu overhaul Phase 10: the title-gallery trait lists and prompt
 // assembly, modelled on the reference games' genTitlePrompt
-// (ref/perchance-menu-conventions.md §3.2) — flat lists, one complete noun
+// (src/ref/structural/perchance-menu-conventions.md §3.2) — flat lists, one complete noun
 // phrase per entry, uniform selection, fixed concatenation order, a shared
 // style tail and negative prompt.
 //
@@ -174,7 +174,7 @@ const ORIENTATION_HINT = {
   portrait: 'tall vertical composition, portrait framing, vertical depth',
 };
 
-// ===== PROMPT V2 — decision-vector generator (ref/prompt-generator-v2.md) ====
+// ===== PROMPT V2 — decision-vector generator (src/ref/wip/prompt-generator-v2.md) ====
 // Supersedes the v1 flat mad-lib (one subject + one pose + one emotion + one
 // setting) with a ~13-slot decision vector: a parallel context roll (Layer 1)
 // frames the scene, a conditioned parallel detail roll (Layer 2) fills it,

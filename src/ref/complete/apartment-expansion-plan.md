@@ -5,10 +5,10 @@
 **Built and verified.** All 17 rooms exist, `ROOM_ADJACENCY` is symmetric
 and fully connected, movement is gated to adjacent rooms, the SVG floor
 plan renders, and NPCs path room-by-room via `npc.transit`. Retained for
-the layout and adjacency rationale; see `ref/ARCHITECTURE.md` for the
+the layout and adjacency rationale; see `src/ref/structural/ARCHITECTURE.md` for the
 as-built architecture.
 
-One open thread: the opening plan (`ref/game-opening-plan.md`) asks whether
+One open thread: the opening plan (`src/ref/complete/game-opening-plan.md`) asks whether
 parts of the apartment should be gated behind progression. The adjacency
 graph and floor plan currently assume all 17 rooms exist from day one.
 

@@ -14,7 +14,7 @@ which phase to work on — find it yourself using the steps below.
 ## Step 0 — find out where you are (cheap: the Status section, not the full doc)
 
 Read only the `## Handoff — read this first` header line and the
-`## Status`-equivalent markers in `ref/restaurant-network-expansion-plan.md`
+`## Status`-equivalent markers in `src/ref/complete/restaurant-network-expansion-plan.md`
 (the plan's phases are listed as numbered `## Phase N` sections; its
 Handoff section tracks exactly which one is next).
 
@@ -77,7 +77,7 @@ specific phase block (goal / where / steps) for the phase you're on.
   — don't mark it complete because the code looks right. There is no test
   harness in this repo; verification is done by loading the live page and
   exercising the game through the fresh-iframe `browser_eval` technique (see
-  `ref/ARCHITECTURE.md`'s P2 section for the iframe pattern and the
+  `src/ref/structural/ARCHITECTURE.md`'s P2 section for the iframe pattern and the
   snapshotting caveat). For Phase 1 and 2, drive the actual DoorDrop flow
   end-to-end (open the app, browse, filter, cart, place an order, advance
   the clock past arrival, confirm the handover). For Phase 3, assert the

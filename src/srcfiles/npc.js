@@ -693,7 +693,7 @@ function getRecentEvents(events, count, npcs) {
   }));
 }
 
-// --- Move-in advocacy (ref/external-world-npcs-overhaul-plan.md, Phase 8) ---
+// --- Move-in advocacy (src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 8) ---
 // The proposal contract gains an optional `advocateFor` field: a resident (or
 // the player) organically suggests someone should move in, and the player then
 // runs the existing offer flow against that external NPC. Everything for the

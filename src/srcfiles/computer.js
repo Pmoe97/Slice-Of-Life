@@ -353,7 +353,7 @@ function closeComputer(gameState) {
 // Replaces the single-job model. The player is a freelancer: accept
 // discrete gigs from a board, work them block-by-block, deliver by a
 // deadline for a lump sum. Income is lumpy — dry spells happen. See
-// ref/vocation-and-gigs-plan.md.
+// src/ref/vocation-and-gigs-plan.md.
 
 // How much a work block's *progress* is worth scales with rest and mood.
 // Kept from the old model — energy/mood scaling is the hook burnout
@@ -1446,7 +1446,7 @@ function acceptApplicant(gameState, npcId, roomId) {
   // Phase 4: a bedroom must be habitable before someone can move in. The
   // room's own habitability facility must be at least 'functional' — this
   // is the first upgrade goal, because it points the player at recruiting,
-  // which is the answer to rent. See ref/apartment-upgrades-plan.md.
+  // which is the answer to rent. See src/ref/complete/apartment-upgrades-plan.md.
   if (!isBedroomHabitable(gameState, roomId)) {
     return { ok: false, reason: 'That bedroom is uninhabitable — repair it via RenoFix first.' };
   }
@@ -2123,7 +2123,7 @@ function getActiveJobForRoom(gameState, roomId) {
   return null;
 }
 
-// --- Contractor Friend pricing (ref/contractor-tutorial-overhaul-plan.md) ---
+// --- Contractor Friend pricing (src/ref/complete/contractor-tutorial-overhaul-plan.md) ---
 // The Contractor charges the facility's materials cost (the existing
 // per-tier `cost` field) plus a flat labor markup — "he's intended to make
 // a lot of money off the player." Kept as its own constant + function (not
@@ -2207,7 +2207,7 @@ function fireContractorMilestone(gameState, milestoneId) {
   return true;
 }
 
-// --- External NPCs (ref/external-world-npcs-overhaul-plan.md) ---
+// --- External NPCs (src/ref/complete/external-world-npcs-overhaul-plan.md) ---
 // Spawn a full, persistent external NPC deterministically from the world
 // seed. Reuses the exact pools generateApplicantStubsForDay draws from, so
 // an external is built the same way any other character is — they are full
@@ -2851,7 +2851,7 @@ function isEscortServiceBooked(booking, serviceId) {
   return !!booking && (booking.services || []).includes(serviceId);
 }
 
-// Book a contracted renovation job (ref/renovation-occupancy-overhaul-plan.md).
+// Book a contracted renovation job (src/ref/complete/renovation-occupancy-overhaul-plan.md).
 // Replaces the instant click of the old purchaseUpgrade: the player pays
 // the FULL contracted price UP FRONT (materials + the Contractor's labor
 // markup — no refund on cancel, locked decision), the job runs for

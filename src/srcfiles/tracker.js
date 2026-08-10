@@ -1,7 +1,7 @@
 // ===== SECTION: TRACKER (BrineOS Phase 4) =====
 // The phone's Tracker: one pure, deterministic pass that derives every
 // current obligation from game state — decision D of
-// ref/BrineOS-The-Phone-plan.md. Obligations are never stored (no queue,
+// src/ref/BrineOS-The-Phone-plan.md. Obligations are never stored (no queue,
 // no "seen" flags); only the player's dismiss/snooze intents live on
 // world.phone (Phase 4 addition to defaultPhoneState). No LLM, no
 // randomness, no persistence: the same save always yields the same

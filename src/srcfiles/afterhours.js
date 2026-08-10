@@ -2,7 +2,7 @@
 // Two real sources, one seamless feed. Pornhub (webmasters API, JSON) is
 // fetched via root.superFetch; Eporner (API v2, JSON) via PLAIN browser
 // fetch — its anti-bot wall blocks every proxy path, so the superFetch
-// route is banned for it and vice versa (see ref/afterhours-redesign-plan.md).
+// route is banned for it and vice versa (see src/ref/complete/afterhours-redesign-plan.md).
 //
 // Since Phase 2 this file also ships the full routed mini-site: the router
 // (browser.afterHoursView = { view, params, stack }), the site header with
@@ -15,7 +15,7 @@
 // load time by earlier scripts — they call into AH_* only from runtime
 // handlers, after every script tag has finished loading.
 //
-// Normalized clip shape (data model, ref/afterhours-redesign-plan.md):
+// Normalized clip shape (data model, src/ref/complete/afterhours-redesign-plan.md):
 //   { id: 'ph:<videoId>'|'ep:<videoId>', sources: ['ph']|['ph','ep'],
 //     sourceVideoId, title, duration (display), durationSec, views, rating,
 //     thumb, embedUrls: { ph?, ep? }, watchUrls: { ph?, ep? }, category,

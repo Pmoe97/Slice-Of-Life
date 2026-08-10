@@ -15,7 +15,7 @@ which phase to work on — find it yourself using the steps below.
 ## Step 0 — find out where you are (cheap: the Status table, not the full doc)
 
 Read only the `## Handoff — read this first` header line and the `## Status`
-table in `ref/afterhours-redesign-plan.md`.
+table in `src/ref/complete/afterhours-redesign-plan.md`.
 
 The first phase not marked "Done" is your phase — go to Step 1. The phases
 must be done in order, with one deliberate exception: Phase 5 (ads/ticker/

@@ -163,7 +163,7 @@ const APP_DEFS = {
   // unchanged. Shared account data stays where it always lived — world.bills
   // for the bills, computer.apps.invest for holdings — so the reused
   // renderers and do* handlers work unmodified (decision A of
-  // ref/BrineOS-The-Phone-plan.md). Old saves with open bills/invest
+  // src/ref/BrineOS-The-Phone-plan.md). Old saves with open bills/invest
   // windows are handled by normalizeComputerState's unknown-appId prune.
   bank: {
     id: 'bank', label: 'Brine Bank', category: 'finance', requires: [],
@@ -179,7 +179,7 @@ const APP_DEFS = {
   // every facility grouped by room, its current tier, the cost to upgrade,
   // and a quality summary. Purchasing advances the tier, which raises
   // apartment quality and the rent ceiling — the money sink that pays
-  // back. See ref/apartment-upgrades-plan.md.
+  // back. See src/ref/complete/apartment-upgrades-plan.md.
   upgrades: {
     id: 'upgrades', label: 'RenoFix', category: 'home', requires: [],
     devices: ['computer', 'phone'],
@@ -218,7 +218,7 @@ const APP_DEFS = {
 // --- Gig board (Phase 2 — vocation rewrite) ---
 // Replaces JOB_DEFS. The player is a freelancer: accept discrete gigs,
 // work them block-by-block, deliver by a deadline. Income is lumpy by
-// design — dry spells happen. See ref/vocation-and-gigs-plan.md.
+// design — dry spells happen. See src/ref/vocation-and-gigs-plan.md.
 //
 // A template is the *shape* of an available gig; instances are generated
 // seeded on day rollover (generateGigsForDay) with payout/blocks/deadline

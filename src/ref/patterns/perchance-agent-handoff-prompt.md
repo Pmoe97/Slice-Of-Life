@@ -14,9 +14,9 @@ below.
 Check these three documents **in order**, reading only the `## Status` table
 near the bottom of each:
 
-1. `ref/renovation-occupancy-overhaul-plan.md`
-2. `ref/contractor-tutorial-overhaul-plan.md`
-3. `ref/external-world-npcs-overhaul-plan.md`
+1. `src/ref/complete/renovation-occupancy-overhaul-plan.md`
+2. `src/ref/complete/contractor-tutorial-overhaul-plan.md`
+3. `src/ref/complete/external-world-npcs-overhaul-plan.md`
 
 The **first** one with any phase not marked "Done" is your document, and the
 first not-Done phase in it is your phase — go to Step 1. Documents 1 and 2
@@ -32,11 +32,11 @@ depends on something from another document (e.g. a function signature the
 Contractor doc's Phase 2 needs from the Renovation doc's Phase 1), open only
 the relevant section of that other document — not the whole thing.
 
-**One cross-document case needs care.** `ref/external-world-npcs-overhaul-plan.md`
+**One cross-document case needs care.** `src/ref/complete/external-world-npcs-overhaul-plan.md`
 Phase 4 deliberately modifies already-shipped renovation code: it changes
 `etaDay` from raw calendar days to *working* days and adds a paid
 weekend-rush option. That is intentional, not a conflict. When you do that
-phase, also update `ref/renovation-occupancy-overhaul-plan.md`'s description
+phase, also update `src/ref/complete/renovation-occupancy-overhaul-plan.md`'s description
 of `etaDay`, so a completed document doesn't keep describing behavior that
 no longer exists.
 

@@ -12,7 +12,7 @@ system that makes the game interesting — recruiting roommates, negotiating
 rent shares, the pressure of carrying a lease alone — is pre-solved before
 the player touches anything.
 
-The rent model (`ref/economy-and-rent-plan.md`) is built around solo living
+The rent model (`src/ref/complete/economy-and-rent-plan.md`) is built around solo living
 being unsustainable and roommates being the relief valve. That curve only
 means something if the player *starts* alone and *earns* their way out.
 
@@ -28,7 +28,7 @@ rather than already living in it with a full household.
   most rooms are rooms in name only until repaired. This is what makes the
   inheritance premise work — you've been handed something impressive and
   unusable, which is the same shape as an overgrown farm. See
-  `ref/apartment-upgrades-plan.md`.
+  `src/ref/complete/apartment-upgrades-plan.md`.
 - **Start alone.** Empty bedrooms are the visible, spatial statement of the
   problem. The Mirrored H's four bedrooms become a scoreboard.
 - **The first objective writes itself:** make one bedroom habitable so
@@ -38,7 +38,7 @@ rather than already living in it with a full household.
   couple of weeks or first month. After that, rent is a consistent threat,
   permanently.
 - **Starting energy is lower** than the eventual ceiling (see
-  `ref/sleep-and-alarm-plan.md`), so the early game is genuinely tight on
+  `src/ref/sleep-and-alarm-plan.md`), so the early game is genuinely tight on
   both money and hours.
 
 ## What this touches
@@ -59,7 +59,7 @@ rather than already living in it with a full household.
 - How much of the apartment is *usable* at the start? Disrepair answers
   most of this (rooms exist but don't work), but whether some are outright
   locked is still open — the adjacency graph and floor plan assume all 17
-  rooms are reachable. Tracked in `ref/apartment-upgrades-plan.md`.
+  rooms are reachable. Tracked in `src/ref/complete/apartment-upgrades-plan.md`.
 - Is there a story reason the apartment is this nice, or is "you inherited
   something absurd" enough?
 - Does the player choose their own bedroom?
