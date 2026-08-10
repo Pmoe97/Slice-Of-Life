@@ -170,6 +170,20 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
       applyEffects(effects, effCtx);
     }
 
+    // Perception plan Phase 3: a drive with an audible or smellable signature
+    // says so declaratively — `emitsSignal: { signal, intensity }` on the
+    // DRIVE_DEFS entry — rather than each one being special-cased here. This
+    // is the same shape ACTION_DEFS uses, so the player and an NPC doing the
+    // same thing are heard the same way.
+    if (drive.emitsSignal && location) {
+      emitTransient(gameState, {
+        id: drive.emitsSignal.signal,
+        roomId: location,
+        intensity: drive.emitsSignal.intensity,
+        sourceId: npcId,
+      });
+    }
+
     // Phase 5: meter utility usage for drives that consume utilities —
     // NPC behaviour must show up on the bills (the whole point of
     // metering). `meters` on a DRIVE_DEFS entry is the same shape as on
@@ -548,6 +562,17 @@ function tryEatFood(npc, npcId, resolved, gameState, rng) {
   applyEffects(lines.map(l => parseEffectDSL(l)[0]).filter(Boolean), effCtx);
 
   const ateFromKitchen = plan.some(u => u.from !== npcId);
+  // Perception plan Phase 3: the eat drive resolves through this custom path
+  // and `continue`s before the generic `emitsSignal` handler in the drive
+  // loop, so its emission lives here — and it is only a cooking smell when
+  // they actually went to the kitchen. Someone eating crisps out of their own
+  // bag in their bedroom does not fill the flat with the smell of dinner.
+  if (ateFromKitchen) {
+    emitTransient(gameState, {
+      id: 'cooking', roomId: 'kitchen',
+      intensity: SIGNALS_EMIT.cookingDrive, sourceId: npcId,
+    });
+  }
   const items = [...new Set(plan.map(u => ITEM_DEFS[u.defId]?.label || u.defId))].join(', ');
   const event = {
     day, tick, roomId: ateFromKitchen ? 'kitchen' : resolved.location, npcId,

@@ -51,7 +51,7 @@ const SAVE_KEYS = [
     'visits', 'commitments', 'foodOrders', 'externalStubs', 'escortRoster',
     'escortBookings', 'hotSinglesRoster', 'moveInOffers', 'flags', 'quests',
     'rent', 'computer', 'taxes', 'bills', 'upgrades', 'utilities',
-    'phone', 'afterHours',
+    'phone', 'afterHours', 'signals',
   ] },
   { folder: 'npcs', all: true },
   { folder: 'objects', all: true },
@@ -96,6 +96,10 @@ const WORLD_KEY_FALLBACKS = {
   utilities: () => initUtilitiesState(),
   phone: () => defaultPhoneState(),
   afterHours: () => defaultAfterHoursState(),
+  // Perception plan Phase 3: the transient-signal ring buffer. An empty list
+  // is exactly what a save from before this existed should read as, so no
+  // migration is needed — same precedent as world.computer.
+  signals: () => [],
 };
 
 // --- Migration functions (per folder). Stubbed for day-one; iterate here. ---

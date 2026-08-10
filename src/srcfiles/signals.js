@@ -49,6 +49,80 @@ function deriveStandingSignals(gameState) {
   return out;
 }
 
+// --- Transient signals: emitted by an act, stored, and fading (plan D1/D11) ---
+// The stored record is deliberately minimal:
+//   { id, roomId, intensity, bornTick, sourceId }
+// `channel` and `decayPerTick` are NOT stored — they live on the def, and a
+// copy on every instance could disagree with it (RI3). `intensity` is the
+// strength at birth; what a perceiver gets is computed from age at read time.
+//
+// `bornTick` is ABSOLUTE (day × ticksPerDay + tick index) rather than a
+// per-day index, so decay just works across a midnight rollover instead of
+// needing a special case for "born yesterday".
+function absoluteTick(clock) {
+  if (!clock) return 0;
+  return (clock.day || 0) * CLOCK.ticksPerDay + getTickIndex(clock.minutes || 0);
+}
+
+// What a transient is worth right now, or 0 once it has faded out.
+function transientIntensityNow(rec, nowTick) {
+  const def = SIGNAL_DEFS[rec.id];
+  if (!def) return 0;
+  const decay = def.decayPerTick;
+  if (!decay) return rec.intensity; // no decay declared → treat as steady
+  const age = Math.max(0, nowTick - (rec.bornTick || 0));
+  return Math.max(0, rec.intensity - age * decay);
+}
+
+// Emit an act's signal into the world. Trusted producer — callers are
+// resolveTick, the drive loop and ACTION_DEFS, never model output. Prunes on
+// write, which is where the buffer is allowed to be mutated.
+function emitTransient(gameState, { id, roomId, intensity, sourceId }) {
+  const def = SIGNAL_DEFS[id];
+  if (!def || !roomId || !ROOMS[roomId]) return;
+  if (!gameState.world) return;
+  const nowTick = absoluteTick(gameState.meta?.clock);
+  const list = pruneTransients(gameState, nowTick);
+  list.push({
+    id,
+    roomId,
+    intensity: intensity ?? 0.5,
+    bornTick: nowTick,
+    sourceId: sourceId || null,
+  });
+  // Ring buffer: oldest out. The cap is a backstop, not the primary control —
+  // decay is. It exists so a pathological tick (every NPC moving every tick
+  // through a long batched sleep) cannot grow the save without limit.
+  while (list.length > SIGNAL_TUNING.transientCap) list.shift();
+  gameState.world.signals = list;
+}
+
+// Drop faded records. MUTATING — only call from a write path. Returns the
+// live list. Pruning here rather than only on a timer is what stops a save
+// that sat idle for a week from resurrecting week-old footsteps the moment
+// something new is emitted.
+function pruneTransients(gameState, nowTick) {
+  const list = gameState.world?.signals || [];
+  const live = list.filter(r => transientIntensityNow(r, nowTick) >= SIGNAL_TUNING.floor);
+  if (gameState.world) gameState.world.signals = live;
+  return live;
+}
+
+// The READ-side counterpart: same filter, no mutation. perceiveSignals must
+// stay pure (RI3) — a query that quietly rewrote the save would make every
+// perceive call a state change, and the Phase 1 harness asserts byte-identical
+// state across a query. Faded records are skipped here and actually removed
+// the next time something is emitted.
+function liveTransients(gameState, nowTick) {
+  const out = [];
+  for (const rec of (gameState.world?.signals || [])) {
+    const intensity = transientIntensityNow(rec, nowTick);
+    if (intensity < SIGNAL_TUNING.floor) continue;
+    out.push({ signalId: rec.id, roomId: rec.roomId, intensity, sourceId: rec.sourceId });
+  }
+  return out;
+}
+
 // --- Door attenuation (plan D6) ---
 // 1 when the room has no door object at all — NOT the `unlocked` multiplier.
 // WORLD's getDoorState returns 'unlocked' for a doorless room too, which would
@@ -126,7 +200,11 @@ function perceiveSignals(gameState, perceiverId, roomId) {
   const attention = perceptionOf(gameState, perceiverId);
   if (attention <= 0) return [];
 
-  const sources = deriveStandingSignals(gameState);
+  // Both kinds, one list. From here down nothing cares which is which — a
+  // standing rot and a fading footstep propagate and attenuate identically,
+  // which is the point of having one model rather than two.
+  const sources = deriveStandingSignals(gameState)
+    .concat(liveTransients(gameState, absoluteTick(gameState.meta?.clock)));
   if (sources.length === 0) return [];
 
   // One reach map per channel that actually has a source, not per signal.

@@ -1999,12 +1999,130 @@ const SIGNAL_DEFS = {
       strong: ['the pool is green, and the smell carries'],
     },
   },
+
+  // --- TRANSIENT signals (Phase 3) ------------------------------------
+  // Emitted by an act at a moment, stored on world.signals with a birth tick,
+  // and fading at `decayPerTick`. The presence of that field is what marks a
+  // def transient: standing signals are derived fresh every query and have no
+  // decay, because the world state they read IS their persistence.
+  //
+  // Decay rates are in per-tick intensity, against a 30-minute tick. 0.5 means
+  // a footstep is gone inside an hour; 0.05 means a cooking smell hangs around
+  // most of an evening, which is exactly the difference between the two.
+  footsteps: {
+    channel: 'sound', salience: 0.5, decayPerTick: 0.5,
+    phrases: {
+      faint:  ['someone moving around, somewhere further off'],
+      clear:  ['footsteps in the next room'],
+      strong: ['footsteps, close — someone just walked past'],
+    },
+  },
+  voices: {
+    channel: 'sound', salience: 0.45, decayPerTick: 0.2,
+    phrases: {
+      faint:  ['the murmur of a conversation somewhere'],
+      clear:  ['two people talking, not far off'],
+      strong: ['a conversation going on right there'],
+    },
+  },
+  door_close: {
+    channel: 'sound', salience: 0.55, decayPerTick: 0.7,
+    phrases: {
+      faint:  ['a door somewhere in the apartment'],
+      clear:  ['a door closing'],
+      strong: ['a door shuts, close enough to feel it'],
+    },
+  },
+  running_water: {
+    channel: 'sound', salience: 0.4, decayPerTick: 0.25,
+    phrases: {
+      faint:  ['water running somewhere'],
+      clear:  ['the shower is going'],
+      strong: ['the shower is loud through the wall'],
+    },
+  },
+  machine_running: {
+    channel: 'sound', salience: 0.3, decayPerTick: 0.12,
+    phrases: {
+      faint:  ['a machine humming somewhere'],
+      clear:  ['the washer is running'],
+      strong: ['the washer is going, and it is not balanced'],
+    },
+  },
+  // Cooking is the long one on purpose — a good smell that outlasts the meal
+  // is one of the most domestic things a shared apartment has.
+  cooking: {
+    channel: 'smell', salience: 0.5, decayPerTick: 0.05,
+    phrases: {
+      faint:  ['a trace of something someone cooked earlier'],
+      clear:  ['someone has been cooking, and it smelled good'],
+      strong: ['whatever is on the stove smells genuinely good'],
+    },
+  },
+  smoke: {
+    channel: 'smell', salience: 0.85, decayPerTick: 0.08,
+    phrases: {
+      faint:  ['a whiff of something scorched'],
+      clear:  ['the sharp smell of something burnt'],
+      strong: ['burnt, badly — the kind of smell that sets off an alarm'],
+    },
+  },
+  breakage: {
+    channel: 'sound', salience: 0.9, decayPerTick: 0.6,
+    phrases: {
+      faint:  ['a clatter from somewhere in the apartment'],
+      clear:  ['something hit the floor and broke'],
+      strong: ['a crash, close — that was something breaking'],
+    },
+  },
+};
+
+// Emission strengths for the acts that produce transient signals (Phase 3).
+// Here rather than inline at each call site so "how loud is a footstep" is one
+// tunable fact rather than a number buried in resolveTick.
+const SIGNALS_EMIT = {
+  // Measured against the case the plan exists for: someone striding past your
+  // closed bedroom door must be audible from inside. At 0.5 that arrived at
+  // 0.5 × 0.5 (one hop) × 0.45 (door) = 0.1125, which against an average
+  // attention of 0.30 gave 0.034 — under the 0.04 sound floor by a hair, so
+  // the headline case silently failed. 0.7 clears it.
+  //
+  // The gap between the two values is doing real work: someone PASSING
+  // THROUGH is heard through a closed door, someone merely ARRIVING in the
+  // next room is not. That difference is what makes footsteps informative
+  // rather than ambient noise.
+  footstepsTransit: 0.7,   // passing through on the way somewhere — louder
+  footstepsArrive:  0.45,  // arriving and settling in
+  shower:           0.85,
+  laundry:          0.5,
+  cookingDrive:     0.55,  // an NPC raiding the kitchen
+  cookingAction:    0.7,   // the player actually cooking a recipe
+  voices:           0.5,
+  doorClose:        0.55,
+};
+
+// Off-screen world events that make a noise or a smell (Phase 3). Keyed by
+// the event `type` SIM's drawOffscreenEvent produces, so an event that
+// already exists as fiction becomes something the household can actually
+// sense. An event with no entry here is silent, which is most of them.
+const EVENT_SIGNALS = {
+  breakage:   { signal: 'breakage', intensity: 0.8 },
+  burnt_food: { signal: 'smoke',    intensity: 0.75 },
+  cooking:    { signal: 'cooking',  intensity: 0.6 },
 };
 
 const SIGNAL_TUNING = {
   // Stop propagating once a signal falls under this. Guards the walk and
   // keeps a strong source from technically reaching the whole apartment.
   floor: 0.05,
+  // Ring-buffer size for TRANSIENT signals on world.signals (plan D11). A
+  // backstop, not the primary control — decay is what normally keeps this
+  // list short. The cap exists so a pathological stretch (every NPC moving
+  // every tick through a long batched sleep) cannot grow the save without
+  // limit. Declared in the plan and missing from the Phase 1 config, which
+  // made `while (list.length > SIGNAL_TUNING.transientCap)` compare against
+  // undefined and never trim anything.
+  transientCap: 64,
   // Per adjacency hop, by channel (plan D5). These numbers are what make the
   // three channels feel different without any extra machinery: smell drifts,
   // sound carries less, sight essentially does not leave its room.
@@ -3470,6 +3588,7 @@ const DRIVE_DEFS = {
     // is what the old comment claimed was happening.
     setsClothing: 'towel',
     meters: [['showers', 1], ['waterHeating', 1]],
+    emitsSignal: { signal: 'running_water', intensity: SIGNALS_EMIT.shower },
   },
   // Correctness plan Phase 4 (D10 follow-on). The `shower` drive is
   // facility-gated on bathroom plumbing (MAINTENANCE.npcDecayActions), and
@@ -3537,6 +3656,7 @@ const DRIVE_DEFS = {
     cooldownTicks: 30,
     emptiesHamper: true,
     meters: [['laundry', 1], ['devices', 0.5]],
+    emitsSignal: { signal: 'machine_running', intensity: SIGNALS_EMIT.laundry },
   },
 
   // --- Social: NPC-to-NPC interaction ---
@@ -3548,6 +3668,7 @@ const DRIVE_DEFS = {
     activityOverride: 'chatting with a roommate',
     cooldownTicks: 12,
     npcToNpc: true,
+    emitsSignal: { signal: 'voices', intensity: SIGNALS_EMIT.voices },
     // Produces a small rel delta between the two NPCs
     relDelta: { trust: 0.02, affection: 0.02 },
   },

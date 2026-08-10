@@ -76,6 +76,7 @@ const ACTION_DEFS = {
     timeCost: { base: 30, perIngredient: 3, max: 50, skill: 'cooking', curve: 'timeReduction', min: 15 },
     skill: { id: 'cooking', xp: 12 },
     meters: [['cooking', 1], ['devices', 0.5]],
+    emitsSignal: { signal: 'cooking', intensity: SIGNALS_EMIT.cookingAction },
     prepare: prepareCook,
     buildEffects: buildCookEffects,
     narration: { mode: 'dynamic', build: cookNarration },
@@ -89,6 +90,7 @@ const ACTION_DEFS = {
     // Exposed for the duration of the action — see ACTIONS'
     // withVulnerableState and SIM's getPlayerVulnerableState.
     vulnerableState: 'showering',
+    emitsSignal: { signal: 'running_water', intensity: SIGNALS_EMIT.shower },
     timeCost: { base: 15 },
     effects: [`ADJUST_NEED player hygiene +${NEEDS.hygiene.washRestore}`],
     meters: [['showers', 1], ['waterHeating', 1]],
@@ -138,6 +140,7 @@ const ACTION_DEFS = {
     group: 'door', chipPriority: 35,
     requires: ['doorUnlocked'],
     timeCost: { base: 1 },
+    emitsSignal: { signal: 'door_close', intensity: SIGNALS_EMIT.doorClose },
     prepare: prepareDoor,
     buildEffects: buildLockDoorEffects,
     narration: { mode: 'dynamic', build: lockDoorNarration },
@@ -201,6 +204,7 @@ const ACTION_DEFS = {
     requires: ['hamperNotEmpty', 'waterNotCutoff', 'facilityFunctional:laundry_machines'],
     timeCost: { base: 20 },
     meters: [['laundry', 1], ['devices', 0.5]],
+    emitsSignal: { signal: 'machine_running', intensity: SIGNALS_EMIT.laundry },
     prepare: prepareLaundry,
     buildEffects: buildLaundryEffects,
     narration: { mode: 'dynamic', build: laundryNarration },
@@ -271,6 +275,7 @@ const ACTION_DEFS = {
     group: 'bathroom', chipPriority: 20,
     requires: ['waterNotCutoff', 'facilityFunctionalHere:self.shower'],
     vulnerableState: 'showering',
+    emitsSignal: { signal: 'running_water', intensity: SIGNALS_EMIT.shower },
     timeCost: { base: ACTION_TUNING.longShowerMinutes },
     effects: [
       `ADJUST_NEED player hygiene +${ACTION_TUNING.longShowerHygieneGain}`,

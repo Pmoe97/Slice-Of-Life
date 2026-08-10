@@ -124,6 +124,20 @@ async function executeAction(actionId, gameState) {
     }
   }
 
+  // Perception plan Phase 3: the player is audible too. Same declarative
+  // `emitsSignal: { signal, intensity }` field the DRIVE_DEFS entries carry,
+  // so an NPC showering and the player showering produce the same sound —
+  // which is what Plan 3 needs in order for an NPC to react to the player
+  // being somewhere without a bespoke check for each case.
+  if (def.emitsSignal) {
+    emitTransient(gameState, {
+      id: def.emitsSignal.signal,
+      roomId: gameState.player.location,
+      intensity: def.emitsSignal.intensity,
+      sourceId: 'player',
+    });
+  }
+
   // Phase 9: decay facility condition for gated actions. Find which
   // facility this action requires and decay it. A tier drop is rare
   // (condition starts at 100, decays 1.5/use) but when it happens the

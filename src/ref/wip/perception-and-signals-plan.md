@@ -1,7 +1,7 @@
 # Perception & Signals
 
-Status: **in progress — Phases 1–2 done**. Design session complete
-2026-08-10; decisions D1–D14 locked, five phases drawn. Phases 3–5
+Status: **in progress — Phases 1–3 done**. Design session complete
+2026-08-10; decisions D1–D14 locked, five phases drawn. Phases 4–5
 outstanding.
 Last updated 2026-08-10.
 
@@ -20,10 +20,50 @@ near the bottom, as the very last thing you do each session.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 3 (transient signals). Phases 1–2 are done and verified —
-38 + 26 assertions at `scratchpad/verify-s1.js` / `verify-s2.js`, plus
+**Resume at:** Phase 4 (notes). Phases 1–3 are done and verified — 38 / 26 /
+38 assertions at `scratchpad/verify-s1..s3.js`, plus
 `scratchpad/measure-signals.js` as the tuning instrument. The whole suite
-across both plans is 215 assertions and green.
+across both plans is 253 assertions and green.
+
+**Phase 3 notes (2026-08-10):**
+- Eight transient signals ship, all with real emitters: `footsteps`, `voices`,
+  `door_close`, `running_water`, `machine_running`, `cooking`, `smoke`,
+  `breakage`. A def is transient iff it declares `decayPerTick`; the harness
+  asserts every def is unambiguously one kind or the other.
+- **`SIGNAL_TUNING.transientCap` did not exist.** The plan specified it and the
+  Phase 1 config never included it, so `while (list.length >
+  SIGNAL_TUNING.transientCap)` compared against `undefined` and the ring buffer
+  silently never trimmed — 501 records survived a 500-emission loop. Added, and
+  now asserted.
+- **Footsteps needed to be louder than the plan assumed.** At the first value
+  (0.5) someone striding past a closed bedroom door arrived at 0.034 against a
+  0.04 sound floor — the headline case of the whole plan, failing by a hair.
+  Raised to 0.7 transit / 0.45 arrive. The GAP between those two is load-
+  bearing: someone passing through is heard through a closed door, someone
+  merely arriving next door is not, which is what makes footsteps informative
+  rather than constant background noise. Both are asserted.
+- **Reads stay pure, writes prune.** `liveTransients` filters without touching
+  state (so `perceiveSignals` remains byte-identical-safe, which Phase 1
+  asserts); `pruneTransients` actually drops faded records and only runs from
+  `emitTransient`. A week-old footstep is invisible to a read immediately and
+  physically removed at the next write.
+- Emission is declarative and shared: `emitsSignal: { signal, intensity }` on a
+  DRIVE_DEFS *or* ACTION_DEFS entry. The shower drive and `self.shower` emit
+  the identical signal at the identical intensity — asserted — so an NPC and
+  the player doing the same thing sound the same. That equivalence is what
+  Plan 3 needs to react to the player without a bespoke check per case.
+- `EVENT_SIGNALS` maps off-screen event types onto signals, so `breakage` and
+  `burnt_food` became things the household can hear and smell rather than log
+  lines. Events with no entry are silent, which is most of them.
+- **Observation for Plan 3, not a bug here:** a day heard from the living room
+  is almost entirely footsteps, because `resolveRoomForActivity` re-rolls an
+  NPC's activity and room EVERY tick, so they wander constantly. Phase 3 only
+  made an existing problem audible. Committed multi-tick intents (Plan 3) are
+  the fix; do not paper over it by muting the emitter.
+- Harness scoping: `verify-s1`/`s2`'s "no orphaned signal" checks are now
+  explicitly scoped to STANDING signals, and `verify-s3` owns the transient
+  half. Each harness checks its own phase's contract rather than three copies
+  of one enumeration.
 
 **Phase 2 notes (2026-08-10):**
 - All 24 `dirtyWhen`-carrying objects now emit; four new signals joined the
@@ -531,7 +571,7 @@ unbounded allocation.
 |---|---|---|
 | 1 | **Done** | `SIGNAL_DEFS`, standing derivation, propagation, perception query, debug readout. 37 assertions pass (`scratchpad/verify-s1.js`) |
 | 2 | **Done** | Object `emits` tables on all 24 dirty objects; `room.odor` retired. 26 assertions pass (`scratchpad/verify-s2.js`) |
-| 3 | Not started | Transient signals from acts and movement; ring buffer with decay |
+| 3 | **Done** | Transient signals from acts, movement and events; ring buffer with decay. 38 assertions pass (`scratchpad/verify-s3.js`) |
 | 4 | Not started | Notes — placeable, sightable, readable |
 | 5 | Not started | NPC perception through the same query, plus one signal-gated drive |
 

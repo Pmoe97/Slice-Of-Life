@@ -1136,6 +1136,22 @@ function resolveTick(gameState) {
       needs.stimulation = Math.min(100, needs.stimulation + NEEDS.npcStimulationRestore);
     }
 
+    // Perception plan Phase 3: someone moving between rooms is audible.
+    // Emitted here because this is the one place that holds BOTH the previous
+    // location (npc.location — npcUpdates aren't applied until resolveBatch)
+    // and where they end up this tick. Someone passing THROUGH a room on the
+    // way somewhere is louder than someone settling into it, which is what
+    // makes "footsteps outside your door" different from "someone is in the
+    // next room".
+    if (location && npc.location && location !== npc.location) {
+      emitTransient(gameState, {
+        id: 'footsteps',
+        roomId: location,
+        intensity: resolved[id].transit ? SIGNALS_EMIT.footstepsTransit : SIGNALS_EMIT.footstepsArrive,
+        sourceId: id,
+      });
+    }
+
     // Random event chance (weighted by stress + low needs)
     let moodDelta = 0;
     if (rng() < 0.15 && block !== 'sleep' && block !== 'work') {
@@ -1146,6 +1162,14 @@ function resolveTick(gameState) {
       evt.roomId = location; // null for off-screen (work/commute) events
       newEvents.push(evt);
       moodDelta = evt.moodDelta;
+      // Perception plan Phase 3: an event that makes a noise or a smell
+      // becomes something the household can actually sense, not just a line
+      // in the log. EVENT_SIGNALS is the table; an event with no entry is
+      // silent, which is most of them.
+      const sig = EVENT_SIGNALS[evt.type];
+      if (sig && location) {
+        emitTransient(gameState, { id: sig.signal, roomId: location, intensity: sig.intensity, sourceId: id });
+      }
     }
 
     // Evidence discovery (STEALTH, P6): a resident who ends up back in
@@ -2505,6 +2529,12 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
       // the admission ticket into RoomList's Offers screen and the assign
       // flow; it's cleared when the person moves in (acceptApplicant).
       moveInOffers: [],
+      // Perception plan Phase 3: the transient-signal ring buffer. Records are
+      // { id, roomId, intensity, bornTick, sourceId } and fade at their def's
+      // decayPerTick; SIGNALS' emitTransient prunes and caps it on every
+      // write. Standing signals are NOT here — those are derived from object
+      // state on demand and never stored.
+      signals: [],
       // Contractor tutorial (contractor doc Phase 3): one-shot tutorial /
       // milestone flags (tutorialRenoUsed, tutorial_<milestoneId>) — see
       // src/ref/complete/contractor-tutorial-overhaul-plan.md.
