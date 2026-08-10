@@ -21,6 +21,8 @@ rather than here, so they survive across sessions:
 | `ref/contractor-tutorial-overhaul-plan.md` | Del Connors, job pricing, the tutorial he anchors (**built** — all 4 phases) |
 | `ref/external-world-npcs-overhaul-plan.md` | External world: visit spine, contacts, maid, food delivery, friends-of-roommates, escorts, move-in advocacy (**built** — all 8 phases) |
 | `ref/perchance-agent-handoff-prompt.md` | The one-phase-per-session protocol the implementing agent runs |
+| `ref/afterhours-redesign-plan.md` | AfterHours site expansion: PH+EP blended feed, routed mini-site, player page + related rail, parody ads, watch persistence, Hot Singles NPCs (**not started** — 8 phases) |
+| `ref/afterhours-redesign-handoff-prompt.md` | The one-phase-per-session protocol for the AfterHours expansion |
 
 > An earlier revision of this file cited `ref/Original Prompt and Response
 > Train.txt`, `ref/Perchance Helper AI - Next Steps.md` and `ref/Perchance
