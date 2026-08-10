@@ -719,6 +719,13 @@ const CONTRACTOR_QUALITY_MILESTONE_THRESHOLD = 0.25;
 // ORGANIC visits only — paid/scheduled visits always honor their booking.
 const VISIT_TUNING = {
   softCap: 3,               // concurrent visitors that triggers organic-visit deferral (Phase 6)
+  // How many days a retired ('done'/'deferred') visit record is kept before
+  // processVisitsForDay sweeps it. getActiveVisits only ever matches the
+  // current day, so anything older is inert — but the array is written into
+  // the save in full on every boundary, and without a sweep it grows for the
+  // life of the playthrough. A week is plenty of slack for anything that
+  // wants to look back at recent visits.
+  retainDoneDays: 7,
   contractor: {
     startTick: 18,          // 09:00 — Del's locked presence window (decision 10)
     endTick: 33,            // 16:30 — weekday only, see isWeekend
@@ -806,10 +813,10 @@ const FOOD_TUNING = {
   // "everyone persists forever" (locked decision 5) plus repeat drivers is
   // what makes a delivery person someone you can actually get to know.
   driverPoolSize: 5,
-  // The handover window, in ticks. Two (one hour) rather than one: ticks are
-  // 30 minutes, and a single-tick window would mean the player had to already
-  // be standing in the entry to ever meet the driver.
-  driverWindowTicks: 2,
+  // The handover window, in ticks. One (thirty minutes) — long enough that
+  // the player can realistically be in the entry to catch the driver, but
+  // not absurdly long.
+  driverWindowTicks: 1,
   // How far ahead a scheduled order can be placed, in ticks past the
   // earliest possible arrival.
   maxScheduleAheadTicks: 12,
@@ -1522,13 +1529,16 @@ const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', '
 // continuous clock, advance a computed number of minutes in one batch,
 // then resume — they call advanceAndResolveMinutes directly.
 const TIME_DILATION = {
-  // Game-minutes per real-second at each context scale
+  // Each context's scale is a MULTIPLIER over real time, not a rate: 20
+  // means one real second becomes 20 game-seconds. clockFrame converts it
+  // with gameMinutes = realSeconds * (scale / 60), so 20x = 1/3
+  // game-minute per real second = one game minute every 3 real seconds.
   scales: {
-    idle: 20,           // standing around, menu navigation
-    browsing: 10,       // computer browser, AfterHours grid
-    masturbating: 3,    // slow, intimate — time crawls
-    conversation: 1,    // talking to an NPC — real-time
-    working: 25,        // work blocks — time flies
+    idle: 20,           // standing around, menu navigation — 1 gm / 3 real-sec
+    browsing: 10,       // computer browser, AfterHours grid — 1 gm / 6 real-sec
+    masturbating: 3,    // slow, intimate — time crawls — 1 gm / 20 real-sec
+    conversation: 1 / 60, // talking to an NPC — one game-second per real second
+    working: 25,        // work blocks — time flies — 1 gm / 2.4 real-sec
     sleeping: 0,        // special: skip-to-morning, not continuous
   },
   // How often the NPC sim runs (in game-minutes of accumulated time).
@@ -2232,6 +2242,7 @@ const PERSONALITY_TRAITS_POOL = [
   'nostalgic', 'adventurous', 'cautious', 'rebellious', 'conformist', 'creative', 'practical', 'spiritual',
   'materialistic', 'sensitive', 'thick-skinned', 'loyal', 'fickle', 'honest', 'deceptive',
   'warm', 'cold', 'playful', 'serious', 'dramatic', 'understated',
+  'sensual', 'brazen', 'teasing', 'forward', 'magnetic', 'daring',
 ];
 
 const QUIRKS_POOL = [
@@ -2484,9 +2495,145 @@ const ACTION_TUNING = {
 // which is what doAfterHoursCum actually applies. They were duplicated
 // here as moodGain/energyCost/hygieneCost and read by nothing — two
 // tuning surfaces for one outcome, one of them silently inert.
+// --- S4714: the game's random number generator (see ORBITAL) ---
+// Real orbital elements for the fastest-known star in the galaxy, a member of
+// the S-cluster whipping around Sagittarius A* (Peißker et al. 2020). Every
+// random number the game draws is derived from propagating this orbit.
+//
+// The eccentricity is the whole reason it's fun: at e=0.985 the star's speed
+// varies by a factor of ~130 over one orbit, from a few hundred km/s out at
+// apoapsis to roughly 24,000 km/s — about 8% of lightspeed — as it slingshots
+// through periapsis at 12.6 AU. Derived quantities (period, mean motion,
+// periapsis speed) are computed from these in ORBITAL's s4714Elements rather
+// than hard-coded, so changing a number here stays self-consistent.
+const S4714_ORBIT = {
+  semiMajorAxisAu: 840,      // ~12 year period against Sgr A*'s mass
+  eccentricity: 0.985,       // periapsis 12.6 AU, apoapsis ~1670 AU
+  centralMassSolar: 4.297e6, // Sagittarius A*
+};
+
 const MASTURBATION = {
   timeCostMinutes: 15,
   warmupSeconds: 3,
+};
+
+// --- AfterHours blend tuning (Site Expansion plan, Phase 1) ---
+// Two real sources (Pornhub via superFetch, Eporner via direct fetch),
+// blended into one seamless feed. Per-page counts are locked to Pornhub's
+// webmasters page size — the API returns 30 videos per page (verified live
+// 2026-08-05), and Eporner's per_page is set to match so both sources
+// contribute equally. blendWeights is 50/50 as proposed; with equal page
+// sizes it's effectively a no-op and the interleave does the work.
+const AH_TUNING = {
+  perPage: 30,                     // Pornhub webmasters page size (verified live); Eporner per_page matches
+  searchTimeoutMs: 15000,          // cap on any single provider search call (hung requests must settle
+                                   // so row/related fetches can degrade instead of hanging forever)
+  blendWeights: { ph: 50, ep: 50 }, // proposed default — equal page sizes make this mostly a no-op
+  dedupDurationTolerance: 0.10,    // ±10% duration match for cross-post dedup (plus a 5s floor)
+  maxConsecutiveSameSource: 2,     // round-robin interleave run cap
+  maxTotalPages: 50,               // cap on the stored total-pages number (both APIs report thousands)
+  // Site Expansion Phase 2 — routed mini-site chrome. `routes` maps each
+  // view to its fake address-bar path segment (home = bare root); `skeletonMs`
+  // is the minimum display time for the browse skeleton so fast fetches don't
+  // strobe the grid; `maxStack` caps the site's internal history stack.
+  routes: {
+    home:        { path: '',           label: 'Home' },
+    category:    { path: 'category',   label: 'Category' },
+    search:      { path: 'search',     label: 'Search' },
+    player:      { path: 'watch',      label: 'Watch' },
+    history:     { path: 'history',    label: 'History' },
+    liked:       { path: 'liked',      label: 'Liked' },
+    hotsingles:  { path: 'hotsingles', label: 'Hot Singles' },
+    'hot-single': { path: 'hot-single', label: 'Hot Single' },
+    '404':       { path: '',           label: 'Not Found' },
+  },
+  skeletonMs: 500,                   // minimum skeleton display time on browse fetches
+  maxStack: 50,                      // cap on the site's internal history stack
+  // Site Expansion Phase 3 — the player page's rails + seeded comments.
+  relatedRowSize: 12,        // clips per "More Like This" / "Because you watched" row
+  relatedKeywordsPerRow: 2,  // blended searches per related row (one per top keyword)
+  upNextCount: 8,            // clips in the Up Next rail
+  relatedStaleMs: 15000,     // a 'fetching' entry older than this is a dead fetch (orphaned
+                             // at reload — world.computer persists wholesale in the save — or
+                             // crashed mid-flight); the kick drops and refetches it instead of
+                             // deadlocking the rail. Live fetches settle in ~1-3s, so 15s is
+                             // comfortably one-sided.
+  likedCap: 200,             // like-snapshot cap (Phase 6 persists the real list)
+  historyCap: 100,           // world.afterHours.history cap (Phase 6; oldest dropped)
+  searchHistoryCap: 20,      // world.afterHours.searchHistory cap (Phase 6; oldest dropped)
+  toastMs: 3000,             // toast auto-dismiss delay (Phase 5 formalizes spawnToast)
+  // Site Expansion Phase 5 — the campy ad network + live ticker.
+  // `lifecycleMs` is the cadence of the SINGLE AfterHours lifecycle
+  // interval that rotates ad slots and drifts the "watching now" counter
+  // (started idempotently when the site renders/opens, self-clears on its
+  // own tick once the site is no longer displayed — Locked decision 14).
+  // The counter's baseline and the ads' rotation offsets are seeded
+  // (deterministic per save); the per-tick drift is live animation only,
+  // read back by renders as module state so re-renders never jump it.
+  lifecycleMs: 3000,
+  tickerDrift: { min: -380, max: 380 }, // per-tick delta for the live count
+  tickerMinFloor: 500,                  // absolute floor the live count never dips below
+  adRotateEveryTicks: 4,                // rotate ad slots every N lifecycle ticks (~12s),
+                                        // so the visitor ad's countdown visibly counts down
+                                        // (and resets on each re-show) before the ad rotates
+  // Site Expansion Phase 4 — the homepage's discovery rows. `homeSections`
+  // is the ordered row list; every section is just another blended search
+  // (Locked decision 9), fetched by the fetchRow pipeline into
+  // AFTERHOURS' module-level AH_rowCache. type 'carousel' renders as the big hero strip,
+  // 'row' as a horizontal-scroll card row. `query: ''` means the site's
+  // featured/default feed (no search term — matches the category browse's
+  // 'featured' handling). `derived` sections compute their query at render
+  // time (recommended = the top keyword across the session's watched
+  // snapshots) and are skipped while there's nothing to derive from.
+  homeSections: [
+    { id: 'featured',    label: 'Featured',            type: 'carousel', query: '',          rowSize: 10 },
+    { id: 'trending',    label: 'Trending Now',        type: 'row',      query: 'popular',   rowSize: 12 },
+    { id: 'new',         label: 'New Releases',        type: 'row',      query: 'new',       rowSize: 12 },
+    { id: 'top-rated',   label: 'Top Rated',           type: 'row',      query: 'top-rated', rowSize: 12 },
+    { id: 'recommended', label: 'Recommended for You', type: 'row',      query: null, derived: true, rowSize: 12 },
+  ],
+  continueWatchingMax: 3,   // Continue Watching cards shown on home (session-only until Phase 6)
+};
+
+// --- AfterHours Site Expansion Phase 7 — Hot Singles ---
+// The "Hot Singles in your area" section is a deterministic roster of FULL
+// NPCs (the same createExternalNpc path escorts use — never vendor bots,
+// external-world plan design invariant 6), generated from the world seed so
+// the same save always shows the same six people. Unlike escorts this is
+// NOT a paid service — "Say hi" is free and makes them ordinary NPCs (IM
+// contact, invites over, romance, move-in all reuse existing machinery).
+// `deviantSkew` is how far volatility/openness are re-rolled toward the
+// high end at generation (Locked decision 19); `adultTraits` is the
+// adult-leaning trait pool the deviant draw favours (a superset of
+// PERSONALITY_TRAITS_POOL so validation everywhere stays green);
+// `openingLines` is the seeded "Say hi" opener pool delivered as the first
+// IM. The site-side profile copy (headlines/bios/interests) lives in
+// afterhours.js as authored chrome, derived deterministically per npcId.
+const AH_HOT_SINGLES_TUNING = {
+  rosterSize: 6,             // deterministic slots hot_single_1..6
+  deviantSkew: 0.35,         // how far the temperament re-roll pushes volatility/openness up
+  adultTraits: [
+    'flirtatious', 'confident', 'expressive', 'playful', 'impulsive', 'adventurous',
+    'sensual', 'brazen', 'teasing', 'forward', 'magnetic', 'daring',
+  ],
+  openingLines: [
+    'Heyyy. I saw you browsing AfterHours and figured I\'d skip the small talk.',
+    'Okay, embarrassing, but you looked interesting. Wanna swap numbers?',
+    'You like what you\'re watching? I can be way more interesting than a video.',
+    'Hey. No weird stuff — I just noticed you. Coffee sometime?',
+    'Not gonna lie, I was hoping you\'d find my profile.',
+    'Hi. You already know my name. Here\'s the important part: I\'m fun.',
+    'I never do this, but your profile made me laugh. So: hi.',
+    'Heyy. I\'m in your area, and I\'m told that\'s a selling point.',
+  ],
+  // Phase 8: how strongly an NPC's baked `bible.deviantLevel` (0..1, absent
+  // on cast roommates) amplifies the interruption volatility term. 0 = no
+  // deviant effect; the multiplier applied to volatility is
+  // `1 + weight * deviantLevel`, so weight 1.0 turns a 0.8-deviant Hot
+  // Single into a 1.8x volatility factor (max 2x at deviant 1). Visible but
+  // clampable — if playtest finds it obnoxious, dial it down and flag in
+  // the Handoff.
+  interruptionDeviantWeight: 1.0,
 };
 
 // --- Interruption (Phase 5): personality-driven, AI-generated

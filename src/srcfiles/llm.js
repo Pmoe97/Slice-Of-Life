@@ -211,6 +211,15 @@ function buildNpcBlockV2(npc, query) {
   const t = b.temperament;
   block += `[Temperament]: warmth ${t.warmth}, volatility ${t.volatility}, openness ${t.openness}, conscientiousness ${t.conscientiousness}, assertiveness ${t.assertiveness}\n  → ${temperamentDirective(npc)}\n`;
 
+  // AfterHours Phase 8: surface the baked deviant number (present on every
+  // external NPC via createExternalNpc; cast roommates have no field, so
+  // nothing is emitted) so conversation can naturally read more forward for
+  // high-deviant people without hard-coding lines. The number is an
+  // intentional hint to colour flirtation/boundary-pushing, not a mandate.
+  if (typeof b.deviantLevel === 'number') {
+    block += `[Deviant disposition]: ${b.deviantLevel.toFixed(2)} on a 0-1 scale (0 = conventional, 1 = very forward). Let this colour how forward, unfazed, and boundary-pushing they are about sex, innuendo, and flirtation — especially with the player.\n`;
+  }
+
   // [Personality]
   const pers = b.personality;
   if (pers && (pers.traits?.length > 0 || pers.coreTrait || pers.quirks?.length > 0)) {

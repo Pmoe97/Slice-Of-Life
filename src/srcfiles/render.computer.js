@@ -206,328 +206,17 @@ function renderArticle(body, gs, app, screen) {
   body.appendChild(backBtn);
 }
 
-// Phase 10: embed refusal fallback — shows a "Watch on site" link when
-// the Pornhub embed refuses to load. The clip URL is third-party API
-// output, so it goes in a property, not innerHTML.
-function showEmbedFallback(container, clip) {
-  container.innerHTML = '';
-  const msg = document.createElement('p');
-  msg.className = 'ah-error';
-  msg.textContent = 'This video can\'t be embedded here.';
-  container.appendChild(msg);
-  if (clip.watchUrl) {
-    const link = document.createElement('button');
-    link.className = 'btn tiny';
-    link.textContent = 'Watch on site →';
-    link.title = 'Open in new tab';
-    link.addEventListener('click', () => window.open(clip.watchUrl, '_blank', 'noopener,noreferrer'));
-    container.appendChild(link);
-  }
-}
 
-// AfterHours: a live porn site browser backed by Pornhub's webmaster
-// API. Category tabs map to search queries. Clips are fetched at
-// runtime via superFetch (see fetchAfterHoursClips in UI.COMPUTER) and
-// stored in browser.afterHoursClips. Clicking a clip embeds the
-// Pornhub player iframe. No static entries — everything is live.
+
+// AfterHours (Site Expansion Phase 2): the whole routed mini-site now
+// lives in AFTERHOURS — this is a one-line delegate to AH.render(body, gs,
+// site) so the phone's shared-renderer path (COMPUTER_RENDERERS['article'])
+// stays on the identical site.
 function renderAfterHours(body, gs, site) {
-  const ac = site.adultContent;
-  const browser = gs.world.computer.apps.browser;
-  const selectedCat = browser.afterHoursCategory || 'featured';
-
-  body.appendChild(renderBrowserNav(gs));
-  // Site header
-  const header = makePanel(`<h3>${site.label}</h3><p class="dim tiny">${site.url}</p><p>${site.body}</p>`);
-  body.appendChild(header);
-
-  // Category tabs
-  const catBar = document.createElement('div');
-  catBar.className = 'ah-category-bar';
-  for (const cat of ac.categories) {
-    const tab = document.createElement('button');
-    tab.className = 'ah-cat-tab' + (cat.id === selectedCat ? ' active' : '');
-    tab.setAttribute('data-action', 'browser.ah-category');
-    tab.setAttribute('data-row-id', cat.id);
-    tab.textContent = cat.label;
-    catBar.appendChild(tab);
-  }
-  body.appendChild(catBar);
-
-  // Phase 10: search bar — free-text search across all categories
-  const searchBar = document.createElement('div');
-  searchBar.className = 'ah-search-bar';
-  const searchInput = document.createElement('input');
-  searchInput.type = 'text';
-  searchInput.className = 'ah-search-input';
-  searchInput.placeholder = 'Search AfterHours...';
-  searchInput.value = browser.afterHoursSearchQuery || '';
-  searchBar.appendChild(searchInput);
-  const searchBtn = document.createElement('button');
-  searchBtn.className = 'btn tiny';
-  searchBtn.textContent = 'Search';
-  searchBtn.addEventListener('click', () => {
-    doAfterHoursSearch(searchInput.value);
-  });
-  searchBar.appendChild(searchBtn);
-  // Enter key triggers search too
-  searchInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); doAfterHoursSearch(searchInput.value); }
-  });
-  // Clear search button
-  if (browser.afterHoursSearchQuery) {
-    const clearBtn = document.createElement('button');
-    clearBtn.className = 'btn btn-secondary tiny';
-    clearBtn.textContent = '✕';
-    clearBtn.title = 'Clear search';
-    clearBtn.addEventListener('click', () => {
-      searchInput.value = '';
-      doAfterHoursSearch('');
-    });
-    searchBar.appendChild(clearBtn);
-  }
-  body.appendChild(searchBar);
-
-  // Refresh + pagination bar
-  const refreshBar = document.createElement('div');
-  refreshBar.className = 'ah-refresh-bar';
-  // Phase 10: prev page button
-  const currentPage = browser.afterHoursClipPage || 1;
-  const totalPages = browser.afterHoursTotalPages || 1;
-  if (currentPage > 1) {
-    const prevBtn = document.createElement('button');
-    prevBtn.className = 'btn btn-secondary tiny';
-    prevBtn.setAttribute('data-action', 'browser.ah-page');
-    prevBtn.setAttribute('data-direction', '-1');
-    prevBtn.textContent = '◀ Prev';
-    refreshBar.appendChild(prevBtn);
-  }
-  const refreshBtn = document.createElement('button');
-  refreshBtn.className = 'btn btn-secondary tiny ah-refresh-btn';
-  refreshBtn.setAttribute('data-action', 'browser.ah-refresh');
-  refreshBtn.textContent = '↻ Next Page';
-  refreshBar.appendChild(refreshBtn);
-  // Page indicator
-  const pageIndicator = document.createElement('span');
-  pageIndicator.className = 'dim tiny';
-  pageIndicator.textContent = `Page ${currentPage}`;
-  refreshBar.appendChild(pageIndicator);
-  if (browser.afterHoursClipsLoading) {
-    const status = document.createElement('span');
-    status.className = 'dim tiny';
-    status.textContent = 'Loading clips...';
-    refreshBar.appendChild(status);
-  }
-  body.appendChild(refreshBar);
-
-  // Content grid — populated from live-fetched clips, not static defs
-  const clips = browser.afterHoursClips;
-  const grid = document.createElement('div');
-  grid.className = 'ah-content-grid';
-
-  if (browser.afterHoursClipsLoading && (!clips || clips.length === 0)) {
-    const loading = document.createElement('div');
-    loading.className = 'ah-loading-grid';
-    loading.textContent = 'Loading clips...';
-    grid.appendChild(loading);
-  } else if (!clips || clips.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'ah-error';
-    empty.textContent = browser.afterHoursClipsError || 'No clips loaded. Click Refresh.';
-    grid.appendChild(empty);
-  } else {
-    for (const clip of clips) {
-      const card = document.createElement('div');
-      card.className = 'ah-card';
-      card.setAttribute('data-action', 'browser.ah-watch');
-      card.setAttribute('data-row-id', clip.id);
-
-      const thumb = document.createElement('div');
-      thumb.className = 'ah-thumb';
-      if (clip.thumb) {
-        // Built as nodes, not an innerHTML template. Every field here is
-        // verbatim third-party API output, so interpolating it into markup
-        // let a crafted title or thumb URL close the attribute and inject
-        // script. The onerror fallback is a listener for the same reason.
-        const img = document.createElement('img');
-        img.src = clip.thumb;
-        img.alt = '';
-        img.referrerPolicy = 'no-referrer';
-        img.addEventListener('error', () => {
-          img.style.display = 'none';
-          thumb.textContent = 'Click to play';
-        });
-        thumb.appendChild(img);
-        const dur = document.createElement('span');
-        dur.className = 'ah-duration';
-        dur.textContent = clip.duration || '';
-        thumb.appendChild(dur);
-        const views = document.createElement('span');
-        views.className = 'ah-views';
-        views.textContent = formatViews(clip.views);
-        thumb.appendChild(views);
-      } else {
-        thumb.textContent = 'Click to play';
-      }
-      card.appendChild(thumb);
-
-      const title = document.createElement('div');
-      title.className = 'ah-card-title';
-      title.textContent = clip.title;
-      card.appendChild(title);
-
-      const meta = document.createElement('div');
-      meta.className = 'ah-card-meta';
-      meta.textContent = clip.rating ? `★ ${clip.rating}%` : '';
-      card.appendChild(meta);
-
-      grid.appendChild(card);
-    }
-  }
-  // If a clip is being watched, show the embed player ABOVE the grid
-  // so it's immediately visible without scrolling past 30 thumbnails
-  const watchingId = browser.afterHoursWatching;
-  if (watchingId && clips) {
-    const clip = clips.find(c => c.id === watchingId);
-    if (clip) {
-      const watchPanel = document.createElement('div');
-      watchPanel.className = 'ah-watch-panel';
-      watchPanel.id = 'ah-watch-panel';
-      // textContent, not innerHTML — clip.title is third-party API output.
-      const heading = document.createElement('h4');
-      heading.textContent = clip.title;
-      watchPanel.appendChild(heading);
-      const meta = document.createElement('div');
-      meta.className = 'ah-watch-meta';
-      // formatViews already appends " views"; this line used to add a
-      // second one ("1.2M views views").
-      meta.textContent = `${clip.duration || ''} · ${formatViews(clip.views)}${clip.rating ? ' · ★ ' + clip.rating + '%' : ''}`;
-      watchPanel.appendChild(meta);
-
-      const embedCtn = document.createElement('div');
-      embedCtn.className = 'ah-embed-ctn';
-      if (clip.embedUrl) {
-        // Built as a node so the API-derived URL lands in a property
-        // rather than being interpolated into an attribute.
-        const frame = document.createElement('iframe');
-        frame.src = clip.embedUrl;
-        frame.setAttribute('allow', 'autoplay; fullscreen');
-        frame.setAttribute('scrolling', 'no');
-        embedCtn.appendChild(frame);
-
-        // Phase 10: embed refusal fallback. Some clips refuse to embed
-        // ("you can only watch this on Pornhub"). We can't read the
-        // cross-origin iframe, so we show a manual fallback link after
-        // a short delay and on load error. The "Watch on site" link
-        // opens the clip in a new tab — textContent, not innerHTML.
-        frame.addEventListener('error', () => {
-          embedCtn.innerHTML = '';
-          showEmbedFallback(embedCtn, clip);
-        });
-        // Also add a manual fallback button (always visible below iframe)
-        const fallbackBar = document.createElement('div');
-        fallbackBar.className = 'ah-embed-fallback-bar';
-        const troubleBtn = document.createElement('button');
-        troubleBtn.className = 'btn btn-secondary tiny';
-        troubleBtn.textContent = 'Video not loading? Watch on site →';
-        troubleBtn.title = 'Open in new tab';
-        troubleBtn.addEventListener('click', () => {
-          if (clip.watchUrl) window.open(clip.watchUrl, '_blank', 'noopener,noreferrer');
-        });
-        fallbackBar.appendChild(troubleBtn);
-        embedCtn.appendChild(fallbackBar);
-      } else {
-        const err = document.createElement('p');
-        err.className = 'ah-error';
-        err.textContent = 'Embed unavailable.';
-        embedCtn.appendChild(err);
-        if (clip.watchUrl) {
-          const link = document.createElement('button');
-          link.className = 'btn btn-secondary tiny';
-          link.textContent = 'Watch on site →';
-          link.addEventListener('click', () => window.open(clip.watchUrl, '_blank', 'noopener,noreferrer'));
-          embedCtn.appendChild(link);
-        }
-      }
-      watchPanel.appendChild(embedCtn);
-
-      const actions = document.createElement('div');
-      actions.className = 'ah-watch-actions';
-      const closeBtn = document.createElement('button');
-      closeBtn.className = 'btn btn-secondary tiny';
-      closeBtn.setAttribute('data-action', 'browser.ah-close');
-      closeBtn.textContent = 'Close player';
-      actions.appendChild(closeBtn);
-
-      // Phase 3: masturbate/cum/stop buttons. Session-active is DERIVED
-      // (Phase 5.5): the record exists but the device must still be in
-      // use — a pocketed/locked/dead phone or a powered-off computer reads
-      // as inactive here too.
-      if (isAfterHoursSessionActive(gs)) {
-        // Session in progress — show Cum (with warmup) and Stop.
-        // startedTick is an absolute game-minute (day*1440+m), not a
-        // time-of-day, so a session running past midnight reports
-        // elapsed time instead of a large negative number.
-        const sessionMinutes = browser.afterHoursSession?.startedTick != null
-          ? Math.max(0, Math.round(clockToAbsolute(gs.meta.clock) - browser.afterHoursSession.startedTick))
-          : 0;
-        const status = document.createElement('span');
-        status.className = 'ah-session-status dim tiny';
-        status.textContent = `Session: ${sessionMinutes} min`;
-        actions.appendChild(status);
-
-        // Warmup is derived from state (a wall-clock deadline stored when
-        // the session started), not from a setTimeout scheduled inside the
-        // render pass. The old version re-armed a fresh timer and reset
-        // `disabled` on *every* re-render, so any incidental re-render
-        // restarted the warmup — the same render-triggered-side-effect trap
-        // doAfterHoursWatch's comment warns about a few functions down.
-        const warmedUp = Date.now() >= (browser.afterHoursWarmupUntilMs || 0);
-        const cumBtn = document.createElement('button');
-        cumBtn.className = 'btn ah-cum-btn' + (warmedUp ? ' ready' : '');
-        cumBtn.setAttribute('data-action', 'browser.ah-cum');
-        cumBtn.textContent = 'Cum';
-        cumBtn.disabled = !warmedUp;
-        cumBtn.id = 'ah-cum-btn';
-        actions.appendChild(cumBtn);
-
-        const stopBtn = document.createElement('button');
-        stopBtn.className = 'btn btn-secondary tiny';
-        stopBtn.setAttribute('data-action', 'browser.ah-stop');
-        stopBtn.textContent = 'Stop';
-        actions.appendChild(stopBtn);
-      } else {
-        // Not masturbating — show Masturbate button
-        const masturbateBtn = document.createElement('button');
-        masturbateBtn.className = 'btn ah-masturbate-btn';
-        masturbateBtn.setAttribute('data-action', 'browser.ah-masturbate');
-        masturbateBtn.textContent = 'Masturbate';
-        actions.appendChild(masturbateBtn);
-      }
-
-      watchPanel.appendChild(actions);
-
-      body.appendChild(watchPanel);
-    }
-  }
-
-  body.appendChild(grid);
-
-  const backBtn = document.createElement('button');
-  backBtn.className = 'btn btn-secondary tiny';
-  backBtn.setAttribute('data-action', 'computer.open-screen');
-  backBtn.setAttribute('data-app', 'browser');
-  backBtn.setAttribute('data-screen', 'home');
-  backBtn.textContent = 'Back';
-  body.appendChild(backBtn);
+  AH.render(body, gs, site);
 }
 
-// Format view counts: 1234 -> 1.2K, 1234567 -> 1.2M
-function formatViews(views) {
-  if (!views) return '';
-  if (views >= 1e6) return (views / 1e6).toFixed(1) + 'M views';
-  if (views >= 1e3) return (views / 1e3).toFixed(1) + 'K views';
-  return views + ' views';
-}
+
 
 // Classifieds' applicant detail — same "which one is open" pattern as
 // Browser's article (apps.classifieds.viewingApplicantId, not
@@ -1208,12 +897,47 @@ function renderHomeCareHired(body, gs, app, screen) {
 // restaurants → a menu → a cart with the fee stack spelled out → orders with
 // a live ETA. The fees are itemised deliberately: "ordering in is expensive"
 // only lands as a decision if you can see what you're paying for.
+
+// Transient browse filter (restaurant overhaul Phase 3d): which service chip
+// is active. Deliberately NOT game data — same "DOM-only, not state" class
+// as dragGesture in UI.WINDOWMANAGER. Nothing is persisted and every fresh
+// page load starts on 'all'; the chip buttons just set this and re-render.
+// Service keys are RESTAURANT_DEFS `service` values plus 'all'.
+let foodBrowseFilterService = 'all';
+const FOOD_BROWSE_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'breakfast', label: 'Breakfast' },
+  { id: 'lunch', label: 'Lunch' },
+  { id: 'dinner', label: 'Dinner' },
+  { id: 'late', label: 'Late Night' },
+  { id: '24h', label: '24H' },
+];
+
 function renderDoorDropBrowse(body, gs, app, screen) {
   const nowTick = getTickIndex(gs.meta.clock.minutes);
   const cartId = getFoodCartRestaurantId(gs);
+  // Meal-category filter row — a single-select toggle of chips in the same
+  // styling family as the tip selector: the active chip is the filled .btn,
+  // the inactive ones are .btn-secondary.
+  const filterRow = document.createElement('div');
+  filterRow.className = 'dd-filters';
+  for (const f of FOOD_BROWSE_FILTERS) {
+    const chip = document.createElement('button');
+    chip.className = `btn tiny${foodBrowseFilterService === f.id ? '' : ' btn-secondary'}`;
+    chip.setAttribute('data-action', 'food.filter-service');
+    chip.setAttribute('data-service', f.id);
+    chip.textContent = f.label;
+    filterRow.appendChild(chip);
+  }
+  body.appendChild(filterRow);
+  // Within a filter, open places render before closed ones — a closed card
+  // still shows (so the player can see the hours), just dimmed and last.
+  const list = RESTAURANT_DEFS_LIST
+    .filter(def => foodBrowseFilterService === 'all' || def.service === foodBrowseFilterService)
+    .sort((a, b) => (isRestaurantOpen(b, nowTick) ? 1 : 0) - (isRestaurantOpen(a, nowTick) ? 1 : 0));
   const grid = document.createElement('div');
   grid.className = 'dd-grid';
-  for (const def of RESTAURANT_DEFS_LIST) {
+  for (const def of list) {
     const open = isRestaurantOpen(def, nowTick);
     const card = document.createElement('div');
     card.className = `dd-card${open ? '' : ' dd-closed'}`;
@@ -1223,7 +947,7 @@ function renderDoorDropBrowse(body, gs, app, screen) {
         <span class="dim tiny">${def.cuisine}</span>
       </div>
       <div class="dim tiny">${def.blurb}</div>
-      <div class="dim tiny">~${def.prepMinutes} min prep — $${def.deliveryFeeBase} delivery — ${formatTime(def.hours[0] * 30)}–${formatTime(def.hours[1] * 30)}</div>
+      <div class="dim tiny">~${def.prepMinutes} min prep — ${def.deliveryFeeBase} delivery — ${formatRestaurantHours(def)}</div>
     `;
     if (!open) {
       card.innerHTML += '<div class="cs-status-pill">Closed</div>';
@@ -1315,15 +1039,37 @@ function renderDoorDropCart(body, gs, app, screen) {
 
   // Delivery time. The earliest option is the kitchen's prep plus travel —
   // the same number placeFoodOrder will use, since both are seeded on the
-  // day and the order count (see getFoodEarliestArrivalTick).
+  // day and the order count (see getFoodEarliestArrival). Slots are
+  // "{day}:{tick}" values (today or tomorrow) from earliest up to
+  // earliest + maxScheduleAheadTicks — the same value shape the escort
+  // booking select uses, and the same reason: a late-night order
+  // legitimately offers tomorrow's early-morning slots now that arrivals
+  // can cross midnight.
   const seq = (gs.world.foodOrders || []).length;
-  const earliest = getFoodEarliestArrivalTick(gs, restaurantId, seq);
+  const earliest = getFoodEarliestArrival(gs, restaurantId, seq);
+  const nowDay = gs.meta.clock.day;
+  const earliestAbs = earliest.day * 1440 + earliest.tick * 30;
+  const maxAbs = earliestAbs + FOOD_TUNING.maxScheduleAheadTicks * 30;
   const timeWrap = document.createElement('div');
   timeWrap.className = 'dd-time';
-  let opts = `<option value="${earliest}">ASAP — ${formatTime(earliest * 30)}</option>`;
-  for (let t = earliest + 1; t <= Math.min(47, earliest + FOOD_TUNING.maxScheduleAheadTicks); t++) {
-    opts += `<option value="${t}">${formatTime(t * 30)}</option>`;
+  let opts = '';
+  let curDay = null;
+  for (let abs = earliestAbs; abs <= maxAbs; abs += 30) {
+    const d = Math.floor(abs / 1440);
+    const t = Math.floor((abs % 1440) / 30);
+    if (d !== curDay) {
+      if (curDay !== null) opts += '</optgroup>';
+      const group = d === nowDay ? 'Today' : d === nowDay + 1 ? 'Tomorrow' : `Day ${d}`;
+      opts += `<optgroup label="${group}">`;
+      curDay = d;
+    }
+    const isFirst = abs === earliestAbs;
+    const timeLabel = formatTime(t * 30);
+    const prefix = d === nowDay ? '' : d === nowDay + 1 ? 'Tomorrow ' : `Day ${d} `;
+    const label = isFirst ? `ASAP — ${prefix}${timeLabel}` : `${prefix}${timeLabel}`;
+    opts += `<option value="${d}:${t}">${label}</option>`;
   }
+  if (curDay !== null) opts += '</optgroup>';
   timeWrap.innerHTML = `<label class="dim tiny">Deliver at</label> <select id="food-time">${opts}</select>`;
   body.appendChild(timeWrap);
 
@@ -1338,6 +1084,25 @@ function renderDoorDropCart(body, gs, app, screen) {
     btn.textContent = pct === 0 ? 'None' : `${Math.round(pct * 100)}%`;
     tipWrap.appendChild(btn);
   }
+  const customTipInput = document.createElement('input');
+  customTipInput.type = 'number';
+  customTipInput.min = '0';
+  customTipInput.max = '100';
+  customTipInput.step = '1';
+  customTipInput.className = 'dd-tip-custom';
+  customTipInput.placeholder = 'Custom %';
+  if (!FOOD_TUNING.tipOptions.includes(totals.tipPct)) {
+    customTipInput.value = String(Math.round(totals.tipPct * 100));
+  }
+  const applyCustomTip = () => {
+    const v = Number(customTipInput.value);
+    if (Number.isFinite(v) && v >= 0 && v <= 100) doFoodSetTip(v);
+  };
+  customTipInput.addEventListener('change', applyCustomTip);
+  customTipInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') applyCustomTip();
+  });
+  tipWrap.appendChild(customTipInput);
   body.appendChild(tipWrap);
 
   const summary = document.createElement('div');
@@ -1366,6 +1131,20 @@ function renderDoorDropCart(body, gs, app, screen) {
   body.appendChild(actions);
 }
 
+// One arrival-label string for both the orders renderer and the live ETA
+// ticker (updateFoodOrderEtas), so the two can never disagree about what
+// "arriving" means. Cross-midnight orders (arrivalDay > order day) label
+// their slot "Tomorrow HH:MM"; old saved orders without arrivalDay read as
+// same-day.
+function foodArrivalWhenLabel(order, gs) {
+  const arrivalDay = order.arrivalDay != null ? order.arrivalDay : order.day;
+  return arrivalDay === gs.meta.clock.day
+    ? formatTime(order.arrivalTick * 30)
+    : arrivalDay === gs.meta.clock.day + 1
+      ? `Tomorrow ${formatTime(order.arrivalTick * 30)}`
+      : `Day ${arrivalDay}, ${formatTime(order.arrivalTick * 30)}`;
+}
+
 function renderDoorDropOrders(body, gs, app, screen) {
   const orders = [...(gs.world.foodOrders || [])].reverse();
   if (orders.length === 0) { body.innerHTML = '<p class="dim tiny">No orders yet.</p>'; return; }
@@ -1376,13 +1155,20 @@ function renderDoorDropOrders(body, gs, app, screen) {
     const lines = order.items.map(i => `${ITEM_DEFS[i.itemId]?.label || i.itemId}${i.qty > 1 ? ` ×${i.qty}` : ''}`).join(', ');
     const card = document.createElement('div');
     card.className = 'dd-order';
+    // data-order-id lets the live ticker (updateFoodOrderEtas) find this
+    // order's pill without re-rendering the whole list, and .dd-order-eta
+    // marks exactly the node it's allowed to touch.
+    card.dataset.orderId = order.id;
     // The ETA is the app's live surface: a placed order is a thing you sit
     // and wait for, so it counts down rather than just saying "ordered".
+    // The countdown is updated in place by updateFoodOrderEtas each clock
+    // frame while the screen is open — no full re-render needed.
+    const arrivalWhen = foodArrivalWhenLabel(order, gs);
     const status = order.status === 'delivered'
-      ? `<span class="cs-status-pill done">Delivered${order.handedTo === 'doormat' ? ' — left at the door' : ''}</span>`
+      ? `<span class="cs-status-pill done dd-order-eta">Delivered${order.handedTo === 'doormat' ? ' — left at the door' : ''}</span>`
       : eta > 0
-        ? `<span class="cs-status-pill active">${eta} min away — arriving ${formatTime(order.arrivalTick * 30)}</span>`
-        : '<span class="cs-status-pill active">At your door</span>';
+        ? `<span class="cs-status-pill active dd-order-eta">${Math.ceil(eta)} min away — arriving ${arrivalWhen}</span>`
+        : '<span class="cs-status-pill active dd-order-eta">At your door</span>';
     card.innerHTML = `
       <div class="dd-card-head"><span class="hc-card-title">${def?.label || order.restaurantId}</span><span class="dim tiny">$${order.total}</span></div>
       <div class="dim tiny">${lines}</div>
@@ -1390,6 +1176,38 @@ function renderDoorDropOrders(body, gs, app, screen) {
       ${status}
     `;
     body.appendChild(card);
+  }
+}
+
+// Live ETA ticker: the orders screen's "X min away" countdown is a
+// clock-bound number, and the continuous clock moves it every frame while
+// the screen sits open — but the screen is only (re)built on interaction.
+// This updates JUST the .dd-order status pills in place, no DOM rebuild,
+// and skips any pill whose text hasn't actually changed, so the 60fps
+// clock loop costs a few textContent compares, not repaints. Runs from
+// updateClockDisplay (TIME) every clock frame; querySelectorAll returns
+// empty and this returns immediately when no orders screen is open.
+// Covers both the phone and computer DoorDrop windows (cards are tagged
+// data-order-id by renderDoorDropOrders, pill .dd-order-eta).
+function updateFoodOrderEtas(gs) {
+  const cards = document.querySelectorAll('[data-order-id]');
+  if (!cards.length) return;
+  const orders = new Map((gs.world.foodOrders || []).map(o => [o.id, o]));
+  for (const card of cards) {
+    const order = orders.get(card.dataset.orderId);
+    if (!order) continue;
+    const pill = card.querySelector('.dd-order-eta');
+    if (!pill) continue;
+    const delivered = order.status === 'delivered';
+    const text = delivered
+      ? `Delivered${order.handedTo === 'doormat' ? ' — left at the door' : ''}`
+      : getFoodOrderEtaMinutes(order, gs.meta.clock) > 0
+        ? `${Math.ceil(getFoodOrderEtaMinutes(order, gs.meta.clock))} min away — arriving ${foodArrivalWhenLabel(order, gs)}`
+        : 'At your door';
+    if (pill.textContent !== text) {
+      pill.textContent = text;
+      pill.className = `cs-status-pill ${delivered ? 'done' : 'active'} dd-order-eta`;
+    }
   }
 }
 

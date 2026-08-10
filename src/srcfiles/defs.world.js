@@ -626,6 +626,145 @@ const ITEM_DEFS = {
   dish_green_curry: { id: 'dish_green_curry', label: 'Green Curry', nouns: ['green curry', 'curry'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 46, mood: 0.05 } },
   dish_spring_rolls: { id: 'dish_spring_rolls', label: 'Fresh Spring Rolls', nouns: ['spring rolls'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 18, mood: 0.04 } },
 
+  // --- Full-menu expansion (restaurant network overhaul Phase 3): every
+  // new dish follows the same conventions — NO `price` (prices live in the
+  // restaurant's menu entries only), stackable, 1-2 day perishable (fried/
+  // short-lived = 1, noodle/curry/diner = 2), hunger in the existing range
+  // with mood 0.03-0.08; coffee/tea drinks add `energy` like coffee_beans.
+  // Golden Wok
+  dish_orange_chicken: { id: 'dish_orange_chicken', label: 'Orange Chicken', nouns: ['orange chicken'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 48, mood: 0.05 } },
+  dish_lo_mein: { id: 'dish_lo_mein', label: 'Lo Mein', nouns: ['lo mein'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 40, mood: 0.04 } },
+  dish_house_fried_rice: { id: 'dish_house_fried_rice', label: 'House Fried Rice', nouns: ['fried rice', 'house fried rice'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 42, mood: 0.04 } },
+  dish_beef_broccoli: { id: 'dish_beef_broccoli', label: 'Beef & Broccoli', nouns: ['beef and broccoli', 'broccoli'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 46, mood: 0.05 } },
+  dish_wonton_soup: { id: 'dish_wonton_soup', label: 'Wonton Soup', nouns: ['wonton soup'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 20, mood: 0.04 } },
+  dish_fortune_cookies: { id: 'dish_fortune_cookies', label: 'Fortune Cookies', nouns: ['fortune cookies', 'fortune cookie'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 2 }, consumable: { hunger: 8, mood: 0.03 } },
+
+  // Sal's Pizzeria
+  dish_cheese_pizza: { id: 'dish_cheese_pizza', label: 'Cheese Pizza', nouns: ['cheese pizza', 'pizza'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, consumable: { hunger: 48, mood: 0.05 } },
+  dish_sausage_pizza: { id: 'dish_sausage_pizza', label: 'Sausage Pizza', nouns: ['sausage pizza', 'pizza'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, consumable: { hunger: 52, mood: 0.06 } },
+  dish_white_pizza: { id: 'dish_white_pizza', label: 'White Pizza', nouns: ['white pizza', 'pizza'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, consumable: { hunger: 50, mood: 0.05 } },
+  dish_meatball_sub: { id: 'dish_meatball_sub', label: 'Meatball Sub', nouns: ['meatball sub', 'sub'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 2 }, consumable: { hunger: 44, mood: 0.05 } },
+  dish_breadsticks: { id: 'dish_breadsticks', label: 'Garlic Breadsticks', nouns: ['breadsticks', 'breadstick'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 18, mood: 0.04 } },
+  dish_caesar_wedge: { id: 'dish_caesar_wedge', label: 'Caesar Wedge', nouns: ['caesar salad', 'wedge'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 22, mood: 0.03 } },
+  dish_cannoli: { id: 'dish_cannoli', label: 'Cannoli', nouns: ['cannoli'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 16, mood: 0.06 } },
+  dish_limonata: { id: 'dish_limonata', label: 'Lemon Soda', nouns: ['limonata', 'lemon soda'], category: 'drink', stackable: true, maxStack: 6, perishable: { days: 2 }, consumable: { hunger: 10, mood: 0.03 } },
+
+  // Big Bite Burgers
+  dish_breakfast_burger: { id: 'dish_breakfast_burger', label: 'Breakfast Burger', nouns: ['breakfast burger'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 42, mood: 0.05 } },
+  dish_sausage_egg_muffin: { id: 'dish_sausage_egg_muffin', label: 'Sausage Egg Muffin', nouns: ['sausage egg muffin', 'egg muffin'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 32, mood: 0.04 } },
+  dish_pancakes: { id: 'dish_pancakes', label: 'Short Stack of Pancakes', nouns: ['pancakes', 'pancake'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 36, mood: 0.05 } },
+  dish_hash_browns: { id: 'dish_hash_browns', label: 'Hash Browns', nouns: ['hash browns', 'hash brown'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 16, mood: 0.03 } },
+  dish_chicken_sandwich: { id: 'dish_chicken_sandwich', label: 'Crispy Chicken Sandwich', nouns: ['chicken sandwich'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 46, mood: 0.05 } },
+  dish_onion_rings: { id: 'dish_onion_rings', label: 'Onion Rings', nouns: ['onion rings'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 20, mood: 0.04 } },
+  dish_bacon_burger: { id: 'dish_bacon_burger', label: 'Bacon Cheeseburger', nouns: ['bacon cheeseburger', 'burger'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 52, mood: 0.06 } },
+  dish_nuggets: { id: 'dish_nuggets', label: 'Chicken Nuggets', nouns: ['nuggets'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 28, mood: 0.04 } },
+  dish_lemonade: { id: 'dish_lemonade', label: 'Fresh Lemonade', nouns: ['lemonade'], category: 'drink', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 8, mood: 0.03 } },
+  dish_apple_pie: { id: 'dish_apple_pie', label: 'Apple Pie Slice', nouns: ['apple pie'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 18, mood: 0.04 } },
+
+  // Kaisen Sushi
+  dish_spicy_tuna_roll: { id: 'dish_spicy_tuna_roll', label: 'Spicy Tuna Roll', nouns: ['spicy tuna roll', 'tuna roll'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 38, mood: 0.06 } },
+  dish_rainbow_roll: { id: 'dish_rainbow_roll', label: 'Rainbow Roll', nouns: ['rainbow roll'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 42, mood: 0.07 } },
+  dish_ebi_tempura: { id: 'dish_ebi_tempura', label: 'Ebi Tempura', nouns: ['ebi tempura', 'tempura'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 34, mood: 0.05 } },
+  dish_chicken_katsu: { id: 'dish_chicken_katsu', label: 'Chicken Katsu', nouns: ['chicken katsu', 'katsu'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 2 }, consumable: { hunger: 44, mood: 0.05 } },
+  dish_gyoza: { id: 'dish_gyoza', label: 'Pork Gyoza', nouns: ['gyoza'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 28, mood: 0.05 } },
+  dish_edamame: { id: 'dish_edamame', label: 'Edamame', nouns: ['edamame'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 14, mood: 0.03 } },
+  dish_green_tea: { id: 'dish_green_tea', label: 'Green Tea', nouns: ['green tea', 'tea'], category: 'drink', stackable: true, maxStack: 6, perishable: { days: 2 }, consumable: { hunger: 6, mood: 0.02, energy: 4 } },
+  dish_mochi: { id: 'dish_mochi', label: 'Mochi', nouns: ['mochi'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 2 }, consumable: { hunger: 12, mood: 0.06 } },
+
+  // El Camino Taqueria
+  dish_carnitas_tacos: { id: 'dish_carnitas_tacos', label: 'Carnitas Tacos', nouns: ['carnitas tacos', 'tacos'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 42, mood: 0.05 } },
+  dish_chorizo_tacos: { id: 'dish_chorizo_tacos', label: 'Chorizo Tacos', nouns: ['chorizo tacos', 'tacos'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 44, mood: 0.06 } },
+  dish_quesadilla: { id: 'dish_quesadilla', label: 'Cheese Quesadilla', nouns: ['quesadilla'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 40, mood: 0.05 } },
+  dish_tamales: { id: 'dish_tamales', label: 'Tamales', nouns: ['tamales'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 36, mood: 0.05 } },
+  dish_elote: { id: 'dish_elote', label: 'Mexican Street Corn', nouns: ['elote', 'street corn'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 16, mood: 0.04 } },
+  dish_sopes: { id: 'dish_sopes', label: 'Sopes', nouns: ['sopes'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 32, mood: 0.04 } },
+  dish_horchata: { id: 'dish_horchata', label: 'Horchata', nouns: ['horchata'], category: 'drink', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 12, mood: 0.03 } },
+  dish_bean_cheese_burrito: { id: 'dish_bean_cheese_burrito', label: 'Bean & Cheese Burrito', nouns: ['bean and cheese burrito', 'burrito'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 38, mood: 0.04 } },
+
+  // Bangkok House
+  dish_drunken_noodles: { id: 'dish_drunken_noodles', label: 'Drunken Noodles', nouns: ['drunken noodles'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 46, mood: 0.05 } },
+  dish_massaman_curry: { id: 'dish_massaman_curry', label: 'Massaman Curry', nouns: ['massaman curry', 'curry'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 50, mood: 0.06 } },
+  dish_thai_fried_rice: { id: 'dish_thai_fried_rice', label: 'Thai Fried Rice', nouns: ['thai fried rice', 'fried rice'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 42, mood: 0.04 } },
+  dish_tom_yum: { id: 'dish_tom_yum', label: 'Tom Yum Soup', nouns: ['tom yum', 'tom yum soup'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 24, mood: 0.03 } },
+  dish_satay: { id: 'dish_satay', label: 'Chicken Satay', nouns: ['satay', 'chicken satay'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 30, mood: 0.04 } },
+  dish_thai_iced_tea: { id: 'dish_thai_iced_tea', label: 'Thai Iced Tea', nouns: ['thai iced tea', 'iced tea'], category: 'drink', stackable: true, maxStack: 6, perishable: { days: 2 }, consumable: { hunger: 12, mood: 0.03, energy: 4 } },
+  dish_mango_sticky_rice: { id: 'dish_mango_sticky_rice', label: 'Mango Sticky Rice', nouns: ['mango sticky rice', 'sticky rice'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 18, mood: 0.07 } },
+  dish_coconut_ice_cream: { id: 'dish_coconut_ice_cream', label: 'Coconut Ice Cream', nouns: ['coconut ice cream', 'ice cream'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 12, mood: 0.06 } },
+
+  // Sunrise Cafe (new)
+  dish_pancake_stack: { id: 'dish_pancake_stack', label: 'Pancake Stack', nouns: ['pancake stack', 'pancakes'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 40, mood: 0.06 } },
+  dish_belgian_waffle: { id: 'dish_belgian_waffle', label: 'Belgian Waffle', nouns: ['belgian waffle', 'waffle'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 42, mood: 0.06 } },
+  dish_breakfast_sandwich: { id: 'dish_breakfast_sandwich', label: 'Breakfast Sandwich', nouns: ['breakfast sandwich'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 38, mood: 0.04 } },
+  dish_avocado_toast: { id: 'dish_avocado_toast', label: 'Avocado Toast', nouns: ['avocado toast'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 30, mood: 0.05 } },
+  dish_hash_brown_bowl: { id: 'dish_hash_brown_bowl', label: 'Hash Brown Bowl', nouns: ['hash brown bowl'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 28, mood: 0.04 } },
+  dish_granola_bowl: { id: 'dish_granola_bowl', label: 'Granola Bowl', nouns: ['granola bowl'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 32, mood: 0.05 } },
+  dish_breakfast_potatoes: { id: 'dish_breakfast_potatoes', label: 'Breakfast Potatoes', nouns: ['breakfast potatoes'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 20, mood: 0.03 } },
+  dish_fresh_coffee: { id: 'dish_fresh_coffee', label: 'Fresh Coffee', nouns: ['coffee', 'fresh coffee'], category: 'drink', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 8, energy: 10 } },
+  dish_oat_latte: { id: 'dish_oat_latte', label: 'Oat Latte', nouns: ['oat latte', 'latte'], category: 'drink', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 6, mood: 0.02, energy: 6 } },
+  dish_orange_juice_pitcher: { id: 'dish_orange_juice_pitcher', label: 'Orange Juice Pitcher', nouns: ['orange juice', 'juice pitcher'], category: 'drink', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 3, mood: 0.02 } },
+  dish_croissant: { id: 'dish_croissant', label: 'Butter Croissant', nouns: ['croissant'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 16, mood: 0.04 } },
+  dish_bagel_cc: { id: 'dish_bagel_cc', label: 'Bagel with Cream Cheese', nouns: ['bagel', 'bagel with cream cheese'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 24, mood: 0.04 } },
+
+  // The Greasy Spoon (new)
+  dish_diner_breakfast: { id: 'dish_diner_breakfast', label: 'Diner Breakfast Platter', nouns: ['diner breakfast', 'breakfast platter'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 45, mood: 0.05 } },
+  dish_club_sandwich: { id: 'dish_club_sandwich', label: 'Club Sandwich', nouns: ['club sandwich'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 46, mood: 0.05 } },
+  dish_patty_melt: { id: 'dish_patty_melt', label: 'Patty Melt', nouns: ['patty melt'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 48, mood: 0.05 } },
+  dish_grilled_cheese: { id: 'dish_grilled_cheese', label: 'Grilled Cheese', nouns: ['grilled cheese'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 30, mood: 0.04 } },
+  dish_tomato_soup_cup: { id: 'dish_tomato_soup_cup', label: 'Tomato Soup (Cup)', nouns: ['tomato soup'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 16, mood: 0.03 } },
+  dish_chicken_tenders: { id: 'dish_chicken_tenders', label: 'Chicken Tenders', nouns: ['chicken tenders', 'tenders'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 38, mood: 0.04 } },
+  dish_hamburger_steak: { id: 'dish_hamburger_steak', label: 'Hamburger Steak', nouns: ['hamburger steak', 'burger steak'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 2 }, consumable: { hunger: 50, mood: 0.05 } },
+  dish_pancake_plate: { id: 'dish_pancake_plate', label: 'Pancake Plate', nouns: ['pancake plate', 'pancakes'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 35, mood: 0.05 } },
+  dish_pie_slice: { id: 'dish_pie_slice', label: 'Pie Slice', nouns: ['pie slice', 'pie'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 18, mood: 0.05 } },
+  dish_coffee_mug: { id: 'dish_coffee_mug', label: 'Diner Coffee Mug', nouns: ['coffee', 'mug of coffee'], category: 'drink', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 6, energy: 8 } },
+  dish_vanilla_shake: { id: 'dish_vanilla_shake', label: 'Vanilla Shake', nouns: ['vanilla shake', 'shake'], category: 'drink', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 14, mood: 0.05 } },
+  dish_onion_soup: { id: 'dish_onion_soup', label: 'French Onion Soup', nouns: ['french onion soup', 'onion soup'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 22, mood: 0.04 } },
+
+  // Corner Deli (new)
+  dish_pho_ga: { id: 'dish_pho_ga', label: 'Pho Ga', nouns: ['pho ga', 'pho'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 42, mood: 0.05 } },
+  dish_tomato_soup_bowl: { id: 'dish_tomato_soup_bowl', label: 'Tomato Soup (Bowl)', nouns: ['tomato soup'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 28, mood: 0.03 } },
+  dish_bread_bowl_chili: { id: 'dish_bread_bowl_chili', label: 'Bread Bowl Chili', nouns: ['bread bowl chili', 'chili'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 2 }, consumable: { hunger: 40, mood: 0.05 } },
+  dish_chicken_flatbread: { id: 'dish_chicken_flatbread', label: 'Chicken Flatbread', nouns: ['chicken flatbread', 'flatbread'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 38, mood: 0.04 } },
+  dish_salad_medley: { id: 'dish_salad_medley', label: 'Salad Medley', nouns: ['salad medley', 'salad'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 30, mood: 0.03 } },
+  dish_mushroom_soup: { id: 'dish_mushroom_soup', label: 'Mushroom Soup', nouns: ['mushroom soup'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 30, mood: 0.04 } },
+  dish_half_sandwich_soup: { id: 'dish_half_sandwich_soup', label: 'Half Sandwich & Soup', nouns: ['half sandwich and soup', 'sandwich and soup'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 36, mood: 0.04 } },
+  dish_grilled_cheese_deli: { id: 'dish_grilled_cheese_deli', label: 'Deli Grilled Cheese', nouns: ['deli grilled cheese', 'grilled cheese'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 32, mood: 0.04 } },
+  dish_lemonade_pitcher: { id: 'dish_lemonade_pitcher', label: 'Lemonade Pitcher', nouns: ['lemonade', 'lemonade pitcher'], category: 'drink', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 12, mood: 0.02 } },
+  dish_turkey_club: { id: 'dish_turkey_club', label: 'Turkey Club', nouns: ['turkey club'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 44, mood: 0.05 } },
+
+  // Emerald Kitchen (new) — the splurge: hunger values deliberately exceed
+  // the usual ceiling, priced accordingly (prices in the menu entry).
+  dish_ribeye: { id: 'dish_ribeye', label: 'Ribeye', nouns: ['ribeye', 'ribeye steak'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 1 }, consumable: { hunger: 65, mood: 0.08 } },
+  dish_duck_breast: { id: 'dish_duck_breast', label: 'Duck Breast', nouns: ['duck breast', 'duck'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 1 }, consumable: { hunger: 60, mood: 0.08 } },
+  dish_short_rib: { id: 'dish_short_rib', label: 'Braised Short Rib', nouns: ['short rib'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 1 }, consumable: { hunger: 62, mood: 0.08 } },
+  dish_caesar_salad: { id: 'dish_caesar_salad', label: 'Emerald Caesar Salad', nouns: ['caesar salad'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 24, mood: 0.03 } },
+  dish_butter_potatoes: { id: 'dish_butter_potatoes', label: 'Butter-Roasted Potatoes', nouns: ['butter potatoes'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 28, mood: 0.04 } },
+  dish_creme_brulee: { id: 'dish_creme_brulee', label: 'Crème Brûlée', nouns: ['creme brulee', 'creme'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 16, mood: 0.07 } },
+  dish_chocolate_torte: { id: 'dish_chocolate_torte', label: 'Chocolate Torte', nouns: ['chocolate torte', 'torte'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 18, mood: 0.07 } },
+  dish_house_red: { id: 'dish_house_red', label: 'House Red', nouns: ['house red', 'red wine'], category: 'drink', stackable: true, maxStack: 6, perishable: { days: 2 }, consumable: { mood: 0.08, energy: -4 } },
+  dish_espresso: { id: 'dish_espresso', label: 'Espresso', nouns: ['espresso'], category: 'drink', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { energy: 8 } },
+
+  // Midnight Noodle (new)
+  dish_tonkotsu_ramen: { id: 'dish_tonkotsu_ramen', label: 'Tonkotsu Ramen', nouns: ['tonkotsu ramen', 'ramen'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 2 }, consumable: { hunger: 52, mood: 0.06 } },
+  dish_dan_dan: { id: 'dish_dan_dan', label: 'Dan Dan Noodles', nouns: ['dan dan noodles', 'dan dan'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 48, mood: 0.05 } },
+  dish_spicy_wontons: { id: 'dish_spicy_wontons', label: 'Spicy Wontons', nouns: ['spicy wontons', 'wontons'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 34, mood: 0.05 } },
+  dish_garlic_fried_rice: { id: 'dish_garlic_fried_rice', label: 'Garlic Fried Rice', nouns: ['garlic fried rice', 'fried rice'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 40, mood: 0.04 } },
+  dish_chashu_bowl: { id: 'dish_chashu_bowl', label: 'Chashu Bowl', nouns: ['chashu bowl'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 2 }, consumable: { hunger: 46, mood: 0.05 } },
+  dish_egg_ramen: { id: 'dish_egg_ramen', label: 'Egg Ramen', nouns: ['egg ramen', 'ramen'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 36, mood: 0.04 } },
+  dish_gyoza_night: { id: 'dish_gyoza_night', label: 'Gyoza (Late Night)', nouns: ['gyoza'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 30, mood: 0.05 } },
+  dish_boba_milk_tea: { id: 'dish_boba_milk_tea', label: 'Boba Milk Tea', nouns: ['boba milk tea', 'boba'], category: 'drink', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 12, mood: 0.05, energy: 4 } },
+  dish_cucumber_salad: { id: 'dish_cucumber_salad', label: 'Cucumber Salad', nouns: ['cucumber salad'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 14, mood: 0.03 } },
+
+  // Latenight Munchies (new)
+  dish_loaded_nachos: { id: 'dish_loaded_nachos', label: 'Loaded Nachos', nouns: ['loaded nachos', 'nachos'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 40, mood: 0.05 } },
+  dish_buffalo_wings: { id: 'dish_buffalo_wings', label: 'Buffalo Wings', nouns: ['buffalo wings', 'wings'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 42, mood: 0.05 } },
+  dish_chili_cheese_tots: { id: 'dish_chili_cheese_tots', label: 'Chili Cheese Tots', nouns: ['chili cheese tots', 'tots'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 34, mood: 0.04 } },
+  dish_hot_dog: { id: 'dish_hot_dog', label: 'Hot Dog', nouns: ['hot dog'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 26, mood: 0.03 } },
+  dish_mozzarella_sticks: { id: 'dish_mozzarella_sticks', label: 'Mozzarella Sticks', nouns: ['mozzarella sticks'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 28, mood: 0.04 } },
+  dish_poutine: { id: 'dish_poutine', label: 'Poutine', nouns: ['poutine'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 44, mood: 0.06 } },
+  dish_fried_pickles: { id: 'dish_fried_pickles', label: 'Fried Pickles', nouns: ['fried pickles'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 22, mood: 0.04 } },
+  dish_cheesesteak: { id: 'dish_cheesesteak', label: 'Cheesesteak', nouns: ['cheesesteak'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 48, mood: 0.05 } },
+  dish_freezie: { id: 'dish_freezie', label: 'Freezie', nouns: ['freezie', 'slushie'], category: 'drink', stackable: true, maxStack: 6, perishable: { days: 2 }, consumable: { hunger: 10, mood: 0.04 } },
+
   // Snacks/drinks (directly consumable, no cooking needed)
   instant_noodles: { id: 'instant_noodles', label: 'Instant Noodles', nouns: ['instant noodles', 'ramen'], category: 'food', stackable: true, maxStack: 12, consumable: { hunger: 20 }, price: 2, buyQty: 4 },
   energy_drink: { id: 'energy_drink', label: 'Energy Drink', nouns: ['energy drink'], category: 'drink', stackable: true, maxStack: 12, consumable: { energy: 15, hygiene: -1 }, price: 3, buyQty: 4 },

@@ -1,7 +1,7 @@
 // ===== SECTION: TIME =====
 // Continuous time-dilation clock. A rAF loop adds game-minutes to
 // clock.minutes based on the current context's timeScale (browsing=10x,
-// conversation=1x, idle=20x, etc). The NPC simulation runs at fixed
+// idle=20x, conversation≈0.017x, etc). The NPC simulation runs at fixed
 // checkpoints (every TIME_DILATION.simCheckpointMinutes of accumulated
 // game-time), not once per player action.
 //
@@ -314,6 +314,10 @@ function updateClockDisplay() {
   if (csClock) csClock.textContent = `Day ${currentGameState.meta.clock.day} — ${formatTime(m)}`;
   const phoneClock = document.getElementById('phone-clock');
   if (phoneClock) phoneClock.textContent = formatTime(m);
+  // DoorDrop order ETAs are clock-bound too — tick them in place while an
+  // orders screen is open (no-op otherwise). Guarded because TIME loads
+  // before RENDER.COMPUTER defines the function.
+  if (typeof updateFoodOrderEtas === 'function') updateFoodOrderEtas(currentGameState);
 }
 
 // --- Start/stop the clock loop ---

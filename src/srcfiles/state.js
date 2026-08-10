@@ -404,6 +404,37 @@ function stopAutosave() {
   autosaveTimer = null;
 }
 
+// --- AfterHours (Site Expansion Phase 6): durable site data ---
+// The site's player records persist as their own world sub-key so
+// history/liked/searchHistory/continueWatching survive reloads independent
+// of the wholesale world.computer write. Lazy-init for old saves (the
+// world.phone pattern, below) — nothing here needs a migration.
+function defaultAfterHoursState() {
+  return {
+    history: [],             // most-recent-first, capped AH_TUNING.historyCap (100)
+    liked: [],               // most-recent-first, capped AH_TUNING.likedCap (200)
+    searchHistory: [],       // most-recent-first, capped AH_TUNING.searchHistoryCap (20)
+    continueWatching: null,  // { clipId, ...snapshot, day, tick } | null
+    metNpcIds: [],           // Phase 7 — Hot Singles the player said hi to
+  };
+}
+
+// Defensive normalization for hand-typed/partially-written saves. Records
+// are full clip snapshots plus the plan's day/tick fields; the site's own
+// lookups re-derive anything missing (see AH_recordToClip in afterhours.js),
+// so preserving array shape is enough here.
+function normalizeAfterHoursState(raw) {
+  if (!raw || typeof raw !== 'object') return defaultAfterHoursState();
+  const asArr = (v) => Array.isArray(v) ? v : [];
+  return {
+    history: asArr(raw.history),
+    liked: asArr(raw.liked),
+    searchHistory: asArr(raw.searchHistory),
+    continueWatching: (raw.continueWatching && typeof raw.continueWatching === 'object') ? raw.continueWatching : null,
+    metNpcIds: asArr(raw.metNpcIds),
+  };
+}
+
 // Persist the live game state at a save boundary (phase change, scene exit,
 // before an LLM call, manual save, or the autosave timer). gameState is the
 // in-memory object UI mutates directly during play — without it there is
@@ -438,6 +469,10 @@ async function saveAtBoundary(reason, gameState) {
     // it, so it must survive a reload as reliably as the visit does.
     queueWrite('world', 'escortRoster', gameState.world.escortRoster || []);
     queueWrite('world', 'escortBookings', gameState.world.escortBookings || []);
+    // Hot Singles (AfterHours Site Expansion Phase 7): roster membership for
+    // the site's "Hot Singles in your area" section. The people themselves
+    // persist through the npcs loop below; this is the fixed-slot order.
+    queueWrite('world', 'hotSinglesRoster', gameState.world.hotSinglesRoster || []);
     // Move-in offers (external-world plan Phase 8): a pending vouch survives
     // a reload like any other world fact — the player may come back to
     // RoomList days later and still find the offer waiting.
@@ -457,6 +492,12 @@ async function saveAtBoundary(reason, gameState) {
     // trust world.phone exists.
     gameState.world.phone = gameState.world.phone || defaultPhoneState();
     queueWrite('world', 'phone', gameState.world.phone);
+    // AfterHours (Site Expansion Phase 6): the site's durable player data —
+    // history/liked/searchHistory/continueWatching. Lazy-init in-memory so
+    // every later reader can trust world.afterHours exists (the world.phone
+    // pattern); old saves start empty and back-fill as the player browses.
+    gameState.world.afterHours = gameState.world.afterHours || defaultAfterHoursState();
+    queueWrite('world', 'afterHours', gameState.world.afterHours);
     // kv.npcs is one key per npc (brief: "appending an episode rewrites one
     // character, not the world"). Every tick resolves every NPC's
     // location/activity/needs/mood in-memory via resolveBatch, but until
@@ -737,6 +778,10 @@ async function loadGameState() {
   // backfills the roster on first browse/day rollover, so no migration.
   const escortRoster = await getWorld('escortRoster') || [];
   const escortBookings = await getWorld('escortBookings') || [];
+  // Hot Singles (AfterHours Site Expansion Phase 7): roster membership.
+  // Empty for saves written before Phase 7 — ensureHotSinglesRoster
+  // backfills on first browse/day rollover, so no migration.
+  const hotSinglesRoster = await getWorld('hotSinglesRoster') || [];
   // Move-in offers (external-world plan Phase 8): pending vouches for an
   // external NPC to move in. Empty for saves written before Phase 8 — an
   // offer is created live in conversation, so there is nothing to backfill.
@@ -746,6 +791,10 @@ async function loadGameState() {
   // BrineOS Phase 2: phone shell nav state (Phase 3). Presence is derived
   // from the object bucket, so this is the whole persisted shape.
   const phone = normalizePhoneState(await getWorld('phone'));
+  // AfterHours (Site Expansion Phase 6): durable site data. Empty for saves
+  // written before Phase 6 — lazy-init by defaultAfterHoursState, filled as
+  // the player browses, so no migration.
+  const afterHours = normalizeAfterHoursState(await getWorld('afterHours'));
 
   const gameState = {
     meta,
@@ -759,7 +808,7 @@ async function loadGameState() {
     npcIds: Object.keys(npcs).filter(id => id.startsWith('npc_')),
     // droppedConstraints is persisted in meta by writeGeneratedGameState.
     droppedConstraints: meta.droppedConstraints || [],
-    world: { rooms, castWeb, quests, events, deliveries, renovationJobs, visits, foodOrders, externalStubs, escortRoster, escortBookings, moveInOffers, rent, computer, taxes, bills, upgrades, utilities, phone, flags },
+    world: { rooms, castWeb, quests, events, deliveries, renovationJobs, visits, foodOrders, externalStubs, escortRoster, escortBookings, moveInOffers, rent, computer, taxes, bills, upgrades, utilities, phone, afterHours, hotSinglesRoster, flags },
   };
   // Lazily spawns any bucket missing from kv (a pre-WORLD save, or a
   // resident who moved in since the last full write) rather than needing a
@@ -797,6 +846,11 @@ async function writeGeneratedGameState(gameState) {
   // first write so a brand-new game ships with escorts in the app (the day-
   // rollover / first-browse call stays, as the backstop for old saves).
   ensureEscortRoster(gameState);
+  // Hot Singles (AfterHours Site Expansion Phase 7): pre-generate the roster
+  // before the first write exactly like the escorts — a brand-new game ships
+  // with the site's six singles (the first-browse / rollover call stays, as
+  // the backstop for old saves).
+  ensureHotSinglesRoster(gameState);
 
   await setMeta({
     versions: { ...FOLDER_VERSIONS },
@@ -825,6 +879,7 @@ async function writeGeneratedGameState(gameState) {
   await root.kv.world.set('externalStubs', gameState.world.externalStubs || {});
   await root.kv.world.set('escortRoster', gameState.world.escortRoster || []);
   await root.kv.world.set('escortBookings', gameState.world.escortBookings || []);
+  await root.kv.world.set('hotSinglesRoster', gameState.world.hotSinglesRoster || []);
   await root.kv.world.set('moveInOffers', gameState.world.moveInOffers || []);
   await root.kv.world.set('flags', gameState.world.flags || {});
   await root.kv.world.set('rent', gameState.world.rent);
@@ -837,6 +892,10 @@ async function writeGeneratedGameState(gameState) {
   // from the object bucket, never stored here (decision B).
   gameState.world.phone = gameState.world.phone || defaultPhoneState();
   await root.kv.world.set('phone', gameState.world.phone);
+  // AfterHours (Site Expansion Phase 6): durable site data. Empty for a
+  // brand-new game — the player fills it by browsing.
+  gameState.world.afterHours = gameState.world.afterHours || defaultAfterHoursState();
+  await root.kv.world.set('afterHours', gameState.world.afterHours);
 
   for (const [id, npc] of Object.entries(gameState.npcs)) {
     await root.kv.npcs.set(id, npc);

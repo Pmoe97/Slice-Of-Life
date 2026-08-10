@@ -218,7 +218,7 @@ function resolveTimeCost(def, gameState, prepared) {
 function narrateAction(def, ctx, prepared) {
   if (def.narration?.mode === 'dynamic' && def.narration.build) return def.narration.build(ctx, prepared);
   const templates = def.narration?.templates || ['You do it.'];
-  return templates[Math.floor(Math.random() * templates.length)];
+  return templates[Math.floor(orbitalRandom() * templates.length)];
 }
 
 // --- UI-facing wrapper: mirrors the existing doX() convention (loading

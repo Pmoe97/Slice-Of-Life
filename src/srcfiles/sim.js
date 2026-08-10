@@ -24,9 +24,11 @@ function hashStr(str) {
   return h >>> 0;
 }
 
-// Generate a random seed string
+// Generate a random seed string. Drawn from the live star (ORBITAL) rather
+// than Math.random — the one place we genuinely want unpredictability, since
+// this is the number a whole playthrough is reproduced from.
 function genSeed() {
-  return Math.random().toString(36).substring(2, 12);
+  return orbitalRandom().toString(36).substring(2, 12);
 }
 
 // Generate a unique NPC ID for non-seeded contexts (mid-game additions like
@@ -47,8 +49,19 @@ function genSeededNpcId(seed, slotIndex) {
 }
 
 // --- Seeded RNG factory: creates a PRNG from a base seed + sub-seed ---
+// The contract is unchanged and load-bearing: a pure deterministic function of
+// (baseSeed, subSeed), so the same save reproduces the same world forever
+// (design invariant 6, brief §7.3's "paste a seed, get the same house").
+//
+// What produces the numbers, however, is now S4714 — a real star orbiting the
+// black hole at the centre of the galaxy at up to 8% of lightspeed. The seed
+// pair chooses where on its ~12-year orbit to start; each draw advances it a
+// golden-ratio fraction of a period and hashes the resulting eccentric
+// anomaly, orbital radius and instantaneous speed. See ORBITAL for why that is
+// a real PRNG and not just decoration. It is, to be completely clear, an
+// absurd way to decide what an NPC has for breakfast.
 function seededRng(baseSeed, subSeed) {
-  return mulberry32(hashStr(baseSeed + '|' + subSeed));
+  return s4714Rng(baseSeed, subSeed);
 }
 
 // --- Weighted random pick ---
@@ -391,6 +404,10 @@ function scheduleVisit(gameState, sourceId, day, visit) {
     roomId: visit.roomId,
     status: 'scheduled',
     hostNpcId: visit.hostNpcId || null,
+    // AfterHours Phase 8 (Hot Singles): an invited guest who is here for
+    // the PLAYER (not a resident host) follows them through the shared
+    // space — resolveVisitPresence's social+followPlayer branch.
+    followPlayer: !!visit.followPlayer,
   };
   visits.push(record);
   return record;
@@ -478,6 +495,31 @@ function ensureEscortRoster(gameState) {
       rate: ESCORT_TUNING.baseRateMin + Math.floor(rng() * (ESCORT_TUNING.baseRateMax - ESCORT_TUNING.baseRateMin + 1)),
       offeredServices: [...(ESCORT_OFFERED_ROTATION[i % ESCORT_OFFERED_ROTATION.length] || [])],
     });
+  }
+  return roster;
+}
+
+// --- Hot Singles (AfterHours Site Expansion Phase 7) ---
+// The "Hot Singles in your area" section's roster: the same persistent,
+// deterministic pre-generation pattern as ensureEscortRoster — a fixed set
+// of FULL NPCs (via createHotSingleNpc → createExternalNpc with the deviant
+// skew, so they are never vendor bots), ids fixed to 'hot_single_1'..'n' so
+// the same seed always yields the same people. They are NOT a paid service
+// (that's escorts); meeting them is free and afterwards they are ordinary
+// NPCs on every existing external-world path. Idempotent like the escort
+// roster: called at new-game write, at day rollover, and on first browse —
+// so a save written before this phase picks the roster up without a
+// migration. The roster entries are deliberately lean ({npcId, slot}); the
+// site-side profile copy (headline/bio/distance/interests) is derived
+// deterministically per npcId by the AfterHours renderer (authored chrome,
+// never API output).
+function ensureHotSinglesRoster(gameState) {
+  const roster = gameState.world.hotSinglesRoster || (gameState.world.hotSinglesRoster = []);
+  if (roster.length > 0) return roster;
+  for (let i = 0; i < AH_HOT_SINGLES_TUNING.rosterSize; i++) {
+    const npcId = `hot_single_${i + 1}`;
+    createHotSingleNpc(gameState, npcId, npcId);
+    roster.push({ npcId, slot: i + 1 });
   }
   return roster;
 }
@@ -588,6 +630,22 @@ function resolveVisitPresence(npcId, gameState, activeVisits, rng, resolved) {
     return {
       block: 'leisure',
       location: followable ? hostLoc : visit.roomId,
+      activity,
+      transit: null,
+    };
+  }
+  // An invited Hot Single (AfterHours Phase 8) is here for the PLAYER, so
+  // they follow the player through the shared space the way a guest follows
+  // their host — but common rooms only, unlike an escort: a date waits
+  // where they were invited until the player comes out, and another
+  // resident's bedroom is still off-limits. If the player is in a private
+  // room (or off-screen), the guest waits in the room the invite booked.
+  if (visit && visit.purpose === 'social' && visit.followPlayer) {
+    const pLoc = gameState.player.location;
+    const followable = pLoc && ROOMS[pLoc]?.type === 'common';
+    return {
+      block: 'leisure',
+      location: followable ? pLoc : visit.roomId,
       activity,
       transit: null,
     };
@@ -2109,6 +2167,12 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
       // because the visit and the person outlive the app session.
       escortRoster: [],
       escortBookings: [],
+      // Hot Singles (AfterHours Site Expansion Phase 7): the deterministic
+      // roster behind the site's "Hot Singles in your area" section. Each
+      // entry is { npcId, slot } — the actual NPCs live in `npcs` (same
+      // pre-generation as ensureEscortRoster) and the site-side profile
+      // copy is derived deterministically per npcId at render time.
+      hotSinglesRoster: [],
       // Move-in offers (external-world plan Phase 8): pending vouches for an
       // external NPC to move in, recorded when a resident (or the player)
       // advocates for them in conversation (applyProposal). Each record is

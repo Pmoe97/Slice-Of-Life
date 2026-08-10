@@ -1441,6 +1441,301 @@ body {
 @keyframes ah-cum-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(236, 72, 153, 0.4); } 50% { box-shadow: 0 0 0 6px rgba(236, 72, 153, 0); } }
 .ah-loading-grid { display: flex; align-items: center; justify-content: center; padding: 40px; color: var(--color-text-dim); font-size: var(--fs-sm); }
 .ah-error { padding: 20px; text-align: center; color: var(--color-text-dim); font-size: var(--fs-sm); }
+/* AfterHours Site Expansion (Phase 1): blended-feed source badges + host switch */
+.ah-source-badge {
+  position: absolute; top: 4px; left: 4px; z-index: 2;
+  background: rgba(0,0,0,0.75); color: #fff; font-size: 10px; font-weight: 700;
+  padding: 2px 6px; border-radius: 3px; letter-spacing: 0.5px;
+  border: 1px solid rgba(255,255,255,0.25);
+}
+.ah-source-badge.multi { background: var(--color-accent, #6f9cf); color: var(--color-bg, #111); border-color: var(--color-accent, #6f9cf); }
+.ah-host-switch { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-top: 1px solid var(--color-border); }
+.ah-host-chip {
+  padding: 3px 10px; border: 1px solid var(--color-border); border-radius: 3px;
+  background: var(--color-card); color: var(--color-text-dim); cursor: pointer; font-size: 10px; font-weight: 700;
+}
+.ah-host-chip:hover { border-color: var(--color-accent); }
+.ah-host-chip.active { background: var(--color-accent); color: var(--color-bg); border-color: var(--color-accent); }
+
+/* AfterHours Site Expansion (Phase 2): site shell — header, address bar,
+   footer, skeleton, 404. The site's own chrome sits BELOW the sim browser
+   nav (renderBrowserNav), the way a real website's header sits inside the
+   browser window. */
+.ah-site-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; background: var(--color-card); border: 1px solid var(--color-border); border-radius: 6px; margin-bottom: 8px; }
+.ah-brand { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; background: none; border: none; padding: 0; cursor: pointer; color: var(--color-accent); }
+.ah-brand-name { font-size: var(--fs-lg); font-weight: 800; letter-spacing: 0.5px; line-height: 1.1; }
+.ah-brand-tagline { font-size: 10px; color: var(--color-text-dim); font-style: italic; }
+.ah-site-nav { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 260px; }
+.ah-nav-btn { width: 28px; height: 28px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: var(--color-surface-alt); border: 1px solid var(--color-border); border-radius: var(--radius-sm); color: var(--color-text); cursor: pointer; font-size: 14px; }
+.ah-nav-btn:hover { background: var(--color-surface-hover); }
+.ah-nav-btn:disabled { opacity: 0.35; cursor: default; }
+.ah-addressbar { flex: 1; min-width: 160px; font-family: monospace; font-size: var(--fs-xs); color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 5px 8px; }
+.ah-addressbar:focus { outline: none; border-color: var(--color-accent); }
+.ah-footer { margin-top: 12px; padding: 10px 4px; border-top: 1px solid var(--color-border); display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: var(--fs-xs); color: var(--color-text-dim); }
+.ah-footer-link { background: none; border: none; padding: 0; color: var(--color-text-dim); cursor: pointer; text-decoration: underline; font-size: var(--fs-xs); }
+.ah-footer-link:hover { color: var(--color-accent); }
+.ah-skeleton { background: linear-gradient(90deg, var(--color-surface) 25%, var(--color-surface-alt) 50%, var(--color-surface) 75%); background-size: 200% 100%; animation: ah-shimmer 1.2s ease-in-out infinite; }
+@keyframes ah-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.ah-skeleton-card { pointer-events: none; }
+.ah-skeleton-card .ah-thumb { border: none; }
+.ah-skeleton-title { height: 12px; width: 70%; margin: 6px 6px 10px; border-radius: 3px; }
+.ah-404 { text-align: center; padding: 48px 16px; }
+.ah-404 h3 { font-size: var(--fs-lg); margin-bottom: 8px; }
+.ah-404 .btn { margin-top: 16px; }
+
+/* AfterHours Site Expansion (Phase 3): the player page — layout, rails,
+   comments, like/share, toasts. */
+.ah-player-layout { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin: 12px 0 4px; }
+.ah-player-layout > .ah-player-main { flex: 1 1 320px; min-width: 0; }
+.ah-player-layout > .ah-rail { flex: 1 1 250px; min-width: 0; }
+.ah-player-main h4 { margin: 0 0 2px; padding: 0 12px; font-size: var(--fs-sm); }
+.ah-watch-meta { display: flex; flex-direction: column; gap: 6px; }
+.ah-keyword-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.ah-kw-chip {
+  background: var(--color-surface-alt); border: 1px solid var(--color-border);
+  color: var(--color-text-dim); border-radius: 10px; padding: 2px 8px;
+  font-size: 10px; cursor: pointer;
+}
+.ah-kw-chip:hover { color: var(--color-accent); border-color: var(--color-accent); }
+.ah-like-btn.liked { background: var(--color-accent, #e05d5d); color: var(--color-bg, #111); border-color: var(--color-accent, #e05d5d); }
+.ah-rail-header h4 { margin: 0; }
+.ah-rail-empty { padding: 8px 4px; }
+.ah-upnext-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: none; border: none; border-bottom: 1px solid var(--color-border);
+  padding: 6px 2px; cursor: pointer; text-align: left; color: var(--color-text);
+}
+.ah-upnext-row:hover .ah-upnext-title { color: var(--color-accent); }
+.ah-upnext-thumb {
+  position: relative; width: 120px; min-width: 120px; aspect-ratio: 16/9;
+  background: #000; border-radius: 3px; overflow: hidden; display: flex;
+  align-items: center; justify-content: center; color: var(--color-text-dim); font-size: 11px;
+}
+.ah-upnext-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ah-upnext-thumb .ah-duration { bottom: 2px; right: 2px; font-size: 9px; }
+.ah-upnext-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ah-upnext-title {
+  font-size: 11px; font-weight: 600; line-height: 1.3; color: var(--color-text);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.ah-upnext-meta { font-size: 10px; }
+.ah-related-section { margin: 10px 0 4px; }
+.ah-related-header { display: flex; align-items: baseline; gap: 8px; }
+.ah-related-header h4 { margin: 0; }
+.ah-related-row {
+  display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 8px;
+  scrollbar-width: thin;
+}
+.ah-related-row .ah-card { min-width: 170px; max-width: 200px; }
+.ah-related-empty { padding: 8px 4px; }
+.ah-comments { margin-top: 14px; border-top: 1px solid var(--color-border); padding-top: 10px; }
+.ah-comments-header { display: flex; align-items: baseline; gap: 8px; }
+.ah-comments-header h4 { margin: 0; }
+.ah-comment { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--color-border); }
+.ah-comment-avatar {
+  width: 34px; height: 34px; min-width: 34px; border-radius: 50%; color: #fff;
+  display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: var(--fs-sm);
+}
+.ah-comment-body { flex: 1; min-width: 0; }
+.ah-comment-byline { display: flex; align-items: baseline; gap: 8px; }
+.ah-comment-name { font-size: 11px; font-weight: 700; color: var(--color-accent); }
+.ah-comment-text { font-size: var(--fs-xs); line-height: 1.45; margin: 3px 0 2px; }
+.ah-comment-meta { font-size: 10px; }
+.ah-toast-layer {
+  position: absolute; right: 10px; bottom: 10px; z-index: 60;
+  display: flex; flex-direction: column; gap: 6px; max-width: 260px;
+  pointer-events: none;
+}
+.ah-toast {
+  background: var(--color-card); border: 1px solid var(--color-accent, #6f9cf);
+  color: var(--color-text); font-size: var(--fs-xs); padding: 8px 12px;
+  border-radius: 6px; box-shadow: var(--shadow-lg, 0 4px 16px rgba(0,0,0,0.4));
+  animation: ah-toast-in 0.2s ease-out; word-break: break-word;
+}
+@keyframes ah-toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* AfterHours Site Expansion (Phase 4): homepage — hero carousel, discovery
+   rows, category tiles, continue-watching; search view filter row. */
+.ah-home-section { margin: 10px 0 2px; }
+.ah-row-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.ah-row-header h4 { margin: 0; font-size: var(--fs-sm); }
+.ah-carousel {
+  display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 8px;
+  scroll-snap-type: x mandatory; scrollbar-width: thin;
+}
+.ah-carousel .ah-card {
+  flex: 0 0 240px; min-width: 240px; max-width: 260px; scroll-snap-align: start;
+}
+.ah-carousel .ah-card-title { font-size: var(--fs-sm); }
+.ah-row {
+  display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 8px;
+  scrollbar-width: thin;
+}
+.ah-row .ah-card { flex: 0 0 170px; min-width: 170px; max-width: 200px; }
+.ah-row .ah-skeleton-card, .ah-carousel .ah-skeleton-card { flex: 0 0 170px; min-width: 170px; }
+.ah-carousel .ah-skeleton-card { flex-basis: 240px; min-width: 240px; }
+.ah-cat-tiles {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+}
+.ah-cat-tile {
+  position: relative; aspect-ratio: 16/9; overflow: hidden; border-radius: 6px;
+  border: 1px solid var(--color-border); background: var(--color-surface-alt);
+  cursor: pointer; padding: 0; color: var(--color-text);
+}
+.ah-cat-tile:hover { border-color: var(--color-accent); }
+.ah-cat-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ah-cat-tile-label {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 8px 6px;
+  background: linear-gradient(transparent, rgba(0,0,0,0.8));
+  color: #fff; font-size: 11px; font-weight: 700; text-align: left;
+}
+.ah-search-filters {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: 2px 0 6px; padding: 6px 8px; background: var(--color-surface-alt);
+  border: 1px solid var(--color-border); border-radius: 6px;
+}
+.ah-sort-select {
+  background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border);
+  border-radius: 4px; padding: 3px 6px; font-size: 11px;
+}
+.ah-filter-chip {
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  color: var(--color-text-dim); border-radius: 10px; padding: 2px 10px;
+  font-size: 10px; cursor: pointer;
+}
+.ah-filter-chip:hover { color: var(--color-accent); border-color: var(--color-accent); }
+.ah-filter-chip.active { background: var(--color-accent); color: var(--color-bg); border-color: var(--color-accent); }
+.ah-filter-chip-inert { opacity: 0.6; cursor: default; }
+.ah-filter-chip-inert:hover { color: var(--color-text-dim); border-color: var(--color-border); }
+
+/* AfterHours Site Expansion (Phase 5): campy ad network + live ticker.
+   Ads are authored parody chrome (Locked decision 12) — CSS/emoji/text
+   only, no AI art, never API-derived. Rotation + ticker drift run on the
+   single AfterHours lifecycle interval (started on site open, self-clears
+   on close — Locked decision 14), mutating DOM directly, never re-renders. */
+.ah-ticker {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.3px;
+  color: #ff8a8a; background: rgba(255,107,107,0.08);
+  border: 1px solid rgba(255,107,107,0.35); border-radius: 12px; padding: 3px 10px;
+  white-space: nowrap;
+}
+.ah-ticker-dot { color: #ff6b6b; animation: ah-ticker-blink 1.2s ease-in-out infinite; }
+.ah-ticker-count { font-variant-numeric: tabular-nums; }
+@keyframes ah-ticker-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
+.ah-ad-slot { position: relative; margin: 8px 0; }
+.ah-ad-banner {
+  background: linear-gradient(90deg, rgba(255,107,107,0.07), rgba(138,92,246,0.07));
+  border: 1px dashed var(--color-border); border-radius: 6px; padding: 8px 10px 10px;
+}
+.ah-ad-skyscraper {
+  background: linear-gradient(180deg, rgba(255,107,107,0.07), rgba(138,92,246,0.07));
+  border: 1px dashed var(--color-border); border-radius: 6px; padding: 8px;
+}
+.ah-ad-chrome { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.ah-ad-label {
+  font-size: 9px; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--color-text-dim); border: 1px solid var(--color-border);
+  padding: 0 5px; border-radius: 3px;
+}
+.ah-ad-close { margin-left: auto; background: none; border: none; padding: 0 2px; color: var(--color-text-dim); cursor: pointer; font-size: 12px; line-height: 1; }
+.ah-ad-close:hover { color: var(--color-text); }
+.ah-ad-frame { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; animation: ah-ad-in 0.25s ease-out; }
+@keyframes ah-ad-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.ah-ad-skyscraper .ah-ad-frame { flex-direction: column; align-items: stretch; }
+.ah-ad-emoji { font-size: 18px; }
+.ah-ad-copy { font-size: var(--fs-xs); color: var(--color-text); font-weight: 600; flex: 1; min-width: 120px; }
+.ah-ad-countdown { font-size: 10px; color: var(--color-text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ah-ad-cta {
+  margin-left: auto; background: #ff6b6b; color: #fff; border: none;
+  border-radius: 4px; padding: 5px 14px; font-size: 11px; font-weight: 700;
+  cursor: pointer; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0;
+}
+.ah-ad-cta:hover { background: #e85555; }
+.ah-ad-skyscraper .ah-ad-cta { margin-left: 0; width: 100%; }
+/* The fake browser-update prompt — styled like the sim's own browser. */
+.ah-ad-slot[data-kind="update"] .ah-ad-frame { display: block; }
+.ah-ad-update { width: 100%; background: var(--color-card); border: 1px solid var(--color-border); border-radius: 6px; overflow: hidden; }
+.ah-ad-update-bar {
+  display: flex; align-items: center; gap: 6px; padding: 5px 8px;
+  background: var(--color-surface-alt); border-bottom: 1px solid var(--color-border);
+  font-size: 10px; color: var(--color-text-dim); font-weight: 600;
+}
+.ah-ad-update-body { display: flex; align-items: center; gap: 10px; padding: 10px 12px; flex-wrap: wrap; }
+.ah-ad-update-icon { font-size: 18px; flex-shrink: 0; }
+.ah-ad-update-body > span:nth-child(2) { flex: 1; min-width: 140px; font-size: var(--fs-xs); }
+.ah-ad-update-actions { margin-left: auto; display: flex; gap: 6px; flex-shrink: 0; }
+
+/* AfterHours Site Expansion (Phase 7): Hot Singles — the deterministic
+   roster, profile cards, and the campy homepage banner. Authored chrome
+   (CSS/text/emoji), never API-derived. */
+.ah-hotsingle-banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; width: 100%;
+  margin: 10px 0 2px; padding: 12px 14px; text-align: left; cursor: pointer;
+  background: linear-gradient(90deg, rgba(255,107,107,0.12), rgba(236,72,153,0.10));
+  border: 1px solid rgba(236,72,153,0.4); border-radius: 8px; color: var(--color-text);
+  transition: border-color 0.15s;
+}
+.ah-hotsingle-banner:hover { border-color: #ec4899; }
+.ah-hotsingle-banner-emoji { font-size: 20px; flex-shrink: 0; }
+.ah-hotsingle-banner-copy { flex: 1; min-width: 180px; font-size: var(--fs-xs); font-weight: 600; }
+.ah-hotsingle-banner-cta {
+  flex-shrink: 0; background: #ec4899; color: #fff; border: none; border-radius: 4px;
+  padding: 5px 14px; font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.ah-hotsingle-pitch { margin: -2px 0 6px; }
+.ah-hotsingle-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px; margin: 8px 0;
+}
+.ah-hotsingle-card {
+  display: flex; gap: 10px; align-items: center; padding: 10px;
+  background: var(--color-card); border: 1px solid var(--color-border);
+  border-radius: 8px; cursor: pointer; text-align: left; color: var(--color-text);
+  transition: border-color 0.15s;
+}
+.ah-hotsingle-card:hover { border-color: #ec4899; }
+.ah-hotsingle-card.met { opacity: 0.85; }
+.ah-hotsingle-avatar {
+  width: 46px; height: 46px; flex-shrink: 0; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #ec4899, #8b5cf6); color: #fff;
+  font-weight: 800; font-size: var(--fs-lg);
+}
+.ah-hotsingle-avatar.big { width: 72px; height: 72px; font-size: 30px; }
+.ah-hotsingle-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ah-hotsingle-name-row { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.ah-hotsingle-name { font-size: var(--fs-sm); font-weight: 700; }
+.ah-hotsingle-online {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
+  color: var(--color-text-dim);
+}
+.ah-hotsingle-online.on { color: #4ade80; }
+.ah-hotsingle-headline {
+  font-size: 11px; color: var(--color-text); line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.ah-hotsingle-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ah-hotsingle-profile {
+  display: flex; flex-direction: column; gap: 8px; margin: 12px 0;
+  padding: 14px; background: var(--color-card); border: 1px solid var(--color-border);
+  border-radius: 8px; max-width: 560px;
+}
+.ah-hotsingle-profile-head h4 { margin: 0 0 2px; font-size: var(--fs-lg); }
+.ah-hotsingle-profile-headline { font-size: var(--fs-sm); font-style: italic; color: var(--color-accent); margin: 2px 0 0; }
+.ah-hotsingle-profile-bio { font-size: var(--fs-sm); line-height: 1.55; margin: 0; color: var(--color-text); }
+.ah-hotsingle-profile .ah-keyword-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.ah-hotsingle-sayhi {
+  background: #ec4899; color: #fff; border: none;
+}
+.ah-hotsingle-sayhi:hover { background: #db2777; }
+.ah-hotsingle-invite {
+  background: #8b5cf6; color: #fff; border: none;
+}
+.ah-hotsingle-invite:hover { background: #7c3aed; }
+
 
 /* Interruption bubble (Phase 5) — DOM-injected, survives re-renders */
 .interrupt-bubble { position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; pointer-events: auto; }
@@ -1576,6 +1871,8 @@ body {
 .dd-time { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-3) 0; }
 .dd-time select { background: var(--color-card); color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 2px var(--space-2); }
 .dd-tips { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
+.dd-tip-custom { width: 5em; background: var(--color-card); color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 2px var(--space-2); }
+.dd-filters { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .dd-summary { display: flex; flex-direction: column; gap: 2px; background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); font-size: var(--fs-sm); }
 .dd-summary > div { display: flex; justify-content: space-between; }
 .dd-summary .dd-total { font-weight: 700; border-top: 1px solid var(--color-border); margin-top: var(--space-2); padding-top: var(--space-2); }
@@ -2256,50 +2553,60 @@ body {
 <!-- Load order matters (each script's top-level code may reference an
      earlier script's data at load time — e.g. DEFS.ACTIONS reading NEEDS
      from CONFIG): CONFIG → ICONS → DEFS.WORLD → DEFS.ACTIONS →
-     DEFS.COMPUTER → STATE → SIM → WORLD → ITEMS → EFFECTS → ACTIONS →
+     DEFS.COMPUTER → ORBITAL → STATE → SIM → WORLD → ITEMS → EFFECTS → ACTIONS →
      SKILLS → COMPUTER → NPC → PROMPT → LLM → IMAGE → RENDER →
-     RENDER.COMPUTER → RENDER.DESKTOP → UI → UI.COMPUTER →
+     RENDER.COMPUTER → RENDER.DESKTOP → UI → UI.COMPUTER → AFTERHOURS →
      UI.WINDOWMANAGER → BOOT. Functions calling into a LATER script are
      fine either way — those calls only happen at runtime, after every
      script below has finished loading. -->
-<script src="src/srcfiles/config.js?v=25"></script>
-<script src="src/srcfiles/icons.js?v=13"></script>
-<script src="src/srcfiles/defs.world.js?v=9"></script>
-<script src="src/srcfiles/defs.actions.js?v=8"></script>
-<script src="src/srcfiles/defs.computer.js?v=13"></script>
-<script src="src/srcfiles/state.js?v=15"></script>
-<script src="src/srcfiles/sim.js?v=21"></script>
-<script src="src/srcfiles/world.js?v=13"></script>
-<script src="src/srcfiles/items.js?v=6"></script>
-<script src="src/srcfiles/effects.js?v=6"></script>
-<script src="src/srcfiles/drives.js?v=8"></script>
-<script src="src/srcfiles/actions.js?v=6"></script>
-<script src="src/srcfiles/intent.js?v=6"></script>
-<script src="src/srcfiles/skills.js?v=6"></script>
-<script src="src/srcfiles/stealth.js?v=6"></script>
-<script src="src/srcfiles/time.js?v=9"></script>
-<script src="src/srcfiles/computer.js?v=23"></script>
+<script src="src/srcfiles/config.js?v=37"></script>
+<script src="src/srcfiles/icons.js?v=14"></script>
+<script src="src/srcfiles/defs.world.js?v=10"></script>
+<script src="src/srcfiles/defs.actions.js?v=9"></script>
+<script src="src/srcfiles/defs.computer.js?v=15"></script>
+<!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
+     Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
+<script src="src/srcfiles/orbital.js?v=1"></script>
+<script src="src/srcfiles/state.js?v=19"></script>
+<script src="src/srcfiles/sim.js?v=25"></script>
+<script src="src/srcfiles/world.js?v=14"></script>
+<script src="src/srcfiles/items.js?v=7"></script>
+<script src="src/srcfiles/effects.js?v=7"></script>
+<script src="src/srcfiles/drives.js?v=9"></script>
+<script src="src/srcfiles/actions.js?v=8"></script>
+<script src="src/srcfiles/intent.js?v=7"></script>
+<script src="src/srcfiles/skills.js?v=7"></script>
+<script src="src/srcfiles/stealth.js?v=7"></script>
+<script src="src/srcfiles/time.js?v=11"></script>
+<script src="src/srcfiles/computer.js?v=32"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
-<script src="src/srcfiles/tracker.js?v=2"></script>
+<script src="src/srcfiles/tracker.js?v=3"></script>
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
-<script src="src/srcfiles/phone.js?v=8"></script>
-<script src="src/srcfiles/npc.js?v=9"></script>
-<script src="src/srcfiles/prompt.js?v=7"></script>
-<script src="src/srcfiles/llm.js?v=8"></script>
-<script src="src/srcfiles/interruption.js?v=7"></script>
-<script src="src/srcfiles/image.js?v=7"></script>
-<script src="src/srcfiles/render.js?v=16"></script>
-<script src="src/srcfiles/render.computer.js?v=23"></script>
-<script src="src/srcfiles/render.desktop.js?v=7"></script>
+<script src="src/srcfiles/phone.js?v=9"></script>
+<script src="src/srcfiles/npc.js?v=10"></script>
+<script src="src/srcfiles/prompt.js?v=8"></script>
+<script src="src/srcfiles/llm.js?v=10"></script>
+<script src="src/srcfiles/interruption.js?v=11"></script>
+<script src="src/srcfiles/image.js?v=8"></script>
+<script src="src/srcfiles/render.js?v=17"></script>
+<script src="src/srcfiles/render.computer.js?v=28"></script>
+<script src="src/srcfiles/render.desktop.js?v=8"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
-<script src="src/srcfiles/render.phone.js?v=11"></script>
-<script src="src/srcfiles/ui.js?v=30"></script>
-<script src="src/srcfiles/ui.computer.js?v=22"></script>
-<script src="src/srcfiles/ui.windowmanager.js?v=7"></script>
+<script src="src/srcfiles/render.phone.js?v=12"></script>
+<script src="src/srcfiles/ui.js?v=35"></script>
+<script src="src/srcfiles/ui.computer.js?v=26"></script>
+<!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
+     adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
+     site header with fake address bar + internal back/forward, footer, 404,
+     skeleton grid, and every AfterHours renderer + handler. After
+     ui.computer.js (doBrowserVisit calls AH.onSiteOpen at runtime) and
+     before ui.windowmanager.js. -->
+<script src="src/srcfiles/afterhours.js?v=18"></script>
+<script src="src/srcfiles/ui.windowmanager.js?v=8"></script>
 <!-- BrineOS Phase 3: phone shell orchestration — after ui.computer.js. -->
-<script src="src/srcfiles/ui.phone.js?v=6"></script>
+<script src="src/srcfiles/ui.phone.js?v=7"></script>
 <!-- ===== /SECTION: SCRIPTS ===== -->

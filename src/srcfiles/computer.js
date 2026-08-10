@@ -60,6 +60,36 @@ function defaultComputerState() {
         afterHoursTotalPages: 1,       // Phase 10: pagination
         afterHoursWatching: null, afterHoursSession: null,
         afterHoursWarmupUntilMs: 0,
+        // Site Expansion Phase 1: per-source page cursors so Next Page
+        // advances both feeds; kept in lockstep with afterHoursClipPage
+        // (the UI-facing page number). afterHoursHost is the blended
+        // clip's selected embed host for the host-switch row.
+        afterHoursSourcePages: { ph: 1, ep: 1 },
+        afterHoursHost: 'ph',
+        // Site Expansion Phase 4: the search view's active filters (sort +
+        // source; the duration chips are display-only).
+        // NOTE: afterHoursLiked is intentionally NOT initialized here — Phase
+        // 6 moved the durable list to world.afterHours.liked, and
+        // AH_ensureState migrates any legacy pre-Phase-6 value once.
+        // NOTE: the row cache, the per-clip related-rows cache and the
+        // watched stack/snapshots are NOT here either. They are fetch state,
+        // not app state, and this whole object is written into the save
+        // wholesale (state.js queueWrite('world', 'computer', ...)) — keeping
+        // them here pushed hundreds of clip records into every save and
+        // carried dead 'fetching' entries across reloads, where the kick
+        // guards read them as in-flight and left rows stuck on skeletons.
+        // They live in module-level session caches in AFTERHOURS instead.
+        afterHoursFilter: { sort: 'relevance', source: 'all' },
+        // Site Expansion Phase 2: the routed mini-site. afterHoursView
+        // holds the current routed view + params and the site's internal
+        // history stack (its own back/forward — the sim's browser
+        // Back/Forward still moves between SITES). afterHoursSeed anchors
+        // the deterministic site chrome; old saves lazy-init both via the
+        // AH module (AH_ensureState), since normalizeComputerState
+        // deep-merges per-app but the saved browser object replaces the
+        // fresh defaults wholesale.
+        afterHoursView: { view: 'home', params: {}, stack: [] },
+        afterHoursSeed: null,
       },
       classes: { enrolled: [], completed: [] },
       services: { hired: [] },
@@ -2143,7 +2173,7 @@ function fireContractorMilestone(gameState, milestoneId) {
   const pool = CONTRACTOR_TUTORIAL_MILESTONES[milestoneId];
   if (!pool || !gameState.world.computer?.apps?.im) return false;
   flags[key] = true;
-  const text = pool[Math.floor(Math.random() * pool.length)];
+  const text = pool[Math.floor(orbitalRandom() * pool.length)];
   processNpcImMessages(gameState, [{ npcId: CONTRACTOR_ID, text }]);
   return true;
 }
@@ -2156,7 +2186,14 @@ function fireContractorMilestone(gameState, milestoneId) {
 // present only inside a visit window, never a resident, no rent.
 // Phase 3 uses this for the maid; Phases 5-7 reuse it for drivers, friends
 // and escorts rather than each inventing their own generator.
-function createExternalNpc(gameState, npcId, seedKey, occupationTitle) {
+// AfterHours Phase 7 (Hot Singles): `opts.deviant` is an optional 0..1 skew
+// that re-rolls volatility/openness toward the high end, favours the
+// adult-leaning trait pool (AH_HOT_SINGLES_TUNING.adultTraits), and bakes
+// `bible.deviantLevel` — a [0,1] number derived from that temperament —
+// into every external NPC so later systems can consume it without
+// string-matching (Phase 8 drives interruption math off it; 0 skew just
+// records the temperament's natural deviantLevel).
+function createExternalNpc(gameState, npcId, seedKey, occupationTitle, opts = {}) {
   if (gameState.npcs[npcId]) return gameState.npcs[npcId];
   // Same raw-vs-wrapped tolerance as generateFriendStub/ensureSocialCircles:
   // Phase 7's ensureEscortRoster calls this from writeGeneratedGameState,
@@ -2171,18 +2208,44 @@ function createExternalNpc(gameState, npcId, seedKey, occupationTitle) {
     : (gender === 'male' || gender === 'trans_male') ? CHAR_GEN.namePools.first_m
     : CHAR_GEN.namePools.first_f;
   const name = namePool[Math.floor(rng() * namePool.length)];
-  const traits = pickUnique(rng, PERSONALITY_TRAITS_POOL, 2 + Math.floor(rng() * 2));
+  // Hot Single skew: at least one trait comes from the adult-leaning pool
+  // (the rest from the general pool minus the adult entries, so the trait
+  // set stays unique and canonical).
+  const numTraits = 2 + Math.floor(rng() * 2);
+  let traits;
+  if (opts.deviant > 0) {
+    const adultPool = AH_HOT_SINGLES_TUNING?.adultTraits || [];
+    const adultCount = Math.min(adultPool.length, 1 + Math.floor(rng() * Math.min(2, numTraits)));
+    const adultPick = pickUnique(rng, adultPool, adultCount);
+    const generalPool = PERSONALITY_TRAITS_POOL.filter(t => !adultPool.includes(t));
+    traits = [...adultPick, ...pickUnique(rng, generalPool, numTraits - adultCount)];
+  } else {
+    traits = pickUnique(rng, PERSONALITY_TRAITS_POOL, numTraits);
+  }
   const occ = weightedPick(rng, OCCUPATION_POOL);
+  const temperament = {
+    warmth: rollAxis(rng), volatility: rollAxis(rng), openness: rollAxis(rng),
+    conscientiousness: rollAxis(rng), assertiveness: rollAxis(rng), selfAwareness: rollAxis(rng),
+  };
+  if (opts.deviant > 0) {
+    // Re-roll toward the high end (Locked decision 19): the affine pull
+    // `skew + v*(1-skew)` keeps the [-1,1] span but shifts the mean up.
+    temperament.volatility = skewAxisTowardHigh(rng, opts.deviant);
+    temperament.openness = skewAxisTowardHigh(rng, opts.deviant);
+  }
+  // The deviant number: a temperament-weighted [0,1] so Phase 8 can compare
+  // Hot Singles against low-deviant roommates without string-matching.
+  const deviantLevel = Math.max(0, Math.min(1,
+    0.5 + 0.5 * (0.4 * temperament.volatility + 0.35 * temperament.openness + 0.25 * temperament.assertiveness)
+  ));
   const bible = {
     name,
     genSeed: Math.floor(rng() * 1e9),
     age,
     gender,
     history: '',
-    temperament: {
-      warmth: rollAxis(rng), volatility: rollAxis(rng), openness: rollAxis(rng),
-      conscientiousness: rollAxis(rng), assertiveness: rollAxis(rng), selfAwareness: rollAxis(rng),
-    },
+    deviantLevel,
+    temperament,
     personality: { traits, coreTrait: traits[0] || 'easygoing', hiddenTrait: '', quirks: [], likes: [], dislikes: [] },
     occupation: {
       category: 'service',
@@ -2205,6 +2268,25 @@ function createExternalNpc(gameState, npcId, seedKey, occupationTitle) {
   const npc = createNpcFromBible(bible, 'visitor');
   gameState.npcs[npcId] = npc;
   return npc;
+}
+
+// Push a temperament axis toward its high end: `skew + v*(1-skew)` preserves
+// the [-1,1] span but pulls the mean up by `skew` (skew 0 = identity; 1
+// clamps everything to 1). Used by the Hot Single deviant re-roll.
+function skewAxisTowardHigh(rng, skew) {
+  const v = rollAxis(rng);
+  return Math.max(-1, Math.min(1, skew + v * (1 - skew)));
+}
+
+// AfterHours Phase 7 (Hot Singles): a full external NPC with the deviant
+// skew baked in, occupation-titled "Hot Single". The npcId doubles as the
+// seedKey, so the same world seed always produces the same six people
+// (hot_single_1..6). They are ordinary NPCs after generation — "Say hi"
+// grants contact and they run on every existing external-world path.
+function createHotSingleNpc(gameState, npcId, seedKey) {
+  return createExternalNpc(gameState, npcId, seedKey || npcId, 'Hot Single', {
+    deviant: AH_HOT_SINGLES_TUNING.deviantSkew,
+  });
 }
 
 // --- Friends of roommates (external-world plan Phase 6) ---
@@ -2395,11 +2477,39 @@ function foodMenuEntry(restaurantId, itemId) {
 }
 
 // A kitchen that's closed refuses the order outright rather than silently
-// delivering at 4am. Hours are [openTick, closeTick] in 0-47 half-hour ticks.
+// delivering at 4am. Hours are [openTick, closeTick] in 0-47 half-hour ticks,
+// possibly as an array of windows; a window with open > close wraps across
+// midnight. [0, 47] is the 24h sentinel.
+function getRestaurantWindows(def) {
+  const hours = def?.hours || [0, 47];
+  return Array.isArray(hours[0]) ? hours : [hours];
+}
+
 function isRestaurantOpen(def, tick) {
   if (!def) return false;
-  const [open, close] = def.hours || [0, 47];
-  return tick >= open && tick < close;
+  return getRestaurantWindows(def).some(([open, close]) => {
+    if (open === 0 && close === 47) return true; // [0, 47] = 24 hours
+    if (open > close) return tick >= open || tick < close; // wraps midnight
+    return tick >= open && tick < close;
+  });
+}
+
+// One hours string for both the browse card and the closed-refusal message,
+// so the two can never disagree about what "open" means. A wrap window reads
+// fine as raw 24h times ("17:00–04:00"); [0, 47] gets its own phrasing.
+function formatRestaurantHours(def) {
+  const windows = getRestaurantWindows(def);
+  const label = ([open, close]) => open === 0 && close === 47
+    ? 'Open 24 hours'
+    : `${formatTime(open * 30)}–${formatTime(close * 30)}`;
+  return windows.map(label).join(', ');
+}
+
+// Dev-only coverage helper: how many places are open at a given tick. Not
+// wired into any UI — Phase 4's verification uses it to assert the ≥2-open
+// invariant across all 48 ticks.
+function countRestaurantsOpenAt(tick) {
+  return RESTAURANT_DEFS_LIST.filter(def => isRestaurantOpen(def, tick)).length;
 }
 
 function getFoodApp(gameState) {
@@ -2467,12 +2577,28 @@ function getFoodTravelMinutes(gameState, seq) {
   return FOOD_TUNING.travelMinutesBase + Math.floor(rng() * FOOD_TUNING.travelMinutesVariance);
 }
 
-function getFoodEarliestArrivalTick(gameState, restaurantId, seq) {
+// Absolute-arrival math (Phase 2): an arrival that lands past midnight is
+// DAY+1's delivery, not tick 47 clamped back into today. Convert an absolute
+// minute count into a { day, tick } record; a landing in the final half hour
+// of a day (1410 < m < 1440) rolls over to tick 0 of the next day.
+function foodArrivalFromAbs(abs) {
+  let day = Math.floor(abs / 1440);
+  let tick = Math.ceil((abs % 1440) / 30);
+  if (tick === 48) { tick = 0; day += 1; }
+  return { day, tick };
+}
+
+// The soonest the food could physically arrive: the kitchen's prep time plus
+// travel, rounded up to the next whole tick. Returns { day, tick } because a
+// slow kitchen ordered from late at night legitimately lands on tomorrow's
+// record. Seeded on the day and the order number so the ETA quoted on the
+// cart screen is exactly the ETA the order is placed with.
+function getFoodEarliestArrival(gameState, restaurantId, seq) {
   const def = RESTAURANT_DEFS[restaurantId];
   if (!def) return null;
-  const nowMinutes = gameState.meta.clock.minutes;
-  const minutes = nowMinutes + (def.prepMinutes || 0) + getFoodTravelMinutes(gameState, seq);
-  return Math.ceil(minutes / 30);
+  const clock = gameState.meta.clock;
+  const abs = clock.day * 1440 + clock.minutes + (def.prepMinutes || 0) + getFoodTravelMinutes(gameState, seq);
+  return foodArrivalFromAbs(abs);
 }
 
 // Drivers are a small persistent pool rather than a fresh stranger per order:
@@ -2490,8 +2616,11 @@ function pickFoodDriver(gameState, seq) {
 // Place the order: charge, pick the driver, schedule their visit at the
 // entry, and record the order. Nothing enters inventory here — the handover
 // is processFoodOrdersNow's job when the driver actually turns up.
-// `requestedTick` (optional) is a scheduled delivery time; the order still
-// can't beat the kitchen, so the real arrival is the later of the two.
+// `requestedDay`/`requestedTick` (optional) is a scheduled delivery slot
+// ("today 19:30" or "tomorrow 00:30"); the order still can't beat the
+// kitchen, so the real arrival is the later of the two. The order keeps
+// `day` = the day it was placed (the Orders list) plus `arrivalDay` = the
+// day the driver physically turns up, which is day+1 for late-night orders.
 function placeFoodOrder(gameState, opts = {}) {
   const app = getFoodApp(gameState);
   if (!app) return { ok: false, reason: 'DoorDrop is unavailable.' };
@@ -2503,7 +2632,7 @@ function placeFoodOrder(gameState, opts = {}) {
   const { day, minutes } = gameState.meta.clock;
   const nowTick = getTickIndex(minutes);
   if (!isRestaurantOpen(def, nowTick)) {
-    return { ok: false, reason: `${def.label} is closed right now (${formatTime(def.hours[0] * 30)}–${formatTime(def.hours[1] * 30)}).` };
+    return { ok: false, reason: `${def.label} is closed right now (${formatRestaurantHours(def)}).` };
   }
 
   const orders = gameState.world.foodOrders || (gameState.world.foodOrders = []);
@@ -2513,14 +2642,26 @@ function placeFoodOrder(gameState, opts = {}) {
     return { ok: false, reason: `Can't afford $${totals.total} (you have $${Math.round(gameState.player.money)}).` };
   }
 
-  const earliest = getFoodEarliestArrivalTick(gameState, restaurantId, seq);
-  const requested = Number(opts.requestedTick);
-  let arrivalTick = Number.isFinite(requested) ? Math.max(earliest, requested) : earliest;
-  arrivalTick = Math.min(arrivalTick, earliest + FOOD_TUNING.maxScheduleAheadTicks);
-  // A same-day-only queue: an arrival past midnight would need a visit on
-  // tomorrow's day record, and "order at 11pm for 12:30am" is a corner the
-  // kitchen hours already mostly close. Clamp to the last tick of the day.
-  arrivalTick = Math.min(arrivalTick, 47);
+  const earliest = getFoodEarliestArrival(gameState, restaurantId, seq);
+  const requestedDay = Number(opts.requestedDay);
+  const requestedTick = Number(opts.requestedTick);
+  if (Number.isFinite(requestedDay) && Number.isFinite(requestedTick)
+      && requestedDay !== day && requestedDay !== day + 1) {
+    return { ok: false, reason: 'Deliveries are for today or tomorrow.' };
+  }
+  const earliestAbs = earliest.day * 1440 + earliest.tick * 30;
+  let arrivalAbs = earliestAbs;
+  if (Number.isFinite(requestedDay) && Number.isFinite(requestedTick)) {
+    arrivalAbs = Math.max(arrivalAbs, requestedDay * 1440 + requestedTick * 30);
+  }
+  // Scheduled deliveries can't be pushed arbitrarily far out — the quote
+  // window is earliest..earliest+maxScheduleAheadTicks, the same bound the
+  // cart select offers. No 47 clamp: a late-night order legitimately lands
+  // on tomorrow's record (arrivalDay) when prep+travel crosses midnight.
+  arrivalAbs = Math.min(arrivalAbs, earliestAbs + FOOD_TUNING.maxScheduleAheadTicks * 30);
+  const arrival = foodArrivalFromAbs(arrivalAbs);
+  const arrivalDay = arrival.day;
+  const arrivalTick = arrival.tick;
 
   gameState.player.money -= totals.total;
   const driverNpcId = pickFoodDriver(gameState, seq);
@@ -2535,6 +2676,7 @@ function placeFoodOrder(gameState, opts = {}) {
     tipPct: totals.tipPct,
     total: totals.total,
     day,
+    arrivalDay,
     orderedTick: nowTick,
     arrivalTick,
     driverNpcId,
@@ -2543,8 +2685,11 @@ function placeFoodOrder(gameState, opts = {}) {
   orders.push(order);
   // The driver's presence is a visit like any other — same queue the
   // contractor, the maid and invited guests use (locked decision 1). Short
-  // window at the entry: they're handing over a bag, not moving in.
-  scheduleVisit(gameState, order.id, day, {
+  // window at the entry: they're handing over a bag, not moving in. The
+  // visit lands on the ARRIVAL day's record — tomorrow's when the kitchen
+  // was slow enough to push past midnight (scheduleVisit keys on
+  // source+day, so an order's visit never collides with anything).
+  scheduleVisit(gameState, order.id, arrivalDay, {
     npcId: driverNpcId,
     purpose: 'delivery',
     startTick: arrivalTick,
@@ -2557,9 +2702,12 @@ function placeFoodOrder(gameState, opts = {}) {
 }
 
 // Minutes until the food is at the door, for the live ETA. Negative once the
-// arrival tick has passed (the driver is here / has been).
+// arrival tick has passed (the driver is here / has been). Cross-midnight
+// orders count against arrivalDay; orders saved before arrivalDay existed
+// (no kv migration) fall back to order.day, keeping the old same-day math.
 function getFoodOrderEtaMinutes(order, clock) {
-  const dayDelta = (order.day - clock.day) * 24 * 60;
+  const arrivalDay = order.arrivalDay != null ? order.arrivalDay : order.day;
+  const dayDelta = (arrivalDay - clock.day) * 24 * 60;
   return dayDelta + order.arrivalTick * 30 - clock.minutes;
 }
 

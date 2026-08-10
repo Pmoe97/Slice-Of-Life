@@ -170,6 +170,11 @@ async function processDayRollover(day) {
   // friends. The visit itself is already scheduled (bookEscort); this is
   // lifecycle + narration only.
   processEscortBookingsForDay(day);
+  // Hot Singles (AfterHours Site Expansion Phase 7): the same idempotent
+  // day-rollover backfill the escort roster gets, so a save written before
+  // Phase 7 picks the roster up without a migration and without ever
+  // generating six NPCs from inside a render pass.
+  ensureHotSinglesRoster(currentGameState);
   // Contractor tutorial (contractor doc Phase 3): one-shot quality-milestone hint once apartment quality crosses the threshold.
   maybeFireContractorQualityMilestone();
   processQuestsForDay(day);
@@ -249,13 +254,13 @@ function processNeedConsequences() {
 
   // Random NPC reaction to low hygiene (checked each call)
   if (p.hygiene < NEEDS.hygiene.warnBelow) {
-    const rng = Math.random();
+    const rng = orbitalRandom();
     if (rng < NEED_CONSEQUENCES.hygiene.npcReactionChance) {
       const presentNpcs = getPresentNpcIds(currentGameState.npcs, p.location);
       if (presentNpcs.length > 0) {
-        const npcId = presentNpcs[Math.floor(Math.random() * presentNpcs.length)];
+        const npcId = presentNpcs[Math.floor(orbitalRandom() * presentNpcs.length)];
         const npc = currentGameState.npcs[npcId];
-        const template = NEED_CONSEQUENCES.hygiene.npcReactions[Math.floor(Math.random() * NEED_CONSEQUENCES.hygiene.npcReactions.length)];
+        const template = NEED_CONSEQUENCES.hygiene.npcReactions[Math.floor(orbitalRandom() * NEED_CONSEQUENCES.hygiene.npcReactions.length)];
         addLogEntry('narration', template.replace('{name}', npc.bible.name || 'Someone'));
       }
     }
@@ -277,14 +282,14 @@ function checkRelConsequences(npcId) {
 
   if (tension >= REL_CONSEQUENCES.tensionHigh) {
     // NPC refuses to talk
-    if (Math.random() < REL_CONSEQUENCES.tensionRefuseTalkChance) {
+    if (orbitalRandom() < REL_CONSEQUENCES.tensionRefuseTalkChance) {
       return { canTalk: false, avoided: false, reason: `${npc.bible.name} doesn't want to talk right now. They're clearly upset with you.` };
     }
   }
 
   if (tension >= REL_CONSEQUENCES.tensionThreshold) {
     // NPC might leave the room when you enter
-    if (Math.random() < REL_CONSEQUENCES.tensionAvoidChance) {
+    if (orbitalRandom() < REL_CONSEQUENCES.tensionAvoidChance) {
       return { canTalk: false, avoided: true, reason: `${npc.bible.name} leaves the room when you walk in.` };
     }
   }
@@ -627,6 +632,16 @@ function processVisitsForDay(day) {
       visitor.transit = null;
     }
   }
+  // Retention: world.visits is append-only otherwise, and it is written into
+  // the save in full on every boundary. Retired records older than the
+  // retention window can't affect anything (getActiveVisits is same-day) and
+  // exist only to grow the save — every delivery, maid day, contractor day
+  // and invite leaves one forever. Drop them once they're safely in the past.
+  const cutoff = day - VISIT_TUNING.retainDoneDays;
+  for (let i = visits.length - 1; i >= 0; i--) {
+    const v = visits[i];
+    if (v.day < cutoff && (v.status === 'done' || v.status === 'deferred')) visits.splice(i, 1);
+  }
   // Re-ensure today's contractor windows for still-active jobs.
   for (const job of currentGameState.world.renovationJobs || []) {
     if (job.status !== 'active') continue;
@@ -833,8 +848,12 @@ function processFoodOrdersNow() {
   const tick = getTickIndex(minutes);
   for (const order of orders) {
     if (order.status !== 'ordered') continue;
-    if (day < order.day) continue;
-    if (day === order.day && tick < order.arrivalTick) continue;
+    // Phase 2: an order whose arrival crossed midnight is day+1's delivery.
+    // Orders saved before arrivalDay existed (no kv migration) treat the
+    // arrival day as the order day, preserving the old same-day behavior.
+    const arrivalDay = order.arrivalDay != null ? order.arrivalDay : order.day;
+    if (day < arrivalDay) continue;
+    if (day === arrivalDay && tick < order.arrivalTick) continue;
     handOverFoodOrder(order, day);
   }
 }
@@ -924,6 +943,18 @@ async function doFoodSetTip(pctWhole) {
   await saveAtBoundary('food-tip', currentGameState);
 }
 
+// The DoorDrop browse filter chip (Phase 3d). Pure render-time state: sets
+// the transient foodBrowseFilterService variable (declared in RENDER.
+// COMPUTER, same shared-global pattern as dragGesture) and re-renders both
+// shells. Nothing is written to gameState/kv, so there's no save boundary
+// and no per-user persistence — every reload starts on 'All'.
+function doFoodFilterService(service) {
+  if (!service || !currentGameState) return;
+  foodBrowseFilterService = service;
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+}
+
 // The chosen delivery time is read off the select at submit time — the same
 // "transient form state stays in the DOM until it's committed" pattern
 // doMaidSave uses. Scoped by device because the computer and phone shells
@@ -933,8 +964,11 @@ async function doFoodPlaceOrder(device) {
   if (!currentGameState) return;
   const scope = device === 'phone' ? document.getElementById('phone-screen') : document;
   const select = scope?.querySelector?.('#food-time') || document.getElementById('food-time');
-  const requestedTick = select ? Number(select.value) : undefined;
-  const result = placeFoodOrder(currentGameState, { requestedTick });
+  // The select value is "<day>:<tick>" (today or tomorrow) — the same
+  // value shape the escort booking select uses; the cart can now offer
+  // tomorrow's early-morning slots for orders whose arrival crosses midnight.
+  const [requestedDay, requestedTick] = (select?.value || '').split(':');
+  const result = placeFoodOrder(currentGameState, { requestedDay: Number(requestedDay), requestedTick: Number(requestedTick) });
   if (!result.ok) { addLogEntry('system', result.reason); return; }
   const driver = currentGameState.npcs[result.order.driverNpcId];
   const eta = getFoodOrderEtaMinutes(result.order, currentGameState.meta.clock);
@@ -1006,38 +1040,56 @@ async function doAskContact(npcId) {
 // source uses — the player's invitation is not a special case. Scheduled for
 // the next day inside the standard daytime window so there's always a real
 // wait between inviting and their arrival.
-async function doInviteOver(npcId) {
+//
+// AfterHours Phase 8 (Hot Singles): the site's "Invite Over" button funnels
+// through this same flow with `source: 'ah'` — the visit is tagged
+// `sourceId: 'ah_<npcId>_<day>'` so narration can flavour them as "the
+// person you met on AfterHours", and the guest follows the player through
+// the common rooms (sim.js resolveVisitPresence reads followPlayer) the way
+// an invited date follows their host.
+// Returns { ok, reason? } so a caller that reports its own outcome (the
+// AfterHours profile's Invite Over button toasts in-site) can say what
+// actually happened instead of assuming its own pre-checks still match these.
+async function doInviteOver(npcId, source) {
   const npc = currentGameState?.npcs[npcId];
-  if (!npc) return;
+  if (!npc) return { ok: false, reason: 'No such person.' };
   const name = npc.bible?.name || 'They';
   // Residency first: someone who lives here can't be "invited over" whether
   // or not you happen to have their number.
   if (npc.residency?.status === 'resident') {
-    addLogEntry('system', `${name} already lives here.`);
-    return;
+    const reason = `${name} already lives here.`;
+    addLogEntry('system', reason);
+    return { ok: false, reason };
   }
   if (!npc.contactKnown) {
-    addLogEntry('system', `You don't have ${name}'s number.`);
-    return;
+    const reason = `You don't have ${name}'s number.`;
+    addLogEntry('system', reason);
+    return { ok: false, reason };
   }
   const day = currentGameState.meta.clock.day + 1;
   const existing = (currentGameState.world.visits || []).find(v =>
     v.npcId === npcId && v.day === day && v.status !== 'done' && v.status !== 'deferred');
   if (existing) {
-    addLogEntry('system', `${name} is already coming over that day.`);
-    return;
+    const reason = `${name} is already coming over that day.`;
+    addLogEntry('system', reason);
+    return { ok: false, reason };
   }
+  const ahSource = source === 'ah';
   const win = VISIT_TUNING.contractor; // shared daytime window
-  scheduleVisit(currentGameState, `invite_${npcId}_${day}`, day, {
+  scheduleVisit(currentGameState, ahSource ? `ah_${npcId}_${day}` : `invite_${npcId}_${day}`, day, {
     npcId,
     purpose: 'social',
     startTick: win.startTick,
     endTick: win.endTick,
     roomId: 'living_room',
+    followPlayer: ahSource,
   });
-  addLogEntry('narration', `${name} says they'll come by tomorrow.`);
+  addLogEntry('narration', ahSource
+    ? `${name} — the person you met on AfterHours — says they'll come by tomorrow.`
+    : `${name} says they'll come by tomorrow.`);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('invite-over', currentGameState);
+  return { ok: true };
 }
 
 // Daily goals sourced from resident wants/wounds/interests (brief §Identity:
@@ -1343,7 +1395,7 @@ async function doKnock(roomId) {
         `${name} calls out, "Come in!"`,
         `A pause, then footsteps. ${name} opens the door. "Oh, hey."`,
       ];
-      addLogEntry('narration', `You knock on the ${roomName} door. ${responses[Math.floor(Math.random() * responses.length)]}`);
+      addLogEntry('narration', `You knock on the ${roomName} door. ${responses[Math.floor(orbitalRandom() * responses.length)]}`);
     }
   }
   await advanceAndResolve(1);
@@ -1612,6 +1664,9 @@ async function handleAction(action, npcId, extra) {
     case 'browser.ah-refresh':
       doAfterHoursRefresh();
       break;
+    case 'browser.ah-host':
+      doAfterHoursHost(extra?.source);
+      break;
     case 'browser.ah-close':
       doAfterHoursClose();
       break;
@@ -1653,6 +1708,9 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'food.set-tip':
       await doFoodSetTip(extra?.amount);
+      break;
+    case 'food.filter-service':
+      doFoodFilterService(extra?.service);
       break;
     case 'food.place-order':
       await doFoodPlaceOrder(extra?.device);
@@ -2079,7 +2137,7 @@ function narrateDemotion(demotedId, promotedId) {
   const demotedNpc = currentGameState.npcs[demotedId];
   const promotedNpc = currentGameState.npcs[promotedId];
   if (!demotedNpc) return;
-  const template = DEMOTION_BEATS[Math.floor(Math.random() * DEMOTION_BEATS.length)];
+  const template = DEMOTION_BEATS[Math.floor(orbitalRandom() * DEMOTION_BEATS.length)];
   const text = template
     .replace('{name}', demotedNpc.bible.name || 'They')
     .replace('{other}', promotedNpc?.bible?.name || 'you');
@@ -2188,7 +2246,7 @@ async function doTalk(npcId) {
   if (!relCheck.canTalk) {
     if (relCheck.avoided) {
       const rooms = COMMON_ROOMS.filter(r => r !== currentGameState.player.location);
-      const newRoom = rooms[Math.floor(Math.random() * rooms.length)];
+      const newRoom = rooms[Math.floor(orbitalRandom() * rooms.length)];
       currentGameState.npcs[npcId].location = newRoom;
       currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
     }
@@ -2217,7 +2275,7 @@ async function doTalk(npcId) {
   const npc = currentGameState.npcs[npcId];
   const suspicion = (npc.suspicion || {}).boundary_violation || 0;
   if (suspicion >= STEALTH_TUNING.confrontThreshold) {
-    const template = BOUNDARY_CONFRONT_TEMPLATES[Math.floor(Math.random() * BOUNDARY_CONFRONT_TEMPLATES.length)];
+    const template = BOUNDARY_CONFRONT_TEMPLATES[Math.floor(orbitalRandom() * BOUNDARY_CONFRONT_TEMPLATES.length)];
     convAddBeat(template.replace('{name}', npc.bible.name || 'Your roommate'));
     const effCtx = buildEffectContext(currentGameState, [npcId], [npcId], {}, []);
     const target = suspicion * STEALTH_TUNING.confrontDecayFactor;
@@ -2367,13 +2425,12 @@ async function doMove(roomId) {
   showLoading();
   try {
     currentGameState.player.location = roomId;
-    // Boundary-crossing check runs on entry, before the tick advances, so
+    // Boundary-crossing check runs on entry, before any time passes, so
     // "who was home" reflects who was actually there when the player
     // walked in (see STEALTH's resolveRoomEntryStealth). Trusted producer,
-    // no LLM — safe to run unconditionally on every move.
+    // no LLM — safe to run unconditionally on every move. Room travel is
+    // instant: no tick advances, only the passive clock keeps ticking.
     const stealthResult = resolveRoomEntryStealth(currentGameState, roomId);
-    await advanceAndResolve(1);
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
     // Recompute scene participants for the new room — active starts
     // populated (see getSceneParticipants) rather than empty.
     currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
@@ -2761,6 +2818,13 @@ async function syncGameStateFromKv() {
   const state = await loadGameState();
   if (state) {
     currentGameState = state;
+    // Hot Singles (AfterHours Phase 7): backfill the roster for saves written
+    // before it existed, on the single load path both boot() and
+    // continueGame() go through — and crucially BEFORE the first render. A
+    // save resumed with the browser already sitting on AfterHours renders the
+    // site without ever running doBrowserVisit's onSiteOpen hook, and the
+    // roster must never be generated from inside a render pass.
+    ensureHotSinglesRoster(currentGameState);
   }
 }
 
@@ -2991,8 +3055,10 @@ function attachEventHandlers() {
     if (target.hasAttribute('data-amount')) extra.amount = Number(target.getAttribute('data-amount'));
     if (target.hasAttribute('data-direction')) extra.direction = Number(target.getAttribute('data-direction'));
     if (target.hasAttribute('data-search-text')) extra.searchText = target.getAttribute('data-search-text');
+    if (target.hasAttribute('data-source')) extra.source = target.getAttribute('data-source');
     if (target.hasAttribute('data-key')) extra.key = target.getAttribute('data-key');
     if (target.hasAttribute('data-days')) extra.days = Number(target.getAttribute('data-days'));
+    if (target.hasAttribute('data-service')) extra.service = target.getAttribute('data-service');
     // Device-parameterised nav (BrineOS 0.2): the shell that owns the node
     // declares its device via data-device on itself or any ancestor, and
     // computer.open-screen dispatches on it — the phone shell will emit

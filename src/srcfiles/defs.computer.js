@@ -387,6 +387,28 @@ const SITE_DEFS = {
 };
 const SITE_DEFS_LIST = Object.values(SITE_DEFS);
 
+// AfterHours Site Expansion Phase 5 — the parody ad network. Every entry
+// is authored chrome (Locked decision 12): campy, self-aware, CSS/emoji
+// text only, no AI art, never API-derived. `slot` places it ('banner' =
+// wide strip, 'skyscraper' = tall rail); `copy`/`cta` are the body and
+// button. Kinds: default = classic text+button ad; 'update' = the fake
+// browser-update prompt (OK → toast, Cancel → does nothing, the joke);
+// 'visitor' = the "you are visitor #1,000,000" classic with a countdown
+// that resets on each re-show. Clicks never leave the sandbox — the CTA
+// toasts a campy non-follow.
+const AH_ADS = [
+  { slot: 'banner', kind: null, copy: 'HornyGoat™ Max Dose — for the times two just isn\u2019t enough.', cta: 'Try HornyGoat™', href: 'hornygoat.example', emoji: '🐐' },
+  { slot: 'banner', copy: 'Hot MILFs in YOUR area are waiting to meet you!', cta: 'Meet them now', href: 'milfs.example', emoji: '🔥' },
+  { slot: 'banner', kind: 'visitor', copy: 'Congratulations! You are visitor #1,000,000!', cta: 'Claim my prize', href: 'prize.example', emoji: '🎉' },
+  { slot: 'banner', copy: 'Spin & Win Casino — this spin is statistically your turn.', cta: 'Spin the wheel', href: 'casino.example', emoji: '🎰' },
+  { slot: 'banner', kind: 'update', title: 'AfterHours Browser Update', copy: 'A new version of AfterHours Browser is ready. Install now to watch in 4K. (This is a fake ad. Nothing is installing.)', ctaOk: 'Update now', ctaCancel: 'Later', emoji: '⬇' },
+  { slot: 'banner', copy: 'Local singles want to text you at 3AM. Who are we to judge?', cta: 'Say hi', href: 'textme.example', emoji: '💬' },
+  { slot: 'banner', copy: 'Earn $2,000/week from home. Your roommates will never know.', cta: 'Learn the secret', href: 'sidehustle.example', emoji: '💵' },
+  { slot: 'skyscraper', copy: 'HornyGoat™ Max Dose.', cta: 'Goat it', href: 'hornygoat.example', emoji: '🐐' },
+  { slot: 'skyscraper', copy: 'One click. That\u2019s all it takes.', cta: 'Click me', href: 'oneclick.example', emoji: '👆' },
+  { slot: 'skyscraper', copy: 'Your neighbors are watching this site right now.', cta: 'Prove it', href: 'neighbors.example', emoji: '👀' },
+];
+
 // --- Courses: paid, multi-lesson, real commitments. `requiresLevel` gates
 // enrollment (the same skillLevel check JOB_DEFS' requiredSkills uses),
 // not attendance — once enrolled you can always finish what you started. ---
@@ -451,67 +473,226 @@ const SERVICE_DEFS_LIST = Object.values(SERVICE_DEFS);
 // `prepMinutes` is the kitchen's own turnaround, added to travel time
 // (FOOD_TUNING) to produce the ETA. `hours` is [openTick, closeTick] in the
 // same 0-47 half-hour ticks everything else uses — a closed kitchen refuses
-// the order rather than quietly delivering at 4am.
+// the order rather than quietly delivering at 4am. A window with open > close
+// wraps across midnight ([0, 47] = 24 hours); see getRestaurantWindows /
+// formatRestaurantHours (COMPUTER). `service` is the meal-category the
+// DoorDrop browse filter groups by: breakfast | lunch | dinner | late | 24h.
 const RESTAURANT_DEFS = {
+  // --- The target roster (restaurant network overhaul Phase 3) ---
+  // 12 places total, six new below. Every menu's prices are ~$0.30-0.35 per
+  // hunger point for normal joints, cheaper for breakfast/diner fare, richer
+  // for kaisen/emerald. Existing restaurantIds and all pre-existing itemIds
+  // are unchanged so in-flight world.foodOrders keep resolving.
+  sunrise_cafe: {
+    id: 'sunrise_cafe', label: 'Sunrise Cafe', cuisine: 'Café',
+    blurb: 'Burn the first pancake of every shift, remember your order forever, close by lunch.',
+    service: 'breakfast', deliveryFeeBase: 2, prepMinutes: 10, hours: [12, 28],
+    menu: [
+      { itemId: 'dish_pancake_stack', price: 11 },
+      { itemId: 'dish_belgian_waffle', price: 12 },
+      { itemId: 'dish_breakfast_sandwich', price: 10 },
+      { itemId: 'dish_avocado_toast', price: 9 },
+      { itemId: 'dish_hash_brown_bowl', price: 8 },
+      { itemId: 'dish_granola_bowl', price: 10 },
+      { itemId: 'dish_breakfast_potatoes', price: 6 },
+      { itemId: 'dish_fresh_coffee', price: 4 },
+      { itemId: 'dish_oat_latte', price: 6 },
+      { itemId: 'dish_orange_juice_pitcher', price: 5 },
+      { itemId: 'dish_croissant', price: 5 },
+      { itemId: 'dish_bagel_cc', price: 7 },
+    ],
+  },
+  corner_deli: {
+    id: 'corner_deli', label: 'Corner Deli', cuisine: 'Soup & Deli',
+    blurb: 'Steam on the window, a knife block older than the landlord, a lunch rush that moves like a riot.',
+    service: 'lunch', deliveryFeeBase: 2, prepMinutes: 12, hours: [20, 32],
+    menu: [
+      { itemId: 'dish_pho_ga', price: 12 },
+      { itemId: 'dish_tomato_soup_bowl', price: 8 },
+      { itemId: 'dish_bread_bowl_chili', price: 12 },
+      { itemId: 'dish_chicken_flatbread', price: 11 },
+      { itemId: 'dish_salad_medley', price: 10 },
+      { itemId: 'dish_mushroom_soup', price: 9 },
+      { itemId: 'dish_half_sandwich_soup', price: 11 },
+      { itemId: 'dish_grilled_cheese_deli', price: 9 },
+      { itemId: 'dish_lemonade_pitcher', price: 5 },
+      { itemId: 'dish_turkey_club', price: 12 },
+    ],
+  },
+  big_bite: {
+    id: 'big_bite', label: 'Big Bite Burgers', cuisine: 'American',
+    blurb: 'Fast, greasy, open 24 hours. The fries arrive lukewarm and nobody has ever complained.',
+    service: '24h', deliveryFeeBase: 3, prepMinutes: 15, hours: [0, 47],
+    menu: [
+      { itemId: 'dish_double_burger', price: 15 },
+      { itemId: 'dish_fries', price: 6 },
+      { itemId: 'dish_milkshake', price: 7 },
+      { itemId: 'dish_breakfast_burger', price: 11 },
+      { itemId: 'dish_sausage_egg_muffin', price: 8 },
+      { itemId: 'dish_pancakes', price: 9 },
+      { itemId: 'dish_hash_browns', price: 5 },
+      { itemId: 'dish_chicken_sandwich', price: 13 },
+      { itemId: 'dish_onion_rings', price: 7 },
+      { itemId: 'dish_bacon_burger', price: 16 },
+      { itemId: 'dish_nuggets', price: 8 },
+      { itemId: 'dish_lemonade', price: 4 },
+      { itemId: 'dish_apple_pie', price: 6 },
+    ],
+  },
+  the_greasy_spoon: {
+    id: 'the_greasy_spoon', label: 'The Greasy Spoon', cuisine: 'Diner',
+    blurb: 'Fluorescent lights, sticky menus, and coffee that has been on the burner since 1979.',
+    service: '24h', deliveryFeeBase: 2, prepMinutes: 12, hours: [0, 47],
+    menu: [
+      { itemId: 'dish_diner_breakfast', price: 10 },
+      { itemId: 'dish_club_sandwich', price: 12 },
+      { itemId: 'dish_patty_melt', price: 13 },
+      { itemId: 'dish_grilled_cheese', price: 8 },
+      { itemId: 'dish_tomato_soup_cup', price: 5 },
+      { itemId: 'dish_chicken_tenders', price: 11 },
+      { itemId: 'dish_hamburger_steak', price: 14 },
+      { itemId: 'dish_pancake_plate', price: 9 },
+      { itemId: 'dish_pie_slice', price: 6 },
+      { itemId: 'dish_coffee_mug', price: 3 },
+      { itemId: 'dish_vanilla_shake', price: 6 },
+      { itemId: 'dish_onion_soup', price: 7 },
+    ],
+  },
   golden_wok: {
     id: 'golden_wok', label: 'Golden Wok', cuisine: 'Chinese',
     blurb: 'Takeout cartons, chili oil, and a wok that has never once been off the heat.',
-    deliveryFeeBase: 3, prepMinutes: 20, hours: [22, 44],
+    service: 'dinner', deliveryFeeBase: 3, prepMinutes: 20, hours: [22, 46],
     menu: [
       { itemId: 'dish_kung_pao', price: 14 },
       { itemId: 'dish_chow_mein', price: 13 },
       { itemId: 'dish_dumplings', price: 9 },
       { itemId: 'dish_egg_rolls', price: 6 },
+      { itemId: 'dish_orange_chicken', price: 15 },
+      { itemId: 'dish_lo_mein', price: 12 },
+      { itemId: 'dish_house_fried_rice', price: 13 },
+      { itemId: 'dish_beef_broccoli', price: 14 },
+      { itemId: 'dish_wonton_soup', price: 8 },
+      { itemId: 'dish_fortune_cookies', price: 4 },
     ],
   },
   sals_pizzeria: {
     id: 'sals_pizzeria', label: "Sal's Pizzeria", cuisine: 'Italian',
     blurb: 'A whole pie in a box that barely fits through the door. Sal does not do half-portions.',
-    deliveryFeeBase: 4, prepMinutes: 30, hours: [22, 46],
+    service: 'late', deliveryFeeBase: 4, prepMinutes: 30, hours: [22, 47],
     menu: [
       { itemId: 'dish_pepperoni_pizza', price: 19 },
       { itemId: 'dish_calzone', price: 15 },
       { itemId: 'dish_garlic_knots', price: 7 },
-    ],
-  },
-  big_bite: {
-    id: 'big_bite', label: 'Big Bite Burgers', cuisine: 'American',
-    blurb: 'Fast, greasy, open late. The fries arrive lukewarm and nobody has ever complained.',
-    deliveryFeeBase: 3, prepMinutes: 15, hours: [20, 47],
-    menu: [
-      { itemId: 'dish_double_burger', price: 15 },
-      { itemId: 'dish_fries', price: 6 },
-      { itemId: 'dish_milkshake', price: 7 },
-    ],
-  },
-  kaisen_sushi: {
-    id: 'kaisen_sushi', label: 'Kaisen Sushi', cuisine: 'Japanese',
-    blurb: 'The expensive one. Everything comes in a lacquered box and travels badly.',
-    deliveryFeeBase: 6, prepMinutes: 35, hours: [23, 43],
-    menu: [
-      { itemId: 'dish_salmon_roll', price: 24 },
-      { itemId: 'dish_tempura_udon', price: 18 },
-      { itemId: 'dish_miso_soup', price: 5 },
+      { itemId: 'dish_cheese_pizza', price: 16 },
+      { itemId: 'dish_sausage_pizza', price: 18 },
+      { itemId: 'dish_white_pizza', price: 17 },
+      { itemId: 'dish_meatball_sub', price: 13 },
+      { itemId: 'dish_breadsticks', price: 6 },
+      { itemId: 'dish_caesar_wedge', price: 9 },
+      { itemId: 'dish_cannoli', price: 8 },
+      { itemId: 'dish_limonata', price: 5 },
     ],
   },
   el_camino: {
     id: 'el_camino', label: 'El Camino Taqueria', cuisine: 'Mexican',
     blurb: 'Foil-wrapped, cheap, and enormous. The salsa comes in a container that always leaks.',
-    deliveryFeeBase: 3, prepMinutes: 18, hours: [21, 46],
+    service: 'late', deliveryFeeBase: 3, prepMinutes: 18, hours: [21, 46],
     menu: [
       { itemId: 'dish_al_pastor', price: 12 },
       { itemId: 'dish_burrito', price: 14 },
       { itemId: 'dish_chips_guac', price: 8 },
+      { itemId: 'dish_carnitas_tacos', price: 12 },
+      { itemId: 'dish_chorizo_tacos', price: 13 },
+      { itemId: 'dish_quesadilla', price: 11 },
+      { itemId: 'dish_tamales', price: 10 },
+      { itemId: 'dish_elote', price: 6 },
+      { itemId: 'dish_sopes', price: 9 },
+      { itemId: 'dish_horchata', price: 5 },
+      { itemId: 'dish_bean_cheese_burrito', price: 10 },
     ],
   },
   bangkok_house: {
     id: 'bangkok_house', label: 'Bangkok House', cuisine: 'Thai',
     blurb: 'Asks how spicy you want it and then ignores the answer.',
-    deliveryFeeBase: 4, prepMinutes: 25, hours: [22, 44],
+    service: 'dinner', deliveryFeeBase: 4, prepMinutes: 25, hours: [22, 44],
     menu: [
       { itemId: 'dish_pad_thai', price: 15 },
       { itemId: 'dish_green_curry', price: 16 },
       { itemId: 'dish_spring_rolls', price: 7 },
+      { itemId: 'dish_drunken_noodles', price: 15 },
+      { itemId: 'dish_massaman_curry', price: 17 },
+      { itemId: 'dish_thai_fried_rice', price: 13 },
+      { itemId: 'dish_tom_yum', price: 9 },
+      { itemId: 'dish_satay', price: 11 },
+      { itemId: 'dish_thai_iced_tea', price: 5 },
+      { itemId: 'dish_mango_sticky_rice', price: 9 },
+      { itemId: 'dish_coconut_ice_cream', price: 7 },
+    ],
+  },
+  kaisen_sushi: {
+    id: 'kaisen_sushi', label: 'Kaisen Sushi', cuisine: 'Japanese',
+    blurb: 'The expensive one. Everything comes in a lacquered box and travels badly.',
+    service: 'dinner', deliveryFeeBase: 6, prepMinutes: 35, hours: [23, 43],
+    menu: [
+      { itemId: 'dish_salmon_roll', price: 24 },
+      { itemId: 'dish_tempura_udon', price: 18 },
+      { itemId: 'dish_miso_soup', price: 5 },
+      { itemId: 'dish_spicy_tuna_roll', price: 22 },
+      { itemId: 'dish_rainbow_roll', price: 28 },
+      { itemId: 'dish_ebi_tempura', price: 16 },
+      { itemId: 'dish_chicken_katsu', price: 17 },
+      { itemId: 'dish_gyoza', price: 11 },
+      { itemId: 'dish_edamame', price: 6 },
+      { itemId: 'dish_green_tea', price: 4 },
+      { itemId: 'dish_mochi', price: 8 },
+    ],
+  },
+  emerald_kitchen: {
+    id: 'emerald_kitchen', label: 'Emerald Kitchen', cuisine: 'Upscale',
+    blurb: 'White tablecloths, a sommelier who raises one eyebrow, and prices that quietly exclude you.',
+    service: 'dinner', deliveryFeeBase: 8, prepMinutes: 30, hours: [34, 46],
+    menu: [
+      { itemId: 'dish_ribeye', price: 38 },
+      { itemId: 'dish_duck_breast', price: 34 },
+      { itemId: 'dish_short_rib', price: 36 },
+      { itemId: 'dish_caesar_salad', price: 12 },
+      { itemId: 'dish_butter_potatoes', price: 10 },
+      { itemId: 'dish_creme_brulee', price: 9 },
+      { itemId: 'dish_chocolate_torte', price: 10 },
+      { itemId: 'dish_house_red', price: 14 },
+      { itemId: 'dish_espresso', price: 6 },
+    ],
+  },
+  midnight_noodle: {
+    id: 'midnight_noodle', label: 'Midnight Noodle', cuisine: 'Asian',
+    blurb: 'Steam rolling off the broth at 2am. The last good decision you will make tonight.',
+    service: 'late', deliveryFeeBase: 4, prepMinutes: 18, hours: [34, 8],
+    menu: [
+      { itemId: 'dish_tonkotsu_ramen', price: 16 },
+      { itemId: 'dish_dan_dan', price: 14 },
+      { itemId: 'dish_spicy_wontons', price: 10 },
+      { itemId: 'dish_garlic_fried_rice', price: 12 },
+      { itemId: 'dish_chashu_bowl', price: 15 },
+      { itemId: 'dish_egg_ramen', price: 11 },
+      { itemId: 'dish_gyoza_night', price: 10 },
+      { itemId: 'dish_boba_milk_tea', price: 7 },
+      { itemId: 'dish_cucumber_salad', price: 6 },
+    ],
+  },
+  latenight_munchies: {
+    id: 'latenight_munchies', label: 'Latenight Munchies', cuisine: 'Street food',
+    blurb: 'Anything battered and fried, served to people who smell like regret and victory.',
+    service: 'late', deliveryFeeBase: 3, prepMinutes: 12, hours: [36, 10],
+    menu: [
+      { itemId: 'dish_loaded_nachos', price: 11 },
+      { itemId: 'dish_buffalo_wings', price: 13 },
+      { itemId: 'dish_chili_cheese_tots', price: 9 },
+      { itemId: 'dish_hot_dog', price: 7 },
+      { itemId: 'dish_mozzarella_sticks', price: 8 },
+      { itemId: 'dish_poutine', price: 12 },
+      { itemId: 'dish_fried_pickles', price: 7 },
+      { itemId: 'dish_cheesesteak', price: 14 },
+      { itemId: 'dish_freezie', price: 5 },
     ],
   },
 };
