@@ -92,7 +92,7 @@ function seedStarterGroceries(objects) {
   for (const [defId, groceries] of Object.entries(STARTER_GROCERIES)) {
     const obj = Object.values(kitchen).find(o => o.defId === defId);
     if (!obj) continue;
-    obj.contents = groceries.map(g => ({ defId: g.defId, qty: g.qty, ownerId: null, meta: {} }));
+    obj.contents = groceries.map(g => ({ defId: g.defId, qty: g.qty, ownerId: null, meta: { acquiredDay: 1 } }));
   }
 }
 

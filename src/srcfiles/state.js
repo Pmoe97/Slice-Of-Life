@@ -26,12 +26,76 @@ function assert(cond, msg, context) {
 // --- Folder versions (independent migration) ---
 const FOLDER_VERSIONS = {
   meta: 1,
-  player: 3,
+  player: 4,
   world: 3,
-  npcs: 2,
+  npcs: 3,
   images: 1,
   snapshots: 1,
   objects: 2,
+};
+
+// --- Persisted-key table (Phase 9: the invariant the save system rests on) ---
+// The SINGLE source of truth for what lives in the persisted folders. Both
+// the autosave path (saveAtBoundary) and the snapshot path (captureSave)
+// walk this table — never enumerate persisted keys in two places. castWeb
+// silently never persisted for months because it was missing from exactly
+// this list (it was added to saveAtBoundary's hard-coded queueWrite block,
+// and the two paths drifted apart). `all: true` folders store one kv key
+// per record (npcs: one per character; objects: one per placement bucket) —
+// every key, by construction.
+const SAVE_KEYS = [
+  { folder: 'meta', keys: ['meta'] },
+  { folder: 'player', keys: ['player'] },
+  { folder: 'world', keys: [
+    'rooms', 'castWeb', 'events', 'deliveries', 'renovationJobs',
+    'visits', 'commitments', 'foodOrders', 'externalStubs', 'escortRoster',
+    'escortBookings', 'hotSinglesRoster', 'moveInOffers', 'flags', 'quests',
+    'rent', 'computer', 'taxes', 'bills', 'upgrades', 'utilities',
+    'phone', 'afterHours',
+  ] },
+  { folder: 'npcs', all: true },
+  { folder: 'objects', all: true },
+];
+
+// The in-memory source map for a folder — { key: value } pairs in the same
+// shape SAVE_KEYS describes. meta/player are single-key folders whose value
+// is the live object itself; world is the world map; npcs/objects are their
+// own maps.
+function folderSourceMap(gs, folder) {
+  if (folder === 'meta') return { meta: gs.meta };
+  if (folder === 'player') return { player: gs.player };
+  return gs[folder] || {};
+}
+
+// World keys that may be absent from an in-memory state (a brand-new game
+// state from SIM_generateHouse omits phone/afterHours; a key added to
+// SAVE_KEYS before every construction path sets it) get their historical
+// safe default at write time. These are called at RUNTIME only — the
+// default* fns live in later scripts (sim/computer/world).
+const WORLD_KEY_FALLBACKS = {
+  rooms: () => ({}),
+  castWeb: () => ({}),
+  events: () => [],
+  deliveries: () => [],
+  renovationJobs: () => [],
+  visits: () => [],
+  commitments: () => [],
+  foodOrders: () => [],
+  externalStubs: () => ({}),
+  escortRoster: () => [],
+  escortBookings: () => [],
+  hotSinglesRoster: () => [],
+  moveInOffers: () => [],
+  flags: () => ({}),
+  quests: () => ({ active: [], completed: [] }),
+  rent: () => ({ total: ECONOMY.rent.total, playerShare: ECONOMY.rent.total, roommateShares: {}, coveredByRoommates: 0, contributorCount: 0 }),
+  computer: () => defaultComputerState(),
+  taxes: () => ({ quarterGross: 0, lastQuarterBilled: -1, unpaid: 0, autoReserve: false, reserve: 0, quarterDeductions: 0, lastQuarterOwed: 0, lastQuarterPaid: 0 }),
+  bills: () => initBillState(),
+  upgrades: () => initUpgradesState(),
+  utilities: () => initUtilitiesState(),
+  phone: () => defaultPhoneState(),
+  afterHours: () => defaultAfterHoursState(),
 };
 
 // --- Migration functions (per folder). Stubbed for day-one; iterate here. ---
@@ -55,6 +119,18 @@ const MIGRATIONS = {
       alarm: player.alarm ?? null,
       energyMax: player.energyMax ?? ENERGY.startingMax,
       burnout: player.burnout ?? { consecutiveWorkDays: 0, burnoutLevel: 0, lastWorkDay: 0 },
+    }) },
+    // player 3->4 (needs rebalance Phase 5): the hunger rhythm + mood
+    // impulse model. hoursSinceLastMeal is backfilled FROM the old 0-100
+    // hunger display (satietyStart − hunger)/perHour, clamped ≥ 0, so a
+    // save mid-day keeps a sensible hunger state instead of snapping to
+    // "just ate" — an old hunger of 80 → 2h, 40 → 10h, 0 → 18h (still
+    // starving). mealsToday and the moodEvents pool start empty.
+    { from: 3, to: 4, fn: (player) => ({
+      ...player,
+      hoursSinceLastMeal: player.hoursSinceLastMeal ?? Math.max(0, (HUNGER_RHYTHM.satietyStart - (player.hunger ?? 80)) / HUNGER_RHYTHM.satietyPerHour),
+      mealsToday: player.mealsToday ?? 0,
+      moodEvents: player.moodEvents ?? [],
     }) },
   ],
   world: [
@@ -112,6 +188,13 @@ const MIGRATIONS = {
     // consumer breaks, but a formal migration ensures consistency rather
     // than relying on every read site to guard with `|| {}`.
     { from: 1, to: 2, fn: (npc) => migrateNpcToV2(npc) },
+    // npcs 2->3 (inventory overhaul Phase 8, D8): backfill npc.inventory
+    // from the lifestyle template (NPC.seedNpcInventory) for saves
+    // predating NPC possessions. Deterministic per bible.genSeed, and
+    // keyed to residency.since (the day they moved in) so a mid-game
+    // backfill ages their snack stash from move-in, not day one. An NPC
+    // that somehow already carries an inventory passes through untouched.
+    { from: 2, to: 3, fn: (npc) => seedNpcInventory(npc, npc?.residency?.since ?? 1) },
   ],
   images: [],
   snapshots: [],
@@ -318,7 +401,13 @@ async function initStorage() {
   let meta = await root.kv.meta.get('meta');
   if (!meta) {
     meta = {
-      versions: { meta: 1, player: 1, world: 3, npcs: 2, images: 1, snapshots: 1, objects: 2 },
+      // Spread FOLDER_VERSIONS rather than restating it. This literal was a
+      // hand-maintained second copy of that table and had already drifted
+      // (it still said npcs: 2 after the Phase 8 bump to 3) — the same
+      // enumerate-in-two-places failure SAVE_KEYS exists to prevent. It was
+      // benign only because the npcs folder is empty at this point and
+      // seedNpcInventory is idempotent; the next drift might not be.
+      versions: { ...FOLDER_VERSIONS },
       seed: null,
       clock: null,
       structuralHash: null,
@@ -387,6 +476,13 @@ let autosaveTimer = null;
 // the timer see whatever currentGameState points to at each tick.
 function startAutosave(getState) {
   if (autosaveTimer) clearInterval(autosaveTimer);
+  autosaveTimer = null;
+  // Menu overhaul Phase 10: the Options screen's Autosave toggle (kv.menu
+  // 'options') can switch autosaving off. isAutosaveEnabled() lives in
+  // MENU — defined after STATE at load, but only CALLED at runtime (the
+  // same forward-reference rule every startX in this file relies on).
+  // Absent (nothing defined it yet) means on — the historical default.
+  if (typeof isAutosaveEnabled === 'function' && !isAutosaveEnabled()) return;
   autosaveTimer = setInterval(() => saveAtBoundary('timer', getState ? getState() : null), AUTOSAVE_MS);
 }
 
@@ -441,77 +537,36 @@ function normalizeAfterHoursState(raw) {
 // nothing new to write and this only stamps the save timestamp.
 async function saveAtBoundary(reason, gameState) {
   if (gameState) {
-    gameState.meta.saveTimestamp = Date.now();
-    queueWrite('meta', 'meta', gameState.meta);
-    queueWrite('player', 'player', gameState.player);
-    queueWrite('world', 'rooms', gameState.world.rooms);
-    // castWeb was missing here — NPC-to-NPC relationship deltas from
-    // applyNpcToNpcDelta silently never persisted past the in-memory
-    // session (found while wiring EFFECTS into the save path; see
-    // ref/ARCHITECTURE.md).
-    queueWrite('world', 'castWeb', gameState.world.castWeb);
-    queueWrite('world', 'events', gameState.world.events);
-    queueWrite('world', 'deliveries', gameState.world.deliveries);
-    queueWrite('world', 'renovationJobs', gameState.world.renovationJobs);
-    // Visit spine (external-world plan Phase 1): the visit queue is world
-    // state like any other — visitors' presence windows must survive a
-    // reload mid-visit so Del doesn't vanish from the site mid-shift.
-    queueWrite('world', 'visits', gameState.world.visits || []);
-    // Food delivery (external-world plan Phase 5): an order in flight has
-    // real money in it — it must survive a reload as reliably as the
-    // driver's visit does.
-    queueWrite('world', 'foodOrders', gameState.world.foodOrders || []);
-    // Friends of roommates (external-world plan Phase 6): the stub table is
-    // the only record of who a resident's friends ARE until one is promoted.
-    queueWrite('world', 'externalStubs', gameState.world.externalStubs || {});
-    // Escorts (external-world plan Phase 7): the roster and booking ledger —
-    // a booking in flight has real money in it and a visit scheduled against
-    // it, so it must survive a reload as reliably as the visit does.
-    queueWrite('world', 'escortRoster', gameState.world.escortRoster || []);
-    queueWrite('world', 'escortBookings', gameState.world.escortBookings || []);
-    // Hot Singles (AfterHours Site Expansion Phase 7): roster membership for
-    // the site's "Hot Singles in your area" section. The people themselves
-    // persist through the npcs loop below; this is the fixed-slot order.
-    queueWrite('world', 'hotSinglesRoster', gameState.world.hotSinglesRoster || []);
-    // Move-in offers (external-world plan Phase 8): a pending vouch survives
-    // a reload like any other world fact — the player may come back to
-    // RoomList days later and still find the offer waiting.
-    queueWrite('world', 'moveInOffers', gameState.world.moveInOffers || []);
-    // Contractor tutorial (contractor doc Phase 3): one-shot tutorial/milestone flags.
-    queueWrite('world', 'flags', gameState.world.flags || {});
-    queueWrite('world', 'quests', gameState.world.quests);
-    queueWrite('world', 'rent', gameState.world.rent);
-    queueWrite('world', 'computer', gameState.world.computer || defaultComputerState());
-    queueWrite('world', 'taxes', gameState.world.taxes);
-    queueWrite('world', 'bills', gameState.world.bills || initBillState());
-    queueWrite('world', 'upgrades', gameState.world.upgrades || initUpgradesState());
-    queueWrite('world', 'utilities', gameState.world.utilities || initUtilitiesState());
-    // BrineOS Phase 2: the phone shell's nav state (navStack/openAppId,
-    // Phase 3). Decision B — presence is DERIVED from the object bucket,
-    // never stored here. Lazy-init in-memory so every later reader can
-    // trust world.phone exists.
+    const now = Date.now();
+    // Phase 9: real time between boundaries is real play time. saveTimestamp
+    // is stamped here, so the delta from the previous boundary is play that
+    // happened; the save record's meta.playtimeMs reads the accumulator.
+    gameState.meta.playtimeMs = (gameState.meta.playtimeMs || 0) + (now - (gameState.meta.saveTimestamp || now));
+    gameState.meta.saveTimestamp = now;
+    // Lazy-init guarantee (the world.phone pattern): every later reader can
+    // trust world.phone/world.afterHours exist. Both are then picked up by
+    // the SAVE_KEYS loop below like any other world key.
     gameState.world.phone = gameState.world.phone || defaultPhoneState();
-    queueWrite('world', 'phone', gameState.world.phone);
-    // AfterHours (Site Expansion Phase 6): the site's durable player data —
-    // history/liked/searchHistory/continueWatching. Lazy-init in-memory so
-    // every later reader can trust world.afterHours exists (the world.phone
-    // pattern); old saves start empty and back-fill as the player browses.
     gameState.world.afterHours = gameState.world.afterHours || defaultAfterHoursState();
-    queueWrite('world', 'afterHours', gameState.world.afterHours);
-    // kv.npcs is one key per npc (brief: "appending an episode rewrites one
-    // character, not the world"). Every tick resolves every NPC's
-    // location/activity/needs/mood in-memory via resolveBatch, but until
-    // this loop existed nothing ever wrote that back to kv — location and
-    // needs silently reverted to new-game values on every reload.
-    for (const [id, npc] of Object.entries(gameState.npcs || {})) {
-      queueWrite('npcs', id, npc);
-    }
-    // Object buckets are few (~12) and small, so an unconditional write
-    // loop here is the same tradeoff the NPC loop above already makes —
-    // real dirty-tracking is worth adding once something actually mutates
-    // objects on most turns (P2 cooking, P6 stealth), not before.
-    for (const [bucket, data] of Object.entries(gameState.objects || {})) {
-      queueWrite('objects', bucket, data);
+    // The persisted key list is SAVE_KEYS and nothing else — the single
+    // table both the autosave path and the snapshot path (captureSave)
+    // walk, so a new world sub-key joins both with one edit.
+    for (const { folder, keys, all } of SAVE_KEYS) {
+      const src = folderSourceMap(gameState, folder);
+      if (all) {
+        // npcs/objects: one kv key per record — write everything present.
+        for (const [id, data] of Object.entries(src)) {
+          queueWrite(folder, id, data);
+        }
+      } else {
+        for (const key of keys) {
+          let val = src[key];
+          if (val === undefined && folder === 'world' && WORLD_KEY_FALLBACKS[key]) {
+            val = WORLD_KEY_FALLBACKS[key]();
+          }
+          queueWrite(folder, key, val);
+        }
+      }
     }
   } else {
     const meta = await root.kv.meta.get('meta') || {};
@@ -519,6 +574,13 @@ async function saveAtBoundary(reason, gameState) {
     queueWrite('meta', 'meta', meta);
   }
   await forceFlush();
+  // Phase 9: boundary autosaves rotate a save record (the 5-deep ring) so
+  // the save menu always has recent recoverable points. Manual/quick/exit
+  // writes go through their own handlers (saveToSlot); only the reasons in
+  // SAVE_TUNING.recordReasons land here.
+  if (gameState && SAVE_TUNING.recordReasons.includes(reason)) {
+    await saveToSlot(gameState, 'auto');
+  }
   console.debug('Autosaved at boundary:', reason);
 }
 
@@ -695,11 +757,24 @@ async function setCachedImage(sceneKey, blob) {
   }
 }
 
-// ===== SAVE / LOAD =====
-
-async function saveGame(gameState) {
-  await saveAtBoundary('manual', gameState);
+// Remove one image from the LRU — both the blob folder and the index.
+// Used by the menu slideshow to enforce its own share cap (deviation 4:
+// the menu keeps a bounded ring of its cache keys and deletes the evicted
+// ones itself, instead of letting unbounded menu generation churn the
+// shared LRU against scene images).
+async function deleteCachedImage(key) {
+  await root.kv.images.delete(key);
+  await root.kv.meta.update('meta', (meta) => {
+    meta = meta || {};
+    const imageIndex = { ...(meta.imageIndex || {}) };
+    delete imageIndex[key];
+    return { ...meta, imageIndex };
+  });
 }
+
+// ===== SAVE / LOAD =====
+// (saveGame is gone — Phase 9's save system writes through saveToSlot +
+// saveAtBoundary; a bare 'manual' persist is `saveAtBoundary('manual', gs)`.)
 
 async function hasSave() {
   const meta = await root.kv.meta.get('meta');
@@ -765,6 +840,11 @@ async function loadGameState() {
   // existed — an in-flight job on such a save gets its crew visits via
   // processVisitsForDay's rollover backstop, no migration needed.
   const visits = await getWorld('visits') || [];
+  // Meal commitments (inventory overhaul Phase 7): the resident-side
+  // schedule-override queue. Empty for saves written before Phase 7 — a
+  // commitment is created live at invite time, so there is nothing to
+  // backfill (same pattern as moveInOffers).
+  const commitments = await getWorld('commitments') || [];
   // Food delivery (external-world plan Phase 5): placed DoorDrop orders.
   // Empty for saves written before food existed; an order in flight survives
   // a reload because its driver's visit is in `visits` alongside it.
@@ -808,7 +888,7 @@ async function loadGameState() {
     npcIds: Object.keys(npcs).filter(id => id.startsWith('npc_')),
     // droppedConstraints is persisted in meta by writeGeneratedGameState.
     droppedConstraints: meta.droppedConstraints || [],
-    world: { rooms, castWeb, quests, events, deliveries, renovationJobs, visits, foodOrders, externalStubs, escortRoster, escortBookings, moveInOffers, rent, computer, taxes, bills, upgrades, utilities, phone, afterHours, hotSinglesRoster, flags },
+    world: { rooms, castWeb, quests, events, deliveries, renovationJobs, visits, commitments, foodOrders, externalStubs, escortRoster, escortBookings, moveInOffers, rent, computer, taxes, bills, upgrades, utilities, phone, afterHours, hotSinglesRoster, flags },
   };
   // Lazily spawns any bucket missing from kv (a pre-WORLD save, or a
   // resident who moved in since the last full write) rather than needing a
@@ -864,38 +944,34 @@ async function writeGeneratedGameState(gameState) {
     // consumed by narration (that's LLM prompt-construction territory —
     // see ui.js's handleGenerateCast) but persisted rather than dropped.
     contentConfig: gameState.contentConfig || { tone: CONTENT_CONFIG.tone, contentPrefs: [] },
+    // Phase 9 lineage: a fresh playthrough is its own run; the first save
+    // captures it as saveIndex 1 with no parent. lastSaveId null means "no
+    // save loaded yet this session" — captureSave chains the first one to
+    // nothing, every later one to whatever came before.
+    runId: genRunId(),
+    saveIndex: 0,
+    lastSaveId: null,
+    playtimeMs: 0,
   });
 
-  await root.kv.player.set('player', gameState.player);
-
-  await root.kv.world.set('rooms', gameState.world.rooms);
-  await root.kv.world.set('castWeb', gameState.world.castWeb);
-  await root.kv.world.set('quests', gameState.world.quests);
-  await root.kv.world.set('events', gameState.world.events);
-  await root.kv.world.set('deliveries', gameState.world.deliveries);
-  await root.kv.world.set('renovationJobs', gameState.world.renovationJobs || []);
-  await root.kv.world.set('visits', gameState.world.visits || []);
-  await root.kv.world.set('foodOrders', gameState.world.foodOrders || []);
-  await root.kv.world.set('externalStubs', gameState.world.externalStubs || {});
-  await root.kv.world.set('escortRoster', gameState.world.escortRoster || []);
-  await root.kv.world.set('escortBookings', gameState.world.escortBookings || []);
-  await root.kv.world.set('hotSinglesRoster', gameState.world.hotSinglesRoster || []);
-  await root.kv.world.set('moveInOffers', gameState.world.moveInOffers || []);
-  await root.kv.world.set('flags', gameState.world.flags || {});
-  await root.kv.world.set('rent', gameState.world.rent);
-  await root.kv.world.set('computer', gameState.world.computer || defaultComputerState());
-  await root.kv.world.set('taxes', gameState.world.taxes);
-  await root.kv.world.set('bills', gameState.world.bills || initBillState());
-  await root.kv.world.set('upgrades', gameState.world.upgrades || initUpgradesState());
-  await root.kv.world.set('utilities', gameState.world.utilities || initUtilitiesState());
-  // BrineOS Phase 2: phone shell nav state (Phase 3); presence is derived
-  // from the object bucket, never stored here (decision B).
+  // The new-game write walks the SAME SAVE_KEYS table as the autosave path
+  // and the snapshot path — a new world sub-key joins all three with one
+  // edit (the invariant). meta is excluded: setMeta above is the one true
+  // write for the fresh meta (a SIM_generateHouse state has no meta yet).
+  // phone/afterHours are lazy-inited beside the write (the world.phone
+  // pattern) before the loop picks them up.
   gameState.world.phone = gameState.world.phone || defaultPhoneState();
-  await root.kv.world.set('phone', gameState.world.phone);
-  // AfterHours (Site Expansion Phase 6): durable site data. Empty for a
-  // brand-new game — the player fills it by browsing.
   gameState.world.afterHours = gameState.world.afterHours || defaultAfterHoursState();
-  await root.kv.world.set('afterHours', gameState.world.afterHours);
+  for (const { folder, keys, all } of SAVE_KEYS) {
+    if (all || folder === 'meta') continue; // npcs/objects below (with stale-key sweeps)
+    for (const key of keys) {
+      let val = folder === 'world' ? gameState.world[key] : gameState[folder];
+      if (val === undefined && folder === 'world' && WORLD_KEY_FALLBACKS[key]) {
+        val = WORLD_KEY_FALLBACKS[key]();
+      }
+      await root.kv[folder].set(key, val);
+    }
+  }
 
   for (const [id, npc] of Object.entries(gameState.npcs)) {
     await root.kv.npcs.set(id, npc);
@@ -916,8 +992,310 @@ async function writeGeneratedGameState(gameState) {
   return gameState;
 }
 
-// ===== EXPORT / IMPORT =====
+// ===== SAVE SYSTEM V2 (inventory overhaul Phase 9, D9/D10) =====
+// VN-style slot grid on kv. kv.saves holds the full records, one key per
+// slot (manual_0..manual_11 plus grown, auto_0..auto_4, quick, exit);
+// kv.saveIndex holds a lightweight list of summaries the menu renders
+// cards from WITHOUT deserializing any payload. runId groups saves under a
+// playthrough; parentSaveId + saveIndex record lineage so the branching-tree
+// view is a later pure-UI addition with zero migration. Records follow the
+// plan's save-record shape: { saveId, runId, parentSaveId, saveIndex, kind,
+// createdAt, meta (card summary), payload (full folder snapshot) }.
 
+function genRunId() {
+  return 'run_' + orbitalRandom().toString(36).substring(2, 10);
+}
+
+function genSaveId() {
+  return 'sv_' + orbitalRandom().toString(36).substring(2, 12);
+}
+
+// Build the per-slot index entry (summary, no payload) from a record. The
+// card render surface is the SAME object the record carries — one shape,
+// two writers.
+function recordToIndexEntry(record) {
+  return {
+    saveId: record.saveId,
+    slotId: record.slotId,
+    kind: record.kind,
+    runId: record.runId,
+    parentSaveId: record.parentSaveId,
+    saveIndex: record.saveIndex,
+    createdAt: record.createdAt,
+    meta: record.meta,
+  };
+}
+
+async function getSaveIndex() {
+  const idx = await root.kv.saveIndex.get('index');
+  return Array.isArray(idx) ? idx : [];
+}
+
+async function setSaveIndex(list) {
+  await root.kv.saveIndex.set('index', list);
+}
+
+async function upsertIndexEntry(entry) {
+  const list = await getSaveIndex();
+  // Keyed by SLOT, not saveId: overwriting a slot produces a brand-new
+  // saveId, and matching on saveId would stack a second index entry per
+  // overwrite (the index would grow without bound while the ring rotates).
+  const i = list.findIndex(e => e.slotId === entry.slotId);
+  if (i >= 0) list[i] = entry; else list.push(entry);
+  list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)); // newest first
+  await setSaveIndex(list);
+  return list;
+}
+
+// Rebuild the index from kv.saves — recovery/self-heal if the index and the
+// records ever disagree (e.g. an overwrite landed but the index update was
+// interrupted). Cheap: kv.saves holds at most ~30 small records.
+async function rebuildSaveIndex() {
+  const keys = await root.kv.saves.keys();
+  const list = [];
+  for (const slotId of keys) {
+    const record = await root.kv.saves.get(slotId);
+    if (record && record.saveId) list.push(recordToIndexEntry(record));
+  }
+  list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  await setSaveIndex(list);
+  return list;
+}
+
+async function dropIndexEntry(slotId) {
+  const list = await getSaveIndex();
+  const next = list.filter(e => e.slotId !== slotId);
+  await setSaveIndex(next);
+  return next;
+}
+
+// Full folder snapshot from the live in-memory state, walking SAVE_KEYS —
+// the invariant that makes the whole design hold (a new world sub-key
+// joins the save the moment it joins SAVE_KEYS; there is nowhere else to
+// forget it).
+function captureSavePayload(gs) {
+  const payload = {};
+  for (const { folder, keys, all } of SAVE_KEYS) {
+    const src = folderSourceMap(gs, folder);
+    payload[folder] = {};
+    if (all) {
+      for (const [id, data] of Object.entries(src)) payload[folder][id] = data;
+    } else {
+      for (const key of keys) {
+        let val = src[key];
+        if (val === undefined && folder === 'world' && WORLD_KEY_FALLBACKS[key]) {
+          val = WORLD_KEY_FALLBACKS[key]();
+        }
+        if (val !== undefined) payload[folder][key] = val;
+      }
+    }
+  }
+  return payload;
+}
+
+// Build a save record from the live in-memory state. Mutates gs.meta the
+// same way saveAtBoundary does (runId/saveIndex/lastSaveId lazy-init) — the
+// surrounding write persists meta, so the lineage is durable, not just
+// in-memory. opts.sceneKey is the image-cache key of the scene currently on
+// screen (thumbnail reuses the LRU blob cache in kv.images — a cache key,
+// never a second copy of the image); when absent it is recomputed from the
+// present NPCs.
+function captureSave(gs, kind, opts = {}) {
+  const meta = gs.meta || {};
+  const clock = meta.clock || {};
+  meta.runId = meta.runId || genRunId();
+  meta.saveIndex = (meta.saveIndex ?? 0) + 1;
+  const saveId = genSaveId();
+  const parentSaveId = meta.lastSaveId || null;
+  meta.lastSaveId = saveId;
+
+  const roomId = gs.player?.location;
+  const minutes = clock.minutes ?? CLOCK.startMinutes;
+  const sceneKey = opts.sceneKey
+    || (roomId ? composeSceneKey(roomId, clock.phase || getPhase(minutes), 'normal', getPresentNpcIds(gs.npcs, roomId)) : null);
+
+  const log = meta.sessionLog || [];
+  const headlineEntry = [...log].reverse()
+    .find(e => e && typeof e.text === 'string' && ['narration', 'dialogue', 'action'].includes(e.type))
+    || log[log.length - 1];
+  const headline = headlineEntry?.text && typeof headlineEntry.text === 'string'
+    ? (headlineEntry.text.length > 160 ? headlineEntry.text.slice(0, 160) + '…' : headlineEntry.text)
+    : null;
+
+  const castNames = Object.values(gs.npcs || {})
+    .filter(n => n?.residency?.status !== 'former')
+    .map(n => n?.bible?.name || 'Unknown');
+
+  const record = {
+    saveId,
+    slotId: null, // assigned by writeSaveRecord
+    runId: meta.runId,
+    parentSaveId,
+    saveIndex: meta.saveIndex,
+    kind,
+    createdAt: Date.now(),
+    meta: {
+      day: clock.day ?? 1,
+      minutes,
+      phase: clock.phase || getPhase(minutes),
+      roomId,
+      money: gs.player?.money ?? 0,
+      playerName: gs.player?.name || 'You',
+      castNames,
+      thumbKey: sceneKey,
+      headline,
+      playtimeMs: meta.playtimeMs || 0,
+      gameVersion: GAME_VERSION,
+      folderVersions: { ...FOLDER_VERSIONS },
+    },
+    payload: captureSavePayload(gs),
+  };
+  return record;
+}
+
+// Write a record to its slot + refresh the lightweight index. The lineage
+// fields captureSave stamped on gs.meta are reached through the payload
+// snapshot (payload.meta IS gs.meta) and pushed to kv.meta here so the next
+// capture in this session chains parentSaveId correctly.
+async function writeSaveRecord(record, slotId) {
+  record.slotId = slotId;
+  await root.kv.saves.set(slotId, record);
+  await upsertIndexEntry(recordToIndexEntry(record));
+  if (record.payload?.meta?.meta) {
+    await root.kv.meta.set('meta', record.payload.meta.meta);
+  }
+  return record;
+}
+
+// Save the live game state to a slot. slotId absent → kind decides:
+// manual = lowest free manual slot (grow on demand), auto = the oldest
+// autosave (rotating ring), quick/exit = their fixed slots.
+async function saveToSlot(gs, kind, opts = {}) {
+  let target = opts.slotId;
+  if (!target) {
+    if (kind === 'quick' || kind === 'exit') target = kind;
+    else if (kind === 'auto') target = await rotateAutosaveSlot();
+    else target = await allocateManualSlot();
+  }
+  const record = captureSave(gs, kind, { sceneKey: opts.sceneKey });
+  await writeSaveRecord(record, target);
+  return record;
+}
+
+async function allocateManualSlot() {
+  const index = await getSaveIndex();
+  const used = new Set();
+  for (const e of index) {
+    const m = /^manual_(\d+)$/.exec(e.slotId || '');
+    if (m) used.add(Number(m[1]));
+  }
+  for (let i = 0; i < SAVE_TUNING.manualBaseSlots; i++) {
+    if (!used.has(i)) return `manual_${i}`;
+  }
+  // Base grid full — grow on demand above it.
+  let n = SAVE_TUNING.manualBaseSlots;
+  while (used.has(n)) n++;
+  return `manual_${n}`;
+}
+
+async function rotateAutosaveSlot() {
+  const index = await getSaveIndex();
+  const autos = index.filter(e => e.kind === 'auto').sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  if (autos.length < SAVE_TUNING.autosaveDepth) {
+    const used = new Set(autos.map(e => Number(String(e.slotId).split('_')[1]) || 0));
+    for (let i = 0; i < SAVE_TUNING.autosaveDepth; i++) {
+      if (!used.has(i)) return `auto_${i}`;
+    }
+  }
+  return autos.length > 0 ? autos[0].slotId : 'auto_0'; // oldest overwritten
+}
+
+async function deleteSaveSlot(slotId) {
+  await root.kv.saves.delete(slotId);
+  await dropIndexEntry(slotId);
+}
+
+async function saveCapacityInfo() {
+  const index = await getSaveIndex();
+  const total = index.length;
+  return {
+    total,
+    free: Math.max(0, SAVE_TUNING.maxTotalSaves - total),
+    warn: total >= SAVE_TUNING.maxTotalSaves - SAVE_TUNING.warnNearLimit,
+  };
+}
+
+// Get the full record for a slot (index entry + payload). Returns null if
+// the slot is empty or its record is missing.
+async function getSaveRecord(slotId) {
+  const record = await root.kv.saves.get(slotId);
+  return record || null;
+}
+
+// The slot id space, ordered for the grid: manual slots first (base range +
+// any grown above it, both from the index), then the autosave ring, then
+// quick + exit. Occupied slots carry their index entry; empty ones are
+// placeholders. The menu renders from this — kv.saveIndex alone, never a
+// payload.
+async function buildSaveSlotGrid() {
+  const index = await getSaveIndex();
+  const bySlot = new Map(index.map(e => [e.slotId, e]));
+  const manualIds = new Set();
+  for (const e of index) if (/^manual_\d+$/.test(e.slotId || '')) manualIds.add(e.slotId);
+  for (let i = 0; i < SAVE_TUNING.manualBaseSlots; i++) manualIds.add(`manual_${i}`);
+  const manual = [...manualIds].sort((a, b) => Number(a.split('_')[1]) - Number(b.split('_')[1]));
+  const auto = [];
+  for (let i = 0; i < SAVE_TUNING.autosaveDepth; i++) auto.push(`auto_${i}`);
+  const order = ['quick', 'exit'];
+  const sections = [
+    { label: 'Manual saves', slotIds: manual },
+    { label: 'Autosaves', slotIds: auto },
+    { label: 'Quick & exit', slotIds: order },
+  ];
+  return sections.map(sec => ({
+    label: sec.label,
+    slots: sec.slotIds.map(slotId => ({ slotId, entry: bySlot.get(slotId) || null })),
+  }));
+}
+
+// Install a record's payload into kv and run the recorded folder versions
+// up through the existing migration chain, then rebuild the in-memory state.
+// Refuses a NEWER save (recorded version > current — importing a save from
+// a newer build must be surfaced as a warning, not silently mangled).
+async function restoreSave(record) {
+  if (!record || !record.payload) return null;
+  const recordedVersions = record.payload.meta?.meta?.versions || {};
+  for (const [folder, ver] of Object.entries(recordedVersions)) {
+    if (typeof FOLDER_VERSIONS[folder] === 'number' && ver > FOLDER_VERSIONS[folder]) {
+      throw new Error(`This save was written by a newer version of the game (${folder} v${ver} > v${FOLDER_VERSIONS[folder]}). Please update the game before loading it.`);
+    }
+  }
+  await initStorage(); // folders exist before the writes below
+  for (const [folder, data] of Object.entries(record.payload)) {
+    if (!root.kv[folder]) continue;
+    for (const [key, value] of Object.entries(data || {})) {
+      await root.kv[folder].set(key, value);
+    }
+  }
+  // Stale keys from a later state must not leak into the loaded save: an
+  // NPC who moved in after this snapshot isn't part of it, and an object
+  // bucket spawned later isn't either. Same stale-key sweep
+  // writeGeneratedGameState does for a new game.
+  const expectedNpcKeys = new Set(Object.keys(record.payload.npcs || {}));
+  for (const k of await root.kv.npcs.keys()) {
+    if (!expectedNpcKeys.has(k)) await root.kv.npcs.delete(k);
+  }
+  const expectedObjKeys = new Set(Object.keys(record.payload.objects || {}));
+  for (const k of await root.kv.objects.keys()) {
+    if (!expectedObjKeys.has(k)) await root.kv.objects.delete(k);
+  }
+  // The installed meta carries the recorded folderVersions; loadGameState's
+  // initStorage runs each folder's MIGRATIONS chain from there up to the
+  // current version (snapshot-before-migrate included) and rebuilds state.
+  return await loadGameState();
+}
+
+// ===== EXPORT / IMPORT =====
 async function exportCharacter(npcId) {
   const npc = await getNpc(npcId);
   if (!npc) return null;
@@ -978,6 +1356,90 @@ async function importHousehold(json) {
   }
   await setWorld('castWeb', json.castWeb || {});
   return npcs;
+}
+
+// --- Save export/import (Phase 9, D10) ---
+// A save exports as a gzip-compressed base64 blob — copyable into chat or a
+// file, and downloadable. Import validates the envelope, warns on a
+// gameVersion mismatch (a NEWER save is refused by restoreSave's version
+// guard), and installs into a fresh manual slot. Thumbnails are cache keys,
+// not image data, so an export never carries multi-megabyte blobs.
+const SAVE_EXPORT_TYPE = 'slice-of-life-save';
+const SAVE_EXPORT_VERSION = 1;
+
+function bytesToBase64(bytes) {
+  let bin = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
+function base64ToBytes(b64) {
+  const bin = atob(b64.replace(/\s+/g, ''));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function gzipBytes(bytes) {
+  const cs = new CompressionStream('gzip');
+  const writer = cs.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+}
+
+async function gunzipBytes(bytes) {
+  const ds = new DecompressionStream('gzip');
+  const writer = ds.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+}
+
+// Compressed base64 export of a full record.
+async function exportSaveRecord(record) {
+  const json = JSON.stringify({
+    type: SAVE_EXPORT_TYPE,
+    version: SAVE_EXPORT_VERSION,
+    gameVersion: GAME_VERSION,
+    exportedAt: Date.now(),
+    record,
+  });
+  const bytes = new TextEncoder().encode(json);
+  const compressed = await gzipBytes(bytes);
+  return bytesToBase64(compressed);
+}
+
+// Parse + validate an exported blob. Returns the record, or throws a
+// human-readable error. gameVersion is surfaced on the returned object's
+// .gameVersion for the UI's version-mismatch warning; the imported record's
+// meta.imageIndex is scrubbed because the LRU index is local-browser state —
+// a stale index would evict real cached images before their blobs ever load.
+async function importSaveRecord(text) {
+  let parsed;
+  try {
+    const compressed = base64ToBytes(text.trim());
+    const bytes = await gunzipBytes(compressed);
+    parsed = JSON.parse(new TextDecoder().decode(bytes));
+  } catch (e) {
+    throw new Error('That file is not a valid save (could not decompress it).');
+  }
+  if (!parsed || parsed.type !== SAVE_EXPORT_TYPE) {
+    throw new Error('That file is not a save for this game.');
+  }
+  if (parsed.version !== SAVE_EXPORT_VERSION) {
+    throw new Error(`Unsupported save format version ${parsed.version} (this build reads version ${SAVE_EXPORT_VERSION}).`);
+  }
+  const record = parsed.record;
+  if (!record || !record.payload) throw new Error('That save is missing its payload and cannot be loaded.');
+  if (record.payload.meta?.meta) {
+    record.payload.meta.meta.imageIndex = {};
+  }
+  record._importedGameVersion = parsed.gameVersion || 'unknown';
+  return record;
 }
 
 // ===== /SECTION: STATE =====

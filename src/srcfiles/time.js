@@ -276,7 +276,7 @@ async function advanceAndResolveMinutes(minutes) {
   // to be, in either direction.
   currentGameState.meta.clock = absoluteToClock(targetAbs);
 
-  currentGameState.player = decayPlayerNeeds(currentGameState.player, minutes / CLOCK.tickMinutes);
+  currentGameState.player = decayPlayerNeeds(currentGameState.player, minutes / CLOCK.tickMinutes, currentGameState);
   return ticks;
 }
 
@@ -291,7 +291,12 @@ async function runSimCheckpoint(minutes) {
     // these minutes. This path only runs the NPC simulation over them.
     const ticks = Math.max(1, Math.round(minutes / CLOCK.tickMinutes));
     await advanceAndResolve(ticks, { advanceClock: false, fromClockLoop: true });
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, minutes / CLOCK.tickMinutes);
+    // Phase 5 (D12): this is the IDLE path — real wall-clock minutes passed
+    // while the player did nothing. Need decay runs at
+    // NEEDS.idleDecayMultiplier so reading the log isn't punished like
+    // taking actions is. advanceAndResolveMinutes (the acting path) leaves
+    // the option unset.
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, minutes / CLOCK.tickMinutes, currentGameState, { idle: true });
   } finally {
     checkpointInProgress = false;
     if (pendingCheckpointMinutes >= TIME_DILATION.simCheckpointMinutes) {

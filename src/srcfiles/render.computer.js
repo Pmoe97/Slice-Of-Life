@@ -2255,6 +2255,15 @@ function renderMessages(body, gs, app, screen) {
       invite.setAttribute('data-row-id', im.viewingNpcId);
       invite.textContent = 'Invite Over';
       header.appendChild(invite);
+    } else if (npc.residency?.status === 'resident') {
+      // Meal commitments (overhaul Phase 7, D7): roommates are the people
+      // you invite to a shared dinner — the same in-person ask, over text.
+      const inviteDinner = document.createElement('button');
+      inviteDinner.className = 'btn tiny im-invite-btn';
+      inviteDinner.setAttribute('data-action', 'im.invite-dinner');
+      inviteDinner.setAttribute('data-row-id', im.viewingNpcId);
+      inviteDinner.textContent = 'Invite to Dinner';
+      header.appendChild(inviteDinner);
     }
     pane.appendChild(header);
 

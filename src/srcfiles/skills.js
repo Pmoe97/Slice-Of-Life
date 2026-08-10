@@ -17,6 +17,22 @@ function skillLevel(player, skillId) {
   return Math.min(SKILLS.maxLevel, Math.floor(Math.sqrt(xp / SKILLS.xpPerLevelBase)));
 }
 
+// The single site that awards skill XP — ADD_SKILL_XP's applier (EFFECTS)
+// and the classes app's attendLesson (COMPUTER) both call here so the
+// level-up dopamine rule lives in one place: crossing a level boundary
+// pushes a mood impulse (MOOD_PAYOUTS.skillLevelUp × levels crossed). All
+// other readers (skillMod etc.) keep reading player.skills directly.
+function awardSkillXp(player, skillId, xp, day) {
+  player.skills = player.skills || {};
+  const before = skillLevel(player, skillId);
+  player.skills[skillId] = (player.skills[skillId] || 0) + Number(xp);
+  const after = skillLevel(player, skillId);
+  if (after > before && player !== undefined) {
+    pushMoodImpulse(player, MOOD_PAYOUTS.skillLevelUp * (after - before), day);
+  }
+  return player.skills[skillId];
+}
+
 // 11 entries each, indexed 0..SKILLS.maxLevel. Only `timeReduction` is
 // consumed by anything yet (ACTIONS' resolveTimeCost, wired to
 // self.cook's `cooking` skill) — the rest (cookQuality, stealthSuccess,

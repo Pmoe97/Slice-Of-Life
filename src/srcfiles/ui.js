@@ -136,6 +136,10 @@ async function advanceAndResolve(ticks, opts = {}) {
 // --- Day rollover: rent, deliveries, quests ---
 
 async function processDayRollover(day) {
+  // Phase 5: the meal-rhythm counter belongs to the calendar day, not the
+  // session — a fresh day is a fresh slate for "how many meals have I had
+  // today".
+  if (currentGameState.player) currentGameState.player.mealsToday = 0;
   await processRentForDay(day);
   processBillsForDayUi(day);
   // BrineOS Phase 7 (plan 7.2): after, not before — autopay must see this
@@ -144,6 +148,12 @@ async function processDayRollover(day) {
   processAutopayForDayUi(day);
   processTaxesForDayUi(day);
   processDeliveriesForDay(day);
+  // Spoilage (inventory overhaul Phase 4): stacks past shelf life +
+  // graceDays convert to a mess — ROTTEN_FOOD on their container + room
+  // odor — feeding the existing cleanliness machinery. Before the maid so
+  // a visit hired for today can clean a mess that formed at this
+  // rollover.
+  processSpoilageForDay(currentGameState, day);
   // Renovation overhaul: materials "arrive" with the day's deliveries, then
   // any job whose ETA is today wraps up — grouping renovations next to
   // deliveries keeps the day-rollover narrative order sensible.
@@ -154,6 +164,12 @@ async function processDayRollover(day) {
   // remaining working days. Runs after the jobs rollover so a job that
   // completes today schedules nothing (its last work day was yesterday).
   processVisitsForDay(day);
+  // Meal commitments (inventory overhaul Phase 7, D7): the resident-side
+  // sibling of the visit sweep — a 'scheduled' commitment whose day passed
+  // without a meal becomes 'missed', and old held/missed records are pruned.
+  // After processVisitsForDay, mirroring its placement; runs before the
+  // maid so a same-day cleaning can clear the table left from yesterday.
+  processCommitmentsForDay(currentGameState, day);
   // The maid (external-world plan Phase 3): charge + perform + schedule her
   // presence for today, if today is one of her contracted days. After
   // processVisitsForDay so today's fresh visit isn't swept by the retirement
@@ -223,12 +239,15 @@ function processNeedConsequences() {
     p.flags._starvingStreak = (p.flags._starvingStreak || 0) + 1;
     if (!p.flags._starving) {
       p.flags._starving = true;
-      p.mood = Math.max(-1, p.mood + NEED_CONSEQUENCES.hunger.moodPenaltyPerTick * 5);
+      // Phase 5: mood is an impulse system — the starvation penalty is a
+      // decaying impulse (eventTerm), never a direct bar write. The
+      // sustained pressure comes from the hunger band in the mood target.
+      pushMoodImpulse(p, NEED_CONSEQUENCES.hunger.moodPenaltyPerTick * 5, currentGameState.meta.clock.day);
       addLogEntry('narration', NEED_CONSEQUENCES.hunger.logMessage);
     }
     if (p.flags._starvingStreak >= NEED_CONSEQUENCES.hunger.healthThresholdTicks && !p.flags._starvingHealthHit) {
       p.flags._starvingHealthHit = true;
-      p.mood = Math.max(-1, p.mood + NEED_CONSEQUENCES.hunger.moodPenaltyPerTick * 5);
+      pushMoodImpulse(p, NEED_CONSEQUENCES.hunger.moodPenaltyPerTick * 5, currentGameState.meta.clock.day);
       addLogEntry('narration', NEED_CONSEQUENCES.hunger.healthLogMessage);
     }
   } else if (p.hunger > 10) {
@@ -415,7 +434,11 @@ async function processRentForDay(day) {
   }
 
   if ((player.rentOwed || 0) > 0) {
-    player.mood = Math.max(-1, player.mood - ECONOMY.rentLatePenaltyMood);
+    // Phase 5: the direct per-day mood subtraction (ECONOMY.rentLatePenaltyMood)
+    // is gone — overdue rent is now a steady drag on the mood TARGET
+    // (MOOD_TARGET.stress.rentPenalty), so the bar eases down to it rather
+    // than being pushed toward -1 forever. The relationship consequences
+    // below are untouched.
     for (const [id, npc] of Object.entries(currentGameState.npcs)) {
       if (npc.residency.status !== 'resident') continue;
       currentGameState.npcs[id] = applyRelDelta(npc, { tension: ECONOMY.rentLateTensionPerDay }, currentGameState.meta.clock.day);
@@ -539,7 +562,7 @@ function processDeliveriesForDay(day) {
     d.status = 'delivered';
     const label = ITEM_DEFS[d.defId]?.label || d.defId || 'a package';
     if (doormat && d.defId) {
-      doormat.contents = addStack(doormat.contents, d.defId, d.qty || 1, null, {});
+      doormat.contents = addStack(doormat.contents, d.defId, d.qty || 1, null, {}, currentGameState.meta.clock.day);
       addLogEntry('narration', `A delivery has arrived: ${label}. It's waiting by the front door.`);
     } else {
       addLogEntry('narration', `A delivery has arrived: ${label}.`);
@@ -876,9 +899,9 @@ function handOverFoodOrder(order, day) {
   for (const line of order.items) {
     if (!ITEM_DEFS[line.itemId]) continue;
     if (toPlayer) {
-      currentGameState.player.inventory = addStack(currentGameState.player.inventory, line.itemId, line.qty, 'player', {});
+      currentGameState.player.inventory = addStack(currentGameState.player.inventory, line.itemId, line.qty, 'player', {}, currentGameState.meta.clock.day);
     } else if (doormat) {
-      doormat.contents = addStack(doormat.contents, line.itemId, line.qty, null, {});
+      doormat.contents = addStack(doormat.contents, line.itemId, line.qty, null, {}, currentGameState.meta.clock.day);
     }
   }
 
@@ -1092,6 +1115,54 @@ async function doInviteOver(npcId, source) {
   return { ok: true };
 }
 
+// Meal invitations (inventory overhaul Phase 7, D7): invite a RESIDENT to
+// a shared dinner — in person (the Social chip) or by IM (the chat-header
+// button). Picks a day + meal window (render.js's openDinnerInvitePicker),
+// creates the world.commitments record, and narrates the immediate yes/no:
+// acceptance is decided AT INVITE TIME by COMMITMENTS.respondToCommitment,
+// so a roommate who dislikes you declines on the spot and a work-shift
+// conflict is a real, named reason. Costs a tick like any social action
+// (ask-contact) — needs decay exactly once via advanceAndResolve.
+async function doInviteDinner(npcId) {
+  const npc = currentGameState?.npcs?.[npcId];
+  if (!npc) return;
+  const name = npc.bible?.name || 'They';
+  if (npc.residency?.status !== 'resident') {
+    addLogEntry('system', `Only your housemates sit down for a shared dinner — ${name} lives elsewhere.`);
+    return;
+  }
+  const choice = await openDinnerInvitePicker(name);
+  if (!choice) return;
+  const { record, responses } = createCommitment(currentGameState, {
+    day: choice.day, tickStart: choice.tickStart, tickEnd: choice.tickEnd,
+    roomId: 'dining', invitedIds: [npcId],
+  });
+  const resp = responses?.[npcId];
+  const when = choice.day === currentGameState.meta.clock.day
+    ? 'today'
+    : choice.day === currentGameState.meta.clock.day + 1
+      ? 'tomorrow'
+      : formatDate(choice.day);
+  const at = formatTime(choice.tickStart * 30);
+  if (resp?.accept) {
+    addLogEntry('narration', `${name} says yes — dinner ${when} at ${at}. You'll set the table in the dining room.`);
+  } else if (resp?.reason === 'busy') {
+    const busy = resp.block;
+    const why = busy === 'sleep' ? "they'll be asleep then"
+      : (busy === 'work' || busy === 'commute' || busy === 'commute_home') ? 'they have work around then'
+        : "they're tied up";
+    addLogEntry('narration', `${name} can't make dinner ${when} at ${at} — ${why}. Maybe another time.`);
+  } else {
+    addLogEntry('narration', `${name} gives a long look and declines the invitation. It hangs awkwardly in the air.`);
+  }
+  if (record.acceptedIds.length === 0 && record.declinedIds.length > 0) {
+    addLogEntry('system', `${name} isn't coming — you can still set the table and eat alone, or pick a different time.`);
+  }
+  await advanceAndResolve(1);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('invite-dinner', currentGameState);
+}
+
 // Daily goals sourced from resident wants/wounds/interests (brief §Identity:
 // "daily goals with real consequences"). Generation is deterministic
 // (seeded RNG, no LLM — consistent with SIM's off-screen resolution).
@@ -1245,7 +1316,10 @@ function checkChainQuestProgress(actionType, npcId, itemCategory) {
       if (quest.rewardRelation) {
         currentGameState.npcs[npcId] = applyRelDelta(currentGameState.npcs[npcId], quest.rewardRelation, currentGameState.meta.clock.day);
       }
-      addLogEntry('system', `Goal complete: ${quest.title} (+$${quest.rewardMoney || 0})`);
+      // Phase 6 (D13): resolving a chain quest is a genuine win — mood
+      // impulse alongside the money/relationship payoff.
+      pushMoodImpulse(currentGameState.player, MOOD_PAYOUTS.questComplete, currentGameState.meta.clock.day);
+      addLogEntry('system', `Goal complete: ${quest.title} (+${quest.rewardMoney || 0})`);
     } else {
       const nextStep = quest.steps[quest.currentStep];
       quest.desc = nextStep.desc;
@@ -1269,6 +1343,10 @@ async function doPayRent() {
   }
   player.money -= owed;
   player.rentOwed = 0;
+  // Phase 6 (D13): getting the balance to zero is a real relief — a mood
+  // impulse on top of the stress-term drag (MOOD_TARGET.stress.rentPenalty)
+  // that the cleared balance removes.
+  pushMoodImpulse(player, MOOD_PAYOUTS.payRent, currentGameState.meta.clock.day);
   addLogEntry('narration', `You pay ${owed} in rent. That's a relief.`);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('pay-rent', currentGameState);
@@ -1363,7 +1441,7 @@ async function doPeep(roomId) {
     return;
   }
   addLogEntry('narration', result.narration);
-  currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
+  currentGameState.player = decayPlayerNeeds(currentGameState.player, 1, currentGameState);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('peep', currentGameState);
 }
@@ -1399,9 +1477,64 @@ async function doKnock(roomId) {
     }
   }
   await advanceAndResolve(1);
-  currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
+  currentGameState.player = decayPlayerNeeds(currentGameState.player, 1, currentGameState);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('knock', currentGameState);
+}
+
+// --- Room search (inventory overhaul Phase 8, D8) ---
+// Searching a roommate's room surfaces their possessions via the modal
+// (render.js's openRoomSearchModal); the take that follows routes through
+// the same ADJUST_SUSPICION boundary_violation path as phone-snooping
+// (drives.js:400) — the owner in the room to catch you pays the full
+// witnessed delta. Browsing is free; the TAKE pays game time through
+// advanceAndResolveMinutes (search + pocket, decayed exactly once), so
+// the room-search can never become a free-action item printer.
+async function doSearchRoom(ownerId) {
+  if (!currentGameState) return;
+  const npc = currentGameState.npcs[ownerId];
+  if (!npc) return;
+  if (roomOwnerId(currentGameState.player.location, currentGameState.npcs) !== ownerId) {
+    addLogEntry('system', "You're not in their room.");
+    return;
+  }
+  const choice = await openRoomSearchModal(npc);
+  if (!choice) return;
+  await doTakeFromRoom(ownerId, choice.defId, choice.qty);
+}
+
+async function doTakeFromRoom(ownerId, defId, qty) {
+  if (!currentGameState) return;
+  const npc = currentGameState.npcs[ownerId];
+  const def = ITEM_DEFS[defId];
+  if (!npc || !def) return;
+  const stack = (npc.inventory || []).find(s => s.defId === defId && (s?.qty || 0) > 0);
+  if (!stack) { addLogEntry('system', "It isn't there anymore."); return; }
+  if (stack.meta?.keyItem || def.keyItem) {
+    addLogEntry('system', "You can't take that — it's personal.");
+    return;
+  }
+  const name = npc.bible.name || 'They';
+  const roomId = currentGameState.player.location;
+  const presentIds = getPresentNpcIds(currentGameState.npcs, roomId);
+  const ownerPresent = presentIds.includes(ownerId);
+  const delta = ownerPresent
+    ? STEALTH_TUNING.witnessedSuspicionDelta
+    : STEALTH_TUNING.possessionTakeSuspicionDelta;
+  const roomObjects = currentGameState.objects[`room_${roomId}`] || {};
+  const effCtx = buildEffectContext(currentGameState, [], presentIds, roomObjects, currentGameState.player.inventory || []);
+  const lines = [
+    `MOVE_ITEM ${defId} ${qty} ${ownerId} player`,
+    `ADJUST_SUSPICION ${ownerId} boundary_violation +${delta}`,
+  ];
+  applyEffects(lines.map(l => parseEffectDSL(l)[0]).filter(Boolean), effCtx);
+  await advanceAndResolveMinutes(STEALTH_TUNING.searchTimeMinutes + STEALTH_TUNING.takeTimeMinutes);
+  const label = def.label || stack.meta?.origName || defId;
+  addLogEntry('narration', ownerPresent
+    ? `You pocket ${name}'s ${label}${qty > 1 ? ` ×${qty}` : ''} right in front of them. Their eyes narrow.`
+    : `You take ${name}'s ${label}${qty > 1 ? ` ×${qty}` : ''}. They're none the wiser.`);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('room-take', currentGameState);
 }
 
 // Give item: gives a meal/food/gift item from inventory to an NPC.
@@ -1447,6 +1580,254 @@ async function doGiveItem(npcId) {
   await saveAtBoundary('give-item', currentGameState);
 }
 
+// --- Inventory panel verbs (overhaul Phase 1) ---
+// The panel's Use/Drop/Trash all emit effect-DSL lines (EAT_ITEM /
+// MOVE_ITEM / DESTROY_ITEM — all `implemented: true` in EFFECT_DEFS) and
+// then pay the same game time as an equivalent action chip through
+// advanceAndResolveMinutes: the clock advances, needs decay exactly once
+// (never twice), and the panel can never become a way to act for free.
+// Phase 3: Use routes through EAT_ITEM (not CONSUME_ITEM) so food with
+// `servings` is eaten one serving at a time with leftovers tracked via
+// meta.servingsLeft; defs without servings behave exactly like the old
+// whole-item consume, so nothing else changed.
+function inventoryCtxForUi() {
+  return buildInventoryCtx(currentGameState);
+}
+
+function inventoryActionQty(stack) {
+  const input = document.getElementById('invp-qty');
+  const requested = input ? Math.floor(Number(input.value)) : 1;
+  return clamp(requested || 1, 1, stack?.qty || 1);
+}
+
+function inventoryStackLabel(stack) {
+  return describeStack(stack, { day: currentGameState.meta.clock.day }).label;
+}
+
+function inventoryUseNarration(stack) {
+  const def = stackDef(stack);
+  const c = def.consumable || {};
+  const label = inventoryStackLabel(stack);
+  const verb = def.category === 'drink' ? 'drink' : (c.hunger > 0 ? 'eat' : 'use');
+  const extra = c.energy > 0 ? ' — it perks you up.' : (c.mood > 0 ? ' — that hits the spot.' : '.');
+  return `You ${verb} some ${label}${extra}`;
+}
+
+async function applyInventoryVerb(effectLine, minutes, narration, reason) {
+  const ctx = inventoryCtxForUi();
+  applyEffects(parseEffectDSL(effectLine), ctx);
+  await advanceAndResolveMinutes(minutes);
+  if (narration) addLogEntry('narration', narration);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary(reason, currentGameState);
+}
+
+async function doInventoryUse(defId) {
+  if (!currentGameState) return;
+  const stack = (currentGameState.player.inventory || []).find(s => s.defId === defId);
+  if (!stack) return;
+  const ctx = inventoryCtxForUi();
+  if (!stackActions(stack, ctx).use) { addLogEntry('system', "You can't use that."); return; }
+  const def = stackDef(stack);
+  // Phase 3: EAT_ITEM is serving-aware — for multi-serving food the qty
+  // input means SERVINGS eaten, so using a pizza eats a slice and leaves
+  // the rest; single-serving defs behave exactly like the old CONSUME_ITEM.
+  const qty = inventoryActionQty(stack);
+  const minutes = INVENTORY_TUNING.useTimeMinutes[def.category] ?? INVENTORY_TUNING.useTimeMinutes._default;
+  await applyInventoryVerb(`EAT_ITEM ${defId} ${qty} player`, minutes, inventoryUseNarration(stack), 'inventory-use');
+}
+
+async function doInventoryDrop(defId) {
+  if (!currentGameState) return;
+  const stack = (currentGameState.player.inventory || []).find(s => s.defId === defId);
+  if (!stack) return;
+  const ctx = inventoryCtxForUi();
+  if (!stackActions(stack, ctx).drop) { addLogEntry('system', "You can't drop that here."); return; }
+  const floor = Object.values(ctx.roomObjects).find(o => o.defId === 'floor');
+  if (!floor) { addLogEntry('system', "There's nowhere to set that down in this room."); return; }
+  const qty = inventoryActionQty(stack);
+  const label = inventoryStackLabel(stack);
+  await applyInventoryVerb(
+    `MOVE_ITEM ${defId} ${qty} player ${floor.id}`,
+    INVENTORY_TUNING.dropMinutes,
+    `You set the ${label}${qty > 1 ? ` ×${qty}` : ''} down on the floor here.`,
+    'inventory-drop'
+  );
+}
+
+async function doInventoryTrash(defId) {
+  if (!currentGameState) return;
+  const stack = (currentGameState.player.inventory || []).find(s => s.defId === defId);
+  if (!stack) return;
+  const ctx = inventoryCtxForUi();
+  if (!stackActions(stack, ctx).trash) { addLogEntry('system', "You can't trash that."); return; }
+  const qty = inventoryActionQty(stack);
+  const label = inventoryStackLabel(stack);
+  await applyInventoryVerb(
+    `DESTROY_ITEM ${defId} ${qty} player`,
+    INVENTORY_TUNING.trashMinutes,
+    `You throw the ${label}${qty > 1 ? ` ×${qty}` : ''} away.`,
+    'inventory-trash'
+  );
+}
+
+async function doInventoryPlace(defId) {
+  if (!currentGameState) return;
+  const stack = (currentGameState.player.inventory || []).find(s => s.defId === defId);
+  if (!stack) return;
+  const ctx = inventoryCtxForUi();
+  if (!stackActions(stack, ctx).place) { addLogEntry('system', "You can't place that here."); return; }
+  const objDef = OBJECT_DEFS[defId];
+  if (!objDef) { addLogEntry('system', "That can't be placed."); return; }
+  const roomId = currentGameState.player.location;
+  const roomName = ROOMS[roomId]?.name || roomId;
+  // Two effect lines in one batch: the shipped ITEM_DEFS stack leaves the
+  // bag (DESTROY_ITEM) and the matching OBJECT_DEFS instance spawns into
+  // the current room's bucket (SPAWN_OBJECT) — the mutation routes through
+  // applyEffects like every other verb, then pays the clock once.
+  await applyInventoryVerb(
+    `DESTROY_ITEM ${defId} 1 player\nSPAWN_OBJECT ${defId} ${roomId}`,
+    INVENTORY_TUNING.placeMinutes,
+    `You unbox the ${objDef.label} and set it up in the ${roomName}.`,
+    'inventory-place'
+  );
+}
+
+// --- Container transfers (overhaul Phase 2) ---
+// The shared two-panel chest UI's verbs. Take/Put move one stack (the
+// selected one) between the open container and the bag; Take All / Put All
+// move every transferable stack on that side. All of them emit MOVE_ITEM
+// effect-DSL lines through applyEffects (mutation stays on the EFFECTS
+// path) and then pay INVENTORY_TUNING.containerVerbMinutes once per batch
+// through advanceAndResolveMinutes — same "act, then decay exactly once"
+// rule as the inventory verbs, so the chest can never outrun the clock.
+function containerCtxForUi() {
+  return buildInventoryCtx(currentGameState);
+}
+
+function openContainerObject(objId) {
+  if (!currentGameState || !objId) return null;
+  return findObjectById(currentGameState, objId);
+}
+
+function containerLabel(obj) {
+  const def = OBJECT_DEFS[obj?.defId];
+  return def?.container?.label || def?.label || 'Container';
+}
+
+function containerTransferQty(stack) {
+  const input = document.getElementById('ctr-qty');
+  const requested = input ? Math.floor(Number(input.value)) : 1;
+  return clamp(requested || 1, 1, stack?.qty || 1);
+}
+
+function containerStackLabel(stack) {
+  return describeStack(stack, { day: currentGameState.meta.clock.day }).label;
+}
+
+async function applyContainerVerb(lines, minutes, narration, reason) {
+  const effects = lines.map(line => parseEffectDSL(line)[0]).filter(Boolean);
+  if (effects.length === 0) return;
+  const ctx = containerCtxForUi();
+  applyEffects(effects, ctx);
+  await advanceAndResolveMinutes(minutes);
+  if (narration) addLogEntry('narration', narration);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary(reason, currentGameState);
+}
+
+async function doContainerTransfer(objId, defId, direction) {
+  if (!currentGameState) return;
+  const obj = openContainerObject(objId);
+  if (!obj) return;
+  const ctx = containerCtxForUi();
+  // The chest must be in the room the player is standing in — the chips
+  // only ever render in-room containers, but a stale ctrObjId (e.g. a
+  // panel left open across an action that changed rooms) must not let the
+  // trusted MOVE_ITEM path reach an out-of-room object.
+  if (!ctx.roomObjects[objId]) { addLogEntry('system', "You can't reach that from here."); return; }
+  const from = direction === 'take' ? objId : 'player';
+  const to = direction === 'take' ? 'player' : objId;
+  const srcList = direction === 'take' ? containerStacks(obj) : (currentGameState.player.inventory || []);
+  const stack = srcList.find(s => s.defId === defId);
+  if (!stack) { addLogEntry('system', "That isn't there anymore."); return; }
+  if (direction === 'put' && !stackActions(stack, ctx).transfer) {
+    addLogEntry('system', "You can't put that away.");
+    return;
+  }
+  const qty = containerTransferQty(stack);
+  const label = containerStackLabel(stack);
+  const name = containerLabel(obj);
+  await applyContainerVerb(
+    transferPlan(from, to, defId, qty),
+    INVENTORY_TUNING.containerVerbMinutes,
+    direction === 'take'
+      ? `You take the ${label}${qty > 1 ? ` ×${qty}` : ''} from the ${name}.`
+      : `You put the ${label}${qty > 1 ? ` ×${qty}` : ''} into the ${name}.`,
+    `container-${direction}`
+  );
+}
+
+async function doContainerTransferAll(objId, direction) {
+  if (!currentGameState) return;
+  const obj = openContainerObject(objId);
+  if (!obj) return;
+  const ctx = containerCtxForUi();
+  if (!ctx.roomObjects[objId]) { addLogEntry('system', "You can't reach that from here."); return; }
+  const from = direction === 'take' ? objId : 'player';
+  const to = direction === 'take' ? 'player' : objId;
+  const srcList = direction === 'take' ? containerStacks(obj) : (currentGameState.player.inventory || []);
+  const lines = [];
+  const moved = [];
+  for (const stack of srcList) {
+    if (!(stack?.qty > 0)) continue;
+    if (direction === 'put' && !stackActions(stack, ctx).transfer) continue;
+    lines.push(...transferPlan(from, to, stack.defId, stack.qty));
+    moved.push(`${containerStackLabel(stack)}${stack.qty > 1 ? ` ×${stack.qty}` : ''}`);
+  }
+  if (lines.length === 0) {
+    addLogEntry('system', direction === 'take' ? 'There is nothing to take.' : 'Nothing in your bag can be put away.');
+    return;
+  }
+  const name = containerLabel(obj);
+  await applyContainerVerb(
+    lines,
+    INVENTORY_TUNING.containerVerbMinutes,
+    direction === 'take'
+      ? `You clear everything out of the ${name}: ${moved.join(', ')}.`
+      : `You empty your bag into the ${name}: ${moved.join(', ')}.`,
+    `container-${direction}-all`
+  );
+}
+
+// --- Rot-mess cleanup (inventory overhaul Phase 4) ---
+// The container panel's "throw out the spoiled food" button. A mess is the
+// container's `rotten_food: 'rotten'` state + the room's odor flag (both
+// written by the daily spoilage pass); this reverses exactly those two
+// writes and pays ROT.clearMessMinutes — the same act-then-decay-once
+// rule as every other verb, so clearing a mess is never a free action.
+async function doClearContainerMess(objId) {
+  if (!currentGameState) return;
+  const obj = openContainerObject(objId);
+  if (!obj || obj.state?.rotten_food !== 'rotten') return;
+  const ctx = containerCtxForUi();
+  if (!ctx.roomObjects[objId]) { addLogEntry('system', "You can't reach that from here."); return; }
+  const name = containerLabel(obj);
+  const roomId = obj.bucket.replace(/^room_/, '');
+  // The container state routes through applyEffects (SET_OBJECT_STATE) so
+  // player-driven mutation stays on the effects path; the room odor has no
+  // effect verb (SET_ROOM_STATE is declared but unimplemented) and is the
+  // spoilage pass's own field, so it's written directly here — the same
+  // two-writer contract cleanRoomObjects uses.
+  applyEffects([parseEffectDSL(`SET_OBJECT_STATE ${objId} rotten_food none`)[0]].filter(Boolean), ctx);
+  if (currentGameState.world.rooms?.[roomId]) currentGameState.world.rooms[roomId].odor = 'none';
+  refreshRoomCleanliness(currentGameState, roomId);
+  addLogEntry('narration', `You throw out the spoiled food and wipe down the ${name.toLowerCase()}.`);
+  await advanceAndResolveMinutes(ROT.clearMessMinutes);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('container-clear-mess', currentGameState);
+}
+
 const MAX_WORLD_EVENTS = 200;
 
 function appendWorldEvents(events) {
@@ -1488,7 +1869,19 @@ async function compactMemoryIfNeeded(npcIds) {
 // permanently unreachable: they're only ever clicked from a screen that
 // only appears when currentGameState IS null, so the guard fired every
 // time, before the switch below ever ran.
-const MENU_ACTIONS = ['menu', 'new-game-solo', 'new-game-random', 'new-game-guided', 'new-game-manual', 'new-game-seed', 'generate-cast', 'reroll-char', 'approve-cast', 'back-to-form', 'continue', 'debug', 'debug-close'];
+const MENU_ACTIONS = ['menu', 'new-game-solo', 'new-game-random', 'new-game-guided', 'new-game-manual', 'new-game-seed', 'generate-cast', 'reroll-char', 'approve-cast', 'back-to-form', 'continue', 'debug', 'debug-close',
+  // Save system v2 (Phase 9): reachable with no active game — the save/load
+  // menu is the recovery surface the boot screen (Phase 10) builds on.
+  'save-menu', 'load-menu', 'save-quick', 'load-quick', 'save-close',
+  'save-slot', 'load-slot', 'save-overwrite', 'save-delete',
+  'save-export', 'save-import',
+  // Menu overhaul Phase 10: the main-menu component's own verbs — all meta,
+  // reachable at boot (no game) and from the in-play pause menu.
+  'menu.continue', 'menu.new-game', 'menu.load', 'menu.options',
+  'menu.resume', 'menu.exit', 'menu.back', 'menu.prev', 'menu.next',
+  'menu.debug', 'options.bg-art', 'options.autosave',
+  'prefs.gender-f', 'prefs.gender-m', 'prefs.gender-nb',
+  'prefs.pairing-hetero', 'prefs.pairing-gay', 'prefs.pairing-lesbian'];
 
 // Actions that can be performed even when energy is at 0. Travel ('move')
 // must always be allowed — if the player can't reach their bedroom they're
@@ -1500,6 +1893,28 @@ const ENERGY_GATE_EXEMPT = new Set([
   'new-game-solo', 'new-game-random', 'new-game-guided', 'new-game-manual', 'new-game-seed',
   'generate-cast', 'reroll-char', 'approve-cast', 'back-to-form', 'continue',
   'computer.close',
+  // Inventory overhaul Phase 1: opening/closing the bag is free browsing
+  // (zero game time), so it must not be energy-gated; the verbs inside it
+  // (inventory.use/drop/trash) are NOT exempt and stay gated like any
+  // other action.
+  'inventory.open', 'inventory.close',
+  // Inventory overhaul Phase 2: same rule for containers — opening a
+  // chest to browse is free, the transfer verbs inside it
+  // (container.take/put/take-all/put-all) are NOT exempt.
+  'container.open', 'container.close',
+  // Save system v2 (Phase 9): save/load/menu are meta actions, not
+  // in-world actions — free at any energy level.
+  'save-menu', 'load-menu', 'save-quick', 'load-quick', 'save-close',
+  'save-slot', 'load-slot', 'save-overwrite', 'save-delete',
+  'save-export', 'save-import',
+  // Menu overhaul Phase 10: the menu itself is a meta surface — meta actions
+  // are free at any energy level, and its verbs (Continue/New Game/Load/
+  // Options/Exit/arrows) must be clickable even exhausted.
+  'menu', 'menu.continue', 'menu.new-game', 'menu.load', 'menu.options',
+  'menu.resume', 'menu.exit', 'menu.back', 'menu.prev', 'menu.next',
+  'menu.debug', 'options.bg-art', 'options.autosave',
+  'prefs.gender-f', 'prefs.gender-m', 'prefs.gender-nb',
+  'prefs.pairing-hetero', 'prefs.pairing-gay', 'prefs.pairing-lesbian',
 ]);
 
 function isActionExemptFromEnergyGate(action) {
@@ -1832,6 +2247,12 @@ async function handleAction(action, npcId, extra) {
     case 'im.invite':
       if (extra?.rowId) await doInviteOver(extra.rowId);
       break;
+    case 'invite-dinner':
+      if (npcId) await doInviteDinner(npcId);
+      break;
+    case 'im.invite-dinner':
+      if (extra?.rowId) await doInviteDinner(extra.rowId);
+      break;
     case 'step-away':
       if (npcId) await doStepAway(npcId);
       break;
@@ -1850,17 +2271,141 @@ async function handleAction(action, npcId, extra) {
     case 'knock':
       if (npcId) await doKnock(npcId);
       break;
+    case 'search-room':
+      if (npcId) await doSearchRoom(npcId);
+      break;
     case 'give-item':
       if (npcId) await doGiveItem(npcId);
+      break;
+    case 'inventory.open':
+      openInventoryPanel();
+      break;
+    case 'inventory.close':
+      closeInventoryPanel();
+      break;
+    case 'inventory.use':
+      if (extra.defId) await doInventoryUse(extra.defId);
+      break;
+    case 'inventory.drop':
+      if (extra.defId) await doInventoryDrop(extra.defId);
+      break;
+    case 'inventory.trash':
+      if (extra.defId) await doInventoryTrash(extra.defId);
+      break;
+    case 'inventory.place':
+      if (extra.defId) await doInventoryPlace(extra.defId);
+      break;
+    case 'container.open':
+      if (extra.objId) openContainerPanel(currentGameState, extra.objId);
+      break;
+    case 'container.close':
+      closeContainerPanel();
+      break;
+    case 'container.take':
+    case 'container.put':
+      if (extra.objId && extra.defId) await doContainerTransfer(extra.objId, extra.defId, action === 'container.take' ? 'take' : 'put');
+      break;
+    case 'container.take-all':
+      if (extra.objId) await doContainerTransferAll(extra.objId, 'take');
+      break;
+    case 'container.put-all':
+      if (extra.objId) await doContainerTransferAll(extra.objId, 'put');
+      break;
+    case 'container.clear-mess':
+      if (extra.objId) await doClearContainerMess(extra.objId);
       break;
     case 'move':
       if (extra?.roomId) await doMove(extra.roomId);
       break;
     case 'save':
-      await saveGame(currentGameState);
+      // Phase 9: Save now opens the slot grid (save mode) instead of
+      // silently overwriting the single live folder set.
+      openSaveMenu('save');
+      break;
+    case 'save-menu':
+      openSaveMenu('save');
+      break;
+    case 'load-menu':
+      openSaveMenu('load');
+      break;
+    case 'save-close':
+      closeSaveMenu();
+      break;
+    case 'save-quick':
+      await doQuickSave();
+      break;
+    case 'load-quick':
+      await doLoadQuick();
+      break;
+    case 'save-slot':
+      if (extra.slotId) await doSaveToSlot(extra.slotId);
+      break;
+    case 'save-overwrite':
+      if (extra.slotId) await doOverwriteSlot(extra.slotId);
+      break;
+    case 'load-slot':
+      if (extra.slotId) await doLoadFromSlot(extra.slotId);
+      break;
+    case 'save-delete':
+      if (extra.slotId) await doDeleteSlot(extra.slotId);
+      break;
+    case 'save-export':
+      if (extra.slotId) await doExportSlot(extra.slotId);
+      break;
+    case 'save-import':
+      openImportModal();
       break;
     case 'menu':
-      showMenuModal();
+      // Menu overhaul Phase 10: the header Menu button opens the pause
+      // context of the main-menu component (same slideshow, Resume added,
+      // game clock paused). The boot menu is reached via showMainMenu.
+      showMainMenu('pause');
+      break;
+    case 'menu.continue':
+      await doMenuContinue();
+      break;
+    case 'menu.new-game':
+      showCharCreationModal('random');
+      break;
+    case 'menu.load':
+      openSaveMenu('load');
+      break;
+    case 'menu.options':
+      doMenuOpenOptions();
+      break;
+    case 'menu.resume':
+      doMenuResume();
+      break;
+    case 'menu.exit':
+      await doExitGame();
+      break;
+    case 'menu.back':
+      showMenuScreen('title');
+      break;
+    case 'menu.prev':
+      titlePrev();
+      break;
+    case 'menu.next':
+      titleNext();
+      break;
+    case 'menu.debug':
+      toggleDebugPanel();
+      break;
+    case 'options.bg-art':
+      await doToggleBgArt();
+      break;
+    case 'options.autosave':
+      await doToggleAutosave();
+      break;
+    case 'prefs.gender-f':
+    case 'prefs.gender-m':
+    case 'prefs.gender-nb':
+      await doTogglePreference('gender', action.slice('prefs.gender-'.length));
+      break;
+    case 'prefs.pairing-hetero':
+    case 'prefs.pairing-gay':
+    case 'prefs.pairing-lesbian':
+      await doTogglePreference('pairing', action.slice('prefs.pairing-'.length));
       break;
     case 'new-game-solo':
       await startSoloGame();
@@ -1963,7 +2508,7 @@ async function doPlayerAction(actionText) {
     }
 
     // Decay player needs
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1, currentGameState);
 
     render(currentGameState, currentSceneState);
     await saveAtBoundary('action', currentGameState);
@@ -2021,7 +2566,7 @@ async function doWait() {
   showLoading();
   try {
     await advanceAndResolve(2);
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, 2);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, 2, currentGameState);
     addLogEntry('narration', 'You wait a while. Time passes.');
     render(currentGameState, currentSceneState);
     await saveAtBoundary('wait', currentGameState);
@@ -2075,7 +2620,7 @@ async function doSleep() {
     // Decay player needs for the time spent sleeping (hunger, hygiene,
     // mood — energy is restored separately below). advanceAndResolve
     // only decays NPC needs, not the player's.
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, sleepTicks);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, sleepTicks, currentGameState);
     // Energy back is proportional to hours actually slept, so a night cut
     // short (by the alarm) genuinely leaves you short.
     // Phase 8: energy is capped at player.energyMax (which starts at 70
@@ -2098,6 +2643,10 @@ async function doSleep() {
         ENERGY.absoluteMax,
         energyMax + ENERGY.growthPerGoodSleep
       );
+      // Phase 6 (D13): a full night on schedule, alarm-free, is the single
+      // most reliable happiness event in the game — a mood impulse tied to
+      // the same "good sleep" condition that grows the energy ceiling.
+      pushMoodImpulse(currentGameState.player, MOOD_PAYOUTS.goodSleep, currentGameState.meta.clock.day);
     }
     let sleepMsg = describeSleep(sleepHours, currentGameState.player.energy);
     if (alarmFired) sleepMsg += ' The alarm dragged you out of bed.';
@@ -2341,7 +2890,7 @@ async function doConvSend(forcedText) {
       convAddBeat(`They seem distracted and don't respond.`);
     }
 
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1, currentGameState);
     convSetStatus('In conversation');
     render(currentGameState, currentSceneState);
     await saveAtBoundary('conv-send', currentGameState);
@@ -2697,6 +3246,7 @@ async function startSoloGame() {
   stopAutosave();
   stopClockLoop();
   closeModal();
+  closeMainMenu();
   showLoading('Moving in...');
   try {
     const seed = genSeed();
@@ -2737,6 +3287,7 @@ async function approveCastAndStartGame() {
   // outgoing game's state while the new one is being written.
   stopClockLoop();
   closeModal();
+  closeMainMenu();
   showLoading('Writing your household\'s story...');
   try {
     // Prose expansion in parallel — was a serial await-per-npc loop behind
@@ -2796,6 +3347,7 @@ async function continueGame() {
   stopAutosave();
   stopClockLoop(); // same reason — see approveCastAndStartGame
   closeModal();
+  closeMainMenu();
   showLoading('Loading...');
   try {
     await syncGameStateFromKv();
@@ -2806,7 +3358,7 @@ async function continueGame() {
       if (currentGameState.world.computer?.power === 'on') resetTimeContext(currentGameState);
       startClockLoop();
     } else {
-      showMenuModal();
+      showMainMenu('boot');
     }
   } finally {
     hideLoading();
@@ -2826,6 +3378,352 @@ async function syncGameStateFromKv() {
     // roster must never be generated from inside a render pass.
     ensureHotSinglesRoster(currentGameState);
   }
+}
+
+// ===== SAVE SYSTEM V2 (Phase 9): handlers =====
+// The slot grid itself is rendered by RENDER's renderSaveMenu; UI owns the
+// verbs. Every save verb routes through STATE's saveToSlot/writeSaveRecord
+// — the slot grid is a view over kv.saves/kv.saveIndex, never a second
+// mutation path. All of these are meta actions: free, zero game time.
+
+let pendingExportB64 = null; // the last exported blob, for copy/download
+
+function saveSlotSummary(record) {
+  const m = record?.meta;
+  if (!m) return 'this slot';
+  return `Day ${m.day ?? 1} — ${formatTime(m.minutes ?? CLOCK.startMinutes)} (${ROOMS[m.roomId]?.name || m.roomId || 'unknown room'})`;
+}
+
+// Promise-based confirm over the shared modal (same pattern as RENDER's
+// openRoomSearchModal).
+function askConfirm(message, confirmLabel) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions) { resolve(false); return; }
+    const finish = (val) => { overlay.removeAttribute('data-open'); resolve(val); };
+    title.textContent = 'Are you sure?';
+    body.innerHTML = '';
+    const p = document.createElement('p');
+    p.textContent = message;
+    body.appendChild(p);
+    actions.innerHTML = '';
+    const ok = document.createElement('button');
+    ok.type = 'button';
+    ok.className = 'btn';
+    ok.textContent = confirmLabel || 'Confirm';
+    ok.addEventListener('click', () => finish(true));
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(false));
+    actions.appendChild(ok);
+    actions.appendChild(cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+
+// The live scene's image-cache key — the thumbnail store. Read from the DOM
+// so the record points at the exact frame the player was looking at (the
+// fallback in STATE recomputes a present-based key when absent).
+function currentSceneKey() {
+  return document.getElementById('scene-img')?.getAttribute('data-scene-key') || undefined;
+}
+
+// Persist the live folders, then capture a record into a slot. Both go
+// through the established paths (saveAtBoundary → SAVE_KEYS; saveToSlot →
+// captureSave) so the live kv state always matches the most recent record.
+async function persistAndSave(kind, slotId) {
+  await saveAtBoundary('manual', currentGameState);
+  const record = await saveToSlot(currentGameState, kind, { slotId, sceneKey: currentSceneKey() });
+  return record;
+}
+
+function savePanelOpen() {
+  const panel = document.getElementById('save-panel');
+  return !!panel && !panel.hidden;
+}
+
+async function doQuickSave() {
+  if (!currentGameState) { showError('Start or continue a game first.'); return; }
+  showLoading('Quick saving...');
+  try {
+    await persistAndSave('quick');
+    addLogEntry('system', 'Game quick-saved.');
+    if (savePanelOpen()) await renderSaveMenu();
+  } catch (e) {
+    showError('Quick save failed: ' + e.message);
+  } finally {
+    hideLoading();
+  }
+}
+
+async function doLoadQuick() {
+  showLoading('Loading quicksave...');
+  try {
+    const record = await getSaveRecord('quick');
+    if (!record) { showError('No quicksave yet.'); openSaveMenu('load'); return; }
+    await resumeFromRecord(record);
+  } catch (e) {
+    showError('Quick load failed: ' + e.message);
+    openSaveMenu('load');
+  } finally {
+    hideLoading();
+  }
+}
+
+// Save mode: a free slot saves straight in; an occupied slot asks first.
+async function doSaveToSlot(slotId) {
+  if (!currentGameState) { showError('Start or continue a game first.'); return; }
+  const existing = await getSaveRecord(slotId);
+  if (existing) {
+    const ok = await askConfirm(`Overwrite ${saveSlotSummary(existing)}?`, 'Overwrite');
+    if (!ok) return;
+  }
+  await performSaveToSlot(slotId);
+}
+
+// Confirm dialog already shown — used when the card's primary action IS
+// "Overwrite".
+async function doOverwriteSlot(slotId) {
+  if (!currentGameState) { showError('Start or continue a game first.'); return; }
+  await performSaveToSlot(slotId);
+}
+
+async function performSaveToSlot(slotId) {
+  showLoading('Saving...');
+  try {
+    await persistAndSave('manual', slotId);
+    addLogEntry('system', `Saved to ${slotId.replace('_', ' ')}.`);
+    if (savePanelOpen()) await renderSaveMenu();
+  } catch (e) {
+    showError('Save failed: ' + e.message);
+  } finally {
+    hideLoading();
+  }
+}
+
+// Load a slot into the live game. Same clock/autosave dance as
+// continueGame — a previous session's timers must be stopped before the
+// (potentially long) restore+migrate sequence writes anything.
+async function resumeFromRecord(record) {
+  stopAutosave();
+  stopClockLoop();
+  closeSaveMenu();
+  closeModal();
+  closeMainMenu();
+  try {
+    const loaded = await restoreSave(record);
+    if (!loaded) { showError('That save could not be loaded.'); return; }
+    ensureHotSinglesRoster(loaded);
+    currentGameState = loaded;
+    currentSceneState = getSceneParticipants(loaded.player, loaded.npcs, loaded.world);
+    render(loaded, currentSceneState);
+    startAutosave(() => currentGameState);
+    if (loaded.world.computer?.power === 'on') resetTimeContext(loaded);
+    startClockLoop();
+    addLogEntry('system', `Loaded save — ${saveSlotSummary(record)}.`);
+  } catch (e) {
+    showError(e.message);
+    openSaveMenu('load');
+  }
+}
+
+async function doLoadFromSlot(slotId) {
+  try {
+    const record = await getSaveRecord(slotId);
+    if (!record) { showError('No save in that slot.'); openSaveMenu('load'); return; }
+    const ok = await askConfirm(`Load ${saveSlotSummary(record)}? Current progress in this session will be replaced.`, 'Load');
+    if (!ok) return;
+    showLoading('Loading save...');
+    await resumeFromRecord(record);
+  } catch (e) {
+    showError('Load failed: ' + e.message);
+  } finally {
+    hideLoading();
+  }
+}
+
+async function doDeleteSlot(slotId) {
+  const record = await getSaveRecord(slotId);
+  const ok = await askConfirm(`Delete ${record ? saveSlotSummary(record) : 'this save'}? This cannot be undone.`, 'Delete');
+  if (!ok) return;
+  await deleteSaveSlot(slotId);
+  addLogEntry('system', `Deleted save slot ${slotId.replace('_', ' ')}.`);
+  if (savePanelOpen()) await renderSaveMenu();
+}
+
+async function doExportSlot(slotId) {
+  showLoading('Exporting...');
+  try {
+    const record = await getSaveRecord(slotId);
+    if (!record) { showError('No save in that slot.'); return; }
+    pendingExportB64 = await exportSaveRecord(record);
+    showExportModal(record, pendingExportB64);
+  } catch (e) {
+    showError('Export failed: ' + e.message);
+  } finally {
+    hideLoading();
+  }
+}
+
+function showExportModal(record, b64) {
+  const overlay = document.getElementById('modal-overlay');
+  const title = document.getElementById('modal-title');
+  const body = document.getElementById('modal-body');
+  const actions = document.getElementById('modal-actions');
+  if (!overlay || !title || !body || !actions) return;
+  title.textContent = 'Export Save';
+  body.innerHTML = '';
+  const p = document.createElement('p');
+  p.className = 'dim tiny';
+  p.textContent = `Copied or downloaded, this blob installs into a manual slot on another device. ${saveSlotSummary(record)}.`;
+  body.appendChild(p);
+  const ta = document.createElement('textarea');
+  ta.id = 'export-text';
+  ta.className = 'svp-import-text';
+  ta.readOnly = true;
+  ta.value = b64;
+  body.appendChild(ta);
+  actions.innerHTML = '';
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'btn';
+  copy.textContent = 'Copy';
+  copy.addEventListener('click', () => handleCopyExport());
+  const dl = document.createElement('button');
+  dl.type = 'button';
+  dl.className = 'btn btn-secondary';
+  dl.textContent = 'Download';
+  dl.addEventListener('click', () => handleDownloadExport());
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'btn btn-secondary';
+  close.textContent = 'Close';
+  close.addEventListener('click', () => overlay.removeAttribute('data-open'));
+  actions.appendChild(copy);
+  actions.appendChild(dl);
+  actions.appendChild(close);
+  overlay.setAttribute('data-open', '');
+}
+
+async function handleCopyExport() {
+  if (!pendingExportB64) return;
+  try {
+    await navigator.clipboard.writeText(pendingExportB64);
+  } catch (e) {
+    // Clipboard API blocked (permissions/unsaved iframe) — select the
+    // textarea so the player can Ctrl/Cmd+C manually.
+    const ta = document.getElementById('export-text');
+    if (ta) { ta.focus(); ta.select(); }
+    return;
+  }
+  addLogEntry('system', 'Save copied to clipboard.');
+  closeModal();
+}
+
+function handleDownloadExport() {
+  if (!pendingExportB64) return;
+  const blob = new Blob([pendingExportB64], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `slice-of-life-save-${new Date().toISOString().slice(0, 10)}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+function openImportModal() {
+  const overlay = document.getElementById('modal-overlay');
+  const title = document.getElementById('modal-title');
+  const body = document.getElementById('modal-body');
+  const actions = document.getElementById('modal-actions');
+  if (!overlay || !title || !body || !actions) return;
+  title.textContent = 'Import Save';
+  body.innerHTML = '';
+  const p = document.createElement('p');
+  p.className = 'dim tiny';
+  p.textContent = 'Paste an exported save below, or choose the file. It installs into a free manual slot — load it from the grid afterwards.';
+  body.appendChild(p);
+  const ta = document.createElement('textarea');
+  ta.id = 'import-text';
+  ta.className = 'svp-import-text';
+  ta.placeholder = 'Paste save data here…';
+  body.appendChild(ta);
+  const fileRow = document.createElement('div');
+  fileRow.className = 'menu-actions';
+  fileRow.style.marginTop = '8px';
+  const fileBtn = document.createElement('button');
+  fileBtn.type = 'button';
+  fileBtn.className = 'btn btn-secondary tiny';
+  fileBtn.textContent = 'Choose file…';
+  fileBtn.addEventListener('click', () => document.getElementById('import-file-input')?.click());
+  fileRow.appendChild(fileBtn);
+  body.appendChild(fileRow);
+  actions.innerHTML = '';
+  const doIt = document.createElement('button');
+  doIt.type = 'button';
+  doIt.className = 'btn';
+  doIt.textContent = 'Import';
+  doIt.addEventListener('click', () => handleImportSave());
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'btn btn-secondary';
+  cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', () => overlay.removeAttribute('data-open'));
+  actions.appendChild(doIt);
+  actions.appendChild(cancel);
+  overlay.setAttribute('data-open', '');
+  setTimeout(() => ta.focus(), 0);
+}
+
+async function handleImportSave() {
+  const ta = document.getElementById('import-text');
+  const text = (ta ? ta.value : '').trim();
+  if (!text) { showError('Paste a save or choose a file first.'); return; }
+  showLoading('Importing...');
+  try {
+    const record = await importSaveRecord(text);
+    const cap = await saveCapacityInfo();
+    if (cap.total >= SAVE_TUNING.maxTotalSaves) {
+      throw new Error(`Too many saves (${SAVE_TUNING.maxTotalSaves} max). Delete one before importing.`);
+    }
+    const slotId = await allocateManualSlot();
+    await writeSaveRecord(record, slotId);
+    closeModal();
+    const versionNote = record._importedGameVersion && record._importedGameVersion !== GAME_VERSION
+      ? ` Note: it was exported by game version ${record._importedGameVersion} (current: ${GAME_VERSION}).`
+      : '';
+    addLogEntry('system', `Imported save into slot ${slotId.replace('_', ' ')}.${versionNote}`);
+    if (savePanelOpen()) await renderSaveMenu();
+  } catch (e) {
+    showError('Import failed: ' + e.message);
+  } finally {
+    hideLoading();
+  }
+}
+
+// Wire the hidden file input (index.html) once — read a chosen file into
+// the import textarea.
+function wireImportFileInput() {
+  const input = document.getElementById('import-file-input');
+  if (!input) return;
+  input.addEventListener('change', () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const ta = document.getElementById('import-text');
+      if (ta) ta.value = String(reader.result || '');
+    };
+    reader.readAsText(file);
+    input.value = '';
+  });
 }
 
 // --- UI helpers ---
@@ -2896,30 +3794,6 @@ function addLogEntry(type, text, speaker) {
 
 // --- Modals ---
 
-function showMenuModal() {
-  const overlay = document.getElementById('modal-overlay');
-  const title = document.getElementById('modal-title');
-  const body = document.getElementById('modal-body');
-  const actions = document.getElementById('modal-actions');
-  title.textContent = 'Slice of Life';
-  body.innerHTML = `
-    <p class="dim">An apartment living sim.</p>
-    <div class="menu-section">
-      <div class="form-hint">New Game</div>
-      <p class="dim tiny" style="margin-bottom: 12px;">You inherit a luxury apartment you can't afford — empty, in disrepair, and all yours. Fix it up, find roommates, make it home.</p>
-      <div class="menu-actions">
-        <button class="btn btn-block" data-action="new-game-solo">Start New Game</button>
-      </div>
-    </div>
-    <div class="menu-actions">
-      <button class="btn btn-secondary btn-block" data-action="continue">Continue</button>
-      <button class="btn btn-secondary btn-block" data-action="debug">Debug Panel</button>
-    </div>
-  `;
-  actions.innerHTML = '';
-  overlay.setAttribute('data-open', '');
-}
-
 function closeModal() {
   const overlay = document.getElementById('modal-overlay');
   overlay.removeAttribute('data-open');
@@ -2988,32 +3862,30 @@ async function updateDebugPanel() {
 // ===== SECTION: BOOT =====
 
 async function boot() {
-  // Load all source scripts
-  // (scripts are loaded via <script> tags in index.html, this runs after)
-
   // Init storage
   await initStorage();
-
-  // Check for existing save
-  const hasExistingSave = await hasSave();
-
-  if (hasExistingSave) {
-    await syncGameStateFromKv();
-    if (currentGameState) {
-      currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
-      render(currentGameState, currentSceneState);
-      startAutosave(() => currentGameState);
-      if (currentGameState.world.computer?.power === 'on') resetTimeContext(currentGameState);
-      startClockLoop();
-    } else {
-      showMenuModal();
-    }
-  } else {
-    showMenuModal();
-  }
-
-  // Attach event delegation
+  // Attach event delegation (the data-action chain the menu buttons route
+  // through) and one-time wiring for the save import file picker.
   attachEventHandlers();
+  wireImportFileInput();
+
+  // Menu overhaul Phase 10: the game ALWAYS boots to the main menu now.
+  // Nothing auto-loads into play. Continue is enabled from kv.saveIndex
+  // (the most recent save in the most recent run) by refreshMenuContinue,
+  // and disabled when no save exists. loadMenuOptions pulls the
+  // browser-local settings (Background art / Autosave) into the cache the
+  // slideshow and startAutosave consult.
+  await loadMenuOptions();
+  showMainMenu('boot');
+
+  // Exit save: best-effort — navigation can cut off IndexedDB writes, but
+  // the autosave ring is the recovery path anyway, so a missed exit-save
+  // costs nothing recoverable.
+  window.addEventListener('pagehide', () => {
+    if (currentGameState && typeof saveToSlot === 'function') {
+      saveToSlot(currentGameState, 'exit').catch(() => {});
+    }
+  });
 }
 
 function attachEventHandlers() {
@@ -3059,6 +3931,17 @@ function attachEventHandlers() {
     if (target.hasAttribute('data-key')) extra.key = target.getAttribute('data-key');
     if (target.hasAttribute('data-days')) extra.days = Number(target.getAttribute('data-days'));
     if (target.hasAttribute('data-service')) extra.service = target.getAttribute('data-service');
+    // Inventory overhaul Phase 1: inventory verbs carry which stack the
+    // button was drawn for (the detail pane rebuilds on selection, so a
+    // stale click could otherwise act on a different item).
+    if (target.hasAttribute('data-def-id')) extra.defId = target.getAttribute('data-def-id');
+    // Inventory overhaul Phase 2: container verbs carry which container
+    // object the button was drawn for (chips and the chest's Take/Put/
+    // All buttons).
+    if (target.hasAttribute('data-obj-id')) extra.objId = target.getAttribute('data-obj-id');
+    // Save system v2 (Phase 9): save-menu verbs carry which slot the card
+    // was drawn for.
+    if (target.hasAttribute('data-slot')) extra.slotId = target.getAttribute('data-slot');
     // Device-parameterised nav (BrineOS 0.2): the shell that owns the node
     // declares its device via data-device on itself or any ancestor, and
     // computer.open-screen dispatches on it — the phone shell will emit
@@ -3120,9 +4003,58 @@ function attachEventHandlers() {
       handleAction('talk', npcId);
     }
   });
+
+  // Inventory panel (overhaul Phase 1): row selection, search, sort, and
+  // Escape-to-close. Search/sort re-render only the panel, not the whole
+  // page, so typing never blurs the input mid-keystroke.
+  document.addEventListener('click', (e) => {
+    const row = e.target.closest('[data-inv-row]');
+    if (!row) return;
+    const defId = row.getAttribute('data-def-id');
+    if (defId && typeof selectInventoryStack === 'function') selectInventoryStack(defId);
+  });
+  const invpSearch = document.getElementById('invp-search');
+  if (invpSearch) {
+    invpSearch.addEventListener('input', () => {
+      invpSearchText = invpSearch.value;
+      if (currentGameState) renderInventoryPanel(currentGameState);
+    });
+  }
+  const invpSort = document.getElementById('invp-sort');
+  if (invpSort) {
+    invpSort.addEventListener('change', () => {
+      invpSortMode = invpSort.value;
+      if (currentGameState) renderInventoryPanel(currentGameState);
+    });
+  }
+
+  // Container panel (overhaul Phase 2): row selection on either side, qty
+  // clamp, and Escape-to-close (falls back to closing the bag if the chest
+  // is closed). Selection only re-renders the panel, never the whole page.
+  document.addEventListener('click', (e) => {
+    const row = e.target.closest('[data-ctr-row]');
+    if (!row || typeof selectContainerStack !== 'function') return;
+    const side = row.getAttribute('data-side');
+    const defId = row.getAttribute('data-def-id');
+    if (side && defId) selectContainerStack(side, defId);
+  });
+  const ctrQty = document.getElementById('ctr-qty');
+  if (ctrQty) {
+    ctrQty.addEventListener('change', () => {
+      const val = Math.floor(Number(ctrQty.value));
+      if (!Number.isFinite(val) || val < 1) ctrQty.value = 1;
+      if (currentGameState && typeof renderContainerPanel === 'function') renderContainerPanel(currentGameState);
+    });
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (typeof closeContainerPanel === 'function' && closeContainerPanel());
+    else if (typeof closeInventoryPanel === 'function') closeInventoryPanel();
+  });
 }
 
-// Boot
-boot();
+// Boot: the single entry point is invoked from the bottom of MENU — the
+// last script to load — so that boot() can call into MENU/IMAGE functions
+// defined after UI. See the note above menu.js's BOOT section.
 
 // ===== /SECTION: BOOT =====

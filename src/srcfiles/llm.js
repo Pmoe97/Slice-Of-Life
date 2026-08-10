@@ -15,6 +15,7 @@ CURRENT SCENE:
 - Location: ${scene.room}
 - Time: ${scene.phase}, ${scene.time}, Day ${scene.day}
 - Cleanliness: ${scene.cleanliness > 70 ? 'tidy' : scene.cleanliness > 40 ? 'lived-in' : 'messy'}
+- Odor: ${scene.odor === 'smelly' ? 'a sour, rotten smell lingers in the air' : 'no bad smells'}
 
 PLAYER:
 - Current mood: ${moodLabel(player.mood)}
@@ -82,7 +83,8 @@ CRITICAL RULES:
 - Relationship deltas are tiny: trust/affection/tension/respect/comfort/desire range -0.3 to +0.3. Mood -0.2 to +0.2.
 - If nothing changes, set all deltas to 0.0 or omit the field.
 - memoryAdditions: facts/episodes/grievances the NPC should remember from this exchange. resolveGrievances: text of grievances that were addressed this turn. Omit if nothing notable.
-- effects is optional: a list of world-change lines drawn ONLY from the OPTIONAL WORLD CHANGES list above (e.g. "ADJUST_NEED player hunger +10"). Omit it or leave it empty if nothing applies. Never invent a new effect type or reference someone not listed above.
+- effects is optional: a list of world-change lines drawn ONLY from the OPTIONAL WORLD CHANGES list above (e.g. "ADJUST_NEED player energy -5"). Omit it or leave it empty if nothing applies. Never invent a new effect type or reference someone not listed above.
+- NEVER emit a hunger change for the player. Eating is an item-driven action the player takes; narration can describe a meal, but it must not feed them.
 - advocateFor is optional and RARE — only when someone naturally suggests moving in (usually a resident close to their friend/partner). One NPC can raise it per turn, max. Omit unless it genuinely fits the conversation.
 - Keep it SHORT. One narration paragraph, 1-3 dialogue lines max.
 - Do not break the fourth wall. Do not describe the format. Just tell the story.`;
@@ -182,6 +184,23 @@ function clothingLabel(npc) {
   return c;
 }
 
+// Phase 8 (D8): the NPC's possessions as a comma-separated label list for
+// buildNpcBlockV2's [Possessions] line. Reads the same npc.inventory stack
+// list the room-search surfaces, so prose and gameplay can never disagree
+// about what someone owns.
+function possessionsLine(npc) {
+  const inv = npc.inventory || [];
+  if (inv.length === 0) return '';
+  return inv
+    .filter(s => (s?.qty || 0) > 0)
+    .map(s => {
+      const def = ITEM_DEFS[s.defId];
+      const label = def?.label || s?.meta?.origName || s.defId;
+      return s.qty > 1 ? `${label} ×${s.qty}` : label;
+    })
+    .join(', ');
+}
+
 // [Style tracking directive is now sourced from buildMemorySliceV2's
 // styleDirective field, which reads styleCounters from the full NPC object.
 // The old styleDirective(npc) function here was dead code — it tried to
@@ -234,6 +253,13 @@ function buildNpcBlockV2(npc, query) {
 
   // [Occupation]
   block += `[Occupation]: ${b.occupation?.title || 'unknown'} (${b.occupation?.hours || 'flexible'})\n`;
+
+  // Phase 8 (D8): what this NPC actually owns. Possessions ground the
+  // prose — a musician's guitar is referenceable, a student's book is on
+  // their nightstand — and are a real theft surface (the player's
+  // room-search can take the non-key items).
+  const owns = possessionsLine(npc);
+  if (owns) block += `[Possessions]: ${owns}\n`;
 
   // [Backstory]
   block += `[Backstory]: Want: ${b.want}. Wound: ${b.wound}. Blind spot: ${b.blindSpot}. Boundary: ${b.boundary}.\n`;

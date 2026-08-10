@@ -169,7 +169,9 @@ const ECONOMY = {
   // than left dead.
   deliveryFee: 8,
   payPeriodDays: 7,          // rent due weekly
-  rentLatePenaltyMood: 0.1,  // player mood lost per day rent stays unpaid (mood is [-1,1])
+  // rentLatePenaltyMood (the old per-day direct mood subtraction) was
+  // absorbed by MOOD_TARGET.stress.rentPenalty in Phase 5 — a steady target
+  // drag while rentOwed > 0 instead of an ever-accumulating bar push.
   rentLateTensionPerDay: 0.02, // resident tension increase per day unpaid
 };
 
@@ -482,7 +484,13 @@ const MAINTENANCE = {
     // 'shower' drive (not 'self_care') decays both bathroom plumbings.
     'shower': ['bathroom_a_plumbing', 'bathroom_b_plumbing'],
     'do_laundry': ['laundry_machines'],
-    'cook': ['kitchen_stove'],
+    // NOTE: the old 'cook' drive (→ kitchen_stove) became Phase 8's 'eat'
+    // drive, which deliberately does NOT map to a facility: a hungry NPC
+    // raids the fridge/pantry/own bag, which needs no working stove, and
+    // gating on the stove would starve everyone during the opening
+    // disrepair. The player's self.cook action still decays the stove.
+    // (This mapping was the stove-gate that kept the eat drive silent on
+    // a save with a broken kitchen — see the Phase 8 handoff.)
     // NPCs who watch TV or play games degrade the living room / game room.
     // There's no dedicated 'game' drive; leisure-time use of these rooms
     // is covered by the 'seek_company' drive when it fires while an NPC
@@ -490,6 +498,41 @@ const MAINTENANCE = {
     // seek_company to approximate shared-area wear.
     'seek_company': ['living_room_entertainment', 'game_room_setup'],
   },
+};
+
+// --- Spoilage / rot (inventory overhaul Phase 4) ---
+// Food decays, and rot becomes a mess with consequences (D5/D6). One
+// tuning surface for the whole model. Freshness is DERIVED from elapsed
+// game days (invariant 5 — never a stored countdown): a stack's effective
+// shelf life is `def.perishable.days × container.preservation`, and the
+// container's preservation multiplier lives on its OBJECT_DEFS entry
+// (fridge 4.0 / pantry 2.0 / bag 1.0 / floor & doormat 0.5 — see
+// DEFS.WORLD's container block). Moving a stack between containers
+// recomputes its remaining life (ITEMS' retimeStack) rather than resetting
+// it. `freshnessThresholds` and `bagPreservation` absorbed from
+// INVENTORY_TUNING, which referenced this block's model before it existed.
+// The Rotten→mess conversion runs in the day-rollover spoilage pass (SIM's
+// processSpoilageForDay) and feeds the EXISTING cleanliness machinery via
+// each container def's `rotten_food` state (DEFS.WORLD), so the maid's
+// cleanRoomObjects and the player's throw-out button clear it with no
+// parallel mess system.
+const ROT = {
+  graceDays: 2,                  // days a stack stays Rotten (still eatable, with penalties) before it becomes a mess
+  bagPreservation: 1.0,          // the player's bag is the neutral baseline (1.0 row of the preservation table)
+  freshnessThresholds: { useSoon: 0.5, spoiling: 0.85 },  // fraction-of-life ladder: Fresh < .5 | Use soon .5–.85 | Spoiling .85–1 | Rotten > 1
+  rottenMessGrime: 0.9,          // dirtyWhen grime a rot mess contributes via `rotten_food: 'rotten'` on the container
+  // Eating spoiled food: Spoiling restores a fraction; Rotten restores a
+  // fraction AND costs mood and energy on top (the food-poisoning beat).
+  // The penalties are per eating event, not per serving — one meal of
+  // rotten food makes you sick once.
+  spoiledRestoreMultiplier: 0.5,
+  rottenRestoreMultiplier: 0.25,
+  rottenMoodPenalty: 0.05,
+  rottenEnergyPenalty: 10,
+  // (Phase 5: the standing-in-a-smelly-room mood cost moved OUT of the
+  // per-tick subtraction and INTO the mood target's comfort term —
+  // MOOD_TARGET.comfort.odorPenalty — so it doesn't fight the easing.)
+  clearMessMinutes: 5,           // game minutes the throw-out button pays
 };
 
 // --- Renovation jobs (ref/renovation-occupancy-overhaul-plan.md) ---
@@ -749,6 +792,63 @@ const VISIT_TUNING = {
     escort: ['waiting by the sofa', 'glancing at the door as you come in', 'settling in like the night has started', 'looking at you like they already know how this goes'],
     default: ['visiting', 'hanging around'],
   },
+};
+
+// --- Meal commitments (inventory overhaul Phase 7, D7) ---
+// world.commitments[] is the resident-side sibling of world.visits[] — the
+// schedule OVERRIDE that relocates an accepted NPC to the dining room for a
+// shared meal (see SIM's resolveScheduleActivity). Each invitation is its
+// own commitment record (one invitee), so inviting two people to the same
+// dinner makes two records that the meal resolution unions. Acceptance is
+// decided at invite time, not at the table: an NPC accepts when their
+// schedule block at the proposed time is free (not work/commute/sleep) and
+// their relationship toward the player clears a noise-blurred threshold —
+// a roommate who dislikes you says no, and the reason they give is
+// information.
+const COMMITMENT_TUNING = {
+  // Meal windows in ticks (30-min units). Offered as invite targets in
+  // exactly this order.
+  mealSlots: [
+    { id: 'breakfast', label: 'Breakfast', startTick: 16, endTick: 20 }, // 08:00-10:00
+    { id: 'lunch', label: 'Lunch', startTick: 26, endTick: 30 },         // 13:00-15:00
+    { id: 'dinner', label: 'Dinner', startTick: 38, endTick: 44 },       // 19:00-22:00
+  ],
+  // Day offsets 0..maxInviteAheadDays-1 are offered (today, +1, +2).
+  maxInviteAheadDays: 3,
+  // Acceptance curve (COMMITMENTS.respondToCommitment): acceptScore =
+  // affection − tension×tensionPenaltyWeight, plus a seeded noise draw in
+  // ±acceptNoiseRange; accept when the sum clears acceptThreshold. A
+  // 0.5-affection roommate always accepts; a −0.3 one always declines;
+  // the middle band is a per-save coin (seeded, so reloading never
+  // renegotiates an answer).
+  acceptThreshold: 0.0,
+  acceptNoiseRange: 0.3,
+  tensionPenaltyWeight: 0.8,
+  // A commitment only overrides these template blocks — if the NPC would be
+  // working, commuting, or asleep at the proposed time they can't attend,
+  // and the refusal names the reason.
+  busyBlocks: ['work', 'commute', 'commute_home', 'sleep'],
+  // The "proper setting" bonus (D7): a meal during a scheduled commitment's
+  // window was laid out properly — the player gets a mood impulse on top of
+  // the food's own values even if nobody else showed, and every attendee
+  // gets the comfort restore + mood bonus below.
+  settingBonusMood: 0.04,
+  attendeeComfortRestore: 8, // NPC comfort restored by a properly set meal
+  attendeeMoodBonus: 0.03,   // NPC mood gain for sitting down to dinner
+  // Relationship deltas per attendee (DEFS.ACTIONS' mealRelDelta):
+  // delta = (relationshipBase + quality×relationshipQualityWeight)
+  //        × attendanceMult × (1 + max(0, affection)×relationshipExistingWeight)
+  // capped at relationshipCap per meal, with a small tension relief on top.
+  relationshipBase: 0.02,
+  relationshipQualityWeight: 0.04,
+  relationshipExistingWeight: 0.5,
+  relationshipCap: 0.05,
+  relationshipTensionRelief: 0.01,
+  attendanceMultFed: 1.0,
+  attendanceMultPresent: 0.5,
+  // How long a held/missed commitment record is kept before the rollover
+  // sweep prunes it (same retention rationale as VISIT_TUNING.retainDoneDays).
+  retainedDays: 7,
 };
 
 // Weekend rush (ref/external-world-npcs-overhaul-plan.md, Phase 4). Del's
@@ -1256,19 +1356,31 @@ const QUEST_CONFIG = {
 };
 
 // --- Needs ---
+// Phase 5 (D1) re-based two of these: HUNGER is no longer a per-tick bar
+// (no decayPerTick here — it's the hoursSinceLastMeal rhythm, see
+// HUNGER_RHYTHM below) and MOOD is no longer a directly-written bar (no
+// decayPerTick here — it eases toward MOOD_TARGET, see below). energy and
+// hygiene stay per-tick rates, both scaled by NEEDS.idleDecayMultiplier
+// while idling (D12).
 const NEEDS = {
   // sleepRestore moved to the SLEEP block — energy recovered by sleeping is
   // now a function of hours actually slept, not a flat per-tick rate.
   energy:  { decayPerTick: 2,  max: 100, warnBelow: 20, workCost: 8 },
-  hunger:  { decayPerTick: 3,  max: 100, warnBelow: 20, eatRestore: 40 },
+  // hunger has no decayPerTick since Phase 5 — the display value is derived
+  // from HUNGER_RHYTHM; max/warnBelow keep serving the header bars (warnBelow
+  // = "you should eat soon", ~14h since the last meal).
+  hunger:  { max: 100, warnBelow: 20 },
   hygiene: { decayPerTick: 1,  max: 100, warnBelow: 25, washRestore: 60 },
   // Player mood lives on the same [-1, 1] scale as NPC mood (relPlayer
-  // axes, castWeb axes, moodDelta application all assume -1..1) — it was
-  // previously stored 0-100 while moodLabel() and every LLM prompt read it
-  // expecting -1..1, so player mood always read as "good" regardless of
-  // its actual value. decayPerTick/warnBelow below are the old 0-100
-  // figures (1, 20) rescaled by *(2/100) to preserve the same felt rate.
-  mood:    { decayPerTick: 0.02, max: 1, warnBelow: -0.6 },
+  // axes, castWeb axes, moodDelta application all assume -1..1). warnBelow
+  // drives the header bar's low flag; the bar itself only moves via the
+  // easing toward MOOD_TARGET in SIM's decayPlayerNeeds.
+  mood:    { max: 1, warnBelow: -0.6 },
+  // D12: minutes spent IDLING (the continuous clock's sim checkpoints —
+  // TIME's runSimCheckpoint) decay needs at this fraction of the rate of
+  // minutes spent acting. Sitting on the narration log must not punish you
+  // like taking actions does.
+  idleDecayMultiplier: 0.25,
   // NPC Overhaul Phase 6 — comfort + stimulation needs
   comfort:    { decayPerTick: 0.5, max: 100, warnBelow: 20, warnAbove: 80 },
   stimulation: { decayPerTick: 1,   max: 100, warnBelow: 20, warnAbove: 80 },
@@ -1294,10 +1406,125 @@ const NEEDS = {
   npcStimulationRestore: 4,   // per tick during leisure/entertainment activities
 };
 
+// --- Hunger rhythm (Phase 5, D1) ---
+// Hunger is a rhythm, not a treadmill: the real state is hoursSinceLastMeal
+// (advances with elapsed game time, scaled by NEEDS.idleDecayMultiplier) and
+// mealsToday (counts meals, reset at day rollover). player.hunger stays a
+// 0-100 DERIVED display value — recomputed by SIM's decayPlayerNeeds and
+// whenever the player eats — so every existing reader (NEED_CONSEQUENCES,
+// the LLM prompt's Hunger line, the header bars, NPC reactions) keeps
+// working with no migration. The satiety mapping bottoms out at 0 exactly at
+// starveHours, which is what fires the existing NEED_CONSEQUENCES.hunger
+// path. The band ladder carries the mechanical effects (mood penalty, work
+// penalty — see resolveMoodTarget and the work-output readers).
+const HUNGER_RHYTHM = {
+  satietyStart: 90,     // display satiety at hoursSinceLastMeal 0 ("just ate")
+  satietyPerHour: 5,    // satiety = satietyStart - hours×perHour, floored 0 (reaches 0 at starveHours)
+  starveHours: 18,      // hoursSinceLastMeal at which the NEED_CONSEQUENCES.hunger path fires
+  mealsPerDayCap: 4,    // mealsToday saturates here (display/bonus hygiene)
+  bands: [
+    { maxHours: 4, key: 'satisfied',   label: 'Satisfied',   moodPenalty: 0 },
+    { maxHours: 8, key: 'peckish',     label: 'Peckish',     moodPenalty: 0 },
+    { maxHours: 12, key: 'hungry',     label: 'Hungry',      moodPenalty: -0.02 },
+    { maxHours: 18, key: 'very_hungry', label: 'Very hungry', moodPenalty: -0.05 },
+    // No workPenalty flag here — a hungry mood flows into work output
+    // transitively via the mood bar (COMPUTER's getWorkFocus reads
+    // player.mood). A separate flag would be a second, silent tuning surface.
+    { maxHours: Infinity, key: 'starving', label: 'Starving', moodPenalty: -0.08 },
+  ],
+};
+
+// --- Mood target (Phase 5, D1) ---
+// player.mood is no longer a directly-written bar. Every mood source is one
+// of two things:
+//  - a DECAYING IMPULSE into player.moodEvents (the eventTerm below) — this
+//    is where every existing `ADJUST_NEED player mood +X` line lands
+//    (effects.js applyAdjustNeed routes them here, syntax unchanged), so the
+//    AfterHours +0.25 stays a real but temporary spike that fades over the
+//    following day unless the target terms below support it;
+//  - a persistent TARGET TERM (needs/social/comfort/stress) — a clean
+//    apartment, food in your belly, and rent paid hold mood up; a mess, an
+//    empty stomach, and overdue rent hold it down.
+// player.mood EASES toward the combined target at easingPerTick per sim
+// tick (~1 game day to converge). The only direct writer of player.mood is
+// SIM's decayPlayerNeeds — see design invariant 6.
+const MOOD_TARGET = {
+  base: 0.1,                  // a functional baseline life is mildly positive
+  easingPerTick: 0.05,        // fraction of the (target − current) gap closed per 30-min tick
+  // eventTerm — the decaying impulse pool. Half-life 1 day: a +0.25 spike
+  // contributes 0.25 the day of, ~0.125 the next, ~0.06 the day after.
+  eventHalfLifeDays: 1,
+  eventPruneBelow: 0.002,     // drop impulses once their contribution decays under this
+  needsTerm: {
+    // hunger band penalties live in HUNGER_RHYTHM.bands[].moodPenalty
+    energyWarnFrac: 0.2,        // energy below this fraction of max → warn penalty
+    energyWarnPenalty: -0.05,
+    energyEmptyPenalty: -0.15,
+    hygieneWarnPenalty: -0.05,  // below NEEDS.hygiene.warnBelow
+    hygieneEmptyPenalty: -0.15,
+    mealsWellFedCount: 2,       // mealsToday ≥ this → the well-fed bonus below
+    mealsWellFedBonus: 0.03,
+    mealsSkippedPenalty: -0.04, // evening with zero meals all day
+    mealsSkippedFromHour: 18,   // clock hour at which zero meals starts to nag
+  },
+  social: {
+    affectionScale: 0.2,        // average resident affection (capped 0..1) × this → target
+    // Phase 6 (D13): being with people you like pays. presencePerPerson is
+    // the target bonus per liked resident physically in the player's room
+    // (scaled by that resident's affection, hostile ones contribute 0),
+    // capped so a full sofa can't out-earn a good day's living on its own.
+    // activityScale sizes the shared-activity mood gain that actions add on
+    // top of their own base when residents are present (watching TV together,
+    // eating together — DEFS.ACTIONS reads it in presentResidentAffection).
+    presencePerPerson: 0.04,
+    presenceCap: 0.12,
+    activityScale: 0.15,
+  },
+  comfort: {
+    cleanlinessMid: 50,         // cleanliness == mid → neutral
+    cleanlinessScale: 0.004,    // per cleanliness point from mid (±0.2 for a 100 vs 0 room)
+    odorPenalty: -0.15,         // standing in a smelly room drags the target (absorbed ROT.odorMoodPenaltyPerTick)
+  },
+  stress: {
+    rentPenalty: -0.25,         // while player.rentOwed > 0 (absorbed ECONOMY.rentLatePenaltyMood)
+    burnoutScale: 0.5,          // getBurnoutMoodPenalty(player) × this
+    billsPenaltyPerUnpaid: -0.02, // per bill with an outstanding balance
+    billsMaxPenalty: -0.08,
+  },
+};
+
+// --- Progress payouts (inventory overhaul Phase 6, D13) ---
+// One-time decaying mood impulses on completing real things: a gig
+// delivered, a lesson finished, rent paid, a quest done, a skill level, a
+// good night's sleep, the place cleaned. These are the "dopamine hit"
+// events the phase exists to spread across the game. All of them are small
+// next to the +0.25 AfterHours spike and decay over a day like every
+// impulse (MOOD_TARGET.eventHalfLifeDays), so no single event out-earns a
+// good day's living. Pushed by the event sites directly (see the Phase 5
+// rule: nothing writes player.mood — only pushMoodImpulse), never inline.
+const MOOD_PAYOUTS = {
+  workGigBase: 0.03,        // flat per delivered gig
+  workGigPerDollar: 0.0005, // plus scaled by payout (a big gig feels bigger)
+  workGigCap: 0.12,
+  courseLesson: 0.02,       // per lesson attended
+  courseComplete: 0.08,     // on top, when the course finishes
+  payRent: 0.06,            // paying down the whole balance
+  questComplete: 0.10,      // a chain quest fully resolved
+  skillLevelUp: 0.04,       // per skill level crossed
+  goodSleep: 0.05,          // a full night on schedule, alarm-free
+  cleanApartmentPerItem: 0.01, // housecleaning pass, scaled by how much there was to do
+  cleanApartmentCap: 0.08,
+};
+
 // --- Need consequences (P7 gameplay loops). When a need hits 0, real
 // mechanical effects fire — not just a red bar. These are checked every
 // tick in decayPlayerNeeds (SIM) and applied through the same applyEffects
 // pipeline as everything else. ---
+// Phase 5 retune: hunger now reaches 0 exactly at
+// HUNGER_RHYTHM.starveHours (18h since the last meal), so the starvation
+// path below fires at the intended moment under the rhythm model; the mood
+// penalties it applies are pushed as decaying impulses (see UI's
+// processNeedConsequences), never written straight to the bar.
 const NEED_CONSEQUENCES = {
   energy: {
     floor: 0,
@@ -1645,6 +1872,42 @@ const DEMOTION_BEATS = [
 const IMAGE_CACHE = {
   cap: 200,               // LRU max entries
   resolutions: { bg: '768x512', char: '512x768' },
+};
+
+// --- Title-gallery slideshow (menu overhaul Phase 10) ---
+// Adopts the reference games' two-layer crossfade + lazy 3-image buffer
+// (ref/perchance-menu-conventions.md §3.4–3.8) onto this game's image
+// pipeline, with three deliberate fixes: bounded retries with exponential
+// backoff (never the reference games' uncapped 500ms retry loop), caching
+// through the shared LRU instead of multi-MB data-URLs in kv, and a hard
+// cap on the menu's share of that cache (deviation 4). The trait lists and
+// rating-tagged prompt assembly live in DEFS.MENU (deviation 2).
+const MENU_SLIDESHOW = {
+  intervalMs: 8000,          // auto-cycle cadence
+  crossfadeMs: 1200,         // two-layer opacity transition length
+  bufferTarget: 3,           // fast-fill target — enough to start cycling
+  fastFillMs: 800,           // gap between generations while below bufferTarget
+  // The menu generates FOREVER, not just up to a target: once the fast fill
+  // is done it keeps producing one image every steadyGenMs for as long as
+  // the menu is open, and the ring prunes its own oldest beyond
+  // maxPersistedImages. So the pool is always 100 fresh-ish images rather
+  // than the same 3 forever. Paced (not back-to-back) because generation
+  // costs real time and quota, and the slideshow only shows one per 8s.
+  steadyGenMs: 15000,
+  maxSessionImages: 100,     // in-memory session buffer cap — matches the ring,
+                             // so everything saved is reachable via prev/next
+  maxPersistedImages: 100,   // saved pool cap (the menu's share of the LRU): keeps
+                             // generating, prunes the oldest saved menu images
+                             // (deviation 4's ring + deleteCachedImage eviction)
+  hydrateBatch: 8,           // blobs pulled from the LRU per background tick when
+                             // rehydrating the session buffer from the ring
+  retryMax: 4,               // generation retries before settling on the gradient
+  retryBaseMs: 2000,         // first retry delay; doubles per attempt
+  // Match the viewport's orientation so the contain-fit bars stay small.
+  // There is deliberately no crop setting: images are shown whole
+  // (object-fit: contain) and cached uncropped — see IMAGE's orientation
+  // block for why trimming on the way into the cache was removed.
+  resolutions: { landscape: '768x512', portrait: '512x768' },
 };
 
 // --- Character generation ---
@@ -2394,6 +2657,15 @@ const STEALTH_TUNING = {
   sneakEvidenceStrength: 0.4,           // fixed strength trusted producers use for LEAVE_EVIDENCE
   baseEvidenceDiscoveryChance: 0.15,    // per-tick roll when the owner is in their own room
   evidenceStrengthDiscoveryFactor: 0.5, // added to base, scaled by evidence.strength
+  // Phase 8 (NPC inventories): the player's room-search. SEARCHING an
+  // NPC's room surfaces their possessions (free, like browsing a chest);
+  // TAKING one costs game time and routes through the same
+  // ADJUST_SUSPICION boundary_violation path as phone-snooping
+  // (drives.js:400) — the owner in the room to catch you pays the full
+  // witnessed delta, an absent owner the lesser take delta.
+  searchTimeMinutes: 5,
+  takeTimeMinutes: 1,
+  possessionTakeSuspicionDelta: 0.2,
 };
 
 // --- Peeping (P7 adult content). Tuning for the spy/peep action that lets
@@ -2466,8 +2738,8 @@ const CLEANLINESS = { baseline: 50 };
 // DEFS.ACTIONS), pulled out of doCook/doWatchTV/doRelax's old inline
 // literals so nothing magic lives in the action bodies. ---
 const ACTION_TUNING = {
-  cookExtraHungerRestore: 10, // cooking restores hunger.eatRestore + this
   tvMoodGain: 0.1,
+  tvMinutes: 30,           // Phase 6: Watch TV finally costs real time (was 1 min) and pays mood
   relaxMoodGain: 0.16,
   relaxEnergyGain: 5,
   dishesMoodGain: 0.05,
@@ -2484,6 +2756,135 @@ const ACTION_TUNING = {
   swimHygieneGain: 10,
   studyMoodGain: 0.08,
   laundryMoodGain: 0.03,
+  // Phase 6 (D13): free ambient actions — the ungated safety net that
+  // guarantees the player always has a mood source on day one with no
+  // renovation and no money spent. All cost zero money/items/facilities;
+  // they still advance the clock like any action. Numbers live here, never
+  // inline at the action def.
+  napMinutes: 30,
+  napMoodGain: 0.03,
+  napEnergyGain: 15,
+  balconyMinutes: 15,
+  balconyMoodGain: 0.04,
+  walkMinutes: 30,
+  walkMoodGain: 0.05,
+  listenMusicMinutes: 15,
+  listenMusicMoodGain: 0.03,
+  longShowerMinutes: 25,
+  longShowerMoodGain: 0.05,
+  longShowerHygieneGain: 20,
+  // Phase 7 (D7): laying out and eating a proper shared meal takes a real
+  // stretch of clock — longer than a solo bite (INVENTORY_TUNING
+  // useTimeMinutes meal: 25), shorter than cooking a dish from scratch.
+  setMealMinutes: 40,
+};
+
+// --- Hobby objects (inventory overhaul Phase 6, D13) ---
+// One action per buyable hobby OBJECT_DEFS entry (DEFS.WORLD's hobby_*
+// set). Tables are keyed by the OBJECT_DEFS id, so adding a hobby is one
+// row in OBJECT_DEFS, one in ITEM_DEFS, one ACTION_DEFS entry (via
+// createHobbyAction) and one row here — no other coupling.
+const HOBBY_TUNING = {
+  useMinutes: { hobby_guitar: 20, hobby_bookshelf: 25, hobby_record_player: 15, hobby_console: 30, hobby_sketchpad: 25, hobby_houseplant: 5 },
+  moodGain:   { hobby_guitar: 0.07, hobby_bookshelf: 0.06, hobby_record_player: 0.05, hobby_console: 0.06, hobby_sketchpad: 0.08, hobby_houseplant: 0.04 },
+  energyCost: { hobby_guitar: 3, hobby_bookshelf: 0, hobby_record_player: 0, hobby_console: 2, hobby_sketchpad: 2, hobby_houseplant: 0 },
+};
+
+// --- Inventory panel tuning (inventory overhaul Phase 1) ---
+// Time costs for acting on items from the inventory panel, in game
+// minutes. Acting from the bag must cost the same game time as the
+// equivalent action chip (it goes through advanceAndResolveMinutes, never
+// a free shortcut), so the panel can never become a way to sidestep the
+// clock. `useTimeMinutes` is keyed by item category; Phase 3's item-driven
+// eat action reuses the same table rather than declaring a second one.
+// Phase 4 moved the freshness ladder and the bag-preservation baseline
+// into the ROT block (one tuning surface for the whole spoilage model) —
+// see ROT, which absorbs what was `freshnessThresholds`/`bagPreservation`
+// here.
+const INVENTORY_TUNING = {
+  useTimeMinutes: { drink: 5, snack: 10, food: 10, meal: 25, _default: 10 },
+  dropMinutes: 1,
+  trashMinutes: 1,
+  // Phase 2: one batch of container transfer verbs (take/put/take-all/
+  // put-all) costs this much game time, applied once per batch through
+  // advanceAndResolveMinutes — the same "act, then decay exactly once"
+  // rule as the inventory verbs. Browsing a container is free, like
+  // browsing the bag.
+  containerVerbMinutes: 1,
+  // Phase 6: unboxing and setting a hobby object in the room (inventory.place
+  // → DESTROY_ITEM + SPAWN_OBJECT). A hobby purchase arrives as an item;
+  // placing it is the last act and it costs the same kind of time as any
+  // other inventory verb.
+  placeMinutes: 5,
+};
+
+// --- NPC inventories (inventory overhaul Phase 8, D8) ---
+// NPCs own things, seeded at creation from the character bible (job, income
+// tier, interests) via NPC.seedNpcInventory (npc.js). Every id is a real
+// ITEM_DEFS id — never a parallel representation (invariant 1). Key-item
+// defs (apartment_keys/wallet/id_card/personal_phone) can't be taken by the
+// player's room-search (stealth.js), so the stealable pressure is exactly
+// the `beyond` items — the musician's guitar, the student's book.
+const NPC_INVENTORY = {
+  // Everyone's personal effects. All four are keyItem defs.
+  baseKit: ['apartment_keys', 'wallet', 'id_card', 'personal_phone'],
+  // One entry per OCCUPATION_POOL category — the thing their job puts in
+  // their pocket, in order. A category with no entry skips this tier.
+  byOccupation: {
+    tech:      ['headphones'],
+    food:      ['energy_drink'],
+    health:    ['pain_reliever'],
+    arts:      ['hobby_sketchpad'],
+    service:   ['candle'],
+    education: ['book'],
+    finance:   ['book'],
+    trades:    ['batteries', 'lightbulb'],
+    media:     ['book'],
+    legal:     ['book'],
+    science:   ['book'],
+  },
+  // One possession that tracks income tier — what a snoop finds reads
+  // differently for a high earner than for someone scraping by.
+  byIncome: {
+    high: ['wine'],
+    mid:  ['chips'],
+    low:  ['soda'],
+  },
+  // Interest names → a possession the NPC plausibly owns. The first
+  // matching interest contributes one stack.
+  byInterest: {
+    gaming:      ['board_game'],
+    music:       ['hobby_guitar'],
+    reading:     ['book'],
+    art:         ['hobby_sketchpad'],
+    gardening:   ['hobby_houseplant'],
+    cooking:     ['book'],
+    fitness:     ['bottled_water'],
+    photography: ['book'],
+    coding:      ['phone_charger'],
+    writing:     ['book'],
+  },
+  // A small personal snack stash so the hunger drive eats from the NPC's
+  // OWN bag before touching the shared fridge (Phase 8 step 4). All
+  // non-perishable so a bag-kept stash never rots.
+  snackPool: ['granola_bar', 'chips', 'soda', 'instant_noodles', 'energy_drink'],
+  snackCount: 2,
+  // The eat drive keeps raiding sources until needs.hunger reaches this
+  // or every reachable source is empty.
+  eatUntilHunger: 65,
+};
+
+// --- NPC gift-giving (inventory overhaul Phase 8, D8) ---
+// The gift_to_player drive makes a fond NPC hand the player something they
+// own. Affection-gated + long cooldown (a gift is a gesture, not a drip),
+// and only when they actually have a non-keyItem possession worth giving.
+const NPC_GIFT_TUNING = {
+  affectionThreshold: 0.35, // relPlayer.affection needed to even consider it
+  cooldownTicks: 96,        // ~2 game days between gift attempts
+  baseChance: 0.02,         // per-tick probability once the gate passes
+  // Categories the drive will gift, in preference order — the kinds of
+  // thing you'd hand someone. Toiletries/cleaning/keys stay theirs.
+  categoryOrder: ['gift', 'food', 'snack', 'drink', 'media', 'comfort'],
 };
 
 // --- Masturbation (Phase 3) ---
@@ -2719,15 +3120,26 @@ const CONTENT_DIRECTIVES = {
 // cooldownTicks prevents the same drive from firing again too soon.
 const DRIVE_DEFS = {
   // --- Need-driven self-care ---
-  cook: {
+  // Phase 8: the eat drive (formerly `cook`). A hungry NPC no longer
+  // conjures hunger from nowhere — it searches the fridge, the pantry and
+  // its own bag and REALLY consumes what it finds (your groceries
+  // disappear; D8). Only when every reachable source is genuinely empty
+  // does it fall back to the abstract scrounge, so nobody starves because
+  // the player forgot to shop. Resolution is custom (tryEatFood in DRIVES),
+  // the same dispatch shape as the peep/snoop drives — the `effects` list
+  // is deliberately empty.
+  eat: {
     gates: [{ need: 'hunger', op: 'below', threshold: 25 }], weight: 0.3,
     blockFilter: ['morning', 'evening', 'leisure', 'midday'],
-    effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'hunger', delta: 30 } }],
-    activityOverride: 'cooking',
-    eventTemplate: '{name} made themselves something to eat.',
-    eventMood: 0.03,
+    effects: [],
     cooldownTicks: 8,
-    meters: [['cooking', 1], ['devices', 0.5]],
+    isEatDrive: true,
+    // Fallback (kitchen genuinely empty) keeps the old cook flavor.
+    activityOverride: 'cooking',
+    fallbackActivityOverride: 'scrounging',
+    eventTemplate: '{name} made themselves something to eat.',
+    fallbackEventTemplate: '{name} scrounged what was left in the cupboards.',
+    eventMood: 0.03,
   },
   shower: {
     gates: [{ need: 'hygiene', op: 'below', threshold: 30 }], weight: 0.3,
@@ -2891,6 +3303,18 @@ const DRIVE_DEFS = {
     effects: [],
     isSnoopDrive: true,
   },
+  // Phase 8 (D8): a fond NPC hands the player something they own. Custom
+  // resolution (tryGiveGift in DRIVES) — affection-gated, cooldowned, and
+  // only when they actually have a non-keyItem possession worth gifting.
+  // The item arrives in the player's bag via MOVE_ITEM.
+  gift_to_player: {
+    gates: [],
+    weight: 0.0,              // actual chance computed in evaluateDrives
+    blockFilter: ['leisure', 'evening', 'wind_down', 'morning'],
+    cooldownTicks: NPC_GIFT_TUNING.cooldownTicks, // single source of truth
+    effects: [],
+    isGiftDrive: true,
+  },
 };
 
 // --- NPC Peeping (Phase 6): the mirror of the player's peep system.
@@ -2995,5 +3419,27 @@ const NPC_PEEP_RESPONSES = {
 // Per-NPC drive cooldown tracking (in-memory, reset on load)
 // Stored as npc.flags._driveCooldowns = { driveId: tickIndex }
 const DRIVE_COOLDOWN_KEY = '_driveCooldowns';
+
+// --- Save system v2 (inventory overhaul Phase 9, D9/D10) ---
+// VN-style multi-slot saves on kv (see STATE's SAVE_KEYS / captureSave).
+// Slot model: 12 base manual slots (more are allocated on demand when the
+// base grid is full), a 5-deep rotating autosave ring (oldest overwritten),
+// one quicksave, one exit-save. Every record stores runId + parentSaveId +
+// saveIndex so the branching-tree view is a later pure-UI addition (D9).
+// The menu renders cards from kv.saveIndex (a lightweight summary list) and
+// NEVER deserializes a payload to draw a card.
+const GAME_VERSION = '0.12.0'; // bump whenever a save-affecting schema change ships
+
+const SAVE_TUNING = {
+  manualBaseSlots: 12,       // manual_0..manual_11; grow on demand above this
+  autosaveDepth: 5,          // auto_0..auto_4, oldest overwritten first
+  maxTotalSaves: 30,         // hard cap across all kinds (incl. grown manual slots)
+  warnNearLimit: 3,          // warn in the save menu when fewer than this many slots are free
+  // saveAtBoundary reasons that ALSO write a rotating autosave record. The
+  // 30s timer is the autosave; every other boundary just flushes the live
+  // folders (writing a full snapshot on ~60 different reasons would rotate
+  // the ring mid-session and bury every meaningful point).
+  recordReasons: ['timer'],
+};
 
 // ===== /SECTION: CONFIG =====

@@ -551,6 +551,14 @@ function deliverGig(gameState, gigId) {
     : Math.round(GIG_REP_DELIVERY * sizeFactor);
   gigs.reputation = clamp((gigs.reputation || 0) + repDelta, 0, GIG_REP_MAX);
   gigs.accepted = gigs.accepted.filter(g => g.gigId !== gigId);
+  // Phase 6 (D13): delivering a finished gig is a dopamine hit — a mood
+  // impulse scaled by the payout (a big contract feels better than a small
+  // one), capped so no single delivery out-earns a good day's living.
+  pushMoodImpulse(
+    gameState.player,
+    Math.min(MOOD_PAYOUTS.workGigCap, MOOD_PAYOUTS.workGigBase + gig.payout * MOOD_PAYOUTS.workGigPerDollar),
+    gameState.meta.clock.day
+  );
   return { ok: true, gig, late, payout: gig.payout, repDelta };
 }
 
@@ -750,11 +758,15 @@ function attendLesson(gameState, courseId) {
   if (!course || !enrollment) return { ok: false, reason: 'Not enrolled in that.' };
 
   enrollment.progress += 1;
-  gameState.player.skills = gameState.player.skills || {};
-  gameState.player.skills[course.skillId] = (gameState.player.skills[course.skillId] || 0) + course.xpPerLesson;
+  // Phase 6 (D13): lesson XP routes through the single awardSkillXp site,
+  // so a level-up mid-course still fires its mood impulse; each lesson
+  // attended is its own small win, and finishing the course is a bigger one.
+  awardSkillXp(gameState.player, course.skillId, course.xpPerLesson, gameState.meta.clock.day);
+  pushMoodImpulse(gameState.player, MOOD_PAYOUTS.courseLesson, gameState.meta.clock.day);
 
   const completed = enrollment.progress >= course.lessons;
   if (completed) {
+    pushMoodImpulse(gameState.player, MOOD_PAYOUTS.courseComplete, gameState.meta.clock.day);
     classes.enrolled = classes.enrolled.filter(e => e.courseId !== courseId);
     classes.completed.push(courseId);
   }
@@ -799,6 +811,11 @@ function cleanRoomObjects(gameState, roomId) {
     }
   }
   refreshRoomCleanliness(gameState, roomId);
+  // Phase 4: a rot mess leaves a room-level odor behind — cleaning the
+  // room clears it too. The object states above reset the container's
+  // rotten_food; this is the room flag's only writer besides the
+  // spoilage pass.
+  if (gameState.world.rooms?.[roomId]) gameState.world.rooms[roomId].odor = 'none';
   return cleanedCount;
 }
 
@@ -830,6 +847,18 @@ function performCleaningVisit(gameState, service) {
   if (lines.length) {
     const effCtx = buildEffectContext(gameState, [], [], {}, []);
     applyEffects(lines.map(l => parseEffectDSL(l)[0]).filter(Boolean), effCtx);
+  }
+  // Phase 6 (D13): a cleaning pass that actually cleans something is a
+  // happiness event for the household — a mood impulse scaled by how much
+  // there was to do, capped so a single deep-clean can't out-earn a good
+  // day's living. Fires for the hired service AND the maid (she calls
+  // performCleaningVisit too), whether or not the player is home.
+  if (itemsCleaned > 0) {
+    pushMoodImpulse(
+      gameState.player,
+      Math.min(MOOD_PAYOUTS.cleanApartmentCap, itemsCleaned * MOOD_PAYOUTS.cleanApartmentPerItem),
+      gameState.meta.clock.day
+    );
   }
   return itemsCleaned;
 }
@@ -2456,7 +2485,7 @@ function performMaidVisit(gameState, contract, entry) {
       const itemId = MAID_TUNING.cookingMealItems[Math.floor(rng() * MAID_TUNING.cookingMealItems.length)];
       if (!ITEM_DEFS[itemId]) continue;
       if (fridge) {
-        fridge.contents = addStack(fridge.contents, itemId, 1, null, {});
+        fridge.contents = addStack(fridge.contents, itemId, 1, null, {}, gameState.meta.clock.day);
         result.mealsCooked++;
       }
     }

@@ -130,7 +130,55 @@ function migrateNpcToV2(npc) {
   return npc;
 }
 
-// Add a fact to an NPC's memory
+// --- NPC inventories (inventory overhaul Phase 8, D8) ---
+// NPCs own things. Seeded at creation (SIM's createNpcFromBible) and
+// backfilled for existing saves (STATE's npcs 2→3 migration) from a
+// lifestyle template derived from the character bible — job, income tier,
+// interests (CONFIG's NPC_INVENTORY). Deterministic: the rng is seeded
+// from bible.genSeed, so the same NPC always gets the same inventory —
+// a fresh save and a migration can't disagree. Pure (returns a NEW npc);
+// a save that already carries an inventory passes through untouched.
+// `day` stamps meta.acquiredDay (defaults to 1, the game-start day; the
+// migration passes residency.since so a mid-game backfill ages their
+// snacks from move-in, not day one).
+function seedNpcInventory(npc, day) {
+  if (!npc || typeof npc !== 'object') return npc;
+  if (Array.isArray(npc.inventory) && npc.inventory.length > 0) return npc;
+  const cfg = NPC_INVENTORY;
+  const b = npc.bible || {};
+  const rng = mulberry32((b.genSeed || 0) + 99991);
+  // Built through ITEMS' addStack so same-def stacks merge (the book from
+  // an occupation and the book from an interest land as one stack, not
+  // two — same uniform stack shape + cohort rules as everywhere else).
+  let stacks = [];
+  const push = (defId, qty = 1) => {
+    if (!ITEM_DEFS[defId]) return;
+    const keyItem = !!(ITEM_DEFS[defId]?.keyItem);
+    stacks = addStack(stacks, defId, qty, null, keyItem ? { keyItem: true } : {}, day ?? 1);
+  };
+  for (const defId of cfg.baseKit) push(defId);
+  const occ = b.occupation || {};
+  for (const defId of cfg.byOccupation[occ.category] || []) push(defId);
+  for (const defId of cfg.byIncome[occ.incomeBand] || []) push(defId);
+  const seen = new Set();
+  for (const intr of b.interests || []) {
+    for (const defId of cfg.byInterest[intr?.name] || []) {
+      if (seen.has(defId)) continue;
+      seen.add(defId);
+      push(defId);
+      break;
+    }
+  }
+  const snackPool = cfg.snackPool || [];
+  const picked = [];
+  for (let i = 0; i < (cfg.snackCount || 2) && snackPool.length > 0; i++) {
+    const id = snackPool[Math.floor(rng() * snackPool.length)];
+    if (!picked.includes(id)) picked.push(id);
+  }
+  for (const id of picked) push(id, 1 + Math.floor(rng() * 3));
+  return { ...npc, inventory: stacks };
+}
+
 // Add a fact to an NPC's memory. Fact can be a bare string (legacy) or an
 // object { text, day, importance, category }. NPC Overhaul: added category + valid.
 function addMemoryFact(npc, fact) {
@@ -549,6 +597,9 @@ function assembleContext(gameState, sceneState) {
       time,
       day,
       cleanliness: room.cleanliness,
+      // Phase 4: room odor (a rot mess in this room) so narration can
+      // mention the smell. 'none' or 'smelly'.
+      odor: room.odor || 'none',
     },
     player: {
       name: 'You',

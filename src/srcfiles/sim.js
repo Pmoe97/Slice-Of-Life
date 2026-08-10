@@ -697,8 +697,22 @@ function resolveVisitPresence(npcId, gameState, activeVisits, rng, resolved) {
 
 // --- Schedule resolution ---
 
-// Given an NPC's schedule template and current time, get their activity
-function resolveScheduleActivity(npc, clock) {
+// Given an NPC's schedule template and current time, get their activity.
+// Phase 7 (D7): a resident with an ACTIVE accepted meal commitment is
+// relocated to the commitment's room for its window — the invitation binds,
+// it doesn't hope. The commitment check is the FIRST question asked, so a
+// committed dinner beats whatever the work template says (a day_shift
+// roommate would otherwise be mid-evening leisure somewhere random). The
+// extra args are optional: callers without a gameState (interruption.js's
+// schedule reads) keep the old pure-template behavior. Returns the block
+// 'meal' with commitmentRoomId set when an override is active.
+function resolveScheduleActivity(npc, clock, gameState, npcId) {
+  if (gameState && npcId) {
+    const commitment = activeCommitmentFor(npcId, gameState);
+    if (commitment) {
+      return { block: 'meal', weight: 1.0, commitmentRoomId: commitment.roomId };
+    }
+  }
   const template = SCHEDULES[npc.bible.scheduleTemplate] || SCHEDULES.standard;
   const dayType = isWeekend(clock.day) ? 'weekend' : 'weekday';
   const sched = template[dayType] || template.weekday;
@@ -903,12 +917,21 @@ function resolveTick(gameState) {
     }
     if (npc.residency.status !== 'resident') continue;
 
-    const { block } = resolveScheduleActivity(npc, meta.clock);
+    const scheduleResult = resolveScheduleActivity(npc, meta.clock, gameState, id);
+    const { block } = scheduleResult;
     let location = null;
     let activity = block;
     let transit = npc.transit || null;
 
-    if (block === 'sleep') {
+    if (block === 'meal') {
+      // Phase 7 (D7): a committed dinner binds — the attendee is at the
+      // table for the whole window, not wherever the template would put
+      // them. The location comes straight from the commitment (the dining
+      // room); a commitment never routes through resolveRoomForActivity.
+      location = scheduleResult.commitmentRoomId || npc.residency.room;
+      activity = 'sitting down to dinner';
+      transit = null;
+    } else if (block === 'sleep') {
       location = npc.residency.room;
       activity = 'sleeping';
       transit = null;
@@ -1012,7 +1035,9 @@ function resolveTick(gameState) {
     if (block === 'sleep') {
       needs.energy = Math.min(NEEDS.energy.max, needs.energy + NEEDS.npcSleepRestore);
     }
-    if (block === 'morning' || block === 'evening') {
+    // Phase 7 (D7): a 'meal' block is a committed dinner — the attendee
+    // eats there, so it restores hunger like the morning/evening blocks.
+    if (block === 'morning' || block === 'evening' || block === 'meal') {
       needs.hunger = Math.min(NEEDS.hunger.max, needs.hunger + NEEDS.npcEatRestore);
     }
     if (block === 'morning' || block === 'wind_down' || block === 'evening') {
@@ -1164,6 +1189,13 @@ function resolveTick(gameState) {
       npcUpdates[id].memory = postDrive.memory;
       npcUpdates[id].relPlayer = postDrive.relPlayer;
       if (postDrive.suspicion) npcUpdates[id].suspicion = postDrive.suspicion;
+      // Phase 8 (NPC inventories): the eat/gift drives mutate the NPC's
+      // inventory through applyEffects (CONSUME_ITEM/MOVE_ITEM replace the
+      // array on gameState.npcs[id]) — without this merge the stale
+      // pre-drive copy in npcUpdates would win and the eaten groceries /
+      // gifted item would snap back every tick, exactly like the memory
+      // replacement bug this block was written to fix.
+      if (postDrive.inventory) npcUpdates[id].inventory = postDrive.inventory;
     }
     // Cooldowns (and any other flags set by setCooldown during drive
     // evaluation) live on driveResult.updatedNpc.flags — without this
@@ -1253,17 +1285,204 @@ function resolveBatch(gameState, ticks, opts = {}) {
   return { state, events: allEvents, peepResults: allPeepResults };
 }
 
-// --- Needs decay for player ---
+// --- Player needs: the Phase 5 model (D1, D12) ---
 // mood floors at -1, not 0 — it's the only need on a [-1, 1] scale (see
 // NEEDS.mood config comment); the others are 0-100.
-function decayPlayerNeeds(player, ticks) {
+// Phase 5 re-based two of the four:
+//  - hunger: the real state is hoursSinceLastMeal / mealsToday; the 0-100
+//    player.hunger below is a DERIVED display value (satietyFrom),
+//    recomputed here and on every meal, so every existing reader
+//    (NEED_CONSEQUENCES, the LLM's Hunger line, the header bars, NPC
+//    reactions) keeps working with no migration. It bottoms out at 0 exactly
+//    at HUNGER_RHYTHM.starveHours, which is what fires the existing
+//    NEED_CONSEQUENCES.hunger path.
+//  - mood: nothing writes player.mood except this function, which EASES it
+//    toward resolveMoodTarget(). Mood sources are either decaying impulses
+//    (player.moodEvents — pushed by effects.js's ADJUST_NEED/MOOD_DELTA and
+//    by UI's starvation/filthy beats) or persistent target terms (needs/
+//    social/comfort/stress). Phase 4's standing-in-odor per-tick subtraction
+//    (ROT.odorMoodPenaltyPerTick) moved into the comfort term as a steady
+//    drag, so it no longer fights the easing.
+// options.idle (D12): true when the decay comes from the continuous clock's
+// sim checkpoint (real time passing while the player does nothing) — such
+// minutes count at NEEDS.idleDecayMultiplier. Every action path (the other
+// 12 call sites) leaves it false.
+function decayPlayerNeeds(player, ticks, gameState, options = {}) {
+  const mult = options.idle ? NEEDS.idleDecayMultiplier : 1;
+  const minutes = ticks * CLOCK.tickMinutes * mult;
+
+  const hoursSinceLastMeal = (player.hoursSinceLastMeal ?? 0) + minutes / 60;
+
+  const day = gameState?.meta?.clock?.day ?? 0;
+  const { moodEvents, eventTerm } = advanceMoodEvents(player.moodEvents, day);
+  const moodTarget = resolveMoodTarget(player, gameState, eventTerm, hoursSinceLastMeal);
+  const mood = clamp(player.mood + (moodTarget - player.mood) * MOOD_TARGET.easingPerTick * ticks * mult, -1, 1);
+
   return {
     ...player,
-    energy: Math.max(0, player.energy - NEEDS.energy.decayPerTick * ticks),
-    hunger: Math.max(0, player.hunger - NEEDS.hunger.decayPerTick * ticks),
-    hygiene: Math.max(0, player.hygiene - NEEDS.hygiene.decayPerTick * ticks),
-    mood: Math.max(-1, player.mood - NEEDS.mood.decayPerTick * ticks),
+    hoursSinceLastMeal,
+    mealsToday: player.mealsToday ?? 0,
+    moodEvents,
+    energy: Math.max(0, player.energy - NEEDS.energy.decayPerTick * ticks * mult),
+    hygiene: Math.max(0, player.hygiene - NEEDS.hygiene.decayPerTick * ticks * mult),
+    hunger: satietyFrom(hoursSinceLastMeal),
+    mood,
   };
+}
+
+// Push a mood impulse. Every ADJUST_NEED player mood line (effects.js) and
+// the UI's starvation/filthy beats land here — the bar itself is only moved
+// by the easing in decayPlayerNeeds.
+function pushMoodImpulse(player, delta, day) {
+  if (!delta) return;
+  if (!Array.isArray(player.moodEvents)) player.moodEvents = [];
+  player.moodEvents.push({ day, delta: Number(delta) });
+}
+
+// Decay the impulse pool to a single eventTerm as of `day`, pruning entries
+// whose contribution has decayed under MOOD_TARGET.eventPruneBelow (bounded:
+// an impulse halves every eventHalfLifeDays, so it's pruned after ~10
+// half-lives no matter how many were pushed). eventTerm is capped to the
+// mood axis so a stack of one-turn spikes can't blow past the bar.
+function advanceMoodEvents(moodEvents, day) {
+  const events = Array.isArray(moodEvents) ? moodEvents : [];
+  if (events.length === 0) return { moodEvents: events, eventTerm: 0 };
+  const factor = Math.pow(0.5, 1 / MOOD_TARGET.eventHalfLifeDays);
+  const kept = [];
+  let eventTerm = 0;
+  for (const e of events) {
+    const age = Math.max(0, (day ?? 0) - (e.day ?? day ?? 0));
+    const contrib = (e.delta || 0) * Math.pow(factor, age);
+    if (Math.abs(contrib) >= MOOD_TARGET.eventPruneBelow) { kept.push(e); eventTerm += contrib; }
+  }
+  return { moodEvents: kept, eventTerm: clamp(eventTerm, -1, 1) };
+}
+
+// The hunger band for a given hours-since-last-meal (HUNGER_RHYTHM.bands).
+function hungerBand(hoursSinceLastMeal) {
+  for (const b of HUNGER_RHYTHM.bands) {
+    if (hoursSinceLastMeal < b.maxHours) return b;
+  }
+  return HUNGER_RHYTHM.bands[HUNGER_RHYTHM.bands.length - 1];
+}
+
+// Derived 0-100 hunger display. Purely a function of hoursSinceLastMeal (a
+// meal of any size resets the clock — food-size flavour lives in the mood
+// impulse and the consumable values, not the bar). Reaches 0 exactly at
+// HUNGER_RHYTHM.starveHours.
+function satietyFrom(hoursSinceLastMeal) {
+  return Math.max(0, HUNGER_RHYTHM.satietyStart - hoursSinceLastMeal * HUNGER_RHYTHM.satietyPerHour);
+}
+
+// The steady-state mood target: base + needs + social + comfort + stress +
+// eventTerm. See the MOOD_TARGET block in CONFIG for the terms and their
+// shapes. player.mood eases toward this in decayPlayerNeeds.
+function resolveMoodTarget(player, gameState, eventTerm, hoursSinceLastMeal) {
+  const cfg = MOOD_TARGET;
+  const h = hoursSinceLastMeal ?? player.hoursSinceLastMeal ?? 0;
+  const mealsToday = player.mealsToday ?? 0;
+  let target = cfg.base;
+
+  // needsTerm — hunger band + energy + hygiene + meal regularity.
+  target += hungerBand(h).moodPenalty;
+  const energyMax = player.energyMax || NEEDS.energy.max;
+  if (player.energy <= 0) target += cfg.needsTerm.energyEmptyPenalty;
+  else if (player.energy <= energyMax * cfg.needsTerm.energyWarnFrac) target += cfg.needsTerm.energyWarnPenalty;
+  if (player.hygiene <= 0) target += cfg.needsTerm.hygieneEmptyPenalty;
+  else if (player.hygiene < NEEDS.hygiene.warnBelow) target += cfg.needsTerm.hygieneWarnPenalty;
+  if (mealsToday >= cfg.needsTerm.mealsWellFedCount) target += cfg.needsTerm.mealsWellFedBonus;
+  else if (mealsToday === 0 && ((gameState?.meta?.clock?.minutes ?? 0) / 60) % 24 >= cfg.needsTerm.mealsSkippedFromHour) {
+    target += cfg.needsTerm.mealsSkippedPenalty;
+  }
+
+  // socialTerm — average resident affection toward the player. The
+  // interaction-based part of this term arrives as impulses (Phase 6's
+  // watch-tv/eat-together bonuses in DEFS.ACTIONS); the affection baseline
+  // is what exists today (talk to your roommates). Phase 6 adds the
+  // presence bonus: a liked resident physically in the same room is worth
+  // more than one three rooms away, and a hostile one contributes nothing
+  // (clamped at 0) — "sitting with a liked roommate raises mood, with a
+  // hostile one does not."
+  if (gameState?.npcs) {
+    const residents = Object.values(gameState.npcs).filter(n => n.residency?.status === 'resident');
+    if (residents.length > 0) {
+      let sum = 0;
+      for (const n of residents) sum += n.relPlayer?.affection ?? 0;
+      target += clamp(sum / residents.length, 0, 1) * cfg.social.affectionScale;
+      let presentSum = 0;
+      for (const n of residents) {
+        if (n.location !== player.location) continue;
+        presentSum += Math.max(0, n.relPlayer?.affection ?? 0);
+      }
+      if (presentSum > 0) target += clamp(presentSum * cfg.social.presencePerPerson, 0, cfg.social.presenceCap);
+    }
+  }
+
+  // comfortTerm — the player's current room: cleanliness + odor.
+  const room = gameState?.world?.rooms?.[player.location];
+  if (room) {
+    target += ((room.cleanliness ?? cfg.comfort.cleanlinessMid) - cfg.comfort.cleanlinessMid) * cfg.comfort.cleanlinessScale;
+    if (room.odor === 'smelly') target += cfg.comfort.odorPenalty;
+  }
+
+  // stressTerm — rent, burnout, unpaid bills.
+  if ((player.rentOwed || 0) > 0) target += cfg.stress.rentPenalty;
+  // getBurnoutMoodPenalty returns a POSITIVE magnitude — subtract it.
+  if ((player.burnout?.burnoutLevel || 0) > 0) target += -getBurnoutMoodPenalty(player) * cfg.stress.burnoutScale;
+  let unpaidBills = 0;
+  const bills = gameState?.world?.bills;
+  if (bills) for (const b of Object.values(bills)) if ((b.balance || 0) > 0) unpaidBills++;
+  if (unpaidBills > 0) target += Math.max(cfg.stress.billsMaxPenalty, unpaidBills * cfg.stress.billsPenaltyPerUnpaid);
+
+  // eventTerm — the decaying impulse pool (meals, AfterHours, chores, ...).
+  target += eventTerm;
+
+  return clamp(target, -1, 1);
+}
+
+// --- Spoilage pass (inventory overhaul Phase 4) ---
+// Runs once per calendar day in the day-rollover path (UI's
+// processDayRollover). Freshness itself is DERIVED at read time
+// (freshnessOf — never a stored countdown), so this pass only handles the
+// one irreversible event: a stack left past its shelf life PLUS
+// ROT.graceDays converts to a MESS — it's removed from its container, the
+// container's `rotten_food` state flips to 'rotten' (feeding the EXISTING
+// cleanliness machinery via the def's dirtyWhen/cleanlinessWeight), and
+// the room gains an `odor` flag. A Rotten-but-within-grace stack stays
+// put (still eatable, with the Rotten eating penalties in applyEatItem),
+// so "throwing it out" during the Rotten window prevents the mess. The
+// maid (cleanRoomObjects) and the player's throw-out button clear both the
+// container state and the room odor. Synchronous by design — it's a
+// rollover hook like the others.
+function processSpoilageForDay(gameState, day) {
+  if (!gameState?.objects) return;
+  for (const [bucket, objs] of Object.entries(gameState.objects || {})) {
+    for (const obj of Object.values(objs || {})) {
+      const odef = OBJECT_DEFS[obj.defId];
+      // Only containers that declare the state can rot; anything else is
+      // skipped so cleanRoomObjects' dirtyWhen-driven reset stays sound.
+      if (!odef?.states?.rotten_food || !Array.isArray(obj.contents)) continue;
+      const shelfMult = odef.container?.preservation ?? ROT.bagPreservation;
+      let anyMess = false;
+      const kept = [];
+      for (const stack of obj.contents) {
+        const def = ITEM_DEFS[stack.defId];
+        if (!def?.perishable?.days) { kept.push(stack); continue; }
+        const anchor = stack?.meta?.cohort ?? stack?.meta?.acquiredDay;
+        if (anchor == null) { kept.push(stack); continue; } // age unknown — never instant rot
+        const shelfDays = def.perishable.days * shelfMult;
+        if (day > anchor + shelfDays + ROT.graceDays) { anyMess = true; continue; } // converts to a mess
+        kept.push(stack);
+      }
+      if (kept.length !== obj.contents.length) obj.contents = kept;
+      if (anyMess) {
+        obj.state = { ...obj.state, rotten_food: 'rotten' };
+        const roomId = bucket.replace(/^room_/, '');
+        if (gameState.world.rooms?.[roomId]) gameState.world.rooms[roomId].odor = 'smelly';
+        refreshRoomCleanliness(gameState, roomId);
+      }
+    }
+  }
 }
 
 // --- Sleep ---
@@ -2059,7 +2278,7 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
   const rooms = {};
   for (const roomId of ALL_ROOMS) {
     const bucket = objects[`room_${roomId}`];
-    rooms[roomId] = { capacity: ROOMS[roomId].capacity, cleanliness: recomputeRoomCleanliness(bucket), lastEvent: null };
+    rooms[roomId] = { capacity: ROOMS[roomId].capacity, cleanliness: recomputeRoomCleanliness(bucket), lastEvent: null, odor: 'none' };
   }
 
   // Seed episode logs with backdated shared-history beats
@@ -2093,11 +2312,26 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
     // early rent harder and the pressure to recruit roommates sharper.
     energy: 70,
     energyMax: 70,
+    // Phase 5: hunger is a derived rhythm value (see satietyFrom). Starting
+    // hoursSinceLastMeal 2 keeps the familiar 80 display (satiety 90−2×5) —
+    // you had something on the way in — and mealsToday/moodEvents seed the
+    // new real state.
+    hoursSinceLastMeal: 2,
+    mealsToday: 0,
+    moodEvents: [],
     hunger: 80,
     hygiene: 100,
     mood: 0.2, // [-1, 1] scale — see NEEDS.mood config comment. 0.2 mirrors the old 60/100 starting mood at the same relative position.
     skills: {},
-    inventory: [],
+    // Inventory overhaul Phase 1: the player starts with their personal
+    // effects — keys, wallet, ID — as `keyItem` stacks that the inventory
+    // panel protects from drop/trash/give. acquiredDay is 1 (the game
+    // starts on day 1) so the freshness model never treats them as stale.
+    inventory: [
+      { defId: 'apartment_keys', qty: 1, ownerId: 'player', meta: { acquiredDay: 1 } },
+      { defId: 'wallet', qty: 1, ownerId: 'player', meta: { acquiredDay: 1 } },
+      { defId: 'id_card', qty: 1, ownerId: 'player', meta: { acquiredDay: 1 } },
+    ],
     location: 'bedroom_player',
     flags: {},
     // Phase 8: alarm system. The player can set an alarm that caps the
@@ -2147,6 +2381,12 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
       // lands here and nothing else. getActiveVisits (SIM) is the only
       // reader; statuses are scheduled → done (see processVisitsForDay).
       visits: [],
+      // Meal commitments (inventory overhaul Phase 7, D7): the resident-side
+      // sibling of visits — a schedule OVERRIDE (an accepted dinner relocates
+      // the NPC to the dining room for its window; see resolveScheduleActivity
+      // and COMMITMENTS). Empty by default, like visits, so old saves get it
+      // from the loadGameState fallback with no migration.
+      commitments: [],
       // Food delivery (external-world plan Phase 5): placed DoorDrop orders,
       // one record per order, resolved intra-day by processFoodOrdersNow (UI)
       // when the driver's visit window opens. World state rather than app
@@ -2369,7 +2609,7 @@ function initUtilitiesState() {
 
 // --- Create NPC object from validated bible ---
 function createNpcFromBible(bible, residencyStatus) {
-  return {
+  const npc = {
     bible,
     bibleRevision: 0,
     bibleChanges: [],
@@ -2422,6 +2662,12 @@ function createNpcFromBible(bible, residencyStatus) {
     // Same additive-default pattern as suspicion/skills.
     clothing: 'dressed',
   };
+  // Phase 8 (D8): NPCs own things. Seeded here — at THE single creation
+  // point every path (cast generation, studio imports, applicants,
+  // externals) funnels through — from the lifestyle template derived from
+  // the bible (seedNpcInventory, NPC.js); deterministic per genSeed, so a
+  // reload or a migration of the same NPC produces the same inventory.
+  return seedNpcInventory(npc, 1);
 }
 
 // ===== /SECTION: SIM =====

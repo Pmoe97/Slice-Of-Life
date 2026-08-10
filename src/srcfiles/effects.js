@@ -46,8 +46,19 @@ function validatePresentNpc(npcId, ctx) {
 function validateActiveNpc(npcId, ctx) {
   return ctx.activeNpcIds.includes(npcId) || `${npcId} is not an active participant.`;
 }
+// `hunger` is deliberately NOT in the player's list. Phase 5 made hunger a
+// rhythm: applyAdjustNeed treats ANY positive player-hunger delta as a whole
+// meal (resets hoursSinceLastMeal, +1 mealsToday), so magnitude is discarded
+// and +1 would feed you exactly as much as +40. Since ADJUST_NEED is
+// llm:true, leaving hunger reachable let the narration path hand out free
+// meals and quietly bypass the food economy Phases 1-4 exist to create —
+// design invariant 3 ("no action restores a need from nothing"). Every
+// legitimate player-hunger path now goes through EAT_ITEM (trusted-only,
+// llm:false), which consumes a real item. NPC hunger stays reachable: the
+// drive fallback (DRIVE_DEFS' npc_eat) is a trusted producer and skips
+// validation anyway, and NPC hunger is still a plain bar.
 function validateNeedName(who, need) {
-  const allowed = who === 'player' ? ['hunger', 'energy', 'hygiene', 'mood'] : ['hunger', 'energy', 'hygiene', 'social'];
+  const allowed = who === 'player' ? ['energy', 'hygiene', 'mood'] : ['hunger', 'energy', 'hygiene', 'social'];
   return allowed.includes(need) || `Unknown need "${need}" for ${who}.`;
 }
 function validateNeedDelta(need, deltaStr) {
@@ -116,6 +127,8 @@ function validateObjectPortable(objId, ctx) {
   return !!def.portable || `${def.label} can't be moved.`;
 }
 function validateItemDefId(defId) { return !!ITEM_DEFS[defId] || `Unknown item: ${defId}`; }
+function validateObjectDefId(defId) { return !!OBJECT_DEFS[defId] || `Unknown object: ${defId}`; }
+function validateRoomId(roomId) { return !!ROOMS[roomId] || `Unknown room: ${roomId}`; }
 function validateQtyRange(qtyStr) {
   if (!isFiniteNumber(qtyStr)) return `Not a number: ${qtyStr}`;
   const q = Number(qtyStr);
@@ -129,6 +142,18 @@ function locationStackList(ref, ctx) {
 }
 function validateHasEnough(defId, qtyStr, from, ctx) {
   return stackQty(locationStackList(from, ctx), defId) >= Number(qtyStr) || `Not enough ${defId} at ${from}.`;
+}
+// Servings-aware stock check for EAT_ITEM: a stack of a multi-serving item
+// holds qty×servings (or (qty−1)×servings + servingsLeft when an item is
+// already open), so "enough" means enough SERVINGS, not enough whole items.
+// Reads the pure serving math from INVENTORY (stackServingsLeft).
+function validateHasEnoughServings(defId, qtyStr, from, ctx) {
+  if (!isFiniteNumber(qtyStr)) return `Not a number: ${qtyStr}`;
+  const q = Number(qtyStr);
+  const have = (locationStackList(from, ctx) || []).reduce(
+    (sum, s) => (s.defId === defId ? sum + stackServingsLeft(s) : sum), 0
+  );
+  return have >= q || `Not enough ${defId} at ${from}.`;
 }
 
 // --- Stealth validators (P6) ---
@@ -167,8 +192,30 @@ function firstFailure(...checks) {
 function applyAdjustNeed(p, ctx) {
   const delta = Number(p.delta);
   if (p.who === 'player') {
-    if (p.need === 'mood') ctx.gameState.player.mood = clamp(ctx.gameState.player.mood + delta, -1, 1);
-    else ctx.gameState.player[p.need] = clamp((ctx.gameState.player[p.need] || 0) + delta, 0, 100);
+    if (p.need === 'mood') {
+      // Phase 5 (D1): mood is an impulse system. Every ADJUST_NEED player
+      // mood line (roughly thirty across defs.actions/defs.computer/effects
+      // and the LLM's effects vocab) keeps its old syntax but now pushes a
+      // DECAYING impulse into player.moodEvents; the bar itself only moves
+      // via the easing toward MOOD_TARGET in SIM's decayPlayerNeeds. The
+      // AfterHours +0.25 becomes a real spike that fades over the following
+      // day unless the target terms support it.
+      pushMoodImpulse(ctx.gameState.player, delta, ctx.gameState.meta.clock.day);
+    } else if (p.need === 'hunger') {
+      // Phase 5 (D1): hunger is a rhythm, not a bar. A positive hunger delta
+      // is a MEAL — it resets the since-last-meal clock and counts toward
+      // mealsToday; the 0-100 display value is derived (satietyFrom) and
+      // recomputed immediately so the very next render is correct. Negative
+      // deltas are inert for the player: hunger only advances with time.
+      if (delta > 0) {
+        const player = ctx.gameState.player;
+        player.hoursSinceLastMeal = 0;
+        player.mealsToday = Math.min(HUNGER_RHYTHM.mealsPerDayCap, (player.mealsToday || 0) + 1);
+        player.hunger = satietyFrom(0);
+      }
+    } else {
+      ctx.gameState.player[p.need] = clamp((ctx.gameState.player[p.need] || 0) + delta, 0, 100);
+    }
   } else {
     const npc = ctx.gameState.npcs[p.who];
     if (npc) npc.needs[p.need] = clamp((npc.needs[p.need] || 0) + delta, 0, 100);
@@ -176,7 +223,10 @@ function applyAdjustNeed(p, ctx) {
 }
 function applyMoodDeltaEffect(p, ctx) {
   const delta = Number(p.delta);
-  if (p.who === 'player') { ctx.gameState.player.mood = clamp(ctx.gameState.player.mood + delta, -1, 1); return; }
+  // Phase 5: the player-side MOOD_DELTA routes through the impulse pool like
+  // ADJUST_NEED mood (invariant 6 — nothing writes player.mood directly).
+  // NPC mood stays a direct write.
+  if (p.who === 'player') { pushMoodImpulse(ctx.gameState.player, delta, ctx.gameState.meta.clock.day); return; }
   const npc = ctx.gameState.npcs[p.who];
   if (npc) npc.mood = clamp(npc.mood + delta, -1, 1);
 }
@@ -193,8 +243,7 @@ function applyNpcActivity(p, ctx) {
   if (npc) npc.activity = p.text.slice(0, EFFECT_LIMITS.npcActivityMaxLength);
 }
 function applyAddSkillXp(p, ctx) {
-  const skills = ctx.gameState.player.skills || (ctx.gameState.player.skills = {});
-  skills[p.skillId] = (skills[p.skillId] || 0) + Number(p.xp);
+  awardSkillXp(ctx.gameState.player, p.skillId, Number(p.xp), ctx.gameState.meta.clock.day);
 }
 function resolveFlagBag(p, ctx) {
   return p.who === 'player' ? ctx.gameState.player : ctx.gameState.npcs[p.who];
@@ -228,13 +277,39 @@ function findObjectById(gameState, objId) {
   }
   return null;
 }
+// Item-stack location refs (inventory overhaul Phase 8): 'player' resolves
+// to the player's bag, a raw NPC id (npc_<n> / del / ...) resolves to that
+// NPC's inventory (npc.inventory, the same uniform stack shape — see NPC's
+// seedNpcInventory), and anything else is an object id resolving to the
+// object instance's .contents. Object ids always start with `obj_`, so a
+// raw NPC id can never collide with one. NPC refs are TRUSTED-PRODUCER
+// only: the LLM reach-set (validateLocationRef) deliberately does NOT know
+// about them, so the narrator can't reach into anyone's pockets — only
+// drives and the player's own room-search action do.
 function locationStackListMutable(ref, gameState) {
-  return ref === 'player' ? gameState.player.inventory : findObjectById(gameState, ref)?.contents;
+  if (ref === 'player') return gameState.player.inventory;
+  if (gameState.npcs[ref]) return gameState.npcs[ref].inventory;
+  return findObjectById(gameState, ref)?.contents;
 }
 function writeLocationStackList(ref, gameState, list) {
   if (ref === 'player') { gameState.player.inventory = list; return; }
+  if (gameState.npcs[ref]) { gameState.npcs[ref].inventory = list; return; }
   const obj = findObjectById(gameState, ref);
   if (obj) obj.contents = list;
+}
+
+// Preservation lookup for a MOVE_ITEM/EAT_ITEM location ref — 'player'
+// resolves to the bag baseline (ROT.bagPreservation); an object id
+// resolves to its OBJECT_DEFS container block (null for a non-container,
+// which freshness treats as the 1.0 default). Shared by applyMoveItem's
+// retimeStack and applyEatItem's spoiled-food penalties so the two call
+// sites can't drift apart on what "this container's multiplier" means.
+function containerDefForRef(ref, gameState) {
+  if (ref === 'player') return null;
+  // NPC bag — same 1.0 preservation baseline as the player's bag (D5).
+  if (gameState.npcs[ref]) return null;
+  const obj = findObjectById(gameState, ref);
+  return obj ? OBJECT_DEFS[obj.defId] : null;
 }
 
 function applySetObjectState(p, ctx) {
@@ -257,11 +332,23 @@ function applyMoveObject(p, ctx) {
 function applyMoveItem(p, ctx) {
   const fromList = locationStackListMutable(p.from, ctx.gameState);
   if (!fromList) return;
+  // Inventory overhaul Phase 1: the moved quantity carries the source
+  // stack's meta with it (acquiredDay etc.) so a transfer never resets an
+  // item's age. Phase 4 (D5): retimeStack then recomputes the moved
+  // stack's remaining life against the destination's preservation
+  // multiplier — taking milk out of the fridge for an hour must not cost
+  // it a week. The destination merge (addStack) is cohort-aware since B2,
+  // so a merge only ever fuses stacks with equal effective freshness in
+  // this container.
+  const srcStack = fromList.find(s => s.defId === p.defId);
   const { stacks: afterRemove, removed } = removeStack(fromList, p.defId, Number(p.qty));
   writeLocationStackList(p.from, ctx.gameState, afterRemove);
   if (removed <= 0) return;
   const toList = locationStackListMutable(p.to, ctx.gameState) || [];
-  writeLocationStackList(p.to, ctx.gameState, addStack(toList, p.defId, removed, p.to === 'player' ? 'player' : null));
+  const movedMeta = srcStack
+    ? retimeStack(srcStack, containerDefForRef(p.from, ctx.gameState), containerDefForRef(p.to, ctx.gameState), ctx.gameState.meta.clock.day).meta
+    : srcStack?.meta;
+  writeLocationStackList(p.to, ctx.gameState, addStack(toList, p.defId, removed, p.to === 'player' ? 'player' : null, movedMeta, ctx.gameState.meta.clock.day));
 }
 function applyConsumeItem(p, ctx) {
   const fromList = locationStackListMutable(p.from, ctx.gameState);
@@ -269,10 +356,99 @@ function applyConsumeItem(p, ctx) {
   const { stacks: afterRemove, removed } = removeStack(fromList, p.defId, Number(p.qty));
   writeLocationStackList(p.from, ctx.gameState, afterRemove);
   if (removed <= 0) return;
+  // Phase 8 (B1 fix): CONSUME_ITEM no longer hardcodes 'player' — the
+  // eater is `who`, defaulting to 'player' (the optional trailing `?`
+  // param; see parseEffectParams). This is what lets an NPC actually
+  // consume the player's groceries out of the fridge (the hunger drive)
+  // instead of just wishing its hunger away. The consumable's mood entry
+  // is skipped for an NPC the same way EAT_ITEM skips it — npc.mood is the
+  // direct bar, not a needs-map field (set_meal/drives push it separately).
+  const who = p.who || 'player';
   const def = ITEM_DEFS[p.defId];
   for (const [need, amt] of Object.entries(def?.consumable || {})) {
-    applyAdjustNeed({ who: 'player', need, delta: String(amt * removed) }, ctx);
+    if (who !== 'player' && need === 'mood') continue;
+    applyAdjustNeed({ who, need, delta: String(amt * removed) }, ctx);
   }
+}
+// EAT_ITEM (inventory overhaul Phase 3): the eating verb.
+// Consumes `qty` SERVINGS of defId from the given location (bag or a
+// reachable container), restores the eater's consumable scaled by
+// servings/def.servings, and re-encodes the stack in place: a
+// multi-serving item (def.servings > 1) leaves a partial stack with
+// meta.servingsLeft, so eating one slice of a pizza keeps the rest where
+// it was (fridge leftovers stay in the fridge — a bag would spoil them
+// 4× faster). Single-serving defs (servings absent = 1) behave exactly
+// like CONSUME_ITEM: one item gone, full consumable restored — that's why
+// the panel's Use verb can route through this for everything.
+//
+// Phase 7 (D7): an optional trailing `who` (default 'player') feeds that
+// NPC instead — the shared-meal primitive behind set_meal, where every
+// attendee gets one serving from the same dish with the same math. The
+// consumable's mood is skipped for an NPC (npc mood is the direct bar, not
+// the needs map — set_meal pushes it separately via MOOD_DELTA).
+//
+// Phase 4 (spoiled-food penalties, D5/D6): restore is scaled by the eaten
+// stack's freshness at its current container — Spoiling restores
+// ROT.spoiledRestoreMultiplier, Rotten restores ROT.rottenRestoreMultiplier
+// and additionally costs mood + energy (the food-poisoning beat, once per
+// eating event), routed to whoever ate it. Freshness is derived
+// (freshnessOf), so a stack left in a fridge stays edible far longer than
+// the same stack in a bag, and eating either late is punished the moment
+// it actually is late.
+// Trusted-only (llm:false): eating is the player's own verb; the narrator
+// still uses CONSUME_ITEM for incidental consumption.
+function applyEatItem(p, ctx) {
+  const fromList = locationStackListMutable(p.from, ctx.gameState);
+  if (!fromList) return;
+  const def = ITEM_DEFS[p.defId];
+  if (!def) return;
+  const who = p.who || 'player';
+  const sv = itemServings(def);
+  const fromDef = containerDefForRef(p.from, ctx.gameState);
+  let remaining = Math.max(0, Math.floor(Number(p.qty) || 0));
+  let ateRotten = false;
+  const out = [];
+  for (const s of fromList) {
+    if (remaining <= 0 || s.defId !== p.defId) { out.push(s); continue; }
+    const have = stackServingsLeft(s);
+    if (have <= 0) { out.push(s); continue; }
+    const eat = Math.min(remaining, have);
+    remaining -= eat;
+    const fresh = freshnessOf(s, fromDef, ctx.gameState.meta.clock.day);
+    const mult = fresh?.key === 'rotten' ? ROT.rottenRestoreMultiplier
+      : fresh?.key === 'spoiling' ? ROT.spoiledRestoreMultiplier : 1;
+    if (fresh?.key === 'rotten') ateRotten = true;
+    for (const [need, amt] of Object.entries(def.consumable || {})) {
+      // NPCs have no mood NEED — their mood is the direct bar, which
+      // ADJUST_NEED doesn't touch; the caller (set_meal) adds MOOD_DELTA.
+      if (who !== 'player' && need === 'mood') continue;
+      applyAdjustNeed({ who, need, delta: String(amt * eat / sv * mult) }, ctx);
+    }
+    const left = have - eat;
+    if (left <= 0) continue; // stack fully eaten — drop it
+    const qty = Math.ceil(left / sv);
+    const openLeft = left - (qty - 1) * sv;
+    const meta = { ...(s.meta || {}) };
+    if (openLeft >= sv) {
+      delete meta.servingsLeft; // back to a whole-stack representation
+      out.push({ ...s, qty, meta });
+    } else {
+      meta.servingsLeft = openLeft;
+      out.push({ ...s, qty, meta });
+    }
+  }
+  if (ateRotten) {
+    // The food-poisoning beat applies to whoever ate it. Player mood is an
+    // impulse (ADJUST_NEED mood routes through pushMoodImpulse); an NPC's
+    // mood is their direct bar, so it goes through MOOD_DELTA semantics.
+    if (who === 'player') {
+      applyAdjustNeed({ who: 'player', need: 'mood', delta: String(-ROT.rottenMoodPenalty) }, ctx);
+    } else {
+      applyMoodDeltaEffect({ who, delta: String(-ROT.rottenMoodPenalty) }, ctx);
+    }
+    applyAdjustNeed({ who, need: 'energy', delta: String(-ROT.rottenEnergyPenalty) }, ctx);
+  }
+  writeLocationStackList(p.from, ctx.gameState, out);
 }
 function applyDestroyItem(p, ctx) {
   const fromList = locationStackListMutable(p.from, ctx.gameState);
@@ -281,7 +457,30 @@ function applyDestroyItem(p, ctx) {
 }
 function applySpawnItem(p, ctx) {
   const toList = locationStackListMutable(p.to, ctx.gameState) || [];
-  writeLocationStackList(p.to, ctx.gameState, addStack(toList, p.defId, Number(p.qty), p.to === 'player' ? 'player' : null));
+  writeLocationStackList(p.to, ctx.gameState, addStack(toList, p.defId, Number(p.qty), p.to === 'player' ? 'player' : null, undefined, ctx.gameState.meta.clock.day));
+}
+// SPAWN_OBJECT (inventory overhaul Phase 6): place a buyable hobby OBJECT_DEFS
+// instance into a room bucket — the second half of the Place verb (the first
+// is DESTROY_ITEM removing the shipped ITEM_DEFS stack from the bag). The
+// object is created with makeObjectInstance (WORLD) so it carries the exact
+// instance shape every other object has (seeded id, ownerId 'player', state,
+// bucket, spawnedDay), which is what lets it persist through saveAtBoundary's
+// wholesale bucket write and be found by findObjectById/room-scoped reads like
+// any fixture. Trusted-producer only (llm:false): spawning arbitrary objects
+// is not something the narrator gets to do.
+function applySpawnObject(p, ctx) {
+  const def = OBJECT_DEFS[p.defId];
+  if (!def) return;
+  const roomId = p.roomId || ctx.gameState.player.location;
+  const bucket = `room_${roomId}`;
+  const bucketMap = ctx.gameState.objects[bucket] || (ctx.gameState.objects[bucket] = {});
+  const slot = Object.keys(bucketMap).length;
+  const inst = makeObjectInstance(
+    { defId: p.defId, ownerId: 'player' },
+    bucket, slot, ctx.gameState.meta.seed, roomId, ctx.gameState.npcs, ctx.gameState.meta.clock.day
+  );
+  if (!inst) return;
+  bucketMap[inst.id] = inst;
 }
 
 // --- Stealth appliers (P6) ---
@@ -402,9 +601,23 @@ const EFFECT_DEFS = {
     apply: applyMoveItem,
   },
   CONSUME_ITEM: {
-    paramShape: ['defId', 'qty', 'from'], llm: true, implemented: true,
+    // Phase 8 (B1 fix): optional trailing `who` (default 'player') — who
+    // actually eats/uses the consumed qty. Trusted drives use it so a
+    // hungry roommate consumes the player's groceries out of the fridge
+    // for real (applyConsumeItem routes the restore to that NPC). The LLM
+    // never gets a who token — the reach-set doesn't expose NPC refs.
+    paramShape: ['defId', 'qty', 'from', 'who?'], llm: true, implemented: true,
     validate: (p, ctx) => firstFailure(validateItemDefId(p.defId), () => validateQtyRange(p.qty), () => validateLocationRef(p.from, ctx), () => validateHasEnough(p.defId, p.qty, p.from, ctx)),
     apply: applyConsumeItem,
+  },
+  EAT_ITEM: {
+    // Phase 3 eating verb — consumes SERVINGS (see applyEatItem), trusted-only.
+    // Phase 7 (D7): optional trailing `who` (default 'player') — a shared
+    // meal feeds each attendee their own serving from the same dish, so the
+    // same freshness/serving/penalty math applies per eater.
+    paramShape: ['defId', 'qty', 'from', 'who?'], llm: false, implemented: true,
+    validate: (p, ctx) => firstFailure(validateItemDefId(p.defId), () => validateQtyRange(p.qty), () => validateLocationRef(p.from, ctx), () => validateHasEnoughServings(p.defId, p.qty, p.from, ctx)),
+    apply: applyEatItem,
   },
   DESTROY_ITEM: {
     paramShape: ['defId', 'qty', 'from'], llm: true, implemented: true,
@@ -415,6 +628,13 @@ const EFFECT_DEFS = {
     paramShape: ['defId', 'qty', 'to'], llm: false, implemented: true,
     validate: (p, ctx) => firstFailure(validateItemDefId(p.defId), () => validateQtyRange(p.qty), () => validateLocationRef(p.to, ctx)),
     apply: applySpawnItem,
+  },
+  SPAWN_OBJECT: {
+    // Phase 6 hobby placement — see applySpawnObject. Trusted-only: the
+    // narrator doesn't get to put furniture in rooms.
+    paramShape: ['defId', 'roomId'], llm: false, implemented: true,
+    validate: (p, ctx) => firstFailure(validateObjectDefId(p.defId), () => validateRoomId(p.roomId)),
+    apply: applySpawnObject,
   },
   // --- Stealth effects (WORLD/SKILLS-backed, P6) ---
   WITNESS: {
@@ -468,9 +688,19 @@ function parseEffectParams(type, rest) {
   const tokens = rest.split(/\s+/).filter(Boolean);
   const params = {};
   for (let i = 0; i < shape.length; i++) {
-    const name = shape[i];
+    const rawName = shape[i];
+    // A trailing '?' marks an OPTIONAL param (Phase 7's EAT_ITEM who —
+    // defaults to 'player'): a missing optional token is not an arity
+    // error, it just ends the parse. Every pre-Phase-7 shape has no '?'
+    // and keeps its strict-arity behavior, so existing 3-token EAT_ITEM
+    // lines parse exactly as before.
+    const optional = rawName.endsWith('?');
+    const name = optional ? rawName.slice(0, -1) : rawName;
     if (name.startsWith('...')) { params[name.slice(3)] = tokens.slice(i).join(' '); break; }
-    if (tokens[i] === undefined) return null; // arity mismatch — drop the line
+    if (tokens[i] === undefined) {
+      if (optional) break;
+      return null; // arity mismatch — drop the line
+    }
     params[name] = tokens[i];
   }
   return params;

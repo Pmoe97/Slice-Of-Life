@@ -16,19 +16,57 @@
 // UI.js implementations for now — they involve multi-tick batching, LLM
 // calls, or residency mutation that fit more naturally once the
 // free-action pipeline (P5) exists. self.cook is object-sourced (the
-// stove) and recipe-driven (ITEMS' RECIPES/pickAvailableRecipe) — the
-// first action to actually use the object model beyond room-gating; see
-// prepareCook/buildCookEffects/cookNarration below.
+// stove) and recipe-driven (ITEMS' RECIPES/availableRecipes) — the first
+// action to actually use the object model beyond room-gating; see
+// prepareCook/buildCookEffects/cookNarration below. Since Phase 2 the
+// player CHOOSES among every satisfiable recipe (the kitchen is never a
+// slot machine where the first match silently wins): prepareCook lists
+// availableRecipes and, when more than one is on hand, presents a picker
+// (RENDER's openRecipePicker) and awaits the choice. Since Phase 3
+// self.eat is item-driven (INVENTORY's edibleStacks + EAT_ITEM serving
+// math) — see prepareEat/buildEatEffects/eatNarration below.
 
 const ACTION_DEFS = {
   'self.eat': {
+    // Inventory overhaul Phase 3: item-driven eating. The old flat
+    // ADJUST_NEED refill is retired — eating now picks one edible item
+    // (bag + fridge/pantry in the kitchen, or the kitchen's when dining)
+    // and consumes ONE SERVING of it via EAT_ITEM: a multi-serving dish
+    // leaves a partial stack behind (meta.servingsLeft), so leftovers are
+    // a real recurring resource. Time is the eaten item's category
+    // (drink 5 / snack 10 / food 10 / full meal 25) via
+    // INVENTORY_TUNING.useTimeMinutes — same table the inventory panel's
+    // Use verb reads, so the chip and the panel can never disagree.
     id: 'self.eat', label: 'Eat', verbs: ['eat', 'snack', 'grab a bite'],
     source: { kind: 'room', roomIds: ['kitchen', 'dining'] },
     group: 'kitchen', chipPriority: 30,
-    requires: [],
-    timeCost: { base: 15 },
-    effects: [`ADJUST_NEED player hunger +${NEEDS.hunger.eatRestore}`],
-    narration: { mode: 'template', templates: ['You grab a bite to eat.'] },
+    requires: ['hasEdibleFood'],
+    timeCost: { byItemCategory: true },
+    prepare: prepareEat,
+    buildEffects: buildEatEffects,
+    narration: { mode: 'dynamic', build: eatNarration },
+  },
+  // Inventory overhaul Phase 7 (D7): Set Meal — the dining table becomes
+  // the place the household gathers, on purpose. Invitations (IM or in
+  // person) create world.commitments that relocate accepted residents to
+  // the dining room for their window (COMMITMENTS + SIM); this action is
+  // the meal itself: pick one dish, and every resident present at the
+  // table eats a real serving of it (EAT_ITEM's Phase 7 `who`), with the
+  // "proper setting" mood bonus, NPC comfort/mood, and per-attendee
+  // relationship deltas. If nobody committed, it's still a proper meal at
+  // a set table. The table is left dirty — a shared dinner costs a chore.
+  'set_meal': {
+    id: 'set_meal', label: 'Set the Table & Eat', verbs: ['set the table', 'share a meal', 'sit down to dinner', 'eat together', 'have dinner'],
+    source: { kind: 'room', roomIds: ['dining', 'kitchen'] },
+    group: 'kitchen', chipPriority: 35,
+    requires: ['hasEdibleFood'],
+    // Phase 7 (D7): laying out and eating a proper shared meal takes a real
+    // stretch of clock (ACTION_TUNING.setMealMinutes) — longer than a solo
+    // bite, shorter than cooking.
+    timeCost: { base: ACTION_TUNING.setMealMinutes },
+    prepare: prepareSetMeal,
+    buildEffects: buildSetMealEffects,
+    narration: { mode: 'dynamic', build: setMealNarration },
   },
   'self.cook': {
     id: 'self.cook', label: 'Cook', verbs: ['cook', 'make food', 'prepare a meal'],
@@ -61,7 +99,14 @@ const ACTION_DEFS = {
     source: { kind: 'room', roomIds: ['living_room'] },
     group: 'living_room', chipPriority: 30,
     requires: ['facilityFunctional:living_room_entertainment'],
-    narration: { mode: 'template', templates: ['You watch some TV. Mindless, relaxing.'] },
+    // Phase 6 (D13): TV is a real leisure action — it takes time and pays
+    // mood. The mood gain scales with present-resident affection, so
+    // watching with someone who likes you beats watching alone (social
+    // time pays; see prepareSocialAction/buildWatchTvEffects).
+    timeCost: { base: ACTION_TUNING.tvMinutes },
+    prepare: prepareSocialAction,
+    buildEffects: buildWatchTvEffects,
+    narration: { mode: 'dynamic', build: watchTvNarration },
   },
   'self.relax': {
     id: 'self.relax', label: 'Relax', verbs: ['relax', 'unwind', 'chill', 'take a breather'],
@@ -170,6 +215,80 @@ const ACTION_DEFS = {
     ],
     narration: { mode: 'template', templates: ['You settle in at the desk and focus. Quiet and productive.'] },
   },
+  // --- Free ambient actions (inventory overhaul Phase 6, D13) ---
+  // The ungated safety net: small mood, zero money/items/facilities, and
+  // available from day one. Each still advances the clock like any action,
+  // so the "safety net" never becomes a free-turn machine. `group: 'chill'`
+  // is flavour only — all chips render into the Here column.
+  'self.nap': {
+    id: 'self.nap', label: 'Nap', verbs: ['nap', 'take a nap', 'lie down for a bit'],
+    source: { kind: 'object', objDefs: ['bed', 'sofa'] },
+    group: 'chill', chipPriority: 15,
+    requires: [],
+    timeCost: { base: ACTION_TUNING.napMinutes },
+    effects: [
+      `ADJUST_NEED player energy +${ACTION_TUNING.napEnergyGain}`,
+      `ADJUST_NEED player mood +${ACTION_TUNING.napMoodGain}`,
+    ],
+    narration: { mode: 'template', templates: ['You lie down and nap. Twenty minutes later you surface, groggy but steadier.'] },
+  },
+  'self.balcony_sit': {
+    id: 'self.balcony_sit', label: 'Sit on the Balcony', verbs: ['sit on the balcony', 'sit outside', 'enjoy the balcony'],
+    source: { kind: 'room', roomIds: ['balcony'] },
+    group: 'chill', chipPriority: 15,
+    requires: [],
+    timeCost: { base: ACTION_TUNING.balconyMinutes },
+    effects: [
+      `ADJUST_NEED player mood +${ACTION_TUNING.balconyMoodGain}`,
+    ],
+    narration: { mode: 'template', templates: ['You sit on the balcony and watch the street below. The city hums on without you.'] },
+  },
+  'self.take_walk': {
+    id: 'self.take_walk', label: 'Take a Walk', verbs: ['take a walk', 'go for a walk', 'stretch your legs'],
+    source: { kind: 'room', roomIds: ['entry'] },
+    group: 'chill', chipPriority: 15,
+    requires: [],
+    timeCost: { base: ACTION_TUNING.walkMinutes },
+    effects: [
+      `ADJUST_NEED player mood +${ACTION_TUNING.walkMoodGain}`,
+    ],
+    narration: { mode: 'template', templates: ['You step out and walk around the block. Fresh air, sore legs, clearer head.'] },
+  },
+  'self.listen_music': {
+    id: 'self.listen_music', label: 'Listen to Music', verbs: ['listen to music', 'put on headphones', 'zone out to music'],
+    source: { kind: 'room', roomIds: ['living_room', 'balcony'] },
+    group: 'chill', chipPriority: 15,
+    requires: [],
+    timeCost: { base: ACTION_TUNING.listenMusicMinutes },
+    effects: [
+      `ADJUST_NEED player mood +${ACTION_TUNING.listenMusicMoodGain}`,
+    ],
+    narration: { mode: 'template', templates: ['You put on music and let it carry you for a while.'] },
+  },
+  'self.long_shower': {
+    id: 'self.long_shower', label: 'Long Shower', verbs: ['take a long shower', 'luxuriate in the shower', 'long shower'],
+    source: { kind: 'room', roomIds: ['bathroom_a', 'bathroom_b'] },
+    group: 'bathroom', chipPriority: 20,
+    requires: ['waterNotCutoff', 'facilityFunctionalHere:self.shower'],
+    vulnerableState: 'showering',
+    timeCost: { base: ACTION_TUNING.longShowerMinutes },
+    effects: [
+      `ADJUST_NEED player hygiene +${ACTION_TUNING.longShowerHygieneGain}`,
+      `ADJUST_NEED player mood +${ACTION_TUNING.longShowerMoodGain}`,
+    ],
+    meters: [['water', 2], ['waterHeating', 1.5]],
+    narration: { mode: 'template', templates: ['You take your time under the hot water. Steam, quiet, no rush.'] },
+  },
+  // --- Buyable hobby actions (inventory overhaul Phase 6, D13) ---
+  // One per hobby OBJECT_DEFS entry, generated by createHobbyAction (below)
+  // so the six are guaranteed to share one shape. Sourced from the OBJECT,
+  // which is what makes a hobby usable only in the room that contains it.
+  ...createHobbyAction('hobby_guitar', 'Play Guitar', ['play guitar', 'strum the guitar', 'practice guitar']),
+  ...createHobbyAction('hobby_bookshelf', 'Read', ['read', 'curl up with a book', 'read a book']),
+  ...createHobbyAction('hobby_record_player', 'Listen to Records', ['listen to records', 'put on a record', 'spin some vinyl']),
+  ...createHobbyAction('hobby_console', 'Play Console', ['play the console', 'play video games', 'game']),
+  ...createHobbyAction('hobby_sketchpad', 'Sketch', ['sketch', 'draw', 'doodle']),
+  ...createHobbyAction('hobby_houseplant', 'Tend Plant', ['tend the plant', 'water the plant', 'care for the plant']),
   // --- BrineOS phone object actions (Phase 2) ---
   // Pickup / set-down / plug-in / unplug. These are the first-ever callers
   // of the long-dormant MOVE_OBJECT effect (effects.js) and run as trusted
@@ -238,7 +357,17 @@ const ACTION_REQUIREMENT_CHECKERS = {
   hasRecipeIngredients: (ctx) => {
     const fridge = findObjectInRoom(ctx, 'fridge');
     const pantry = findObjectInRoom(ctx, 'pantry');
-    return !!pickAvailableRecipe(fridge?.contents, pantry?.contents) || 'Nothing to cook — the kitchen is out of ingredients.';
+    const pool = [...(fridge?.contents || []), ...(pantry?.contents || [])];
+    return availableRecipes(pool).length > 0 || 'Nothing to cook — the kitchen is out of ingredients.';
+  },
+  // Inventory overhaul Phase 3: the Eat chip only lights up when there's
+  // actually something edible to eat — bag, or the fridge/pantry (in the
+  // kitchen, or the kitchen's when dining) — so the retired free refill
+  // can't be replaced by a hunger-from-nothing shortcut of a different
+  // name. Reads INVENTORY's edibleStacks, the same list the action itself
+  // picks from.
+  hasEdibleFood: (ctx) => {
+    return edibleStacks(ctx.gameState, ctx).length > 0 || 'Nothing to eat around here — check your bag, the fridge, or the pantry.';
   },
   dishesDirty: (ctx) => {
     const sink = findObjectInRoom(ctx, 'sink_kitchen');
@@ -353,23 +482,40 @@ const ACTION_REQUIREMENT_CHECKERS = {
 // prepare() picks the recipe once; buildEffects/cookNarration both read
 // that same pick, so what happened and what got said about it can't
 // disagree (see ACTIONS' executeAction for why this two-step exists).
-function prepareCook(ctx) {
+// Since Phase 2 prepare is async: with one satisfiable recipe it cooks
+// straight through; with several it asks the player which to make via
+// RENDER's openRecipePicker (a modal, resolved by clicking a row). A
+// cancel resolves null and marks the action cancelled so executeAction
+// bails before spending time or eating ingredients.
+async function prepareCook(ctx) {
   const fridge = findObjectInRoom(ctx, 'fridge');
   const pantry = findObjectInRoom(ctx, 'pantry');
-  return { recipe: pickAvailableRecipe(fridge?.contents, pantry?.contents), fridge, pantry };
+  const pool = [...(fridge?.contents || []), ...(pantry?.contents || [])];
+  const recipes = availableRecipes(pool);
+  if (recipes.length === 0) return { recipes, fridge, pantry, recipe: null };
+  if (recipes.length === 1) return { recipes, fridge, pantry, recipe: recipes[0] };
+  const choiceId = await openRecipePicker(recipes);
+  if (!choiceId) return { recipes, fridge, pantry, recipe: null, cancelled: true };
+  return { recipes, fridge, pantry, recipe: recipes.find(r => r.id === choiceId) || null };
 }
 
 // Ingredients may be split across fridge and pantry (an omelette's eggs
 // come from the fridge, a sandwich's bread from the pantry and cheese
 // from the fridge) — checks fridge stock first, pantry for the remainder,
 // matching pickAvailableRecipe's combined-pool availability check.
-function ingredientConsumeLines(ing, fridge, pantry) {
+// Phase 3 decision (resolves the cooking double-count): ingredients are
+// DESTROYED without restoring hunger — they're transformed into the meal,
+// not eaten raw, so a cooked dish restores exactly the meal's own
+// consumable values and nothing is granted from nothing. (The maid's
+// performMaidVisit never went through buildCookEffects, so this change
+// does not touch it.)
+function ingredientDestroyLines(ing, fridge, pantry) {
   const fridgeQty = stackQty(fridge?.contents, ing.defId);
   const fromFridge = Math.min(ing.qty, fridgeQty);
   const fromPantry = ing.qty - fromFridge;
   const lines = [];
-  if (fromFridge > 0 && fridge) lines.push(`CONSUME_ITEM ${ing.defId} ${fromFridge} ${fridge.id}`);
-  if (fromPantry > 0 && pantry) lines.push(`CONSUME_ITEM ${ing.defId} ${fromPantry} ${pantry.id}`);
+  if (fromFridge > 0 && fridge) lines.push(`DESTROY_ITEM ${ing.defId} ${fromFridge} ${fridge.id}`);
+  if (fromPantry > 0 && pantry) lines.push(`DESTROY_ITEM ${ing.defId} ${fromPantry} ${pantry.id}`);
   return lines;
 }
 
@@ -388,7 +534,7 @@ function expandCookLeaveLine(line, ctx) {
 function buildCookEffects(ctx, prepared) {
   if (!prepared?.recipe) return [];
   const { recipe, fridge, pantry } = prepared;
-  const lines = recipe.ingredients.flatMap(ing => ingredientConsumeLines(ing, fridge, pantry));
+  const lines = recipe.ingredients.flatMap(ing => ingredientDestroyLines(ing, fridge, pantry));
   lines.push(`SPAWN_ITEM ${recipe.produces.defId} ${recipe.produces.qty} player`);
   lines.push(`CONSUME_ITEM ${recipe.produces.defId} 1 player`);
   for (const leave of recipe.leaves || []) lines.push(expandCookLeaveLine(leave, ctx));
@@ -399,6 +545,300 @@ function cookNarration(ctx, prepared) {
   if (!prepared?.recipe) return 'You rummage through the kitchen but come up empty-handed.';
   const leftover = prepared.recipe.produces.qty > 1;
   return `You cook ${prepared.recipe.label.toLowerCase()}. It smells good` + (leftover ? " — there's enough for leftovers." : '.');
+}
+
+// --- Social time (inventory overhaul Phase 6, D13) ---
+// The game's thesis made mechanical: being with people who like you pays.
+// presentResidentAffection is the shared read (average affection of
+// residents physically in the player's room, hostile/absent = 0) used by
+// watch_tv, eating together, and the hobby actions. The persistent
+// baseline side lives in SIM's resolveMoodTarget (MOOD_TARGET.social.
+// presencePerPerson); these are the per-action impulse sides.
+function presentResidentAffection(ctx) {
+  const ids = ctx?.presentNpcIds || [];
+  let sum = 0, n = 0;
+  for (const id of ids) {
+    const npc = ctx.gameState?.npcs?.[id];
+    if (!npc || npc.residency?.status !== 'resident') continue;
+    sum += npc.relPlayer?.affection ?? 0;
+    n++;
+  }
+  return n > 0 ? sum / n : 0;
+}
+
+function prepareSocialAction(ctx) {
+  return { affection: presentResidentAffection(ctx) };
+}
+
+function buildWatchTvEffects(ctx, prepared) {
+  const base = ACTION_TUNING.tvMoodGain;
+  const affection = prepared?.affection ?? 0;
+  const bonus = affection > 0 ? Math.round(affection * MOOD_TARGET.social.activityScale * 100) / 100 : 0;
+  return [`ADJUST_NEED player mood +${Math.round((base + bonus) * 100) / 100}`];
+}
+
+function watchTvNarration(ctx, prepared) {
+  const affection = prepared?.affection ?? 0;
+  if (affection > 0) return 'You watch TV with someone who actually likes you. Best show on right now.';
+  return 'You watch some TV. Mindless, relaxing.';
+}
+
+// --- Buyable hobbies (inventory overhaul Phase 6, D13) ---
+// createHobbyAction generates one ACTION_DEFS entry per hobby OBJECT_DEFS
+// id (HOBBY_TUNING holds the numbers). The action id is 'hobby.' + the
+// object id suffix; sourcing from the object is what scopes the hobby to
+// the room it was placed in. The social layer rides along: a liked
+// resident watching you play makes it better.
+function createHobbyAction(objDef, label, verbs) {
+  const id = `hobby.${objDef.slice('hobby_'.length)}`;
+  // The closure captures objDef so buildEffects/narration know which hobby
+  // this is — executeAction only hands prepare/buildEffects the ctx and the
+  // prepared result, not the def (see ACTIONS' two-step contract).
+  const prepare = (ctx) => ({ key: objDef, affection: presentResidentAffection(ctx) });
+  return {
+    [id]: {
+      id, label, verbs,
+      source: { kind: 'object', objDef },
+      group: 'hobby', chipPriority: 25,
+      requires: [],
+      timeCost: { base: HOBBY_TUNING.useMinutes[objDef] ?? 20 },
+      prepare,
+      buildEffects: buildHobbyEffects,
+      narration: { mode: 'dynamic', build: hobbyNarration },
+    },
+  };
+}
+
+function buildHobbyEffects(ctx, prepared) {
+  const key = prepared?.key;
+  const mood = HOBBY_TUNING.moodGain[key];
+  const energy = HOBBY_TUNING.energyCost[key] || 0;
+  if (mood == null) return [];
+  const lines = [`ADJUST_NEED player mood +${mood}`];
+  if (energy > 0) lines.push(`ADJUST_NEED player energy -${energy}`);
+  const affection = prepared?.affection ?? 0;
+  if (affection > 0) {
+    const bonus = Math.round(affection * MOOD_TARGET.social.activityScale * 100) / 100;
+    if (bonus > 0) lines.push(`ADJUST_NEED player mood +${bonus}`);
+  }
+  return lines;
+}
+
+const HOBBY_NARRATION = {
+  hobby_guitar: "You pick at the strings until a tune starts to come together. The apartment is the only audience, and it doesn't care how you play.",
+  hobby_bookshelf: 'You lose an hour in a chapter. The rest of the day can wait.',
+  hobby_record_player: 'The needle drops and the room fills. You close your eyes and just listen.',
+  hobby_console: 'You game until your thumbs ache. Pointless, unproductive, excellent.',
+  hobby_sketchpad: 'You sketch until the page stops being wrong. Half of it is terrible — the other half is you, getting better.',
+  hobby_houseplant: "You water it, turn it toward the light, talk to it a little. It looks greener already, or maybe that's you.",
+};
+
+function hobbyNarration(ctx, prepared) {
+  const key = prepared?.key;
+  const line = HOBBY_NARRATION[key];
+  if (line) return line;
+  return 'You lose yourself in the hobby for a while. Good for the head.';
+}
+
+// --- self.eat's runtime logic (inventory overhaul Phase 3) ---
+// prepare() picks the food once; buildEffects/eatNarration both read that
+// same pick (the ACTIONS two-step contract, same as self.cook). Options
+// come from INVENTORY's edibleStacks (bag + nearby fridge/pantry); with
+// one option the action eats straight through, with several it asks via
+// RENDER's openEatPicker and awaits the choice — a cancel marks the
+// action cancelled so executeAction bails before time or hunger effects.
+// The eaten quantity is always ONE SERVING; multi-serving dishes are
+// eaten over several visits (leftovers persist via meta.servingsLeft).
+async function prepareEat(ctx) {
+  const affection = presentResidentAffection(ctx);
+  const options = edibleStacks(ctx.gameState, ctx);
+  if (options.length === 0) return { options, option: null, cancelled: true, affection };
+  if (options.length === 1) return { options, option: options[0], affection };
+  const choice = await openEatPicker(options);
+  if (!choice) return { options, option: null, cancelled: true, affection };
+  return { options, option: options.find(o => o.from === choice.from && o.stack.defId === choice.defId) || null, affection };
+}
+
+function buildEatEffects(ctx, prepared) {
+  const option = prepared?.option;
+  if (!option) return [];
+  // EAT_ITEM consumes in place (fridge leftovers stay in the fridge — a
+  // bag would spoil them 4× faster) and restores the def's consumable
+  // scaled to one serving.
+  const lines = [`EAT_ITEM ${option.stack.defId} 1 ${option.from}`];
+  // Phase 6 (D13): eating together pays — a liked resident at the table
+  // adds a small affection-scaled mood impulse on top of the food's own
+  // values. Hostile or alone contributes 0.
+  const affection = prepared?.affection ?? 0;
+  if (affection > 0) {
+    const bonus = Math.round(affection * MOOD_TARGET.social.activityScale * 100) / 100;
+    if (bonus > 0) lines.push(`ADJUST_NEED player mood +${bonus}`);
+  }
+  return lines;
+}
+
+function eatNarration(ctx, prepared) {
+  const option = prepared?.option;
+  if (!option) return 'You rummage through your food but come up empty.';
+  const def = option.def;
+  const label = def.label || 'something';
+  // Phase 4: surface the eaten item's freshness — the picker shows the
+  // same freshness tags, and the Rotten/Spoiling lines match the restore
+  // penalties applyEatItem applies.
+  const fresh = freshnessOf(option.stack, option.containerDef ?? null, ctx?.gameState?.meta?.clock?.day);
+  if (fresh?.key === 'rotten') return `You force down some ${label.toLowerCase()} despite the smell. You regret it immediately.`;
+  if (fresh?.key === 'spoiling') return `You eat some ${label.toLowerCase()}. It tastes... off.`;
+  // Phase 6: eating with a liked resident is its own line — the social
+  // bonus buildEatEffects added deserves narration.
+  if ((prepared?.affection ?? 0) > 0) return `You share a meal with someone who actually likes you. The ${label.toLowerCase()} never tasted better.`;
+  if (def.category === 'drink') return `You drink some ${label.toLowerCase()}.`;
+  const amount = itemServings(def) > 1 ? 'some of the' : 'a';
+  return `You eat ${amount} ${label.toLowerCase()}.`;
+}
+
+// --- set_meal's runtime logic (inventory overhaul Phase 7, D7) ---
+// prepare() picks the food once and snapshots the table (attendees,
+// commitment state, dining-table instance, who gets fed); buildEffects and
+// the narration both read that SAME snapshot so what happened and what got
+// said about it can't disagree (the ACTIONS two-step contract).
+//
+// The meal feeds the player plus every resident present at the table, one
+// serving each in presence order, until the dish runs out — multi-serving
+// dishes are exactly what a shared dinner is for (a 4-serving pizza with
+// three people at the table leaves one serving of leftovers). The picker
+// is the same one self.eat uses (it shows the serving count and per-serving
+// restore); the action's time cost is the flat set_meal stretch, not the
+// item category, since the point is the gathering, not the bite.
+async function prepareSetMeal(ctx) {
+  const affection = presentResidentAffection(ctx);
+  const options = edibleStacks(ctx.gameState, ctx);
+  if (options.length === 0) return { options, option: null, cancelled: true, affection };
+  let option;
+  if (options.length === 1) {
+    option = options[0];
+  } else {
+    const choice = await openEatPicker(options);
+    if (!choice) return { options, option: null, cancelled: true, affection };
+    option = options.find(o => o.from === choice.from && o.stack.defId === choice.defId) || null;
+  }
+  if (!option) return { options, option: null, cancelled: true, affection };
+  const attendees = mealAttendees(ctx.gameState, ctx.roomId);
+  const hasCommitment = activeMealCommitmentsInRoom(ctx.gameState, ctx.roomId).length > 0;
+  // The dining table is the household's table even when the player cooks in
+  // the kitchen — but the mess only lands on it if the meal actually
+  // happened there (the player.location === 'dining' guard in buildEffects).
+  const diningTable = Object.values(ctx.gameState.objects?.['room_dining'] || {})
+    .find(o => o.defId === 'dining_table') || null;
+  // Who actually gets fed: the player's own serving first, then present
+  // NPCs in presence order, one serving each, until the dish runs out.
+  const remaining = Math.max(0, stackServingsLeft(option.stack) - 1);
+  const fedNpcIds = [];
+  for (const a of attendees) {
+    if (fedNpcIds.length >= remaining) break;
+    fedNpcIds.push(a.npcId);
+  }
+  return { options, option, affection, attendees, hasCommitment, diningTable, fedNpcIds };
+}
+
+// How good a meal this dish is, 0..1 — hunger is the bulk, mood and energy
+// sweeten it. Scales the relationship delta (a four-cheese pizza bonds
+// people more than a dry sandwich).
+function foodQuality(def) {
+  const c = def.consumable || {};
+  const raw = (c.hunger || 0) + (c.mood || 0) * 40 + (c.energy || 0) * 0.4;
+  return clamp(raw / 60, 0, 1);
+}
+
+// Per-attendee relationship delta for a shared meal, scaled by food
+// quality, whether they actually ate ("attendance"), and the existing
+// relationship (someone who already likes you warms faster). All numbers
+// from COMMITMENT_TUNING.
+function mealRelDelta(def, npc, fed) {
+  const q = foodQuality(def);
+  const existing = Math.max(0, npc?.relPlayer?.affection || 0);
+  const raw = (COMMITMENT_TUNING.relationshipBase + q * COMMITMENT_TUNING.relationshipQualityWeight)
+    * (fed ? COMMITMENT_TUNING.attendanceMultFed : COMMITMENT_TUNING.attendanceMultPresent)
+    * (1 + existing * COMMITMENT_TUNING.relationshipExistingWeight);
+  return Math.round(Math.min(COMMITMENT_TUNING.relationshipCap, raw) * 1000) / 1000;
+}
+
+function buildSetMealEffects(ctx, prepared) {
+  const option = prepared?.option;
+  if (!option) return [];
+  const { stack, def, from } = option;
+  const attendees = prepared?.attendees || [];
+  const fedNpcIds = prepared?.fedNpcIds || [];
+  const lines = [];
+
+  // The player's own serving — real consumption, per-serving restore,
+  // freshness-aware (EAT_ITEM).
+  lines.push(`EAT_ITEM ${stack.defId} 1 ${from} player`);
+  // Every fed attendee's serving comes out of the same real dish
+  // (EAT_ITEM's Phase 7 `who` routes the restore to their needs — an NPC
+  // who eats genuinely eats; nothing is restored from nowhere).
+  for (const npcId of fedNpcIds) {
+    lines.push(`EAT_ITEM ${stack.defId} 1 ${from} ${npcId}`);
+  }
+
+  const per = perServingConsumable(def);
+  const foodMood = per.mood || 0;
+  for (const a of attendees) {
+    const isFed = fedNpcIds.includes(a.npcId);
+    const moodBoost = COMMITMENT_TUNING.attendeeMoodBonus + (isFed ? (foodMood || 0) : 0);
+    if (moodBoost > 0) lines.push(`MOOD_DELTA ${a.npcId} +${Math.round(moodBoost * 100) / 100}`);
+    // A properly set meal restores comfort for everyone who sat down.
+    lines.push(`ADJUST_NEED ${a.npcId} comfort +${COMMITMENT_TUNING.attendeeComfortRestore}`);
+    // Relationship: scaled by food quality, attendance, existing rel.
+    const delta = mealRelDelta(def, a.npc, isFed);
+    if (delta > 0) lines.push(`REL_DELTA ${a.npcId} affection +${delta}`);
+    if (isFed && COMMITMENT_TUNING.relationshipTensionRelief > 0) {
+      lines.push(`REL_DELTA ${a.npcId} tension -${COMMITMENT_TUNING.relationshipTensionRelief}`);
+    }
+  }
+
+  // The player side: the "proper setting" bonus when a commitment was
+  // scheduled here (D7 — even if nobody else showed), plus the Phase 6
+  // shared-meal social bonus scaled by present-resident affection.
+  const commitmentBonus = prepared?.hasCommitment ? COMMITMENT_TUNING.settingBonusMood : 0;
+  const affection = prepared?.affection ?? 0;
+  const socialBonus = affection > 0 ? Math.round(affection * MOOD_TARGET.social.activityScale * 100) / 100 : 0;
+  const playerBonus = Math.round((commitmentBonus + socialBonus) * 100) / 100;
+  if (playerBonus > 0) lines.push(`ADJUST_NEED player mood +${playerBonus}`);
+
+  // The table is left with plates and crumbs — meals at the table leave a
+  // mess, feeding the EXISTING cleanliness machinery (dining_table's
+  // dirtyWhen clutter), which the maid's cleanRoomObjects clears.
+  if (prepared?.diningTable && ctx.gameState.player.location === 'dining') {
+    lines.push(`SET_OBJECT_STATE ${prepared.diningTable.id} clutter cluttered`);
+  }
+  return lines;
+}
+
+function setMealNarration(ctx, prepared) {
+  const option = prepared?.option;
+  if (!option) return 'You sit down to eat, but there is nothing to put on the table.';
+  const def = option.def;
+  const label = def.label.toLowerCase();
+  const attendees = prepared?.attendees || [];
+  const fedNpcIds = prepared?.fedNpcIds || [];
+  const names = attendees.map(a => ctx.gameState.npcs[a.npcId]?.bible?.name || 'a roommate');
+  const fedCount = fedNpcIds.length;
+  const fresh = freshnessOf(option.stack, option.containerDef ?? null, ctx.gameState.meta.clock.day);
+  if (fresh?.key === 'rotten') {
+    return `You set the table and serve some ${label} that has clearly turned. ${names.length ? `${names.join(' and ')} ${names.length > 1 ? 'make' : 'makes'} a face but eats anyway.` : 'You grimace and eat it anyway.'}`;
+  }
+  const sv = itemServings(def);
+  const leftoverServings = Math.max(0, sv - 1 - fedCount);
+  const leftover = leftoverServings > 0 ? ' — there are leftovers for later' : '';
+  const setting = prepared?.hasCommitment ? ' The table is properly set.' : '';
+  if (names.length > 0) {
+    const eaters = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
+    return `You set the table and share dinner with ${eaters}.${setting} The ${label} tastes better for the company${leftover}.`;
+  }
+  if (prepared?.hasCommitment) {
+    return `You set the table properly and eat alone. Nobody showed${leftover}.`;
+  }
+  return `You set the table and eat some ${label}${leftover}.`;
 }
 
 // --- self.dishes' runtime logic ---

@@ -216,7 +216,7 @@ async function doBrowserVisit(siteId, device) {
       applyEffects(effects, effCtx);
     }
     await advanceAndResolve(1);
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1, currentGameState);
 
     // Phase 5 device parity: the phone's Browser app uses the SAME
     // handlers, so the visit has to navigate whichever shell launched it —
@@ -275,7 +275,7 @@ async function doAttendLesson(courseId) {
     const result = attendLesson(currentGameState, courseId);
     if (!result.ok) { addLogEntry('system', result.reason); return; }
     await advanceAndResolve(result.ticks);
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, result.ticks);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, result.ticks, currentGameState);
     if (result.completed) addLogEntry('narration', `You finish ${result.course.label}. Certificate unlocked, for whatever that's worth.`);
     else addLogEntry('narration', `You attend a lesson in ${result.course.label}. +${result.xpGain} ${result.course.skillId} XP.`);
     renderComputerScreen(currentGameState);
@@ -752,7 +752,7 @@ async function doImSend(npcId) {
     const result = await resolveImReply(currentGameState, npcId, text);
     if (!result.ok) { addLogEntry('system', result.reason); }
     await advanceAndResolve(1);
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1, currentGameState);
     renderComputerScreen(currentGameState);
     render(currentGameState, currentSceneState);
     await saveAtBoundary('im-send', currentGameState);
@@ -788,7 +788,7 @@ async function doStreamWatch(showId, device) {
     applyEffects([{ type: 'ADJUST_NEED', params: { who: 'player', need: 'mood', delta: String(result.show.moodGain) } }], effCtx);
 
     await advanceAndResolve(result.show.episodeTicks);
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, result.show.episodeTicks);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, result.show.episodeTicks, currentGameState);
     addLogEntry('narration', `You watch episode ${result.episode} of ${result.show.label}.`);
     renderComputerScreen(currentGameState);
     render(currentGameState, currentSceneState);

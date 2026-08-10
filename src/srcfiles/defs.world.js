@@ -12,6 +12,19 @@
 // so the object/instance model has real content to spawn and render
 // against.
 //
+// Item-holding defs (inventory overhaul Phase 2) carry a `container`
+// object instead of the old `container: true` boolean:
+//   container: {
+//     capacity: null,      // null = uncapped (D4); field exists for future caps
+//     preservation: 4.0,   // Phase 4 shelf-life multiplier — fridge 4.0,
+//                          // pantry 2.0, floor/doormat 0.5, everything else
+//                          // 1.0 (the neutral indoor default, same as the bag)
+//     label: 'Fridge'      // UI title for the browse panel
+//   }
+// `container: false` on non-holding defs is unchanged. The browse/transfer
+// UI reads the affords (`container.open/take/put`) — a def that is
+// browsable but not takable/putable (washer/dryer) simply omits the verb.
+//
 // `dirtyWhen: { stateKey: { value: griminess0to1 } }` is what
 // recomputeRoomCleanliness (WORLD) reads — data-driven, so "what makes a
 // room feel dirty" is a CONFIG-shaped fact about each object, not a
@@ -36,17 +49,19 @@ const OBJECT_DEFS = {
   },
   wardrobe: {
     id: 'wardrobe', label: 'Wardrobe', nouns: ['wardrobe', 'closet'],
-    portable: false, breakable: false, container: true, containerCapacity: 20, private: true,
-    states: { door: ['closed', 'open'] }, defaultState: { door: 'closed' },
-    dirtyWhen: {}, cleanlinessWeight: 0,
+    portable: false, breakable: false, container: { capacity: null, preservation: 1.0, label: 'Wardrobe' }, private: true,
+    states: { rotten_food: ['none', 'rotten'], door: ['closed', 'open'] },
+    defaultState: { rotten_food: 'none', door: 'closed' },
+    dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 0,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a wardrobe',
   },
   nightstand: {
     id: 'nightstand', label: 'Nightstand', nouns: ['nightstand', 'bedside table'],
-    portable: false, breakable: false, container: true, containerCapacity: 6, private: true,
-    states: { door: ['closed', 'open'] }, defaultState: { door: 'closed' },
-    dirtyWhen: {}, cleanlinessWeight: 0,
+    portable: false, breakable: false, container: { capacity: null, preservation: 1.0, label: 'Nightstand' }, private: true,
+    states: { rotten_food: ['none', 'rotten'], door: ['closed', 'open'] },
+    defaultState: { rotten_food: 'none', door: 'closed' },
+    dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 0,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a nightstand with a lamp',
   },
@@ -98,10 +113,66 @@ const OBJECT_DEFS = {
   },
   jewelry_box: {
     id: 'jewelry_box', label: 'Jewelry Box', nouns: ['jewelry box', 'jewelry'],
-    portable: true, breakable: false, container: true, containerCapacity: 10, private: true,
-    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 0,
+    portable: true, breakable: false, container: { capacity: null, preservation: 1.0, label: 'Jewelry Box' }, private: true,
+    states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 0,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a small jewelry box',
+  },
+  // --- Buyable hobby objects (inventory overhaul Phase 6) ---
+  // Nile purchases the player places in a room — the ITEM_DEFS hobby_*
+  // entries above are the shipped items; the Place verb (INVENTORY/UI,
+  // SPAWN_OBJECT in EFFECTS) turns one into an instance of the matching
+  // OBJECT_DEFS here, sitting in the room bucket so it persists like any
+  // fixture. portable:false + unowned: the object lives where the player
+  // put it. Each affords exactly one hobby action (sourced 'object' in
+  // DEFS.ACTIONS), so the hobby is usable only in the room that contains
+  // it. Distinct defs from the pre-existing fixture objects (guitar,
+  // bookshelf, game_console, plant_lr) so buying one never collides with
+  // a roommate's fixture guitar or the living room's seeded bookshelf.
+  hobby_guitar: {
+    id: 'hobby_guitar', label: 'Guitar', nouns: ['guitar', 'acoustic guitar'],
+    portable: false, breakable: true, container: false, private: false,
+    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 0,
+    affords: ['hobby.guitar', 'inspect.object'],
+    imagePhrase: 'a guitar leaning against the wall, strings a little loose',
+  },
+  hobby_bookshelf: {
+    id: 'hobby_bookshelf', label: 'Bookshelf', nouns: ['bookshelf', 'bookcase'],
+    portable: false, breakable: false, container: false, private: false,
+    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 1,
+    affords: ['hobby.bookshelf', 'inspect.object'],
+    imagePhrase: 'a bookshelf crammed with paperbacks and dog-eared novels',
+  },
+  hobby_record_player: {
+    id: 'hobby_record_player', label: 'Record Player', nouns: ['record player', 'turntable'],
+    portable: false, breakable: true, container: false, private: false,
+    states: { power: ['off', 'on'] }, defaultState: { power: 'off' },
+    dirtyWhen: {}, cleanlinessWeight: 1,
+    affords: ['hobby.record_player', 'inspect.object'],
+    imagePhrase: 'a record player with a small stack of vinyl beside it',
+  },
+  hobby_console: {
+    id: 'hobby_console', label: 'Game Console', nouns: ['console', 'game console'],
+    portable: false, breakable: true, container: false, private: false,
+    states: { power: ['off', 'on'] }, defaultState: { power: 'off' },
+    dirtyWhen: {}, cleanlinessWeight: 0,
+    affords: ['hobby.console', 'inspect.object'],
+    imagePhrase: 'a game console hooked to a small TV with controllers on the floor',
+  },
+  hobby_sketchpad: {
+    id: 'hobby_sketchpad', label: 'Sketchpad', nouns: ['sketchpad', 'sketchbook'],
+    portable: false, breakable: false, container: false, private: false,
+    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 0,
+    affords: ['hobby.sketchpad', 'inspect.object'],
+    imagePhrase: 'an open sketchpad covered in half-finished drawings',
+  },
+  hobby_houseplant: {
+    id: 'hobby_houseplant', label: 'Houseplant', nouns: ['houseplant', 'plant'],
+    portable: false, breakable: false, container: false, private: false,
+    states: { health: ['thriving', 'wilting'] }, defaultState: { health: 'thriving' },
+    dirtyWhen: {}, cleanlinessWeight: 1,
+    affords: ['hobby.houseplant', 'inspect.object'],
+    imagePhrase: 'a leafy houseplant in a ceramic pot',
   },
 
   // --- Kitchen ---
@@ -115,9 +186,10 @@ const OBJECT_DEFS = {
   },
   fridge: {
     id: 'fridge', label: 'Fridge', nouns: ['fridge', 'refrigerator', 'icebox'],
-    portable: false, breakable: false, container: true, containerCapacity: 24, private: false,
-    states: { door: ['closed', 'open'] }, defaultState: { door: 'closed' },
-    dirtyWhen: {}, cleanlinessWeight: 1,
+    portable: false, breakable: false, container: { capacity: null, preservation: 4.0, label: 'Fridge' }, private: false,
+    states: { rotten_food: ['none', 'rotten'], door: ['closed', 'open'] },
+    defaultState: { rotten_food: 'none', door: 'closed' },
+    dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
     affords: ['container.open', 'container.take', 'container.put', 'clean.object', 'inspect.object'],
     imagePhrase: 'a refrigerator covered in magnets',
   },
@@ -131,9 +203,10 @@ const OBJECT_DEFS = {
   },
   pantry: {
     id: 'pantry', label: 'Pantry', nouns: ['pantry', 'cupboard'],
-    portable: false, breakable: false, container: true, containerCapacity: 30, private: false,
-    states: { door: ['closed', 'open'] }, defaultState: { door: 'closed' },
-    dirtyWhen: {}, cleanlinessWeight: 1,
+    portable: false, breakable: false, container: { capacity: null, preservation: 2.0, label: 'Pantry' }, private: false,
+    states: { rotten_food: ['none', 'rotten'], door: ['closed', 'open'] },
+    defaultState: { rotten_food: 'none', door: 'closed' },
+    dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a small pantry shelf',
   },
@@ -154,10 +227,11 @@ const OBJECT_DEFS = {
   },
   trash_kitchen: {
     id: 'trash_kitchen', label: 'Trash Can', nouns: ['trash', 'trash can', 'garbage'],
-    portable: false, breakable: false, container: true, containerCapacity: 999, private: false,
-    states: { fill: ['empty', 'partial', 'full'] }, defaultState: { fill: 'empty' },
-    dirtyWhen: { fill: { partial: 0.3, full: 0.8 } }, cleanlinessWeight: 2,
-    affords: ['clean.object', 'inspect.object'],
+    portable: false, breakable: false, container: { capacity: null, preservation: 1.0, label: 'Trash Can' }, private: false,
+    states: { rotten_food: ['none', 'rotten'], fill: ['empty', 'partial', 'full'] },
+    defaultState: { rotten_food: 'none', fill: 'empty' },
+    dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime }, fill: { partial: 0.3, full: 0.8 } }, cleanlinessWeight: 2,
+    affords: ['container.open', 'container.take', 'container.put', 'clean.object', 'inspect.object'],
     imagePhrase: 'a kitchen trash can',
   },
 
@@ -195,9 +269,10 @@ const OBJECT_DEFS = {
   },
   laundry_hamper: {
     id: 'laundry_hamper', label: 'Laundry Hamper', nouns: ['hamper', 'laundry hamper', 'laundry'],
-    portable: false, breakable: false, container: true, containerCapacity: 15, private: false,
-    states: { fill: ['empty', 'partial', 'full'] }, defaultState: { fill: 'empty' },
-    dirtyWhen: {}, cleanlinessWeight: 1,
+    portable: false, breakable: false, container: { capacity: null, preservation: 1.0, label: 'Laundry Hamper' }, private: false,
+    states: { rotten_food: ['none', 'rotten'], fill: ['empty', 'partial', 'full'] },
+    defaultState: { rotten_food: 'none', fill: 'empty' },
+    dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a laundry hamper in the corner',
   },
@@ -228,8 +303,8 @@ const OBJECT_DEFS = {
   },
   bookshelf: {
     id: 'bookshelf', label: 'Bookshelf', nouns: ['bookshelf', 'shelf'],
-    portable: false, breakable: false, container: true, containerCapacity: 40, private: false,
-    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 1,
+    portable: false, breakable: false, container: { capacity: null, preservation: 1.0, label: 'Bookshelf' }, private: false,
+    states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a bookshelf crammed with paperbacks',
   },
@@ -253,15 +328,15 @@ const OBJECT_DEFS = {
   // --- Hallway ---
   doormat: {
     id: 'doormat', label: 'Doormat', nouns: ['doormat', 'mat'],
-    portable: false, breakable: false, container: true, containerCapacity: 10, private: false,
-    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 0,
+    portable: false, breakable: false, container: { capacity: null, preservation: 0.5, label: 'Doormat' }, private: false,
+    states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 0,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a doormat by the front door, the kind packages get left on',
   },
   coat_rack: {
     id: 'coat_rack', label: 'Coat Rack', nouns: ['coat rack', 'rack'],
-    portable: false, breakable: false, container: true, containerCapacity: 8, private: false,
-    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 0,
+    portable: false, breakable: false, container: { capacity: null, preservation: 1.0, label: 'Coat Rack' }, private: false,
+    states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 0,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a coat rack by the door',
   },
@@ -303,8 +378,8 @@ const OBJECT_DEFS = {
   },
   shoe_rack: {
     id: 'shoe_rack', label: 'Shoe Rack', nouns: ['shoe rack', 'shoes'],
-    portable: false, breakable: false, container: true, containerCapacity: 12, private: false,
-    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 0,
+    portable: false, breakable: false, container: { capacity: null, preservation: 1.0, label: 'Shoe Rack' }, private: false,
+    states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 0,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a shoe rack by the door',
   },
@@ -395,8 +470,8 @@ const OBJECT_DEFS = {
   },
   study_bookshelf: {
     id: 'study_bookshelf', label: 'Bookshelf', nouns: ['bookshelf', 'shelf', 'books'],
-    portable: false, breakable: false, container: true, containerCapacity: 60, private: false,
-    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 1,
+    portable: false, breakable: false, container: { capacity: null, preservation: 1.0, label: 'Bookshelf' }, private: false,
+    states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'floor-to-ceiling bookshelves lined with well-worn books',
   },
@@ -428,19 +503,33 @@ const OBJECT_DEFS = {
   // --- Laundry Room ---
   washer: {
     id: 'washer', label: 'Washer', nouns: ['washer', 'washing machine'],
-    portable: false, breakable: true, container: true, containerCapacity: 15, private: false,
-    states: { power: ['off', 'on'], cycle: ['empty', 'running', 'done'] }, defaultState: { power: 'off', cycle: 'empty' },
-    dirtyWhen: {}, cleanlinessWeight: 1,
+    portable: false, breakable: true, container: { capacity: null, preservation: 1.0, label: 'Washer' }, private: false,
+    states: { rotten_food: ['none', 'rotten'], power: ['off', 'on'], cycle: ['empty', 'running', 'done'] },
+    defaultState: { rotten_food: 'none', power: 'off', cycle: 'empty' },
+    dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
     affords: ['self.laundry', 'container.open', 'container.put', 'inspect.object'],
     imagePhrase: 'a front-loading washing machine',
   },
   dryer: {
     id: 'dryer', label: 'Dryer', nouns: ['dryer', 'drying machine'],
-    portable: false, breakable: true, container: true, containerCapacity: 15, private: false,
-    states: { power: ['off', 'on'], cycle: ['empty', 'running', 'done'] }, defaultState: { power: 'off', cycle: 'empty' },
-    dirtyWhen: {}, cleanlinessWeight: 1,
+    portable: false, breakable: true, container: { capacity: null, preservation: 1.0, label: 'Dryer' }, private: false,
+    states: { rotten_food: ['none', 'rotten'], power: ['off', 'on'], cycle: ['empty', 'running', 'done'] },
+    defaultState: { rotten_food: 'none', power: 'off', cycle: 'empty' },
+    dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
     affords: ['container.open', 'container.take', 'inspect.object'],
     imagePhrase: 'a dryer next to the washer',
+  },
+  // Dropped items (inventory overhaul Phase 1): every room gets one floor
+  // object so the inventory panel's Drop verb has a real destination that
+  // persists like any other container. Deliberately invisible and inert —
+  // no imagePhrase (room scene prompts must not mention empty floor), no
+  // cleanlinessWeight, no affordances. Phase 2 gives it browsing UI and
+  // its preservation multiplier (0.5, floor/doormat row of the table).
+  floor: {
+    id: 'floor', label: 'Floor', nouns: ['floor', 'ground'],
+    portable: false, breakable: false, container: { capacity: null, preservation: 0.5, label: 'Floor' }, private: false,
+    states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 0,
+    affords: ['container.open', 'container.take', 'container.put'],
   },
 };
 
@@ -457,7 +546,8 @@ const OBJECT_DEFS = {
 // once. (v2 = the Mirrored H expansion: bedroom_door/bathroom_door and the
 // seven new rooms.) Removing a fixture needs no bump — the back-fill only
 // ever adds, and never deletes what a save already has.
-const APARTMENT_LAYOUT_VERSION = 3;
+// (v4 = inventory overhaul Phase 1: a `floor` in every room for Drop.)
+const APARTMENT_LAYOUT_VERSION = 4;
 
 const APARTMENT_LAYOUT = {
   bedroom_player: [
@@ -468,6 +558,7 @@ const APARTMENT_LAYOUT = {
     { defId: 'nightstand' },
     { defId: 'desktop_computer' },
     { defId: 'phone', ownerFrom: 'roomResident' },
+    { defId: 'floor' },
   ],
   bedroom_1: [
     { defId: 'bedroom_door' },
@@ -477,6 +568,7 @@ const APARTMENT_LAYOUT = {
     { defId: 'nightstand' },
     { defId: 'guitar', ownerFrom: 'roomResident' },
     { defId: 'diary', ownerFrom: 'roomResident' },
+    { defId: 'floor' },
   ],
   bedroom_2: [
     { defId: 'bedroom_door' },
@@ -485,6 +577,7 @@ const APARTMENT_LAYOUT = {
     { defId: 'wardrobe' },
     { defId: 'nightstand' },
     { defId: 'jewelry_box', ownerFrom: 'roomResident' },
+    { defId: 'floor' },
   ],
   bedroom_3: [
     { defId: 'bedroom_door' },
@@ -492,56 +585,71 @@ const APARTMENT_LAYOUT = {
     { defId: 'desk' },
     { defId: 'wardrobe' },
     { defId: 'nightstand' },
+    { defId: 'floor' },
   ],
   kitchen: [
     { defId: 'stove' }, { defId: 'fridge' }, { defId: 'sink_kitchen' },
     { defId: 'pantry' }, { defId: 'coffee_maker' }, { defId: 'kitchen_table' }, { defId: 'trash_kitchen' },
+    { defId: 'floor' },
   ],
   bathroom_a: [
     { defId: 'bathroom_door' },
     { defId: 'shower' }, { defId: 'toilet' }, { defId: 'sink_bathroom' },
     { defId: 'bathroom_mirror' },
+    { defId: 'floor' },
   ],
   bathroom_b: [
     { defId: 'bathroom_door' },
     { defId: 'shower' }, { defId: 'toilet' }, { defId: 'sink_bathroom' },
     { defId: 'bathroom_mirror' },
+    { defId: 'floor' },
   ],
   living_room: [
     { defId: 'sofa' }, { defId: 'tv' }, { defId: 'coffee_table_lr' },
     { defId: 'bookshelf' }, { defId: 'lamp_lr' }, { defId: 'plant_lr' },
+    { defId: 'floor' },
   ],
   hallway_a: [
     { defId: 'coat_rack' },
+    { defId: 'floor' },
   ],
   hallway_b: [
     { defId: 'coat_rack' },
+    { defId: 'floor' },
   ],
   entry: [
     { defId: 'front_door' },
     { defId: 'doormat' },
     { defId: 'shoe_rack' },
+    { defId: 'floor' },
   ],
   dining: [
     { defId: 'dining_table' },
+    { defId: 'floor' },
   ],
   game_room: [
     { defId: 'pool_table' }, { defId: 'game_console' }, { defId: 'dartboard' },
+    { defId: 'floor' },
   ],
   gym: [
     { defId: 'treadmill' }, { defId: 'weight_set' }, { defId: 'yoga_mat' },
+    { defId: 'floor' },
   ],
   pool_room: [
     { defId: 'swimming_pool' }, { defId: 'pool_pump' }, { defId: 'pool_loungers' },
+    { defId: 'floor' },
   ],
   study: [
     { defId: 'study_desk' }, { defId: 'study_bookshelf' }, { defId: 'armchair' },
+    { defId: 'floor' },
   ],
   balcony: [
     { defId: 'balcony_table' }, { defId: 'plant_balcony' },
+    { defId: 'floor' },
   ],
   laundry: [
     { defId: 'washer' }, { defId: 'dryer' }, { defId: 'laundry_hamper' },
+    { defId: 'floor' },
   ],
 };
 
@@ -555,6 +663,22 @@ const ITEM_DEFS = {
     id: '_unknown', label: 'Unidentified Item', nouns: [], category: 'misc',
     stackable: true, maxStack: 99,
   },
+
+  // --- Key items (inventory overhaul Phase 1) ---
+  // Personal effects that can never be dropped, trashed, or given away —
+  // `keyItem` is exactly the flag the panel's stackActions reads to hide
+  // those verbs. Deliberately NO `price`, so SHOP_CATALOG_LIST (ITEMS)
+  // never offers them for sale. Seeded into the player's starting
+  // inventory (SIM's buildGameState) so the protection is real from day
+  // one; Phase 8 seeds the same shape into NPC inventories.
+  apartment_keys: { id: 'apartment_keys', label: 'Keys', nouns: ['keys', 'key', 'apartment keys'], category: 'key', keyItem: true, stackable: false, maxStack: 1 },
+  wallet: { id: 'wallet', label: 'Wallet', nouns: ['wallet'], category: 'key', keyItem: true, stackable: false, maxStack: 1 },
+  id_card: { id: 'id_card', label: 'ID Card', nouns: ['id', 'id card', 'idcard'], category: 'key', keyItem: true, stackable: false, maxStack: 1 },
+  // Phase 8 (NPC inventories, D8): everyone's personal phone — seeded into
+  // NPC inventories like the other key items and protected the same way
+  // (keyItem = can't be dropped, trashed, or taken by the player's room-
+  // search). Deliberately NO `price`, so it never joins Nile's catalog.
+  personal_phone: { id: 'personal_phone', label: 'Phone', nouns: ['phone', 'cellphone', 'cell phone'], category: 'key', keyItem: true, stackable: false, maxStack: 1 },
 
   // Ingredients
   eggs: { id: 'eggs', label: 'Eggs', nouns: ['egg', 'eggs'], category: 'ingredient', stackable: true, maxStack: 24, perishable: { days: 14 }, consumable: { hunger: 6 }, price: 4, buyQty: 12 },
@@ -601,12 +725,16 @@ const ITEM_DEFS = {
   // which builds itself from every priced ITEM_DEF (SHOP_CATALOG_LIST, ITEMS).
   // Restaurant food beats home cooking on hunger and mood — that's what the
   // markup buys — and spoils faster, so ordering ahead has a real cost.
+  // Inventory overhaul Phase 3: whole/shared dishes carry `servings: n` —
+  // eating one serving leaves the rest behind as a partial stack
+  // (meta.servingsLeft), so a pizza is eaten a slice at a time instead of
+  // vanishing whole. See INVENTORY's edibility/servings section.
   dish_kung_pao: { id: 'dish_kung_pao', label: 'Kung Pao Chicken', nouns: ['kung pao', 'kung pao chicken'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 45, mood: 0.05 } },
   dish_chow_mein: { id: 'dish_chow_mein', label: 'Beef Chow Mein', nouns: ['chow mein', 'noodles'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 44, mood: 0.04 } },
   dish_dumplings: { id: 'dish_dumplings', label: 'Pork Dumplings', nouns: ['dumplings'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 30, mood: 0.05 } },
   dish_egg_rolls: { id: 'dish_egg_rolls', label: 'Egg Rolls', nouns: ['egg rolls'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 2 }, consumable: { hunger: 18, mood: 0.03 } },
 
-  dish_pepperoni_pizza: { id: 'dish_pepperoni_pizza', label: 'Pepperoni Pizza', nouns: ['pizza', 'pepperoni pizza'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, consumable: { hunger: 55, mood: 0.06 } },
+  dish_pepperoni_pizza: { id: 'dish_pepperoni_pizza', label: 'Pepperoni Pizza', nouns: ['pizza', 'pepperoni pizza'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, servings: 4, consumable: { hunger: 55, mood: 0.06 } },
   dish_garlic_knots: { id: 'dish_garlic_knots', label: 'Garlic Knots', nouns: ['garlic knots', 'knots'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 2 }, consumable: { hunger: 20, mood: 0.04 } },
   dish_calzone: { id: 'dish_calzone', label: 'Calzone', nouns: ['calzone'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 2 }, consumable: { hunger: 46, mood: 0.05 } },
 
@@ -640,9 +768,9 @@ const ITEM_DEFS = {
   dish_fortune_cookies: { id: 'dish_fortune_cookies', label: 'Fortune Cookies', nouns: ['fortune cookies', 'fortune cookie'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 2 }, consumable: { hunger: 8, mood: 0.03 } },
 
   // Sal's Pizzeria
-  dish_cheese_pizza: { id: 'dish_cheese_pizza', label: 'Cheese Pizza', nouns: ['cheese pizza', 'pizza'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, consumable: { hunger: 48, mood: 0.05 } },
-  dish_sausage_pizza: { id: 'dish_sausage_pizza', label: 'Sausage Pizza', nouns: ['sausage pizza', 'pizza'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, consumable: { hunger: 52, mood: 0.06 } },
-  dish_white_pizza: { id: 'dish_white_pizza', label: 'White Pizza', nouns: ['white pizza', 'pizza'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, consumable: { hunger: 50, mood: 0.05 } },
+  dish_cheese_pizza: { id: 'dish_cheese_pizza', label: 'Cheese Pizza', nouns: ['cheese pizza', 'pizza'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, servings: 4, consumable: { hunger: 48, mood: 0.05 } },
+  dish_sausage_pizza: { id: 'dish_sausage_pizza', label: 'Sausage Pizza', nouns: ['sausage pizza', 'pizza'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, servings: 4, consumable: { hunger: 52, mood: 0.06 } },
+  dish_white_pizza: { id: 'dish_white_pizza', label: 'White Pizza', nouns: ['white pizza', 'pizza'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, servings: 4, consumable: { hunger: 50, mood: 0.05 } },
   dish_meatball_sub: { id: 'dish_meatball_sub', label: 'Meatball Sub', nouns: ['meatball sub', 'sub'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 2 }, consumable: { hunger: 44, mood: 0.05 } },
   dish_breadsticks: { id: 'dish_breadsticks', label: 'Garlic Breadsticks', nouns: ['breadsticks', 'breadstick'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 18, mood: 0.04 } },
   dish_caesar_wedge: { id: 'dish_caesar_wedge', label: 'Caesar Wedge', nouns: ['caesar salad', 'wedge'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 22, mood: 0.03 } },
@@ -652,7 +780,7 @@ const ITEM_DEFS = {
   // Big Bite Burgers
   dish_breakfast_burger: { id: 'dish_breakfast_burger', label: 'Breakfast Burger', nouns: ['breakfast burger'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 42, mood: 0.05 } },
   dish_sausage_egg_muffin: { id: 'dish_sausage_egg_muffin', label: 'Sausage Egg Muffin', nouns: ['sausage egg muffin', 'egg muffin'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 32, mood: 0.04 } },
-  dish_pancakes: { id: 'dish_pancakes', label: 'Short Stack of Pancakes', nouns: ['pancakes', 'pancake'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 36, mood: 0.05 } },
+  dish_pancakes: { id: 'dish_pancakes', label: 'Short Stack of Pancakes', nouns: ['pancakes', 'pancake'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, servings: 3, consumable: { hunger: 36, mood: 0.05 } },
   dish_hash_browns: { id: 'dish_hash_browns', label: 'Hash Browns', nouns: ['hash browns', 'hash brown'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 16, mood: 0.03 } },
   dish_chicken_sandwich: { id: 'dish_chicken_sandwich', label: 'Crispy Chicken Sandwich', nouns: ['chicken sandwich'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 46, mood: 0.05 } },
   dish_onion_rings: { id: 'dish_onion_rings', label: 'Onion Rings', nouns: ['onion rings'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 20, mood: 0.04 } },
@@ -692,7 +820,7 @@ const ITEM_DEFS = {
   dish_coconut_ice_cream: { id: 'dish_coconut_ice_cream', label: 'Coconut Ice Cream', nouns: ['coconut ice cream', 'ice cream'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 12, mood: 0.06 } },
 
   // Sunrise Cafe (new)
-  dish_pancake_stack: { id: 'dish_pancake_stack', label: 'Pancake Stack', nouns: ['pancake stack', 'pancakes'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 40, mood: 0.06 } },
+  dish_pancake_stack: { id: 'dish_pancake_stack', label: 'Pancake Stack', nouns: ['pancake stack', 'pancakes'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, servings: 3, consumable: { hunger: 40, mood: 0.06 } },
   dish_belgian_waffle: { id: 'dish_belgian_waffle', label: 'Belgian Waffle', nouns: ['belgian waffle', 'waffle'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 42, mood: 0.06 } },
   dish_breakfast_sandwich: { id: 'dish_breakfast_sandwich', label: 'Breakfast Sandwich', nouns: ['breakfast sandwich'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 38, mood: 0.04 } },
   dish_avocado_toast: { id: 'dish_avocado_toast', label: 'Avocado Toast', nouns: ['avocado toast'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 30, mood: 0.05 } },
@@ -701,7 +829,7 @@ const ITEM_DEFS = {
   dish_breakfast_potatoes: { id: 'dish_breakfast_potatoes', label: 'Breakfast Potatoes', nouns: ['breakfast potatoes'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 20, mood: 0.03 } },
   dish_fresh_coffee: { id: 'dish_fresh_coffee', label: 'Fresh Coffee', nouns: ['coffee', 'fresh coffee'], category: 'drink', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 8, energy: 10 } },
   dish_oat_latte: { id: 'dish_oat_latte', label: 'Oat Latte', nouns: ['oat latte', 'latte'], category: 'drink', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 6, mood: 0.02, energy: 6 } },
-  dish_orange_juice_pitcher: { id: 'dish_orange_juice_pitcher', label: 'Orange Juice Pitcher', nouns: ['orange juice', 'juice pitcher'], category: 'drink', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 3, mood: 0.02 } },
+  dish_orange_juice_pitcher: { id: 'dish_orange_juice_pitcher', label: 'Orange Juice Pitcher', nouns: ['orange juice', 'juice pitcher'], category: 'drink', stackable: true, maxStack: 4, perishable: { days: 1 }, servings: 4, consumable: { hunger: 3, mood: 0.02 } },
   dish_croissant: { id: 'dish_croissant', label: 'Butter Croissant', nouns: ['croissant'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 16, mood: 0.04 } },
   dish_bagel_cc: { id: 'dish_bagel_cc', label: 'Bagel with Cream Cheese', nouns: ['bagel', 'bagel with cream cheese'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 24, mood: 0.04 } },
 
@@ -713,7 +841,7 @@ const ITEM_DEFS = {
   dish_tomato_soup_cup: { id: 'dish_tomato_soup_cup', label: 'Tomato Soup (Cup)', nouns: ['tomato soup'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 16, mood: 0.03 } },
   dish_chicken_tenders: { id: 'dish_chicken_tenders', label: 'Chicken Tenders', nouns: ['chicken tenders', 'tenders'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 38, mood: 0.04 } },
   dish_hamburger_steak: { id: 'dish_hamburger_steak', label: 'Hamburger Steak', nouns: ['hamburger steak', 'burger steak'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 2 }, consumable: { hunger: 50, mood: 0.05 } },
-  dish_pancake_plate: { id: 'dish_pancake_plate', label: 'Pancake Plate', nouns: ['pancake plate', 'pancakes'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 35, mood: 0.05 } },
+  dish_pancake_plate: { id: 'dish_pancake_plate', label: 'Pancake Plate', nouns: ['pancake plate', 'pancakes'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, servings: 2, consumable: { hunger: 35, mood: 0.05 } },
   dish_pie_slice: { id: 'dish_pie_slice', label: 'Pie Slice', nouns: ['pie slice', 'pie'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 18, mood: 0.05 } },
   dish_coffee_mug: { id: 'dish_coffee_mug', label: 'Diner Coffee Mug', nouns: ['coffee', 'mug of coffee'], category: 'drink', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 6, energy: 8 } },
   dish_vanilla_shake: { id: 'dish_vanilla_shake', label: 'Vanilla Shake', nouns: ['vanilla shake', 'shake'], category: 'drink', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 14, mood: 0.05 } },
@@ -728,7 +856,7 @@ const ITEM_DEFS = {
   dish_mushroom_soup: { id: 'dish_mushroom_soup', label: 'Mushroom Soup', nouns: ['mushroom soup'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 30, mood: 0.04 } },
   dish_half_sandwich_soup: { id: 'dish_half_sandwich_soup', label: 'Half Sandwich & Soup', nouns: ['half sandwich and soup', 'sandwich and soup'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 36, mood: 0.04 } },
   dish_grilled_cheese_deli: { id: 'dish_grilled_cheese_deli', label: 'Deli Grilled Cheese', nouns: ['deli grilled cheese', 'grilled cheese'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 32, mood: 0.04 } },
-  dish_lemonade_pitcher: { id: 'dish_lemonade_pitcher', label: 'Lemonade Pitcher', nouns: ['lemonade', 'lemonade pitcher'], category: 'drink', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 12, mood: 0.02 } },
+  dish_lemonade_pitcher: { id: 'dish_lemonade_pitcher', label: 'Lemonade Pitcher', nouns: ['lemonade', 'lemonade pitcher'], category: 'drink', stackable: true, maxStack: 4, perishable: { days: 1 }, servings: 4, consumable: { hunger: 12, mood: 0.02 } },
   dish_turkey_club: { id: 'dish_turkey_club', label: 'Turkey Club', nouns: ['turkey club'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 44, mood: 0.05 } },
 
   // Emerald Kitchen (new) — the splurge: hunger values deliberately exceed
@@ -755,7 +883,7 @@ const ITEM_DEFS = {
   dish_cucumber_salad: { id: 'dish_cucumber_salad', label: 'Cucumber Salad', nouns: ['cucumber salad'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 14, mood: 0.03 } },
 
   // Latenight Munchies (new)
-  dish_loaded_nachos: { id: 'dish_loaded_nachos', label: 'Loaded Nachos', nouns: ['loaded nachos', 'nachos'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 40, mood: 0.05 } },
+  dish_loaded_nachos: { id: 'dish_loaded_nachos', label: 'Loaded Nachos', nouns: ['loaded nachos', 'nachos'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, servings: 3, consumable: { hunger: 40, mood: 0.05 } },
   dish_buffalo_wings: { id: 'dish_buffalo_wings', label: 'Buffalo Wings', nouns: ['buffalo wings', 'wings'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 42, mood: 0.05 } },
   dish_chili_cheese_tots: { id: 'dish_chili_cheese_tots', label: 'Chili Cheese Tots', nouns: ['chili cheese tots', 'tots'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 34, mood: 0.04 } },
   dish_hot_dog: { id: 'dish_hot_dog', label: 'Hot Dog', nouns: ['hot dog'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 26, mood: 0.03 } },
@@ -771,11 +899,47 @@ const ITEM_DEFS = {
   soda: { id: 'soda', label: 'Soda', nouns: ['soda', 'pop'], category: 'drink', stackable: true, maxStack: 12, consumable: { mood: 0.02 }, price: 2, buyQty: 6 },
   chips: { id: 'chips', label: 'Chips', nouns: ['chips'], category: 'food', stackable: true, maxStack: 8, consumable: { hunger: 12, mood: 0.02 }, price: 3, buyQty: 2 },
   granola_bar: { id: 'granola_bar', label: 'Granola Bar', nouns: ['granola bar'], category: 'food', stackable: true, maxStack: 12, consumable: { hunger: 15 }, price: 2, buyQty: 6 },
-  beer: { id: 'beer', label: 'Beer', nouns: ['beer'], category: 'drink', stackable: true, maxStack: 12, consumable: { mood: 0.05, energy: -3 }, price: 3, buyQty: 6, tags: ['substance'] },
+  beer: { id: 'beer', label: 'Beer', nouns: ['beer'], category: 'drink', stackable: true, maxStack: 12, consumable: { mood: 0.10, energy: -4 }, price: 3, buyQty: 6, tags: ['substance'] },
   wine: { id: 'wine', label: 'Wine', nouns: ['wine'], category: 'drink', stackable: true, maxStack: 4, consumable: { mood: 0.06, energy: -4 }, price: 12, buyQty: 1, tags: ['substance'] },
   orange_juice: { id: 'orange_juice', label: 'Orange Juice', nouns: ['orange juice', 'juice'], category: 'drink', stackable: true, maxStack: 4, perishable: { days: 10 }, consumable: { hunger: 3, mood: 0.01 }, price: 4, buyQty: 1 },
   bottled_water: { id: 'bottled_water', label: 'Bottled Water', nouns: ['water'], category: 'drink', stackable: true, maxStack: 24, price: 1, buyQty: 12 },
-  frozen_pizza: { id: 'frozen_pizza', label: 'Frozen Pizza', nouns: ['pizza'], category: 'food', stackable: true, maxStack: 4, consumable: { hunger: 35, mood: 0.02 }, price: 7, buyQty: 1 },
+  frozen_pizza: { id: 'frozen_pizza', label: 'Frozen Pizza', nouns: ['pizza'], category: 'food', stackable: true, maxStack: 4, servings: 4, consumable: { hunger: 35, mood: 0.02 }, price: 7, buyQty: 1 },
+
+  // --- Comfort consumables (inventory overhaul Phase 6, D13) ---
+  // The day-one happiness sources: cheap, ungated, purchasable on Nile like
+  // any priced item (they join SHOP_CATALOG_LIST automatically), consumed
+  // through the inventory panel's Use verb. Category 'comfort' keeps them
+  // OUT of the Eat picker — they're treats, not meals — and gives them
+  // their own sort group. Every one trades something (a bigger mood spike
+  // costs energy or hygiene), so spamming isn't free; mood values sit at or
+  // under the AfterHours +0.25 ceiling and decay like any impulse. Existing
+  // cheaper sources (soda/chips/energy_drink/wine) stay as they were; beer
+  // was re-tuned to the Phase 6 table's proposed values.
+  comfort_coffee: { id: 'comfort_coffee', label: 'Coffee', nouns: ['coffee', 'cup of coffee'], category: 'comfort', stackable: true, maxStack: 8, consumable: { energy: 8, mood: 0.05 }, price: 4, buyQty: 4 },
+  comfort_latte: { id: 'comfort_latte', label: 'Good Coffee', nouns: ['good coffee', 'latte'], category: 'comfort', stackable: true, maxStack: 4, consumable: { energy: 10, mood: 0.08 }, price: 7, buyQty: 1 },
+  comfort_tea: { id: 'comfort_tea', label: 'Tea', nouns: ['tea', 'cup of tea'], category: 'comfort', stackable: true, maxStack: 8, consumable: { energy: 5, mood: 0.04 }, price: 3, buyQty: 4 },
+  comfort_whiskey: { id: 'comfort_whiskey', label: 'Cheap Whiskey', nouns: ['whiskey', 'cheap whiskey'], category: 'comfort', stackable: true, maxStack: 4, consumable: { mood: 0.12, energy: -6, hygiene: -2 }, price: 9, buyQty: 1, tags: ['substance'] },
+  comfort_ice_cream: { id: 'comfort_ice_cream', label: 'Ice Cream', nouns: ['ice cream'], category: 'comfort', stackable: true, maxStack: 4, perishable: { days: 30 }, consumable: { hunger: 15, mood: 0.10 }, price: 5, buyQty: 1 },
+  comfort_chocolate: { id: 'comfort_chocolate', label: 'Chocolate Bar', nouns: ['chocolate', 'chocolate bar'], category: 'comfort', stackable: true, maxStack: 8, consumable: { hunger: 8, mood: 0.06 }, price: 3, buyQty: 2 },
+  comfort_joint: { id: 'comfort_joint', label: 'Joint', nouns: ['joint', 'weed', 'marijuana'], category: 'comfort', stackable: true, maxStack: 4, consumable: { mood: 0.20, energy: -12 }, price: 8, buyQty: 1, tags: ['substance'] },
+
+  // --- Hobby objects (inventory overhaul Phase 6, D13) ---
+  // The buyable hobby set. Each ITEM_DEFS id here has a matching
+  // OBJECT_DEFS id (same string, different namespace) — the item is the
+  // Nile-shipped purchase that rides the normal delivery pipeline into
+  // your bag, and the Place verb (INVENTORY's stackActions / UI's
+  // doInventoryPlace) turns it into a placed OBJECT_DEFS instance in the
+  // room via SPAWN_OBJECT, which is what unlocks its action (sourced from
+  // the object, so the hobby is usable only where it physically sits).
+  // stackable:false + maxStack 1 = one at a time in the bag; buyQty 1 =
+  // one delivery delivers the one object. No consumable — the joy is the
+  // action, not the item.
+  hobby_guitar: { id: 'hobby_guitar', label: 'Guitar', nouns: ['guitar', 'acoustic guitar'], category: 'hobby', stackable: false, maxStack: 1, price: 60, buyQty: 1 },
+  hobby_bookshelf: { id: 'hobby_bookshelf', label: 'Bookshelf', nouns: ['bookshelf', 'bookcase'], category: 'hobby', stackable: false, maxStack: 1, price: 45, buyQty: 1 },
+  hobby_record_player: { id: 'hobby_record_player', label: 'Record Player', nouns: ['record player', 'turntable', 'vinyl'], category: 'hobby', stackable: false, maxStack: 1, price: 70, buyQty: 1 },
+  hobby_console: { id: 'hobby_console', label: 'Game Console', nouns: ['console', 'game console'], category: 'hobby', stackable: false, maxStack: 1, price: 120, buyQty: 1 },
+  hobby_sketchpad: { id: 'hobby_sketchpad', label: 'Sketchpad', nouns: ['sketchpad', 'sketchbook'], category: 'hobby', stackable: false, maxStack: 1, price: 12, buyQty: 1 },
+  hobby_houseplant: { id: 'hobby_houseplant', label: 'Houseplant', nouns: ['houseplant', 'plant'], category: 'hobby', stackable: false, maxStack: 1, price: 18, buyQty: 1 },
 
   // Cleaning supplies
   dish_soap: { id: 'dish_soap', label: 'Dish Soap', nouns: ['dish soap'], category: 'cleaning', stackable: true, maxStack: 4, price: 4, buyQty: 1 },
@@ -805,6 +969,42 @@ const ITEM_DEFS = {
   flowers: { id: 'flowers', label: 'Flowers', nouns: ['flowers'], category: 'gift', stackable: true, maxStack: 3, price: 15, buyQty: 1 },
   chocolate_box: { id: 'chocolate_box', label: 'Box of Chocolates', nouns: ['chocolates', 'chocolate box'], category: 'gift', stackable: true, maxStack: 3, price: 10, buyQty: 1 },
 };
+
+// --- Sort groups (inventory overhaul Phase 1) ---
+// The inventory panel groups items by def.sortGroup — the renderer never
+// hardcodes a category→group list. Every def is stamped with its
+// sortGroup at load from its category via CATEGORY_SORT_GROUP below (the
+// panel also groups by this on a per-def basis if a def ever overrides
+// sortGroup directly). Categories `comfort`/`hobby`/`key`/`junk` exist now
+// for the later phases of the overhaul even though no current item uses
+// them yet.
+const SORT_GROUPS = {
+  food:     { label: 'Food',      order: 10 },
+  drink:    { label: 'Drinks',    order: 20 },
+  comfort:  { label: 'Comfort',   order: 30 },
+  hobby:    { label: 'Hobbies',   order: 40 },
+  gift:     { label: 'Gifts',     order: 50 },
+  cleaning: { label: 'Cleaning',  order: 60 },
+  toiletry: { label: 'Toiletries', order: 70 },
+  medication: { label: 'Medication', order: 80 },
+  gear:     { label: 'Gear',      order: 90 },
+  key:      { label: 'Keys & ID', order: 100 },
+  junk:     { label: 'Junk',      order: 110 },
+  other:    { label: 'Other',     order: 120 },
+};
+
+const CATEGORY_SORT_GROUP = {
+  ingredient: 'food', meal: 'food', food: 'food', snack: 'food',
+  drink: 'drink',
+  comfort: 'comfort', hobby: 'hobby', gift: 'gift',
+  cleaning: 'cleaning', toiletry: 'toiletry', medication: 'medication',
+  tool: 'gear', decor: 'gear', electronics: 'gear', media: 'gear',
+  key: 'key', junk: 'junk', misc: 'other',
+};
+
+for (const def of Object.values(ITEM_DEFS)) {
+  if (!def.sortGroup) def.sortGroup = CATEGORY_SORT_GROUP[def.category] || 'other';
+}
 
 // --- Recipes: what stove.cook_meal (DEFS.ACTIONS) draws from. Checked in
 // declaration order by ITEMS' pickAvailableRecipe — the first one whose

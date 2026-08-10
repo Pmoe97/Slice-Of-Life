@@ -81,7 +81,12 @@ async function executeAction(actionId, gameState) {
   const check = checkRequirements(def, ctx);
   if (!check.ok) return { ok: false, reason: check.reason, ticksSpent: 0 };
 
-  const prepared = def.prepare ? def.prepare(ctx) : null;
+  const prepared = def.prepare ? await def.prepare(ctx) : null;
+  // A prepare() that presented a choice and got cancelled (self.cook's
+  // recipe picker) must abort the whole action before any effects, time,
+  // or ingredient consumption happens — executeAction returns a cancelled
+  // result and the caller (runRegisteredAction) exits silently.
+  if (prepared && prepared.cancelled) return { ok: false, reason: null, cancelled: true, ticksSpent: 0 };
   const effectLines = def.buildEffects ? def.buildEffects(ctx, prepared) : [...(def.effects || [])];
   // Skill XP is declarative (def.skill), not something buildEffects has to
   // remember to emit itself — checkRequirements already guaranteed the
@@ -91,6 +96,23 @@ async function executeAction(actionId, gameState) {
   const effects = effectLines.map(line => parseEffectDSL(line)[0]).filter(Boolean);
   const effCtx = buildEffectContext(gameState, [], ctx.presentNpcIds, ctx.roomObjects, gameState.player.inventory || []);
   applyEffects(effects, effCtx);
+
+  // Phase 7 (D7): an action that dirtied a room's objects (SET_OBJECT_STATE
+  // on a dirtyWhen-carrying object — cooking a stove, a shared meal on the
+  // dining table) must recompute the room's DERIVED cleanliness. This is
+  // the refresh hook the WORLD doc planned for P2 but that was never
+  // wired — without it a dirty table LOOKS cluttered but the room still
+  // reads clean to the mood/cleanliness systems. Scoped to the rooms the
+  // action actually touched, deduped (a meal that dirties one object is
+  // one recompute, not N).
+  const touchedRooms = new Set();
+  for (const eff of effects) {
+    if (eff.type === 'SET_OBJECT_STATE') {
+      const obj = findObjectById(gameState, eff.params?.objId);
+      if (obj && obj.bucket?.startsWith('room_')) touchedRooms.add(obj.bucket.slice('room_'.length));
+    }
+  }
+  for (const roomId of touchedRooms) refreshRoomCleanliness(gameState, roomId);
 
   // Phase 5: meter utility usage for actions that consume utilities. The
   // `meters` field on an ACTION_DEFS entry is a list of [meterKey, amount]
@@ -173,6 +195,9 @@ async function withVulnerableState(gameState, state, fn) {
 // Base time cost in game-minutes. Supports:
 // - `base` (number): flat minutes (legacy: if the whole timeCost is a
 //   bare number, it's minutes)
+// - `byItemCategory` (true): the picked item's category via
+//   INVENTORY_TUNING.useTimeMinutes (Phase 3 self.eat — the item is in
+//   `prepared.option.def`)
 // - `skill`/`curve` (string): shrinks the base by a skill curve — e.g.
 //   { base: 20, skill: 'cooking', curve: 'timeReduction', min: 15 }
 //   means 20 min minus up to 50% at max cooking level, floored at 15
@@ -194,6 +219,15 @@ function resolveTimeCost(def, gameState, prepared) {
   const tc = def.timeCost;
   if (typeof tc === 'number') return Math.max(1, tc);
   let minutes = tc.base ?? 0;
+
+  // Inventory overhaul Phase 3: self.eat's time is the eaten item's
+  // category — drink 5 / snack 10 / food 10 / full meal 25 — reading
+  // INVENTORY_TUNING.useTimeMinutes, the SAME table the inventory
+  // panel's Use verb reads, so the Eat chip and the panel can never
+  // disagree about how long eating takes.
+  if (tc.byItemCategory && prepared?.option?.def) {
+    minutes = INVENTORY_TUNING.useTimeMinutes[prepared.option.def.category] ?? INVENTORY_TUNING.useTimeMinutes._default;
+  }
 
   if (tc.perIngredient && prepared?.recipe) {
     minutes += (prepared.recipe.ingredients?.length || 0) * tc.perIngredient;
@@ -226,10 +260,25 @@ function narrateAction(def, ctx, prepared) {
 // replacement for a hand-written doX(). Called from UI's handleAction. ---
 async function runRegisteredAction(actionId) {
   showLoading();
+  // Phase 7 (D7): a set_meal that HAPPENED is the moment a scheduled meal
+  // commitment in the player's room becomes 'held' — captured BEFORE the
+  // action so a late dinner that ends just past the window still counts
+  // (executeAction advances the clock by the action's minutes). Eating a
+  // solo snack in the dining room during someone's dinner window is NOT
+  // the same thing, so only set_meal marks.
+  const mealCommitments = actionId === 'set_meal'
+    ? activeMealCommitmentsInRoom(currentGameState, currentGameState.player.location)
+    : [];
   try {
     const result = await executeAction(actionId, currentGameState);
+    // A cancelled choice (e.g. closing the recipe picker) aborts silently —
+    // no system-log line, no narration, no save.
+    if (result.cancelled) return;
     if (!result.ok) { addLogEntry('system', result.reason || "You can't do that right now."); return; }
     addLogEntry('narration', result.narration);
+    if (actionId === 'set_meal') {
+      for (const c of mealCommitments) c.status = 'held';
+    }
     // Phase 8: working out grows the energy ceiling (energyMax). This is
     // the exercise path to a higher daily work capacity — the other path
     // is sleep consistency (handled in doSleep).

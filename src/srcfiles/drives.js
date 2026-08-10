@@ -112,6 +112,39 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
       continue;
     }
 
+    // Phase 8 (NPC inventories): the eat drive — a hungry NPC really
+    // consumes what it finds (own bag, then the kitchen fridge/pantry),
+    // falling back to the abstract scrounge only when every reachable
+    // source is empty (nobody starves because the player forgot to shop).
+    // The resolver applies its own effects and returns an activity /
+    // location override plus events; the cooldown is set on any firing,
+    // exactly like the peep/snoop drives.
+    if (drive.isEatDrive) {
+      const eatResult = tryEatFood(updatedNpc, npcId, resolved, gameState, rng);
+      if (eatResult) {
+        if (eatResult.locationOverride) locationOverride = eatResult.locationOverride;
+        if (eatResult.activityOverride) activityOverride = eatResult.activityOverride;
+        events.push(...eatResult.events);
+        updatedNpc = setCooldown(updatedNpc, driveId, currentTick);
+      }
+      continue;
+    }
+
+    // Phase 8 (NPC inventories): the gift drive — a fond NPC hands the
+    // player something they own (MOVE_ITEM into the player's bag).
+    // Affection-gated inside the resolver; a failed gate/roll sets NO
+    // cooldown (the NPC didn't do anything, so nothing to rate-limit
+    // yet — same reasoning as trySnoopPhone's unsuccessful attempts).
+    if (drive.isGiftDrive) {
+      const giftResult = tryGiveGift(updatedNpc, npcId, resolved, gameState, rng);
+      if (giftResult) {
+        if (giftResult.activityOverride) activityOverride = giftResult.activityOverride;
+        events.push(...giftResult.events);
+        updatedNpc = setCooldown(updatedNpc, driveId, currentTick);
+      }
+      continue;
+    }
+
     // Random roll against weight
     if (rng() > drive.weight) continue;
 
@@ -423,6 +456,147 @@ function resolveSnoopPhone(gameState, npcId, phone) {
   applyEffects(effects, effCtx);
 
   return { npcId, strength };
+}
+
+// --- Phase 8: NPC eat drive ---
+// A hungry NPC searches reachable food — its own bag first, then the
+// kitchen's fridge/pantry — and REALLY consumes what it finds via
+// `CONSUME_ITEM <defId> 1 <from> <npcId>` (the B1 `who` param; the
+// groceries disappear from the player's view). Eats greedily
+// most-satisfying-first until NPC_INVENTORY.eatUntilHunger or the food
+// runs out. When every reachable source is genuinely empty it falls back
+// to the abstract restore (the plan's explicit exception to invariant 3)
+// so nobody starves because the player forgot to shop. Returns a result
+// the drive loop folds in ({ activityOverride, locationOverride, events }),
+// or null. Never eats already-Rotten food — that penalty beat is the
+// player's to step in.
+function tryEatFood(npc, npcId, resolved, gameState, rng) {
+  const day = gameState.meta.clock.day;
+  const tick = getTickIndex(gameState.meta.clock.minutes);
+  const sources = [];
+  const addList = (list, from, containerDef) => {
+    for (const stack of list || []) {
+      const def = ITEM_DEFS[stack?.defId];
+      if (!(stack?.qty > 0)) continue;
+      // Anything that restores hunger counts — groceries and meals alike
+      // (the point is the groceries disappear, not a nutrition lecture).
+      if (!def?.consumable || !(def.consumable.hunger > 0)) continue;
+      if (freshnessOf(stack, containerDef, day)?.key === 'rotten') continue;
+      sources.push({ def, from, stack });
+    }
+  };
+  addList(npc.inventory, npcId, null);
+  const kitchenBucket = gameState.objects?.['room_kitchen'] || {};
+  for (const obj of Object.values(kitchenBucket)) {
+    if (obj.defId !== 'fridge' && obj.defId !== 'pantry') continue;
+    addList(obj.contents, obj.id, OBJECT_DEFS[obj.defId]);
+  }
+
+  // Fallback scrounge — only when nothing at all is reachable.
+  if (sources.length === 0) {
+    const effCtx = buildEffectContext(gameState, [npcId], [npcId], {}, []);
+    applyEffects([{ type: 'ADJUST_NEED', params: { who: npcId, need: 'hunger', delta: 30 } }], effCtx);
+    return {
+      activityOverride: 'scrounging',
+      events: [{
+        day, tick, roomId: resolved.location, npcId,
+        type: 'eat_fallback', moodDelta: 0.02,
+        data: {},
+        template: '{name} scrounged what was left in the cupboards.',
+        seenByPlayer: false,
+      }],
+    };
+  }
+
+  // Greedy plan, most-satisfying first, one unit at a time, until the
+  // hunger target or the food runs out. Planned against the LIVE stack
+  // quantities (banked per source), so every emitted CONSUME_ITEM line
+  // removes exactly the unit this plan counted.
+  const bank = new Map(); // from -> [{ def, defId, qty }]
+  for (const src of sources) {
+    const arr = bank.get(src.from) || [];
+    const existing = arr.find(e => e.defId === src.def.id);
+    if (existing) existing.qty += src.stack.qty;
+    else arr.push({ def: src.def, defId: src.def.id, qty: src.stack.qty });
+    bank.set(src.from, arr);
+  }
+  const plan = [];
+  let hunger = npc.needs.hunger || 0;
+  const target = NPC_INVENTORY.eatUntilHunger;
+  while (hunger < target) {
+    let best = null, bestFrom = null;
+    for (const [from, arr] of bank) {
+      for (const e of arr) {
+        if (e.qty <= 0) continue;
+        if (!best || e.def.consumable.hunger > best.def.consumable.hunger) { best = e; bestFrom = from; }
+      }
+    }
+    if (!best) break;
+    best.qty -= 1;
+    plan.push({ defId: best.defId, from: bestFrom });
+    hunger += best.def.consumable.hunger;
+  }
+  if (plan.length === 0) return null;
+
+  const lines = plan.map(u => `CONSUME_ITEM ${u.defId} 1 ${u.from} ${npcId}`);
+  const effCtx = buildEffectContext(gameState, [npcId], [npcId], {}, []);
+  applyEffects(lines.map(l => parseEffectDSL(l)[0]).filter(Boolean), effCtx);
+
+  const ateFromKitchen = plan.some(u => u.from !== npcId);
+  const items = [...new Set(plan.map(u => ITEM_DEFS[u.defId]?.label || u.defId))].join(', ');
+  const event = {
+    day, tick, roomId: ateFromKitchen ? 'kitchen' : resolved.location, npcId,
+    type: 'eat', moodDelta: 0.03,
+    data: { items },
+    template: ateFromKitchen
+      ? '{name} helped themselves to {items} from the kitchen.'
+      : '{name} snacked on {items} from their bag.',
+    seenByPlayer: false,
+  };
+  return {
+    activityOverride: ateFromKitchen ? 'cooking' : 'snacking',
+    locationOverride: ateFromKitchen && resolved.location !== 'kitchen' ? 'kitchen' : null,
+    events: [event],
+  };
+}
+
+// --- Phase 8: NPC gift drive ---
+// A fond NPC hands the player something they own — MOVE_ITEM one unit
+// from npc.inventory into the player's bag. Affection-gated (a gift is a
+// gesture, it takes real fondness) and only when they actually have a
+// non-keyItem possession in a giftable category. Returns a result the
+// drive loop folds in, or null when the gate/roll fails (no cooldown on a
+// null — nothing happened to rate-limit).
+function tryGiveGift(npc, npcId, resolved, gameState, rng) {
+  const cfg = NPC_GIFT_TUNING;
+  if ((npc.relPlayer?.affection || 0) < cfg.affectionThreshold) return null;
+  const pickable = (npc.inventory || [])
+    .filter(s => (s?.qty || 0) > 0 && !(s.meta?.keyItem) && !ITEM_DEFS[s.defId]?.keyItem)
+    .sort((a, b) => {
+      const ia = cfg.categoryOrder.indexOf(ITEM_DEFS[a.defId]?.category ?? '');
+      const ib = cfg.categoryOrder.indexOf(ITEM_DEFS[b.defId]?.category ?? '');
+      return (ia < 0 ? cfg.categoryOrder.length : ia) - (ib < 0 ? cfg.categoryOrder.length : ib);
+    });
+  if (pickable.length === 0) return null;
+  if (rng() > cfg.baseChance) return null;
+
+  const stack = pickable[0];
+  const def = ITEM_DEFS[stack.defId];
+  const day = gameState.meta.clock.day;
+  const tick = getTickIndex(gameState.meta.clock.minutes);
+  const effCtx = buildEffectContext(gameState, [npcId], [npcId], {}, []);
+  applyEffects(parseEffectDSL(`MOVE_ITEM ${stack.defId} 1 ${npcId} player`), effCtx);
+  const inRoom = resolved.location === gameState.player.location;
+  const event = {
+    day, tick, roomId: resolved.location, npcId,
+    type: 'gift', moodDelta: 0.05,
+    data: { item: def?.label || stack.defId },
+    template: inRoom
+      ? '{name} hands you their {item} — "I want you to have this."'
+      : '{name} left their {item} out for you, wrapped in a napkin.',
+    seenByPlayer: false,
+  };
+  return { activityOverride: null, events: [event] };
 }
 
 // Room adjacency: ROOM_ADJACENCY is now a first-class CONFIG constant

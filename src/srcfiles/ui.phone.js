@@ -151,7 +151,7 @@ async function doPhoneCameraShare(photoId, npcId) {
     const result = await resolveImReply(currentGameState, npcId, shared.text);
     if (!result.ok) addLogEntry('system', result.reason);
     await advanceAndResolve(1);
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1, currentGameState);
     addLogEntry('system', `Photo sent to ${currentGameState.npcs[npcId]?.bible?.name || 'them'}.`);
     renderPhoneScreen(currentGameState);
     render(currentGameState, currentSceneState);

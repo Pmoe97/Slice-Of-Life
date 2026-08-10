@@ -1,3 +1,10 @@
+<!-- Menu overhaul Phase 10: Cinzel (display serif title/buttons) +
+     Cormorant Garamond (italic subtitle/body) — the reference games' menu
+     pairing (perchance-menu-conventions.md §2). -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap" rel="stylesheet">
+
 <!-- ===== SECTION: TOKENS ===== -->
 <style id="tokens">
 :root {
@@ -806,6 +813,351 @@ body {
 .menu-actions-row { flex-direction: row; }
 .menu-actions-row > .btn { flex: 1; }
 
+/* --- Inventory panel (overhaul Phase 1) --- */
+/* Full-overlay bag UI. Sits at the same z tier as #modal-overlay (they
+   never open together today) so it can float over the computer shell and
+   phone. `hidden` always wins (platform convention), so the display:flex
+   below only applies while visible. */
+.inventory-panel {
+  position: fixed;
+  inset: 0;
+  background: var(--color-overlay);
+  z-index: var(--z-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.inventory-panel[hidden] { display: none !important; }
+.invp-box {
+  display: flex;
+  flex-direction: column;
+  width: min(920px, 94vw);
+  height: min(72vh, 92dvh);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.invp-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+.invp-header h2 { font-size: var(--fs-lg); flex-shrink: 0; margin: 0; }
+.invp-tools { display: flex; align-items: center; gap: var(--space-2); flex: 1; justify-content: flex-end; }
+.invp-search, .invp-sort {
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+}
+.invp-search { width: min(240px, 30vw); }
+.invp-search:focus-visible, .invp-sort:focus-visible { outline: none; border-color: var(--color-accent); }
+.invp-body { display: flex; flex: 1; min-height: 0; }
+.invp-list {
+  flex: 1.1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid var(--color-border);
+}
+.invp-group-header {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-dim);
+  padding: var(--space-2) var(--space-1) var(--space-1);
+}
+.invp-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.invp-row:hover { background: var(--color-surface-hover); }
+.invp-row[data-selected] { background: var(--color-accent-dim); border-color: var(--color-accent); }
+.invp-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.invp-row-qty { color: var(--color-text-dim); flex-shrink: 0; }
+.invp-row-sublabel { color: var(--color-text-faint); font-size: var(--fs-xs); flex-shrink: 0; }
+.invp-freshness-tag { font-size: var(--fs-xs); padding: 1px 6px; border-radius: 3px; flex-shrink: 0; }
+.invp-freshness-tag[data-state="fresh"] { background: rgba(108, 246, 169, 0.15); color: var(--color-positive); }
+.invp-freshness-tag[data-state="useSoon"] { background: rgba(246, 215, 108, 0.15); color: var(--color-warning); }
+.invp-freshness-tag[data-state="spoiling"] { background: rgba(246, 169, 108, 0.15); color: var(--color-warm); }
+.invp-freshness-tag[data-state="rotten"] { background: rgba(246, 108, 140, 0.15); color: var(--color-negative); }
+.invp-empty { padding: var(--space-4); }
+.invp-detail {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.invp-detail-name { font-size: var(--fs-lg); font-weight: 700; }
+.invp-detail-meta { font-size: var(--fs-xs); color: var(--color-text-dim); }
+.invp-detail-desc { font-size: var(--fs-sm); color: var(--color-text); line-height: var(--lh-loose); }
+.invp-detail-fresh { font-size: var(--fs-sm); color: var(--color-text-dim); }
+.invp-detail-fresh[data-state="spoiling"] { color: var(--color-warm); }
+.invp-detail-fresh[data-state="rotten"] { color: var(--color-negative); }
+.invp-detail-actions { display: flex; flex-direction: column; gap: var(--space-2); }
+.invp-qty-row { display: flex; align-items: center; gap: var(--space-2); }
+.invp-qty-row label { font-size: var(--fs-xs); color: var(--color-text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+#invp-qty {
+  width: 70px;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+}
+.invp-detail-btns { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.sidebar-open-btn { margin-top: var(--space-2); }
+
+/* Container panel (overhaul Phase 2) — reuses the inventory overlay/box
+   chrome (.inventory-panel/.invp-box) and adds the two-pane body, the
+   per-selection verb bar, and the Take All / Put All row. */
+.ctr-box { width: min(960px, 94vw); }
+.ctr-body { display: flex; flex: 1; min-height: 0; }
+.ctr-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ctr-col:first-child { border-right: 1px solid var(--color-border); }
+.ctr-col-title {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-dim);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+.ctr-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ctr-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.ctr-row:hover { background: var(--color-surface-hover); }
+.ctr-row[data-selected] { background: var(--color-accent-dim); border-color: var(--color-accent); }
+.ctr-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.ctr-row-qty { color: var(--color-text-dim); flex-shrink: 0; }
+.ctr-freshness-tag { font-size: var(--fs-xs); padding: 1px 6px; border-radius: 3px; flex-shrink: 0; }
+.ctr-freshness-tag[data-state="fresh"] { background: rgba(108, 246, 169, 0.15); color: var(--color-positive); }
+.ctr-freshness-tag[data-state="useSoon"] { background: rgba(246, 215, 108, 0.15); color: var(--color-warning); }
+.ctr-freshness-tag[data-state="spoiling"] { background: rgba(246, 169, 108, 0.15); color: var(--color-warm); }
+.ctr-freshness-tag[data-state="rotten"] { background: rgba(246, 108, 140, 0.15); color: var(--color-negative); }
+.ctr-empty { padding: var(--space-4); }
+.ctr-actions {
+  border-top: 1px solid var(--color-border);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+.ctr-detail { min-height: 44px; }
+.ctr-detail-name { font-size: var(--fs-md); font-weight: 700; }
+.ctr-detail-meta { font-size: var(--fs-xs); color: var(--color-text-dim); }
+.ctr-detail-desc { font-size: var(--fs-sm); color: var(--color-text); line-height: var(--lh-loose); }
+.ctr-detail-fresh { font-size: var(--fs-sm); color: var(--color-text-dim); }
+.ctr-detail-fresh[data-state="spoiling"] { color: var(--color-warm); }
+.ctr-detail-fresh[data-state="rotten"] { color: var(--color-negative); }
+.ctr-action-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+
+/* Save menu (overhaul Phase 9): VN-style slot grid. */
+.svp-box { width: min(1100px, 96vw); height: min(80vh, 94dvh); }
+.svp-hint { flex: 1; text-align: left; }
+.svp-hint[data-warn] { color: var(--color-warning); }
+.svp-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.svp-section-label {
+  font-size: var(--fs-xs);
+  color: var(--color-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: var(--space-2);
+}
+.svp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--space-3);
+}
+.svp-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+}
+.svp-card:hover { border-color: var(--color-border-strong); }
+.svp-empty { justify-content: center; align-items: center; min-height: 150px; opacity: 0.7; }
+.svp-thumb {
+  position: relative;
+  height: 84px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.svp-thumb-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.3s ease; }
+.svp-thumb-img.svp-thumb-visible { opacity: 1; }
+.svp-thumb-letter { font-size: var(--fs-xl); font-weight: 700; color: rgba(224, 224, 240, 0.5); }
+.svp-thumb-letter.svp-thumb-hidden { display: none; }
+.svp-kind-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(10, 10, 20, 0.7);
+  color: var(--color-accent);
+}
+.svp-kind-badge[data-kind="auto"] { color: var(--color-cool); }
+.svp-kind-badge[data-kind="quick"] { color: var(--color-warm); }
+.svp-kind-badge[data-kind="exit"] { color: var(--color-text-dim); }
+.svp-card-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.svp-day { font-weight: 700; font-size: var(--fs-sm); }
+.svp-loc { font-size: var(--fs-xs); color: var(--color-text-dim); }
+.svp-headline {
+  font-size: var(--fs-xs);
+  color: var(--color-text);
+  line-height: var(--lh-normal);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.svp-cast { font-size: var(--fs-xs); color: var(--color-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.svp-played { font-size: var(--fs-xs); color: var(--color-text-faint); }
+.svp-empty-label { font-size: var(--fs-sm); color: var(--color-text-faint); }
+.svp-card-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.svp-import-text {
+  width: 100%;
+  min-height: 120px;
+  margin-top: 8px;
+  resize: vertical;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+.ctr-qty-row { display: flex; align-items: center; gap: var(--space-2); }
+.ctr-qty-row label { font-size: var(--fs-xs); color: var(--color-text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+#ctr-qty {
+  width: 70px;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+}
+
+/* Recipe picker (overhaul Phase 2) — the "What do you want to cook?"
+   choice inside the shared modal. */
+.recipe-pick-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.recipe-pick-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+}
+.recipe-pick-name { font-weight: 700; }
+.recipe-pick-ings { font-size: var(--fs-xs); color: var(--color-text-dim); }
+
+/* Eat picker (overhaul Phase 3) — the "What do you want to eat?" choice,
+   same chrome as the recipe picker with a source/serving meta line. */
+.eat-pick-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.eat-pick-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+}
+.eat-pick-name { font-weight: 700; }
+.eat-pick-meta { font-size: var(--fs-xs); color: var(--color-text-dim); }
+/* Phase 4: non-Fresh options get a coloured tag so the reduced-restore /
+   sickening lines in applyEatItem are visible before you pick. */
+.eat-pick-freshness {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.eat-pick-spoiling { background: rgba(246, 169, 108, 0.15); color: var(--color-warm); }
+.eat-pick-rotten { background: rgba(246, 108, 140, 0.15); color: var(--color-negative); }
+
+/* Container panel — the rot-mess throw-out button (overhaul Phase 4). */
+#ctr-mess-btn { color: var(--color-negative); }
+
+@media (max-width: 700px) {
+  .invp-body { flex-direction: column; }
+  .invp-list { border-right: none; border-bottom: 1px solid var(--color-border); flex: 0 0 45%; }
+  .invp-tools { flex-wrap: wrap; }
+  .ctr-body { flex-direction: column; }
+  .ctr-col:first-child { border-right: none; border-bottom: 1px solid var(--color-border); flex: 0 0 45%; }
+}
+
 /* Modal */
 #modal-overlay {
   position: fixed;
@@ -915,7 +1267,249 @@ body {
 #debug-panel .dbg-section { margin-bottom: var(--space-4); }
 #debug-panel .dbg-title { font-size: var(--fs-sm); font-weight: 600; color: var(--color-accent); cursor: pointer; }
 
+/* --- Main menu (overhaul Phase 10) --- */
+/* Full-screen boot menu + in-play pause menu. Palette and typography adopt
+   the reference games' §2 block (perchance-menu-conventions.md): gold
+   #d9b871 on a very dark purple gradient, Cinzel + Cormorant Garamond.
+   z-index 190 — above the phone (170) and the whole #app, below the modal/
+   save/inventory overlays (200) so char-creation and the slot grid float
+   over it, and below the loading overlay (200). The z0 gradient layer is
+   permanent: zero images is a designed state (deviation 9), never a
+   failure state. */
+.main-menu {
+  position: fixed;
+  inset: 0;
+  z-index: 190;
+  overflow: hidden;
+  background: linear-gradient(160deg, #0a0713, #151028 45%, #0a0713);
+}
+.main-menu[hidden] { display: none !important; }
+.title-bg-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(1200px 800px at 12% -10%, rgba(124, 58, 237, 0.22), transparent 60%),
+    radial-gradient(900px 700px at 110% 15%, rgba(225, 29, 72, 0.10), transparent 55%),
+    linear-gradient(160deg, #0a0713, #151028 45%, #0a0713);
+}
+.title-bg-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* contain, never cover: show the WHOLE generated frame, never stretched,
+     distorted, or cropped. Whatever the aspect ratios don't account for
+     becomes a letterbox/pillarbox bar showing the .title-bg-layer gradient
+     beneath — which is the menu's designed no-image state anyway, so the
+     bars read as intentional framing rather than as missing content. */
+  object-fit: contain;
+  opacity: 0;
+  transition: opacity 1.2s ease-in-out;
+  z-index: 1;
+}
+.title-bg-img.visible { opacity: 1; }
+.title-bg-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: linear-gradient(90deg, rgba(8, 6, 16, 0.94) 0%, rgba(8, 6, 16, 0.78) 26%, rgba(8, 6, 16, 0.34) 55%, rgba(8, 6, 16, 0.08) 100%);
+}
+.menu-screen {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  max-width: 440px;
+  padding: 0 0 0 60px;
+  z-index: 3;
+  max-height: 100vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.menu-screen[hidden] { display: none !important; }
+.menu-title {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: clamp(24px, 8vh, 64px);
+  line-height: 1.05;
+  color: #d9b871;
+  letter-spacing: 4px;
+  margin: 0 0 8px;
+  text-shadow: 0 0 30px rgba(217, 184, 113, 0.5), 0 0 60px rgba(217, 184, 113, 0.2);
+}
+.menu-subtitle {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-style: italic;
+  font-size: clamp(12px, 2.6vh, 20px);
+  color: #e11d48;
+  margin: 0 0 clamp(10px, 3.5vh, 30px);
+  text-shadow: 0 0 15px rgba(225, 29, 72, 0.3);
+}
+.menu-buttons { display: flex; flex-direction: column; gap: clamp(6px, 1.5vh, 12px); max-width: 280px; }
+.title-btn {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: clamp(10px, 2vh, 16px);
+  letter-spacing: 2px;
+  padding: clamp(6px, 1.6vh, 12px) clamp(14px, 3.2vh, 26px);
+  border: 2px solid rgba(217, 184, 113, 0.55);
+  border-radius: 2px;
+  background: rgba(10, 7, 19, 0.55);
+  color: #d9b871;
+  cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+  transition: all 0.25s;
+  display: block;
+}
+.title-btn:hover {
+  background: rgba(217, 184, 113, 0.15);
+  box-shadow: 0 0 20px rgba(217, 184, 113, 0.3);
+  transform: translateX(4px);
+  color: #f3e3b8;
+}
+.title-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  border-color: #555;
+  color: #666;
+  transform: none;
+  box-shadow: none;
+  background: rgba(10, 7, 19, 0.4);
+}
+.title-btn[hidden] { display: none !important; }
+.menu-loading, .menu-unavailable {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 13px;
+  color: #b57bff;
+  margin-top: clamp(6px, 1.7vh, 14px);
+  min-height: 18px;
+}
+.menu-unavailable { color: #7a7090; }
+.menu-warning {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: clamp(9px, 1.6vh, 12px);
+  color: #e11d48;
+  margin-top: clamp(8px, 2.2vh, 18px);
+  opacity: 0.75;
+  max-width: 340px;
+}
+.menu-footnote {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: clamp(9px, 1.5vh, 11px);
+  color: #7a7090;
+  margin-top: clamp(3px, 0.8vh, 6px);
+  opacity: 0.7;
+  max-width: 340px;
+}
+.menu-exit-note { font-size: clamp(10px, 1.6vh, 12px); color: #d9b871; margin-top: clamp(6px, 1.2vh, 10px); min-height: 16px; }
+.title-arrows {
+  position: absolute;
+  bottom: 30px;
+  right: 30px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.title-arrows[hidden] { display: none !important; }
+.title-arrow-btn {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 2px solid rgba(217, 184, 113, 0.4);
+  background: rgba(10, 7, 19, 0.6);
+  color: #d9b871;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+.title-arrow-btn:hover:not(:disabled) { border-color: #d9b871; box-shadow: 0 0 15px rgba(217, 184, 113, 0.35); }
+.title-arrow-btn:disabled { opacity: 0.25; cursor: not-allowed; }
+.title-counter {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 14px;
+  color: #d9b871;
+  min-width: 50px;
+  text-align: center;
+}
+
+/* Options sub-screen */
+.options-title {
+  font-family: 'Cinzel', Georgia, serif;
+  color: #d9b871;
+  font-size: 26px;
+  letter-spacing: 2px;
+  margin-bottom: 22px;
+}
+.menu-option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid rgba(217, 184, 113, 0.18);
+  max-width: 340px;
+}
+.menu-option-name { font-size: 15px; color: var(--color-text); font-weight: 600; }
+.menu-option-desc { font-size: 12px; color: var(--color-text-faint); margin-top: 2px; }
+.menu-option-toggle { padding: 8px 18px; font-size: 13px; min-width: 64px; }
+.menu-options-back { margin-top: 22px; }
+.menu-option-section-title {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 13px;
+  letter-spacing: 2px;
+  color: #d9b871;
+  margin-top: 22px;
+  margin-bottom: 2px;
+  text-transform: uppercase;
+}
+.menu-option-hint { font-size: 11px; color: #7a7090; margin: 0 0 10px; max-width: 300px; }
+.menu-option-note { font-size: 11px; color: #e11d48; margin-top: 10px; min-height: 14px; }
+
+/* Discord badge (reference §4, recoloured to this game's gold) */
+.discord-logo-link {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  width: 120px;
+  height: 120px;
+  z-index: 1001;
+  transition: all 0.3s ease;
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+  background: rgba(11, 12, 13, 0.9);
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.discord-logo-link:hover {
+  transform: scale(1.1) translateY(-5px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.7), 0 0 30px rgba(217, 184, 113, 0.4);
+  background: rgba(11, 12, 13, 1);
+}
+.discord-logo-link:active { transform: scale(1.05) translateY(-3px); }
+.menu-logo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.3));
+  transition: filter 0.3s ease;
+}
+.discord-logo-link:hover .menu-logo {
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.5)) brightness(1.2);
+}
+
 /* Loading */
+/* Boot cover — see the #app markup comment. visibility, not display, so
+   layout still resolves for anything that measures while covered. */
+#app[data-app-hidden] { visibility: hidden; pointer-events: none; }
+
 .loading-overlay {
   position: absolute;
   inset: 0;
@@ -938,8 +1532,7 @@ body {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* Responsive */
-@media (max-width: 900px) {
-  #app {
+@media (max-width: 900px) {  #app {
     grid-template-columns: 1fr;
     grid-template-areas:
       "header"
@@ -2213,11 +2806,35 @@ body {
 .bank-owed-label .bills-status-pill { margin-left: 6px; }
 .bank-owed-value { font-size: var(--fs-sm); font-weight: 700; }
 .bank-owed-row.cutoff .bank-owed-value { color: var(--color-negative); }
+
+/* Menu overhaul Phase 10: responsive + reduced-motion for the menu. */
+@media (max-width: 600px) {
+  .menu-screen { padding: 0 20px; max-width: 320px; }
+  .menu-title { font-size: clamp(20px, 7vh, 36px); letter-spacing: 2px; margin: 0 0 6px; }
+  .menu-subtitle { font-size: clamp(11px, 2.4vh, 16px); }
+  .title-btn { font-size: clamp(10px, 2vh, 15px); padding: clamp(6px, 1.6vh, 10px) clamp(12px, 2.8vh, 20px); }
+  .title-arrows { bottom: 20px; right: 14px; }
+  .discord-logo-link { width: 60px; height: 60px; top: 12px; right: 12px; }
+  .menu-buttons a.title-btn[href*="discord"] { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .title-bg-img { transition-duration: 0.001ms; }
+  .title-btn, .title-arrow-btn, .discord-logo-link { transition-duration: 0.001ms; }
+}
 </style>
 <!-- ===== /SECTION: STYLES ===== -->
 
 <!-- ===== SECTION: MARKUP ===== -->
-<div id="app">
+<!-- `data-app-hidden` is the boot cover. #main-menu is `hidden` until
+     menu.js (the LAST script) runs boot(), so without this the game shell
+     paints for the whole parse+load window and the player sees the play
+     screen flash before the title. The attribute is in the MARKUP, not set
+     by script, so the shell is covered from the very first paint. It uses
+     visibility (not `hidden`/display:none) deliberately: every render path
+     that measures layout — the floor plan, the scene image box, the
+     computer window manager — still gets real dimensions while covered.
+     MENU's showMainMenu('boot') re-applies it; closeMainMenu() removes it. -->
+<div id="app" data-app-hidden>
   <!-- Header -->
   <header id="header">
     <button class="drawer-toggle" data-toggle="left" aria-label="Toggle navigation">&#9776;</button>
@@ -2258,7 +2875,7 @@ body {
     <div class="h-sep" id="hdr-needs-sep"></div>
     <button class="btn btn-secondary" id="save-btn" data-action="save">Save</button>
     <button class="btn btn-secondary" id="menu-btn" data-action="menu">Menu</button>
-    [fullscreenButton("⛶ Fullscreen", "⛶ Exit Fullscreen", "background: var(--color-surface-alt); color: var(--color-text); border: none; border-radius: var(--radius-md); padding: var(--space-1) var(--space-2); font-size: var(--fs-xs); font-weight: 600; cursor: pointer;")]
+    [fullscreenButton("⛶ Fullscreen", "⛶ Exit Fullscreen", "background:#2a2a4a;color:#e0e0f0;border:none;border-radius:8px;padding:4px 8px;font-size:11px;font-weight:600;cursor:pointer;")]
   </header>
 
   <!-- Left Sidebar -->
@@ -2295,7 +2912,7 @@ body {
         <div class="taskbar-running" id="taskbar-running"></div>
         <div class="taskbar-tray">
           <span class="cs-clock" id="cs-clock"></span>
-          [fullscreenButton("⛶", "⛶", "background: var(--color-surface-alt); color: var(--color-text); border: none; border-radius: var(--radius-md); padding: var(--space-1) var(--space-2); font-size: var(--fs-xs); font-weight: 600; cursor: pointer;")]
+          [fullscreenButton("⛶", "⛶", "background:#2a2a4a;color:#e0e0f0;border:none;border-radius:8px;padding:4px 8px;font-size:11px;font-weight:600;cursor:pointer;")]
           <button class="btn btn-secondary tiny" data-action="computer.close">Power Off</button>
         </div>
       </div>
@@ -2315,6 +2932,7 @@ body {
     <div class="sidebar-section">
       <h3>Inventory</h3>
       <div id="inventory-list"></div>
+      <button class="btn btn-secondary btn-block sidebar-open-btn" data-action="inventory.open">Open Bag</button>
     </div>
     <div class="sidebar-section">
       <h3>Delivery</h3>
@@ -2365,6 +2983,126 @@ body {
   </section>
 </div>
 
+<!-- Main menu (overhaul Phase 10): full-screen boot screen AND in-play
+     pause menu — one component, two contexts. Persistent DOM + `.hidden`
+     toggling (hedonism-island structure, deviation 1), buttons through the
+     global data-action chain. Background stack: z0 gradient layer that
+     never moves (zero images is a designed state), two crossfading image
+     layers above it, a left-to-right darkening overlay, and the
+     left-aligned text column on top. Slideshow logic lives in
+     src/srcfiles/image.js (titleGallery); the component lives in
+     src/srcfiles/menu.js. -->
+<div id="main-menu" class="main-menu" hidden>
+  <div class="title-bg-layer"></div>
+  <img id="titleBgImgA" class="title-bg-img" alt="">
+  <img id="titleBgImgB" class="title-bg-img" alt="">
+  <div class="title-bg-overlay"></div>
+
+  <!-- Left-aligned text column — title screen. -->
+  <div id="menu-title-screen" class="menu-screen">
+    <h1 class="menu-title">Slice of Life</h1>
+    <p class="menu-subtitle">An apartment living sim</p>
+    <div class="menu-buttons">
+      <button class="title-btn" id="menu-resume-btn" data-action="menu.resume" hidden>Resume</button>
+      <button class="title-btn" id="menu-continue-btn" data-action="menu.continue" disabled>Continue</button>
+      <button class="title-btn" data-action="menu.new-game">New Game</button>
+      <button class="title-btn" data-action="menu.load">Load Game</button>
+      <button class="title-btn" data-action="menu.options">Options</button>
+      <a class="title-btn" href="https://discord.com/invite/E6N9WKpGPA" target="_blank" rel="noopener noreferrer" title="Join our Discord community!">Discord</a>
+      <button class="title-btn" data-action="menu.exit">Exit Game</button>
+    </div>
+    <p class="menu-loading" id="menuLoading" hidden></p>
+    <p class="menu-unavailable" id="menuUnavailable" hidden>Background art unavailable — showing a quiet gradient.</p>
+    <p class="menu-exit-note" id="menu-exit-note" hidden>This game runs in your browser — you can close this tab anytime.</p>
+    <p class="menu-warning">⚠ 18+ Only — mature themes, adult content, and AI-generated characters and imagery.</p>
+    <p class="menu-footnote">All characters are fictional and AI-generated. Content is dynamically created, not pre-written.</p>
+  </div>
+
+  <!-- Options sub-screen (same column, toggled from the title screen). -->
+  <div id="menu-options-screen" class="menu-screen" hidden>
+    <h2 class="options-title">Options</h2>
+    <div class="menu-option-row">
+      <div>
+        <div class="menu-option-name">Background art</div>
+        <div class="menu-option-desc">Animated title-screen images. Turn off to keep the quiet gradient.</div>
+      </div>
+      <button class="title-btn menu-option-toggle" id="opt-bg-art-btn" data-action="options.bg-art">On</button>
+    </div>
+    <div class="menu-option-row">
+      <div>
+        <div class="menu-option-name">Autosave</div>
+        <div class="menu-option-desc">Write a rotating autosave every 30 seconds while playing.</div>
+      </div>
+      <button class="title-btn menu-option-toggle" id="opt-autosave-btn" data-action="options.autosave">On</button>
+    </div>
+    <div class="menu-option-row">
+      <div>
+        <div class="menu-option-name">Debug Panel</div>
+        <div class="menu-option-desc">Seed, cast viewer, state dump, LLM telemetry.</div>
+      </div>
+      <button class="title-btn menu-option-toggle" data-action="menu.debug">Open</button>
+    </div>
+    <div class="menu-option-section-title">Cast preferences</div>
+    <p class="menu-option-hint">Which actors and pairings appear in generated background art. At least one of each must stay on.</p>
+    <div class="menu-option-row">
+      <div>
+        <div class="menu-option-name">Female actors</div>
+        <div class="menu-option-desc">Women and female-presenting cast members.</div>
+      </div>
+      <button class="title-btn menu-option-toggle" id="pref-gender-f-btn" data-action="prefs.gender-f">On</button>
+    </div>
+    <div class="menu-option-row">
+      <div>
+        <div class="menu-option-name">Male actors</div>
+        <div class="menu-option-desc">Men and male-presenting cast members.</div>
+      </div>
+      <button class="title-btn menu-option-toggle" id="pref-gender-m-btn" data-action="prefs.gender-m">On</button>
+    </div>
+    <div class="menu-option-row">
+      <div>
+        <div class="menu-option-name">Non-binary actors</div>
+        <div class="menu-option-desc">Non-binary and androgynous cast members.</div>
+      </div>
+      <button class="title-btn menu-option-toggle" id="pref-gender-nb-btn" data-action="prefs.gender-nb">On</button>
+    </div>
+    <div class="menu-option-row">
+      <div>
+        <div class="menu-option-name">Hetero pairings</div>
+        <div class="menu-option-desc">Mixed-gender couples.</div>
+      </div>
+      <button class="title-btn menu-option-toggle" id="pref-pairing-hetero-btn" data-action="prefs.pairing-hetero">On</button>
+    </div>
+    <div class="menu-option-row">
+      <div>
+        <div class="menu-option-name">Gay pairings</div>
+        <div class="menu-option-desc">Male–male couples.</div>
+      </div>
+      <button class="title-btn menu-option-toggle" id="pref-pairing-gay-btn" data-action="prefs.pairing-gay">On</button>
+    </div>
+    <div class="menu-option-row">
+      <div>
+        <div class="menu-option-name">Lesbian pairings</div>
+        <div class="menu-option-desc">Female–female couples.</div>
+      </div>
+      <button class="title-btn menu-option-toggle" id="pref-pairing-lesbian-btn" data-action="prefs.pairing-lesbian">On</button>
+    </div>
+    <p class="menu-option-note" id="menu-pref-note" hidden></p>
+    <button class="title-btn menu-options-back" data-action="menu.back">← Back</button>
+  </div>
+
+  <!-- Slideshow nav — hidden on the options screen. -->
+  <div id="menu-arrows" class="title-arrows">
+    <button class="title-arrow-btn" id="titlePrevBtn" data-action="menu.prev" disabled>◀</button>
+    <span class="title-counter" id="titleCounter">…</span>
+    <button class="title-arrow-btn" id="titleNextBtn" data-action="menu.next" disabled>▶</button>
+  </div>
+
+  <!-- Discord badge — fixed top-right, outside the button column. -->
+  <a href="https://discord.com/invite/E6N9WKpGPA" target="_blank" rel="noopener noreferrer" class="discord-logo-link" title="Join our Discord community!">
+    <img class="menu-logo" src="data:image/svg+xml,%3c%3fxml%20version='1.0'%20encoding='utf-8'%3f%3e%3csvg%20xmlns='http://www.w3.org/2000/svg'%20version='1.1'%20width='4096'%20height='4096'%20viewBox='0%200%204096%204096'%3e%3crect%20x='0'%20y='0'%20width='4096'%20height='4096'%20fill='%230b0c0d'%20/%3e%3cg%20fill='%23d9b871'%20fill-rule='evenodd'%20stroke='none'%3e%3cpath%20d='M%201686%203585%20L%201646%203585%20L%201646%203592%20L%201650%203596%20L%201650%203608%20L%201624%203660%20L%201613%203660%20L%201611%203657%20L%201610%203641%20L%201605%203617%20L%201605%203601%20L%201615%203592%20L%201615%203585%20L%201563%203585%20L%201563%203593%20L%201571%203604%20L%201577%203626%20L%201591%203697%20L%201591%203713%20L%201574%203744%20L%201560%203762%20L%201549%203762%20L%201543%203758%20L%201534%203758%20L%201530%203761%20L%201528%203765%20L%201528%203776%20L%201532%203781%20L%201536%203783%20L%201550%203783%20L%201566%203774%20L%201578%203762%20L%201600%203730%20L%201623%203688%20L%201667%203615%20L%201678%203600%20L%201686%203593%20Z%20M%202575%203563%20L%202563%203565%20L%202547%203571%20L%202536%203578%20L%202522%203591%20L%202513%203604%20L%202505%203624%20L%202503%203649%20L%202505%203664%20L%202510%203678%20L%202521%203695%20L%202531%203705%20L%202543%203713%20L%202562%203720%20L%202585%203721%20L%202616%203712%20L%202626%203707%20L%202641%203697%20L%202642%203687%20L%202632%203687%20L%202621%203693%20L%202602%203700%20L%202577%203701%20L%202571%203699%20L%202560%203692%20L%202549%203678%20L%202544%203662%20L%202544%203646%20L%202549%203642%20L%202639%203641%20L%202642%203640%20L%202646%203634%20L%202646%203617%20L%202638%203593%20L%202632%203584%20L%202624%203576%20L%202615%203570%20L%202602%203565%20L%202592%203563%20Z%20M%202604%203588%20L%202604%203589%20L%202606%203592%20L%202606%203594%20L%202607%203595%20L%202607%203613%20L%202606%203614%20L%202606%203615%20L%202605%203616%20L%202605%203617%20L%202599%203623%20L%202598%203623%20L%202597%203624%20L%202595%203624%20L%202594%203625%20L%202551%203625%20L%202550%203624%20L%202548%203624%20L%202545%203621%20L%202545%203610%20L%202546%203609%20L%202546%203606%20L%202548%203603%20L%202548%203601%20L%202550%203599%20L%202550%203598%20L%202551%203597%20L%202551%203596%20L%202553%203594%20L%202553%203593%20L%202557%203589%20L%202557%203588%20L%202560%203585%20L%202561%203585%20L%202564%203582%20L%202565%203582%20L%202568%203580%20L%202570%203580%20L%202571%203579%20L%202574%203579%20L%202575%203578%20L%202588%203578%20L%202589%203579%20L%202592%203579%20L%202593%203580%20L%202594%203580%20L%202595%203581%20L%202596%203581%20L%202597%203582%20L%202598%203582%20Z%20M%202383%203562%20L%202382%203563%20L%202371%203564%20L%202355%203569%20L%202342%203576%20L%202325%203591%20L%202317%203602%20L%202309%203620%20L%202306%203633%20L%202306%203650%20L%202312%203672%20L%202317%203682%20L%202325%203693%20L%202336%203704%20L%202351%203713%20L%202359%203715%20L%202369%203720%20L%202380%203722%20L%202392%203722%20L%202393%203721%20L%202405%203720%20L%202417%203715%20L%202427%203713%20L%202435%203709%20L%202442%203704%20L%202457%203689%20L%202465%203677%20L%202470%203665%20L%202473%203653%20L%202474%203632%20L%202472%203622%20L%202465%203604%20L%202458%203593%20L%202446%203581%20L%202436%203574%20L%202415%203565%20L%202398%203563%20L%202397%203562%20Z%20M%202379%203579%20L%202396%203579%20L%202397%203580%20L%202400%203580%20L%202403%203582%20L%202405%203582%20L%202412%203586%20L%202422%203596%20L%202422%203597%20L%202426%203602%20L%202430%203610%20L%202430%203612%20L%202432%203615%20L%202432%203618%20L%202433%203619%20L%202433%203629%20L%202434%203630%20L%202434%203662%20L%202433%203663%20L%202433%203671%20L%202432%203672%20L%202431%203677%20L%202423%203690%20L%202414%203699%20L%202405%203704%20L%202402%203704%20L%202401%203705%20L%202381%203705%20L%202380%203704%20L%202377%203704%20L%202369%203700%20L%202358%203689%20L%202358%203688%20L%202356%203686%20L%202351%203676%20L%202351%203674%20L%202348%203667%20L%202347%203660%20L%202346%203659%20L%202346%203651%20L%202345%203650%20L%202345%203626%20L%202346%203625%20L%202347%203614%20L%202348%203613%20L%202350%203605%20L%202352%203602%20L%202352%203600%20L%202357%203592%20L%202361%203588%20L%202362%203588%20L%202365%203585%20Z%20M%201996%203578%20L%201996%203585%20L%202014%203599%20L%202017%203607%20L%202017%203691%20L%202009%203703%20L%202000%203707%20L%202002%203715%20L%202070%203714%20L%202070%203707%20L%202059%203701%20L%202053%203693%20L%202051%203621%20L%202057%203605%20L%202070%203592%20L%202087%203585%20L%202106%203588%20L%202116%203601%20L%202119%203617%20L%202119%203690%20L%202115%203699%20L%202102%203707%20L%202102%203714%20L%202172%203714%20L%202172%203707%20L%202159%203698%20L%202155%203686%20L%202155%203614%20L%202168%203596%20L%202189%203585%20L%202209%203588%20L%202217%203597%20L%202221%203610%20L%202222%203687%20L%202218%203699%20L%202205%203707%20L%202205%203715%20L%202276%203714%20L%202276%203707%20L%202266%203703%20L%202258%203690%20L%202258%203618%20L%202255%203599%20L%202248%203582%20L%202232%203567%20L%202214%203562%20L%202197%203564%20L%202176%203573%20L%202159%203586%20L%202148%203586%20L%202134%203569%20L%202115%203562%20L%202085%203567%20L%202063%203580%20L%202052%203580%20L%202047%203565%20L%202037%203565%20Z%20M%201456%203506%20L%201422%203510%20L%201416%203513%20L%201416%203521%20L%201422%203523%20L%201426%203527%20L%201426%203544%20L%201411%203617%20L%201408%203646%20L%201402%203666%20L%201401%203681%20L%201398%203690%20L%201398%203699%20L%201400%203703%20L%201409%203711%20L%201432%203719%20L%201449%203719%20L%201460%203715%20L%201468%203714%20L%201483%203707%20L%201494%203699%20L%201506%203687%20L%201519%203668%20L%201526%203651%20L%201529%203637%20L%201529%203617%20L%201526%203606%20L%201518%203593%20L%201511%203587%20L%201494%203581%20L%201480%203581%20L%201462%203588%20L%201450%203587%20L%201450%203570%20L%201459%203520%20L%201459%203509%20Z%20M%201483%203599%20L%201484%203600%20L%201487%203601%20L%201494%203608%20L%201494%203609%20L%201496%203612%20L%201496%203614%20L%201497%203615%20L%201497%203620%20L%201498%203621%20L%201498%203637%20L%201497%203638%20L%201497%203645%20L%201496%203646%20L%201496%203650%20L%201495%203651%20L%201495%203653%20L%201494%203654%20L%201494%203657%20L%201493%203658%20L%201492%203663%20L%201490%203666%20L%201490%203668%20L%201489%203669%20L%201486%203676%20L%201484%203678%20L%201483%203681%20L%201480%203684%20L%201480%203685%20L%201475%203690%20L%201475%203691%20L%201466%203699%20L%201465%203699%20L%201458%203703%20L%201456%203703%20L%201455%203704%20L%201441%203704%20L%201440%203703%20L%201438%203703%20L%201432%203698%20L%201432%203697%20L%201430%203694%20L%201430%203681%20L%201431%203680%20L%201431%203676%20L%201432%203675%20L%201432%203671%20L%201433%203670%20L%201433%203666%20L%201434%203665%20L%201434%203659%20L%201435%203658%20L%201435%203653%20L%201436%203652%20L%201436%203649%20L%201437%203648%20L%201437%203643%20L%201438%203642%20L%201438%203636%20L%201439%203635%20L%201439%203631%20L%201440%203630%20L%201440%203628%20L%201441%203627%20L%201442%203622%20L%201445%203618%20L%201445%203617%20L%201457%203605%20L%201458%203605%20L%201460%203603%20L%201461%203603%20L%201464%203601%20L%201469%203600%20L%201470%203599%20Z%20M%201941%203506%20L%201919%203494%20L%201893%203488%20L%201873%203486%20L%201788%203488%20L%201788%203495%20L%201798%203501%20L%201805%203508%20L%201809%203523%20L%201809%203686%20L%201806%203696%20L%201800%203702%20L%201789%203707%20L%201789%203715%20L%201871%203714%20L%201871%203707%20L%201861%203702%20L%201854%203695%20L%201851%203688%20L%201851%203631%20L%201858%203626%20L%201887%203626%20L%201908%203622%20L%201922%203617%20L%201940%203606%20L%201954%203592%20L%201964%203572%20L%201966%203548%20L%201959%203527%20L%201953%203518%20Z%20M%201859%203503%20L%201879%203503%20L%201880%203504%20L%201884%203504%20L%201885%203505%20L%201888%203505%20L%201889%203506%20L%201891%203506%20L%201892%203507%20L%201894%203507%20L%201896%203508%20L%201898%203510%20L%201901%203511%20L%201904%203514%20L%201905%203514%20L%201912%203521%20L%201912%203522%20L%201916%203527%20L%201920%203535%20L%201920%203538%20L%201921%203539%20L%201921%203545%20L%201922%203546%20L%201922%203568%20L%201921%203569%20L%201921%203576%20L%201920%203577%20L%201920%203580%20L%201918%203584%20L%201916%203586%20L%201916%203587%20L%201913%203590%20L%201913%203591%20L%201905%203599%20L%201904%203599%20L%201901%203602%20L%201893%203606%20L%201891%203606%20L%201887%203608%20L%201883%203608%20L%201882%203609%20L%201858%203609%20L%201857%203608%20L%201855%203608%20L%201851%203604%20L%201851%203602%20L%201850%203601%20L%201850%203513%20L%201851%203512%20L%201851%203510%20L%201852%203508%20L%201855%203505%20Z%20M%201953%203017%20L%201935%203039%20L%201931%203051%20L%201931%203068%20L%201938%203088%20L%201956%203110%20L%201956%203122%20L%201925%203147%20L%201910%203168%20L%201901%203190%20L%201901%203227%20L%201913%203255%20L%201935%203275%20L%201955%203284%20L%201978%203288%20L%202008%203286%20L%202027%203279%20L%202053%203263%20L%202072%203246%20L%202083%203246%20L%202108%203273%20L%202119%203279%20L%202134%203282%20L%202181%203282%20L%202182%203273%20L%202168%203263%20L%202114%203205%20L%202114%203193%20L%202156%203135%20L%202177%203119%20L%202177%203111%20L%202093%203111%20L%202093%203119%20L%202108%203126%20L%202115%203133%20L%202117%203151%20L%202100%203179%20L%202088%203179%20L%202024%203116%20L%202024%203104%20L%202047%203088%20L%202069%203061%20L%202074%203046%20L%202074%203034%20L%202065%203015%20L%202040%203000%20L%202007%202997%20L%201980%203003%20Z%20M%201972%203140%20L%201985%203140%20L%201987%203141%20L%202032%203185%20L%202032%203186%20L%202041%203195%20L%202041%203196%20L%202056%203211%20L%202056%203212%20L%202060%203216%20L%202060%203228%20L%202053%203235%20L%202052%203235%20L%202043%203242%20L%202031%203248%20L%202029%203248%20L%202028%203249%20L%202026%203249%20L%202019%203252%20L%202015%203252%20L%202014%203253%20L%201992%203253%20L%201991%203252%20L%201980%203249%20L%201974%203246%20L%201972%203244%20L%201971%203244%20L%201960%203233%20L%201960%203232%20L%201957%203229%20L%201952%203219%20L%201952%203217%20L%201950%203213%20L%201950%203209%20L%201949%203208%20L%201949%203202%20L%201948%203201%20L%201948%203188%20L%201949%203187%20L%201949%203181%20L%201950%203180%20L%201951%203173%20L%201954%203167%20L%201954%203165%20L%201963%203150%20Z%20M%202019%203017%20L%202020%203018%20L%202022%203018%20L%202023%203019%20L%202024%203019%20L%202026%203021%20L%202027%203021%20L%202035%203029%20L%202035%203030%20L%202037%203032%20L%202037%203033%20L%202038%203034%20L%202038%203036%20L%202040%203039%20L%202040%203055%20L%202039%203056%20L%202039%203058%20L%202038%203059%20L%202038%203061%20L%202037%203062%20L%202037%203063%20L%202036%203064%20L%202036%203065%20L%202035%203066%20L%202035%203067%20L%202034%203068%20L%202033%203071%20L%202031%203073%20L%202031%203074%20L%202027%203078%20L%202027%203079%20L%202017%203089%20L%202016%203089%20L%202013%203092%20L%202012%203092%20L%202009%203094%20L%201998%203094%20L%201997%203093%20L%201996%203093%20L%201987%203084%20L%201987%203083%20L%201984%203080%20L%201984%203079%20L%201982%203077%20L%201981%203074%20L%201979%203072%20L%201979%203070%20L%201977%203067%20L%201977%203065%20L%201976%203064%20L%201976%203062%20L%201975%203061%20L%201975%203058%20L%201974%203057%20L%201974%203045%20L%201975%203044%20L%201975%203041%20L%201976%203040%20L%201976%203038%20L%201978%203035%20L%201978%203033%20L%201980%203031%20L%201980%203030%20L%201982%203028%20L%201982%203027%20L%201985%203024%20L%201986%203024%20L%201991%203020%20L%201992%203020%20L%201993%203019%20L%201995%203019%20L%201996%203018%20L%201999%203018%20L%202000%203017%20Z%20M%202644%202977%20L%202644%202985%20L%202661%202995%20L%202669%203003%20L%202673%203014%20L%202673%203243%20L%202669%203256%20L%202644%203275%20L%202644%203282%20L%202650%203285%20L%202750%203285%20L%202757%203282%20L%202757%203275%20L%202738%203264%20L%202729%203248%20L%202729%203160%20L%202735%203151%20L%202749%203151%20L%202761%203160%20L%202814%203243%20L%202839%203273%20L%202866%203286%20L%202909%203288%20L%202922%203285%20L%202924%203276%20L%202900%203261%20L%202883%203245%20L%202814%203149%20L%202814%203138%20L%202853%203109%20L%202866%203091%20L%202873%203074%20L%202874%203039%20L%202860%203010%20L%202833%202988%20L%202799%202977%20Z%20M%202736%203003%20L%202738%203003%20L%202739%203002%20L%202744%203002%20L%202745%203001%20L%202761%203001%20L%202762%203002%20L%202771%203002%20L%202772%203003%20L%202775%203003%20L%202776%203004%20L%202781%203005%20L%202790%203010%20L%202800%203019%20L%202800%203020%20L%202805%203026%20L%202809%203034%20L%202809%203036%20L%202811%203039%20L%202812%203044%20L%202814%203047%20L%202814%203049%20L%202816%203053%20L%202816%203057%20L%202817%203058%20L%202817%203071%20L%202816%203072%20L%202816%203077%20L%202815%203078%20L%202811%203092%20L%202809%203095%20L%202809%203097%20L%202804%203106%20L%202794%203116%20L%202785%203121%20L%202783%203121%20L%202779%203123%20L%202776%203123%20L%202775%203124%20L%202771%203124%20L%202770%203125%20L%202760%203125%20L%202759%203126%20L%202741%203126%20L%202740%203125%20L%202736%203125%20L%202734%203124%20L%202729%203119%20L%202729%203116%20L%202728%203115%20L%202728%203033%20L%202729%203032%20L%202729%203012%20L%202730%203011%20L%202730%203009%20Z%20M%203521%202976%20L%203522%202985%20L%203544%203001%20L%203549%203028%20L%203548%203246%20L%203542%203259%20L%203523%203274%20L%203523%203282%20L%203733%203284%20L%203739%203281%20L%203750%203235%20L%203750%203215%20L%203742%203215%20L%203706%203252%20L%203695%203257%20L%203616%203257%20L%203606%203247%20L%203606%203143%20L%203610%203137%20L%203671%203137%20L%203684%203143%20L%203699%203159%20L%203706%203159%20L%203708%203155%20L%203708%203093%20L%203705%203087%20L%203698%203087%20L%203684%203101%20L%203668%203108%20L%203614%203109%20L%203607%203104%20L%203607%203007%20L%203620%203001%20L%203694%203002%20L%203707%203011%20L%203720%203037%20L%203730%203040%20L%203733%203035%20L%203731%202977%20L%203726%202974%20Z%20M%203148%202975%20L%203148%202984%20L%203175%203006%20L%203181%203020%20L%203181%203240%20L%203174%203256%20L%203153%203272%20L%203152%203282%20L%203158%203285%20L%203243%203282%20L%203243%203274%20L%203222%203258%20L%203217%203247%20L%203216%203081%20L%203217%203068%20L%203230%203067%20L%203410%203278%20L%203423%203289%20L%203435%203288%20L%203438%203013%20L%203443%203002%20L%203463%202983%20L%203463%202976%20L%203370%202976%20L%203370%202983%20L%203395%203002%20L%203401%203015%20L%203403%203164%20L%203390%203166%20L%203229%202977%20Z%20M%202980%202974%20L%202975%202977%20L%202975%202985%20L%202995%202999%20L%203001%203013%20L%203001%203247%20L%202994%203261%20L%202973%203275%20L%202973%203282%20L%202976%203284%20L%203081%203285%20L%203085%203283%20L%203085%203275%20L%203069%203266%20L%203061%203258%20L%203057%203246%20L%203057%203012%20L%203063%202998%20L%203080%202984%20L%203080%202976%20L%203076%202974%20Z%20M%202525%202989%20L%202499%202978%20L%202473%202973%20L%202343%202974%20L%202339%202976%20L%202339%202984%20L%202354%202993%20L%202363%203002%20L%202368%203015%20L%202368%203243%20L%202362%203256%20L%202340%203274%20L%202342%203283%20L%202471%203284%20L%202500%203281%20L%202521%203275%20L%202543%203264%20L%202562%203248%20L%202575%203231%20L%202585%203197%20L%202584%203179%20L%202580%203164%20L%202570%203146%20L%202556%203131%20L%202527%203114%20L%202527%203103%20L%202547%203084%20L%202556%203068%20L%202560%203051%20L%202558%203030%20L%202544%203005%20Z%20M%202427%203135%20L%202432%203133%20L%202447%203133%20L%202448%203134%20L%202478%203134%20L%202479%203135%20L%202483%203135%20L%202491%203138%20L%202494%203138%20L%202502%203142%20L%202516%203155%20L%202521%203163%20L%202521%203165%20L%202523%203168%20L%202523%203170%20L%202525%203174%20L%202525%203177%20L%202526%203178%20L%202526%203183%20L%202527%203184%20L%202527%203201%20L%202526%203202%20L%202525%203213%20L%202518%203229%20L%202515%203233%20L%202503%203244%20L%202494%203249%20L%202492%203249%20L%202486%203252%20L%202478%203253%20L%202477%203254%20L%202472%203254%20L%202471%203255%20L%202465%203255%20L%202464%203256%20L%202444%203256%20L%202443%203255%20L%202437%203255%20L%202436%203254%20L%202430%203253%20L%202425%203248%20L%202423%203243%20L%202423%203140%20Z%20M%202431%203001%20L%202433%203001%20L%202437%202999%20L%202442%202999%20L%202443%202998%20L%202455%202998%20L%202456%202999%20L%202466%203000%20L%202467%203001%20L%202475%203003%20L%202479%203005%20L%202481%203007%20L%202484%203008%20L%202487%203011%20L%202488%203011%20L%202496%203020%20L%202500%203028%20L%202500%203030%20L%202501%203031%20L%202501%203033%20L%202503%203037%20L%202503%203040%20L%202504%203041%20L%202504%203063%20L%202503%203064%20L%202502%203071%20L%202501%203072%20L%202499%203080%20L%202495%203087%20L%202492%203090%20L%202492%203091%20L%202483%203099%20L%202475%203103%20L%202469%203104%20L%202468%203105%20L%202463%203105%20L%202462%203106%20L%202435%203106%20L%202434%203105%20L%202430%203105%20L%202428%203104%20L%202424%203100%20L%202423%203098%20L%202423%203010%20L%202425%203006%20Z%20M%20423%202972%20L%20423%202981%20L%20452%203009%20L%20449%203132%20L%20438%203248%20L%20407%203274%20L%20408%203282%20L%20502%203282%20L%20502%203273%20L%20482%203259%20L%20475%203245%20L%20483%203078%20L%20495%203079%20L%20588%203283%20L%20602%203288%20L%20629%203239%20L%20700%203074%20L%20713%203078%20L%20724%203250%20L%20698%203274%20L%20698%203282%20L%20809%203281%20L%20809%203274%20L%20789%203262%20L%20780%203247%20L%20770%203126%20L%20766%203012%20L%20771%202999%20L%20794%202982%20L%20793%202973%20L%20707%202975%20L%20616%203187%20L%20605%203187%20L%20506%202972%20Z%20M%201704%202974%20L%201673%202978%20L%201642%202969%20L%201603%202970%20L%201566%202987%20L%201542%203014%20L%201531%203047%20L%201531%203065%20L%201541%203097%20L%201553%203113%20L%201573%203130%20L%201630%203159%20L%201654%203175%20L%201672%203197%20L%201675%203222%20L%201667%203245%20L%201654%203257%20L%201637%203265%20L%201606%203265%20L%201569%203247%20L%201551%203228%20L%201536%203203%20L%201527%203202%20L%201525%203234%20L%201528%203269%20L%201534%203282%20L%201565%203279%20L%201603%203291%20L%201647%203290%20L%201672%203282%20L%201689%203272%20L%201717%203240%20L%201726%203216%20L%201728%203187%20L%201722%203163%20L%201713%203147%20L%201682%203119%20L%201606%203080%20L%201590%203064%20L%201582%203044%20L%201583%203026%20L%201594%203007%20L%201613%202996%20L%201640%202995%20L%201657%203000%20L%201675%203011%20L%201689%203028%20L%201699%203048%20L%201710%203051%20L%201709%202984%20Z%20M%201427%202974%20L%201398%202979%20L%201364%202969%20L%201322%202971%20L%201286%202989%20L%201264%203015%20L%201255%203038%20L%201253%203065%20L%201265%203100%20L%201293%203129%20L%201377%203175%20L%201396%203199%20L%201399%203223%20L%201394%203241%20L%201376%203259%20L%201363%203265%20L%201329%203265%20L%201291%203244%20L%201274%203225%20L%201259%203202%20L%201252%203202%20L%201250%203224%20L%201253%203266%20L%201260%203282%20L%201289%203279%20L%201330%203292%20L%201378%203289%20L%201408%203276%20L%201429%203258%20L%201439%203244%20L%201450%203216%20L%201451%203182%20L%201445%203161%20L%201437%203148%20L%201405%203119%20L%201327%203080%20L%201312%203065%20L%201305%203048%20L%201306%203025%20L%201317%203007%20L%201341%202995%20L%201363%202995%20L%201398%203011%20L%201409%203023%20L%201422%203048%20L%201432%203051%20L%201433%202992%20Z%20M%201065%202973%20L%201037%202969%20L%201001%202970%20L%20971%202976%20L%20929%202994%20L%20904%203012%20L%20882%203035%20L%20869%203055%20L%20859%203077%20L%20853%203099%20L%20850%203138%20L%20854%203164%20L%20862%203190%20L%20881%203224%20L%20902%203248%20L%20922%203263%20L%20956%203280%20L%20997%203289%20L%201035%203289%20L%201061%203284%20L%201092%203273%20L%201127%203252%20L%201151%203230%20L%201169%203205%20L%201181%203179%20L%201189%203146%20L%201190%203117%20L%201185%203087%20L%201169%203049%20L%201150%203023%20L%201126%203001%20L%201093%202982%20Z%20M%20999%202998%20L%201032%202998%20L%201041%203000%20L%201063%203008%20L%201081%203019%20L%201099%203038%20L%201111%203059%20L%201117%203075%20L%201125%203115%20L%201125%203152%20L%201121%203177%20L%201115%203197%20L%201103%203221%20L%201085%203241%20L%201075%203248%20L%201058%203256%20L%201030%203264%20L%201014%203264%20L%20980%203254%20L%20962%203244%20L%20944%203226%20L%20933%203209%20L%20924%203188%20L%20915%203144%20L%20915%203114%20L%20918%203088%20L%20926%203062%20L%20935%203043%20L%20946%203028%20L%20964%203011%20L%20978%203004%20Z%20M%201873%202470%20L%201873%202479%20L%201881%202489%20L%201937%202527%20L%201980%202546%20L%202013%202554%20L%202034%202556%20L%202084%202554%20L%202127%202543%20L%202173%202521%20L%202216%202492%20L%202228%202479%20L%202226%202468%20L%202214%202456%20L%202191%202440%20L%202166%202426%20L%202125%202408%20L%202100%202401%20L%202073%202397%20L%202027%202397%20L%202002%202401%20L%201967%202411%20L%201944%202421%20L%201909%202440%20L%201882%202459%20Z%20M%203100%201715%20L%203089%201716%20L%203075%201728%20L%202999%201772%20L%202999%201780%20L%203025%201811%20L%203048%201851%20L%203057%201882%20L%203059%201928%20L%203056%201947%20L%203048%201972%20L%203037%201994%20L%203025%202011%20L%203001%202033%20L%202978%202047%20L%202949%202055%20L%202932%202057%20L%202932%202065%20L%202938%202071%20L%202958%202082%20L%202979%202087%20L%203013%202086%20L%203044%202077%20L%203077%202059%20L%203097%202043%20L%203125%202012%20L%203144%201981%20L%203154%201959%20L%203162%201932%20L%203167%201901%20L%203167%201860%20L%203162%201827%20L%203155%201803%20L%203135%201759%20L%203119%201736%20Z%20M%20998%201714%20L%20974%201741%20L%20956%201772%20L%20945%201797%20L%20934%201837%20L%20931%201890%20L%20937%201931%20L%20945%201958%20L%20964%201997%20L%20979%202018%20L%201001%202042%20L%201031%202065%20L%201057%202078%20L%201085%202086%20L%201119%202087%20L%201143%202081%20L%201162%202070%20L%201167%202065%20L%201167%202057%20L%201124%202048%20L%201089%202026%20L%201072%202008%20L%201059%201988%20L%201048%201963%20L%201042%201940%20L%201041%201892%20L%201050%201855%20L%201071%201815%20L%201100%201781%20L%201100%201772%20L%201048%201743%20L%201007%201714%20Z%20M%201298%201439%20L%201281%201550%20L%201339%201659%20L%201382%201474%20L%201458%201467%20L%201526%201534%20L%201414%201665%20L%201336%201846%20L%201251%202384%20L%201523%202598%20L%201795%202734%20L%201475%202454%20L%201354%202226%20L%201362%202072%20L%201432%201933%20L%201422%202123%20L%201486%202273%20L%201532%202170%20L%201582%202335%20L%201722%202445%20L%201730%202169%20L%201814%201900%20L%201726%201885%20L%201669%201797%20L%201614%201784%20L%201683%201746%20L%201844%201757%20L%201912%201808%20L%201801%202187%20L%201822%202419%20L%202002%202311%20L%201999%202216%20L%201904%202204%20L%201883%202132%20L%201927%202066%20L%202042%202041%20L%202175%202067%20L%202217%202130%20L%202199%202202%20L%202099%202218%20L%202100%202316%20L%202292%202408%20L%202298%202182%20L%202187%201821%20L%202223%201769%20L%202387%201743%20L%202485%201771%20L%202369%201886%20L%202284%201900%20L%202369%202165%20L%202377%202444%20L%202517%202336%20L%202564%202168%20L%202612%202276%20L%202642%202244%20L%202677%201927%20L%202752%202143%20L%202717%202321%20L%202579%202503%20L%202304%202732%20L%202612%202575%20L%202847%202390%20L%202770%201868%20L%202686%201668%20L%202574%201533%20L%202640%201467%20L%202718%201476%20L%202760%201660%20L%202818%201483%20L%202744%201381%20L%202606%201364%20L%202474%201467%20L%202133%201405%20L%201886%201410%20L%201627%201467%20L%201539%201383%20L%201429%201357%20Z%20M%202903%20807%20L%202826%20814%20L%202771%20842%20L%202735%20883%20L%202709%20961%20L%202713%201031%20L%202744%201101%20L%202790%201153%20L%202913%201247%20L%202960%201292%20L%203009%201373%20L%203013%201438%20L%202993%201498%20L%202953%201540%20L%202869%201587%20L%202844%201649%20L%202809%201704%20L%202813%201715%20L%202846%201720%20L%202903%201717%20L%202967%201701%20L%203022%201677%20L%203073%201642%20L%203108%201606%20L%203137%201561%20L%203158%201509%20L%203168%201448%20L%203155%201349%20L%203133%201296%20L%203102%201247%20L%203019%201165%20L%202870%201065%20L%202835%201018%20L%202829%20968%20L%202840%20929%20L%202865%20903%20L%202907%20893%20L%202961%20900%20L%203012%20936%20L%203029%20978%20L%203014%201044%20L%203032%201046%20L%203054%201037%20L%203081%20998%20L%203081%20935%20L%203051%20880%20L%203023%20853%20L%202973%20824%20Z%20M%201209%20806%20L%201133%20821%20L%201064%20863%20L%201019%20930%20L%201017%20995%20L%201045%201037%20L%201067%201046%20L%201086%201044%20L%201070%20983%20L%201087%20936%20L%201139%20899%20L%201204%20894%20L%201239%20906%20L%201263%20936%20L%201271%20987%20L%201262%201023%20L%201228%201065%20L%201074%201169%20L%201003%201239%20L%20969%201290%20L%20946%201343%20L%20933%201400%20L%20932%201451%20L%20954%201544%20L%20983%201596%20L%201019%201637%20L%201118%201696%20L%201195%201717%20L%201250%201720%20L%201284%201715%20L%201288%201704%20L%201254%201648%20L%201234%201595%20L%201222%201581%20L%201146%201540%20L%201115%201511%20L%201090%201463%20L%201086%201389%20L%201103%201341%20L%201135%201295%20L%201189%201244%20L%201301%201159%20L%201344%201113%20L%201381%201042%20L%201390%20973%20L%201373%20902%20L%201330%20845%20L%201271%20813%20Z%20M%201205%201414%20L%201209%201468%20L%201225%201485%20L%201250%201409%20L%201305%201342%20L%201401%201294%20L%201511%201293%20L%201590%201228%20L%201639%201144%20L%201652%201148%20L%201639%201227%20L%201564%201326%20L%201631%201383%20L%201733%201332%20L%201788%201216%20L%201801%201219%20L%201805%201265%20L%201776%201365%20L%201822%201370%20L%201891%201342%20L%201975%201243%20L%202037%201213%20L%202110%201231%20L%202203%201337%20L%202276%201370%20L%202324%201365%20L%202294%201271%20L%202297%201220%20L%202310%201216%20L%202365%201330%20L%202468%201383%20L%202536%201326%20L%202464%201232%20L%202449%201147%20L%202462%201145%20L%202503%201218%20L%202599%201297%20L%202681%201290%20L%202760%201318%20L%202837%201387%20L%202875%201484%20L%202894%201452%20L%202888%201390%20L%202846%201315%20L%202766%201250%20L%202607%201176%20L%202555%201107%20L%202541%20991%20L%202582%20700%20L%202559%20598%20L%202509%20503%20L%202427%20413%20L%202321%20342%20L%202202%20297%20L%202070%20279%20L%201943%20289%20L%201807%20331%20L%201684%20406%20L%201597%20497%20L%201549%20583%20L%201521%20685%20L%201522%20796%20L%201559%201001%20L%201540%201118%20L%201477%201187%20L%201285%201284%20L%201232%201344%20Z%20M%202458%20905%20L%202458%20916%20L%202453%20921%20L%202429%20934%20L%202420%20941%20L%202417%20948%20L%202416%20977%20L%202405%201014%20L%202392%201037%20L%202373%201055%20L%202362%201061%20L%202342%201068%20L%202318%201073%20L%202304%201074%20L%202270%201073%20L%202251%201068%20L%202230%201059%20L%202218%201059%20L%202207%201069%20L%202197%201083%20L%202185%201082%20L%202187%201057%20L%202195%201033%20L%202206%201012%20L%202229%20981%20L%202241%20969%20L%202266%20950%20L%202293%20937%20L%202335%20925%20L%202440%20903%20L%202455%20903%20Z%20M%201642%20904%20L%201659%20903%20L%201676%20906%20L%201705%20914%20L%201768%20927%20L%201808%20939%20L%201836%20954%20L%201850%20964%20L%201869%20982%20L%201893%201013%20L%201909%201048%20L%201913%201062%20L%201914%201083%20L%201902%201084%20L%201890%201067%20L%201881%201059%20L%201870%201059%20L%201848%201068%20L%201828%201073%20L%201795%201074%20L%201781%201073%20L%201753%201067%20L%201724%201054%20L%201706%201036%20L%201693%201011%20L%201686%20986%20L%201682%20961%20L%201682%20947%20L%201680%20942%20L%201670%20934%20L%201645%20919%20L%201642%20916%20Z'%20/%3e%3c/g%3e%3c/svg%3e" alt="Discord">
+  </a>
+</div>
+
 <!-- Modal -->
 <div id="modal-overlay">
   <div class="modal-box">
@@ -2373,6 +3111,96 @@ body {
     <div class="modal-actions" id="modal-actions"></div>
   </div>
 </div>
+
+<!-- Inventory panel (overhaul Phase 1): the real bag UI, replacing the
+     cramped read-only sidebar list. Own overlay so it can sit above every
+     shell (computer/phone) without touching their markup. Grouped list
+     left, detail pane right, search + sort on top. The sidebar section
+     now only summarises and opens this. -->
+<div id="inventory-panel" class="inventory-panel" hidden>
+  <div class="invp-box">
+    <div class="invp-header">
+      <h2>Inventory</h2>
+      <div class="invp-tools">
+        <input type="text" id="invp-search" class="invp-search" placeholder="Search items…" autocomplete="off" aria-label="Search inventory">
+        <select id="invp-sort" class="invp-sort" aria-label="Sort inventory">
+          <option value="group">Group</option>
+          <option value="name">Name</option>
+          <option value="qty">Quantity</option>
+          <option value="freshness">Freshness</option>
+        </select>
+        <button class="btn btn-secondary tiny" data-action="inventory.close">Close</button>
+      </div>
+    </div>
+    <div class="invp-body">
+      <div class="invp-list" id="invp-list"></div>
+      <div class="invp-detail" id="invp-detail"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Container panel (overhaul Phase 2): the shared two-panel chest UI.
+     One implementation for every container (fridge, pantry, wardrobe,
+     doormat, floor, trash...), driven by the def's `container` block and
+     affords. Contents left, bag right, a per-selection Take/Put verb bar
+     plus Take All / Put All. Opening is free browsing; the verbs pay game
+     time through the same data-action chain as the inventory verbs. -->
+<div id="container-panel" class="inventory-panel" hidden>
+  <div class="invp-box ctr-box">
+    <div class="invp-header">
+      <h2 id="ctr-title">Container</h2>
+      <span class="dim tiny" id="ctr-subtitle"></span>
+      <div class="invp-tools">
+        <button class="btn btn-secondary tiny" data-action="container.close">Close</button>
+      </div>
+    </div>
+    <div class="ctr-body">
+      <div class="ctr-col">
+        <div class="ctr-col-title" id="ctr-container-title">Inside</div>
+        <div class="ctr-list" id="ctr-container-list"></div>
+      </div>
+      <div class="ctr-col">
+        <div class="ctr-col-title" id="ctr-bag-title">Your Bag</div>
+        <div class="ctr-list" id="ctr-bag-list"></div>
+      </div>
+    </div>
+    <div class="ctr-actions">
+      <div class="ctr-detail" id="ctr-detail"></div>
+      <div class="ctr-action-row">
+        <div class="ctr-qty-row">
+          <label for="ctr-qty">Qty</label>
+          <input type="number" id="ctr-qty" min="1" value="1" aria-label="Quantity to transfer">
+        </div>
+        <button class="btn tiny" id="ctr-verb-btn" disabled>Select an item</button>
+        <button class="btn btn-secondary tiny" id="ctr-take-all-btn" data-action="container.take-all" disabled>Take All</button>
+        <button class="btn btn-secondary tiny" id="ctr-put-all-btn" data-action="container.put-all" disabled>Put All</button>
+        <!-- Phase 4: shown by renderContainerPanel only when the open
+             container holds a rot mess (rotten_food: 'rotten'). -->
+        <button class="btn btn-secondary tiny" id="ctr-mess-btn" data-action="container.clear-mess" hidden>Throw Out the Rotten Food</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Save menu (overhaul Phase 9): VN-style slot grid over kv.saves.
+     Own overlay like the inventory panel so it can sit above every shell.
+     Cards render from kv.saveIndex alone — never a payload; thumbnails
+     reuse the LRU image cache by storing the scene image's cache key. -->
+<div id="save-panel" class="inventory-panel" hidden>
+  <div class="invp-box svp-box">
+    <div class="invp-header">
+      <h2 id="svp-title">Save Game</h2>
+      <span class="dim tiny svp-hint" id="svp-hint"></span>
+      <div class="invp-tools">
+        <button class="btn btn-secondary tiny" data-action="save-quick">Quick Save</button>
+        <button class="btn btn-secondary tiny" data-action="save-import">Import</button>
+        <button class="btn btn-secondary tiny" data-action="save-close">Close</button>
+      </div>
+    </div>
+    <div class="svp-body" id="svp-grid"></div>
+  </div>
+</div>
+<input type="file" id="import-file-input" accept=".txt,text/plain" hidden>
 
 <!-- In-person conversation overlay (separate from the scene viewer). A
      dedicated chat-like interface for talking with an NPC: shows the
@@ -2453,10 +3281,64 @@ body {
   </div>
 </template>
 
-<template id="tpl-inv-item">
-  <div class="inv-item">
-    <span class="inv-name"></span>
-    <span class="inv-qty"></span>
+<template id="tpl-inv-row">
+  <button type="button" class="invp-row" data-inv-row>
+    <span class="invp-row-name"></span>
+    <span class="invp-row-qty"></span>
+    <span class="invp-row-sublabel"></span>
+    <span class="invp-freshness-tag"></span>
+  </button>
+</template>
+
+<template id="tpl-inv-detail">
+  <div class="invp-detail-inner">
+    <div class="invp-detail-name"></div>
+    <div class="invp-detail-meta"></div>
+    <div class="invp-detail-desc"></div>
+    <div class="invp-detail-fresh"></div>
+    <div class="invp-detail-actions">
+      <div class="invp-qty-row">
+        <label for="invp-qty">Qty</label>
+        <input type="number" id="invp-qty" min="1" value="1" aria-label="Quantity to act on">
+      </div>
+      <div class="invp-detail-btns"></div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-ctr-row">
+  <button type="button" class="ctr-row" data-ctr-row>
+    <span class="ctr-row-name"></span>
+    <span class="ctr-row-qty"></span>
+    <span class="ctr-freshness-tag"></span>
+  </button>
+</template>
+
+<template id="tpl-ctr-detail">
+  <div class="ctr-detail-inner">
+    <div class="ctr-detail-name"></div>
+    <div class="ctr-detail-meta"></div>
+    <div class="ctr-detail-desc"></div>
+    <div class="ctr-detail-fresh"></div>
+  </div>
+</template>
+
+<template id="tpl-save-card">
+  <div class="svp-card" data-slot>
+    <div class="svp-thumb">
+      <img class="svp-thumb-img" alt="Scene thumbnail" loading="lazy">
+      <span class="svp-thumb-letter"></span>
+      <span class="svp-kind-badge"></span>
+    </div>
+    <div class="svp-card-body">
+      <div class="svp-day"></div>
+      <div class="svp-loc"></div>
+      <div class="svp-headline"></div>
+      <div class="svp-cast"></div>
+      <div class="svp-played"></div>
+    </div>
+    <div class="svp-empty-label"></div>
+    <div class="svp-card-actions"></div>
   </div>
 </template>
 
@@ -2553,32 +3435,47 @@ body {
 <!-- Load order matters (each script's top-level code may reference an
      earlier script's data at load time — e.g. DEFS.ACTIONS reading NEEDS
      from CONFIG): CONFIG → ICONS → DEFS.WORLD → DEFS.ACTIONS →
-     DEFS.COMPUTER → ORBITAL → STATE → SIM → WORLD → ITEMS → EFFECTS → ACTIONS →
-     SKILLS → COMPUTER → NPC → PROMPT → LLM → IMAGE → RENDER →
-     RENDER.COMPUTER → RENDER.DESKTOP → UI → UI.COMPUTER → AFTERHOURS →
-     UI.WINDOWMANAGER → BOOT. Functions calling into a LATER script are
-     fine either way — those calls only happen at runtime, after every
-     script below has finished loading. -->
-<script src="src/srcfiles/config.js?v=37"></script>
+     DEFS.COMPUTER → DEFS.MENU → ORBITAL → STATE → SIM → COMMITMENTS →
+     WORLD → ITEMS → INVENTORY → EFFECTS → ACTIONS → SKILLS → COMPUTER →
+     NPC → PROMPT → LLM → IMAGE → RENDER → RENDER.COMPUTER →
+     RENDER.DESKTOP → UI → UI.COMPUTER → AFTERHOURS → UI.WINDOWMANAGER →
+     UI.PHONE → MENU → BOOT (the BOOT call moved from the bottom of ui.js
+     to the bottom of menu.js, the last script, so boot() can call into
+     MENU/IMAGE). Functions calling into a LATER script are fine either way
+     — those calls only happen at runtime, after every script below has
+     finished loading. -->
+<script src="src/srcfiles/config.js?v=53"></script>
 <script src="src/srcfiles/icons.js?v=14"></script>
-<script src="src/srcfiles/defs.world.js?v=10"></script>
-<script src="src/srcfiles/defs.actions.js?v=9"></script>
+<script src="src/srcfiles/defs.world.js?v=16"></script>
+<script src="src/srcfiles/defs.actions.js?v=14"></script>
 <script src="src/srcfiles/defs.computer.js?v=15"></script>
+<!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
+     (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
+     at runtime; IMAGE's titleGallery consumes genTitlePrompt. -->
+<script src="src/srcfiles/defs.menu.js?v=8"></script>
 <!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/srcfiles/orbital.js?v=1"></script>
-<script src="src/srcfiles/state.js?v=19"></script>
-<script src="src/srcfiles/sim.js?v=25"></script>
-<script src="src/srcfiles/world.js?v=14"></script>
-<script src="src/srcfiles/items.js?v=7"></script>
-<script src="src/srcfiles/effects.js?v=7"></script>
-<script src="src/srcfiles/drives.js?v=9"></script>
-<script src="src/srcfiles/actions.js?v=8"></script>
+<script src="src/srcfiles/state.js?v=27"></script>
+<script src="src/srcfiles/sim.js?v=31"></script>
+<!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
+     sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
+     time) and before render.js/ui.js, which call it at runtime. -->
+<script src="src/srcfiles/commitments.js?v=1"></script>
+<script src="src/srcfiles/world.js?v=15"></script>
+<script src="src/srcfiles/items.js?v=10"></script>
+<!-- Inventory overhaul Phase 1: pure inventory query/sort/describe helpers
+     (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
+     time) and before render.js/ui.js, which call it at runtime. -->
+<script src="src/srcfiles/inventory.js?v=5"></script>
+<script src="src/srcfiles/effects.js?v=15"></script>
+<script src="src/srcfiles/drives.js?v=10"></script>
+<script src="src/srcfiles/actions.js?v=11"></script>
 <script src="src/srcfiles/intent.js?v=7"></script>
-<script src="src/srcfiles/skills.js?v=7"></script>
+<script src="src/srcfiles/skills.js?v=8"></script>
 <script src="src/srcfiles/stealth.js?v=7"></script>
-<script src="src/srcfiles/time.js?v=11"></script>
-<script src="src/srcfiles/computer.js?v=32"></script>
+<script src="src/srcfiles/time.js?v=13"></script>
+<script src="src/srcfiles/computer.js?v=35"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -2586,19 +3483,19 @@ body {
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
 <script src="src/srcfiles/phone.js?v=9"></script>
-<script src="src/srcfiles/npc.js?v=10"></script>
+<script src="src/srcfiles/npc.js?v=12"></script>
 <script src="src/srcfiles/prompt.js?v=8"></script>
-<script src="src/srcfiles/llm.js?v=10"></script>
+<script src="src/srcfiles/llm.js?v=13"></script>
 <script src="src/srcfiles/interruption.js?v=11"></script>
-<script src="src/srcfiles/image.js?v=8"></script>
-<script src="src/srcfiles/render.js?v=17"></script>
-<script src="src/srcfiles/render.computer.js?v=28"></script>
+<script src="src/srcfiles/image.js?v=12"></script>
+<script src="src/srcfiles/render.js?v=27"></script>
+<script src="src/srcfiles/render.computer.js?v=29"></script>
 <script src="src/srcfiles/render.desktop.js?v=8"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
 <script src="src/srcfiles/render.phone.js?v=12"></script>
-<script src="src/srcfiles/ui.js?v=35"></script>
-<script src="src/srcfiles/ui.computer.js?v=26"></script>
+<script src="src/srcfiles/ui.js?v=47"></script>
+<script src="src/srcfiles/ui.computer.js?v=27"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
      site header with fake address bar + internal back/forward, footer, 404,
@@ -2608,5 +3505,11 @@ body {
 <script src="src/srcfiles/afterhours.js?v=18"></script>
 <script src="src/srcfiles/ui.windowmanager.js?v=8"></script>
 <!-- BrineOS Phase 3: phone shell orchestration — after ui.computer.js. -->
-<script src="src/srcfiles/ui.phone.js?v=7"></script>
+<script src="src/srcfiles/ui.phone.js?v=8"></script>
+<!-- Menu overhaul Phase 10: the main-menu component — after ui.js (calls
+     resumeFromRecord/openSaveMenu/startAutosave and the data-action chain
+     at runtime). Loads LAST: the bottom of menu.js invokes boot(), which
+     ui.js can no longer call itself because boot() reaches into MENU/IMAGE
+     functions defined after UI. -->
+<script src="src/srcfiles/menu.js?v=6"></script>
 <!-- ===== /SECTION: SCRIPTS ===== -->

@@ -342,35 +342,778 @@ function renderQuestList(gs) {
   }
 }
 
-// --- Inventory ---
+// --- Inventory (overhaul Phase 1): compact sidebar summary + full panel ---
+// The sidebar section summarises ("8 items · 3 kinds") with an Open Bag
+// button; real browsing happens in the #inventory-panel overlay — grouped
+// list left, detail pane right, search + sort on top. Every verb emits
+// effect-DSL lines through the data-action chain (UI) and costs game time
+// via advanceAndResolveMinutes; nothing here mutates a stack list
+// directly (design invariant 2).
+let invpSearchText = '';
+let invpSortMode = 'group';
+let invpSelectedDefId = null;
+
 function renderInventory(gs) {
+  renderInventorySummary(gs);
+  renderInventoryPanel(gs);
+  renderContainerPanel(gs);
+}
+
+function renderInventorySummary(gs) {
   const container = document.getElementById('inventory-list');
   if (!container) return;
-  container.innerHTML = '';
-
   const inv = gs.player.inventory || [];
-  if (inv.length === 0) {
+  const distinct = inv.length;
+  const total = inv.reduce((s, i) => s + (i?.qty || 0), 0);
+  container.innerHTML = '';
+  if (total === 0) {
     container.innerHTML = '<span class="dim tiny">Empty pockets.</span>';
     return;
   }
+  const span = document.createElement('span');
+  span.className = 'dim tiny';
+  span.textContent = `${total} item${total === 1 ? '' : 's'} · ${distinct} kind${distinct === 1 ? '' : 's'}`;
+  container.appendChild(span);
+}
 
-  const tpl = document.getElementById('tpl-inv-item');
-  for (const item of inv) {
-    const node = tpl.content.cloneNode(true);
-    node.querySelector('.inv-name').textContent = inventoryDisplayName(item);
-    node.querySelector('.inv-qty').textContent = item.qty > 1 ? `×${item.qty}` : '';
-    container.appendChild(node);
+function renderInventoryPanel(gs) {
+  const panel = document.getElementById('inventory-panel');
+  const listEl = document.getElementById('invp-list');
+  if (!panel || !listEl) return;
+  if (panel.hidden) return;
+
+  // Live values from the search/sort controls (kept in sync by UI's
+  // input/change listeners; read here so render() never owns the inputs'
+  // state and can't fight the user mid-typing).
+  const search = document.getElementById('invp-search');
+  const sort = document.getElementById('invp-sort');
+  if (search && search.value !== invpSearchText) invpSearchText = search.value;
+  if (sort) invpSortMode = sort.value;
+
+  const inv = gs.player.inventory || [];
+  let stacks = filterStacks(inv, invpSearchText);
+  const grouped = invpSortMode === 'group';
+  if (!grouped) stacks = sortStacks(stacks, invpSortMode, gs.meta.clock.day);
+
+  // Selection: keep the previously selected defId while still visible,
+  // otherwise fall back to the first filtered stack.
+  let selected = null;
+  if (invpSelectedDefId) selected = stacks.find(s => s.defId === invpSelectedDefId) || null;
+  if (!selected) selected = stacks[0] || null;
+  invpSelectedDefId = selected?.defId || null;
+
+  listEl.innerHTML = '';
+  const rowTpl = document.getElementById('tpl-inv-row');
+  if (grouped) {
+    for (const group of groupStacks(stacks)) {
+      const header = document.createElement('div');
+      header.className = 'invp-group-header';
+      header.textContent = group.label;
+      listEl.appendChild(header);
+      for (const stack of group.stacks) appendInventoryRow(listEl, rowTpl, stack, gs);
+    }
+  } else {
+    for (const stack of stacks) appendInventoryRow(listEl, rowTpl, stack, gs);
+  }
+  if (stacks.length === 0) {
+    const empty = document.createElement('span');
+    empty.className = 'dim tiny invp-empty';
+    empty.textContent = inv.length === 0 ? 'Your pockets are empty.' : 'Nothing matches your search.';
+    listEl.appendChild(empty);
+  }
+  renderInventoryDetail(gs, selected);
+}
+
+function appendInventoryRow(container, tpl, stack, gs) {
+  const node = tpl.content.cloneNode(true);
+  const row = node.querySelector('.invp-row');
+  row.setAttribute('data-def-id', stack.defId);
+  if (invpSelectedDefId === stack.defId) row.setAttribute('data-selected', '');
+  const d = describeStack(stack, { day: gs.meta.clock.day });
+  node.querySelector('.invp-row-name').textContent = d.label;
+  node.querySelector('.invp-row-qty').textContent = `×${d.qty}`;
+  node.querySelector('.invp-row-sublabel').textContent = d.sublabel;
+  const tag = node.querySelector('.invp-freshness-tag');
+  if (d.freshness) {
+    tag.textContent = d.freshness.label;
+    tag.setAttribute('data-state', d.freshness.key);
+  }
+  container.appendChild(node);
+}
+
+function renderInventoryDetail(gs, stack) {
+  const el = document.getElementById('invp-detail');
+  if (!el) return;
+  if (!stack) {
+    el.innerHTML = '<span class="dim tiny">Select an item to see its details.</span>';
+    return;
+  }
+  const ctx = buildInventoryCtx(gs);
+  const tpl = document.getElementById('tpl-inv-detail');
+  const node = tpl.content.cloneNode(true);
+  const d = describeStack(stack, ctx);
+  node.querySelector('.invp-detail-name').textContent = d.label;
+  node.querySelector('.invp-detail-meta').textContent = `×${d.qty} · ${d.sublabel}`;
+  const descEl = node.querySelector('.invp-detail-desc');
+  descEl.textContent = d.description + (d.tooltip ? ` ${d.tooltip}` : '');
+  const freshEl = node.querySelector('.invp-detail-fresh');
+  freshEl.textContent = d.freshnessText || 'Non-perishable';
+  if (d.freshness) freshEl.setAttribute('data-state', d.freshness.key);
+  else freshEl.removeAttribute('data-state');
+
+  const actions = stackActions(stack, ctx);
+  const btns = node.querySelector('.invp-detail-btns');
+  const addActionBtn = (label, action, ok) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn tiny';
+    btn.textContent = label;
+    btn.disabled = !ok;
+    if (ok) {
+      btn.setAttribute('data-action', action);
+      btn.setAttribute('data-def-id', stack.defId);
+    }
+    btns.appendChild(btn);
+  };
+  addActionBtn('Use', 'inventory.use', actions.use);
+  addActionBtn('Place', 'inventory.place', actions.place);
+  addActionBtn('Drop', 'inventory.drop', actions.drop);
+  addActionBtn('Trash', 'inventory.trash', actions.trash);
+  el.replaceChildren(node);
+}
+
+// Panel visibility (UI dispatches these through the data-action chain —
+// 'inventory.open' / 'inventory.close'). Browsing costs zero game time;
+// only the verbs do (they go through advanceAndResolveMinutes). These
+// live here in the render layer because they only toggle + redraw DOM.
+function selectInventoryStack(defId) {
+  invpSelectedDefId = defId || null;
+  if (typeof currentGameState !== 'undefined' && currentGameState) renderInventoryPanel(currentGameState);
+}
+
+function openInventoryPanel() {
+  if (typeof currentGameState === 'undefined' || !currentGameState) return;
+  const panel = document.getElementById('inventory-panel');
+  if (!panel) return;
+  invpSelectedDefId = null;
+  invpSearchText = '';
+  invpSortMode = 'group';
+  const search = document.getElementById('invp-search');
+  if (search) search.value = '';
+  const sort = document.getElementById('invp-sort');
+  if (sort) sort.value = 'group';
+  panel.hidden = false;
+  renderInventoryPanel(currentGameState);
+}
+
+function closeInventoryPanel() {
+  const panel = document.getElementById('inventory-panel');
+  const wasOpen = panel && !panel.hidden;
+  if (panel) panel.hidden = true;
+  return wasOpen;
+}
+
+// --- Container panel (overhaul Phase 2) ---
+// The shared two-panel chest UI — ONE implementation for every container
+// (fridge, pantry, wardrobe, doormat, floor, trash, ...), driven by the
+// def's `container` block and affords: opening a chest is free browsing
+// (zero game time, energy-exempt), and the transfer verbs pay
+// INVENTORY_TUNING.containerVerbMinutes per batch through UI's handlers,
+// which emit MOVE_ITEM effect-DSL lines via applyEffects. Nothing here
+// mutates a stack list directly (design invariant 2).
+let ctrObjId = null;
+let ctrSelected = null; // { side: 'container' | 'bag', defId }
+
+function currentContainerObject(gs) {
+  if (!ctrObjId || !gs) return null;
+  return findObjectById(gs, ctrObjId) || null;
+}
+
+function openContainerPanel(gs, objId) {
+  const panel = document.getElementById('container-panel');
+  if (!panel || !gs) return;
+  ctrObjId = objId;
+  ctrSelected = null;
+  const qty = document.getElementById('ctr-qty');
+  if (qty) qty.value = 1;
+  panel.hidden = false;
+  renderContainerPanel(gs);
+}
+
+// Returns whether the chest was actually open — lets the Escape handler
+// fall through to closing the bag when no chest is up.
+function closeContainerPanel() {
+  const panel = document.getElementById('container-panel');
+  const wasOpen = panel && !panel.hidden;
+  if (panel) panel.hidden = true;
+  ctrObjId = null;
+  ctrSelected = null;
+  return wasOpen;
+}
+
+function selectContainerStack(side, defId) {
+  ctrSelected = { side, defId };
+  if (typeof currentGameState !== 'undefined' && currentGameState) renderContainerPanel(currentGameState);
+}
+
+function renderContainerPanel(gs) {
+  const panel = document.getElementById('container-panel');
+  if (!panel) return;
+  if (panel.hidden) return;
+  const obj = currentContainerObject(gs);
+  if (!obj) { closeContainerPanel(); return; }
+  const def = OBJECT_DEFS[obj.defId] || {};
+  const cdef = def.container;
+  const title = document.getElementById('ctr-title');
+  if (title) title.textContent = cdef?.label || def.label || 'Container';
+  const sub = document.getElementById('ctr-subtitle');
+  if (sub) {
+    const n = containerStacks(obj).length;
+    sub.textContent = n === 0 ? 'Empty.' : `${n} stack${n === 1 ? '' : 's'} inside.`;
+  }
+  // Phase 4: the throw-out button for a rot mess — visible only when this
+  // container holds one (rotten_food: 'rotten'). Cleaning it resets the
+  // container state AND the room's odor (UI's doClearContainerMess).
+  const messBtn = document.getElementById('ctr-mess-btn');
+  if (messBtn) {
+    const messy = obj.state?.rotten_food === 'rotten';
+    messBtn.hidden = !messy;
+    if (messy) messBtn.setAttribute('data-obj-id', obj.id);
+    else messBtn.removeAttribute('data-obj-id');
+  }
+  renderContainerColumn('ctr-container-list', 'container', containerStacks(obj), gs, def);
+  renderContainerColumn('ctr-bag-list', 'bag', gs.player.inventory || [], gs, null);
+  updateContainerVerbBar(gs, obj);
+}
+
+function renderContainerColumn(listId, side, stacks, gs, containerDef) {
+  const listEl = document.getElementById(listId);
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  const rowTpl = document.getElementById('tpl-ctr-row');
+  const ordered = sortStacks(stacks, 'category');
+  for (const stack of ordered) {
+    const node = rowTpl.content.cloneNode(true);
+    const row = node.querySelector('.ctr-row');
+    row.setAttribute('data-side', side);
+    row.setAttribute('data-def-id', stack.defId);
+    if (ctrSelected?.side === side && ctrSelected?.defId === stack.defId) row.setAttribute('data-selected', '');
+    // Phase 4: container-side rows compute freshness against THIS
+    // container's preservation multiplier (bag side passes null).
+    const d = describeStack(stack, { day: gs.meta.clock.day, containerDef });
+    node.querySelector('.ctr-row-name').textContent = d.label;
+    node.querySelector('.ctr-row-qty').textContent = `×${d.qty}`;
+    const tag = node.querySelector('.ctr-freshness-tag');
+    if (d.freshness) {
+      tag.textContent = d.freshness.label;
+      tag.setAttribute('data-state', d.freshness.key);
+    }
+    listEl.appendChild(node);
+  }
+  if (ordered.length === 0) {
+    const empty = document.createElement('span');
+    empty.className = 'dim tiny ctr-empty';
+    empty.textContent = side === 'container' ? 'Nothing inside.' : 'Your bag is empty.';
+    listEl.appendChild(empty);
   }
 }
 
-// Resolves a stack's display name from ITEM_DEFS (ITEMS section). Also
-// tolerates un-migrated legacy shapes (bare strings, {name,qty}) so this
-// keeps working during the window before a save's `player` folder has
-// actually run its 1->2 migration.
-function inventoryDisplayName(item) {
-  if (typeof item === 'string') return item;
-  if (item.defId) return ITEM_DEFS[item.defId]?.label || item.meta?.origName || item.defId;
-  return item.name || 'Unknown item';
+// The bottom action bar: which verb the selected stack gets (Take from the
+// container side, Put from the bag side), respecting the def's take/put
+// affords and keyItem, plus the selected stack's description and the
+// Take All / Put All enablement.
+function updateContainerVerbBar(gs, obj) {
+  const verbBtn = document.getElementById('ctr-verb-btn');
+  const takeAll = document.getElementById('ctr-take-all-btn');
+  const putAll = document.getElementById('ctr-put-all-btn');
+  const qtyInput = document.getElementById('ctr-qty');
+  const detailEl = document.getElementById('ctr-detail');
+  if (!verbBtn || !takeAll || !putAll) return;
+  const def = OBJECT_DEFS[obj.defId] || {};
+  const canTake = !!def.affords?.includes('container.take');
+  const canPut = !!def.affords?.includes('container.put');
+  takeAll.setAttribute('data-obj-id', obj.id);
+  putAll.setAttribute('data-obj-id', obj.id);
+  const ctx = buildInventoryCtx(gs);
+  const ctrStacks = containerStacks(obj).filter(s => (s?.qty || 0) > 0);
+  const bagStacks = (gs.player.inventory || []).filter(s => (s?.qty || 0) > 0 && stackActions(s, ctx).transfer);
+  takeAll.disabled = !(canTake && ctrStacks.length > 0);
+  putAll.disabled = !(canPut && bagStacks.length > 0);
+
+  if (!ctrSelected) {
+    verbBtn.textContent = 'Select an item';
+    verbBtn.disabled = true;
+    verbBtn.removeAttribute('data-action');
+    verbBtn.removeAttribute('data-obj-id');
+    verbBtn.removeAttribute('data-def-id');
+    if (qtyInput) qtyInput.value = 1;
+    if (detailEl) detailEl.innerHTML = '<span class="dim tiny">Pick an item on either side.</span>';
+    return;
+  }
+  const side = ctrSelected.side;
+  const srcList = side === 'container' ? containerStacks(obj) : (gs.player.inventory || []);
+  const stack = srcList.find(s => s.defId === ctrSelected.defId);
+  if (!stack) { ctrSelected = null; updateContainerVerbBar(gs, obj); return; }
+  const keyItem = !!(stack.meta?.keyItem || stackDef(stack).keyItem);
+  const direction = side === 'container' ? 'take' : 'put';
+  const legal = keyItem ? false : (direction === 'take' ? canTake : canPut);
+  const label = describeStack(stack, ctx).label;
+  verbBtn.textContent = `${direction === 'take' ? 'Take' : 'Put'} ${label}`;
+  verbBtn.disabled = !legal;
+  if (legal) {
+    verbBtn.setAttribute('data-action', direction === 'take' ? 'container.take' : 'container.put');
+    verbBtn.setAttribute('data-obj-id', obj.id);
+    verbBtn.setAttribute('data-def-id', stack.defId);
+  } else {
+    verbBtn.removeAttribute('data-action');
+    verbBtn.removeAttribute('data-obj-id');
+    verbBtn.removeAttribute('data-def-id');
+  }
+  if (qtyInput) qtyInput.value = clamp(Number(qtyInput.value) || 1, 1, stack.qty);
+  if (detailEl) {
+    // Phase 4: the detail pane shows container-aware freshness for the
+    // container side (bag side stays at the bag baseline).
+    const stackCtx = { ...ctx, containerDef: side === 'container' ? def : null };
+    const d = describeStack(stack, stackCtx);
+    detailEl.innerHTML = '';
+    const tpl = document.getElementById('tpl-ctr-detail');
+    if (tpl) {
+      const node = tpl.content.cloneNode(true);
+      node.querySelector('.ctr-detail-name').textContent = d.label;
+      node.querySelector('.ctr-detail-meta').textContent = `×${d.qty} · ${d.sublabel}`;
+      node.querySelector('.ctr-detail-desc').textContent = d.description + (d.tooltip ? ` ${d.tooltip}` : '');
+      const freshEl = node.querySelector('.ctr-detail-fresh');
+      freshEl.textContent = d.freshnessText || 'Non-perishable';
+      if (d.freshness) freshEl.setAttribute('data-state', d.freshness.key);
+      else freshEl.removeAttribute('data-state');
+      detailEl.replaceChildren(node);
+    } else {
+      detailEl.textContent = d.description;
+    }
+  }
+}
+
+// --- Recipe picker (overhaul Phase 2) ---
+// self.cook's prepare asks which recipe to make when more than one is on
+// hand. Rendered into the shared #modal-overlay (the same box the old
+// menu modal used before Phase 10 retired it) with real buttons — handlers
+// resolve the promise directly, no data-action chain needed. Returns the
+// chosen recipe id, or null on cancel. Hides the loading overlay first:
+// runRegisteredAction shows it while executeAction runs, and it would
+// cover the modal.
+function openRecipePicker(recipes) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (recipeId) => { overlay.removeAttribute('data-open'); resolve(recipeId); };
+    title.textContent = 'What do you want to cook?';
+    body.innerHTML = '';
+    const list = document.createElement('div');
+    list.className = 'recipe-pick-list';
+    for (const recipe of recipes) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-block recipe-pick-btn';
+      const name = document.createElement('span');
+      name.className = 'recipe-pick-name';
+      name.textContent = recipe.label;
+      const ings = document.createElement('span');
+      ings.className = 'recipe-pick-ings';
+      ings.textContent = recipe.ingredients.map(ing => `${ITEM_DEFS[ing.defId]?.label || ing.defId} ×${ing.qty}`).join(', ');
+      btn.append(name, ings);
+      btn.addEventListener('click', () => finish(recipe.id));
+      list.appendChild(btn);
+    }
+    body.appendChild(list);
+    actions.innerHTML = '';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    actions.appendChild(cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+
+// --- Eat picker (overhaul Phase 3) ---
+// The "What do you want to eat?" choice behind the Eat chip, mirroring
+// openRecipePicker: one row per edible option (INVENTORY's edibleStacks),
+// each showing what it is, where it is (bag / Fridge / Pantry), how many
+// servings it has, and the per-serving restore. Resolves to
+// { defId, from } or null on Cancel.
+function openEatPicker(options) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (choice) => { overlay.removeAttribute('data-open'); resolve(choice); };
+    title.textContent = 'What do you want to eat?';
+    body.innerHTML = '';
+    const list = document.createElement('div');
+    list.className = 'eat-pick-list';
+    for (const option of options) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-block eat-pick-btn';
+      const name = document.createElement('span');
+      name.className = 'eat-pick-name';
+      name.textContent = option.def.label || 'Something';
+      const meta = document.createElement('span');
+      meta.className = 'eat-pick-meta';
+      const sv = itemServings(option.def);
+      const restore = consumableSummary(option.def, { perServing: sv > 1 });
+      const metaParts = [];
+      if (sv > 1) metaParts.push(`serves ${sv}`);
+      if (restore) metaParts.push(`restores ${restore}`);
+      meta.textContent = `${option.sourceLabel} · ${metaParts.join(' · ')}`;
+      // Phase 4: flag non-Fresh options (the restore shown is the WHOLE
+      // item's — a Spoiling/Rotten one restores far less and may sicken
+      // you, see applyEatItem).
+      const fresh = freshnessOf(option.stack, option.containerDef ?? null, option.day);
+      if (fresh && fresh.key !== 'fresh') {
+        const tag = document.createElement('span');
+        tag.className = `eat-pick-freshness eat-pick-${fresh.key}`;
+        tag.textContent = fresh.label;
+        meta.appendChild(document.createTextNode(' · '));
+        meta.appendChild(tag);
+      }
+      btn.append(name, meta);
+      btn.addEventListener('click', () => finish({ defId: option.stack.defId, from: option.from }));
+      list.appendChild(btn);
+    }
+    body.appendChild(list);
+    actions.innerHTML = '';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    actions.appendChild(cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+
+// --- Dinner-invite picker (overhaul Phase 7) ---
+// "When should we eat?" behind the Invite to Dinner actions (in-person
+// chip and the IM chat-header button). One button per day×meal-slot combo
+// (today's slots whose window already passed are omitted), resolving to
+// { day, tickStart, tickEnd, slotId } or null on Cancel.
+function openDinnerInvitePicker(npcName) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (choice) => { overlay.removeAttribute('data-open'); resolve(choice); };
+    title.textContent = `Invite ${npcName || 'them'} to dinner`;
+    body.innerHTML = '';
+    const list = document.createElement('div');
+    list.className = 'recipe-pick-list';
+    const day = currentGameState?.meta?.clock?.day ?? 1;
+    const tick = getTickIndex(currentGameState?.meta?.clock?.minutes ?? 0);
+    for (let offset = 0; offset < COMMITMENT_TUNING.maxInviteAheadDays; offset++) {
+      const d = day + offset;
+      for (const slot of COMMITMENT_TUNING.mealSlots) {
+        if (offset === 0 && tick >= slot.endTick) continue; // today's window already passed
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-block recipe-pick-btn';
+        const name = document.createElement('span');
+        name.className = 'recipe-pick-name';
+        name.textContent = offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow' : formatDate(d);
+        const meta = document.createElement('span');
+        meta.className = 'recipe-pick-ings';
+        meta.textContent = `${slot.label} · ${formatTime(slot.startTick * 30)}`;
+        btn.append(name, meta);
+        btn.addEventListener('click', () => finish({ day: d, tickStart: slot.startTick, tickEnd: slot.endTick, slotId: slot.id }));
+        list.appendChild(btn);
+      }
+    }
+    if (list.childElementCount === 0) {
+      const none = document.createElement('p');
+      none.className = 'dim';
+      none.textContent = 'No meal windows left to schedule right now.';
+      list.appendChild(none);
+    }
+    body.appendChild(list);
+    actions.innerHTML = '';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    actions.appendChild(cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+
+// --- Room-search modal (inventory overhaul Phase 8, D8) ---
+// Searching a roommate's room surfaces their possessions. One row per
+// owned stack, each with a Take button — disabled for key items (no one
+// takes a roommate's wallet; the player's own keyItems are protected the
+// same way). Resolves to { defId, qty } or null on Close. Browsing is
+// free; the TAKE (UI's doTakeFromRoom) pays the time.
+function openRoomSearchModal(npc) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (choice) => { overlay.removeAttribute('data-open'); resolve(choice); };
+    title.textContent = `${npc.bible.name || 'Their'} room — what's here`;
+    body.innerHTML = '';
+    const inv = npc.inventory || [];
+    if (inv.length === 0) {
+      const none = document.createElement('p');
+      none.className = 'dim';
+      none.textContent = 'Not much here — a few bare shelves and dust.';
+      body.appendChild(none);
+    } else {
+      const list = document.createElement('div');
+      list.className = 'recipe-pick-list';
+      for (const stack of inv) {
+        if (!(stack?.qty > 0)) continue;
+        const def = ITEM_DEFS[stack.defId] || ITEM_DEFS._unknown;
+        const label = def.id === '_unknown' ? (stack.meta?.origName || def.label) : def.label;
+        const keyItem = !!(stack.meta?.keyItem || def.keyItem);
+        const row = document.createElement('div');
+        row.className = 'ctr-row';
+        const nameEl = document.createElement('span');
+        nameEl.className = 'ctr-row-name';
+        nameEl.textContent = `${label}${stack.qty > 1 ? ` ×${stack.qty}` : ''}`;
+        row.appendChild(nameEl);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-secondary tiny';
+        if (keyItem) {
+          btn.textContent = 'Personal';
+          btn.disabled = true;
+        } else {
+          btn.textContent = 'Take';
+          btn.addEventListener('click', () => finish({ defId: stack.defId, qty: 1 }));
+        }
+        row.appendChild(btn);
+        list.appendChild(row);
+      }
+      body.appendChild(list);
+    }
+    actions.innerHTML = '';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Close';
+    cancel.addEventListener('click', () => finish(null));
+    actions.appendChild(cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+
+// --- Save menu (inventory overhaul Phase 9, D10): the VN-style slot grid ---
+// Cards render from kv.saveIndex alone — never a deserialized payload (a
+// payload can be megabytes; the index is a few hundred bytes per entry).
+// Thumbnails reuse the LRU image cache in STATE by storing the scene
+// image's CACHE KEY in the record (meta.thumbKey) and resolving it to a
+// blob on demand; no second copy of the image ever exists. When the key
+// has been evicted or never generated, the card shows a room-coloured
+// placeholder. Opening is free browsing; the verbs (save/load/overwrite/
+// delete/export/import) live in UI and are meta actions, not in-world ones.
+let saveMenuMode = 'save'; // 'save' | 'load'
+let saveMenuBusy = false;
+
+function openSaveMenu(mode) {
+  const panel = document.getElementById('save-panel');
+  if (!panel) return;
+  // The menu modal is a different overlay; never stack them.
+  if (typeof closeModal === 'function') closeModal();
+  if (typeof closeInventoryPanel === 'function') closeInventoryPanel();
+  if (typeof closeContainerPanel === 'function') closeContainerPanel();
+  saveMenuMode = mode || 'save';
+  panel.hidden = false;
+  renderSaveMenu();
+}
+
+function closeSaveMenu() {
+  const panel = document.getElementById('save-panel');
+  if (panel) panel.hidden = true;
+}
+
+// Room-coloured thumbnail placeholder: deterministic colour per room, with
+// the room's first letter — designed state, not a failure state.
+const SAVE_THUMB_COLORS = [
+  '#232342', '#2a2a4a', '#322a5a', '#2a3a5a', '#3a2a4a', '#23404a',
+  '#4a3a2a', '#2a4a3a', '#40404a', '#3a3355', '#1f3352', '#4a2a33',
+];
+function roomThumbColor(roomId) {
+  let h = 0;
+  for (const ch of String(roomId)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return SAVE_THUMB_COLORS[h % SAVE_THUMB_COLORS.length];
+}
+
+function formatPlaytime(ms) {
+  const totalMin = Math.floor((ms || 0) / 60000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h <= 0) return `${m}m`;
+  return `${h}h ${m}m`;
+}
+
+function kindBadge(kind) {
+  switch (kind) {
+    case 'manual': return 'Manual';
+    case 'auto': return 'Auto';
+    case 'quick': return 'Quick';
+    case 'exit': return 'Exit';
+    default: return String(kind || '');
+  }
+}
+
+async function renderSaveMenu() {
+  if (saveMenuBusy) return; // one async render at a time
+  saveMenuBusy = true;
+  const panel = document.getElementById('save-panel');
+  const grid = document.getElementById('svp-grid');
+  const hint = document.getElementById('svp-hint');
+  const title = document.getElementById('svp-title');
+  if (!panel || !grid) { saveMenuBusy = false; return; }
+  try {
+    title.textContent = saveMenuMode === 'load' ? 'Load Game' : 'Save Game';
+    grid.innerHTML = '';
+    const sections = await buildSaveSlotGrid();
+    const cap = await saveCapacityInfo();
+
+    const hintText = saveMenuMode === 'load'
+      ? 'Pick a slot to load. Current progress is replaced.'
+      : (cap.warn ? `Warning: only ${cap.free} save slot${cap.free === 1 ? '' : 's'} free.` : 'Pick a slot to save into.');
+    if (hint) hint.textContent = hintText;
+
+    for (const section of sections) {
+      const secEl = document.createElement('div');
+      secEl.className = 'svp-section';
+      const label = document.createElement('div');
+      label.className = 'svp-section-label';
+      label.textContent = section.label;
+      secEl.appendChild(label);
+      const row = document.createElement('div');
+      row.className = 'svp-grid';
+      for (const slot of section.slots) {
+        row.appendChild(await renderSaveCard(slot, saveMenuMode));
+      }
+      secEl.appendChild(row);
+      grid.appendChild(secEl);
+    }
+  } finally {
+    saveMenuBusy = false;
+  }
+}
+
+async function renderSaveCard(slot, mode) {
+  const tpl = document.getElementById('tpl-save-card');
+  const node = tpl.content.cloneNode(true);
+  const card = node.querySelector('.svp-card');
+  card.setAttribute('data-slot', slot.slotId);
+  const entry = slot.entry;
+
+  if (!entry) {
+    card.classList.add('svp-empty');
+    const empty = node.querySelector('.svp-empty-label');
+    if (empty) empty.textContent = 'Empty slot';
+    const actions = node.querySelector('.svp-card-actions');
+    if (mode === 'save') {
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button';
+      saveBtn.className = 'btn tiny';
+      saveBtn.textContent = 'Save here';
+      saveBtn.setAttribute('data-action', 'save-slot');
+      saveBtn.setAttribute('data-slot', slot.slotId);
+      actions.appendChild(saveBtn);
+    }
+    return node;
+  }
+
+  const m = entry.meta || {};
+  const kind = entry.kind || '';
+  const badge = node.querySelector('.svp-kind-badge');
+  if (badge) { badge.textContent = kindBadge(kind); badge.setAttribute('data-kind', kind); }
+  const dayEl = node.querySelector('.svp-day');
+  if (dayEl) dayEl.textContent = `Day ${m.day ?? 1} · ${formatTime(m.minutes ?? CLOCK.startMinutes)}`;
+  const locEl = node.querySelector('.svp-loc');
+  if (locEl) locEl.textContent = `${ROOMS[m.roomId]?.name || m.roomId || 'Unknown room'} · ${m.money ?? 0}`;
+  const headEl = node.querySelector('.svp-headline');
+  if (headEl) headEl.textContent = m.headline || '—';
+  const castEl = node.querySelector('.svp-cast');
+  const names = Array.isArray(m.castNames) ? m.castNames : [];
+  if (castEl) {
+    castEl.textContent = names.length === 0 ? '' : `With ${names.slice(0, 3).join(', ')}${names.length > 3 ? ` +${names.length - 3}` : ''}`;
+  }
+  const timeEl = node.querySelector('.svp-played');
+  if (timeEl) timeEl.textContent = `Played ${formatPlaytime(m.playtimeMs)}`;
+
+  // Thumbnail: cache-key resolution against the shared LRU, never a copy.
+  const thumb = node.querySelector('.svp-thumb');
+  const roomId = m.roomId;
+  if (thumb) {
+    thumb.style.background = roomThumbColor(roomId);
+    const letter = node.querySelector('.svp-thumb-letter');
+    if (letter) letter.textContent = (ROOMS[roomId]?.name || roomId || '?').charAt(0).toUpperCase();
+    const img = node.querySelector('.svp-thumb-img');
+    if (img && m.thumbKey) {
+      getCachedImage(m.thumbKey).then(blob => {
+        if (!blob) return;
+        if (img.getAttribute('data-loaded')) return;
+        img.setAttribute('data-loaded', '');
+        img.src = createObjectUrl(m.thumbKey, blob);
+        img.classList.add('svp-thumb-visible');
+        if (letter) letter.classList.add('svp-thumb-hidden');
+      }).catch(() => {});
+    }
+  }
+
+  const actions = node.querySelector('.svp-card-actions');
+  if (mode === 'save') {
+    const overwrite = document.createElement('button');
+    overwrite.type = 'button';
+    overwrite.className = 'btn btn-secondary tiny';
+    overwrite.textContent = 'Overwrite';
+    overwrite.setAttribute('data-action', 'save-overwrite');
+    overwrite.setAttribute('data-slot', slot.slotId);
+    actions.appendChild(overwrite);
+  } else {
+    const load = document.createElement('button');
+    load.type = 'button';
+    load.className = 'btn tiny';
+    load.textContent = 'Load';
+    load.setAttribute('data-action', 'load-slot');
+    load.setAttribute('data-slot', slot.slotId);
+    actions.appendChild(load);
+  }
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'btn btn-secondary tiny';
+  del.textContent = 'Delete';
+  del.setAttribute('data-action', 'save-delete');
+  del.setAttribute('data-slot', slot.slotId);
+  actions.appendChild(del);
+  const exp = document.createElement('button');
+  exp.type = 'button';
+  exp.className = 'btn btn-secondary tiny';
+  exp.textContent = 'Export';
+  exp.setAttribute('data-action', 'save-export');
+  exp.setAttribute('data-slot', slot.slotId);
+  actions.appendChild(exp);
+
+  return node;
 }
 
 // --- Deliveries ---
@@ -478,6 +1221,7 @@ function _renderTabsAndChips(groups, energyDepleted) {
       if (chip.npcId) btn.setAttribute('data-npc', chip.npcId);
       if (chip.extra?.roomId) btn.setAttribute('data-room-id', chip.extra.roomId);
       if (chip.extra?.rowId) btn.setAttribute('data-row-id', chip.extra.rowId);
+      if (chip.extra?.objId) btn.setAttribute('data-obj-id', chip.extra.objId);
       btn.textContent = chip.label;
       if (energyDepleted && !isActionExemptFromEnergyGate(chip.action)) btn.disabled = true;
       chipContainer.appendChild(btn);
@@ -511,6 +1255,17 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
     if (!avail.ok) continue;
     hereChips.push({ label: avail.label, action: avail.actionId });
   }
+  // Inventory overhaul Phase 2: every browsable container in this room is
+  // an "Open <X>" chip — the fridge/pantry in the kitchen, the doormat and
+  // shoe rack in the entry, the floor anywhere. Opening is free browsing;
+  // the transfer verbs inside cost time (UI's doContainerTransfer*), so
+  // the chest can never sidestep the clock.
+  for (const obj of Object.values(gs.objects?.[`room_${roomId}`] || {})) {
+    const def = OBJECT_DEFS[obj.defId];
+    if (!def?.affords?.includes('container.open')) continue;
+    const label = def.container?.label || def.label || 'Container';
+    hereChips.push({ label: `Open ${label}`, action: 'container.open', extra: { objId: obj.id } });
+  }
   if ((player.rentOwed || 0) > 0) hereChips.push({ label: `Pay Rent (${player.rentOwed})`, action: 'pay-rent' });
   if (Object.values(gs.world.bills || {}).some(b => b && b.cutoffActive)) hereChips.push({ label: 'Pay Bills (service cut off)', action: 'pay-bills' });
   if (roomId === 'hallway_a' || roomId === 'hallway_b') {
@@ -542,6 +1297,18 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
       if (peepTarget) hereChips.push({ label: `Peek into ${roomName}`, action: 'peep', npcId: peepTarget });
     }
   }
+  // Phase 8 (D8): searching a roommate's room surfaces their possessions
+  // (openRoomSearchModal) and taking something routes through the
+  // suspicion path. Unlike the hallway's Open/Knock/Peek family, you're
+  // ALREADY inside the room to do this, so the chip lives in the Here
+  // group — shown for any resident's bedroom you're standing in.
+  const roomOwner = roomOwnerId(roomId, gs.npcs);
+  if (roomOwner && roomOwner !== 'player') {
+    const owner = gs.npcs[roomOwner];
+    if (owner && owner.residency?.status === 'resident') {
+      hereChips.push({ label: `Search ${owner.bible.name || 'Their'} Room`, action: 'search-room', npcId: roomOwner });
+    }
+  }
   groups.push({ id: 'here', label: 'Here', chips: hereChips });
 
   // Social
@@ -550,6 +1317,16 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
   for (const npcId of presentNpcIds) {
     const npc = gs.npcs[npcId];
     socialChips.push({ label: `Talk to ${npc.bible.name || 'Someone'}`, action: 'talk', npcId });
+  }
+  // Meal commitments (overhaul Phase 7, D7): inviting a Housemate to a
+  // shared dinner is an in-person ask — pick a day and a meal window, and
+  // they answer on the spot (acceptance is deterministic; see
+  // COMMITMENTS.respondToCommitment). Only residents sit down at the
+  // household table — a guest arrives through the visits system instead.
+  for (const npcId of presentNpcIds) {
+    const npc = gs.npcs[npcId];
+    if (npc.residency?.status !== 'resident') continue;
+    socialChips.push({ label: `Invite ${npc.bible.name || 'Them'} to Dinner`, action: 'invite-dinner', npcId });
   }
   // Contacts (external-world plan Phase 2): ask for someone's number. Only
   // offered for people you don't already have — residents included, since
