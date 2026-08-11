@@ -1,9 +1,9 @@
 # Sensory & Social Roadmap
 
 Status: **active** — the umbrella for six linked overhauls. Design session
-2026-08-10. **Plans 0 and 1 are complete.** Plan 2 and Plan 3 are both
-unblocked and independent of each other; 2–5 are theses awaiting their own
-design sessions.
+2026-08-10. **Plans 0 and 1 are complete; Plan 2 is written and ready to
+build.** Plan 3 is unblocked and independent of Plan 2; Plans 3–5 are theses
+awaiting their own design sessions.
 Last updated 2026-08-10.
 
 **Verification note for every plan below.** Plan 0 established that the whole
@@ -159,7 +159,7 @@ own `D`-numbers.
 |---|---|---|---|
 | 0 | [`../complete/npc-correctness-fixes-plan.md`](../complete/npc-correctness-fixes-plan.md) | **Complete** (2026-08-10) | Fixed the five defects the audit found. Later plans build on a working relationship and memory layer. Carries the authoritative dead-field disposition table |
 | 1 | [`../complete/perception-and-signals-plan.md`](../complete/perception-and-signals-plan.md) | **Complete** (2026-08-10) | The signal substrate: standing + transient signals, propagation with per-channel door attenuation, notes, and one perception query shared by the player and every NPC |
-| 2 | `scene-reader-ui-plan.md` | **Next up** — thesis only | The interactive-novel main UI, awareness indicators, demoted log, delineated conversation history |
+| 2 | [`scene-reader-ui-plan.md`](scene-reader-ui-plan.md) | **Written — next up** | The interactive-novel main UI, awareness indicators, demoted log, delineated conversation history |
 | 3 | `npc-cognition-plan.md` | **Ready** — thesis only | Utility-scored intent selection, committed multi-tick plans, NPCs consuming perception |
 | 4 | `knowledge-gossip-memory-plan.md` | Thesis only | Facts with provenance and confidence, NPC-to-NPC transmission, rumination, the player model |
 | 5 | `npc-initiative-plan.md` | Thesis only | NPCs approach, knock, propose; shared activities that feed Plan 4 |

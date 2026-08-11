@@ -46,15 +46,16 @@ folders as a pair.
 | Doc | Status |
 |---|---|
 | `SENSORY-AND-SOCIAL-ROADMAP.md` | **The umbrella for six linked overhauls.** Start here for anything NPC- or sensory-related — it holds the cross-cutting decisions (`R1`–`R8`) all six plans inherit, and the theses for the four not yet written. |
+| `scene-reader-ui-plan.md` | Roadmap Plan 2. The main UI stops being a log and becomes a scene. **Next up.** Written, not started. |
 | `prompt-generator-v2.md` | Engine + authoring + preferences UI + gender-aware refinement all shipped; optional pool expansion outstanding. |
 
 The roadmap's Plans 2–5 (`scene-reader-ui`, `npc-cognition`,
 `knowledge-gossip-memory`, `npc-initiative`) exist as theses inside
 `SENSORY-AND-SOCIAL-ROADMAP.md` and get their own documents at the point the
 plan beneath each one ships. **Do not write plan N+1's phases before plan N
-lands** — its real shape is not knowable yet. Plans 0 and 1 have both landed,
-so **Plan 2 and Plan 3 are the next two design sessions**; they depend only on
-Plan 1 and are independent of each other.
+lands** — its real shape is not knowable yet. Plans 0 and 1 have landed and
+Plan 2 is written, so **Plan 3 (`npc-cognition`) is the next design session**;
+it depends only on Plan 1 and is independent of Plan 2.
 
 ### `complete/`
 | Plan | Paired prompt |
