@@ -251,6 +251,53 @@ function mergePerceived(records) {
   return [...bySignal.values()].sort((a, b) => b.salience - a.salience);
 }
 
+// --- Signals by their SOURCE room (scene-reader plan Phase 3, D9) ---
+// For the floor plan, which shows where a signal is coming FROM rather than
+// what the player perceives. That distinction is the whole value of the
+// surface: a moodle strip already answers "what am I aware of", and a floor
+// plan that repeated it would be a second moodle strip in a worse shape.
+//
+// Standing and transient signals both, merged to the strongest per signal per
+// room, strongest first. Pure — derived on every call like everything else
+// here, and it never touches state.
+function signalsByRoom(gameState) {
+  const nowTick = absoluteTick(gameState.meta?.clock);
+  const all = deriveStandingSignals(gameState)
+    .concat(liveTransients(gameState, nowTick));
+
+  const byRoom = {};
+  for (const src of all) {
+    const def = SIGNAL_DEFS[src.signalId];
+    if (!def || !src.roomId) continue;
+    const list = byRoom[src.roomId] || (byRoom[src.roomId] = []);
+    const existing = list.find(r => r.signalId === src.signalId);
+    if (existing) {
+      if (src.intensity > existing.intensity) {
+        existing.intensity = src.intensity;
+        existing.band = bandFor(src.intensity);
+      }
+      continue;
+    }
+    list.push({
+      signalId: src.signalId,
+      channel: def.channel,
+      intensity: src.intensity,
+      band: bandFor(src.intensity),
+      salience: def.salience * src.intensity,
+    });
+  }
+  for (const list of Object.values(byRoom)) list.sort((a, b) => b.salience - a.salience);
+  return byRoom;
+}
+
+// The glyph for a signal — its own if it has one, otherwise its channel's.
+function signalIcon(signalId) {
+  const def = SIGNAL_DEFS[signalId];
+  return SIGNAL_ICONS.bySignal[signalId]
+    || SIGNAL_ICONS.byChannel[def?.channel]
+    || '•';
+}
+
 // --- Prose (plan R1/D13) ---
 // Authored phrases, composed deterministically. Seeded per
 // (signalId, band, roomId, day) so a standing condition reads the SAME way all

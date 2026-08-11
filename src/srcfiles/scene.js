@@ -60,6 +60,25 @@ function currentScene(gameState) {
   return scene;
 }
 
+// --- Marking a callout as spent (Phase 4, D12) -------------------------
+// Shouting is a side effect of PRESENTING a scene, not of composing one, so
+// this lives apart from composeScene (which must stay pure) and is called by
+// whoever just drew the thing. Without it a callout re-fires on every render
+// — standing in a room with a note would shout at you once per tick, which is
+// precisely the noise this whole plan exists to remove.
+//
+// Leaving the room and coming back opens a NEW scene with an empty `shouted`,
+// so the note calls out again. That is correct: you walked in on it afresh.
+function markCalloutsShouted(gameState, scene) {
+  if (!scene?.callouts?.length) return;
+  const open = gameState.meta?.scene;
+  if (!open) return;
+  const shouted = open.shouted || (open.shouted = []);
+  for (const c of scene.callouts) {
+    if (!shouted.includes(c.signalId)) shouted.push(c.signalId);
+  }
+}
+
 // --- Composition -------------------------------------------------------
 
 // "Hana is at the counter" — one line per character physically present.

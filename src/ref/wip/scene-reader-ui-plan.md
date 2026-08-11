@@ -1,7 +1,7 @@
 # The Scene Reader
 
-Status: **in progress — Phases 1–2 done**. Design session complete
-2026-08-10; all decisions locked. Phases 3–5 outstanding.
+Status: **in progress — Phases 1–4 done**. Design session complete
+2026-08-10; all decisions locked. Phase 5 outstanding.
 Last updated 2026-08-10.
 
 Companions:
@@ -18,9 +18,45 @@ near the bottom, as the very last thing you do each session.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 3 (peripheral awareness). Phases 1–2 are done. Phase 1
-has 40 harness assertions (`scratchpad/verify-r1.js`); Phase 2 is DOM and was
-verified in the browser.
+**Resume at:** Phase 5 (the conversation pane remembers) — the last phase.
+Phases 1–4 are done. Harness coverage: 40 assertions for Phase 1
+(`scratchpad/verify-r1.js`) and 27 for Phases 3+4 (`scratchpad/verify-r34.js`);
+Phase 2 is DOM only. Whole suite across three plans: 389, green.
+
+**Phases 3+4 notes (2026-08-10):**
+- Both surfaces ship. The **moodle strip** (`#scene-moodles`, above the
+  heading) shows perceived signals always, and a need only once it has crossed
+  `warnBelow`. That last part is a deliberate narrowing of the plan text: the
+  footer status row already shows all four needs as labelled bars with
+  percentages, so a second iconic copy of the same numbers would be noise. The
+  strip stays a list of things that WANT attention.
+- The **floor plan** draws each signal at its source room (D9), capped at
+  `SIGNAL_ICONS.maxPerRoom`, opacity by band. `signalsByRoom` (SIGNALS) is the
+  new pure query behind it — source-keyed, so intensities are the EMITTED
+  value and never attenuated. That is the point: perception is the strip's
+  job, emission is the map's.
+- **`renderSceneReader` now returns the composed scene** so its callers can
+  call `markCalloutsShouted`. The renderer deliberately does not mark them
+  itself — a projection that writes to the thing it projects is how view and
+  state start to disagree. A harness assertion greps `render.js` and fails if
+  `markCalloutsShouted` ever appears inside `renderSceneReader`.
+- **Both draw paths must mark.** `render()` and `addLogEntry` each call
+  `renderSceneReader`; if only one marked, a beat arriving while a callout was
+  up would redraw and leave it unmarked. Asserted for both.
+- **Bug found in the browser, not the harness:** `renderSceneMoodles` read
+  `rec.phrase` for its tooltips, but a raw `perceiveSignals` record carries no
+  prose — `phrase` is attached by SCENE's `sensoryLines`. Every moodle had an
+  empty title. Now calls `signalPhrase` directly.
+- **The attention model is visible in the UI for the first time.** With
+  `energy: 12`, `getPlayerPerception` bottoms out and sight drops under its
+  notice floor: the player perceives note + rot only. Rested, the same room
+  yields note + rot + dishes + laundry-from-two-rooms-away. Nothing was
+  written for that — it falls out of Plan 1.
+- **Browser-pane quirk, do not chase it:** after resizing the viewport a few
+  times, `computer{action:'screenshot'}` starts returning a scaled-down
+  capture even though `#app` measures the full viewport width. `zoom` with a
+  region is not supported either. Verify DOM state with `javascript_tool`
+  instead — it is more reliable than reading a shrunken image.
 
 **Phase 2 notes (2026-08-10):**
 - **The dev harness works again and is the way to see this.** `dev-harness.html`
@@ -470,8 +506,8 @@ have never spoken to opens with no history and no separator.
 |---|---|---|
 | 1 | **Done** | `composeScene` + `meta.scene` + `sceneId` on log entries. Pure, tested, nothing renders it. 40 assertions pass (`scratchpad/verify-r1.js`) |
 | 2 | **Done** | The scene reader replaces the narration log in `#main-content`. Verified in the browser; screenshots in the Phase 2 notes |
-| 3 | Not started | Moodle strip + sensory icons on the floor plan |
-| 4 | Not started | Attention callouts, once per scene per signal |
+| 3 | **Done** | Moodle strip + sensory icons on the floor plan. Pure halves covered by 27 assertions (`scratchpad/verify-r34.js`); DOM verified in the browser |
+| 4 | **Done** | `markCalloutsShouted` — a callout fires once per scene per signal. Covered by the same harness |
 | 5 | Not started | The conversation pane shows prior exchanges, marked as past |
 
 ---

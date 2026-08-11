@@ -3879,7 +3879,12 @@ function addLogEntry(type, text, speaker) {
   });
   currentGameState.meta.sessionLog = currentGameState.meta.sessionLog.slice(-100);
   queueWrite('meta', 'meta', currentGameState.meta);
-  renderSceneReader(currentGameState, currentSceneState);
+  // Phase 4: this path draws the scene too, so it must mark callouts spent
+  // for the same reason render() does — otherwise a beat arriving while a
+  // callout is up would redraw it and leave it unmarked, and it would shout
+  // again on the next render.
+  markCalloutsShouted(currentGameState, renderSceneReader(currentGameState, currentSceneState));
+  renderSceneMoodles(currentGameState);
 }
 
 // --- Modals ---

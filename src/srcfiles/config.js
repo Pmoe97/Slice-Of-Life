@@ -2120,6 +2120,37 @@ const SCENE_READER = {
   maxBeats: 40,            // beats rendered in one open scene
 };
 
+// Glyphs for the two peripheral-awareness surfaces (D8/D10): the moodle strip
+// beside the scene, and the sensory icons on the floor plan. Channel picks the
+// default; a signal distinctive enough to deserve its own overrides it. Band
+// picks the opacity, so a faint smell and an overwhelming one are the same
+// glyph at different weights — no new vocabulary, since channel and band are
+// already on every perceived record.
+//
+// Emoji rather than an icon font because the footer status row already uses
+// them (⚡🍔🚿😊), so this matches the house style rather than introducing a
+// second one.
+const SIGNAL_ICONS = {
+  byChannel: { smell: '💨', sound: '🔊', sight: '👁' },
+  bySignal: {
+    note:            '📝',
+    breakage:        '💥',
+    smoke:           '🔥',
+    cooking:         '🍳',
+    running_water:   '🚿',
+    machine_running: '🌀',
+    footsteps:       '👣',
+    voices:          '💬',
+    rot:             '🦠',
+    dirty_dishes:    '🍽',
+    stagnant_water:  '💧',
+  },
+  bandOpacity: { faint: 0.35, clear: 0.7, strong: 1 },
+  // Floor plan: at most this many glyphs per room, strongest first. A room
+  // wallpapered in icons stops being readable as a map.
+  maxPerRoom: 3,
+};
+
 // Overrides for the handful of ACTIVITY_TABLES / drive activityOverride
 // strings that read badly in the default `${name} is ${activity}` frame
 // (D5). Everything absent falls through to that default, which is correct for

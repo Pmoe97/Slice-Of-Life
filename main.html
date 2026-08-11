@@ -354,6 +354,45 @@ body {
   overflow: hidden;
 }
 
+/* The moodle strip (Phase 3, D8): glanceable awareness, above the heading.
+   Answers "what am I aware of right now" — the floor plan answers "where is
+   it coming from". Sensory always; a need only when it has crossed into warn,
+   so the strip stays a list of things that want attention rather than a
+   second copy of the four bars already in the footer. */
+.sr-moodles {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  overflow-x: auto;
+}
+.sr-moodles[hidden] { display: none; }
+.sr-moodle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--fs-sm);
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  white-space: nowrap;
+  cursor: default;
+}
+.sr-moodle-glyph { font-size: var(--fs-base); }
+/* A filled pip for a strong signal, hollow for a faint one — the band, at a
+   glance, without needing to read anything. */
+.sr-moodle-pip { font-size: 9px; color: var(--color-text-dim); }
+.sr-moodle[data-kind="need"] { background: transparent; border: 1px solid var(--color-warning); }
+.sr-moodle[data-kind="need"][data-critical] { border-color: var(--color-negative); }
+
+/* Floor-plan sensory glyphs (Phase 3, D9) — drawn at the room a signal comes
+   FROM, which is what makes the plan a map of the apartment's senses. */
+.fp-signal { font-size: 5px; text-anchor: middle; pointer-events: none; }
+
 .sr-heading {
   flex: 0 0 auto;
   padding: var(--space-3) var(--space-3) var(--space-2);
@@ -3036,6 +3075,7 @@ body {
          into a history drawer. RENDER's renderSceneReader projects SCENE's
          composeScene onto this; the markup holds no logic. -->
     <div class="scene-reader" id="scene-reader">
+      <div class="sr-moodles" id="scene-moodles" hidden></div>
       <header class="sr-heading" id="scene-heading"></header>
       <div class="sr-establishing" id="scene-establishing"></div>
       <div class="sr-beats" id="scene-beats"></div>
@@ -3590,7 +3630,7 @@ body {
      MENU/IMAGE). Functions calling into a LATER script are fine either way
      — those calls only happen at runtime, after every script below has
      finished loading. -->
-<script src="src/srcfiles/config.js?v=66"></script>
+<script src="src/srcfiles/config.js?v=67"></script>
 <script src="src/srcfiles/icons.js?v=14"></script>
 <script src="src/srcfiles/defs.world.js?v=19"></script>
 <script src="src/srcfiles/defs.actions.js?v=16"></script>
@@ -3609,8 +3649,8 @@ body {
      time) and before render.js/ui.js, which call it at runtime. -->
 <script src="src/srcfiles/commitments.js?v=1"></script>
 <script src="src/srcfiles/world.js?v=16"></script>
-<script src="src/srcfiles/signals.js?v=2"></script>
-<script src="src/srcfiles/scene.js?v=1"></script>
+<script src="src/srcfiles/signals.js?v=3"></script>
+<script src="src/srcfiles/scene.js?v=2"></script>
 <script src="src/srcfiles/items.js?v=10"></script>
 <!-- Inventory overhaul Phase 1: pure inventory query/sort/describe helpers
      (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
@@ -3636,13 +3676,13 @@ body {
 <script src="src/srcfiles/llm.js?v=17"></script>
 <script src="src/srcfiles/interruption.js?v=11"></script>
 <script src="src/srcfiles/image.js?v=13"></script>
-<script src="src/srcfiles/render.js?v=30"></script>
+<script src="src/srcfiles/render.js?v=32"></script>
 <script src="src/srcfiles/render.computer.js?v=29"></script>
 <script src="src/srcfiles/render.desktop.js?v=8"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
 <script src="src/srcfiles/render.phone.js?v=12"></script>
-<script src="src/srcfiles/ui.js?v=53"></script>
+<script src="src/srcfiles/ui.js?v=54"></script>
 <script src="src/srcfiles/ui.computer.js?v=27"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),

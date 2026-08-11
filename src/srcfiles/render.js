@@ -16,7 +16,8 @@ function render(gameState, sceneState) {
   renderInventory(gameState);
   renderDeliveries(gameState);
   renderActionChips(gameState, sceneState);
-  renderSceneReader(gameState, sceneState);
+  renderSceneMoodles(gameState);
+  markCalloutsShouted(gameState, renderSceneReader(gameState, sceneState));
   renderFooter(gameState);
   // Harmless when #main-content isn't in computer mode (CSS keeps
   // #computer-screen hidden either way) — always redrawing it here means
@@ -104,6 +105,11 @@ function renderFloorPlan(gs) {
     }
   }
 
+  // Every signal in the apartment, keyed by the room it originates in
+  // (SIGNALS' signalsByRoom). Computed once for the whole plan rather than
+  // per room.
+  const signalMap = typeof signalsByRoom === 'function' ? signalsByRoom(gs) : {};
+
   // Rooms
   for (const roomId of ALL_ROOMS) {
     const r = ROOM_LAYOUT[roomId];
@@ -126,6 +132,18 @@ function renderFloorPlan(gs) {
     const name = ROOMS[roomId].name;
     const label = r.w < 35 && name.length > 8 ? name.substring(0, 7) + '…' : name;
     svg += `<text class="fp-room-label" x="${r.x + r.w / 2}" y="${r.y + r.h / 2 - 2}">${escapeHtml(label)}</text>`;
+
+    // Scene-reader plan Phase 3 (D9): what this room is EMITTING, not what
+    // the player perceives — the floor plan is a map of where things are
+    // coming from. Strongest first, capped, opacity by band.
+    const roomSignals = (signalMap[roomId] || []).slice(0, SIGNAL_ICONS.maxPerRoom);
+    if (roomSignals.length > 0) {
+      const glyphs = roomSignals.map((sig, i) => {
+        const gx = r.x + r.w / 2 + (i - (roomSignals.length - 1) / 2) * 6;
+        return `<text class="fp-signal" x="${gx}" y="${r.y + r.h / 2 + 7}" opacity="${SIGNAL_ICONS.bandOpacity[sig.band]}">${signalIcon(sig.signalId)}</text>`;
+      });
+      svg += glyphs.join('');
+    }
 
     // Under-construction tag, below the room name (hazard fill applied via
     // CSS on .fp-room[data-construction]).
@@ -1404,9 +1422,13 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
 //
 // Replaces renderNarrationLog, which rendered the last 50 session-log entries
 // as identical divs with no notion of place, time or a current moment.
+// Returns the composed scene so the caller can mark its callouts spent
+// (SCENE's markCalloutsShouted). The renderer deliberately does not do that
+// itself — it is a projection, and a projection that writes to the thing it
+// is projecting is how presentation and state start to disagree.
 function renderSceneReader(gs, sceneState) {
   const root = document.getElementById('scene-reader');
-  if (!root) return;
+  if (!root) return null;
   const scene = composeScene(gs, sceneState);
 
   // Heading — where and when.
@@ -1496,6 +1518,62 @@ function renderSceneReader(gs, sceneState) {
       list.appendChild(row);
     }
   }
+
+  return scene;
+}
+
+// --- The moodle strip (scene-reader plan Phase 3, D8) ---
+// What the player is aware of, as glyphs. Sensory signals always; a need only
+// once it has crossed into warn territory, because the footer status row
+// already shows all four as labelled bars with percentages — a second, iconic
+// copy of the same four numbers would be noise, and the point of this strip is
+// that everything on it wants attention.
+function renderSceneMoodles(gs) {
+  const strip = document.getElementById('scene-moodles');
+  if (!strip) return;
+  strip.innerHTML = '';
+
+  const add = (kind, glyph, label, opacity, critical) => {
+    const el = document.createElement('span');
+    el.className = 'sr-moodle';
+    el.setAttribute('data-kind', kind);
+    if (critical) el.setAttribute('data-critical', '');
+    el.title = label;
+    const g = document.createElement('span');
+    g.className = 'sr-moodle-glyph';
+    g.textContent = glyph;
+    if (opacity != null) g.style.opacity = String(opacity);
+    el.appendChild(g);
+    return el;
+  };
+
+  // A raw perceived record carries no prose — `phrase` is attached by SCENE's
+  // sensoryLines, not by perceiveSignals — so resolve it here for the
+  // tooltip. Reading rec.phrase directly gave every moodle an empty title.
+  const perceived = mergePerceived(perceiveSignals(gs, 'player', gs.player.location));
+  for (const rec of perceived) {
+    const el = add('signal', signalIcon(rec.signalId), sentence(signalPhrase(rec, gs)),
+                   SIGNAL_ICONS.bandOpacity[rec.band]);
+    const pip = document.createElement('span');
+    pip.className = 'sr-moodle-pip';
+    pip.textContent = rec.band === 'strong' ? '●' : rec.band === 'clear' ? '◐' : '○';
+    el.appendChild(pip);
+    strip.appendChild(el);
+  }
+
+  // Needs, only when they have crossed a threshold the player should act on.
+  const p = gs.player;
+  const needMoodles = [
+    ['energy',  '😴', 'Tired',  p.energy,  NEEDS.energy.warnBelow],
+    ['hunger',  '🍽', 'Hungry', p.hunger,  NEEDS.hunger.warnBelow],
+    ['hygiene', '🧼', 'Grubby', p.hygiene, NEEDS.hygiene.warnBelow],
+  ];
+  for (const [id, glyph, label, value, warnBelow] of needMoodles) {
+    if (typeof value !== 'number' || value >= warnBelow) continue;
+    strip.appendChild(add('need', glyph, `${label} — ${Math.round(value)}%`, null, value < warnBelow / 2));
+  }
+
+  strip.hidden = strip.childElementCount === 0;
 }
 
 // Capitalise a composed clause into a sentence. The authored signal phrases
