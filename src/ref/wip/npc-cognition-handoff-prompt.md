@@ -134,9 +134,12 @@ rather than working from a paraphrase:
   first. Add a `verify-*.js` for your phase covering the invariant, not just
   the instance.
 - **Behaviour over time → the instrument.** `dev/verify/measure-cognition.js`
-  (Phase 1 lands it) prints actions per npc-tick, the drive mix and gate
+  already exists and prints actions per npc-tick, the drive mix and gate
   reachability. It is a tuning instrument, not a test: it prints, it does not
-  assert. Run it before and after any phase that changes scoring, against the
+  assert. **Run it once before you touch anything** — it should print the
+  plan's `## Evidence` section back to you, and if it does not, the baseline
+  has already moved and that is your first finding. Run it again after any
+  phase that changes scoring, against the
   same population Evidence used — 12 households × 7 in-game days — so the
   comparison is meaningful.
 - **Feel → the browser.** `dev-harness.html` on the `slice-of-life` launch
