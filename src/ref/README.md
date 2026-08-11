@@ -46,15 +46,17 @@ folders as a pair.
 | Doc | Status |
 |---|---|
 | `SENSORY-AND-SOCIAL-ROADMAP.md` | **The umbrella for six linked overhauls.** Start here for anything NPC- or sensory-related — it holds the cross-cutting decisions (`R1`–`R8`) all six plans inherit, and the theses for the four not yet written. |
+| `npc-cognition-plan.md` | Roadmap Plan 3. Utility scoring and committed pursuits replace twelve independent drive coin flips. **Written 2026-08-11; no phases built.** Paired with `npc-cognition-handoff-prompt.md`. Its Evidence section is reproducible from `dev/verify/measure-cognition.js`. |
 | `prompt-generator-v2.md` | Engine + authoring + preferences UI + gender-aware refinement all shipped; optional pool expansion outstanding. |
 
 The roadmap's Plans 2–5 (`scene-reader-ui`, `npc-cognition`,
 `knowledge-gossip-memory`, `npc-initiative`) exist as theses inside
 `SENSORY-AND-SOCIAL-ROADMAP.md` and get their own documents at the point the
 plan beneath each one ships. **Do not write plan N+1's phases before plan N
-lands** — its real shape is not knowable yet. Plans 0, 1 and 2 have all landed,
-so **Plan 3 (`npc-cognition`) is the next design session**; it depends only on
-Plan 1 and is independent of Plan 2.
+lands** — its real shape is not knowable yet. Plans 0, 1 and 2 have landed and
+Plan 3 is written, so **Plan 4 (`knowledge-gossip-memory`) is the next design
+session** — but not until Plan 3 ships, since Plan 4's shape depends on what
+NPC cognition actually turns out to look like.
 
 ### `complete/`
 | Plan | Paired prompt |

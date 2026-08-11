@@ -35,12 +35,17 @@ It stops before `render.js`/`ui.js`, which need a DOM. Those are verified in
 | `verify-r1.js`, `verify-r34.js`, `verify-r5.js` | Plan 2 — the scene reader (Phases 1, 3+4, 5) |
 | `measure.js` | NPC need economy: prints per-need ranges against drive gates |
 | `measure-signals.js` | Signal propagation: how far each channel actually reaches |
+| `measure-cognition.js` | What the cast actually does per tick: actions/npc-tick, per-drive eligible-vs-fired, gate reachability, whether the apartment dirties itself. The baseline Plan 3 compares against |
 | `demo-r1.js` | Renders `composeScene`'s output as prose in the terminal |
 
-The two `measure-*` scripts are **tuning instruments, not tests**. They print;
-they do not assert. Plan 0 Phase 4 and Plan 1 Phase 1 both had their numbers
-set by running these and looking, after a first pass set by arithmetic came
-out wrong in both directions. Re-run them after changing any rate.
+The three `measure-*` scripts are **tuning instruments, not tests**. They
+print; they do not assert. Plan 0 Phase 4 and Plan 1 Phase 1 both had their
+numbers set by running these and looking, after a first pass set by arithmetic
+came out wrong in both directions. Re-run them after changing any rate.
+
+`measure-cognition.js` is also the source of every figure in the NPC cognition
+plan's `## Evidence` section — if it stops reproducing them, the plan's
+baseline has moved and every later comparison in it is stale.
 
 ## Rules that keep this useful
 
