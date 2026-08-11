@@ -1303,6 +1303,22 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
   // suspicion path. Unlike the hallway's Open/Knock/Peek family, you're
   // ALREADY inside the room to do this, so the chip lives in the Here
   // group — shown for any resident's bedroom you're standing in.
+  // Notes (perception plan Phase 4): offered wherever there's something to
+  // stick one to. `surfaces: true` on an OBJECT_DEFS entry is the whole gate —
+  // a fridge, a door, the dining table. Reading and binning are ACTION_DEFS
+  // entries and arrive as ordinary object-sourced chips; only writing needs a
+  // chip of its own, because it needs a text box and the effects pipeline has
+  // nowhere to put one.
+  const roomObjectsHere = gs.objects?.[`room_${roomId}`] || {};
+  const surface = Object.values(roomObjectsHere).find(o => OBJECT_DEFS[o.defId]?.surfaces);
+  const noteCount = Object.values(roomObjectsHere).filter(o => o.defId === 'note').length;
+  if (surface && noteCount < NOTE_TUNING.maxPerRoom) {
+    hereChips.push({
+      label: `Leave a Note on the ${OBJECT_DEFS[surface.defId].label}`,
+      action: 'write-note',
+    });
+  }
+
   const roomOwner = roomOwnerId(roomId, gs.npcs);
   if (roomOwner && roomOwner !== 'player') {
     const owner = gs.npcs[roomOwner];

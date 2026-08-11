@@ -59,7 +59,66 @@ function makeObjectInstance(placement, bucket, slot, seed, roomId, npcs, day) {
     ownerId: resolvePlacementOwner(placement, roomId, npcs),
     state: { ...def.defaultState }, condition: 100, contents: [],
     evidence: null, discovered: {}, flags: { ...(def.defaultFlags || {}) }, spawnedDay: day || 1,
+    // Per-instance authored content (perception plan Phase 4). Null for every
+    // object that doesn't need it — same additive-default shape as `evidence`
+    // above. A note's text/author/addressee live here; nothing else uses it
+    // yet, and spawnNote is its only writer.
+    meta: placement.meta || null,
   };
+}
+
+// --- Notes (perception plan Phase 4) ---
+// Put a note somewhere. `attachedTo` is the object id it is stuck to (a
+// fridge, a door) and is flavour only — the note lives in the ROOM bucket
+// like any other object, so it propagates, persists and is found by every
+// existing room-scoped read without a special case.
+//
+// Returns the instance, or null if the room is already papered over
+// (NOTE_TUNING.maxPerRoom — past a certain number of notes a note stops
+// being a signal and becomes wallpaper, which defeats the whole point).
+function spawnNote(gameState, { roomId, attachedTo, authorId, text, addressedTo }) {
+  if (!ROOMS[roomId]) return null;
+  const bucket = `room_${roomId}`;
+  const bucketMap = gameState.objects[bucket] || (gameState.objects[bucket] = {});
+  const existing = Object.values(bucketMap).filter(o => o.defId === 'note').length;
+  if (existing >= NOTE_TUNING.maxPerRoom) return null;
+
+  const clean = String(text || '').trim().slice(0, NOTE_TUNING.maxLength);
+  if (!clean) return null;
+
+  const inst = makeObjectInstance(
+    {
+      defId: 'note',
+      ownerId: authorId || 'player',
+      meta: {
+        authorId: authorId || 'player',
+        text: clean,
+        // Reserved for Plan 2's privacy question ("is a note addressed to
+        // someone else yours to read?"). No reader yet — flagged here rather
+        // than silently, so it is not mistaken for an oversight.
+        addressedTo: addressedTo || null,
+        day: gameState.meta?.clock?.day ?? 1,
+        attachedTo: attachedTo || null,
+      },
+    },
+    bucket, uniqueObjectSlot(bucketMap, gameState.meta?.seed, bucket, 'note'),
+    gameState.meta?.seed, roomId, gameState.npcs, gameState.meta?.clock?.day
+  );
+  if (!inst) return null;
+  bucketMap[inst.id] = inst;
+  return inst;
+}
+
+// genObjectId hashes (seed, bucket, slot), and every runtime spawn path has
+// used `Object.keys(bucketMap).length` as the slot — which repeats the moment
+// anything is removed from the bucket, producing a DUPLICATE id that silently
+// overwrites the existing object. Harmless for the one-off hobby placements
+// that path was written for; not harmless for notes, which are made and
+// binned constantly. Walks forward to the first free slot instead.
+function uniqueObjectSlot(bucketMap, seed, bucket, defId) {
+  let slot = Object.keys(bucketMap).length;
+  while (bucketMap[genObjectId(seed, bucket, slot, defId)]) slot++;
+  return slot;
 }
 
 // --- Spawning ---

@@ -204,6 +204,7 @@ const OBJECT_DEFS = {
   },
   fridge: {
     id: 'fridge', label: 'Fridge', nouns: ['fridge', 'refrigerator', 'icebox'],
+    surfaces: true,   // perception plan Phase 4: you can stick a note here
     portable: false, breakable: false, container: { capacity: null, preservation: 4.0, label: 'Fridge' }, private: false,
     states: { rotten_food: ['none', 'rotten'], door: ['closed', 'open'] },
     defaultState: { rotten_food: 'none', door: 'closed' },
@@ -304,6 +305,26 @@ const OBJECT_DEFS = {
     affords: ['inspect.object'],
     imagePhrase: 'a mirror',
   },
+  // --- Notes (perception plan Phase 4) ---
+  // A note is an ordinary object whose `read` state drives its own signal
+  // intensity: unread it is the loudest thing in the room, read it is just
+  // paper on a fridge. That collapse needs no code anywhere — the emits table
+  // below IS the mechanism, and it falls out of the standing-signal model for
+  // free (plan D1).
+  //
+  // Per-instance content lives on `meta` (authorId, text, addressedTo, day),
+  // filled by WORLD's spawnNote. Not portable and not a container: you read a
+  // note where it is, and binning it is the only way to make it stop.
+  note: {
+    id: 'note', label: 'Note', nouns: ['note', 'paper', 'message'],
+    portable: false, breakable: false, container: false, private: false,
+    states: { read: ['unread', 'read'] }, defaultState: { read: 'unread' },
+    dirtyWhen: {}, cleanlinessWeight: 0,
+    emits: { read: { unread: { signal: 'note', intensity: NOTE_TUNING.unreadIntensity },
+                     read:   { signal: 'note', intensity: NOTE_TUNING.readIntensity } } },
+    affords: ['self.read_note', 'self.bin_note', 'inspect.object'],
+    imagePhrase: 'a handwritten note',
+  },
   laundry_hamper: {
     id: 'laundry_hamper', label: 'Laundry Hamper', nouns: ['hamper', 'laundry hamper', 'laundry'],
     portable: false, breakable: false, container: { capacity: null, preservation: 1.0, label: 'Laundry Hamper' }, private: false,
@@ -387,6 +408,7 @@ const OBJECT_DEFS = {
   },
   bedroom_door: {
     id: 'bedroom_door', label: 'Door', nouns: ['door', 'bedroom door'],
+    surfaces: true,   // perception plan Phase 4: you can stick a note here
     portable: false, breakable: false, container: false, private: false,
     states: { lock: ['unlocked', 'locked'] }, defaultState: { lock: 'unlocked' },
     dirtyWhen: {}, cleanlinessWeight: 0,
@@ -405,6 +427,7 @@ const OBJECT_DEFS = {
   // --- Dining Room ---
   dining_table: {
     id: 'dining_table', label: 'Dining Table', nouns: ['dining table', 'table'],
+    surfaces: true,   // perception plan Phase 4: you can stick a note here
     portable: false, breakable: false, container: false, private: false,
     states: { clutter: ['tidy', 'cluttered'] }, defaultState: { clutter: 'tidy' },
     dirtyWhen: { clutter: { cluttered: 0.2 } }, cleanlinessWeight: 2,
@@ -416,6 +439,7 @@ const OBJECT_DEFS = {
   // --- Entry / Foyer ---
   front_door: {
     id: 'front_door', label: 'Front Door', nouns: ['front door', 'door'],
+    surfaces: true,   // perception plan Phase 4: you can stick a note here
     portable: false, breakable: false, container: false, private: false,
     states: { lock: ['unlocked', 'locked'] }, defaultState: { lock: 'unlocked' },
     dirtyWhen: {}, cleanlinessWeight: 0,

@@ -471,13 +471,27 @@ function applySpawnItem(p, ctx) {
 // wholesale bucket write and be found by findObjectById/room-scoped reads like
 // any fixture. Trusted-producer only (llm:false): spawning arbitrary objects
 // is not something the narrator gets to do.
+// Perception plan Phase 4. Deletes an object from whichever bucket holds it.
+// findObjectById already scans every bucket, so this needs no roomId param
+// and cannot be pointed at the wrong copy of an id.
+function applyDestroyObject(p, ctx) {
+  const found = findObjectById(ctx.gameState, p.objId);
+  if (!found) return;
+  const bucketMap = ctx.gameState.objects[found.bucket];
+  if (bucketMap) delete bucketMap[p.objId];
+}
+
 function applySpawnObject(p, ctx) {
   const def = OBJECT_DEFS[p.defId];
   if (!def) return;
   const roomId = p.roomId || ctx.gameState.player.location;
   const bucket = `room_${roomId}`;
   const bucketMap = ctx.gameState.objects[bucket] || (ctx.gameState.objects[bucket] = {});
-  const slot = Object.keys(bucketMap).length;
+  // Perception plan Phase 4: was `Object.keys(bucketMap).length`, which
+  // repeats as soon as anything is removed from the bucket and hands the new
+  // object an id that silently overwrites an existing one. uniqueObjectSlot
+  // (WORLD) walks to the first free slot.
+  const slot = uniqueObjectSlot(bucketMap, ctx.gameState.meta.seed, bucket, p.defId);
   const inst = makeObjectInstance(
     { defId: p.defId, ownerId: 'player' },
     bucket, slot, ctx.gameState.meta.seed, roomId, ctx.gameState.npcs, ctx.gameState.meta.clock.day
@@ -641,6 +655,16 @@ const EFFECT_DEFS = {
     paramShape: ['defId', 'roomId'], llm: false, implemented: true,
     validate: (p, ctx) => firstFailure(validateObjectDefId(p.defId), () => validateRoomId(p.roomId)),
     apply: applySpawnObject,
+  },
+  DESTROY_OBJECT: {
+    // Perception plan Phase 4 — the counterpart to SPAWN_OBJECT, added for
+    // binning a note. Trusted-only for the same reason SPAWN_OBJECT is: the
+    // narrator does not get to delete the furniture. Reach-checked all the
+    // same, so even a trusted producer can only destroy something in the
+    // room it is acting in.
+    paramShape: ['objId'], llm: false, implemented: true,
+    validate: (p, ctx) => validateReachableObject(p.objId, ctx),
+    apply: applyDestroyObject,
   },
   // --- Stealth effects (WORLD/SKILLS-backed, P6) ---
   WITNESS: {

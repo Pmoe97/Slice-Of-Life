@@ -1,8 +1,7 @@
 # Perception & Signals
 
-Status: **in progress — Phases 1–3 done**. Design session complete
-2026-08-10; decisions D1–D14 locked, five phases drawn. Phases 4–5
-outstanding.
+Status: **in progress — Phases 1–4 done**. Design session complete
+2026-08-10; decisions D1–D14 locked, five phases drawn. Phase 5 outstanding.
 Last updated 2026-08-10.
 
 Companions:
@@ -20,10 +19,48 @@ near the bottom, as the very last thing you do each session.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 4 (notes). Phases 1–3 are done and verified — 38 / 26 /
-38 assertions at `scratchpad/verify-s1..s3.js`, plus
-`scratchpad/measure-signals.js` as the tuning instrument. The whole suite
-across both plans is 253 assertions and green.
+**Resume at:** Phase 5 (NPC perception + one signal-gated drive) — the last
+phase. Phases 1–4 are done and verified: 38 / 26 / 38 / 37 assertions at
+`scratchpad/verify-s1..s4.js`, plus `scratchpad/measure-signals.js` as the
+tuning instrument. The whole suite across both plans is 290 assertions, green.
+
+**Phase 4 notes (2026-08-10):**
+- Notes work end to end: written by the player on any object flagged
+  `surfaces: true` (fridge, both door types, dining table), seen only from
+  inside the room, read as narration, binned once read.
+- **The read-collapse needed no code.** `emits: { read: { unread: 0.9, read:
+  0.3 } }` on the object def IS the whole mechanism, and a harness assertion
+  greps `signals.js` to prove it contains no mention of notes at all. This is
+  the standing-signal model (D1) paying off exactly as designed.
+- **`readIntensity` had to rise from the planned 0.2 to 0.3.** Measured: 0.2
+  against an average attention of 0.30 gives 0.06, under the 0.08 sight floor,
+  so a read note vanished completely rather than becoming background. The
+  intent is "stops shouting", not "ceases to exist".
+- **`meta` is new on every object instance**, defaulting to `null` — the same
+  additive shape `evidence` already uses. `spawnNote` is its only writer.
+- **Found and fixed a latent id-collision bug.** Every runtime spawn path used
+  `Object.keys(bucketMap).length` as the `genObjectId` slot, which repeats the
+  moment anything is removed from a bucket and hands the new object an id that
+  silently OVERWRITES an existing one. Harmless for the one-off hobby
+  placements that path was written for; not harmless for notes, which churn.
+  `uniqueObjectSlot` (WORLD) walks to the first free slot, and
+  `applySpawnObject` now uses it too rather than leaving two behaviours.
+- **`DESTROY_OBJECT` is new** — the counterpart to `SPAWN_OBJECT`, needed for
+  binning. Trusted-only (`llm: false`) for the same reason: the narrator does
+  not get to delete the furniture. Reach-checked regardless, asserted.
+- Deviation: the plan said `self.take_note`. Shipped `self.bin_note` instead —
+  taking a note into inventory needs an ITEM_DEFS counterpart and an
+  object/item duality for no real gain, where binning is the verb the fiction
+  actually wants. Binning is gated on having read it first, so a note can
+  never be thrown away unseen.
+- Writing is a UI-level chip + modal rather than an ACTION_DEFS entry, because
+  it needs free text and the effects pipeline has nowhere to put a text box.
+  Reading and binning ARE ordinary object-sourced actions.
+- `NOTE_TEMPLATES` is authored and **has no writer yet** — the NPC side is
+  roadmap Plan 5 (an NPC with an unresolved grievance leaves one instead of
+  waiting to be clicked). Declared with that consumer named, which is the one
+  R8 exception the roadmap permits. Same for `meta.addressedTo`, reserved for
+  Plan 2's "is this note yours to read" question.
 
 **Phase 3 notes (2026-08-10):**
 - Eight transient signals ship, all with real emitters: `footsteps`, `voices`,
@@ -572,7 +609,7 @@ unbounded allocation.
 | 1 | **Done** | `SIGNAL_DEFS`, standing derivation, propagation, perception query, debug readout. 37 assertions pass (`scratchpad/verify-s1.js`) |
 | 2 | **Done** | Object `emits` tables on all 24 dirty objects; `room.odor` retired. 26 assertions pass (`scratchpad/verify-s2.js`) |
 | 3 | **Done** | Transient signals from acts, movement and events; ring buffer with decay. 38 assertions pass (`scratchpad/verify-s3.js`) |
-| 4 | Not started | Notes — placeable, sightable, readable |
+| 4 | **Done** | Notes — placeable, sightable, readable, binnable. 37 assertions pass (`scratchpad/verify-s4.js`) |
 | 5 | Not started | NPC perception through the same query, plus one signal-gated drive |
 
 ---

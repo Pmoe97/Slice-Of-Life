@@ -155,6 +155,31 @@ const ACTION_DEFS = {
     buildEffects: buildUnlockDoorEffects,
     narration: { mode: 'dynamic', build: unlockDoorNarration },
   },
+  // --- Notes (perception plan Phase 4) ---
+  // Reading is the mechanism, not a formality: flipping `read` to 'read'
+  // collapses the note's emitted signal intensity from 0.9 to 0.2, so it
+  // stops competing for attention the moment you have taken it in. That
+  // behaviour lives entirely in the object def's emits table.
+  'self.read_note': {
+    id: 'self.read_note', label: 'Read Note', verbs: ['read the note', 'read note'],
+    source: { kind: 'object', objDef: 'note' },
+    group: 'here', chipPriority: 60,
+    requires: ['unreadNoteHere'],
+    timeCost: { base: 1 },
+    prepare: prepareNote,
+    buildEffects: buildReadNoteEffects,
+    narration: { mode: 'dynamic', build: readNoteNarration },
+  },
+  'self.bin_note': {
+    id: 'self.bin_note', label: 'Bin the Note', verbs: ['bin the note', 'throw away the note', 'take down the note'],
+    source: { kind: 'object', objDef: 'note' },
+    group: 'here', chipPriority: 20,
+    requires: ['readNoteHere'],
+    timeCost: { base: 1 },
+    prepare: prepareNote,
+    buildEffects: buildBinNoteEffects,
+    narration: { mode: 'dynamic', build: binNoteNarration },
+  },
   'self.workout': {
     id: 'self.workout', label: 'Work Out', verbs: ['work out', 'workout', 'exercise', 'lift weights'],
     source: { kind: 'room', roomIds: ['gym'] },
@@ -383,6 +408,17 @@ const ACTION_REQUIREMENT_CHECKERS = {
     const door = findObjectInRoom(ctx, 'bedroom_door') || findObjectInRoom(ctx, 'bathroom_door');
     if (!door) return 'No door to lock here.';
     return (door.state?.lock !== 'locked') || 'The door is already locked.';
+  },
+  // A note the player hasn't taken in yet — the whole point of the Read chip.
+  unreadNoteHere: (ctx) => {
+    const note = firstNoteInRoom(ctx, 'unread');
+    return !!note || 'Nothing here to read.';
+  },
+  // Binning is offered only once it has been read, so a note can never be
+  // thrown away unseen.
+  readNoteHere: (ctx) => {
+    const note = firstNoteInRoom(ctx, 'read');
+    return !!note || 'Read it first.';
   },
   doorLocked: (ctx) => {
     const door = findObjectInRoom(ctx, 'bedroom_door') || findObjectInRoom(ctx, 'bathroom_door');
@@ -868,6 +904,50 @@ function dishesNarration(ctx, prepared) {
   if (!prepared?.sink || prepared.dirty === 0) return 'The dishes are already clean.';
   if (prepared.dirty >= 2) return 'You scrub a mountain of dishes. The sink is spotless now.';
   return 'You wash the few dishes in the sink. Satisfying.';
+}
+
+// --- Notes runtime logic (perception plan Phase 4) ---
+// Rooms can hold several notes, unlike every other object def, so these can't
+// use findObjectInRoom's "first instance of this def" shortcut — they pick by
+// read-state. Oldest-first so a stack of notes is worked through in the order
+// they were left, which is the order they make sense in.
+function firstNoteInRoom(ctx, readState) {
+  return Object.values(ctx.roomObjects)
+    .filter(o => o.defId === 'note' && (o.state?.read || 'unread') === readState)
+    .sort((a, b) => (a.meta?.day || 0) - (b.meta?.day || 0))[0] || null;
+}
+
+function prepareNote(ctx) {
+  return { note: firstNoteInRoom(ctx, 'unread') || firstNoteInRoom(ctx, 'read') };
+}
+
+function buildReadNoteEffects(ctx, prepared) {
+  if (!prepared?.note) return [];
+  return [`SET_OBJECT_STATE ${prepared.note.id} read read`];
+}
+
+function buildBinNoteEffects(ctx, prepared) {
+  if (!prepared?.note) return [];
+  return [`DESTROY_OBJECT ${prepared.note.id}`];
+}
+
+// The note's actual words are the narration — there is no separate reading
+// UI, because a note is three lines and a modal for it would be ceremony.
+function readNoteNarration(ctx, prepared) {
+  const note = prepared?.note;
+  if (!note) return 'There is nothing here to read.';
+  const authorId = note.meta?.authorId;
+  const name = authorId === 'player' ? null : ctx.gameState.npcs?.[authorId]?.bible?.name;
+  // Three real cases, each written out rather than composed from a fragment:
+  // "A note, in Hana:" is what a `${name}` slot produces, and it is wrong.
+  const attribution = authorId === 'player'
+    ? 'in your own handwriting'
+    : (name ? `in ${name}'s handwriting` : "in handwriting you don't recognise");
+  return `A note, ${attribution}:\n\n    "${note.meta?.text || ''}"`;
+}
+
+function binNoteNarration(ctx, prepared) {
+  return prepared?.note ? 'You take the note down and bin it.' : 'There is no note to take down.';
 }
 
 // --- self.lock_door / self.unlock_door runtime logic ---

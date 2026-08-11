@@ -1506,6 +1506,56 @@ async function doKnock(roomId) {
 // witnessed delta. Browsing is free; the TAKE pays game time through
 // advanceAndResolveMinutes (search + pocket, decayed exactly once), so
 // the room-search can never become a free-action item printer.
+// --- Notes (perception plan Phase 4) ---
+// Writing is the one note verb that isn't an ACTION_DEFS entry, because it
+// needs free text and the effects pipeline has nowhere to put a text box.
+// Reading and binning ARE ordinary object-sourced actions. Reuses the shared
+// #modal-overlay the same way doConvAskLeave does — no new infrastructure.
+function openWriteNoteModal() {
+  if (!currentGameState) return;
+  const roomId = currentGameState.player.location;
+  const roomObjects = currentGameState.objects?.[`room_${roomId}`] || {};
+  const surface = Object.values(roomObjects).find(o => OBJECT_DEFS[o.defId]?.surfaces);
+  if (!surface) { addLogEntry('system', 'Nothing here to leave a note on.'); return; }
+
+  const overlay = document.getElementById('modal-overlay');
+  const title = document.getElementById('modal-title');
+  const body = document.getElementById('modal-body');
+  const actions = document.getElementById('modal-actions');
+  if (!overlay || !title || !body || !actions) return;
+
+  title.textContent = `Leave a note on the ${OBJECT_DEFS[surface.defId].label}`;
+  body.innerHTML = `<textarea id="note-text" rows="4" maxlength="${NOTE_TUNING.maxLength}"
+    style="width:100%;resize:vertical" placeholder="Write something…"></textarea>`;
+  actions.innerHTML = `<button class="btn" data-action="confirm-write-note">Leave It</button>`
+    + `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>`;
+  overlay.setAttribute('data-open', '');
+  setTimeout(() => document.getElementById('note-text')?.focus(), 50);
+}
+
+async function doWriteNote() {
+  const text = document.getElementById('note-text')?.value || '';
+  closeModal();
+  if (!text.trim()) return;
+  const roomId = currentGameState.player.location;
+  const roomObjects = currentGameState.objects?.[`room_${roomId}`] || {};
+  const surface = Object.values(roomObjects).find(o => OBJECT_DEFS[o.defId]?.surfaces);
+  const note = spawnNote(currentGameState, {
+    roomId,
+    attachedTo: surface?.id || null,
+    authorId: 'player',
+    text,
+  });
+  if (!note) { addLogEntry('system', 'There are already too many notes up here.'); return; }
+  // A note you wrote yourself is already read — it should not sit there
+  // shouting at its own author.
+  note.state = { ...note.state, read: 'read' };
+  addLogEntry('narration', `You leave a note on the ${OBJECT_DEFS[surface.defId].label.toLowerCase()}.`);
+  await advanceAndResolveMinutes(NOTE_TUNING.writeMinutes);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('write-note', currentGameState);
+}
+
 async function doSearchRoom(ownerId) {
   if (!currentGameState) return;
   const npc = currentGameState.npcs[ownerId];
@@ -2289,6 +2339,12 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'search-room':
       if (npcId) await doSearchRoom(npcId);
+      break;
+    case 'write-note':
+      openWriteNoteModal();
+      break;
+    case 'confirm-write-note':
+      await doWriteNote();
       break;
     case 'give-item':
       if (npcId) await doGiveItem(npcId);

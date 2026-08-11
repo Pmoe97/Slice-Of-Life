@@ -2000,6 +2000,21 @@ const SIGNAL_DEFS = {
     },
   },
 
+  // A note is the highest-salience standing signal in the game, and that is
+  // the point: it is the one piece of the apartment that is TRYING to get
+  // your attention. Reading it collapses the intensity (see the `note` def in
+  // defs.world.js), so it stops shouting once you have seen it without any
+  // extra machinery — the state change IS the mechanism.
+  note: {
+    channel: 'sight',
+    salience: 0.95,
+    phrases: {
+      faint:  ['a note, already read, still stuck up'],
+      clear:  ['a note left out where you would see it'],
+      strong: ['a note, propped up so you cannot miss it'],
+    },
+  },
+
   // --- TRANSIENT signals (Phase 3) ------------------------------------
   // Emitted by an act at a moment, stored on world.signals with a birth tick,
   // and fading at `decayPerTick`. The presence of that field is what marks a
@@ -2075,6 +2090,57 @@ const SIGNAL_DEFS = {
       strong: ['a crash, close — that was something breaking'],
     },
   },
+};
+
+// --- Notes (perception plan Phase 4) ---
+// The concrete case the whole perception plan was argued from: an endearing or
+// passive-aggressive note on the fridge that draws your eye the moment you
+// walk in. A note is an ordinary world object whose `read` state drives its
+// own signal intensity, so "it stops shouting once you've seen it" needs no
+// special-casing anywhere.
+const NOTE_TUNING = {
+  maxLength: 240,          // a note is a note, not a letter
+  unreadIntensity: 0.9,    // sight, in-room — comfortably the loudest thing present
+  // Still VISIBLE where you're standing, just no longer demanding. Measured:
+  // at 0.2 an average attention of 0.30 gave 0.06 against the 0.08 sight
+  // floor, so a read note vanished entirely rather than becoming background —
+  // "it stops shouting" is the intent, not "it ceases to exist". 0.3 clears
+  // the floor in-room and still falls in the `faint` band, and sight
+  // attenuation means it reaches no further than before.
+  readIntensity: 0.3,
+  maxPerRoom: 4,           // a fridge covered in notes stops being a signal
+  writeMinutes: 5,
+};
+
+// Authored note text for NPC-written notes, grouped by the reason someone
+// would leave one. Roadmap R1: composed from authored phrases, never
+// generated, so a note costs nothing and can never contradict the state that
+// prompted it. `{name}` is the addressee.
+//
+// NOTHING WRITES THESE YET — notes are player-authored in Phase 4. The NPC
+// side is roadmap Plan 5 (an NPC with an unresolved grievance or an open
+// question leaves one instead of waiting to be clicked). Declared here with
+// that consumer named, which is the one form of R8 exception the roadmap
+// allows.
+const NOTE_TEMPLATES = {
+  chore_grievance: [
+    "the dishes have been in the sink for three days. i'm not doing them again.",
+    "whoever left the pan on the stove — it's your pan now. it lives there.",
+    "bins. please. i've done it four weeks running.",
+  ],
+  thanks: [
+    "thanks for sorting the boiler thing. genuinely. — {name}",
+    "you didn't have to clean up last night but you did, so. thanks.",
+  ],
+  food: [
+    "made too much, there's some in the fridge with your name on it. literally, i wrote your name on it.",
+    "the milk is off. i've binned it. sorry.",
+  ],
+  logistics: [
+    "rent's due friday and i get paid thursday, so don't panic when mine's late.",
+    "landlord called about the window. i said we'd ring back.",
+    "out till late — don't wait up.",
+  ],
 };
 
 // Emission strengths for the acts that produce transient signals (Phase 3).

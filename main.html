@@ -3461,10 +3461,10 @@ body {
      MENU/IMAGE). Functions calling into a LATER script are fine either way
      — those calls only happen at runtime, after every script below has
      finished loading. -->
-<script src="src/srcfiles/config.js?v=62"></script>
+<script src="src/srcfiles/config.js?v=63"></script>
 <script src="src/srcfiles/icons.js?v=14"></script>
-<script src="src/srcfiles/defs.world.js?v=18"></script>
-<script src="src/srcfiles/defs.actions.js?v=15"></script>
+<script src="src/srcfiles/defs.world.js?v=19"></script>
+<script src="src/srcfiles/defs.actions.js?v=16"></script>
 <script src="src/srcfiles/defs.computer.js?v=15"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
@@ -3479,14 +3479,14 @@ body {
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
 <script src="src/srcfiles/commitments.js?v=1"></script>
-<script src="src/srcfiles/world.js?v=15"></script>
+<script src="src/srcfiles/world.js?v=16"></script>
 <script src="src/srcfiles/signals.js?v=2"></script>
 <script src="src/srcfiles/items.js?v=10"></script>
 <!-- Inventory overhaul Phase 1: pure inventory query/sort/describe helpers
      (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
      time) and before render.js/ui.js, which call it at runtime. -->
 <script src="src/srcfiles/inventory.js?v=5"></script>
-<script src="src/srcfiles/effects.js?v=16"></script>
+<script src="src/srcfiles/effects.js?v=17"></script>
 <script src="src/srcfiles/drives.js?v=13"></script>
 <script src="src/srcfiles/actions.js?v=12"></script>
 <script src="src/srcfiles/intent.js?v=7"></script>
@@ -3506,13 +3506,13 @@ body {
 <script src="src/srcfiles/llm.js?v=16"></script>
 <script src="src/srcfiles/interruption.js?v=11"></script>
 <script src="src/srcfiles/image.js?v=13"></script>
-<script src="src/srcfiles/render.js?v=28"></script>
+<script src="src/srcfiles/render.js?v=29"></script>
 <script src="src/srcfiles/render.computer.js?v=29"></script>
 <script src="src/srcfiles/render.desktop.js?v=8"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
 <script src="src/srcfiles/render.phone.js?v=12"></script>
-<script src="src/srcfiles/ui.js?v=50"></script>
+<script src="src/srcfiles/ui.js?v=51"></script>
 <script src="src/srcfiles/ui.computer.js?v=27"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
