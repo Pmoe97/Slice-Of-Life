@@ -2806,6 +2806,44 @@ function convAddBubble(from, text) {
   convScrollToBottom();
 }
 
+// Scene reader plan Phase 5 (D13/D14) — draw the recalled half of the pane,
+// above the separator. A projection of `recallSceneExchanges`: it decides
+// nothing about what to show, it only marks everything it appends with
+// [data-past] so the live half below can never be mistaken for it.
+//
+// Returns how many rows it drew. Zero means this is someone the player has
+// never spoken to face to face — no history AND no separator, because a
+// separator with nothing above it announces an absence.
+function convRenderRecalled(npc) {
+  const log = document.getElementById('conv-log');
+  if (!log) return 0;
+  const rows = recallSceneExchanges(npc, currentGameState?.meta?.clock?.day);
+  if (rows.length === 0) return 0;
+
+  for (const row of rows) {
+    const el = document.createElement('div');
+    if (row.kind === 'time') {
+      el.className = 'conv-time';
+      el.textContent = row.label;
+    } else if (row.kind === 'beat') {
+      el.className = 'conv-beat';
+      el.textContent = row.text;
+    } else {
+      el.className = 'conv-bubble';
+      el.setAttribute('data-from', row.from);
+      el.textContent = row.text;
+    }
+    el.setAttribute('data-past', '');
+    log.appendChild(el);
+  }
+
+  const sep = document.createElement('div');
+  sep.className = 'conv-separator';
+  sep.textContent = 'Now';
+  log.appendChild(sep);
+  return rows.length;
+}
+
 function convShowTyping() {
   const log = document.getElementById('conv-log');
   if (!log) return null;
@@ -2838,15 +2876,26 @@ function openConversationOverlay(npcId) {
   if (nameEl) nameEl.textContent = npc.bible?.name || 'Unknown';
   convSetStatus('In conversation');
 
-  // Clear log
+  // Rebuild the log: prior exchanges, a separator, then the live conversation
+  // that doConvSend is about to append (D13). This used to clear to empty and
+  // stop, which is why talking to someone you had known forty in-game days
+  // started from a blank box — R4 was a missing feature, not a styling pass.
   const log = document.getElementById('conv-log');
-  if (log) log.innerHTML = '';
+  if (log) {
+    log.innerHTML = '';
+    convRenderRecalled(npc);
+  }
 
   // Show ask-to-leave only for residents
   const askBtn = document.getElementById('conv-ask-leave-btn');
   if (askBtn) askBtn.hidden = npc.residency?.status !== 'resident';
 
   overlay.setAttribute('data-open', '');
+
+  // Only now can the log scroll: while the overlay was display:none it had no
+  // layout, so scrollHeight was 0 and the pane would have opened at the oldest
+  // recalled line instead of at the present moment.
+  convScrollToBottom();
 
   // Focus input
   const input = document.getElementById('conv-input');

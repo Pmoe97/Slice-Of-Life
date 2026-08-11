@@ -1,56 +1,104 @@
 # The Scene Reader
 
-Status: **in progress — Phases 1–4 done**. Design session complete
-2026-08-10; all decisions locked. Phase 5 outstanding.
-Last updated 2026-08-10.
+Status: **complete — all five phases built and verified**. Design session
+complete 2026-08-10; all decisions locked. Phases 1–4 built 2026-08-10,
+Phase 5 built 2026-08-11.
+Last updated 2026-08-11.
 
 Companions:
 - `src/ref/wip/SENSORY-AND-SOCIAL-ROADMAP.md` (the umbrella — this is Plan 2 of six, and the first one the player will actually *feel*).
 - `src/ref/complete/perception-and-signals-plan.md` (Plan 1 — **complete**; this plan is its first real consumer. `perceiveSignals`, `signalPhrase` and the `salience` field on every perceived record were all built for this).
 - `src/ref/complete/npc-correctness-fixes-plan.md` (Plan 0 — **complete**; its Phase 1 turned `memory.recent` into a 40-entry channel-tagged buffer, which is what makes Phase 5's conversation history possible at all).
 
-Paired session prompt: `src/ref/wip/scene-reader-ui-handoff-prompt.md` — hand
-that to an agent verbatim each session; it holds *how to work*, this holds
-*what to build*.
+Paired session prompt: `src/ref/complete/scene-reader-ui-handoff-prompt.md` —
+it holds *how to work*, this holds *what to build*. Both moved here together
+when the last phase landed.
 
-This is a living document, worked one phase per session. **Read the Handoff
-section immediately below before anything else** — it is the single source of
-truth for where the last session left off. Update it, and the Status table
-near the bottom, as the very last thing you do each session.
+This was a living document, worked one phase per session; it is now the record
+of what got built. The Handoff below says so and the Build notes keep every
+specific the five sessions paid for.
 
 ---
 
 ## Handoff — read this first
 
-**Resume at:** Phase 5 (the conversation pane remembers) — the last phase.
-Phases 1–4 are done. Harness coverage: 40 assertions for Phase 1
-(`dev/verify/verify-r1.js`) and 27 for Phases 3+4 (`dev/verify/verify-r34.js`);
-Phase 2 is DOM only. Whole suite across three plans: 389, green.
+**Resume at: nothing — the plan is complete.** All five phases are built and
+verified. Do not open a new session against this document; it is a record of
+what was built, not a queue. The next piece of work is roadmap Plan 3
+(`npc-cognition`), which depends only on Plan 1 and is independent of this.
 
-**What Phase 5 needs, already dug out (2026-08-10):**
-- `openConversationOverlay` (`ui.js`) does `log.innerHTML = ''` on every open.
-  That single line is why the pane has no history: a conversation with someone
-  you have known forty in-game days starts from a blank box. R4 is a missing
-  FEATURE, not a styling pass.
-- The data is `npc.memory.recent`, filtered to `channel === 'scene'`. Plan 0
-  Phase 1 made that buffer 40 entries deep and channel-tagged for exactly
-  this; its D6 already asserts that an IM exchange never leaks into the
-  in-person view, and that assertion must keep passing.
-- **Naming wart that will bite you:** a `recent` entry's `tick` field holds
-  `clock.minutes`, not a tick index — `applyProposal` passes
-  `gameState.meta.clock.minutes` into `addRecentExchange`'s `tick` parameter.
-  So the timestamp formatter you want is `formatTime(entry.tick)`, and
-  `getTickIndex` is the wrong tool. Do not "fix" the field name without
-  checking every writer.
-- Existing conversation CSS to extend, in `main.html`: `.conv-log`,
-  `.conv-beat`, and `.conv-bubble[data-from="player|npc|action"]`. A `[data-past]`
-  attribute on the bubble is the natural hook for reduced contrast plus a
-  timestamp gutter.
-- Writers to leave alone: `convAddBubble` / `convAddBeat` append to the live
-  half and should keep doing exactly that. Phase 5 adds a recalled half ABOVE
-  a separator; it does not change how the live half is written.
-- An NPC you have never spoken to must open with no history and no separator
-  — the empty case is a real case, not a degenerate one.
+Harness coverage: 40 assertions for Phase 1 (`dev/verify/verify-r1.js`), 27
+for Phases 3+4 (`dev/verify/verify-r34.js`), 43 for Phase 5
+(`dev/verify/verify-r5.js`); Phase 2 is DOM only. Whole suite across three
+plans: **432, green.**
+
+**Blockers / flagged deviations:** none. No phase hit a conflict with the live
+code and no locked decision turned out unworkable.
+
+**Phase 5 notes (2026-08-11):**
+- The pure half is **`recallSceneExchanges(npc, nowDay)` in `npc.js`**, sitting
+  directly beside `getRecentExchanges` — the same buffer, one function per
+  reader: that one is the prompt's view, this one is the player's. Helpers
+  `recallRow` and `recallTimeLabel` beside it. The plan's file list named only
+  `ui.js` and `main.html`; putting the logic in `npc.js` instead of the
+  renderer is what made 43 assertions possible on a phase billed as DOM-only.
+- It returns display-ready rows — `{kind:'time',label}`,
+  `{kind:'bubble',from,text}`, `{kind:'beat',text}` — so the DOM half
+  (**`convRenderRecalled(npc)` in `ui.js`**) has no filtering, no timestamp
+  formatting and no `channel` string in it at all. A harness assertion greps
+  for exactly that and fails if any of it migrates into the renderer.
+- **`openConversationOverlay` still clears first, then renders.** Order is
+  asserted: clear before render, or re-opening doubles the history. Verified in
+  the browser — re-open leaves one copy and one separator.
+- **`convScrollToBottom()` must run AFTER `overlay.setAttribute('data-open')`.**
+  While the overlay is `display:none` the log has no layout, so `scrollHeight`
+  is 0 and the scroll silently does nothing — the pane would open at the oldest
+  recalled line instead of at the present moment. Ordering is asserted.
+- **A timestamp per *exchange*, not per line.** D14 says "a timestamp per
+  exchange"; a time row is emitted only when `(day, tick)` changes. Four lines
+  at 19:00 get one `19:00`. Grouping on minutes alone would merge yesterday
+  into today, so the day is part of the key — asserted.
+- Labels: today is a bare `19:30`; the day before is `Yesterday 19:30`; older
+  is `Wed Mar 24, Year 1 · 19:30`. Entries from before Plan 0 stamped these
+  fields carry `day: 0` and read as **`Earlier`** — the same word `sceneHistory`
+  already uses for a closed scene whose time was never recorded, rather than
+  inventing `Day 0, 00:00`.
+- **No second cap on how much history is shown.** The buffer is already bounded
+  at `MEMORY_BUDGET.maxRecent` (40, tuned in Plan 0 with a written rationale)
+  and the pane opens scrolled to the live end. A number here would be one
+  nobody tuned. Asserted at the cap: 200 exchanges in, 40 bubbles out, newest
+  kept. See D15.
+- **Past bubbles are at `opacity: 0.62`, and a past PLAYER bubble also drops
+  its accent fill — that second part is measured, not taste.** Measured in the
+  browser with relative luminance against the pane background (35,35,66 →
+  37.2): a past player bubble that kept `--color-accent` would read at **89.3
+  at 0.62 opacity and 83.4 at 0.55**, against **44.3 for a LIVE npc bubble**.
+  Dimming alone leaves the oldest thing in the pane brighter than the newest,
+  which is design invariant 5 exactly backwards; you would need roughly 0.15
+  opacity to bring an accent fill down to live-npc luminance, and at 0.15 the
+  text is unreadable. Swapping to `--color-surface-alt` lands it at **41.6**,
+  just under live. Opacity 0.62 itself was set by eye and only confirmed by
+  computed style — treat that one as unmeasured.
+- **Cosmetic wart, deliberately not fixed:** the forced opening line ("You
+  approach Sam to talk.") is stored as `type: 'player_input'`, so on recall it
+  renders as a player bubble even though the live pane showed it as a beat.
+  `doConvSend` knows it was forced; `applyProposal`, which writes the buffer,
+  does not. Tagging it would mean threading a flag through the memory writer
+  whose ordering Plan 0's D4 assertions guard — too much risk for a UI phase.
+  Pattern-matching the template string in the reader was the other option and
+  is worse: a heuristic that breaks silently when the template changes.
+- **The `·` in the dated label survived** because it was written with the Edit
+  tool. It is the same character `render.js` already uses in ten places. The
+  `python - <<'PYEOF'` heredoc mangling recorded below is real; avoid that
+  route, not the character.
+
+---
+
+## Build notes
+
+Kept, not buried: these are the specifics each session paid for — browser
+quirks, which assertions were themselves wrong, why a constant is the value it
+is. They were in the Handoff while the plan was live.
 
 **Where the harnesses live now (2026-08-10):** they moved out of the session
 scratchpad into **`dev/verify/`** in the repo, because a scratchpad is
@@ -175,8 +223,6 @@ repointed.
 - Do not start Phase 2 before Phase 1's `composeScene` is real and tested. The
   entire value of this plan is that the scene is a *computed object* first and
   a DOM tree second.
-
-**Blockers / flagged deviations:** None.
 
 ---
 
@@ -367,6 +413,19 @@ character you have known for forty in-game days opens as an empty box.
   timestamp per exchange, and a separator between the recalled history and the
   live conversation. The player must never have to work out whether they are
   reading something happening now.
+- **D15 — How much history the pane shows is the buffer's cap, not a second
+  number.** `recallSceneExchanges` returns the whole `channel: 'scene'` slice
+  of `memory.recent`, which Plan 0 already bounds at `MEMORY_BUDGET.maxRecent`
+  (40) with a written rationale, and the pane opens scrolled to the live end so
+  depth costs the player nothing. A separate `SCENE_READER` knob here would be
+  a constant nobody had tuned, sitting next to four that were. *(Phase 5,
+  2026-08-11.)*
+- **D16 — "A timestamp per exchange" (D14) means per distinct `(day, tick)`,
+  not per line.** A time row is emitted only when the stamp changes, so four
+  lines spoken at 19:00 carry one `19:00` between them. Repeating the same
+  time down the gutter is noise with a timestamp on it, and noise is what this
+  plan exists to remove. The day is part of the key: grouping on minutes alone
+  merges yesterday's 19:00 into today's. *(Phase 5, 2026-08-11.)*
 
 ---
 
@@ -545,7 +604,9 @@ have never spoken to opens with no history and no separator.
 | 2 | **Done** | The scene reader replaces the narration log in `#main-content`. Verified in the browser; screenshots in the Phase 2 notes |
 | 3 | **Done** | Moodle strip + sensory icons on the floor plan. Pure halves covered by 27 assertions (`dev/verify/verify-r34.js`); DOM verified in the browser |
 | 4 | **Done** | `markCalloutsShouted` — a callout fires once per scene per signal. Covered by the same harness |
-| 5 | Not started | The conversation pane shows prior exchanges, marked as past |
+| 5 | **Done** | The conversation pane shows prior exchanges, marked as past. `recallSceneExchanges` (pure, `npc.js`) + `convRenderRecalled` (`ui.js`). 43 assertions (`dev/verify/verify-r5.js`); DOM verified in the browser |
+
+**All five phases done. Suite: 432 assertions across three plans, green.**
 
 ---
 
@@ -566,7 +627,13 @@ is wanted.
 
 ---
 
-## Open questions (parked, none blocking)
+## Open questions (parked — these outlived the plan)
+
+**None of the four below were closed.** Two of them said "decide during
+Phase 2/3" and those sessions did not; none blocked anything, and none is
+work this plan still owes. They are recorded here as live questions about a
+shipped feature, to be picked up by whoever next touches the scene reader —
+most naturally Plan 3, which reuses `composeScene`'s output.
 
 - **Does the scene image regenerate when signals change?** A visibly dirty
   kitchen arguably should look dirty. `composeSceneKey` deliberately excludes

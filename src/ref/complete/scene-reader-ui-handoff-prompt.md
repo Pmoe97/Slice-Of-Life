@@ -1,8 +1,13 @@
 # Scene Reader — session prompt
 
-Hand this to an agent **verbatim, unchanged, every session**. It is paired 1:1
-with `scene-reader-ui-plan.md` and moves with it. The plan holds *what to
-build*; this holds *how to work*.
+**Retired 2026-08-11 — the plan it drives is complete.** All five phases are
+built and verified; there is no phase left for a session to pick up, and
+Step 0's stop condition now fires immediately. Kept as the record of how the
+work was run, and as a template worth copying for the next multi-session plan.
+Do not hand it to an agent.
+
+It is paired 1:1 with `scene-reader-ui-plan.md` and moved here with it. The
+plan holds *what was built*; this holds *how it was worked*.
 
 ---
 
@@ -22,7 +27,7 @@ which phase to work on — find it yourself using the steps below.
 ## Step 0 — find out where you are (cheap: the Status table, not the full doc)
 
 Read only the `## Handoff — read this first` section and the `## Status` table
-in `src/ref/wip/scene-reader-ui-plan.md`.
+in `src/ref/complete/scene-reader-ui-plan.md`.
 
 The first phase not marked **Done** is your phase.
 

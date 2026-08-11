@@ -1,10 +1,10 @@
 # Sensory & Social Roadmap
 
 Status: **active** — the umbrella for six linked overhauls. Design session
-2026-08-10. **Plans 0 and 1 are complete; Plan 2 is written and ready to
-build.** Plan 3 is unblocked and independent of Plan 2; Plans 3–5 are theses
-awaiting their own design sessions.
-Last updated 2026-08-10.
+2026-08-10. **Plans 0, 1 and 2 are complete.** Plan 3 is the next design
+session — it depends only on Plan 1 and was always independent of Plan 2.
+Plans 3–5 are theses awaiting their own design sessions.
+Last updated 2026-08-11.
 
 **Verification note for every plan below.** Plan 0 established that the whole
 engine — all 27 files through `interruption.js` — loads into a bare Node `vm`
@@ -159,8 +159,8 @@ own `D`-numbers.
 |---|---|---|---|
 | 0 | [`../complete/npc-correctness-fixes-plan.md`](../complete/npc-correctness-fixes-plan.md) | **Complete** (2026-08-10) | Fixed the five defects the audit found. Later plans build on a working relationship and memory layer. Carries the authoritative dead-field disposition table |
 | 1 | [`../complete/perception-and-signals-plan.md`](../complete/perception-and-signals-plan.md) | **Complete** (2026-08-10) | The signal substrate: standing + transient signals, propagation with per-channel door attenuation, notes, and one perception query shared by the player and every NPC |
-| 2 | [`scene-reader-ui-plan.md`](scene-reader-ui-plan.md) | **Written — next up** | The interactive-novel main UI, awareness indicators, demoted log, delineated conversation history |
-| 3 | `npc-cognition-plan.md` | **Ready** — thesis only | Utility-scored intent selection, committed multi-tick plans, NPCs consuming perception |
+| 2 | [`../complete/scene-reader-ui-plan.md`](../complete/scene-reader-ui-plan.md) | **Complete** (2026-08-11) | The interactive-novel main UI, awareness indicators, demoted log, delineated conversation history. Created `src/srcfiles/scene.js`; 110 assertions |
+| 3 | `npc-cognition-plan.md` | **Ready — next up**, thesis only | Utility-scored intent selection, committed multi-tick plans, NPCs consuming perception |
 | 4 | `knowledge-gossip-memory-plan.md` | Thesis only | Facts with provenance and confidence, NPC-to-NPC transmission, rumination, the player model |
 | 5 | `npc-initiative-plan.md` | Thesis only | NPCs approach, knock, propose; shared activities that feed Plan 4 |
 
@@ -171,7 +171,10 @@ N ships** — the inventory overhaul learned this the expensive way.
 
 ---
 
-## Plan 2 — The Scene Reader *(thesis only)*
+## Plan 2 — The Scene Reader *(built — see [`../complete/scene-reader-ui-plan.md`](../complete/scene-reader-ui-plan.md))*
+
+*The thesis below is what was commissioned; the plan document is what got
+built and is the authority on the result.*
 
 The main content area stops being `renderNarrationLog` and becomes a
 scene: a composed passage of prose describing where you are, what is

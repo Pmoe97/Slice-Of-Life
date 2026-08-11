@@ -46,16 +46,15 @@ folders as a pair.
 | Doc | Status |
 |---|---|
 | `SENSORY-AND-SOCIAL-ROADMAP.md` | **The umbrella for six linked overhauls.** Start here for anything NPC- or sensory-related — it holds the cross-cutting decisions (`R1`–`R8`) all six plans inherit, and the theses for the four not yet written. |
-| `scene-reader-ui-plan.md` | Roadmap Plan 2. The main UI stops being a log and becomes a scene. **Phases 1–4 built; Phase 5 outstanding.** Paired with `scene-reader-ui-handoff-prompt.md`. |
 | `prompt-generator-v2.md` | Engine + authoring + preferences UI + gender-aware refinement all shipped; optional pool expansion outstanding. |
 
 The roadmap's Plans 2–5 (`scene-reader-ui`, `npc-cognition`,
 `knowledge-gossip-memory`, `npc-initiative`) exist as theses inside
 `SENSORY-AND-SOCIAL-ROADMAP.md` and get their own documents at the point the
 plan beneath each one ships. **Do not write plan N+1's phases before plan N
-lands** — its real shape is not knowable yet. Plans 0 and 1 have landed and
-Plan 2 is written, so **Plan 3 (`npc-cognition`) is the next design session**;
-it depends only on Plan 1 and is independent of Plan 2.
+lands** — its real shape is not knowable yet. Plans 0, 1 and 2 have all landed,
+so **Plan 3 (`npc-cognition`) is the next design session**; it depends only on
+Plan 1 and is independent of Plan 2.
 
 ### `complete/`
 | Plan | Paired prompt |
@@ -66,6 +65,7 @@ it depends only on Plan 1 and is independent of Plan 2.
 | `restaurant-network-expansion-plan.md` | `restaurant-expansion-handoff-prompt.md` |
 | `npc-correctness-fixes-plan.md` | — (roadmap Plan 0; carries the dead-field disposition table) |
 | `perception-and-signals-plan.md` | — (roadmap Plan 1; the signal substrate Plans 2–5 consume) |
+| `scene-reader-ui-plan.md` | `scene-reader-ui-handoff-prompt.md` (roadmap Plan 2; the main UI stopped being a log and became a scene) |
 | `renovation-occupancy-overhaul-plan.md` | — |
 | `contractor-tutorial-overhaul-plan.md` | — |
 | `npc-overhaul-plan.md` | — |

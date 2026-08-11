@@ -401,6 +401,71 @@ function getRecentExchanges(npc, count, channel) {
     .join(' | ');
 }
 
+// Scene reader plan Phase 5 (D13/D14) — the PLAYER's view of the same buffer
+// `getRecentExchanges` above hands to the prompt. Pure: reads `memory.recent`,
+// writes nothing, returns display-ready rows so the conversation pane's DOM
+// half stays a projection with no logic of its own (design invariant 1).
+//
+// A row is exactly one of:
+//   { kind: 'time',   label }        — emitted only when the timestamp changes
+//   { kind: 'bubble', from, text }   — from: 'player' | 'npc' | 'action'
+//   { kind: 'beat',   text }
+//
+// No second cap: the buffer is already bounded at MEMORY_BUDGET.maxRecent (40,
+// tuned in Plan 0 Phase 1 with a documented rationale), and the pane opens
+// scrolled to the live end. A second number here would be one nobody tuned.
+//
+// NAMING WART, do not "fix" without checking every writer: an entry's `tick`
+// holds `clock.minutes`, not a tick index — `applyProposal` passes
+// `gameState.meta.clock.minutes` into `addRecentExchange`'s `tick` parameter.
+// `formatTime(entry.tick)` is therefore right and `getTickIndex` is not.
+function recallSceneExchanges(npc, nowDay) {
+  const recent = npc?.memory?.recent;
+  if (!Array.isArray(recent) || recent.length === 0) return [];
+  // D6 (Plan 0): an IM must never surface in the in-person pane. Entries
+  // written before the channel field existed are 'scene', same as the prompt
+  // side assumes — the IM path was the newer of the two surfaces.
+  const inChannel = recent.filter(e => (e.channel || 'scene') === 'scene' && e.text);
+  const rows = [];
+  let lastDay = null, lastTick = null;
+  for (const e of inChannel) {
+    const day = e.day || 0, tick = e.tick || 0;
+    if (day !== lastDay || tick !== lastTick) {
+      rows.push({ kind: 'time', label: recallTimeLabel(day, tick, nowDay) });
+      lastDay = day; lastTick = tick;
+    }
+    rows.push(recallRow(e));
+  }
+  return rows;
+}
+
+// Scene reader plan Phase 5 — mirrors doConvSend's live mapping exactly, so a
+// line reads the same recalled as it did when it happened. Anything unknown
+// (memoryAdditions.recentExchanges is LLM-supplied and only validated as an
+// array) degrades to a beat rather than guessing at a speaker.
+function recallRow(e) {
+  const type = e.type || (e.speaker === 'player' ? 'player_input' : 'dialogue');
+  if (type === 'player_input') return { kind: 'bubble', from: 'player', text: e.text };
+  if (type === 'dialogue') return { kind: 'bubble', from: 'npc', text: e.text };
+  if (type === 'action') return { kind: 'bubble', from: 'action', text: `*${e.text}*` };
+  if (type === 'internal') return { kind: 'beat', text: `(${e.text})` };
+  return { kind: 'beat', text: e.text };
+}
+
+// Scene reader plan Phase 5 — how long ago, in the fewest words that stay
+// unambiguous. Entries from before Plan 0 stamped these fields carry day 0;
+// they read as 'Earlier', the same word sceneHistory uses for a closed scene
+// whose time was never recorded. Inventing a time for them would be worse.
+function recallTimeLabel(day, tick, nowDay) {
+  if (!day) return 'Earlier';
+  const t = formatTime(tick);
+  if (nowDay != null) {
+    if (day === nowDay) return t;
+    if (day === nowDay - 1) return `Yesterday ${t}`;
+  }
+  return `${formatDate(day)} · ${t}`;
+}
+
 // NPC Overhaul Phase 4 — Keyword-scored memory retrieval
 // Tokenizes a query and scores facts/episodes by keyword overlap.
 // Returns top N relevant items from ALL tiers, not just recent.

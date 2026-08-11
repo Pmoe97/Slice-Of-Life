@@ -32,7 +32,7 @@ It stops before `render.js`/`ui.js`, which need a DOM. Those are verified in
 | `run-all.js` | Runs every `verify-*.js`, totals, exits non-zero on failure. |
 | `verify-p1..p5.js` | Plan 0 — NPC correctness fixes |
 | `verify-s1..s5.js` | Plan 1 — perception & signals |
-| `verify-r1.js`, `verify-r34.js` | Plan 2 — the scene reader (Phases 1, 3+4) |
+| `verify-r1.js`, `verify-r34.js`, `verify-r5.js` | Plan 2 — the scene reader (Phases 1, 3+4, 5) |
 | `measure.js` | NPC need economy: prints per-need ranges against drive gates |
 | `measure-signals.js` | Signal propagation: how far each channel actually reaches |
 | `demo-r1.js` | Renders `composeScene`'s output as prose in the terminal |
