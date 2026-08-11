@@ -16,7 +16,7 @@ function render(gameState, sceneState) {
   renderInventory(gameState);
   renderDeliveries(gameState);
   renderActionChips(gameState, sceneState);
-  renderNarrationLog(gameState);
+  renderSceneReader(gameState, sceneState);
   renderFooter(gameState);
   // Harmless when #main-content isn't in computer mode (CSS keeps
   // #computer-screen hidden either way) — always redrawing it here means
@@ -1395,51 +1395,148 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
   return groups;
 }
 
-// --- Narration log ---
-function renderNarrationLog(gs) {
-  const container = document.getElementById('narration-log');
-  if (!container) return;
-  const log = gs.meta.sessionLog || [];
-  container.innerHTML = '';
+// --- The scene reader (scene-reader plan Phase 2) ---
+// Projects SCENE's composeScene onto the DOM. This function holds NO logic
+// of its own — every decision about what belongs in a scene, what gets
+// emphasis and what is history was already made in the pure layer (design
+// invariant 1). If something here needs an `if` about game state, it belongs
+// in composeScene instead.
+//
+// Replaces renderNarrationLog, which rendered the last 50 session-log entries
+// as identical divs with no notion of place, time or a current moment.
+function renderSceneReader(gs, sceneState) {
+  const root = document.getElementById('scene-reader');
+  if (!root) return;
+  const scene = composeScene(gs, sceneState);
 
-  if (log.length === 0) {
-    const entry = document.createElement('div');
-    entry.className = 'log-entry';
-    entry.setAttribute('data-type', 'system');
-    entry.textContent = 'You wake up in your new apartment. It\'s the first day.';
-    container.appendChild(entry);
-    return;
+  // Heading — where and when.
+  const heading = document.getElementById('scene-heading');
+  if (heading) {
+    heading.innerHTML = '';
+    const room = document.createElement('span');
+    room.className = 'sr-room';
+    room.textContent = scene.heading.roomName;
+    const when = document.createElement('span');
+    when.className = 'sr-when';
+    when.textContent = `${scene.heading.dayLabel} · ${scene.heading.timeLabel}`;
+    heading.append(room, when);
   }
 
-  const tpl = document.getElementById('tpl-log-entry');
-  for (const entry of log.slice(-50)) {
-    const node = tpl.content.cloneNode(true);
-    const el = node.querySelector('.log-entry');
-    el.setAttribute('data-type', entry.type);
-
-    if (entry.type === 'dialogue') {
-      el.querySelector('.speaker').textContent = `${entry.speaker}: `;
-      el.querySelector('.speech').textContent = `"${entry.text}"`;
-    } else if (entry.type === 'narration') {
-      el.querySelector('.speaker').textContent = '';
-      el.querySelector('.speech').textContent = entry.text;
-    } else if (entry.type === 'action') {  // NPC Overhaul Phase 2
-      el.querySelector('.speaker').textContent = '';
-      el.querySelector('.speech').textContent = entry.text;
-      el.classList.add('log-action');
-    } else if (entry.type === 'internal') {  // NPC Overhaul Phase 2
-      el.querySelector('.speaker').textContent = '';
-      el.querySelector('.speech').textContent = entry.text;
-      el.classList.add('log-internal');
-    } else if (entry.type === 'system') {
-      el.textContent = entry.text;
-    } else {
-      el.textContent = entry.text || '';
+  // Establishing passage — presence, then callouts, then the rest of what
+  // can be sensed. Callouts sit above the ordinary sensory lines so the
+  // thing demanding attention is read first.
+  const est = document.getElementById('scene-establishing');
+  if (est) {
+    est.innerHTML = '';
+    for (const p of scene.presence) {
+      const el = document.createElement('div');
+      el.className = 'sr-presence';
+      el.textContent = p.line;
+      est.appendChild(el);
     }
-    container.appendChild(node);
+    const calloutIds = new Set(scene.callouts.map(c => c.signalId));
+    for (const c of scene.callouts) {
+      const el = document.createElement('div');
+      el.className = 'sr-callout';
+      el.textContent = sentence(c.phrase);
+      est.appendChild(el);
+    }
+    for (const sig of scene.sensory) {
+      if (calloutIds.has(sig.signalId)) continue;  // already shown, louder
+      const el = document.createElement('div');
+      el.className = 'sr-sensory';
+      el.setAttribute('data-here', String(sig.here));
+      el.textContent = sentence(sig.here
+        ? sig.phrase
+        : `${sig.phrase}, drifting in from the ${sig.sourceRoomName}`);
+      est.appendChild(el);
+    }
+    if (est.childElementCount === 0) {
+      const el = document.createElement('div');
+      el.className = 'sr-empty';
+      el.textContent = 'Quiet. Nothing much to see or smell.';
+      est.appendChild(el);
+    }
   }
-  // Scroll to bottom
-  container.scrollTop = container.scrollHeight;
+
+  // Beats — what has happened since you walked in. Reuses #tpl-log-entry, so
+  // the per-type styling that already existed (dialogue/action/internal)
+  // keeps working untouched.
+  const beats = document.getElementById('scene-beats');
+  if (beats) {
+    beats.innerHTML = '';
+    const tpl = document.getElementById('tpl-log-entry');
+    for (const entry of scene.beats) {
+      beats.appendChild(buildLogEntryNode(tpl, entry));
+    }
+    beats.scrollTop = beats.scrollHeight;
+  }
+
+  // History — closed scenes, folded away and subordinate (invariant 5).
+  const history = document.getElementById('scene-history');
+  const list = document.getElementById('scene-history-list');
+  const summary = document.getElementById('scene-history-summary');
+  if (history && list && summary) {
+    history.hidden = scene.history.length === 0;
+    summary.textContent = `Earlier — ${scene.history.length} scene${scene.history.length === 1 ? '' : 's'}`;
+    list.innerHTML = '';
+    for (const h of scene.history) {
+      const row = document.createElement('div');
+      row.className = 'sr-history-scene';
+      const t = document.createElement('span');
+      t.className = 'sr-history-time';
+      t.textContent = h.timeLabel;
+      const r = document.createElement('span');
+      r.className = 'sr-history-room';
+      r.textContent = h.roomName;
+      const c = document.createElement('span');
+      c.className = 'sr-history-count';
+      c.textContent = `${h.beatCount}`;
+      row.append(t, r, c);
+      list.appendChild(row);
+    }
+  }
+}
+
+// Capitalise a composed clause into a sentence. The authored signal phrases
+// are written as fragments ("dishes stacked in the sink") precisely so they
+// can be composed into larger lines elsewhere — the scene reader is where
+// they become sentences.
+function sentence(text) {
+  if (!text) return '';
+  const trimmed = text.trim();
+  const capped = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  return /[.!?]$/.test(capped) ? capped : capped + '.';
+}
+
+// One log entry -> one node. Extracted from the old renderNarrationLog so the
+// beats list and any future consumer share exactly one idea of how an entry
+// looks; the type-specific branches below are unchanged from that function.
+function buildLogEntryNode(tpl, entry) {
+  const node = tpl.content.cloneNode(true);
+  const el = node.querySelector('.log-entry');
+  el.setAttribute('data-type', entry.type);
+
+  if (entry.type === 'dialogue') {
+    el.querySelector('.speaker').textContent = `${entry.speaker}: `;
+    el.querySelector('.speech').textContent = `"${entry.text}"`;
+  } else if (entry.type === 'narration') {
+    el.querySelector('.speaker').textContent = '';
+    el.querySelector('.speech').textContent = entry.text;
+  } else if (entry.type === 'action') {
+    el.querySelector('.speaker').textContent = '';
+    el.querySelector('.speech').textContent = entry.text;
+    el.classList.add('log-action');
+  } else if (entry.type === 'internal') {
+    el.querySelector('.speaker').textContent = '';
+    el.querySelector('.speech').textContent = entry.text;
+    el.classList.add('log-internal');
+  } else if (entry.type === 'system') {
+    el.textContent = entry.text;
+  } else {
+    el.textContent = entry.text || '';
+  }
+  return node;
 }
 
 // --- Footer ---

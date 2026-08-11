@@ -47,6 +47,11 @@
       meta: makeFolder(), player: makeFolder(), world: makeFolder(),
       npcs: makeFolder(), objects: makeFolder(), images: makeFolder(),
       snapshots: makeFolder(),
+      // Folders added to the game after this harness was first written.
+      // Missing ones fail as `Cannot read properties of undefined (reading
+      // 'get')` during boot, which reads like a game bug and isn't one —
+      // keep this list in step with KVFolders in state.js.
+      menu: makeFolder(), saves: makeFolder(), saveIndex: makeFolder(),
     },
     // Deliberately reject — exercises the game's own existing fallback
     // paths (image.js's gradient placeholder, IM's broken-response

@@ -3879,7 +3879,7 @@ function addLogEntry(type, text, speaker) {
   });
   currentGameState.meta.sessionLog = currentGameState.meta.sessionLog.slice(-100);
   queueWrite('meta', 'meta', currentGameState.meta);
-  renderNarrationLog(currentGameState);
+  renderSceneReader(currentGameState, currentSceneState);
 }
 
 // --- Modals ---

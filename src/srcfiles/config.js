@@ -2099,11 +2099,18 @@ const SIGNAL_DEFS = {
 // the DOM and holds no logic of its own.
 const SCENE_READER = {
   // At or above this salience, a perceived signal stops being one clause in
-  // the establishing passage and gets its own emphasised block (D11). Tuned
-  // against the Plan 1 salience values: an unread note (0.95 × 0.9 ≈ 0.86)
-  // clears it comfortably, a read one (0.95 × 0.3 ≈ 0.29) does not, and
-  // ordinary mess sits below it.
-  calloutSalience: 0.55,
+  // the establishing passage and gets its own emphasised block (D11).
+  //
+  // Retuned from 0.55 to 0.70 after seeing it in the browser: at 0.55 an
+  // unread note AND strong rot both called out at once, and two callouts in
+  // one passage is exactly the "if everything shouts, nothing does" failure
+  // the mechanism exists to avoid. Against Plan 1's salience table the
+  // ceiling each signal can reach is `def.salience × maxIntensity`, so 0.70
+  // admits precisely two things: an unread note (0.95 × 0.9 ≈ 0.86) and
+  // something breaking (0.90 × 0.8 = 0.72). Those are the two events that
+  // should genuinely stop you. Strong rot (0.75 × 0.8 = 0.60) stays a
+  // prominent sensory line, which is the right weight for it.
+  calloutSalience: 0.70,
   // How many sensory clauses the establishing passage carries. Records arrive
   // sorted by salience, so this keeps the strongest. Raised automatically
   // when there are more callouts than this — a callout must always also
