@@ -1,7 +1,7 @@
 # Perception & Signals
 
 Status: **complete** — all five phases implemented and verified, 2026-08-10.
-171 assertions pass across `scratchpad/verify-s1..s5.js`; 322 across both
+171 assertions pass across `dev/verify/verify-s1..s5.js`; 322 across both
 plans.
 Last updated 2026-08-10.
 
@@ -637,11 +637,11 @@ unbounded allocation.
 
 | Phase | Status | What it does |
 |---|---|---|
-| 1 | **Done** | `SIGNAL_DEFS`, standing derivation, propagation, perception query, debug readout. 37 assertions pass (`scratchpad/verify-s1.js`) |
-| 2 | **Done** | Object `emits` tables on all 24 dirty objects; `room.odor` retired. 26 assertions pass (`scratchpad/verify-s2.js`) |
-| 3 | **Done** | Transient signals from acts, movement and events; ring buffer with decay. 38 assertions pass (`scratchpad/verify-s3.js`) |
-| 4 | **Done** | Notes — placeable, sightable, readable, binnable. 37 assertions pass (`scratchpad/verify-s4.js`) |
-| 5 | **Done** | NPC perception through the same query; signal gates; `investigate_smell`. 32 assertions pass (`scratchpad/verify-s5.js`) |
+| 1 | **Done** | `SIGNAL_DEFS`, standing derivation, propagation, perception query, debug readout. 37 assertions pass (`dev/verify/verify-s1.js`) |
+| 2 | **Done** | Object `emits` tables on all 24 dirty objects; `room.odor` retired. 26 assertions pass (`dev/verify/verify-s2.js`) |
+| 3 | **Done** | Transient signals from acts, movement and events; ring buffer with decay. 38 assertions pass (`dev/verify/verify-s3.js`) |
+| 4 | **Done** | Notes — placeable, sightable, readable, binnable. 37 assertions pass (`dev/verify/verify-s4.js`) |
+| 5 | **Done** | NPC perception through the same query; signal gates; `investigate_smell`. 32 assertions pass (`dev/verify/verify-s5.js`) |
 
 ---
 

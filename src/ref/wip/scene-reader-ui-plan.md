@@ -9,6 +9,10 @@ Companions:
 - `src/ref/complete/perception-and-signals-plan.md` (Plan 1 — **complete**; this plan is its first real consumer. `perceiveSignals`, `signalPhrase` and the `salience` field on every perceived record were all built for this).
 - `src/ref/complete/npc-correctness-fixes-plan.md` (Plan 0 — **complete**; its Phase 1 turned `memory.recent` into a 40-entry channel-tagged buffer, which is what makes Phase 5's conversation history possible at all).
 
+Paired session prompt: `src/ref/wip/scene-reader-ui-handoff-prompt.md` — hand
+that to an agent verbatim each session; it holds *how to work*, this holds
+*what to build*.
+
 This is a living document, worked one phase per session. **Read the Handoff
 section immediately below before anything else** — it is the single source of
 truth for where the last session left off. Update it, and the Status table
@@ -20,8 +24,41 @@ near the bottom, as the very last thing you do each session.
 
 **Resume at:** Phase 5 (the conversation pane remembers) — the last phase.
 Phases 1–4 are done. Harness coverage: 40 assertions for Phase 1
-(`scratchpad/verify-r1.js`) and 27 for Phases 3+4 (`scratchpad/verify-r34.js`);
+(`dev/verify/verify-r1.js`) and 27 for Phases 3+4 (`dev/verify/verify-r34.js`);
 Phase 2 is DOM only. Whole suite across three plans: 389, green.
+
+**What Phase 5 needs, already dug out (2026-08-10):**
+- `openConversationOverlay` (`ui.js`) does `log.innerHTML = ''` on every open.
+  That single line is why the pane has no history: a conversation with someone
+  you have known forty in-game days starts from a blank box. R4 is a missing
+  FEATURE, not a styling pass.
+- The data is `npc.memory.recent`, filtered to `channel === 'scene'`. Plan 0
+  Phase 1 made that buffer 40 entries deep and channel-tagged for exactly
+  this; its D6 already asserts that an IM exchange never leaks into the
+  in-person view, and that assertion must keep passing.
+- **Naming wart that will bite you:** a `recent` entry's `tick` field holds
+  `clock.minutes`, not a tick index — `applyProposal` passes
+  `gameState.meta.clock.minutes` into `addRecentExchange`'s `tick` parameter.
+  So the timestamp formatter you want is `formatTime(entry.tick)`, and
+  `getTickIndex` is the wrong tool. Do not "fix" the field name without
+  checking every writer.
+- Existing conversation CSS to extend, in `main.html`: `.conv-log`,
+  `.conv-beat`, and `.conv-bubble[data-from="player|npc|action"]`. A `[data-past]`
+  attribute on the bubble is the natural hook for reduced contrast plus a
+  timestamp gutter.
+- Writers to leave alone: `convAddBubble` / `convAddBeat` append to the live
+  half and should keep doing exactly that. Phase 5 adds a recalled half ABOVE
+  a separator; it does not change how the live half is written.
+- An NPC you have never spoken to must open with no history and no separator
+  — the empty case is a real case, not a degenerate one.
+
+**Where the harnesses live now (2026-08-10):** they moved out of the session
+scratchpad into **`dev/verify/`** in the repo, because a scratchpad is
+per-session and a 389-assertion regression suite that vanishes with the chat
+is worthless. `node dev/verify/run-all.js` runs everything;
+`dev/verify/README.md` explains the loader, the two tuning instruments, and
+how to drive the DOM harness. Every citation in this plan and in Plans 0/1 was
+repointed.
 
 **Phases 3+4 notes (2026-08-10):**
 - Both surfaces ship. The **moodle strip** (`#scene-moodles`, above the
@@ -126,7 +163,7 @@ Phase 2 is DOM only. Whole suite across three plans: 389, green.
 - Four design questions were put to the user and all four answered; they are
   D1, D4, D7 and D10 below. The rest follow from those plus R3/R4.
 - **Verification route:** the whole engine loads into a bare Node `vm` —
-  `scratchpad/loadgame.js`, established by Plan 0. `composeScene` (Phase 1) is
+  `dev/verify/loadgame.js`, established by Plan 0. `composeScene` (Phase 1) is
   pure and fully harness-testable. Phases 2–5 are DOM work and are the first
   thing in this project that genuinely needs a browser; use the Browser pane's
   preview tools, and keep as much logic as possible in the pure layer so the
@@ -504,9 +541,9 @@ have never spoken to opens with no history and no separator.
 
 | Phase | Status | What it does |
 |---|---|---|
-| 1 | **Done** | `composeScene` + `meta.scene` + `sceneId` on log entries. Pure, tested, nothing renders it. 40 assertions pass (`scratchpad/verify-r1.js`) |
+| 1 | **Done** | `composeScene` + `meta.scene` + `sceneId` on log entries. Pure, tested, nothing renders it. 40 assertions pass (`dev/verify/verify-r1.js`) |
 | 2 | **Done** | The scene reader replaces the narration log in `#main-content`. Verified in the browser; screenshots in the Phase 2 notes |
-| 3 | **Done** | Moodle strip + sensory icons on the floor plan. Pure halves covered by 27 assertions (`scratchpad/verify-r34.js`); DOM verified in the browser |
+| 3 | **Done** | Moodle strip + sensory icons on the floor plan. Pure halves covered by 27 assertions (`dev/verify/verify-r34.js`); DOM verified in the browser |
 | 4 | **Done** | `markCalloutsShouted` — a callout fires once per scene per signal. Covered by the same harness |
 | 5 | Not started | The conversation pane shows prior exchanges, marked as past |
 

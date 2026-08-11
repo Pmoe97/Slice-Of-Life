@@ -10,7 +10,7 @@ Last updated 2026-08-10.
 engine — all 27 files through `interruption.js` — loads into a bare Node `vm`
 with five stubs, so `resolveTick`, `SIM_generateHouse`, `evaluateDrives` and
 every pure function are directly callable against real generated houses with
-no browser and no Perchance runtime. See `scratchpad/loadgame.js`. **Prefer
+no browser and no Perchance runtime. See `dev/verify/loadgame.js`. **Prefer
 this to the iframe technique in `ARCHITECTURE.md`** for anything below the
 render layer; it is faster, has no snapshot-staleness problem, and it is what
 made Plan 0's need rebalance tunable at all.

@@ -46,7 +46,7 @@ folders as a pair.
 | Doc | Status |
 |---|---|
 | `SENSORY-AND-SOCIAL-ROADMAP.md` | **The umbrella for six linked overhauls.** Start here for anything NPC- or sensory-related — it holds the cross-cutting decisions (`R1`–`R8`) all six plans inherit, and the theses for the four not yet written. |
-| `scene-reader-ui-plan.md` | Roadmap Plan 2. The main UI stops being a log and becomes a scene. **Next up.** Written, not started. |
+| `scene-reader-ui-plan.md` | Roadmap Plan 2. The main UI stops being a log and becomes a scene. **Phases 1–4 built; Phase 5 outstanding.** Paired with `scene-reader-ui-handoff-prompt.md`. |
 | `prompt-generator-v2.md` | Engine + authoring + preferences UI + gender-aware refinement all shipped; optional pool expansion outstanding. |
 
 The roadmap's Plans 2–5 (`scene-reader-ui`, `npc-cognition`,

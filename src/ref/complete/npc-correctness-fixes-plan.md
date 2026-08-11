@@ -1,7 +1,7 @@
 # NPC Correctness Fixes
 
 Status: **complete** — all five phases implemented and verified, 2026-08-10.
-151 assertions pass across `scratchpad/verify-p1..p5.js`.
+151 assertions pass across `dev/verify/verify-p1..p5.js`.
 Last updated 2026-08-10.
 
 Companions:
@@ -20,11 +20,11 @@ near the bottom, as the very last thing you do each session.
 
 **Resume at:** nothing — this plan is **complete**. All five phases are
 implemented and verified (151 assertions across
-`scratchpad/verify-p1..p5.js`). The next work is roadmap **Plan 1,
+`dev/verify/verify-p1..p5.js`). The next work is roadmap **Plan 1,
 `perception-and-signals-plan.md`**.
 
 **Phase 5 notes (2026-08-10):**
-- Landed; 39 assertions pass at `scratchpad/verify-p5.js`. The disposition
+- Landed; 39 assertions pass at `dev/verify/verify-p5.js`. The disposition
   table is a section of this document (above the Deviations section) and is
   now the authoritative record — **the audit artifact's dead-field list is
   superseded and was wrong in both directions.**
@@ -48,13 +48,13 @@ implemented and verified (151 assertions across
   character art and prose in one edit.
 
 **Phase 4 notes (2026-08-10):**
-- Landed; 40 assertions pass at `scratchpad/verify-p4.js`. **The whole engine
+- Landed; 40 assertions pass at `dev/verify/verify-p4.js`. **The whole engine
   (27 files, through `interruption.js`) loads into a bare Node `vm`** — see
-  `scratchpad/loadgame.js`. That means `resolveTick`, `SIM_generateHouse` and
+  `dev/verify/loadgame.js`. That means `resolveTick`, `SIM_generateHouse` and
   `evaluateDrives` can be driven for real, over real generated houses, with no
   browser. This is now the best verification route in the project by a wide
   margin; prefer it to the iframe technique for anything below the render
-  layer. `scratchpad/measure.js` is the tuning instrument (prints need ranges
+  layer. `dev/verify/measure.js` is the tuning instrument (prints need ranges
   against drive gates); `verify-p4.js` is the assertion harness.
 - **Do not tune these numbers by reasoning alone.** Every rate here was set by
   measuring, and the first pass was wrong in both directions: the planned
@@ -86,7 +86,7 @@ implemented and verified (151 assertions across
   25 the drive never fired at all.
 
 **Phase 3 notes (2026-08-10):**
-- Landed in full; 23 assertions pass at `scratchpad/verify-p3.js`.
+- Landed in full; 23 assertions pass at `dev/verify/verify-p3.js`.
 - **Deviation from the Files list, deliberate.** The plan said drives would
   carry an explicit `importance` on each event object. Shipped instead as a
   central `EVENT_IMPORTANCE` type→band table in `config.js`, with
@@ -108,7 +108,7 @@ implemented and verified (151 assertions across
   permanent. Asserted.
 
 **Phase 2 notes (2026-08-10):**
-- Landed in full; 26 assertions pass at `scratchpad/verify-p2.js`. The ladder
+- Landed in full; 26 assertions pass at `dev/verify/verify-p2.js`. The ladder
   now spans usefully: the four sample relationships in the harness score 8 /
   25 / 48 / 85, one per rung.
 - **`state.js` cannot be loaded into the harness with a `DEV` stub** — it
@@ -128,7 +128,7 @@ implemented and verified (151 assertions across
 
 **Phase 1 notes (2026-08-10):**
 - **Phase 1 landed in full.** 23 assertions pass in a Node `vm` harness at
-  `scratchpad/verify-p1.js`. **This is a better verification route than the
+  `dev/verify/verify-p1.js`. **This is a better verification route than the
   iframe technique ARCHITECTURE.md describes** — `config.js` and `npc.js`
   load into a bare `vm` context with four stubs (`root`, `DEV`, `assert`,
   `mulberry32`) and the memory functions are callable directly. No browser,
@@ -561,11 +561,11 @@ pre-prune save and assert the same.
 
 | Phase | Status | What it does |
 |---|---|---|
-| 1 | **Done** | Conversation transcript order, depth, channel separation; real IM thread in the IM prompt. 23 assertions pass (`scratchpad/verify-p1.js`) |
-| 2 | **Done** | Rebase the intimacy formula so a stranger reads as `early`; re-derive on load. 26 assertions pass (`scratchpad/verify-p2.js`) |
-| 3 | **Done** | Source-keyed episode importance; evict by `importance × decay` instead of FIFO. 23 assertions pass (`scratchpad/verify-p3.js`) |
-| 4 | **Done** | Rebalance the six NPC need rates against the real schedule blocks. 40 assertions pass (`scratchpad/verify-p4.js`), driving the real `resolveTick` over two apartment states |
-| 5 | **Done** | Triage every flagged field: 5 pruned, 9 wired, 12 reserved, 4 corrected. Table above. 39 assertions pass (`scratchpad/verify-p5.js`) |
+| 1 | **Done** | Conversation transcript order, depth, channel separation; real IM thread in the IM prompt. 23 assertions pass (`dev/verify/verify-p1.js`) |
+| 2 | **Done** | Rebase the intimacy formula so a stranger reads as `early`; re-derive on load. 26 assertions pass (`dev/verify/verify-p2.js`) |
+| 3 | **Done** | Source-keyed episode importance; evict by `importance × decay` instead of FIFO. 23 assertions pass (`dev/verify/verify-p3.js`) |
+| 4 | **Done** | Rebalance the six NPC need rates against the real schedule blocks. 40 assertions pass (`dev/verify/verify-p4.js`), driving the real `resolveTick` over two apartment states |
+| 5 | **Done** | Triage every flagged field: 5 pruned, 9 wired, 12 reserved, 4 corrected. Table above. 39 assertions pass (`dev/verify/verify-p5.js`) |
 
 ---
 
