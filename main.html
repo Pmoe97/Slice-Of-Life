@@ -3461,7 +3461,7 @@ body {
      MENU/IMAGE). Functions calling into a LATER script are fine either way
      — those calls only happen at runtime, after every script below has
      finished loading. -->
-<script src="src/srcfiles/config.js?v=64"></script>
+<script src="src/srcfiles/config.js?v=65"></script>
 <script src="src/srcfiles/icons.js?v=14"></script>
 <script src="src/srcfiles/defs.world.js?v=19"></script>
 <script src="src/srcfiles/defs.actions.js?v=16"></script>
@@ -3473,7 +3473,7 @@ body {
 <!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/srcfiles/orbital.js?v=1"></script>
-<script src="src/srcfiles/state.js?v=30"></script>
+<script src="src/srcfiles/state.js?v=31"></script>
 <script src="src/srcfiles/sim.js?v=36"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
@@ -3481,6 +3481,7 @@ body {
 <script src="src/srcfiles/commitments.js?v=1"></script>
 <script src="src/srcfiles/world.js?v=16"></script>
 <script src="src/srcfiles/signals.js?v=2"></script>
+<script src="src/srcfiles/scene.js?v=1"></script>
 <script src="src/srcfiles/items.js?v=10"></script>
 <!-- Inventory overhaul Phase 1: pure inventory query/sort/describe helpers
      (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
@@ -3512,7 +3513,7 @@ body {
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
 <script src="src/srcfiles/render.phone.js?v=12"></script>
-<script src="src/srcfiles/ui.js?v=51"></script>
+<script src="src/srcfiles/ui.js?v=52"></script>
 <script src="src/srcfiles/ui.computer.js?v=27"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),

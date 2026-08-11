@@ -25,7 +25,7 @@ function assert(cond, msg, context) {
 
 // --- Folder versions (independent migration) ---
 const FOLDER_VERSIONS = {
-  meta: 1,
+  meta: 2,
   player: 4,
   world: 4,
   npcs: 4,
@@ -105,7 +105,27 @@ const WORLD_KEY_FALLBACKS = {
 // --- Migration functions (per folder). Stubbed for day-one; iterate here. ---
 const MIGRATIONS = {
   meta: [
-    // { from: 0, to: 1, fn: (state) => { ... } }
+    // meta 1->2 (scene reader Phase 1): seed meta.scene so a save written
+    // before this plan opens inside a valid scene rather than a null one.
+    // Existing sessionLog entries carry no sceneId and read as scene 0, so
+    // they land in the history drawer under "Earlier" — which is exactly
+    // right for "everything that happened before this update". Deliberately
+    // does NOT backfill the entries themselves: their room and time were
+    // never recorded, and inventing them would be worse than admitting it.
+    { from: 1, to: 2, fn: (meta) => {
+      if (!meta || typeof meta !== 'object' || meta.scene) return meta;
+      const clock = meta.clock || {};
+      return {
+        ...meta,
+        scene: {
+          id: 1,
+          roomId: null,      // set by the first openScene, on the first move
+          startedDay: clock.day ?? 1,
+          startedMinutes: clock.minutes ?? CLOCK.startMinutes,
+          shouted: [],
+        },
+      };
+    } },
   ],
   player: [
     // player 1->2 (ITEMS section): inventory was mixed-type — bare strings

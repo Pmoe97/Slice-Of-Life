@@ -3055,6 +3055,11 @@ async function doMove(roomId) {
     // Recompute scene participants for the new room — active starts
     // populated (see getSceneParticipants) rather than empty.
     currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
+    // Scene reader Phase 1 (D1): a room change opens a new scene. Called
+    // BEFORE the narration line below so "You move to the Kitchen" is the
+    // first beat of the scene it opens, not the last beat of the one it
+    // closes. Order matters here — do not move this after addLogEntry.
+    openScene(currentGameState, roomId);
     addLogEntry('narration', `You move to the ${ROOMS[roomId]?.name || roomId}.`);
     // Renovation overhaul Phase 3: entering a room with an active contracted
     // job gets a deterministic construction-scene line — template keyed by
@@ -3858,7 +3863,20 @@ function showError(msg) {
 function addLogEntry(type, text, speaker) {
   if (!currentGameState) return;
   if (!currentGameState.meta.sessionLog) currentGameState.meta.sessionLog = [];
-  currentGameState.meta.sessionLog.push({ type, text, speaker, day: currentGameState.meta.clock.day });
+  // Scene reader Phase 1 (D2): every beat records WHEN and WHERE it happened
+  // and which scene it belongs to. None of that was recorded before, which
+  // made "what happened while I was in the kitchen" impossible to reconstruct
+  // — the information had simply never been captured. sceneHistory derives
+  // the whole history drawer from these three fields, so nothing about a
+  // closed scene needs storing separately.
+  const scene = currentScene(currentGameState);
+  currentGameState.meta.sessionLog.push({
+    type, text, speaker,
+    day: currentGameState.meta.clock.day,
+    minutes: currentGameState.meta.clock.minutes,
+    sceneId: scene.id,
+    roomId: scene.roomId,
+  });
   currentGameState.meta.sessionLog = currentGameState.meta.sessionLog.slice(-100);
   queueWrite('meta', 'meta', currentGameState.meta);
   renderNarrationLog(currentGameState);

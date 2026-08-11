@@ -1,7 +1,7 @@
 # The Scene Reader
 
-Status: **planned — not started**. Design session complete 2026-08-10; all
-decisions locked.
+Status: **in progress — Phase 1 done**. Design session complete 2026-08-10;
+all decisions locked. Phases 2–5 outstanding.
 Last updated 2026-08-10.
 
 Companions:
@@ -18,9 +18,39 @@ near the bottom, as the very last thing you do each session.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 1. Nothing has been built yet.
+**Resume at:** Phase 2 (the scene reader). Phase 1 is done and verified — 40
+assertions at `scratchpad/verify-r1.js`, plus `scratchpad/demo-r1.js`, which
+renders `composeScene`'s output as prose in the terminal. **Read that demo
+before writing any DOM** — it is what Phase 2 is projecting, and it already
+reads correctly.
 
-**Last session's notes (design session, 2026-08-10 — no code written):**
+**Phase 1 notes (2026-08-10):**
+- `src/srcfiles/scene.js` is new and loads after `signals.js`. `composeScene`
+  is pure and verified byte-identical-safe; a harness assertion also stubs
+  `root.generateText` and fails if composition ever reaches for the model.
+- **Log entries gained `roomId` as well as `minutes` and `sceneId`.** The plan
+  named only the latter two. Adding room means `sceneHistory` derives the
+  entire history drawer from the log alone, with nothing about a closed scene
+  stored anywhere — which is RI3 and removes a whole class of drift. Asserted:
+  `meta` carries no `scenes`/`sceneLog` key.
+- **The `meta` 1→2 migration seeds `scene.roomId` as `null` on purpose.** A
+  folder migration only ever receives `meta` and cannot know where the player
+  is standing. `currentScene` resolves it lazily against
+  `player.location` and does NOT write the answer back — a lazily-correct room
+  beats a confidently wrong one. Asserted both halves.
+- Pre-plan log entries have no `sceneId` and read as scene 0, landing in
+  history under "Earlier". Their room and time were never recorded and are
+  deliberately not invented.
+- `openScene` is idempotent per room, so a no-op move cannot fragment history.
+- Callouts are computed from the FULL perceived list and the sensory slice
+  widens to `max(maxSensoryLines, callouts.length)` — a callout must always
+  also appear in the passage, since it is emphasis, not removal. Asserted.
+- `composeScene` costs ~133µs, so calling it on every render is fine.
+- The `shouted` filter (D12) is already in `composeScene`; Phase 4 only needs
+  to add the writer. It was cheaper to build the read side now than to edit
+  the function twice.
+
+**Design-session notes (2026-08-10):**
 - Four design questions were put to the user and all four answered; they are
   D1, D4, D7 and D10 below. The rest follow from those plus R3/R4.
 - **Verification route:** the whole engine loads into a bare Node `vm` —
@@ -402,7 +432,7 @@ have never spoken to opens with no history and no separator.
 
 | Phase | Status | What it does |
 |---|---|---|
-| 1 | Not started | `composeScene` + `meta.scene` + `sceneId` on log entries. Pure, tested, nothing renders it |
+| 1 | **Done** | `composeScene` + `meta.scene` + `sceneId` on log entries. Pure, tested, nothing renders it. 40 assertions pass (`scratchpad/verify-r1.js`) |
 | 2 | Not started | The scene reader replaces the narration log in `#main-content` |
 | 3 | Not started | Moodle strip + sensory icons on the floor plan |
 | 4 | Not started | Attention callouts, once per scene per signal |

@@ -2092,6 +2092,51 @@ const SIGNAL_DEFS = {
   },
 };
 
+// ===================== THE SCENE READER (Plan 2) =====================
+// The main content area is a SCENE, not a log. A scene is room-scoped (D1):
+// entering a room opens one, leaving files it to history. SCENE's
+// composeScene builds it as a pure object; RENDER projects that object onto
+// the DOM and holds no logic of its own.
+const SCENE_READER = {
+  // At or above this salience, a perceived signal stops being one clause in
+  // the establishing passage and gets its own emphasised block (D11). Tuned
+  // against the Plan 1 salience values: an unread note (0.95 × 0.9 ≈ 0.86)
+  // clears it comfortably, a read one (0.95 × 0.3 ≈ 0.29) does not, and
+  // ordinary mess sits below it.
+  calloutSalience: 0.55,
+  // How many sensory clauses the establishing passage carries. Records arrive
+  // sorted by salience, so this keeps the strongest. Raised automatically
+  // when there are more callouts than this — a callout must always also
+  // appear in the passage (emphasis, not removal).
+  maxSensoryLines: 3,
+  historyScenes: 12,       // closed scenes offered in the collapsed drawer
+  maxBeats: 40,            // beats rendered in one open scene
+};
+
+// Overrides for the handful of ACTIVITY_TABLES / drive activityOverride
+// strings that read badly in the default `${name} is ${activity}` frame
+// (D5). Everything absent falls through to that default, which is correct for
+// the large majority ("Hana is making coffee", "Marcus is reading in bed").
+// `{name}` is the character.
+//
+// Expanding this is content work, not structure work — it can happen at any
+// point after Phase 1 without touching a line of logic.
+const PRESENCE_PHRASES = {
+  'sleeping':         '{name} is asleep.',
+  'skincare routine': '{name} is working through a skincare routine.',
+  'at work':          '{name} is out at work.',
+  'commuting':        '{name} is out.',
+  'commuting home':   '{name} is on their way back.',
+  'getting ready':    '{name} is getting ready to go out.',
+  'hanging out':      '{name} is just hanging about.',
+  'scrounging':       '{name} is picking through the cupboards.',
+  'following a bad smell': '{name} is sniffing around for something.',
+  'throwing out something that had gone off': '{name} is binning something that had gone off.',
+  'washing up at the sink': '{name} is washing up at the sink.',
+  'chatting with a roommate': '{name} is deep in conversation.',
+  'looking for something to do': '{name} is drifting around, visibly bored.',
+};
+
 // --- Notes (perception plan Phase 4) ---
 // The concrete case the whole perception plan was argued from: an endearing or
 // passive-aggressive note on the fridge that draws your eye the moment you
