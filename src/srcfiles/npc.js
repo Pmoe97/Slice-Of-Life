@@ -686,6 +686,15 @@ function assembleContext(gameState, sceneState) {
       clothing: npc.clothing,                   // NPC Overhaul — for clothingLabel
       moodReason: npc.moodReason || '',         // NPC Overhaul
       schedule: npc.schedule || null,           // NPC Overhaul Phase 7.2
+      // Perception plan Phase 5: what THIS character can sense, which is not
+      // necessarily what the player can — same room, different attention, and
+      // a keener roommate notices the smell from the laundry two doors down
+      // that you walked straight past. A roommate remarking on something the
+      // player hasn't mentioned is the first moment the perception layer is
+      // visible in fiction rather than in mechanics.
+      perceived: mergePerceived(perceiveSignals(gameState, id, npc.location || roomId))
+        .slice(0, 3)
+        .map(rec => ({ ...rec, phrase: signalPhrase(rec, gameState) })),
       // Escorts (external-world plan Phase 7): the live booking, if this NPC
       // is mid-appointment. buildNpcBlockV2 reads boundaryText; the services
       // array is also what the scene chips are built from.

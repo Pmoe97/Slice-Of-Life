@@ -337,6 +337,16 @@ function buildNpcBlockV2(npc, query, channel) {
     block += `[Current booking]: ${npc.escortSession.boundaryText}\n`;
   }
 
+  // [Senses] — perception plan Phase 5. What this character can sense right
+  // now, which may differ from what the player can. Prose is pre-resolved in
+  // assembleContext (same division as the scene's sensory line).
+  if (npc.perceived?.length > 0) {
+    const bits = npc.perceived
+      .filter(r => r.phrase)
+      .map(r => r.here ? r.phrase : `${r.phrase} (from the ${ROOMS[r.sourceRoomId]?.name || r.sourceRoomId})`);
+    if (bits.length > 0) block += `[Senses]: ${bits.join('; ')}\n`;
+  }
+
   // [Needs]
   block += needsLine(npc.needs);
 

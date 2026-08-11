@@ -1,7 +1,8 @@
 # Perception & Signals
 
-Status: **in progress — Phases 1–4 done**. Design session complete
-2026-08-10; decisions D1–D14 locked, five phases drawn. Phase 5 outstanding.
+Status: **complete** — all five phases implemented and verified, 2026-08-10.
+171 assertions pass across `scratchpad/verify-s1..s5.js`; 322 across both
+plans.
 Last updated 2026-08-10.
 
 Companions:
@@ -19,10 +20,40 @@ near the bottom, as the very last thing you do each session.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 5 (NPC perception + one signal-gated drive) — the last
-phase. Phases 1–4 are done and verified: 38 / 26 / 38 / 37 assertions at
-`scratchpad/verify-s1..s4.js`, plus `scratchpad/measure-signals.js` as the
-tuning instrument. The whole suite across both plans is 290 assertions, green.
+**Resume at:** nothing — this plan is **complete**. The substrate every later
+roadmap plan consumes is in place. Next up: roadmap **Plan 2 (scene reader)**
+and **Plan 3 (NPC cognition)**, which both depend only on this plan and are
+independent of each other.
+
+**Phase 5 notes (2026-08-10):**
+- `evaluateDrives` now calls `perceiveSignals(gameState, npcId, location)` once
+  per NPC per tick and threads the result through every gate. A harness
+  assertion counts `function perceiveSignals` definitions across the tree and
+  fails if there is ever more than one — the moment there are two, NPCs start
+  sensing a subtly different world than the player.
+- Gates take `{ signal, op, threshold }` alongside `{ need, ... }`, and
+  `signal` may be a list (strongest of the list wins), so "any visible mess" is
+  one gate rather than three. An unperceived signal reads as **0**, not as a
+  hard failure — a smell you cannot detect is, to you, no smell.
+- `investigate_smell` is the proof: an NPC who can smell rot walks to the
+  source room, and on the following tick clears the offending container. It
+  needs a custom resolver (like peep/snoop/eat/gift) because acting on a smell
+  requires the `sourceRoomId`/`sourceId` the perceived record carries, and the
+  generic weight roll has neither. **Verified unprompted through two simulated
+  days**: noticed at 17:30, tracked, binned at 19:00.
+- It targets the offending container only, rather than reusing
+  `cleanRoomObjects` — following your nose to a bad smell is not a deep clean.
+  Asserted: dirty dishes in the same room are left alone.
+- `clean_common` is gated on visibly perceiving mess and its weight rose
+  0.08 → 0.35. Sight does not propagate, so it can only fire in the room whose
+  mess the NPC is standing in — which is also the room it cleans. NPCs no
+  longer tidy rooms that were already clean.
+- `assembleContext` carries each active NPC's own perceived list (prose
+  pre-resolved, same division as the scene line) and `buildNpcBlockV2` prints
+  it as `[Senses]`. A roommate remarking on a smell the player walked past is
+  the first moment this layer is visible in fiction rather than in mechanics.
+- Cost: **0.21ms per tick** for a three-resident household with perception on
+  every drive evaluation. No concern.
 
 **Phase 4 notes (2026-08-10):**
 - Notes work end to end: written by the player on any object flagged
@@ -610,7 +641,7 @@ unbounded allocation.
 | 2 | **Done** | Object `emits` tables on all 24 dirty objects; `room.odor` retired. 26 assertions pass (`scratchpad/verify-s2.js`) |
 | 3 | **Done** | Transient signals from acts, movement and events; ring buffer with decay. 38 assertions pass (`scratchpad/verify-s3.js`) |
 | 4 | **Done** | Notes — placeable, sightable, readable, binnable. 37 assertions pass (`scratchpad/verify-s4.js`) |
-| 5 | Not started | NPC perception through the same query, plus one signal-gated drive |
+| 5 | **Done** | NPC perception through the same query; signal gates; `investigate_smell`. 32 assertions pass (`scratchpad/verify-s5.js`) |
 
 ---
 

@@ -11,9 +11,29 @@
 // IM messages are queued (not sent) — the actual LLM reply happens later
 // in advanceAndResolve's event processing, outside the tick.
 
-function checkDriveGates(drive, npc) {
+// A gate is either about an internal state — `{ need, op, threshold }` — or,
+// since the perception plan's Phase 5, about something the NPC can actually
+// SENSE from where they are standing: `{ signal, op, threshold }`, where
+// `signal` may be one id or a list (the strongest of the list is compared, so
+// "any visible mess" is one gate rather than three).
+//
+// An unperceived signal reads as 0 rather than failing outright, which is the
+// meaningful answer: a smell you cannot detect is, to you, no smell.
+function driveGateValue(gate, npc, perceived) {
+  if (gate.signal) {
+    const wanted = Array.isArray(gate.signal) ? gate.signal : [gate.signal];
+    let best = 0;
+    for (const rec of perceived || []) {
+      if (wanted.includes(rec.signalId) && rec.intensity > best) best = rec.intensity;
+    }
+    return best;
+  }
+  return npc.needs[gate.need];
+}
+
+function checkDriveGates(drive, npc, perceived) {
   for (const gate of drive.gates || []) {
-    const val = npc.needs[gate.need];
+    const val = driveGateValue(gate, npc, perceived);
     if (val === undefined) return false;
     if (gate.op === 'below' && !(val < gate.threshold)) return false;
     if (gate.op === 'above' && !(val > gate.threshold)) return false;
@@ -56,6 +76,17 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
   const location = resolved.location;
   const peepResults = [];
 
+  // Perception plan Phase 5: what this NPC can sense from where they are
+  // standing this tick, through the SAME query the player's perception uses
+  // (SIGNALS' perceiveSignals) — the divergence between them is the attention
+  // term, never a second code path. Computed once per NPC per tick and handed
+  // to every gate below; ~75µs, so a five-resident household costs well under
+  // a millisecond a tick.
+  //
+  // This is the line that turns NPCs from things that act on internal state
+  // alone into things that act on the world they are in.
+  const perceived = location ? mergePerceived(perceiveSignals(gameState, npcId, location)) : [];
+
   for (const [driveId, drive] of Object.entries(DRIVE_DEFS)) {
     // Block filter
     if (drive.blockFilter && !drive.blockFilter.includes(block)) continue;
@@ -77,8 +108,8 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
     const decayFacilities = MAINTENANCE.npcDecayActions[driveId];
     if (decayFacilities && decayFacilities.some(fid => !isFacilityFunctional(gameState, fid))) continue;
 
-    // Gate check
-    if (!checkDriveGates(drive, updatedNpc)) continue;
+    // Gate check — needs AND senses (perception plan Phase 5).
+    if (!checkDriveGates(drive, updatedNpc, perceived)) continue;
 
     // Cooldown check
     if (isOnCooldown(updatedNpc, driveId, currentTick)) continue;
@@ -125,6 +156,22 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
         if (eatResult.locationOverride) locationOverride = eatResult.locationOverride;
         if (eatResult.activityOverride) activityOverride = eatResult.activityOverride;
         events.push(...eatResult.events);
+        updatedNpc = setCooldown(updatedNpc, driveId, currentTick);
+      }
+      continue;
+    }
+
+    // Perception plan Phase 5: the proof-of-concept perception consumer.
+    // Same custom-resolver dispatch shape as the peep/snoop/eat/gift drives —
+    // the standard weight roll is replaced, because acting on a smell needs
+    // to know WHERE the smell is coming from, which only the perceived record
+    // carries.
+    if (drive.isInvestigateDrive) {
+      const result = tryInvestigateSmell(updatedNpc, npcId, resolved, gameState, perceived);
+      if (result) {
+        if (result.locationOverride) locationOverride = result.locationOverride;
+        if (result.activityOverride) activityOverride = result.activityOverride;
+        events.push(...(result.events || []));
         updatedNpc = setCooldown(updatedNpc, driveId, currentTick);
       }
       continue;
@@ -587,6 +634,64 @@ function tryEatFood(npc, npcId, resolved, gameState, rng) {
     activityOverride: ateFromKitchen ? 'cooking' : 'snacking',
     locationOverride: ateFromKitchen && resolved.location !== 'kitchen' ? 'kitchen' : null,
     events: [event],
+  };
+}
+
+// --- Perception plan Phase 5: acting on what you can smell ---
+// The proof that the perception layer reaches NPC behaviour. An NPC who can
+// smell rot from where they are walks to wherever it is coming from and
+// clears it; one who cannot smell it — because they are too far, behind a
+// closed door, or simply less attentive — does not, and never knows.
+//
+// The perceived record is what makes this possible at all: it carries
+// `sourceRoomId` and `sourceId`, so "go deal with it" resolves to a real room
+// and a real container rather than a search. Nothing else in the drive loop
+// has that information.
+//
+// Deliberately targets the offending container only, rather than reusing
+// cleanRoomObjects — someone who follows their nose to a bad smell throws out
+// what is rotting, they do not deep-clean the kitchen on the way past.
+function tryInvestigateSmell(npc, npcId, resolved, gameState, perceived) {
+  const rot = (perceived || [])
+    .filter(r => r.signalId === 'rot')
+    .sort((a, b) => b.intensity - a.intensity)[0];
+  if (!rot) return null;
+
+  const day = gameState.meta.clock.day;
+  const tick = getTickIndex(gameState.meta.clock.minutes);
+
+  // Not there yet — follow it. Arriving is a whole tick's work, and the drive
+  // fires again next tick now that they are in the room.
+  if (rot.sourceRoomId !== resolved.location) {
+    return {
+      locationOverride: rot.sourceRoomId,
+      activityOverride: 'following a bad smell',
+      events: [{
+        day, tick, roomId: rot.sourceRoomId, npcId,
+        type: 'investigate_smell', moodDelta: -0.02, data: {},
+        template: '{name} went to find out what the smell was.',
+        seenByPlayer: false,
+      }],
+    };
+  }
+
+  // Standing over it. Clear the source through the effects path like every
+  // other trusted producer, then refresh the room's derived cleanliness.
+  const obj = findObjectById(gameState, rot.sourceId);
+  if (!obj || obj.state?.rotten_food !== 'rotten') return null;
+  const effCtx = buildEffectContext(gameState, [npcId], [npcId], gameState.objects[`room_${resolved.location}`] || {}, []);
+  applyEffects(parseEffectDSL(`SET_OBJECT_STATE ${obj.id} rotten_food none`), effCtx);
+  refreshRoomCleanliness(gameState, resolved.location);
+
+  return {
+    activityOverride: 'throwing out something that had gone off',
+    events: [{
+      day, tick, roomId: resolved.location, npcId,
+      type: 'investigate_smell', moodDelta: -0.04,
+      data: { container: OBJECT_DEFS[obj.defId]?.label || 'container' },
+      template: '{name} found what was rotting in the {container} and binned it.',
+      seenByPlayer: false,
+    }],
   };
 }
 

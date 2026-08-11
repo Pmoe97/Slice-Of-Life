@@ -2267,6 +2267,10 @@ const EVENT_IMPORTANCE = {
   moveInOffer:         'significant',
   argument:            'significant',
   // Social contact — real, but not defining.
+  // investigate_smell (perception plan Phase 5) sits here rather than in
+  // `ambient`: finding the thing that had gone off and binning it is a real
+  // domestic act with a consequence, not background like doing the laundry.
+  investigate_smell:   'social',
   npc_chat:            'social',
   eat:                 'social',
   guest:               'social',
@@ -3702,8 +3706,13 @@ const DRIVE_DEFS = {
 
   // --- Chore behavior ---
   clean_common: {
-    gates: [],
-    weight: 0.08,
+    // Perception plan Phase 5: gated on actually SEEING mess, rather than
+    // firing on a bare weight roll wherever the NPC happened to be. Sight
+    // doesn't propagate, so this can only fire in a room whose mess they are
+    // standing in — which is also the room cleansRoom will clean. An NPC no
+    // longer tidies a room that was already clean.
+    gates: [{ signal: ['dirty_dishes', 'clutter', 'unmade_bed'], op: 'above', threshold: 0.25 }],
+    weight: 0.35,
     blockFilter: ['morning', 'leisure', 'wind_down'],
     effects: [],
     activityOverride: 'cleaning up',
@@ -3836,6 +3845,23 @@ const DRIVE_DEFS = {
     cooldownTicks: 16,
     effects: [],
     isSnoopDrive: true,
+  },
+  // Perception plan Phase 5 — the proof-of-concept perception consumer, and
+  // the first drive in the game motivated by something OUTSIDE the NPC. An
+  // NPC who can smell rot goes and finds it; one who can't, doesn't. Whether
+  // they can depends on distance, doors and their own attention, so two
+  // roommates in the same flat genuinely differ on whether they notice.
+  //
+  // Weight 0 — resolution is custom (tryInvestigateSmell in DRIVES), because
+  // acting on a smell needs the source room and object the perceived record
+  // carries and the generic weight roll has neither.
+  investigate_smell: {
+    gates: [{ signal: 'rot', op: 'above', threshold: 0.2 }],
+    weight: 0.0,
+    blockFilter: ['morning', 'midday', 'evening', 'leisure', 'wind_down'],
+    cooldownTicks: 6,
+    effects: [],
+    isInvestigateDrive: true,
   },
   // Phase 8 (D8): a fond NPC hands the player something they own. Custom
   // resolution (tryGiveGift in DRIVES) — affection-gated, cooldowned, and
