@@ -120,11 +120,25 @@ function defaultComputerState() {
         // object (all fields optional; undefined = "roll it"). `aiBusy`
         // flags AI generation in progress (Phase 5). `aiPrompt` holds the
         // free-text description the player typed for AI generation.
+        // Phase 5 (D12/D16/D17): the same screen also hosts the per-character
+        // profile. Navigation state lives HERE, never the DOM (the house
+        // pattern) — `mode` is 'create' (the draft builder) | 'list' (pick a
+        // character) | 'profile' (a character's tabs); `viewingNpcId` is
+        // which NPC is open; `tab` is the active profile tab; `editMode`
+        // gates the schema-validated Edit Mode; `editSelections` holds the
+        // Edit Mode pool toggles (path -> names). These keys never touch
+        // `draft` — a saved game's residents and an in-progress draft must
+        // not share a struct (the top-of-phase check).
         studio: {
           draft: {},
           aiBusy: false,
           aiPrompt: '',
           preview: null,       // cached preview NPC bible (Phase 4 live preview)
+          mode: 'create',
+          viewingNpcId: null,
+          tab: 'personal',
+          editMode: false,
+          editSelections: {},
         },
         // Phase 7: favorited applicant IDs — players can shortlist
         // applicants they're interested in and come back to them later.
@@ -2176,12 +2190,22 @@ function setContractorJobFact(gameState, category, text, day) {
       if (f.category === 'renovation_job' && f.valid !== false) f.valid = false;
     }
   }
-  npc.memory.facts.push({ text, day: day || 0, importance: 0.9, category, valid: true });
-  // Respect the memory budget, preferring to drop the oldest completed-job
-  // fact over any static/seeded history fact (day 0, category 'history').
-  const cap = MEMORY_BUDGET ? MEMORY_BUDGET.maxFacts : 40;
+  // Knowledge-gossip Phase 1: written through the record normalizer so the
+  // belief record is complete on every fact (provenance 'witnessed',
+  // confidence 1.0, pinned per D3 — importance 0.9 >= significant).
+  // Deliberately NOT addMemoryFact: this writer has its own eviction policy
+  // (drop completed jobs before history) and addMemoryFact's pinned-exempt
+  // eviction would fight it.
+  npc.memory.facts.push(backfillFactRecordV2({ text, day: day || 0, importance: 0.9, category, valid: true }));
+  // Respect the memory budget, preferring to drop a completed-job fact over
+  // any static/seeded history fact (day 0, category 'history'). Pinned facts
+  // are exempt (D3); if every fact is pinned the overflow is allowed — the
+  // all-pinned precedent. In practice the tier stays ~20 facts under the 60
+  // cap, so this branch is the rarely-hit backstop.
+  const cap = BELIEF.maxFacts;
   if (npc.memory.facts.length > cap) {
-    const dropIdx = npc.memory.facts.findIndex(f => f.category === 'renovation_done');
+    let dropIdx = npc.memory.facts.findIndex(f => f.pinned !== true && f.category === 'renovation_done');
+    if (dropIdx < 0) dropIdx = npc.memory.facts.findIndex(f => f.pinned !== true);
     npc.memory.facts.splice(dropIdx >= 0 ? dropIdx : 0, 1);
   }
 }
@@ -2263,9 +2287,11 @@ function createExternalNpc(gameState, npcId, seedKey, occupationTitle, opts = {}
   }
   // The deviant number: a temperament-weighted [0,1] so Phase 8 can compare
   // Hot Singles against low-deviant roommates without string-matching.
-  const deviantLevel = Math.max(0, Math.min(1,
-    0.5 + 0.5 * (0.4 * temperament.volatility + 0.35 * temperament.openness + 0.25 * temperament.assertiveness)
-  ));
+  // The arithmetic moved to SIM's disinhibitionFromTemperament (initiative
+  // plan D11) when the roommate cast — who have no baked deviantLevel at all —
+  // needed the same model. Same weights, one definition, read from
+  // AH_HOT_SINGLES_TUNING.deviantWeights; this is the only place it is BAKED.
+  const deviantLevel = disinhibitionFromTemperament(temperament);
   const bible = {
     name,
     genSeed: Math.floor(rng() * 1e9),

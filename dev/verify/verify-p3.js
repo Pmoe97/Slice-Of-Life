@@ -111,26 +111,55 @@ check('an all-exempt tier overflows rather than dropping a permanent memory',
       api(`__t.allShared.memory.episodes.length`) === 40);
 
 console.log('\nFacts evict by importance, and the off-by-one is gone');
+// The fact budget MOVED in Plan 4 (knowledge-gossip Phase 1, D15):
+// `MEMORY_BUDGET.maxFacts` 40 became `BELIEF.maxFacts` 60. This block read the
+// old name — i.e. `undefined` — and filled a hardcoded 40, so all three
+// assertions were measuring a cap that no longer existed. The cap is read once
+// here and every loop below is sized from it, so the next move costs nothing.
+const FACT_CAP = api(`BELIEF.maxFacts`);
 api(`
   __t.f = __t.blank();
-  for (let i = 0; i < 40; i++) __t.f = addMemoryFact(__t.f, { text: 'trivia ' + i, importance: 0.2 });
+  for (let i = 0; i < ${FACT_CAP}; i++) __t.f = addMemoryFact(__t.f, { text: 'trivia ' + i, importance: 0.2 });
 `);
-check('facts fill to exactly maxFacts (40), not 39',
-      api(`__t.f.memory.facts.length`) === api(`MEMORY_BUDGET.maxFacts`),
+check(`facts fill to exactly maxFacts (${FACT_CAP}), not ${FACT_CAP - 1}`,
+      api(`__t.f.memory.facts.length`) === FACT_CAP,
       `got ${api(`__t.f.memory.facts.length`)}`);
 api(`__t.f = addMemoryFact(__t.f, { text: 'HER BIRTHDAY IS THE 4TH', importance: 1 });`);
 check('a high-importance fact evicts a trivial one, not itself',
       api(`__t.f.memory.facts.some(f => f.text === 'HER BIRTHDAY IS THE 4TH')`));
-check('facts still capped at 40', api(`__t.f.memory.facts.length`) === 40);
+check(`facts still capped at ${FACT_CAP}`, api(`__t.f.memory.facts.length`) === FACT_CAP);
+// Filled at `conversational`, DELIBERATELY. This used to fill at importance 1,
+// which Plan 4's D3 made a second claim as well as a priority: importance >=
+// MEMORY_IMPORTANCE.significant now grants `pinned`, and pinned facts never
+// evict. So the old version built a tier where every entry was exempt and then
+// asserted one of them got dropped. The invariant it is reaching for — an
+// invalid fact is the cheapest thing to lose — only has meaning among facts
+// that are evictable at all.
 api(`
   __t.f2 = __t.blank();
-  for (let i = 0; i < 40; i++) __t.f2 = addMemoryFact(__t.f2, { text: 'keep ' + i, importance: 1 });
+  for (let i = 0; i < ${FACT_CAP}; i++)
+    __t.f2 = addMemoryFact(__t.f2, { text: 'keep ' + i, importance: MEMORY_IMPORTANCE.conversational });
   __t.f2.memory.facts[7].valid = false;
-  __t.f2 = addMemoryFact(__t.f2, { text: 'NEW', importance: 1 });
+  __t.f2 = addMemoryFact(__t.f2, { text: 'NEW', importance: MEMORY_IMPORTANCE.conversational });
 `);
 check('an invalidated fact is evicted before any valid one',
       !api(`__t.f2.memory.facts.some(f => f.text === 'keep 7')`) &&
        api(`__t.f2.memory.facts.some(f => f.text === 'NEW')`));
+check('...and none of those facts was pinned, or the eviction above proved nothing',
+      api(`__t.f2.memory.facts.every(f => f.pinned !== true)`),
+      `MEMORY_IMPORTANCE.conversational must stay below .significant for this test to bite`);
+// D3's other half, which nothing covered and which surprised a reader of this
+// file: a tier of entirely pinned facts is ALLOWED to exceed the budget. That
+// is the day-0 episode precedent applied to beliefs, not a cap that leaks.
+api(`
+  __t.f3 = __t.blank();
+  for (let i = 0; i < ${FACT_CAP} + 1; i++)
+    __t.f3 = addMemoryFact(__t.f3, { text: 'core ' + i, importance: MEMORY_IMPORTANCE.significant });
+`);
+check(`an all-pinned tier is allowed past the ${FACT_CAP} budget (D3)`,
+      api(`__t.f3.memory.facts.length`) === FACT_CAP + 1 &&
+      api(`__t.f3.memory.facts.every(f => f.pinned === true)`),
+      `got ${api(`__t.f3.memory.facts.length`)} — pinned facts never evict, so the budget yields rather than the memory`);
 
 console.log('\nRanking and eviction now agree');
 // retrieveRelevantMemories ranks by importance*decay; eviction must use the

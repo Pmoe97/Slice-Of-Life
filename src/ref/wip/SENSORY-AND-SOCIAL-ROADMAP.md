@@ -1,10 +1,15 @@
 # Sensory & Social Roadmap
 
-Status: **active** — the umbrella for six linked overhauls. Design session
-2026-08-10. **Plans 0, 1 and 2 are complete; Plan 3 is written and ready to
-build** (design session 2026-08-11). Plans 4–5 are theses awaiting their own
-design sessions.
-Last updated 2026-08-11.
+Status: **COMPLETE** — the umbrella for six linked overhauls, and **all six
+have shipped**. Design session 2026-08-10. Plans 0–1 on 2026-08-10, Plans 2–3
+on 2026-08-11, Plan 4 on 2026-08-12, and **Plan 5 on 2026-08-13** (designed
+2026-08-12, all 6 phases built, D1–D36 locked, 372 assertions in
+`verify-i1..i6`). Plus **Plan X-5**, which was not one of the six and was
+inserted ahead of Plan 5 to give it motivation sources that were not zero. Every
+plan document now lives in `complete/`; this file stays in `wip/` as the
+umbrella. See [`../complete/npc-initiative-plan.md`](../complete/npc-initiative-plan.md),
+which is the source of truth for Plan 5.
+Last updated 2026-08-13.
 
 **Verification note for every plan below.** Plan 0 established that the whole
 engine — all 27 files through `interruption.js` — loads into a bare Node `vm`
@@ -160,9 +165,10 @@ own `D`-numbers.
 | 0 | [`../complete/npc-correctness-fixes-plan.md`](../complete/npc-correctness-fixes-plan.md) | **Complete** (2026-08-10) | Fixed the five defects the audit found. Later plans build on a working relationship and memory layer. Carries the authoritative dead-field disposition table |
 | 1 | [`../complete/perception-and-signals-plan.md`](../complete/perception-and-signals-plan.md) | **Complete** (2026-08-10) | The signal substrate: standing + transient signals, propagation with per-channel door attenuation, notes, and one perception query shared by the player and every NPC |
 | 2 | [`../complete/scene-reader-ui-plan.md`](../complete/scene-reader-ui-plan.md) | **Complete** (2026-08-11) | The interactive-novel main UI, awareness indicators, demoted log, delineated conversation history. Created `src/srcfiles/scene.js`; 110 assertions |
-| 3 | [`npc-cognition-plan.md`](npc-cognition-plan.md) | **Written — next up** (2026-08-11) | Utility-scored selection, committed multi-tick pursuits, NPCs consuming perception |
-| 4 | `knowledge-gossip-memory-plan.md` | Thesis only | Facts with provenance and confidence, NPC-to-NPC transmission, rumination, the player model |
-| 5 | `npc-initiative-plan.md` | Thesis only | NPCs approach, knock, propose; shared activities that feed Plan 4 |
+| 3 | [`../complete/npc-cognition-plan.md`](../complete/npc-cognition-plan.md) | **Complete** (2026-08-11) | Utility-scored selection, committed multi-tick pursuits, NPCs consuming perception |
+| 4 | [`../complete/knowledge-gossip-memory-plan.md`](../complete/knowledge-gossip-memory-plan.md) | **Complete** (2026-08-12) | Facts with provenance and confidence, NPC-to-NPC transmission, rumination, the player model, the D13 bridge, and the Character Studio (provenance through to a viewable/edit surface). All 23 decisions locked (D1–D23) |
+| X-5 | [`plan-x5-conversation-consequences.md`](plan-x5-conversation-consequences.md) | **Designed** (2026-08-12), not started | **Not one of the original six — inserted before Plan 5 and built in full first.** Splits judging from writing: a scene-windowed Assessor scores relationship deltas, a day-windowed Chronicler extracts facts as attributed claims. Closes the knowledge cold start Plan 5's Phase 2 depends on. All 17 decisions locked (D1–D17) |
+| 5 | [`../complete/npc-initiative-plan.md`](../complete/npc-initiative-plan.md) | **Complete — all 6 phases** (2026-08-13) | NPCs approach, knock, propose, text; shared activities that feed Plan 4. Reframed in design as a **visibility spectrum** — tiers 1–2 turned out to be already built by Plans 1 and 3, so the plan targets tiers 3–5. Built: the expression layer, the motivation sources that were reading zero, `npc.overture` across all four channels, ten shareable `self.*` activities, and the rate tuned by measurement to **0.099 overtures/NPC/day untouched and 1.742 at the affection ceiling**. D1–D36 locked, 372 assertions in `verify-i1..i6`. Its **D34** reaches outside this plan: a `cooldownTicks` is a wrapped daily window rather than an elapsed duration, so three entries in the game had been firing once per NPC per *game* |
 
 Plans 2–5 have theses recorded below. Each gets its own design session
 before it is written, at the point where the plan beneath it has landed
@@ -205,7 +211,7 @@ bubble machinery.
 
 ---
 
-## Plan 3 — NPC Cognition *(written — see [`npc-cognition-plan.md`](npc-cognition-plan.md))*
+## Plan 3 — NPC Cognition *(built — see [`../complete/npc-cognition-plan.md`](../complete/npc-cognition-plan.md))*
 
 > **The thesis below was measured during Plan 3's design session and its
 > leading claim is wrong.** The collision it describes happens in **1.0%** of
@@ -241,7 +247,10 @@ genuinely differentiates behaviour without becoming unreadable; whether
 
 ---
 
-## Plan 4 — Knowledge, Gossip & Rumination *(thesis only)*
+## Plan 4 — Knowledge, Gossip & Rumination *(built — see [`../complete/knowledge-gossip-memory-plan.md`](../complete/knowledge-gossip-memory-plan.md))*
+
+*The thesis below is what was commissioned; the plan document is what got
+built and is the authority on the result.*
 
 The largest and most novel plan. Memory stops being a flat list of text
 and becomes a web of held beliefs.
@@ -282,7 +291,19 @@ or piggybacks an LLM call.
 
 ---
 
-## Plan 5 — NPC Initiative & Social Verbs *(thesis only)*
+## Plan 5 — NPC Initiative & Social Verbs *(**complete** — see [`../complete/npc-initiative-plan.md`](../complete/npc-initiative-plan.md))*
+
+> **The thesis below stands, but the design session (2026-08-12) reframed its
+> shape and measured its premises. Read the plan, not this.** Initiative turned
+> out to be a **visibility spectrum** rather than one behaviour: tiers 1–2
+> (internal life, asynchronously discovered traces) are already built by Plans 1
+> and 3 and are out of scope, so the plan targets tiers 3–5. The open questions
+> named at the end of this section are resolved as D9, D10 and D21.
+>
+> The measurement that shaped it: **four of the five motivation sources the plan
+> intends to spend read exactly zero** after seven in-game days — desire,
+> grievance, open questions and facts — and `mayInitiate`, a flag named for
+> precisely what this plan does, is computed in `ui.js` and consumed by nothing.
 
 The payoff. Every language beat in the game today except two adult-content
 interruptions is initiated by the player.

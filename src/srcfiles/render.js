@@ -1349,6 +1349,21 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
   // Social
   const socialChips = [];
   const presentNpcIds = getPresentNpcIds(gs.npcs, roomId);
+  // Initiative plan Phase 4 (D8): the channels an NPC opens that the player has
+  // no existing verb for go FIRST, because they are the only chips in this
+  // group that are about something already happening to you. An approach is
+  // deliberately not here — it is answered by Talk and refused by Go, which is
+  // why Phase 3 needed no surface — so the gate is the def declaring `respond`
+  // rather than the record existing.
+  //
+  // The knocker is in another room by construction, so this walks every NPC
+  // rather than the present ones. `overtureRespondTargets` is what decides
+  // whether their record is one this player, standing here, can answer.
+  for (const { npcId, npc, respond } of overtureRespondTargets(gs)) {
+    const name = npc.bible?.name || 'Them';
+    socialChips.push({ label: respond.accept.replace('{name}', name), action: 'overture.accept', npcId });
+    socialChips.push({ label: respond.decline.replace('{name}', name), action: 'overture.decline', npcId });
+  }
   for (const npcId of presentNpcIds) {
     const npc = gs.npcs[npcId];
     socialChips.push({ label: `Talk to ${npc.bible.name || 'Someone'}`, action: 'talk', npcId });

@@ -98,7 +98,12 @@ check('close passes the move-in gate',
       api(`hasPlayerPhaseAtLeast({ relPlayer: { conversationPhase: 'close' } }, MOVE_IN_TUNING.playerPhaseMin)`) === true);
 
 console.log('\nD3 — the npcs 3→4 migration re-derives rather than patching');
-check('FOLDER_VERSIONS.npcs bumped to 4', api(`FOLDER_VERSIONS.npcs`) === 4, `got ${api(`FOLDER_VERSIONS.npcs`)}`);
+// A FLOOR, never an equality (README rule 4). This pinned `=== 4` and Plan 4's
+// belief-record migrations took the npcs folder to 6, so a later plan doing
+// exactly what it should reported as a Plan 0 regression. Versions only go up;
+// what this phase cares about is that the 3->4 step exists and still runs,
+// which is the assertion below.
+check('FOLDER_VERSIONS.npcs is at least 4', api(`FOLDER_VERSIONS.npcs`) >= 4, `got ${api(`FOLDER_VERSIONS.npcs`)}`);
 const steps = api(`MIGRATIONS.npcs.map(m => m.from + '->' + m.to)`);
 check('a 3->4 step is registered', steps.includes('3->4'), `got ${steps.join(', ')}`);
 

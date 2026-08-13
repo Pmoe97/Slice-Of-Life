@@ -280,7 +280,7 @@ function trackerServices(gs) {
   return out;
 }
 
-// Unread IM threads (populated by DRIVE_DEFS.text_player). One entry per
+// Unread IM threads (populated by OVERTURE_DEFS.text_player). One entry per
 // thread with a count; urgency scales per-message up to a cap so a flood
 // can't out-rank real money obligations.
 function trackerImUnread(gs) {

@@ -10,17 +10,19 @@
 //   1. Actions per npc-tick, and how often an NPC with something to do does
 //      nothing. This is the headline the plan exists to move.
 //   2. Per drive, eligible vs fired — which drives are dead weight.
-//   3. Every need gate against the range its need actually reaches. A gate the
-//      need never crosses is a drive that can never fire.
+//   3. Every need curve against the range its need actually reaches. A `below`
+//      the need never gets under is a term that contributes nothing, forever.
 //   4. Whether the apartment gets dirty on its own, which is what the
 //      perception term has to score against.
+//   5. The score distribution, and (since Phase 2) what pursuits actually get
+//      opened, held and broken.
 //
 // HOW IT WORKS. evaluateDrives is wrapped in the vm context: we re-run its own
-// eligibility filter on its real arguments to capture the candidate set, then
+// candidacy filter on its real arguments to capture the candidate set, then
 // call the original and diff the cooldown stamps. setCooldown is called on
 // exactly the firing paths, so a drive whose stamp equals currentTick after the
-// call and did not before is one that fired. This survives the plan's Phase 2
-// rewrite — a pursuit still sets a cooldown when it starts.
+// call and did not before is one that fired. This survived the plan's Phase 2
+// rewrite as promised — a pursuit still sets a cooldown when it opens.
 //
 // TRAP: resolveBatch returns { state, events, peepResults } and does NOT mutate
 // its argument. Read gameState.npcs after calling it and every need reads as a
@@ -45,15 +47,26 @@ api(`
 
   // Deliberately filthy, for separating "this drive is dead" from "this house
   // was never dirty enough to ask".
+  //
+  // The dirty value is DERIVED from each object def's own emits table — pick
+  // whichever value of a state actually emits a signal, and take the strongest.
+  // The version this replaced hardcoded them, and one was simply wrong: it set
+  // clutter to 'heavy' where the state's values are tidy|cluttered, so no object
+  // in the game has ever been made cluttered by this function and the "filthy
+  // house" column understated clean_common for as long as it has existed. A
+  // literal that has to agree with defs.world.js is a literal that will not.
   __filth = (g) => {
     for (const objs of Object.values(g.objects)) {
       for (const o of Object.values(objs)) {
-        const st = OBJECT_DEFS[o.defId] && OBJECT_DEFS[o.defId].states;
-        if (!st) continue;
-        if (st.dishes) o.state = { ...o.state, dishes: 'many' };
-        if (st.clutter) o.state = { ...o.state, clutter: 'heavy' };
-        if (st.made) o.state = { ...o.state, made: 'unmade' };
-        if (st.rotten_food) o.state = { ...o.state, rotten_food: 'rotten' };
+        const emits = OBJECT_DEFS[o.defId] && OBJECT_DEFS[o.defId].emits;
+        if (!emits) continue;
+        for (const [stateKey, byValue] of Object.entries(emits)) {
+          let worst = null, worstAt = -1;
+          for (const [value, payload] of Object.entries(byValue)) {
+            if (payload && payload.intensity > worstAt) { worst = value; worstAt = payload.intensity; }
+          }
+          if (worst !== null) o.state = { ...o.state, [stateKey]: worst };
+        }
       }
     }
     return g;
@@ -64,30 +77,44 @@ api(`
   evaluateDrives = function (npc, npcId, npcs, resolved, gameState, rng, currentTick, opts) {
     opts = opts || {};
     const perceived = resolved.location ? mergePerceived(perceiveSignals(gameState, npcId, resolved.location)) : [];
-    const eligible = [];
-    for (const [driveId, drive] of Object.entries(DRIVE_DEFS)) {
-      if (drive.blockFilter && !drive.blockFilter.includes(resolved.block)) continue;
-      if (opts.isVisitor && !VISITOR_DRIVE_ALLOWLIST.includes(driveId)) continue;
-      const df = MAINTENANCE.npcDecayActions[driveId];
-      if (df && df.some(fid => !isFacilityFunctional(gameState, fid))) continue;
-      if (!checkDriveGates(drive, npc, perceived)) continue;
-      if (isOnCooldown(npc, driveId, currentTick)) continue;
-      eligible.push(driveId);
-    }
+    // Phase 2: candidacy is COGNITION's isDriveCandidate — the same one
+    // scoreCandidates applies, including D15's per-drive conditions. This used
+    // to re-implement evaluateDrives' inline filter; that filter no longer
+    // exists, and an instrument with its own copy of a rule is an instrument
+    // that can disagree with the thing it measures.
+    const ranked = scoreCandidates(npc, npcId, gameState, resolved, perceived, opts);
+    const eligible = ranked.map(c => c.driveId);
+
+    // What the NPC was already in the middle of, BEFORE this tick's resolution.
+    // resolveTick has already aged it, so a pursuit here is one with ticks left.
+    const heldBefore = npc.pursuit ? npc.pursuit.driveId : null;
+
     const before = (npc.flags || {})[DRIVE_COOLDOWN_KEY] || {};
     const res = __origEvaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick, opts);
     const after = (res.updatedNpc && res.updatedNpc.flags && res.updatedNpc.flags[DRIVE_COOLDOWN_KEY]) || {};
+    const heldAfter = gameState.npcs[npcId] && gameState.npcs[npcId].pursuit;
     __rows.push({
       eligible,
       fired: Object.keys(after).filter(d => after[d] === currentTick && before[d] !== currentTick),
+      scored: ranked.map(c => [c.driveId, +c.score.toFixed(4)]),
+      heldBefore,
+      // A pursuit that was held coming in and is not the one held going out was
+      // broken this tick — either by a challenger clearing breakMargin or by
+      // D5's short list.
+      broke: !!(heldBefore && (!heldAfter || heldAfter.driveId !== heldBefore)),
+      opened: !!(heldAfter && heldAfter.startedTick === currentTick && heldAfter.driveId !== heldBefore),
     });
     return res;
   };
 
-  // A drive whose def carries weight 0 has its real chance computed inside a
-  // custom resolver (peep/snoop/eat/investigate/gift), so counting it as a
-  // candidate would overstate the choice set the weight roll actually thins.
-  __standard = () => Object.keys(DRIVE_DEFS).filter(d => (DRIVE_DEFS[d].weight || 0) > 0);
+  // The twelve drives that resolve through the standard path. The other four
+  // (peep/snoop/investigate/gift) route into a custom resolver. This used to be
+  // derived from weight > 0, which meant the same set — but D1 retired weight,
+  // so the resolver flags are now the only honest way to ask.
+  __standard = () => Object.keys(DRIVE_DEFS).filter(d => {
+    const x = DRIVE_DEFS[d];
+    return !x.isPeepDrive && !x.isSnoopDrive && !x.isInvestigateDrive && !x.isGiftDrive;
+  });
 `);
 
 function run(filthy) {
@@ -102,7 +129,21 @@ function run(filthy) {
       const S = new Set(__standard());
       const eligHist = {}, firedHist = {}, eligBy = {}, firedBy = {};
       let withChoice = 0, actedWithChoice = 0, totalFired = 0, totalElig = 0;
+      // Score distribution: per drive, how often it was a candidate, what it
+      // scored when it was, how often it cleared actionThreshold, and how often
+      // it was the best thing on offer. A drive that is always a candidate and
+      // never the winner is losing for a readable reason.
+      const scoreBy = {}, topBy = {};
+      let topClears = 0, anyCandidate = 0;
+      // Phase 2: commitment. How many ticks are spent inside a pursuit somebody
+      // already started, how many pursuits get opened, and how many get broken
+      // before they run out.
+      let heldTicks = 0, opened = 0, broke = 0;
+      const openedBy = {};
       for (const r of __rows) {
+        if (r.heldBefore) heldTicks++;
+        if (r.opened) { opened++; openedBy[r.fired[0] || '?'] = (openedBy[r.fired[0] || '?'] || 0) + 1; }
+        if (r.broke) broke++;
         const e = r.eligible.filter(d => S.has(d));
         const f = r.fired.filter(d => S.has(d));
         totalElig += e.length; totalFired += f.length;
@@ -111,9 +152,23 @@ function run(filthy) {
         for (const d of r.eligible) eligBy[d] = (eligBy[d] || 0) + 1;
         for (const d of r.fired) firedBy[d] = (firedBy[d] || 0) + 1;
         if (e.length >= 1) { withChoice++; if (f.length >= 1) actedWithChoice++; }
+
+        for (const [d, sc] of r.scored) {
+          const a = scoreBy[d] || (scoreBy[d] = { n: 0, sum: 0, max: 0, over: 0 });
+          a.n++; a.sum += sc; a.over += sc > COGNITION.actionThreshold ? 1 : 0;
+          if (sc > a.max) a.max = sc;
+        }
+        if (r.scored.length) {
+          anyCandidate++;
+          const [wd, ws] = r.scored[0];
+          if (ws > COGNITION.actionThreshold) { topClears++; topBy[wd] = (topBy[wd] || 0) + 1; }
+        }
       }
       return JSON.stringify({ samples: __rows.length, eligHist, firedHist, eligBy, firedBy,
-                              withChoice, actedWithChoice, totalFired, totalElig });
+                              withChoice, actedWithChoice, totalFired, totalElig,
+                              scoreBy, topBy, topClears, anyCandidate,
+                              heldTicks, opened, broke, openedBy,
+                              threshold: COGNITION.actionThreshold, target: COGNITION.targetActionsPerTick });
     })()
   `));
 }
@@ -154,11 +209,13 @@ for (const d of ALL) {
 }
 console.log(`\n  (custom-resolver drives, weight 0: ${ALL.filter(d => !STD.includes(d)).join(', ')})`);
 console.log('  CAVEAT: the player in this sim is idle — never showers, never puts a phone');
-console.log('  down, never earns affection. peep_player / snoop_phone / gift_to_player');
-console.log('  reading 0 is probably that, not a dead drive. sleep_recover and seek_comfort');
-console.log('  are dead for a real reason — see section 3.');
+console.log('  down, never earns affection, and never leaves the room they start in.');
+console.log('  peep_player / snoop_phone / gift_to_player / react_to_player reading 0 is');
+console.log('  that, not a dead drive: since Phase 2 all four have candidacy conditions');
+console.log('  (D15) that a stationary, propertyless, unloved player never satisfies.');
+console.log('  verify-c2 is where each is shown firing in a state that does satisfy them.');
 
-console.log('\n--- 3. GATE REACHABILITY ---\n');
+console.log('\n--- 3. NEED-CURVE REACHABILITY ---\n');
 const gates = JSON.parse(api(`
   (() => {
     const range = {};
@@ -180,21 +237,31 @@ const gates = JSON.parse(api(`
         }
       }
     }
+    // D14 deleted the last { need, op, threshold } gate from DRIVE_DEFS: a need
+    // is a score term now, so what matters is whether the need ever gets under
+    // the point its curve starts at. The failure mode is identical and this is
+    // the same reading of it.
     const g = {};
-    for (const [id, d] of Object.entries(DRIVE_DEFS))
-      for (const gt of (d.gates || [])) if (gt.need) g[id] = { need: gt.need, op: gt.op, threshold: gt.threshold };
+    for (const [id, d] of Object.entries(DRIVE_DEFS)) {
+      const u = d.utility && d.utility.need;
+      if (u) g[id] = { need: u.need, below: u.below };
+    }
     return JSON.stringify({ range, gates: g });
   })()
 `));
-console.log('  drive                  need          gate        observed      verdict');
+console.log('  drive                  need          below       observed      verdict');
 for (const [id, g] of Object.entries(gates.gates)) {
   const r = gates.range[g.need];
   if (!r) { console.log(`  ${id.padEnd(22)} ${g.need.padEnd(13)} (need not tracked)`); continue; }
-  const reachable = g.op === 'below' ? r.min < g.threshold : r.max > g.threshold;
   const span = `${Math.round(r.min)}..${Math.round(r.max)}`;
-  console.log(`  ${id.padEnd(22)} ${g.need.padEnd(13)} ${(g.op + ' ' + g.threshold).padEnd(11)} ${span.padEnd(13)} ` +
-              (reachable ? 'reachable' : '*** UNREACHABLE ***'));
+  console.log(`  ${id.padEnd(22)} ${g.need.padEnd(13)} ${String(g.below).padEnd(11)} ${span.padEnd(13)} ` +
+              (r.min < g.below ? 'motivates' : '*** DEAD TERM ***'));
 }
+console.log('\n  The two drives this table was written for — sleep_recover (energy');
+console.log('  gate 20 against a floor of 28) and seek_comfort (comfort gate 40');
+console.log('  against a floor of exactly 40) — no longer have gates to be dead');
+console.log('  behind. Their curves start at 50 and 70. Section 2 is where you');
+console.log('  check they actually fire.');
 
 console.log('\n--- 4. DOES THE APARTMENT DIRTY ITSELF? ---\n');
 console.log(api(`
@@ -214,3 +281,36 @@ console.log(api(`
 `));
 console.log('  Every mess in the game today is made by the player. The perception');
 console.log('  term has nothing to score until that changes (plan Phase 4).\n');
+
+console.log('--- 5. WHAT THE SCORER CHOSE (plan Phase 2) ---\n');
+console.log('  No longer a shadow. As of Phase 2 evaluateDrives selects on exactly');
+console.log('  these scores, so sections 1-2 above ARE this table\'s consequences.');
+console.log('  "won the tick" counts ticks where this drive was the top candidate');
+console.log('  above the threshold; it differs from "fired" in section 2 because a');
+console.log('  tick spent inside a held pursuit never gets to choose.\n');
+console.log(`  actionThreshold ${clean.threshold}   target ${clean.target} actions/npc-tick   (measured today: ${(clean.totalFired / clean.samples).toFixed(2)})\n`);
+console.log('  drive                 scored    mean     max   over thr   won the tick');
+for (const d of ALL) {
+  const a = clean.scoreBy[d];
+  if (!a) { console.log(`  ${d.padEnd(20)} ${'—'.padStart(7)}   (never a candidate)`); continue; }
+  console.log(`  ${d.padEnd(20)} ${String(a.n).padStart(7)} ${(a.sum / a.n).toFixed(3).padStart(7)} ${a.max.toFixed(3).padStart(7)} ` +
+              `${pc(a.over, a.n).padStart(10)} ${String(clean.topBy[d] || 0).padStart(14)}`);
+}
+console.log(`\n  npc-ticks with at least one candidate : ${clean.anyCandidate} (${pc(clean.anyCandidate, clean.samples)})`);
+console.log(`  ...where the best one cleared the bar : ${clean.topClears} (${pc(clean.topClears, clean.anyCandidate)})`);
+
+console.log('\n--- 6. COMMITMENT (plan Phase 2) ---\n');
+console.log(`  Pursuits opened                  : ${clean.opened} (${(clean.opened / clean.samples).toFixed(3)} per npc-tick)`);
+console.log(`  npc-ticks spent inside a pursuit : ${clean.heldTicks} (${pc(clean.heldTicks, clean.samples)})`);
+console.log(`  Pursuits broken before they ran out: ${clean.broke} (${pc(clean.broke, clean.heldTicks)} of held ticks)`);
+console.log(`  Mean ticks per pursuit           : ${clean.opened ? (1 + clean.heldTicks / clean.opened).toFixed(2) : '—'}`);
+console.log('\n  A tick spent inside a pursuit is a tick that does not choose, so');
+console.log('  holding LOWERS the action rate against the projection in section 5.');
+console.log('  That is the point — three ticks of one chore reads as a person doing');
+console.log('  something, three separate actions read as a queue of coincidences.\n');
+console.log(`  Actions per npc-tick: ${(clean.totalFired / clean.samples).toFixed(3)} against a target of ${clean.target} (D2).`);
+console.log('  PHASE 5 TUNES THIS, not Phase 2. The levers are actionThreshold, the');
+console.log('  per-drive baseAppeal values, and holdTicks. Read the "won the tick"');
+console.log('  column beside "over thr" before moving any of them: a drive that is');
+console.log('  often a candidate, often over the bar and never the winner is losing');
+console.log('  to something specific, and raising its base fixes the wrong thing.\n');

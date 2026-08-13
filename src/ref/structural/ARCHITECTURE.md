@@ -34,7 +34,10 @@ between folders together.
 | `src/ref/complete/npc-correctness-fixes-plan.md` | Roadmap Plan 0 — the five defects the 2026-08-10 NPC audit found: reversed conversation buffer, unreachable `early` relationship phase, FIFO memory eviction, pinned need economy, dead-field triage (**built** — all 5 phases, 151 assertions). Holds the authoritative dead-field disposition table. |
 | `src/ref/complete/perception-and-signals-plan.md` | Roadmap Plan 1 — the signal substrate: standing + transient signals, propagation over `ROOM_ADJACENCY` with per-channel door attenuation, notes, and ONE perception query shared by the player and every NPC (**built** — all 5 phases, 171 assertions). `src/srcfiles/signals.js` is the section it created. |
 | `src/ref/complete/scene-reader-ui-plan.md` | Roadmap Plan 2 — `#main-content`'s log becomes a room-scoped scene: composed establishing prose, beats, collapsed history, a moodle strip, sensory icons on the floor plan, attention callouts, and a conversation pane that remembers (**built** — all 5 phases, 110 assertions). Created `src/srcfiles/scene.js`. |
-| `src/ref/wip/npc-cognition-plan.md` | Roadmap Plan 3 — utility scoring replaces the independent per-drive coin flips in `evaluateDrives`, and an NPC commits to one `pursuit` for several ticks. Measured baseline: an NPC acts once per 6.2 in-game hours and does nothing in 82.6% of the ticks where it has something to do (**written**; no phases built). Will create `src/srcfiles/cognition.js`. |
+| `src/ref/complete/npc-cognition-plan.md` | Roadmap Plan 3 — utility scoring replaces the independent per-drive coin flips in `evaluateDrives`; an NPC commits to one `pursuit` for several ticks. **Built** — all 5 phases: created `src/srcfiles/cognition.js` and tuned (Phase 5) to 0.2514 at-home actions/npc-tick on the D2 target. |
+| `src/ref/complete/knowledge-gossip-memory-plan.md` | Roadmap Plan 4 — the belief record (`provenance`/`confidence`/`salience`/`pinned`/`emotionalTag` on facts, `BELIEF`/`FACT_DISPLAY`), gossip transmission (`npc_chat` payload + overhearing), deterministic rumination + open questions, the D11 player model, the D13 bridge, and the Character Studio (D12/D16/D17: profile tabs, `validateNpcField`, Edit Mode). **Built** — all 5 phases, D1–D23 locked. |
+| `src/ref/complete/plan-x5-conversation-consequences.md` | **Not one of the roadmap's six** — inserted ahead of Plan 5, which measured four of its five motivation sources reading zero. Splits the model that *writes* dialogue from the models that *judge* it: the **Assessor** scores a relationship over a scene, the **Chronicler** extracts knowledge over a day, and the writing prompt scores nothing (its `relationshipDeltas` and `memoryAdditions` are stripped on ingestion, not merely unasked for). Created `src/srcfiles/x5.js` — pure, no `async`, the parsing/clamping/windowing/ingestion half. **Built** — all 4 phases, D1–D28 locked, 295 assertions across `verify-x1..x4`. Phase 4 retuned `X5.deltaDivisor` 100 → 50 by measurement (`dev/verify/measure-x5.js`). |
+| `src/ref/complete/npc-initiative-plan.md` | Roadmap Plan 5 — NPCs open. **Built** — all 6 phases, D1–D36 locked, 372 assertions across `verify-i1..i6`. `expresses` leaks mood into the signal layer (Phase 1); ambient episodes carry `participants`/`emotionalTag` so the knowledge sources stop reading zero (Phase 2); `npc.overture` is a committed social act scored by Plan 3's one scorer and committed by four named writers in `src/srcfiles/overture.js` (Phase 3); text, propose and knock ship as `OVERTURE_DEFS` rows rather than code paths, deleting `DRIVE_DEFS.text_player` and giving `commitments.js` a second kind (`hangout`) booked by an NPC (Phase 4); ten `shared` fields on the existing `self.*` entries make activities two-person (Phase 5). Phase 6 tuned the rate to **0.099 overtures/NPC/day untouched and 1.742 at the affection ceiling** (`dev/verify/measure-initiative.js`) and found **D34**: a `cooldownTicks` is a wrapped daily window, not an elapsed duration, so three entries at or above `CLOCK.ticksPerDay` had been firing **once per NPC per game**. |
 | `src/ref/wip/prompt-generator-v2.md` | Decision-vector prompt architecture for the menu slideshow (**engine + 4 passes shipped**; optional pool expansion outstanding) |
 | `src/ref/patterns/perchance-agent-handoff-prompt.md` | The original generic one-phase-per-session protocol (each overhaul now has its own; this is the ancestor) |
 
@@ -106,13 +109,21 @@ partial bump is how you get a client running half-old code):
 
 ```
 config.js → icons.js → defs.world.js → defs.actions.js → defs.computer.js
-→ state.js → sim.js → world.js → items.js → effects.js → drives.js
-→ actions.js → intent.js → skills.js → stealth.js → time.js → computer.js
-→ tracker.js → phone.js → npc.js → prompt.js → llm.js → interruption.js
+→ defs.menu.js → orbital.js → state.js → sim.js → commitments.js → world.js
+→ signals.js → scene.js → items.js → inventory.js → effects.js → drives.js
+→ cognition.js → actions.js → intent.js → skills.js → stealth.js → time.js
+→ computer.js → tracker.js → phone.js → npc.js → rumination.js → prompt.js
+→ llm.js → x5.js → interruption.js
 → image.js → render.js → render.computer.js → render.desktop.js
-→ render.phone.js → ui.js → ui.computer.js → ui.windowmanager.js
-→ ui.phone.js
+→ render.phone.js → ui.js → ui.computer.js → afterhours.js
+→ ui.windowmanager.js → ui.phone.js → menu.js
 ```
+
+**A new `src/srcfiles/*.js` needs a line in TWO places**: `main.html`'s script
+tags and `dev/verify/loadgame.js`'s `ORDER` array. `rumination.js` shipped with
+only the first, and five harnesses — 175 assertions — died with
+`ReferenceError` the moment they called `resolveTick`, silently. See
+`dev/verify/README.md` rule 6.
 
 Rule: if a new script's *top-level* code reads another script's `const`/
 data at load time (e.g. `defs.actions.js` builds `ACTION_DEFS` entries by

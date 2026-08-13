@@ -47,6 +47,9 @@ async function advanceAndResolve(ticks, opts = {}) {
   if (wasRunning) pauseClockLoop();
 
   const dayBefore = currentGameState.meta.clock.day;
+  // Initiative plan Phase 3: who was already waiting on the player, so the
+  // arrival narration below fires only for records this batch OPENED.
+  const overturesBefore = pendingOvertureIds(currentGameState);
   const { state: newState, events, peepResults } = resolveBatch(currentGameState, ticks, { advanceClock: advanceClockToo });
   currentGameState = newState;
   appendWorldEvents(events);
@@ -77,7 +80,18 @@ async function advanceAndResolve(ticks, opts = {}) {
     // happened, not a hardcoded 0.5. An NPC generates 3-7 ambient events a
     // day; at a flat 0.5 against FIFO eviction, a week of laundry and naps
     // pushed out every conversation that mattered.
-    currentGameState.npcs[evt.npcId] = addMemoryEpisode(npc, evt.day, text, eventImportance(evt));
+    // Initiative plan Phase 2 (D15): the episode carries `participants` and
+    // `emotionalTag` now. Without them rumination's two D7 rules could never
+    // fire on ambient life — thirty background episodes a week per resident
+    // against a saturated episode tier produced 0 inferred facts and 0 open
+    // questions, and the entire belief layer was seeded by player conversation
+    // alone. `participants` was stamped inside the tick (SIM's
+    // stampEventParticipants) because co-presence is tick-local and this loop
+    // runs after the whole batch; the tag is derived here from EVENT_EMOTION,
+    // which needs nothing but the type.
+    currentGameState.npcs[evt.npcId] = addMemoryEpisode(
+      npc, evt.day, text, eventImportance(evt), eventEmotionalTag(evt), evt.participants || []
+    );
     // STEALTH (P6): SIM's resolveTick only decides/records evidence
     // discovery (stays synchronous/LLM-free); the suspicion bump itself is
     // a trusted-producer effect application, same tier as everywhere else
@@ -111,6 +125,13 @@ async function advanceAndResolve(ticks, opts = {}) {
     if (!npc.memory.episodes || npc.memory.episodes.length === 0) continue;
     currentGameState.npcs[id] = decayMemory(npc, ticks);
   }
+
+  // Initiative plan Phase 3: an NPC crossed the room. Narrated here rather
+  // than in the tick because the tick may not be the player's present moment —
+  // a batch resolves eight hours in one call — and because narration is the UI
+  // layer's job. D9's do-not-disturb set is what stops this from firing in the
+  // middle of a batch the player is asleep for.
+  narrateOvertureArrivals(overturesBefore);
 
   // Need consequences (P7): check player needs after tick resolution.
   // Fires when a need hits 0 — real mechanical effects, not just a red bar.
@@ -223,6 +244,11 @@ async function processDayRollover(day) {
   // Phase 11: investment growth at day-rollover.
   processInvestmentGrowth(currentGameState, day);
   await processRelConsequencesForDay(day);
+  // Plan X-5 Phase 3 (D3) — the Chronicler's primary trigger. Last in the
+  // rollover, after everything that could add to a transcript has run, and
+  // deliberately here rather than on a player-contact path: rollover is
+  // already a wait, which is the exception D6 names for this pass.
+  await chronicleDayRollover();
 }
 
 // Need consequences (P7): fires when player needs hit 0. Called after
@@ -315,10 +341,27 @@ function checkRelConsequences(npcId) {
   const desire = rel.desire || 0;
   const affection = rel.affection || 0;
 
+  // Initiative plan Phase 2 (D12/D13/D14). The gate itself is SIM's
+  // npcInitiativeGate — pure, personality-scaled, and reachable by the Node
+  // harness, which this function is not (it needs currentGameState and a DOM).
+  // Everything below reads it; nothing recomputes it.
+  const gate = npcInitiativeGate(npc, activeContentFlags(currentGameState));
+
   if (tension >= REL_CONSEQUENCES.tensionHigh) {
-    // NPC refuses to talk
-    if (orbitalRandom() < REL_CONSEQUENCES.tensionRefuseTalkChance) {
+    // D13 — desire overrides the tension refusal. This branch used to block
+    // EVERY approach at tensionHigh, which made `highDesire` (computed since
+    // Phase 3.8 and read by nothing) unable to matter even in principle.
+    // Someone disinhibited enough and wanting enough does not walk away from
+    // you because they are angry with you; the friction is the point. The roll
+    // is skipped outright rather than reweighted — a refusal that still lands
+    // 30% of the time reads as the override being broken.
+    if (!gate.tensionOverride && orbitalRandom() < REL_CONSEQUENCES.tensionRefuseTalkChance) {
       return { canTalk: false, avoided: false, reason: `${npc.bible.name} doesn't want to talk right now. They're clearly upset with you.` };
+    }
+    // It needs its own narration or the tension model reads as simply not
+    // working — doTalk renders this before the conversation opens.
+    if (gate.tensionOverride) {
+      return { canTalk: true, avoided: false, chargedDespiteTension: true, ...gateFlags(gate, comfort) };
     }
   }
 
@@ -329,14 +372,272 @@ function checkRelConsequences(npcId) {
     }
   }
 
-  // NPC Overhaul Phase 3.8 — low comfort makes NPC keep distance
+  return { canTalk: true, avoided: false, ...gateFlags(gate, comfort) };
+}
+
+// The relationship flags checkRelConsequences reports, in one place so its two
+// success returns cannot disagree. lowComfort/highComfort are NPC Overhaul
+// Phase 3.8's and unchanged; mayInitiate and highDesire now come from the
+// scaled gate rather than from an inline conjunction across three axes that
+// all generate at 0 (D12).
+//
+// `mayInitiate` still has no consumer here — Phase 3's overture scorer is its
+// declared one (D20 wires it in this plan, and the NOTE_TEMPLATES precedent is
+// how a field ships one phase ahead of its purpose-reader). `highDesire` got
+// its reader above. `tone` is deliberately NOT mirrored onto this return:
+// Phase 3 calls npcInitiativeGate itself, and this plan's invariant 4 is that
+// its own failure mode would be adding a third flag nothing reads.
+function gateFlags(gate, comfort) {
   const flags = {};
   if (comfort < REL_CONSEQUENCES.comfortLow) flags.lowComfort = true;
   if (comfort >= REL_CONSEQUENCES.comfortHigh) flags.highComfort = true;
-  if (desire >= REL_CONSEQUENCES.desireHigh) flags.highDesire = true;
-  if (desire >= REL_CONSEQUENCES.desireHighComfortHigh && comfort >= REL_CONSEQUENCES.comfortHigh && affection >= REL_CONSEQUENCES.affectionHigh) flags.mayInitiate = true;
+  if (gate.highDesire) flags.highDesire = true;
+  if (gate.mayInitiate) flags.mayInitiate = true;
+  return flags;
+}
 
-  return { canTalk: true, avoided: false, ...flags };
+// --- Overtures: the player's side (initiative plan Phase 3) ----------------
+// The tick decides that an NPC crosses the room; everything an overture MEANS
+// to the player happens out here, outside it, where the language and the
+// consequences belong (D18).
+//
+// Three endings, and they are the three the data model names. The player
+// TALKS to them -> engaged. The player LEAVES the room -> refused, and D10's
+// economy applies. Neither, and the record ages out in the tick -> lapsed, and
+// it costs nothing. That mapping is why Phase 3 needs no new surface (D8):
+// doTalk and doMove are the two things a player already does with someone
+// standing in front of them, and doing neither is already a decision.
+
+// Which residents were holding a pending overture, for the diff below. The
+// arrival narration has to fire exactly once, on the tick the record opens,
+// and comparing before-and-after is what buys that without a `surfaced` field
+// nothing else would ever read (R8).
+function pendingOvertureIds(gameState) {
+  return new Set(Object.keys(gameState.npcs || {})
+    .filter(id => isOverturePending(gameState.npcs[id])));
+}
+
+// D12 as the player experiences it: the warm and charged paths have to READ
+// differently or the distinction never leaves the data model. Two template
+// lists per channel, keyed by the tone the gate assigned.
+//
+// Phase 4: one table per channel that arrives in the scene, and the channel
+// picks. `text` is deliberately absent — a text does not arrive in the room,
+// it arrives in a thread, and narrating it here would tell the player about a
+// message they have not opened. The IM app's unread count is its surface, as
+// it was when this was a drive.
+const OVERTURE_ARRIVAL_TEMPLATES = {
+  approach: OVERTURE_APPROACH_TEMPLATES,
+  propose: OVERTURE_PROPOSE_TEMPLATES,
+  knock: OVERTURE_KNOCK_TEMPLATES,
+};
+
+// Where the arrival is visible from. An approach and a proposal happen in front
+// of you; a knock happens at a door you are behind, so the knocker is by
+// construction NOT in your room and the same-room test would silence the one
+// channel whose whole content is a noise you hear.
+function overtureArrivalVisible(npc) {
+  const def = OVERTURE_DEFS[npc.overture.overtureId];
+  if (def && def.waitAt === 'here') return true;
+  return npc.location === currentGameState.player.location;
+}
+
+function narrateOvertureArrivals(before) {
+  for (const [id, npc] of Object.entries(currentGameState.npcs || {})) {
+    if (!isOverturePending(npc) || before.has(id)) continue;
+    if (!overtureArrivalVisible(npc)) continue;
+    const byTone = OVERTURE_ARRIVAL_TEMPLATES[npc.overture.channel];
+    if (!byTone) continue;
+    const lines = byTone[npc.overture.tone] || byTone.warm;
+    if (!lines || lines.length === 0) continue;
+    addLogEntry('narration', fillOvertureLine(lines[Math.floor(orbitalRandom() * lines.length)], npc, npc.overture));
+  }
+}
+
+// The substitutions every channel's templates may carry. `{name}` is the only
+// one Phase 3 needed; a proposal has to be able to say WHEN and WHERE or it is
+// a mood rather than a plan, and those come off the record's terms.
+function fillOvertureLine(template, npc, record) {
+  const p = record.proposal;
+  return template
+    .replace('{name}', npc.bible?.name || 'Someone')
+    .replace('{when}', p ? proposalWhen(p) : 'sometime')
+    .replace('{where}', p ? (ROOMS[p.roomId]?.name || 'flat') : 'flat');
+}
+
+// "tonight at 19:00" / "tomorrow at 19:00" — the same today/tomorrow/date
+// vocabulary doInviteDinner already narrates a meal invitation in, so an
+// invitation reads the same whichever side of it asked.
+function proposalWhen(p) {
+  const today = currentGameState.meta.clock.day;
+  const when = p.day === today ? 'later today'
+    : p.day === today + 1 ? 'tomorrow'
+      : formatDate(p.day);
+  return `${when} at ${formatTime(p.tickStart * CLOCK.tickMinutes)}`;
+}
+
+// The opening line the conversation starts on when the NPC is the one who
+// opened. doConvSend passes its forced text straight to the model as the beat
+// to respond to, so naming the motive here is what makes an NPC who crossed
+// the room about a specific thing actually open about that thing — generated
+// at the moment it surfaces, on the player's time budget (D18), with nothing
+// pre-generated and nothing in the tick.
+function overtureOpeningLine(npc, record) {
+  const name = npc.bible?.name || 'your roommate';
+  const topic = record.motiveRef && record.motiveRef.topic;
+  // Phase 4: two channels open on the CHANNEL rather than on the motive,
+  // because what they did is more specific than why. A knock's opening beat is
+  // the door coming open; there is no version of that which reads as "they
+  // wandered over". A proposal is only ever affection-motivated (D30), so the
+  // motive switch below would give it one generic line for its only case.
+  if (record.channel === 'knock') {
+    return topic
+      ? `You open the door. ${name} is standing there — they have been thinking about ${topic}.`
+      : `You open the door. ${name} is standing there, and they came to find you.`;
+  }
+  if (record.channel === 'propose') {
+    return `${name} asked if you wanted to spend some time together, and you said yes.`;
+  }
+  switch (record.motive) {
+    case 'curiosity':
+      return topic ? `${name} came over to you — they have been wondering about ${topic}.`
+                   : `${name} came over to you with something on their mind.`;
+    case 'grievance':
+      return topic ? `${name} came over to you — they are still bothered about ${topic}.`
+                   : `${name} came over to you, and they are not happy.`;
+    case 'desire':
+      return record.tone === 'charged'
+        ? `${name} came over to you, standing close, and they are not pretending otherwise.`
+        : `${name} came over to you, and there is something in how they are looking at you.`;
+    default:
+      return `${name} came over to you because they wanted your company.`;
+  }
+}
+
+// D10 — a refusal costs a relationship delta AND is remembered, and BOTH
+// self-limit. `overtureRefusalScale` is the limiter and it is read twice: once
+// here, and once inside OVERTURE's motive scoring, so the relationship cost
+// and the NPC's willingness to ask again decay on the same curve rather than
+// on two that could be tuned apart.
+//
+// The fact goes through addMemoryFact, so it carries ordinary provenance and
+// confidence and decays like any other belief — a grudge that never fades is
+// the failure mode D10 exists to prevent. Written in the second person because
+// that is how this codebase writes what an NPC knows about the player, and it
+// is what derivePlayerModel matches on (R7).
+function applyOvertureRefusal(npcId, record) {
+  const npc = currentGameState.npcs[npcId];
+  if (!npc || !record) return;
+  const day = currentGameState.meta.clock.day;
+  const scale = overtureRefusalScale(npc, day);
+
+  const deltas = {};
+  for (const [axis, v] of Object.entries(OVERTURE.refusalDelta)) deltas[axis] = v * scale;
+  currentGameState.npcs[npcId] = applyRelDelta(npc, deltas, day);
+
+  // Phase 4: the channel gets its own remembered fact where it has one, and
+  // falls back to the tone-keyed base where it does not. Turning down a plan,
+  // not opening a door and walking away from someone standing in front of you
+  // are three different things, and a fact tier that records them identically
+  // has stopped being information — derivePlayerModel reads these back as what
+  // this NPC knows about you (R7).
+  const byChannel = OVERTURE_DEFS[record.overtureId]?.refusalFacts;
+  const template = (byChannel && (byChannel[record.tone] || byChannel.warm))
+    || OVERTURE_REFUSAL_FACTS[record.tone] || OVERTURE_REFUSAL_FACTS.warm;
+  currentGameState.npcs[npcId] = addMemoryFact(currentGameState.npcs[npcId], {
+    text: template.replace('{name}', npc.bible?.name || 'your roommate'),
+    day,
+    importance: MEMORY_IMPORTANCE[OVERTURE.refusalFactImportance],
+    category: 'relationship',
+    provenance: 'witnessed',
+    confidence: OVERTURE.refusalFactConfidence,
+    emotionalTag: record.tone === 'charged' ? 'romance' : 'warmth',
+  });
+
+  // Counted last, so the delta above is scaled by the refusals BEFORE this one
+  // — the first refusal costs full price, which is the point.
+  noteOvertureRefused(currentGameState, npcId, day);
+}
+
+// --- Phase 4: the channels that DO need a button ---------------------------
+// An approach is answered by doTalk and refused by doMove, which is why Phase 3
+// shipped without a surface (D8): both are things the player already does with
+// someone standing in front of them. A proposal and a knock are not. There is
+// no existing verb for "yes, book that" or "open the door", and inferring one
+// from a move would make walking to the kitchen mean two different things.
+//
+// So the def declares `respond: { accept, decline }` and RENDER offers exactly
+// those two chips while the record is pending. One surface, two channels — and
+// a third channel that wants one later needs only the two labels.
+async function doOvertureRespond(npcId, accepted) {
+  if (!npcId || !currentGameState) return;
+  const npc = currentGameState.npcs[npcId];
+  if (!npc || !isOverturePending(npc)) return;
+  const def = OVERTURE_DEFS[npc.overture.overtureId];
+  if (!def || !def.respond) return;
+  const name = npc.bible?.name || 'Them';
+
+  if (!accepted) {
+    // The same ending walking out of the room produces, reached by a button
+    // instead — D10's economy applies WHOLE, because saying no to someone's
+    // face is not a lesser refusal than turning your back on them.
+    const record = resolveOverture(currentGameState, npcId, 'refused');
+    applyOvertureRefusal(npcId, record);
+    addLogEntry('narration', record.channel === 'knock'
+      ? `You do not open the door. After a while, ${name} goes away.`
+      : `You tell ${name} no. They take it, and the moment closes.`);
+    await advanceAndResolve(1);
+    render(currentGameState, currentSceneState);
+    await saveAtBoundary('overture-decline', currentGameState);
+    return;
+  }
+
+  // A knock is answered by the door opening and the conversation starting, so
+  // it hands straight to doTalk — which resolves the record itself, on the
+  // motive, exactly as it does for an approach. Moving them into the room first
+  // is the door opening: they were held on their side of it by the tick.
+  if (def.waitAt === 'here') {
+    currentGameState.npcs[npcId] = { ...npc, location: currentGameState.player.location };
+    currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
+    await doTalk(npcId);
+    return;
+  }
+
+  // A proposal is answered by the plan existing. The commitment is created HERE
+  // rather than when the overture opened, which is what makes "a declined or
+  // lapsed proposal leaves no orphan record" true by construction rather than
+  // by a sweep.
+  const record = resolveOverture(currentGameState, npcId, 'engaged');
+  const p = record && record.proposal;
+  if (p) {
+    createCommitment(currentGameState, {
+      kind: p.kind, day: p.day, tickStart: p.tickStart, tickEnd: p.tickEnd,
+      roomId: p.roomId, invitedIds: [], proposerId: npcId,
+    });
+    addLogEntry('narration', `You tell ${name} yes. ${proposalWhen(p)}, in the ${ROOMS[p.roomId]?.name || 'flat'} — it is in the diary now.`);
+  }
+  await advanceAndResolve(1);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('overture-accept', currentGameState);
+}
+
+// Called from doMove with the room the player is leaving. Walking away from
+// someone who has just crossed a room to reach you is the refusal, and it
+// needs no button.
+//
+// Phase 4: still scoped to the room the player is LEAVING, which is exactly
+// right for the two channels that stand in front of you and exactly right for
+// the knock too — a knocker is by construction in another room, so walking off
+// does not refuse them. Their record lapses at the door (D28), and the player
+// who wants to say no has the chip.
+function refuseOverturesInRoom(roomId) {
+  for (const [id, npc] of Object.entries(currentGameState.npcs || {})) {
+    if (!isOverturePending(npc) || npc.location !== roomId) continue;
+    const record = resolveOverture(currentGameState, id, 'refused');
+    if (!record) continue;
+    applyOvertureRefusal(id, record);
+    addLogEntry('narration', `You leave without answering ${npc.bible?.name || 'them'}.`);
+  }
 }
 
 // Track how long an NPC has been at high tension — if it persists, they
@@ -1919,6 +2220,168 @@ async function compactMemoryIfNeeded(npcIds) {
   }
 }
 
+// --- Plan X-5 Phase 2: the Assessor -------------------------------------
+// The only source of relationship movement from conversation, now that the
+// writing pass has stopped scoring itself (D5). It judges a WINDOW of
+// exchanges after they have happened, never a single message: per-message
+// scoring multiplies any small optimistic bias by every exchange in the game,
+// which is monotonic inflation regardless of what the player does.
+//
+// Same shape as compactMemoryIfNeeded above, for the same reason (D6): a
+// deferred model call that piggybacks on player contact and never runs on a
+// pure tick. It fires on two triggers and no others —
+//   * a scene closing (doMove, once openScene has actually incremented), and
+//   * a scene that reaches X5.assessorMaxExchanges without the player leaving,
+// which are D2's primary and early-flush windows.
+//
+// Not on room entry (D17): those beats carry near-zero relational content and
+// would spend a full-price call on a predictably empty window.
+
+// One pass at a time. Two overlapping passes would judge overlapping windows
+// — the second reads the buffer at its own await-resume and would mark
+// entries the first is still judging, so the same exchanges move a
+// relationship twice. Rapid moves make this reachable, not theoretical.
+let assessorInFlight = false;
+
+// Judge one closed window. Returns true if anything actually moved, so the
+// caller can decide whether a re-render is worth it.
+async function runAssessorPass(sceneId) {
+  if (!currentGameState || assessorInFlight) return false;
+  const win = assessorWindow(currentGameState, { sceneId });
+  if (win.npcIds.length === 0) return false;
+  assessorInFlight = true;
+  try {
+    // `win`, never `window` — the browser's global has no npcIds, so passing
+    // it makes every pass a silent "empty window" no-op that still marks the
+    // buffer judged. That is invisible from the outside: the conversation
+    // looks judged and no relationship ever moves.
+    const result = await callAssessor(currentGameState, win);
+    let moved = false;
+    if (result.ok && Object.keys(result.deltas).length > 0) {
+      // D4 — through the existing door. toProposalDeltas has already clamped
+      // and filtered to the roster, so this validate is belt and braces; it
+      // is also the thing that would catch a future retune of X5.deltaClamp
+      // past what validateProposal accepts, rather than silently applying it.
+      const context = x5ProposalContext(currentGameState, win.npcIds);
+      const { valid, errors } = validateProposal({ relationshipDeltas: result.deltas }, context);
+      if (valid) {
+        await applyProposal({ relationshipDeltas: result.deltas }, context, currentGameState, null);
+        moved = true;
+      } else {
+        console.warn('Assessor proposal failed validation:', errors);
+      }
+    }
+    // D14 — the window is marked judged whether the pass succeeded, judged
+    // nothing, or failed outright. An unmarked window is a window that gets
+    // read again by the next pass, and a relationship that moves twice for
+    // one conversation is worse than one that occasionally fails to move.
+    for (const id of win.npcIds) {
+      const npc = currentGameState.npcs[id];
+      if (npc) currentGameState.npcs[id] = markAssessed(npc, win.sceneId);
+    }
+    return moved;
+  } finally {
+    assessorInFlight = false;
+  }
+}
+
+// D2's early flush: a conversation that goes on long enough in one room is
+// judged where it stands and starts a fresh window, so a whole evening at the
+// kitchen table is not scored as one undifferentiated block at the end of it.
+// markAssessed is what starts the new window — the judged entries drop out of
+// assessorWindow and the count restarts from zero.
+async function assessSceneIfFull() {
+  if (!currentGameState) return false;
+  const win = assessorWindow(currentGameState);
+  if (!win.full) return false;
+  return await runAssessorPass(win.sceneId);
+}
+
+// --- Plan X-5 Phase 3: the Chronicler ------------------------------------
+// The only route conversation has into the belief tier, now that the writing
+// pass has stopped writing memory (D5). Where the Assessor judges a ROOM, this
+// reads a DAY per character (D3): facts extract more accurately from more
+// context, and a wider window dedupes for free — a thing raised three times in
+// one evening is one fact, not three.
+//
+// Two triggers, mirroring the Assessor's:
+//   * day rollover, for every NPC carrying unprocessed exchanges, and
+//   * an NPC whose unprocessed count reaches X5.chroniclerMaxExchanges,
+// which are D3's primary and early-flush windows. Rollover is not a
+// player-contact path, and does not need to be: it is already a wait, which
+// is the exception D6 names.
+
+// Same reason as assessorInFlight, and a separate flag because the two passes
+// are independent — one must not be able to block the other. Two overlapping
+// Chronicler passes would each mark entries the other is still reading, and
+// the same conversation would be extracted twice into the same tier.
+let chroniclerInFlight = false;
+
+// Extract one NPC's unread transcript. Returns true if anything was actually
+// written, so the caller can decide whether a re-render is worth it.
+async function runChroniclerPass(npcId) {
+  if (!currentGameState || chroniclerInFlight) return false;
+  const npc = currentGameState.npcs[npcId];
+  if (!npc) return false;
+  const win = chroniclerWindow(npc);
+  if (win.entries.length === 0) return false;
+  chroniclerInFlight = true;
+  try {
+    const result = await callChronicler(currentGameState, npcId, win);
+    let wrote = false;
+    if (result.ok && Object.keys(result.additions).length > 0) {
+      // D4 — through the existing door. The context holds ONLY this NPC:
+      // the Chronicler's window is per-NPC by construction, and everyone
+      // else who was in the room runs their own pass over their own buffer.
+      // Handing it a wider roster would re-open applyProposal's overhearing
+      // leg on a room that closed hours ago.
+      const context = x5ProposalContext(currentGameState, [npcId]);
+      const { valid, errors } = validateProposal({ memoryAdditions: result.additions }, context);
+      if (valid) {
+        await applyProposal({ memoryAdditions: result.additions }, context, currentGameState, null);
+        wrote = true;
+      } else {
+        console.warn('Chronicler proposal failed validation:', errors);
+      }
+    }
+    // D14 — marked whether the pass wrote something, wrote nothing, or failed
+    // outright. Re-read from state first: applyProposal replaced the record.
+    const after = currentGameState.npcs[npcId];
+    if (after) currentGameState.npcs[npcId] = markProcessed(after, win.entries.length);
+    return wrote;
+  } finally {
+    chroniclerInFlight = false;
+  }
+}
+
+// D3's early flush: an NPC the player has been talking to all evening is read
+// where they stand rather than waiting for midnight. It also stops the window
+// hitting the ceiling MEMORY_BUDGET.maxRecent imposes — past that the buffer
+// shifts its oldest entry out and an exchange is lost before this pass ever
+// sees it, which is the accepted cost of not opening a second buffer.
+async function chronicleIfFull() {
+  if (!currentGameState) return false;
+  let wrote = false;
+  for (const npcId of Object.keys(currentGameState.npcs || {})) {
+    if (!chroniclerWindow(currentGameState.npcs[npcId]).full) continue;
+    if (await runChroniclerPass(npcId)) wrote = true;
+  }
+  return wrote;
+}
+
+// D3's primary trigger. Every NPC with anything unread, once per day. The
+// facts land stamped with the day that has just BEGUN rather than the one the
+// conversation happened on — applyProposal writes episodes from
+// meta.clock.day and cannot be told otherwise, so both halves agree at the
+// cost of a day's optimism in salience, well inside rumination's 7-day window.
+async function chronicleDayRollover() {
+  if (!currentGameState) return;
+  for (const npcId of Object.keys(currentGameState.npcs || {})) {
+    if (chroniclerWindow(currentGameState.npcs[npcId]).entries.length === 0) continue;
+    await runChroniclerPass(npcId);
+  }
+}
+
 // syncNpcsFromKv used to live here: it pulled the NPCs an applied LLM
 // proposal touched back out of kv. It has no callers left — applyProposal
 // (NPC) now mutates gameState.npcs in memory instead of round-tripping
@@ -2241,6 +2704,24 @@ async function handleAction(action, npcId, extra) {
     case 'classifieds.studio-toggle-pool':
       doClassifiedsStudioTogglePool(extra?.rowId);
       break;
+    case 'classifieds.studio-edit-pool':
+      doClassifiedsStudioEditPool(extra?.rowId);
+      break;
+    case 'classifieds.studio-set-mode':
+      doClassifiedsStudioSetMode(extra?.rowId);
+      break;
+    case 'classifieds.studio-set-tab':
+      doClassifiedsStudioSetTab(extra?.rowId);
+      break;
+    case 'classifieds.studio-edit-toggle':
+      doClassifiedsStudioEditToggle();
+      break;
+    case 'classifieds.studio-edit-discard':
+      doClassifiedsStudioEditDiscard();
+      break;
+    case 'classifieds.studio-save-edits':
+      doClassifiedsStudioSaveEdits();
+      break;
     case 'classifieds.studio-create':
       await doClassifiedsStudioCreate();
       break;
@@ -2336,6 +2817,14 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'knock':
       if (npcId) await doKnock(npcId);
+      break;
+    // Initiative plan Phase 4: the two channels an NPC opens that the player
+    // has no existing verb to answer (D8).
+    case 'overture.accept':
+      if (npcId) await doOvertureRespond(npcId, true);
+      break;
+    case 'overture.decline':
+      if (npcId) await doOvertureRespond(npcId, false);
       break;
     case 'search-room':
       if (npcId) await doSearchRoom(npcId);
@@ -2583,6 +3072,12 @@ async function doPlayerAction(actionText) {
     currentGameState.player = decayPlayerNeeds(currentGameState.player, 1, currentGameState);
 
     render(currentGameState, currentSceneState);
+    // D6 — after the response has rendered, never before it. D2's early
+    // flush: only fires once this scene has accumulated a full window.
+    if (await assessSceneIfFull()) render(currentGameState, currentSceneState);
+    // D3's early flush, on a window twice as wide — so this costs a call on
+    // one turn in ten, not one in five.
+    await chronicleIfFull();
     await saveAtBoundary('action', currentGameState);
   } catch (e) {
     console.warn('Action failed:', e);
@@ -2906,10 +3401,27 @@ function closeConversationOverlay() {
   const overlay = document.getElementById('conversation-overlay');
   if (overlay) overlay.removeAttribute('data-open');
   convState = null;
+  // Initiative plan Phase 3 (D9): the durable half of "in conversation". The
+  // tick decides whether to open an overture and cannot see TIME's context
+  // stack, so the flag lives on gameState. Cleared here rather than beside
+  // every close path for the same reason getPlayerVulnerableState prefers a
+  // flag over an inference — one writer on, one writer off.
+  if (currentGameState?.player?.flags) delete currentGameState.player.flags._inConversation;
 }
 
 async function doTalk(npcId) {
   if (!npcId || !currentGameState) return;
+
+  // Cognition plan Phase 2 (D5, COGNITION.alwaysBreak.playerAddress): being
+  // spoken to always ends whatever the NPC had committed to. This is the half
+  // of the break list that cannot live in the tick — the player addressing
+  // someone happens here, not in resolveTick — and it is deliberately not
+  // subject to the scoring margin: an NPC who carries on folding laundry for
+  // four ticks while you stand there talking to them is a feel bug, and no
+  // amount of tuning should be able to produce it. Before the tension check,
+  // because someone who refuses to talk to you has still noticed you.
+  notePlayerAddressed(currentGameState, npcId);
+
   // Relationship consequences (P7): high tension may cause NPC to refuse
   // to talk or avoid the player entirely.
   const relCheck = checkRelConsequences(npcId);
@@ -2926,11 +3438,34 @@ async function doTalk(npcId) {
     return;
   }
 
+  // Initiative plan Phase 2 (D13): they are still angry with you and they
+  // still did not walk away. Narrated before the overlay opens, because
+  // without a line the player sees a refusal threshold that simply stopped
+  // applying — charged, not warm, and the friction is the point.
+  if (relCheck.chargedDespiteTension) {
+    const them = currentGameState.npcs[npcId];
+    addLogEntry('narration', CHARGED_TENSION_TEMPLATES[Math.floor(orbitalRandom() * CHARGED_TENSION_TEMPLATES.length)]
+      .replace('{name}', them?.bible?.name || 'They'));
+  }
+
+  // Initiative plan Phase 3: if they crossed the room to reach you, this is
+  // the ending where the player said yes. Resolved BEFORE the overlay opens so
+  // the flag below cannot make the DND gate read as "already in conversation"
+  // for a record that is still pending, and so the opening beat can be theirs.
+  const overture = isOverturePending(currentGameState.npcs[npcId])
+    ? resolveOverture(currentGameState, npcId, 'engaged') : null;
+
   // Promote to active — demotes the least-engaged active member if the
   // cap is already full, narrated rather than swapped silently.
   const { sceneState, demotedId } = promoteToActive(currentSceneState, npcId);
   currentSceneState = sceneState;
   narrateDemotion(demotedId, npcId);
+
+  // D9's `in_conversation` entry. Set for the life of the overlay; the tick
+  // reads it through OVERTURE's do-not-disturb registry, so nobody opens a
+  // second overture at a player who is mid-sentence with someone else.
+  currentGameState.player.flags = currentGameState.player.flags || {};
+  currentGameState.player.flags._inConversation = true;
 
   // Open the conversation overlay before any LLM call so the player sees
   // the interface immediately, not a loading screen.
@@ -2955,8 +3490,12 @@ async function doTalk(npcId) {
   // Time slows to real-time for the conversation
   pushTimeContext('conversation');
 
-  // Generate the opening exchange — "You approach [name] to talk."
-  await doConvSend(`You approach ${npc.bible?.name || 'your roommate'} to talk.`);
+  // Generate the opening exchange. Whose beat it is depends on who opened:
+  // "You approach [name] to talk" when the player did, and the motive that
+  // won the tick when the NPC did (initiative plan Phase 3).
+  await doConvSend(overture
+    ? overtureOpeningLine(npc, overture)
+    : `You approach ${npc.bible?.name || 'your roommate'} to talk.`);
 
   // Talking to the referenced NPC is the completion trigger for any
   // active goal about them — deterministic, doesn't depend on the LLM
@@ -3014,6 +3553,10 @@ async function doConvSend(forcedText) {
     currentGameState.player = decayPlayerNeeds(currentGameState.player, 1, currentGameState);
     convSetStatus('In conversation');
     render(currentGameState, currentSceneState);
+    // D2's early flush — the reply is already painted into the overlay, so
+    // this judges a window the player has finished reading (D6).
+    if (await assessSceneIfFull()) render(currentGameState, currentSceneState);
+    await chronicleIfFull();                                    // D3's early flush
     await saveAtBoundary('conv-send', currentGameState);
   } catch (e) {
     console.warn('Conversation send failed:', e);
@@ -3094,6 +3637,11 @@ async function doMove(roomId) {
   }
   showLoading();
   try {
+    // Initiative plan Phase 3 (D10): walking out on someone who crossed a room
+    // to reach you IS the refusal, and it needs no button. Read against the
+    // room being LEFT, so this has to run before the move — after it, there is
+    // no record of where the player was standing when they turned away.
+    refuseOverturesInRoom(currentGameState.player.location);
     currentGameState.player.location = roomId;
     // Boundary-crossing check runs on entry, before any time passes, so
     // "who was home" reflects who was actually there when the player
@@ -3108,7 +3656,16 @@ async function doMove(roomId) {
     // BEFORE the narration line below so "You move to the Kitchen" is the
     // first beat of the scene it opens, not the last beat of the one it
     // closes. Order matters here — do not move this after addLogEntry.
+    //
+    // Plan X-5 Phase 2 (D2): openScene OVERWRITES meta.scene, so the id of
+    // the scene it closes has to be captured before the increment — after it,
+    // there is no record of which window just ended. Compared rather than
+    // assumed because openScene is idempotent per room: re-entering the room
+    // you are already standing in closes nothing, and judging that window
+    // would score a conversation that is still going on.
+    const closingSceneId = currentGameState.meta?.scene?.id ?? 0;
     openScene(currentGameState, roomId);
+    const sceneClosed = (currentGameState.meta.scene.id !== closingSceneId);
     addLogEntry('narration', `You move to the ${ROOMS[roomId]?.name || roomId}.`);
     // Renovation overhaul Phase 3: entering a room with an active contracted
     // job gets a deterministic construction-scene line — template keyed by
@@ -3143,6 +3700,10 @@ async function doMove(roomId) {
     }
 
     render(currentGameState, currentSceneState);
+    // D2's primary trigger: the scene the player just walked out of is now a
+    // closed window, and this is the moment it can be judged as a whole. D6 —
+    // after the new room has rendered, so the player is never waiting on it.
+    if (sceneClosed && await runAssessorPass(closingSceneId)) render(currentGameState, currentSceneState);
     await saveAtBoundary('move', currentGameState);
   } finally {
     hideLoading();

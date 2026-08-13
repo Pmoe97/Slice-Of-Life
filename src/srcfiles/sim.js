@@ -313,6 +313,40 @@ function npcCuriosity(npc) {
        + (1 - (consc + 1) / 2) * mods.lowConscientiousness;
 }
 
+// --- Disinhibition (npc-initiative-plan.md D11) ---------------------------
+// How forward a character is: how readily they act on wanting something,
+// rather than waiting to be sure it is welcome. The sibling of npcCuriosity
+// above, written the same way and for the same reason — the initiative plan
+// needs it in more than one place, and two inline copies of a personality
+// formula drift.
+//
+// `bible.deviantLevel` was the obvious candidate and cannot be used on its
+// own: it is baked ONLY by COMPUTER's Hot Singles generator and measured null
+// for all 36 members of the roommate cast, so anything gated on it is dead for
+// everybody the player actually lives with. So the WEIGHTING is what is
+// shared (AH_HOT_SINGLES_TUNING.deviantWeights, which createExternalNpc bakes
+// with), the derivation runs for anyone with a temperament, and a baked value
+// still wins where one exists — Hot Singles keep their authored level and the
+// two populations stay comparable on one scale.
+//
+// [0,1], where 0.5 is a perfectly average temperament.
+function disinhibitionFromTemperament(temperament) {
+  const t = temperament || {};
+  const w = AH_HOT_SINGLES_TUNING.deviantWeights;
+  const raw = 0.5 + 0.5 * (
+      w.volatility    * (t.volatility    || 0)
+    + w.openness      * (t.openness      || 0)
+    + w.assertiveness * (t.assertiveness || 0)
+  );
+  return Math.max(0, Math.min(1, raw));
+}
+
+function npcDisinhibition(npc) {
+  const baked = npc?.bible?.deviantLevel;
+  if (typeof baked === 'number') return Math.max(0, Math.min(1, baked));
+  return disinhibitionFromTemperament(npc?.bible?.temperament);
+}
+
 // The NPC counterpart of getPlayerPerception (perception plan Phase 1, D8) —
 // same tuning block, same clamp, so "how much attention does this character
 // have" means one thing across the game. Temperament replaces the player's
@@ -729,19 +763,30 @@ function resolveVisitPresence(npcId, gameState, activeVisits, rng, resolved) {
 // --- Schedule resolution ---
 
 // Given an NPC's schedule template and current time, get their activity.
-// Phase 7 (D7): a resident with an ACTIVE accepted meal commitment is
-// relocated to the commitment's room for its window — the invitation binds,
-// it doesn't hope. The commitment check is the FIRST question asked, so a
-// committed dinner beats whatever the work template says (a day_shift
-// roommate would otherwise be mid-evening leisure somewhere random). The
-// extra args are optional: callers without a gameState (interruption.js's
-// schedule reads) keep the old pure-template behavior. Returns the block
-// 'meal' with commitmentRoomId set when an override is active.
+// Phase 7 (D7): a resident with an ACTIVE accepted commitment is relocated to
+// the commitment's room for its window — the invitation binds, it doesn't
+// hope. The commitment check is the FIRST question asked, so a committed
+// dinner beats whatever the work template says (a day_shift roommate would
+// otherwise be mid-evening leisure somewhere random). The extra args are
+// optional: callers without a gameState (interruption.js's schedule reads)
+// keep the old pure-template behavior.
+//
+// Initiative plan Phase 4: the block comes from COMMITMENT_KINDS rather than
+// being the literal 'meal' this returned when a meal was the only kind. A
+// hangout resolves as ordinary 'leisure' IN THE COMMITMENT'S ROOM — the
+// binding is `commitmentRoomId`, which is why resolveTick keys its relocation
+// on that field now and not on the block name. Returns the kind alongside it
+// so the caller can name the activity without a second lookup.
 function resolveScheduleActivity(npc, clock, gameState, npcId) {
   if (gameState && npcId) {
     const commitment = activeCommitmentFor(npcId, gameState);
     if (commitment) {
-      return { block: 'meal', weight: 1.0, commitmentRoomId: commitment.roomId };
+      return {
+        block: COMMITMENT_KINDS[commitment.kind].block,
+        weight: 1.0,
+        commitmentRoomId: commitment.roomId,
+        commitmentKind: commitment.kind,
+      };
     }
   }
   const template = SCHEDULES[npc.bible.scheduleTemplate] || SCHEDULES.standard;
@@ -909,6 +954,126 @@ function formatEventText(evt, npcs) {
   return text;
 }
 
+// --- The episode fields a tick event carries (initiative plan Phase 2, D15) ---
+//
+// Rumination's two D7 inference rules key on episode `participants`
+// (co-occurrence) and `emotionalTag` (repetition). The ambient episode writer
+// supplied neither, so thirty background episodes a week per resident produced
+// nothing — 0 inferred facts and 0 open questions against a SATURATED episode
+// tier (the plan's Evidence). Both fields exist on the record and are written
+// only by the LLM path. This is the ambient half.
+//
+// PARTICIPANTS ARE STAMPED IN THE TICK, not at the write site, and that is not
+// a style choice: co-presence is tick-local. UI's advanceAndResolve runs after
+// the whole batch, so an 8-hour sleep resolved in one call would compute "who
+// was present" for a 3am event from everyone's 11am positions. resolveTick's
+// `resolved` map is the only place that knows where people actually were.
+//
+// stampEventParticipants is the ONE writer, run over newEvents at the end of
+// the tick rather than at the three places events are pushed — a footprint
+// added at each emit site is a footprint the fourth emitter forgets.
+function eventParticipants(evt, resolvedLocations, playerLocation) {
+  const parts = [];
+  if (evt && evt.npcId) parts.push(evt.npcId);
+  // The explicit second party (argument's {other}, npc_chat's data.other).
+  // Always a participant even if they have already moved on this tick.
+  const other = evt && evt.data && evt.data.other;
+  if (typeof other === 'string' && other && !parts.includes(other)) parts.push(other);
+  // Everyone else in the room it happened in. roomId is null for off-screen
+  // events (work, commute), which correctly leaves those solo.
+  const room = evt && evt.roomId;
+  if (room) {
+    const co = Object.keys(resolvedLocations || {})
+      .filter(id => id !== evt.npcId && resolvedLocations[id] && resolvedLocations[id].location === room)
+      .sort();
+    for (const id of co) if (!parts.includes(id)) parts.push(id);
+    // The player is a participant in their own right — 'player' is the same
+    // token RUMINATION's resolveNpcName renders as 'the player' and npc.js
+    // uses for the speaker.
+    if (playerLocation === room && !parts.includes('player')) parts.push('player');
+  }
+  return parts;
+}
+
+// EVENT_EMOTION is the whole source: no per-event override, because an
+// override needs a normalizer (an invented tag files real episodes under a
+// theme nothing weighs) and nothing emits one yet. A phase that needs one adds
+// it with its reader. Unlisted → '' — an untagged episode still carries
+// participants and still feeds co-occurrence.
+function eventEmotionalTag(evt) {
+  return EVENT_EMOTION[evt && evt.type] || '';
+}
+
+function stampEventParticipants(events, resolvedLocations, playerLocation) {
+  for (const evt of events || []) {
+    if (!evt || evt.participants) continue;
+    evt.participants = eventParticipants(evt, resolvedLocations, playerLocation);
+  }
+}
+
+// --- The initiative gate (initiative plan Phase 2, D12/D13/D14) ------------
+// Pure. UI's checkRelConsequences is the caller; it lives here because
+// npcDisinhibition does (D11 named Phase 2 as its first consumer) and because
+// ui.js needs a DOM and so cannot be reached by the Node harness at all — a
+// gate nobody can measure is how the flag it replaces stayed dead.
+//
+// `contentFlags` is a PARAMETER rather than a read of gameState.meta: D14 puts
+// the player's content settings above this system, and sim.js loads before
+// COMPUTER's activeContentFlags. One definition, the caller supplies policy.
+// Absent → CONTENT_CONFIG's defaults, the same fallback PROMPT uses.
+//
+// Returns, and every field has a reader in the phase that added it:
+//   mayInitiate  — the gate. Phase 3's overture scorer is its declared
+//                  consumer; today it is reported and measured, not acted on.
+//   tone         — 'warm' | 'charged' | null (D12's two paths).
+//   highDesire   — the flag that has never caused anything to happen (D20).
+//                  Its reader is tensionOverride, immediately below.
+//   tensionOverride — D13. checkRelConsequences returns canTalk:false at
+//                  tensionHigh, which today blocks EVERY approach. Someone
+//                  disinhibited and wanting does not walk away; the friction
+//                  is the point, and it gets its own narration or it reads as
+//                  the tension model being broken.
+//   disinhibition — what scaled the floors, so a caller can narrate or measure
+//                  why this NPC's gate sat where it did.
+function npcInitiativeGate(npc, contentFlags) {
+  const rel = (npc && npc.relPlayer) || {};
+  const desire = rel.desire || 0;
+  const comfort = rel.comfort || 0;
+  const affection = rel.affection || 0;
+  const flags = contentFlags || CONTENT_CONFIG.contentFlags;
+  const disinhibition = npcDisinhibition(npc);
+
+  // The floors run from the authored value at disinhibition 0 to zero at 1.
+  const relief = Math.max(0, 1 - disinhibition * INITIATIVE_GATE.disinhibitionRelief);
+  const comfortFloor = REL_CONSEQUENCES.comfortHigh * relief;
+  const affectionFloor = REL_CONSEQUENCES.affectionHigh * relief;
+
+  const highDesire = desire >= REL_CONSEQUENCES.desireHigh;
+  // Desire is never scaled — it is what the gate is ABOUT.
+  const passes = desire >= REL_CONSEQUENCES.desireHighComfortHigh
+    && comfort >= comfortFloor
+    && affection >= affectionFloor;
+  // 'warm' means they would have cleared the authored bars regardless of
+  // temperament; 'charged' means disinhibition is what let them through.
+  const rawTone = !passes ? null
+    : (affection >= REL_CONSEQUENCES.affectionHigh && comfort >= REL_CONSEQUENCES.comfortHigh)
+      ? 'warm' : 'charged';
+  // D14 — romance gates the affectionate path, mature the explicit one.
+  const allowed = rawTone === 'warm' ? flags.romance !== false
+    : rawTone === 'charged' ? flags.mature !== false
+    : false;
+
+  return {
+    mayInitiate: passes && allowed,
+    tone: passes && allowed ? rawTone : null,
+    highDesire,
+    tensionOverride: highDesire
+      && disinhibition >= INITIATIVE_GATE.tensionOverrideDisinhibition
+      && flags.mature !== false,
+    disinhibition,
+  };
+}
+
 // Resolve all NPCs for a single tick (deterministic, zero LLM)
 function resolveTick(gameState) {
   const { meta, npcs } = gameState;
@@ -954,13 +1119,20 @@ function resolveTick(gameState) {
     let activity = block;
     let transit = npc.transit || null;
 
-    if (block === 'meal') {
+    if (scheduleResult.commitmentRoomId) {
       // Phase 7 (D7): a committed dinner binds — the attendee is at the
       // table for the whole window, not wherever the template would put
       // them. The location comes straight from the commitment (the dining
       // room); a commitment never routes through resolveRoomForActivity.
+      //
+      // Initiative plan Phase 4: keyed on the ROOM rather than on
+      // `block === 'meal'`, because a hangout resolves as ordinary leisure and
+      // would otherwise have fallen through to the wandering branch below —
+      // binding its schedule in name and not in fact. The activity string is
+      // the kind's, so "exactly as a meal does" is one code path rather than
+      // two that agree today.
       location = scheduleResult.commitmentRoomId || npc.residency.room;
-      activity = 'sitting down to dinner';
+      activity = COMMITMENT_KINDS[scheduleResult.commitmentKind]?.boundActivity || activity;
       transit = null;
     } else if (block === 'sleep') {
       location = npc.residency.room;
@@ -1227,19 +1399,76 @@ function resolveTick(gameState) {
   const currentTick = getTickIndex(meta.clock.minutes);
   const allImMessages = [];
   const allRelDeltas = [];
+  const allFactTransfers = [];
   const allPeepResults = [];
   for (const id of activeNpcIds) {
     if (!resolved[id]) continue;
     const npc = npcs[id];
     const isVisitor = visitingIds.has(id);
     if (!isVisitor && npc.residency.status !== 'resident') continue;
+
+    // Cognition plan Phase 2 (D4): age the held pursuit by one tick BEFORE
+    // anything is scored, so anything evaluateDrives still sees is one with
+    // ticks left to run. This runs ahead of the sleep skip below on purpose —
+    // an NPC who falls asleep or leaves the flat mid-chore has stopped doing
+    // it, and agePursuit releases it. A pursuit that only aged on ticks where
+    // drives happened to be evaluated would outlive its reason.
+    const pursuit = agePursuit(gameState, id, resolved[id]);
+
+    // Initiative plan Phase 3 (D19): the same one-tick ageing for the other
+    // record an NPC can be holding, beside its sibling and ahead of the sleep
+    // skip below for the same reason — someone who has fallen asleep, left the
+    // flat or wandered out of the player's room is no longer waiting on an
+    // answer, and a record that only aged on ticks where drives were evaluated
+    // would outlive the moment it belongs to. OVERTURE's ageOverture is one of
+    // its four named writers; nothing here builds or deletes the record.
+    ageOverture(gameState, id, resolved[id]);
+
     // Skip sleeping NPCs — they can't act on drives
     if (resolved[id].block === 'sleep') continue;
-    // Skip NPCs in transit — they're walking, not doing activities.
-    // Drives that set activityOverride would clash with the transit
-    // activity ("heading to the Kitchen") and could make the NPC
-    // appear to cook in a hallway.
-    if (resolved[id].transit) continue;
+
+    // Initiative plan Phase 3 (design invariant 2): someone waiting on an
+    // answer is not also doing the laundry. Without this branch an NPC who
+    // crossed the room on the previous tick was free to win an ordinary drive
+    // on this one — measured over 12 households x 7 days, 95 npc-ticks where
+    // the same NPC held a pursuit and an overture at once, and 147 where a
+    // pending record belonged to someone who had already walked out of the
+    // room. Selection guarantees only that ONE thing is chosen per tick; the
+    // record spans ticks, so the hold has to as well, exactly as a pursuit's
+    // does. They stay put, they keep the activity the def declares, and the
+    // record ages out (or the player answers) within utility.holdTicks.
+    // Phase 4: WHERE they wait is the channel's business, not this loop's —
+    // OVERTURE's overtureWaitRoom answers it. A knocker stays on their side of
+    // the door; an approach follows the player's room. A null roomId means
+    // "leave them where they are", which is the whole difference.
+    if (isOverturePending(npcs[id])) {
+      const { roomId: waitRoom, activity: waitActivity } = overtureWaitRoom(gameState, npcs[id]);
+      npcUpdates[id].transit = null;
+      if (waitRoom) npcUpdates[id].location = waitRoom;
+      if (waitActivity) npcUpdates[id].activity = waitActivity;
+      continue;
+    }
+
+    // NPCs in transit are walking, not doing activities: a drive's
+    // activityOverride would clash with "heading to the Kitchen" and could make
+    // the NPC appear to cook in a hallway.
+    //
+    // UNLESS they are in the middle of something (cognition plan Phase 2). Pass
+    // 1 re-rolls a room preference EVERY tick from ACTIVITY_ROOM_PREFERENCES,
+    // so an NPC who is not walking somewhere is usually about to be — measured,
+    // that cancelled 233 of 485 pursuits, nearly half, and almost always on the
+    // tick after one had moved the NPC to the room it needed. D2 says a pursuit
+    // OVERRIDES the schedule; this is where that has to be true, or a pursuit
+    // that relocates anyone can never survive its own first tick. The transit
+    // is cancelled outright rather than paused: it was never a journey the NPC
+    // chose, it was the schedule wandering, and they are busy.
+    if (resolved[id].transit) {
+      if (!pursuit) continue;
+      const stay = pursuit.roomId || resolved[id].location;
+      resolved[id] = { ...resolved[id], transit: null, location: stay };
+      npcUpdates[id].transit = null;
+      npcUpdates[id].location = stay;
+    }
 
     // Visitors (external-world plan Phase 1) pass their status through so
     // DRIVES' evaluateDrives can enforce VISITOR_DRIVE_ALLOWLIST — only
@@ -1279,6 +1508,21 @@ function resolveTick(gameState) {
       // gifted item would snap back every tick, exactly like the memory
       // replacement bug this block was written to fix.
       if (postDrive.inventory) npcUpdates[id].inventory = postDrive.inventory;
+      // Cognition plan Phase 2 (D12): npc.pursuit is written by COGNITION's
+      // openPursuit/releasePursuit/agePursuit directly on gameState.npcs[id],
+      // and applyEffects can REPLACE that object mid-drive — the same hazard
+      // this whole block exists for. Carried explicitly and unconditionally: a
+      // released pursuit must come back as undefined, or resolveBatch's
+      // `{ ...state.npcs[id], ...update }` merge would resurrect the one the
+      // NPC just finished. Absent means no pursuit, so undefined is the right
+      // value and JSON drops the key on save.
+      npcUpdates[id].pursuit = postDrive.pursuit;
+      // Initiative plan Phase 3 (D19): the same carry for `npc.overture`, and
+      // unconditional for the same reason — a record that lapsed or was opened
+      // this tick must survive resolveBatch's `{ ...state.npcs[id], ...update }`
+      // rebuild in whichever direction it moved. Absent means none, so
+      // undefined is the right value and JSON drops the key on save.
+      npcUpdates[id].overture = postDrive.overture;
     }
     // Cooldowns (and any other flags set by setCooldown during drive
     // evaluation) live on driveResult.updatedNpc.flags — without this
@@ -1304,6 +1548,7 @@ function resolveTick(gameState) {
     newEvents.push(...driveResult.events);
     allImMessages.push(...driveResult.imMessages);
     allRelDeltas.push(...driveResult.relDeltas);
+    if (driveResult.factTransfers) allFactTransfers.push(...driveResult.factTransfers);
 
     // Phase 6: collect peep results for async surfacing
     if (driveResult.peepResults) {
@@ -1319,6 +1564,52 @@ function resolveTick(gameState) {
   // Process NPC-to-NPC and NPC-to-player relationship deltas
   if (allRelDeltas.length > 0) {
     processNpcRelDeltas(gameState, allRelDeltas);
+  }
+
+  // Knowledge-gossip Phase 2 (D5 leg 1): the npc_chat drive's fact transfers.
+  // Each write lands in BOTH gameState.npcs (the live record) and the
+  // receiver's npcUpdates entry — a receiver evaluated earlier in the same
+  // tick otherwise carries a pre-fact memory snapshot that would clobber the
+  // write when resolveBatch rebuilds npcs from `{ ...npc, ...update }`.
+  if (allFactTransfers.length > 0) {
+    for (const ft of allFactTransfers) {
+      const recv = gameState.npcs[ft.receiverId];
+      if (!recv) continue;
+      gameState.npcs[ft.receiverId] = receiveTransmittedFact(recv, ft.fact, ft.opts);
+      const mem = gameState.npcs[ft.receiverId].memory;
+      npcUpdates[ft.receiverId] = npcUpdates[ft.receiverId]
+        ? { ...npcUpdates[ft.receiverId], memory: mem }
+        : { memory: mem };
+    }
+  }
+
+  // Knowledge-gossip Phase 3 (D7/D9): the rumination pass. Runs AFTER the
+  // factTransfers application so a fact that arrived earlier in this tick is
+  // already visible to the pass, and staggered per NPC by id hash — each
+  // resident ruminates once per RUMINATION.intervalTicks ticks (6 in-game
+  // hours at 48 ticks/day) rather than all at once. PURE and LLM-free (R2):
+  // the deterministic inference rules and the open-question lifecycle are
+  // arithmetic over state; D8's LLM half belongs to Phase 4's D13 bridge.
+  // Visitors are skipped (their sim is dormant — external-world plan Phase 1)
+  // and sleeping residents are NOT: rumination is cognition, not an action.
+  // Same merge-carry pattern as factTransfers — the write lands in BOTH the
+  // live gameState.npcs and npcUpdates[id].memory, or resolveBatch's rebuild
+  // would clobber it with the pre-pass memory snapshot.
+  if (RUMINATION.intervalTicks > 0) {
+    const rumTick = getTickIndex(meta.clock.minutes);
+    for (const id of activeNpcIds) {
+      if (visitingIds.has(id)) continue;
+      const npc = gameState.npcs[id];
+      if (!npc || npc.residency.status !== 'resident') continue;
+      const stagger = hashStr(id) % RUMINATION.intervalTicks;
+      if ((rumTick + stagger) % RUMINATION.intervalTicks !== 0) continue;
+      const updated = ruminate(npc, gameState, meta.clock.day);
+      if (!updated || updated === npc) continue;
+      gameState.npcs[id] = updated;
+      npcUpdates[id] = npcUpdates[id]
+        ? { ...npcUpdates[id], memory: updated.memory }
+        : { memory: updated.memory };
+    }
   }
 
   // Visitor dormancy (external-world plan Phase 1): a visitor resolves only
@@ -1338,6 +1629,12 @@ function resolveTick(gameState) {
     if (activeVisitNpcIds.has(id)) continue;
     npcUpdates[id] = { location: null, activity: '', transit: null };
   }
+
+  // Initiative plan Phase 2 (D15): stamp who was present onto every event this
+  // tick produced, while `resolved` still holds this tick's real locations.
+  // One writer, after every emitter has run — see eventParticipants for why
+  // this cannot wait for UI's advanceAndResolve.
+  stampEventParticipants(newEvents, resolved, gameState.player && gameState.player.location);
 
   return { npcUpdates, newEvents, peepResults: allPeepResults };
 }
@@ -2590,7 +2887,12 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
   // their opinions on the apartment — so IM replies have real material to
   // draw from (same memory.facts mechanism as any other NPC; the seeds live
   // in CONTRACTOR_INITIAL_FACTS, config.js).
-  state.npcs[CONTRACTOR_ID].memory.facts = CONTRACTOR_INITIAL_FACTS.map(f => ({ ...f }));
+  state.npcs[CONTRACTOR_ID].memory.facts = CONTRACTOR_INITIAL_FACTS.map(f => backfillFactRecordV2(f));
+  // Phase 3 (D9): the seed facts bypass addMemoryFact, so they need stable
+  // factIds + the openQuestions default like every other record (the
+  // contractor is a visitor and never ruminates, but a future reader must
+  // not see factId-less facts).
+  state.npcs[CONTRACTOR_ID] = backfillOpenQuestionsV2(state.npcs[CONTRACTOR_ID]);
   // Contacts (external-world plan Phase 2): Del is the ONE day-one contact —
   // he was your grandfather's contractor and reached out first, so his
   // thread exists before you've ever met him. Every other external NPC
@@ -2755,6 +3057,8 @@ function createNpcFromBible(bible, residencyStatus) {
       summaryRevision: 0,                              // NPC Overhaul
       recent: [],                                      // NPC Overhaul — the conversation buffer (MEMORY_BUDGET.maxRecent)
       styleCounters: { total: 0, sincePersonal: 0, recentTopics: [] }, // NPC Overhaul
+      openQuestions: [],                               // knowledge-gossip Phase 3 (D9)
+      nextFactId: 1,                                   // knowledge-gossip Phase 3 (D9) — stable factId counter
     },
     flags: {},
     // Contacts (external-world plan Phase 2): do you have their number?

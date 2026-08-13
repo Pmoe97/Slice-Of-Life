@@ -46,17 +46,19 @@ folders as a pair.
 | Doc | Status |
 |---|---|
 | `SENSORY-AND-SOCIAL-ROADMAP.md` | **The umbrella for six linked overhauls.** Start here for anything NPC- or sensory-related — it holds the cross-cutting decisions (`R1`–`R8`) all six plans inherit, and the theses for the four not yet written. |
-| `npc-cognition-plan.md` | Roadmap Plan 3. Utility scoring and committed pursuits replace twelve independent drive coin flips. **Written 2026-08-11; no phases built.** Paired with `npc-cognition-handoff-prompt.md`. Its Evidence section is reproducible from `dev/verify/measure-cognition.js`. |
 | `prompt-generator-v2.md` | Engine + authoring + preferences UI + gender-aware refinement all shipped; optional pool expansion outstanding. |
 
 The roadmap's Plans 2–5 (`scene-reader-ui`, `npc-cognition`,
 `knowledge-gossip-memory`, `npc-initiative`) exist as theses inside
 `SENSORY-AND-SOCIAL-ROADMAP.md` and get their own documents at the point the
 plan beneath each one ships. **Do not write plan N+1's phases before plan N
-lands** — its real shape is not knowable yet. Plans 0, 1 and 2 have landed and
-Plan 3 is written, so **Plan 4 (`knowledge-gossip-memory`) is the next design
-session** — but not until Plan 3 ships, since Plan 4's shape depends on what
-NPC cognition actually turns out to look like.
+lands** — its real shape is not knowable yet. Plans 0–4 have all landed, plus
+**Plan X-5** (`plan-x5-conversation-consequences`), which is not one of the
+roadmap's six: it was inserted ahead of Plan 5 because Plan 5's design session
+measured four of its five motivation sources reading exactly zero. With X-5
+shipped, **Plan 5 (`npc-initiative`) has landed — all six phases, so every
+plan in the roadmap is now complete** and `wip/` holds only the umbrella and
+the prompt generator.
 
 ### `complete/`
 | Plan | Paired prompt |
@@ -68,6 +70,10 @@ NPC cognition actually turns out to look like.
 | `npc-correctness-fixes-plan.md` | — (roadmap Plan 0; carries the dead-field disposition table) |
 | `perception-and-signals-plan.md` | — (roadmap Plan 1; the signal substrate Plans 2–5 consume) |
 | `scene-reader-ui-plan.md` | `scene-reader-ui-handoff-prompt.md` (roadmap Plan 2; the main UI stopped being a log and became a scene) |
+| `npc-cognition-plan.md` | `npc-cognition-handoff-prompt.md` (roadmap Plan 3; utility scoring + committed `pursuit`s replace the twelve independent drive coin flips) |
+| `knowledge-gossip-memory-plan.md` | `knowledge-gossip-handoff-prompt.md` (roadmap Plan 4; the belief record, gossip transmission, rumination + open questions, the D13 bridge, and the Character Studio) |
+| `npc-initiative-plan.md` | `npc-initiative-handoff-prompt.md` (roadmap Plan 5; NPCs open — the expression layer, `npc.overture` across four channels, shared activities, and the rate tuned by measurement. Its D34 is worth reading outside this plan: a `cooldownTicks` is a wrapped daily window rather than an elapsed duration, so three entries in the game had been firing once per NPC per *game*) |
+| `plan-x5-conversation-consequences.md` | `plan-x5-handoff-prompt.md` (**not one of the roadmap's six** — inserted ahead of Plan 5. Splits the model that *writes* dialogue from the two that judge it: the Assessor scores a relationship over a scene, the Chronicler extracts knowledge over a day, and the writer scores nothing) |
 | `renovation-occupancy-overhaul-plan.md` | — |
 | `contractor-tutorial-overhaul-plan.md` | — |
 | `npc-overhaul-plan.md` | — |

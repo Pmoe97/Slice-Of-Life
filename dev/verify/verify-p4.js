@@ -95,8 +95,14 @@ for (const need of NEEDS_LIST) {
 }
 
 console.log('\nD10 — hygiene is drive-serviced, and the shower is alive again');
-check('hygiene falls below the shower gate so the drive engages',
-      repaired.agg('hygiene', 'min') < repaired.api('DRIVE_DEFS.shower.gates[0].threshold'));
+// The cognition plan's D14 deleted the boolean need gates: a need is a score
+// term now (`utility.need.below` — the point at which it starts to matter), not
+// a threshold that switches a drive on. These four assertions are unchanged in
+// intent — does the need economy actually take this need into the range where
+// the drive that services it becomes motivated — and repointed at where that
+// range is now declared.
+check('hygiene falls into the range where the shower drive is motivated',
+      repaired.agg('hygiene', 'min') < repaired.api('DRIVE_DEFS.shower.utility.need.below'));
 check('the shower drive actually fires in a repaired apartment',
       (repaired.fired.shower || 0) > 0, `shower events: ${repaired.fired.shower || 0}`);
 check('hygiene recovers rather than sliding one-way to zero',
@@ -120,8 +126,8 @@ check('and washing at a sink does NOT meter a shower',
       !broken.meters.includes('showers'));
 
 console.log('\nD11 — hunger is drive-serviced and the cast is fed');
-check('hunger crosses the eat gate so the drive engages',
-      repaired.agg('hunger', 'min') < repaired.api('DRIVE_DEFS.eat.gates[0].threshold'));
+check('hunger falls into the range where the eat drive is motivated',
+      repaired.agg('hunger', 'min') < repaired.api('DRIVE_DEFS.eat.utility.need.below'));
 check('the eat drive fires at roughly a meal a day per NPC',
       (repaired.fired.eat || 0) >= repaired.res.length * 2,
       `eat events: ${repaired.fired.eat || 0} across ${repaired.res.length} npcs / 5 days`);
@@ -158,18 +164,27 @@ console.log('\nEmergency drives — inert in a good week BY DESIGN, but not dead
 // a well-provisioned three-person house they should NOT fire; the thing worth
 // asserting is that they still can when the situation actually calls for it.
 const solo = simulate({ residents: 1, days: 5 });
-check('social stays healthy in a full house (seek_company idle is correct)',
-      repaired.agg('social', 'min') > repaired.api('DRIVE_DEFS.seek_company.gates[0].threshold'),
-      `min social ${Math.round(repaired.agg('social', 'min'))}`);
-check('but a lone resident DOES fall below the seek_company gate',
-      solo.agg('social', 'min') < solo.api('DRIVE_DEFS.seek_company.gates[0].threshold'),
+check('a full house keeps social far healthier than a lone resident does',
+      repaired.agg('social', 'min') > solo.agg('social', 'min') + 20,
+      `full house min ${Math.round(repaired.agg('social', 'min'))} vs lone ${Math.round(solo.agg('social', 'min'))}`);
+check('and a lone resident falls deep into the range where seek_company is motivated',
+      solo.agg('social', 'min') < solo.api('DRIVE_DEFS.seek_company.utility.need.below'),
       `lone-resident min social ${Math.round(solo.agg('social', 'min'))}`);
-check('energy is well-managed by the sleep block (sleep_recover idle is correct)',
+check('energy is well-managed by the sleep block (sleep_recover stays a relief valve)',
       repaired.agg('energy', 'avg') > 60, `avg energy ${Math.round(repaired.agg('energy', 'avg'))}`);
-check('sleep_recover still passes its gate for a genuinely exhausted NPC',
-      repaired.api(`checkDriveGates(DRIVE_DEFS.sleep_recover, { needs: { energy: 12 } })`) === true);
-check('and correctly does not for a rested one',
-      repaired.api(`checkDriveGates(DRIVE_DEFS.sleep_recover, { needs: { energy: 80 } })`) === false);
+// The two assertions that used to live here read checkDriveGates against
+// sleep_recover's `energy below 20` gate — the gate that could never trip, and
+// which the cognition plan's D14 deleted. Asked of the model that replaced it,
+// the question is the same one and now has a meaningful answer: an exhausted
+// NPC wants a nap enough to act on it, and a rested one does not.
+const napAt = (e) => repaired.api(`
+  scoreDrive('sleep_recover', { needs: { energy: ${e} }, bible: {}, flags: {} },
+             { perceived: [], block: 'wind_down', currentTick: 0 }).score
+`);
+check('a genuinely exhausted NPC is motivated enough to nap',
+      napAt(12) > repaired.api('COGNITION.actionThreshold'), `score ${napAt(12).toFixed(3)}`);
+check('and a rested one is not',
+      napAt(80) < repaired.api('COGNITION.actionThreshold'), `score ${napAt(80).toFixed(3)}`);
 
 console.log('\nInvariants that must survive the rebalance');
 check('needs stay inside [0, 100] for every npc, every tick, both states',

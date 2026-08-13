@@ -28,9 +28,14 @@ api(`
 `);
 
 console.log('\nGates accept senses as well as needs');
+// This used to be asked of DRIVE_DEFS.sleep_recover, which carried an
+// `energy below 20` gate. The cognition plan's D14 deleted every need gate from
+// the shipped table — a need is a score term now — so the assertion is asked of
+// a synthetic drive instead. What it protects is unchanged and still live: the
+// 2-arg call shape, and need gates composing with signal gates below.
 check('a need gate still works unchanged (2-arg call)',
-      api(`checkDriveGates(DRIVE_DEFS.sleep_recover, { needs: { energy: 12 } })`) === true &&
-      api(`checkDriveGates(DRIVE_DEFS.sleep_recover, { needs: { energy: 80 } })`) === false,
+      api(`checkDriveGates({ gates: [{ need: 'energy', op: 'below', threshold: 20 }] }, { needs: { energy: 12 } })`) === true &&
+      api(`checkDriveGates({ gates: [{ need: 'energy', op: 'below', threshold: 20 }] }, { needs: { energy: 80 } })`) === false,
       'existing callers must not break');
 check('a signal gate passes when the signal is perceived strongly enough', api(`
   checkDriveGates({ gates: [{ signal: 'rot', op: 'above', threshold: 0.2 }] },

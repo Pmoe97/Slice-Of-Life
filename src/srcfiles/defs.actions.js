@@ -77,6 +77,14 @@ const ACTION_DEFS = {
     skill: { id: 'cooking', xp: 12 },
     meters: [['cooking', 1], ['devices', 0.5]],
     emitsSignal: { signal: 'cooking', intensity: SIGNALS_EMIT.cookingAction },
+    shared: {
+      rate: 'companionable',
+      fact: 'You and {name} cooked together.',
+      templates: [
+        'You cook with {name} — one of you chopping, one of you stirring, both of you in the way.',
+        '{name} ends up beside you at the stove, and between you it comes together faster than it would have alone.',
+      ],
+    },
     prepare: prepareCook,
     buildEffects: buildCookEffects,
     narration: { mode: 'dynamic', build: cookNarration },
@@ -106,9 +114,17 @@ const ACTION_DEFS = {
     // watching with someone who likes you beats watching alone (social
     // time pays; see prepareSocialAction/buildWatchTvEffects).
     timeCost: { base: ACTION_TUNING.tvMinutes },
+    shared: {
+      rate: 'companionable',
+      fact: 'You and {name} watched TV together.',
+      templates: [
+        'You watch TV with {name}. Neither of you is really following it, which is fine.',
+        '{name} takes the other end of the sofa and you watch whatever is on until it ends.',
+      ],
+    },
     prepare: prepareSocialAction,
     buildEffects: buildWatchTvEffects,
-    narration: { mode: 'dynamic', build: watchTvNarration },
+    narration: { mode: 'template', templates: ['You watch some TV. Mindless, relaxing.'] },
   },
   'self.relax': {
     id: 'self.relax', label: 'Relax', verbs: ['relax', 'unwind', 'chill', 'take a breather'],
@@ -120,6 +136,14 @@ const ACTION_DEFS = {
       `ADJUST_NEED player mood +${ACTION_TUNING.relaxMoodGain}`,
       `ADJUST_NEED player energy +${ACTION_TUNING.relaxEnergyGain}`,
     ],
+    shared: {
+      rate: 'companionable',
+      fact: 'You and {name} sat around together doing nothing much.',
+      templates: [
+        'You sit with {name} and neither of you does anything in particular. It is easy.',
+        '{name} is already there, so you just sit, and the quiet turns out to be company.',
+      ],
+    },
     narration: { mode: 'template', templates: ['You take a moment to just breathe.'] },
   },
   'self.dishes': {
@@ -185,12 +209,21 @@ const ACTION_DEFS = {
     source: { kind: 'room', roomIds: ['gym'] },
     group: 'gym', chipPriority: 35,
     requires: ['facilityFunctional:gym_equipment'],
+    timeCost: { base: ACTION_TUNING.workoutMinutes },
     effects: [
       `ADJUST_NEED player mood +${ACTION_TUNING.workoutMoodGain}`,
       `ADJUST_NEED player energy -${ACTION_TUNING.workoutEnergyCost}`,
       `ADJUST_NEED player hygiene -${ACTION_TUNING.workoutHygieneCost}`,
     ],
     meters: [['devices', 0.5]],
+    shared: {
+      rate: 'parallel',
+      fact: 'You and {name} worked out together.',
+      templates: [
+        'You work out with {name} — mostly in silence, mostly counting, occasionally spotting.',
+        '{name} is on the next machine over. Neither of you says much, but you both go a little harder for it.',
+      ],
+    },
     narration: { mode: 'template', templates: ['You get a good workout in. Winded but feeling sharp.'] },
   },
   'self.swim': {
@@ -208,6 +241,14 @@ const ACTION_DEFS = {
     ],
     // Heating and filtration are the cost here, not the swimmer.
     meters: [['devices', 1.5], ['waterHeating', 1]],
+    shared: {
+      rate: 'parallel',
+      fact: 'You and {name} swam together.',
+      templates: [
+        'You swim laps alongside {name}. Neither of you talks; the water does not really allow it.',
+        '{name} is already in the pool. You end up racing without either of you saying that is what this is.',
+      ],
+    },
     narration: { mode: 'template', templates: ['You swim until your arms ache. The water is the quietest place in the apartment.'] },
   },
   'self.play_games': {
@@ -215,11 +256,20 @@ const ACTION_DEFS = {
     source: { kind: 'room', roomIds: ['game_room'] },
     group: 'game_room', chipPriority: 35,
     requires: ['facilityFunctional:game_room_setup'],
+    timeCost: { base: ACTION_TUNING.gamesMinutes },
     effects: [
       `ADJUST_NEED player mood +${ACTION_TUNING.gamesMoodGain}`,
       `ADJUST_NEED player energy -${ACTION_TUNING.gamesEnergyCost}`,
     ],
     meters: [['devices', 1]],
+    shared: {
+      rate: 'companionable',
+      fact: 'You and {name} played against each other.',
+      templates: [
+        'You play against {name} until one of you is properly, unreasonably invested in winning.',
+        '{name} takes the second controller. It gets loud, and then it gets late.',
+      ],
+    },
     narration: { mode: 'template', templates: ['You lose track of time playing. Good distraction.'] },
   },
   'self.laundry': {
@@ -239,9 +289,18 @@ const ACTION_DEFS = {
     source: { kind: 'room', roomIds: ['study'] },
     group: 'study', chipPriority: 30,
     requires: ['facilityFunctional:study_setup'],
+    timeCost: { base: ACTION_TUNING.studyMinutes },
     effects: [
       `ADJUST_NEED player mood +${ACTION_TUNING.studyMoodGain}`,
     ],
+    shared: {
+      rate: 'parallel',
+      fact: 'You and {name} studied in the same room.',
+      templates: [
+        'You work at the desk while {name} works at the other end of it. Nobody talks and somehow that helps.',
+        '{name} is already at the table with their own thing spread out. You take the far side and get on with it.',
+      ],
+    },
     narration: { mode: 'template', templates: ['You settle in at the desk and focus. Quiet and productive.'] },
   },
   // --- Free ambient actions (inventory overhaul Phase 6, D13) ---
@@ -270,6 +329,14 @@ const ACTION_DEFS = {
     effects: [
       `ADJUST_NEED player mood +${ACTION_TUNING.balconyMoodGain}`,
     ],
+    shared: {
+      rate: 'confiding',
+      fact: 'You and {name} sat out on the balcony together.',
+      templates: [
+        'You sit out on the balcony with {name}. The street noise fills the gaps, and then it stops needing to.',
+        '{name} comes out and leans on the rail beside you. Somewhere in the next half hour you both stop making conversation and just talk.',
+      ],
+    },
     narration: { mode: 'template', templates: ['You sit on the balcony and watch the street below. The city hums on without you.'] },
   },
   'self.take_walk': {
@@ -281,6 +348,14 @@ const ACTION_DEFS = {
     effects: [
       `ADJUST_NEED player mood +${ACTION_TUNING.walkMoodGain}`,
     ],
+    shared: {
+      rate: 'confiding',
+      fact: 'You and {name} went for a walk.',
+      templates: [
+        'You walk the block with {name}. Walking beside someone turns out to be easier than sitting across from them.',
+        '{name} grabs a jacket and comes with you. By the third street you are talking about something you had not planned to.',
+      ],
+    },
     narration: { mode: 'template', templates: ['You step out and walk around the block. Fresh air, sore legs, clearer head.'] },
   },
   'self.listen_music': {
@@ -292,6 +367,14 @@ const ACTION_DEFS = {
     effects: [
       `ADJUST_NEED player mood +${ACTION_TUNING.listenMusicMoodGain}`,
     ],
+    shared: {
+      rate: 'parallel',
+      fact: 'You and {name} listened to music together.',
+      templates: [
+        'You put music on and {name} lets it play. Two people in a room agreeing about a sound.',
+        '{name} is there when you put it on, and stays for the whole side of it.',
+      ],
+    },
     narration: { mode: 'template', templates: ['You put on music and let it carry you for a while.'] },
   },
   'self.long_shower': {
@@ -595,16 +678,19 @@ function cookNarration(ctx, prepared) {
 // watch_tv, eating together, and the hobby actions. The persistent
 // baseline side lives in SIM's resolveMoodTarget (MOOD_TARGET.social.
 // presencePerPerson); these are the per-action impulse sides.
+//
+// Initiative plan Phase 5: the resident filter this used to inline is now
+// ACTIONS' sharedActivityParticipants, and this reads it. "Who is actually in
+// this with me" is ONE question, and D16's facts and deltas ask it about the
+// same room at the same moment as this mood impulse does — two implementations
+// would have been two ideas of togetherness with nothing forcing them to agree.
+// The behaviour changes in exactly one case, and it was wrong: a roommate
+// asleep on the sofa used to make watching TV "with someone who likes you".
 function presentResidentAffection(ctx) {
-  const ids = ctx?.presentNpcIds || [];
-  let sum = 0, n = 0;
-  for (const id of ids) {
-    const npc = ctx.gameState?.npcs?.[id];
-    if (!npc || npc.residency?.status !== 'resident') continue;
-    sum += npc.relPlayer?.affection ?? 0;
-    n++;
-  }
-  return n > 0 ? sum / n : 0;
+  const ids = sharedActivityParticipants(ctx);
+  let sum = 0;
+  for (const id of ids) sum += ctx.gameState?.npcs?.[id]?.relPlayer?.affection ?? 0;
+  return ids.length > 0 ? sum / ids.length : 0;
 }
 
 function prepareSocialAction(ctx) {
@@ -618,11 +704,17 @@ function buildWatchTvEffects(ctx, prepared) {
   return [`ADJUST_NEED player mood +${Math.round((base + bonus) * 100) / 100}`];
 }
 
-function watchTvNarration(ctx, prepared) {
-  const affection = prepared?.affection ?? 0;
-  if (affection > 0) return 'You watch TV with someone who actually likes you. Best show on right now.';
-  return 'You watch some TV. Mindless, relaxing.';
-}
+// `watchTvNarration` is GONE (initiative plan Phase 5). It existed for one
+// branch — "you watch TV with someone who actually likes you" — which fired on
+// affection rather than on presence, so it stayed silent for the whole of an
+// untouched playthrough (every relationship axis generates at 0) and would have
+// contradicted the shared template the moment affection moved. narrateAction
+// prefers `def.shared.templates` whenever somebody is actually in the room now,
+// which is the two-person version D17 asks for, so what is left of this action's
+// narration is one solo line and a dynamic builder for it would be a function
+// that only ever returns a constant. The def is `mode: 'template'` again;
+// prepareSocialAction stays, because buildWatchTvEffects still needs the
+// affection-scaled mood impulse.
 
 // --- Buyable hobbies (inventory overhaul Phase 6, D13) ---
 // createHobbyAction generates one ACTION_DEFS entry per hobby OBJECT_DEFS

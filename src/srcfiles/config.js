@@ -851,6 +851,49 @@ const COMMITMENT_TUNING = {
   retainedDays: 7,
 };
 
+// What kinds of thing the household can agree to do together (initiative plan
+// Phase 4, D8). commitments.js's header has anticipated a non-'meal' kind since
+// it was written — "the same table later serves movie nights, chore agreements,
+// and anything else the household agrees to do together" — and the proposal
+// channel is the first caller to need one.
+//
+// `block` is what SIM's resolveScheduleActivity returns while the window is
+// live, and it is the whole of what "the invitation binds" means: the resident
+// is relocated to `roomId` and their template is overridden for the window.
+// The meal entry restates the value that used to be hardcoded there, so the
+// generalisation cannot change what a dinner does.
+//
+// `hangout` uses the EXISTING 'leisure' block rather than inventing one. A new
+// block name would appear in no `blockFilter` in DRIVE_DEFS, so the NPC would
+// sit in the room doing literally nothing for the window — which is a
+// convincing description of a bug and an unconvincing one of company. Under
+// 'leisure' they are in the room, at leisure, available. What there is to
+// actually DO together is Phase 5's.
+const COMMITMENT_KINDS = {
+  meal: {
+    block: 'meal',
+    label: 'dinner',
+    // What the floor plan and the scene lines say while the window is live.
+    // Restates the string resolveTick used to hardcode inside its
+    // `block === 'meal'` branch, so the generalisation moved it without
+    // changing it.
+    boundActivity: 'sitting down to dinner',
+  },
+  hangout: {
+    block: 'leisure',
+    label: 'time together',
+    boundActivity: 'spending time together',
+    // Where and when an NPC proposes one. One slot, deliberately: the evening
+    // is when this cast is home and off-shift, and a proposal that could land
+    // at four different times is a scheduling UI, not a beat.
+    roomId: 'living_room',
+    slots: [{ id: 'evening', startTick: 38, endTick: 42 }],  // 19:00–21:00
+    // Today and tomorrow. Further out than that and the player has forgotten
+    // by the time the window opens.
+    maxAheadDays: 2,
+  },
+};
+
 // Weekend rush (src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 4). Del's
 // crew works weekdays only, so a job's durationDays are WORKING days and a
 // booking made late in the week stretches across the weekend. Paying the
@@ -1625,6 +1668,38 @@ const REL_CONSEQUENCES = {
   affectionHigh: 0.6,         // combined with desire+comfort for initiation
 };
 
+// --- The initiative gate (initiative plan Phase 2, D12/D13/D14) ------------
+// Read by SIM's npcInitiativeGate(), which UI's checkRelConsequences calls.
+//
+// D12 — the authored gate above is a conjunction across three axes that all
+// generate at 0, which makes "wanting someone you are not fond of"
+// structurally unrepresentable: every path to an advance runs through
+// affection >= 0.6 AND comfort >= 0.7. Desire stays load-bearing and unscaled;
+// the affection and comfort FLOORS are scaled down by npcDisinhibition, so a
+// disinhibited character reaches the gate on desire and a wholly inhibited one
+// still needs the full authored conjunction. Two ways in, and the gate reports
+// which was used as `tone` — 'warm' when the NPC clears the authored affection
+// and comfort bars anyway, 'charged' when only the scaled ones. Phase 3 owes
+// them different overtures, different narration and different facts.
+//
+// disinhibitionRelief 1.0 is the endpoint choice, not a rate: at 1.0 the
+// floors run the full span from the authored value (disinhibition 0) to zero
+// (disinhibition 1), so the two extremes are exactly "today's behaviour" and
+// "desire alone". Anything below 1.0 leaves a floor nobody can ever clear on
+// the charged path, which is the conflation D12 exists to remove. The measured
+// cast spans 0.123..0.834 (mean 0.483), so nobody in practice sits at either
+// end — see the plan Handoff.
+const INITIATIVE_GATE = {
+  disinhibitionRelief: 1.0,
+  // D13 — the tensionHigh refusal is skipped for someone disinhibited enough
+  // and wanting enough to cross the room anyway. Set against the measured
+  // spread of npcDisinhibition over the generated cast (0.123..0.834, mean
+  // 0.483): 0.60 is roughly its top third, so this is a minority of the cast
+  // behaving differently rather than the tension model quietly ceasing to
+  // apply. Recorded with what produced it — see the plan Handoff.
+  tensionOverrideDisinhibition: 0.60,
+};
+
 // --- Multi-step quest chains (P7). Not just "talk to NPC" but a sequence
 // of steps that build on each other. Each step has a type and completion
 // condition. ---
@@ -2090,6 +2165,63 @@ const SIGNAL_DEFS = {
       strong: ['a crash, close — that was something breaking'],
     },
   },
+
+  // --- THE EMOTIONAL CHANNEL (initiative plan Phase 1, D7) --------------
+  // Transients like any other, and deliberately so: what makes these
+  // different is only what emits them. Every signal above is emitted by an
+  // ACT — a shower running, a door shutting. These are emitted by a MOOD
+  // riding along on whatever act is already happening (`expresses` on a
+  // DRIVE_DEFS entry), so an NPC's internal state leaks into a world the
+  // player can hear. They propagate, attenuate and decay through Plan 1
+  // unchanged; nothing here is a special case.
+  //
+  // Their intensities live in SIGNALS_EMIT with every other emission, and
+  // are set so a sigh is a room-sized sound and a slammed cabinet is not —
+  // see the note there for the arithmetic that places each one.
+  sighing: {
+    channel: 'sound', salience: 0.5, decayPerTick: 0.6,
+    phrases: {
+      faint:  ['someone let out a breath, somewhere close'],
+      clear:  ['a long breath out, the kind that means something'],
+      strong: ['a heavy sigh, right there in the room'],
+    },
+  },
+  humming: {
+    // The slow one of the three: a sigh is over the moment it happens, but
+    // someone humming to themselves goes on for a while, which is exactly
+    // the difference between noticing a mood and living alongside one.
+    channel: 'sound', salience: 0.35, decayPerTick: 0.12,
+    phrases: {
+      faint:  ['someone humming, faintly, somewhere'],
+      clear:  ['someone is humming to themselves'],
+      strong: ['someone humming, close and unselfconscious'],
+    },
+  },
+  cabinet_slam: {
+    channel: 'sound', salience: 0.6, decayPerTick: 0.8,
+    phrases: {
+      faint:  ['a bang from somewhere in the apartment'],
+      clear:  ['a cupboard door slammed harder than it needed to be'],
+      strong: ['a cabinet slams, hard enough to rattle what is in it'],
+    },
+  },
+
+  // --- The knock (initiative plan Phase 4) ------------------------------
+  // The only signal in the table emitted by an OVERTURE rather than by an act
+  // or a mood, and the only one aimed at a person: it lands in the room the
+  // player is standing in, because that is where the door they are behind is.
+  // Salience is above SCENE_READER.calloutSalience on purpose — 0.75 × the
+  // emission below clears it, so a knock at your door gets its own block in
+  // the scene rather than becoming one clause of the establishing passage.
+  // Someone at your door IS the thing that stops you.
+  knocking: {
+    channel: 'sound', salience: 0.85, decayPerTick: 0.5,
+    phrases: {
+      faint:  ['a knock, somewhere — maybe not your door'],
+      clear:  ['a knock at the door'],
+      strong: ['a knock at your door, and whoever it is is still there'],
+    },
+  },
 };
 
 // ===================== THE SCENE READER (Plan 2) =====================
@@ -2144,6 +2276,12 @@ const SIGNAL_ICONS = {
     rot:             '🦠',
     dirty_dishes:    '🍽',
     stagnant_water:  '💧',
+    // The emotional channel (initiative plan Phase 1). On the floor plan
+    // these read as "someone in that room is having a day", which is the
+    // information the signal carries and the reason it exists.
+    sighing:         '😔',
+    humming:         '🎵',
+    cabinet_slam:    '💢',
   },
   bandOpacity: { faint: 0.35, clear: 0.7, strong: 1 },
   // Floor plan: at most this many glyphs per room, strongest first. A room
@@ -2248,6 +2386,80 @@ const SIGNALS_EMIT = {
   cookingAction:    0.7,   // the player actually cooking a recipe
   voices:           0.5,
   doorClose:        0.55,
+
+  // --- The emotional channel (initiative plan Phase 1) -------------------
+  // Placed by the propagation arithmetic rather than by feel, against the
+  // sound channel's 0.5 per hop, its 0.45 unlocked-door factor applied at
+  // BOTH ends of a hop (0.225 for a one-hop trip through a closed door) and
+  // a noticeFloor of 0.04 against a typical attention of ~0.30 — so the bar
+  // to be heard at all is an arrival of ~0.133.
+  //
+  // The brief was "noticeable in the room, not through a closed door":
+  //   sighing 0.35 → in-room 0.350 HEARD, one open hop 0.175 marginal,
+  //                  through a closed door 0.079 NOT HEARD.
+  //   humming 0.30 → same shape, one step quieter.
+  //   cabinetSlam 0.75 → through a closed unlocked door 0.169 HEARD, through
+  //                  a LOCKED one 0.113 not. A slam is the one that reaches
+  //                  you in another room; that is what makes it a slam
+  //                  rather than a cupboard being closed. Louder than
+  //                  doorClose above on purpose, for the same reason.
+  sighing:          0.35,
+  humming:          0.30,
+  cabinetSlam:      0.75,
+
+  // --- The knock (initiative plan Phase 4) -------------------------------
+  // Emitted into the PLAYER's own room rather than the knocker's, so it
+  // arrives undiminished — there is no hop and no door between a knock and
+  // the person it is for. That makes the number a salience decision rather
+  // than a propagation one: 0.85 × SIGNAL_DEFS.knocking's 0.85 salience =
+  // 0.72, just above SCENE_READER.calloutSalience (0.70), which is the whole
+  // point. A knock you can read past is a knock nobody answers.
+  knocking:         0.85,
+};
+
+// The mood bands the expression layer fires in (initiative plan Phase 1).
+// Declared once and referenced from every `expresses` entry, because a band
+// is a decision about the WHOLE layer's rate — how often the flat makes an
+// emotional noise — and not something each drive should hold its own copy of.
+// Phase 6 retunes the rate here, in one place.
+//
+// Set by measuring `npc.mood` where the expression layer actually reads it:
+// 5,467 npc-tick calls to evaluateDrives over 12 households × 3 residents ×
+// 7 in-game days. The distribution is min −0.53, p25 −0.06, median 0.07,
+// p75 0.23, max 1.00, mean 0.109 — so mood is mildly positive most of the
+// time and both tails are genuinely tails:
+//
+//   below −0.30   4.9% of npc-ticks      above  0.25  ~24%
+//   below −0.10  19.5%                   above  0.30  20.2%
+//   below −0.05  ~26%                    above  0.15  ~31%
+//
+// Then placed by SWEEPING the bands against the emission rate over the same
+// population, because the mood distribution is only half the answer — the
+// other half is the drive-fire rate, which caps this layer at 2.75 acts per
+// NPC per day however wide the bands are:
+//
+//   veryLow  low   high | expressions per NPC per day | NPCs expressing (of 36)
+//     −0.30 −0.15  0.25 | 0.353                       | 31
+//     −0.20 −0.10  0.20 | 0.429                       | 33
+//     −0.20 −0.05  0.15 | 0.607                       | 36
+//     −0.20  0.00  0.10 | 0.698                       | 36
+//
+// The third row is the one below. It puts an emotional noise in a three-person
+// flat about 1.8 times a day and reaches every resident inside a week, while
+// keeping a real DEAD BAND (−0.05 .. 0.15, roughly p25..p60 — the ordinary
+// middle of the distribution) where nobody is broadcasting anything. Going
+// wider buys ~15% more at the cost of that band: at `low: 0`, "sighing" stops
+// meaning "having a bad day" and starts meaning "is fractionally below
+// neutral", which is where a texture turns into noise.
+//
+// `veryLow` is deliberately still a tail. A slammed cupboard lands ~0.11 times
+// per household per day — about once every nine days — and that is the point:
+// it has to stay rare or it stops meaning anything. It is the one band here
+// that is set for MEANING rather than for rate.
+const EXPRESSION_MOOD = {
+  veryLow: -0.20,
+  low:     -0.05,
+  high:     0.15,
 };
 
 // Off-screen world events that make a noise or a smell (Phase 3). Keyed by
@@ -2365,6 +2577,251 @@ const EVENT_IMPORTANCE = {
   // Everything else (cooking, cleaning, laundry, nap, package, breakage,
   // shopping, hobby, burnt_food, late_night_snack, repair, eat_fallback)
   // falls through to `ambient`.
+};
+
+// --- World-event type → emotional theme (initiative plan Phase 2, D15) ------
+// The sibling of EVENT_IMPORTANCE, and read by the same writer: SIM's
+// eventEmotionalTag(), which UI's advanceAndResolve calls when it turns a tick
+// event into a memory episode.
+//
+// Why this table has to exist. Rumination's D7 repetition rule groups episodes
+// by `emotionalTag`, and the ambient episode writer supplied none — so thirty
+// background episodes a week per resident could never form a theme, and the
+// whole belief tier was seeded by player conversation alone (the plan's
+// Evidence). This is the ambient half of what the Chronicler already does for
+// conversations.
+//
+// Every value MUST be an EMOTIONAL_WEIGHTS key: rumination groups on the tag
+// string and derives the minted fact's `category` from it, so an invented word
+// would file real episodes under a theme nothing else can weigh. verify-i2
+// asserts that. An unlisted type gets NO tag, which is the safe direction — an
+// untagged episode still carries `participants` and still feeds co-occurrence,
+// it simply does not claim a theme it does not have. That is deliberate for
+// nap / package / hobby / late_night_snack / sick: they are things that
+// happened, not things that felt like anything.
+const EVENT_EMOTION = {
+  argument:            'argument',
+  bad_day:             'failure',
+  good_news:           'success',
+  date:                'romance',
+  guest:               'warmth',
+  phone_call:          'warmth',
+  npc_chat:            'warmth',
+  gift:                'warmth',
+  breakage:            'embarrassment',
+  burnt_food:          'embarrassment',
+  // The chores. `domestic` is the lowest-weight tag in EMOTIONAL_WEIGHTS (0.3)
+  // for exactly this reason — it is the most common theme in the flat and the
+  // least worth repeating to anyone.
+  cooking:             'domestic',
+  cleaning:            'domestic',
+  laundry:             'domestic',
+  shopping:            'domestic',
+  repair:              'domestic',
+  investigate_smell:   'domestic',
+};
+
+// --- Belief record (knowledge-gossip-memory-plan Phase 1, D1/D2/D3/D15/D18) ---
+// The extended fact record: provenance says where a fact was learned,
+// confidence how sure the NPC is it's true, salience how much they care
+// right now, pinned protects what defines a relationship from eviction.
+// Every number here is provisional until the plan's population measurement
+// lands — see the plan Handoff for the measured verdict on maxFacts.
+const BELIEF = {
+  maxFacts: 60,                 // D15 — was MEMORY_BUDGET.maxFacts 40; 60 is provisional, measured in Phase 1 (see Handoff)
+  hopAttenuation: 0.8,          // D2 — a told_by hop: confidence × 0.8
+  confidenceFloor: 0.3,         // D2 — below this, still stored, never raised
+  overheardAttenuation: 0.9,    // D18 — overheard: confidence × 0.9
+  salienceDefault: 0.5,
+  salienceDecayPerDay: 0.05,    // D2 — time drops salience (read at retrieval, Phase 1)
+  salienceFloor: 0.02,
+};
+
+// D15 — the prompt's [Memories — facts] window. The facts tier used to join
+// EVERY valid fact into the block, so raising the cap (40→60) would have cost
+// context per conversation; this bounds what buildMemorySliceV2 renders:
+// pinned + significant always, then the top keyword matches, then the most
+// recent, capped at maxTotal. 60 is validated by measurement in Phase 1.
+const FACT_DISPLAY = {
+  always: true,                 // pinned + importance >= significant, always shown
+  retrieved: 5,                 // top keyword matches
+  recent: 8,                    // most-recent valid facts, after the above
+  maxTotal: 20,
+};
+
+// D10 — emotional weight by tag (knowledge-gossip-memory-plan Phase 2).
+// First reader is D6's eligibility score; rumination (Phase 3) is the
+// second. The ORDERING is authored (grievance/argument/romance punch harder
+// than domestic), the magnitudes are PROVISIONAL until the Phase 2 population
+// run measures the gossip rate — see the plan Handoff.
+const EMOTIONAL_WEIGHTS = {
+  grievance: 0.9, argument: 0.85, romance: 0.8, embarrassment: 0.7,
+  success: 0.6, failure: 0.6, warmth: 0.5, domestic: 0.3, default: 0.3,
+};
+
+// D5/D6 — transmission tuning (knowledge-gossip-memory-plan Phase 2).
+// factsPerChat: how many facts a speaker raises per npc_chat (and how many an
+// overhearing listener retains per exchange).
+// recencyHalfLifeDays: D6's recency term — a fact's "worth raising" halves
+// every this-many days since it was written.
+// talkativenessBase: D6's probability floor. The chance a chat moves any fact
+// scales from here up with speech.verbosity + temperament.assertiveness.
+// Everything else is Phase 2-authored and PROVISIONAL until the 12x7x3
+// population run records the gossip rate — see the plan Handoff.
+const TRANSMISSION = {
+  factsPerChat: 2,
+  recencyHalfLifeDays: 3,
+  talkativenessBase: 0.15,
+  talkativenessVerbosity: 0.5,       // × (verbosity − 0.5)
+  talkativenessAssertiveness: 0.2,   // × assertiveness
+  raiseScoreRef: 0.5,                // P(raise) = talkativeness × score ÷ this; a fresh default-weight no-match fact scores 0.18
+  relevanceNoMatch: 0.6,             // D4 — no interest match
+  relevanceMatch: 1.0,               // D4 — category overlaps an interest tag
+  relevanceStrong: 1.5,              // D4 — category matches an interest name
+  biasNovel: 0.4,                    // D6 — openness → novel/secondhand facts
+  biasSocial: 0.4,                   // D6 — warmth → social/relationship facts
+  biasPractical: 0.4,                // D6 — conscientiousness → practical facts
+  reWitnessBoost: 0.15,              // D2's up-route — hearing a held fact again
+  practicalCategories: ['work', 'money', 'finance', 'home', 'apartment', 'house', 'rent', 'job', 'trades'],
+  socialCategories: ['relationship', 'romance', 'social', 'family', 'friendship', 'dating'],
+};
+
+// D7/D8/D9/D10 — rumination tuning (knowledge-gossip-memory-plan Phase 3).
+// The deterministic half of rumination: D7 inference rules mint inferred
+// facts from episode patterns; the D9 open-question lifecycle creates,
+// grows, ages and retires questions. All of it runs inside resolveTick on a
+// staggered per-NPC cadence (RUMINATION.intervalTicks), synchronous and
+// LLM-free (R2). D8's LLM half does not exist in Phase 3 — it fires at the
+// D13 bridge in Phase 4, on the player's time budget. Every number here is
+// PROVISIONAL until the 12×7×3 population run records open-question
+// occupancy and per-NPC-tick cost — see the plan Handoff.
+const RUMINATION = {
+  intervalTicks: 12,            // per-NPC cadence inside resolveTick (48 ticks/day), staggered by npcId hash
+  inferenceWindowDays: 7,       // D7 — the co-occurrence/repetition window
+  inferredConfidence: 0.5,      // D7 rule 1 — repeated shared episodes → "X and Y spend time together"
+  inferredConfidenceRepeat: 0.4,// D7 rule 2 — repeated same-tag episodes → "this keeps happening"
+  createThreshold: 0.6,         // D9 — questions form only on facts at/below this confidence (the plan's 0.6)
+  createInterestFloor: 1.0,     // D9 — "finds it interesting" bar: factInterestRelevance no-match 0.6 + openness bonus
+  opennessInterest: 0.8,        // D9 — openness × this added to appeal for secondhand/novel facts
+  curiosityStart: 0.2,
+  curiosityPerRun: 0.05,        // D9 — grown by emotionalWeight × max(0, openness) × this per pass
+  curiosityCap: 1.0,
+  raiseThreshold: 0.5,          // D13 — the bridge trips at this; its reader is Phase 4's topOpenQuestion (named consumer)
+  expireAfterDays: 14,          // D9 — age past this and the question retires
+  openQuestionCap: 3,           // D9 — bound per NPC
+  maxTargets: 3,                // D9 — bound on `targets` (who holds a fact on the same category/topic)
+};
+
+// D7 rule 2's fact text, shared by the mint and the dedupe so the two cannot
+// drift (initiative plan Phase 2, D25). RUMINATION's applyRepetitionRule keeps
+// ONE fact per theme per NPC, and it recognises the ones it already wrote by
+// this prefix plus the tag — see there for why exact-text dedupe was not
+// enough once ambient episodes started carrying tags.
+const REPETITION_FACT_PREFIX = 'This keeps happening — ';
+
+// --- Conversation consequences (plan-x5, Phase 1) ---
+// Plan X-5 splits the model that WRITES an NPC's dialogue from the models
+// that judge what it did: the Assessor scores the relationship over a scene
+// (D2), the Chronicler extracts knowledge over a day (D3). Everything here
+// bounds what those two passes are allowed to say — the wire format, the
+// window sizes, and the ceilings that stop an extractor minting permanent
+// beliefs by omission.
+//
+// Every number is PROVISIONAL. Phase 4 sets them by measurement; what is
+// below is arithmetic, and the arithmetic is recorded in the plan's Handoff
+// so a later session can tell a measured number from a guessed one.
+const X5 = {
+  // D7 — integers on the wire, divided on ingestion. A malformed integer is
+  // obvious; a malformed float is a plausible 10x error. deltaClamp /
+  // deltaDivisor is the biggest single-window move: 10/50 = 0.20, so an axis
+  // needs five judged windows at the ceiling to saturate, against the four
+  // EXCHANGES the old inline +-0.3 float allowed.
+  //
+  // D27 — the divisor was 100 through Phases 1-3 and is set here by
+  // measurement (measure-x5.js section 6, and see the plan Handoff). At 100 a
+  // judge following the rubric took 57 windows to carry an NPC from stranger
+  // to `familiar` and 141 to `intimate` — 19 and 47 in-game days for someone
+  // getting a real share of the player's evening. The conversationPhase
+  // ladder is the strongest single lever in the NPC block (see
+  // PHASE_THRESHOLDS below) and at that rate it never moves during a normal
+  // playthrough, so every housemate talks like a stranger forever. That is
+  // the same bug Plan 0's D1/D2 fixed from the other direction, overshot.
+  // At 50 the same judge reaches familiar in 29 windows (~10 days), close in
+  // 57 (~19) and intimate in 90 (~30), which is a relationship arc a
+  // playthrough can actually contain.
+  //
+  // HARD FLOOR: validateProposal rejects any single axis delta above 0.3, and
+  // a proposal fails whole on one bad axis — so below deltaClamp/0.3 it is
+  // precisely the LARGE judgements that stop landing while small ones apply,
+  // silently inverting the scale. Never set this below 34 at deltaClamp 10.
+  // verify-x1 asserts the clearance.
+  deltaClamp: 10,
+  deltaDivisor: 50,
+
+  // The two window ceilings (D2/D3), in EXCHANGES — a player turn and the
+  // dialogue it provoked, not lines. Both are bounded above by what
+  // MEMORY_BUDGET.maxRecent can physically hold: at linesPerExchange
+  // entries per turn, 40 / 4 = 10 exchanges is the most either pass can ever
+  // see, so a threshold above that is a threshold that never fires. The
+  // plan's first-pass numbers (8 / 24) were written before that arithmetic;
+  // verify-x1 asserts the relationship rather than these values.
+  linesPerExchange: 4,          // 1 player line + the writing prompt's "1-3 dialogue lines max"
+  assessorMaxExchanges: 5,      // flush a long single-room scene early (D2)
+  chroniclerMaxExchanges: 10,   // flush before day rollover if busy (D3) — must exceed the Assessor's
+
+  // D11 — an extracted fact is an attributed CLAIM, never a truth. The
+  // default sits at RUMINATION.createThreshold precisely so an unverified
+  // thing the player said is open-question eligible the moment it lands:
+  // that is the cold start this plan exists to close. The max is below
+  // certainty (design invariant 3) so no conversation can mint a fact the
+  // gossip layer will propagate as established.
+  factConfidenceDefault: 0.6,
+  factConfidenceMax: 0.9,
+
+  // D12 — the pinning trap, from the other side. MEMORY_IMPORTANCE.significant
+  // (0.8) grants `pinned`, and pinned facts never evict; Plan 4's Phase 1
+  // measured every conversation fact pinning itself. An extracted fact may
+  // declare that it matters more than small talk, and may never reach the
+  // bar that makes it permanent. Must stay strictly below `significant`.
+  factImportanceCeiling: 0.75,
+
+  // What one window is allowed to write. Without these a chatty extractor
+  // fills BELIEF.maxFacts (60) in three in-game days.
+  maxFactsPerWindow: 4,
+  maxEpisodesPerWindow: 2,
+  maxGrievancesPerWindow: 2,
+  maxParticipants: 4,
+  maxTextLen: 240,
+  maxCategoryLen: 40,
+
+  // Bound on the transcript either prompt renders back to the model.
+  transcriptMaxLines: 60,
+};
+
+// --- D10: labels in, integers out (plan-x5, Phase 2) ---
+// The Assessor is shown where a relationship currently SITS as a bucketed
+// word, never as a number. Mixing a raw axis scale with a +-deltaClamp answer
+// scale in one prompt is what forces prior art into warnings like "NEVER
+// output values like 50, 80 or 100" — that warning treats the symptom of
+// showing two number scales and asking for one of them back.
+//
+// Shape: `cuts` is ascending and exactly one shorter than `labels`; a value
+// below cuts[0] takes labels[0], above the last cut takes the last label.
+// Read by x5AxisLabel (X5 section), which is the only consumer. The bands are
+// authored to read as prose in a sentence ("trust: warming, tension: none"),
+// not to align with PHASE_THRESHOLDS — that ladder buckets a composite, this
+// buckets one axis at a time.
+//
+// `tension` is the odd one and is authored to LOOK odd: its low band is
+// "none", because low tension is the good state (D9). Every other axis reads
+// better as it rises.
+const X5_AXIS_LABELS = {
+  trust:     { cuts: [-0.5, -0.15, 0.15, 0.5], labels: ['wary', 'guarded', 'neutral', 'warming', 'trusting'] },
+  affection: { cuts: [-0.5, -0.15, 0.15, 0.5], labels: ['cold', 'distant', 'neutral', 'fond', 'close'] },
+  tension:   { cuts: [0.15, 0.4, 0.7],         labels: ['none', 'some friction', 'strained', 'hostile'] },
+  respect:   { cuts: [-0.5, -0.15, 0.15, 0.5], labels: ['dismissive', 'unimpressed', 'neutral', 'regarded', 'admiring'] },
+  comfort:   { cuts: [0.2, 0.5, 0.8],          labels: ['stiff', 'settling', 'easy', 'completely at ease'] },
+  desire:    { cuts: [-0.15, 0.15, 0.4, 0.7],  labels: ['averse', 'none', 'a flicker', 'clear', 'strong'] },
 };
 
 // --- Relationship phase ladder (correctness plan Phase 2, D1/D2) ---
@@ -2643,7 +3100,20 @@ const CHARACTER_SCHEMA = {
     memory: { type: 'object', required: true, default: {},
       fields: {
         facts:    { type: 'array', default: [],
-          itemFields: { text: { type: 'string' }, day: { type: 'number' }, importance: { type: 'number' }, category: { type: 'string', default: 'other' }, valid: { type: 'boolean', default: true } } },
+          itemFields: { text: { type: 'string' }, day: { type: 'number' }, importance: { type: 'number' }, category: { type: 'string', default: 'other' }, valid: { type: 'boolean', default: true },
+            // Belief record (knowledge-gossip-memory-plan Phase 1, D1/D2/D3/D10):
+            // provenance = 'witnessed' | 'told_by:<npcId>' | 'overheard' | 'inferred';
+            // confidence 0..1; salience 0..1; pinned per D3; emotionalTag is an
+            // EMOTIONAL_WEIGHTS key (Phase 2 reads it).
+            provenance: { type: 'string', default: 'witnessed' },
+            confidence: { type: 'number', range: [0, 1], default: 1 },
+            salience:   { type: 'number', range: [0, 1], default: 0.5 },
+            pinned:     { type: 'boolean', default: false },
+            emotionalTag: { type: 'string', default: '' },
+            // Phase 3 (D9/D20): the stable per-fact id the open-question
+            // lifecycle's factId reference points at. Assigned by
+            // addMemoryFact from memory.nextFactId; never reused.
+            factId:     { type: 'number' } } },
         episodes: { type: 'array', default: [],
           itemFields: { day: { type: 'number' }, text: { type: 'string' }, decay: { type: 'number', range: [0, 1] }, importance: { type: 'number' }, emotionalTag: { type: 'string', default: '' }, participants: { type: 'array', default: [] } } },
         summary:  { type: 'string', default: '' },
@@ -2656,6 +3126,12 @@ const CHARACTER_SCHEMA = {
         // getStyleDirective.
         styleCounters: { type: 'object', default: {},
           fields: { total: { type: 'number', default: 0 }, sincePersonal: { type: 'number', default: 0 }, recentTopics: { type: 'array', default: [] } } },
+        // Phase 3 (D9): the open-question records and the stable factId
+        // counter they draw from. The lifecycle in rumination.js is the
+        // record's reader; Phase 4's D13 bridge is its declared consumer.
+        openQuestions: { type: 'array', default: [],
+          itemFields: { topic: { type: 'string' }, factId: { type: 'number' }, curiosity: { type: 'number', range: [0, 1], default: 0.2 }, age: { type: 'number', default: 0 }, born: { type: 'number', default: 1 }, targets: { type: 'array', default: [] } } },
+        nextFactId: { type: 'number', default: 1 },
       }
     },
     // `arcs` was here (correctness plan Phase 5): initialised to `[]` at
@@ -3301,6 +3777,19 @@ const BOUNDARY_CONFRONT_TEMPLATES = [
   '"I know someone\'s been in my room," {name} says. "I just want to know it was you and not someone else."',
 ];
 
+// --- D13's narration (initiative plan Phase 2) ----------------------------
+// An NPC at tensionHigh normally refuses to talk. Someone disinhibited and
+// wanting stays anyway (SIM's npcInitiativeGate → tensionOverride), and that
+// needs a line: without one the player sees a refusal threshold that quietly
+// stopped applying, which reads as the tension model being broken rather than
+// as a character wanting two things at once. Charged, not warm — none of these
+// says they have forgiven you.
+const CHARGED_TENSION_TEMPLATES = [
+  '{name} is still angry with you. They stay anyway, arms folded, waiting to see what you say.',
+  '"I\'m not over it," {name} says flatly — and doesn\'t leave the room.',
+  '{name} looks like they\'d rather be anywhere else. They don\'t go anywhere.',
+];
+
 // --- Room cleanliness, once WORLD derives it from object state instead of
 // the old fixed initial value. baseline is used only when a room has no
 // cleanliness-relevant objects (weight 0 across the board). ---
@@ -3316,10 +3805,22 @@ const ACTION_TUNING = {
   relaxEnergyGain: 5,
   dishesMoodGain: 0.05,
   // Phase 5: new room actions
+  // Initiative plan Phase 5: these three entries had no `timeCost` at all, and
+  // resolveTimeCost reads `timeCost.base` unconditionally — so Work Out, Play
+  // Games and Study THREW out of executeAction rather than resolving. They are
+  // three of the ten activities D17 makes shareable and a shared delta is
+  // scaled by the minutes spent, so the phase could not carry them without
+  // this. Sized against the siblings already in this table: a gym session runs
+  // longer than a swim (30), a gaming session longer than hobby.console (30),
+  // and studying is the longest sit of the three. verify-i5 asserts that EVERY
+  // ACTION_DEFS entry declares a timeCost, which is the invariant rather than
+  // these three instances.
   workoutMoodGain: 0.12,
+  workoutMinutes: 45,
   workoutEnergyCost: 10,
   workoutHygieneCost: 8,
   gamesMoodGain: 0.1,
+  gamesMinutes: 40,
   gamesEnergyCost: 3,
   // Swimming is the gym's opposite number: similar effort, but you come
   // out cleaner rather than needing a shower afterward.
@@ -3327,6 +3828,7 @@ const ACTION_TUNING = {
   swimEnergyCost: 9,
   swimHygieneGain: 10,
   studyMoodGain: 0.08,
+  studyMinutes: 60,
   laundryMoodGain: 0.03,
   // Phase 6 (D13): free ambient actions — the ungated safety net that
   // guarantees the player always has a mood source on day one with no
@@ -3349,6 +3851,78 @@ const ACTION_TUNING = {
   // stretch of clock — longer than a solo bite (INVENTORY_TUNING
   // useTimeMinutes meal: 25), shorter than cooking a dish from scratch.
   setMealMinutes: 40,
+};
+
+// --- Shared activities (initiative plan Phase 5, D16/D17) ---
+// D17: a shared activity is NOT a parallel `together.*` table. It is the same
+// activity with somebody else in it, declared by a `shared` field on the
+// ACTION_DEFS entry that already exists — ten config entries rather than ten
+// more actions to keep in step with their solo twins. This holds the numbers
+// those entries reference; ACTIONS' resolveSharedActivity is the reader.
+//
+// The whole of Plan 5 up to here is an NPC reaching for the player. This is
+// the other direction: the player's own verbs finally being things you can do
+// WITH someone rather than next to them.
+const SHARED_ACTIVITY = {
+  // An NPC standing in the room is only IN it with you if they are awake and
+  // not busy with something that is plainly not this. A registry rather than an
+  // inline string test because three inline copies of "is this NPC asleep"
+  // already exist in this codebase (STEALTH, RENDER, UI) and two of them
+  // disagree about the word — RENDER tests 'sleep' where the others test
+  // 'napping'. Listing every spelling here is how this reader cannot be the
+  // fourth copy to drift. Unknown activities fail OPEN (they participate),
+  // which is the safe direction: the failure is a roommate counted as present
+  // while they read a book, not a silent nothing-ever-happens.
+  excludeActivities: ['sleeping', 'napping', 'sleep', 'showering'],
+
+  // D16's relationship delta, expressed PER HOUR of shared time. The lever is
+  // TIME, because time is what a shared activity actually is — so the
+  // 15-minute verb and the 45-minute one pay the same per minute and the cheap
+  // one is not the exploit. Three named rates rather than ten authored number
+  // sets: what an entry declares is what KIND of togetherness it is, and the
+  // numbers stay in one place for Phase 6 to move.
+  //
+  //   parallel      — in the same room doing the same thing, not much said
+  //   companionable — the activity is the excuse to be in each other's company
+  //   confiding     — quiet, side by side, the kind where people talk
+  //
+  // Only `confiding` moves trust, and that is the distinction the tier exists
+  // to make: a walk is where something gets said that the gym is not.
+  rates: {
+    parallel:      { affection: 0.012, comfort: 0.012 },
+    companionable: { affection: 0.020, comfort: 0.015 },
+    confiding:     { affection: 0.020, comfort: 0.020, trust: 0.010 },
+  },
+
+  // D16's other half — small enough that shared time does not become the
+  // dominant relationship lever. This is the structural guarantee rather than
+  // an argument that the player will not grind it: minutes past the cap are
+  // still shared time (the fact is still written, the narration still names
+  // them) but buy no more relationship that day.
+  //
+  // At 150 the ceiling is 2.5 hours × 0.020 = 0.05 affection per NPC per day,
+  // which is LESS THAN ONE judged conversation window at its ceiling
+  // (X5.deltaClamp / X5.deltaDivisor = 0.20). A whole day of doing everything
+  // together is worth less than one good talk, which is the ordering D16 asks
+  // for. verify-i5 derives that comparison from both tables rather than
+  // restating either number.
+  dailyCreditMinutes: 150,
+
+  // D16's first half — the witnessed fact. Written ONCE per activity per NPC:
+  // the first evening in front of the TV together is the thing that gets
+  // remembered, and the thirtieth is what the relationship delta is for.
+  // That bounds this source at ten facts per NPC by construction (one per
+  // shareable entry) against BELIEF.maxFacts 60, which is the same
+  // bounded-rather-than-throttled property D24/D25 settled on in Phase 2.
+  //
+  // Deduplicated on EXACT TEXT, where D25's repetition rule needed a tag: the
+  // text here is rendered deterministically from the entry's own `fact`
+  // template and the NPC's name, so the same activity always produces the same
+  // string. D25 could not do that because its exemplar episode changed daily.
+  factImportance: 'social',      // a MEMORY_IMPORTANCE key — the band the refusal fact uses
+  factConfidence: 0.9,           // first-hand: they were in the room (OVERTURE.refusalFactConfidence's reasoning)
+  factCategory: 'relationship',
+  factEmotionalTag: 'warmth',
 };
 
 // --- Hobby objects (inventory overhaul Phase 6, D13) ---
@@ -3452,7 +4026,17 @@ const NPC_INVENTORY = {
 // and only when they actually have a non-keyItem possession worth giving.
 const NPC_GIFT_TUNING = {
   affectionThreshold: 0.35, // relPlayer.affection needed to even consider it
-  cooldownTicks: 96,        // ~2 game days between gift attempts
+  // WAS 96, which meant "once per NPC per game" rather than the "~2 game days"
+  // it says: a cooldown at or above CLOCK.ticksPerDay can never elapse against
+  // a wrapped 0..47 stamp (D34 of the initiative plan, which found the same
+  // defect on two of its own channels). Not this plan's drive, and fixed here
+  // anyway because it is one number of the same broken class in the same file,
+  // and because the class assertion in verify-i6 cannot be written while it
+  // stands. Measured over 8 households x 3 residents x 7 days at affection
+  // 0.9: one gift per 4.9 NPC-days at 20 against one per 15.3 at 96 — the
+  // second figure being what "once, ever" looks like averaged out. A gesture,
+  // not a drip, which is what the line below always intended.
+  cooldownTicks: 20,        // ~10 in-game hours between gift attempts
   baseChance: 0.02,         // per-tick probability once the gate passes
   // Categories the drive will gift, in preference order — the kinds of
   // thing you'd hand someone. Toiletries/cleaning/keys stay theirs.
@@ -3607,6 +4191,19 @@ const AH_HOT_SINGLES_TUNING = {
   // clampable — if playtest finds it obnoxious, dial it down and flag in
   // the Handoff.
   interruptionDeviantWeight: 1.0,
+  // The published weighting BEHIND `bible.deviantLevel` — the temperament
+  // mix COMPUTER's createExternalNpc bakes into every external NPC as
+  // `clamp01(0.5 + 0.5 * Σ(axis × weight))`. It lived inline in that
+  // function until the initiative plan's D11 needed the same number for the
+  // roommate cast, who have no baked `deviantLevel` at all (measured null
+  // for all 36 residents). SIM's npcDisinhibition is the shared reader; a
+  // baked value still wins where one exists, so Hot Singles keep their
+  // authored level and everyone else is scored on the same model rather
+  // than on a second copy of these three numbers.
+  //
+  // Same reason npcCuriosity was extracted from two identical inline copies
+  // in DRIVES: one definition, several callers, so they cannot drift.
+  deviantWeights: { volatility: 0.4, openness: 0.35, assertiveness: 0.25 },
 };
 
 // --- Interruption (Phase 5): personality-driven, AI-generated
@@ -3690,6 +4287,114 @@ const CONTENT_DIRECTIVES = {
 // weight is the per-tick probability the drive fires once gates pass.
 // blockFilter limits drives to specific schedule blocks.
 // cooldownTicks prevents the same drive from firing again too soon.
+//
+// --- `utility` (npc-cognition-plan.md Phase 1) ---------------------------
+// Every entry also carries a `utility` block, which is what cognition.js's
+// scoreDrive reads:
+//
+//   utility: {
+//     baseAppeal: 0.30,                                  // required — the floor this scores at
+//     need:   { need: 'hygiene', below: 45 },            // rises as the need falls under `below` (D6)
+//     signal: { signal: ['dirty_dishes'], scale: 0.8 },  // at the NPC's own attenuated intensity (D8)
+//     temperamentWeights: { conscientiousness: 0.4 },    // 1 + Σ(axis × weight) (D7)
+//     blockAppeal: { morning: 1.2 },                     // schedule-block multiplier, default 1
+//     holdTicks: 2,                                      // required — how long the pursuit is held (D4)
+//   }
+//
+// `weight` IS RETIRED (D1, Phase 2). Selection is `utility.baseAppeal` scored
+// against needs, signals, personality and schedule; nothing reads `weight` any
+// more. The values are left in place as the historical record of what each
+// drive's probability used to be — Phase 5 tunes `baseAppeal` against the
+// measured action rate and the old numbers are the only thing to compare with.
+//
+// THE NEED GATES ARE GONE (D14, Phase 2). D6 turns a need gate into a score
+// term: `utility.need` declares the point at which a need starts to matter and
+// the contribution rises as the need falls below it. `sleep_recover` and
+// `seek_comfort` were dead for the entire life of the drive system precisely
+// because a threshold can sit outside the range its need ever reaches (energy
+// floors at 28 against a gate of 20; comfort floors at exactly its gate of 40),
+// and a curve cannot. Phase 1 could not delete them while `evaluateDrives` still
+// selected on `gates`; Phase 2 replaced that selection and deleted them in the
+// same edit.
+//
+// `gates` stays for the hard exclusions that are NOT preferences — the SIGNAL
+// gates on `clean_common` and `investigate_smell`, which are about the action
+// being possible at all. You cannot tidy mess you cannot perceive.
+//
+// --- `utility.temperamentWeights` (Phase 3) ------------------------------
+// PERSONALITY IS AUTHORED HERE, and only here. `1 + Σ(temperament[axis] ×
+// weight[axis])` scales a drive's whole appeal, which is the idiom
+// INTERRUPTION.personalityWeights established and SNOOP_TUNING.chanceModifiers
+// copied — deliberately not a third shape. cognition.js's scoreDrive is the one
+// consumer; verify-c3 asserts there is no second.
+//
+// What the axes mean, as used across this table:
+//   conscientiousness  chores and self-maintenance (+), napping and snooping (-)
+//   warmth             seeking, keeping and giving to company (+)
+//   assertiveness      being the one who starts it, rather than waiting (+)
+//   openness           curiosity: novelty, other people's phones, odd smells (+)
+//   volatility         restlessness and self-soothing (+)
+//   selfAwareness      noticing your own state — its FIRST mechanical reader in
+//                      the game is sleep_recover below (Plan 0's audit kept this
+//                      axis because the character studio renders it; nothing has
+//                      ever acted on it)
+//
+// Two rules the authoring follows, both learned from what the numbers do:
+//
+//  1. A weight is a preference, never a gate. The sum stays well inside
+//     [-0.7, +0.7], so `1 + Σ` never approaches COGNITION.temperamentFloor and
+//     the floor stays a safety net rather than a load-bearing clamp.
+//  2. A drive whose `baseAppeal` sits just over COGNITION.actionThreshold has
+//     no room for one. On those, ANY weight decides which half of the cast
+//     never performs the drive at all, and where that line falls barely moves
+//     with the weight's size — so it is a rate decision (Phase 5's
+//     `baseAppeal` pass), not a personality one. `react_to_player` is the drive
+//     this rules out; `do_laundry` is the one where the split is the point.
+//
+// --- `leaves` (Phase 4 — traces) ----------------------------------------
+// The STANDING-signal counterpart of `emitsSignal`. `emitsSignal` declares
+// the transient a drive makes; `leaves` declares the mess it makes, and the
+// two are applied side by side in DRIVES (resolveStandardDrive next to the
+// emission, tryEatFood next to its cooking smell). Shape:
+//
+//   leaves: { objDefId: { stateKey: steps } }
+//
+// `steps` (default 1) advances that object's state along its def-declared
+// ladder — one level per `steps`, saturating at the last value — so repeated
+// acts ACCUMULATE (clean → few → many) instead of resetting to a fixed value
+// that would lie after the first meal. The resulting signal is DERIVED by
+// SIGNALS' deriveStandingSignals from the dirty state, so a `leaves` trace
+// needs no stored record and no cleanup path: clear the mess and the signal
+// stops being derivable. Rooms' derived cleanliness is refreshed on the same
+// D7 hook a player action that dirties an object uses, so an NPC-dirtied
+// room stops reading clean to the cleanliness/mood systems.
+//
+// --- `expresses` (initiative plan Phase 1 — the expression layer) --------
+// The third member of the footprint family, and the one that is about the
+// PERSON rather than the act. `emitsSignal` is what the act sounds like,
+// `leaves` is what it leaves behind, `expresses` is what the NPC's mood does
+// to the room while they are doing it. All three are applied side by side in
+// DRIVES so a drive's whole footprint reads in one place.
+//
+//   expresses: { signal: 'sighing', when: { mood: { below: -0.15 } },
+//                intensity: SIGNALS_EMIT.sighing }
+//
+// or an ARRAY of those, in priority order — the FIRST rule whose condition
+// holds is the one that fires, and at most one fires per act. Ordering is how
+// a drive says "slam if it has been a genuinely bad day, otherwise sigh"
+// without the two competing.
+//
+// D3: an expression RIDES ALONG. It is not a decision, it costs no tick, it
+// sets no cooldown and it opens no pursuit — an NPC can sigh while doing
+// laundry and cannot walk over to you while doing laundry. An expression that
+// starts consuming a tick would break Plan 3's one-action-per-tick guarantee,
+// and verify-i1 asserts it does not.
+//
+// `when` is REQUIRED and fails closed: an expression with no condition, or
+// one naming a source DRIVES' EXPRESSION_SOURCES does not know, never fires.
+// An unconditional noise is what `emitsSignal` is for. Phase 1 ships one
+// source — `mood`, the only motivation source measured alive (see the plan's
+// Evidence) — and the later phases add the rest as they make them live.
 const DRIVE_DEFS = {
   // --- Need-driven self-care ---
   // Phase 8: the eat drive (formerly `cook`). A hungry NPC no longer
@@ -3701,11 +4406,11 @@ const DRIVE_DEFS = {
   // the same dispatch shape as the peep/snoop drives — the `effects` list
   // is deliberately empty.
   eat: {
-    // D11: gate raised 25 → 35. With no passive hunger restore, this drive is
-    // now the only thing that feeds an NPC, so it has to fire before they're
-    // desperate. tryEatFood's scrounge fallback still means an empty kitchen
-    // can't starve anyone.
-    gates: [{ need: 'hunger', op: 'below', threshold: 35 }], weight: 0.5,
+    // The `hunger below 35` gate that used to sit here is now utility.need
+    // (D6/D14). Plan 0's D11 had raised it 25 → 35 because with no passive
+    // hunger restore this drive is the only thing that feeds an NPC; the curve
+    // starts higher still, at 45, for the same reason.
+    gates: [], weight: 0.5,
     // 'wind_down' added and weight raised 0.3 → 0.5: a drive can only fire on
     // a tick where the NPC is neither asleep nor in transit, and NPCs move
     // rooms constantly during evening blocks, so the effective firing rate is
@@ -3713,23 +4418,79 @@ const DRIVE_DEFS = {
     // every three days.
     blockFilter: ['morning', 'evening', 'wind_down', 'leisure', 'midday'],
     effects: [],
-    cooldownTicks: 8,
+    // 8 → 14 in Phase 5, and it is a CONSEQUENCE of the cooldown rollover bug
+    // fix (see isOnCooldown in drives.js), not a judgement about appetite: the
+    // bug was silently suppressing 51.5% of all late-day cooldown stamps, so
+    // when the wrap fix landed the raw eat rate overshot the target at ~35% of
+    // all actions. The longer cooldown plus the base/block cuts below are the
+    // measured compensation that brought the total back to the Phase 5 target.
+    cooldownTicks: 14,
     isEatDrive: true,
+    // Phase 4 (traces): the standing-signal half of this drive's footprint.
+    // A kitchen meal is the NPC's cooking — dishes in the sink, grease on
+    // the stove, scraps in the bin. Applied ONLY on the from-kitchen path
+    // (tryEatFood, right beside the cooking-smell emission): a snack eaten
+    // out of their own bag leaves nothing perceivable, exactly like a bag
+    // snack emits no cooking smell. The bin's fill is what gives an untouched
+    // house a rot smell to investigate within a week (the fridge's own stock
+    // rots on a month's timescale, preserved ×4).
+    leaves: {
+      sink_kitchen: { dishes: 1 },
+      stove: { burner: 1 },
+      trash_kitchen: { fill: 1 },
+    },
+    // The kitchen is where a mood has something to bang. Ordered: a really
+    // bad day slams a cupboard, an ordinary good one hums over the stove,
+    // and everything between the two is silent. Applied on the SAME
+    // from-kitchen path as the cooking smell and the mess above — someone
+    // eating crisps out of their own bag in their bedroom expresses nothing,
+    // exactly as they emit nothing and leave nothing.
+    expresses: [
+      { signal: 'cabinet_slam', when: { mood: { below: EXPRESSION_MOOD.veryLow } }, intensity: SIGNALS_EMIT.cabinetSlam },
+      { signal: 'humming',      when: { mood: { above: EXPRESSION_MOOD.high } },    intensity: SIGNALS_EMIT.humming },
+    ],
     // Fallback (kitchen genuinely empty) keeps the old cook flavor.
     activityOverride: 'cooking',
     fallbackActivityOverride: 'scrounging',
     eventTemplate: '{name} made themselves something to eat.',
     fallbackEventTemplate: '{name} scrounged what was left in the cupboards.',
     eventMood: 0.03,
+    // `below` sits above the old gate of 35 so that appetite ramps up before
+    // the point the gate used to switch on — the whole shape of D6. Observed
+    // hunger range 0..79, so this clears actionThreshold from roughly 26 down.
+    //
+    // No temperamentWeights, and none is coming: hunger is hunger, and personality
+    // belongs to what you eat rather than to whether you do. verify-c1 uses this
+    // entry as its control for "a drive with no weights is unaffected by
+    // temperament", so it is also the table's proof that the term is opt-in.
+    utility: {
+      // baseAppeal 0.30 → 0.27 and the morning/evening blocks 1.2 → 1.05,
+      // midday 1.1 → 1.0, all in Phase 5, all by measurement: with the cooldown
+      // rollover bug fixed, eat's need curve alone put it at ~35% of all actions
+      // (fire at hunger ≈ 42, and hunger sits at 0 for 58.8% of at-home calls —
+      // a full belly does not dull the base term). The three changes together
+      // bring eat to 27% of actions at the Phase 5 target rate. baseAppeal is
+      // NOT zeroed because a sated NPC must still eat eventually: blockAppeal
+      // and holdTicks already vary meal size, and zeroing would make the drive
+      // read as dead on the instrument.
+      baseAppeal: 0.27,
+      need: { need: 'hunger', below: 45 },
+      holdTicks: 2,
+      blockAppeal: { morning: 1.05, midday: 1.0, evening: 1.05, wind_down: 0.8 },
+    },
   },
   shower: {
-    gates: [{ need: 'hygiene', op: 'below', threshold: 30 }], weight: 0.3,
+    gates: [], weight: 0.3,   // was `hygiene below 30` — now utility.need (D14)
     blockFilter: ['morning', 'wind_down', 'leisure'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'hygiene', delta: 40 } }],
     activityOverride: 'showering',
     eventTemplate: '{name} took a shower.',
     eventMood: 0.02,
     cooldownTicks: 10,
+    // Singing in the shower, more or less. The running water is already the
+    // loudest transient in the game (0.85), so this is not what tells you
+    // someone is in there — it is what tells you how their day is going.
+    expresses: { signal: 'humming', when: { mood: { above: EXPRESSION_MOOD.high } }, intensity: SIGNALS_EMIT.humming },
     // Showering makes the NPC undressed during the activity — see clothing state
     // Correctness plan Phase 4. `restoresClothing: true` used to sit here
     // alongside setsClothing, and the two cancelled each other out: both flags
@@ -3742,6 +4503,29 @@ const DRIVE_DEFS = {
     setsClothing: 'towel',
     meters: [['showers', 1], ['waterHeating', 1]],
     emitsSignal: { signal: 'running_water', intensity: SIGNALS_EMIT.shower },
+    // Observed hygiene range 0..69. Clears actionThreshold from roughly 35 down,
+    // so a grubby NPC wants a shower before the old gate of 30 would have let
+    // them have one.
+    //
+    // Phase 3: conscientiousness is where the grooming standard lives — a
+    // fastidious NPC showers before they are grubby, a slovenly one waits until
+    // the need does the arguing. Deliberately the same weight as wash_up, so
+    // personality moves WHEN they wash and never which way they wash.
+    //
+    // 0.20 rather than the 0.25 the other self-care drives carry, and the
+    // difference is measured: at 0.25 the morning multiplier takes a maximally
+    // conscientious NPC to 0.406 with hygiene at 100, i.e. above actionThreshold
+    // with nothing to wash off. A drive that clears the bar at a satisfied need
+    // is a gate stuck open — the same defect verify-c1 pins for sleep_recover —
+    // so the weight is capped where the need stays load-bearing for everybody.
+    // verify-c3 asserts this for every drive that declares a need curve.
+    utility: {
+      baseAppeal: 0.25,
+      need: { need: 'hygiene', below: 45 },
+      temperamentWeights: { conscientiousness: 0.20 },
+      holdTicks: 1,
+      blockAppeal: { morning: 1.3, wind_down: 1.1, leisure: 0.9 },
+    },
   },
   // Correctness plan Phase 4 (D10 follow-on). The `shower` drive is
   // facility-gated on bathroom plumbing (MAINTENANCE.npcDecayActions), and
@@ -3757,26 +4541,70 @@ const DRIVE_DEFS = {
   // household of visibly grubby roommates — it just no longer bottoms out at
   // an unrecoverable zero where every NPC reads identically.
   wash_up: {
-    gates: [{ need: 'hygiene', op: 'below', threshold: 25 }], weight: 0.25,
+    gates: [], weight: 0.25,  // was `hygiene below 25` — now utility.need (D14)
     blockFilter: ['morning', 'wind_down', 'leisure', 'evening'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'hygiene', delta: 20 } }],
     activityOverride: 'washing up at the sink',
     eventTemplate: '{name} washed up as best they could.',
     eventMood: -0.01,
     cooldownTicks: 14,
+    // The consolation-prize version of a shower, and it reads like one.
+    expresses: { signal: 'sighing', when: { mood: { below: EXPRESSION_MOOD.low } }, intensity: SIGNALS_EMIT.sighing },
+    // Deliberately worse than a shower in appeal as well as in effect, so an
+    // NPC with a working bathroom prefers the shower and one without still has
+    // a recovery path. Clears actionThreshold from roughly hygiene 25 down.
+    utility: {
+      baseAppeal: 0.20,
+      need: { need: 'hygiene', below: 35 },
+      temperamentWeights: { conscientiousness: 0.20 },   // as shower — see there
+      holdTicks: 1,
+    },
   },
   sleep_recover: {
-    gates: [{ need: 'energy', op: 'below', threshold: 20 }],
+    // The `energy below 20` gate is deleted (D14). Energy is observed to range
+    // 28..100 — it never once reached 20, so this drive fired zero times in 84
+    // in-game days. That is the defect D6 exists to make structurally
+    // impossible, not a threshold to nudge.
+    gates: [],
     weight: 0.4,
     blockFilter: ['leisure', 'wind_down'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'energy', delta: 25 } }],
     activityOverride: 'napping',
+    // No `leaves`. The obvious trace — napping in a bedroom leaves the bed
+    // unmade — measured dead: 26 nap fires across 12 households × 7 days and
+    // not one happened in a bedroom (the schedule parks NPCs in common rooms
+    // at nap time). A trace that can never fire is the same defect class as a
+    // drive nobody performs; the mechanism is generic, so if a future phase
+    // puts NPCs in bedrooms during the day, this is one config line away.
     eventTemplate: '{name} crashed for a nap.',
     eventMood: 0.05,
     cooldownTicks: 16,
+    // Lying down at the end of a bad one. This drive and seek_comfort carry
+    // the two lowest mean moods in the table (−0.015 and 0.006 against a cast
+    // mean of 0.109), so the low band actually catches them.
+    expresses: { signal: 'sighing', when: { mood: { below: EXPRESSION_MOOD.low } }, intensity: SIGNALS_EMIT.sighing },
+    // D9, one of the two drives that could never fire. Energy is observed to
+    // range 28..100 — it NEVER reaches the gate of 20 above, which is why this
+    // fired zero times in 84 in-game days. `below: 50` makes the curve clear
+    // actionThreshold from about energy 36 down, comfortably inside the range
+    // the need actually occupies, while a rested NPC at 50+ scores 0.20 and
+    // does not nap. The gate above is what Phase 2 deletes.
+    // Phase 3: the two axes pull against each other on purpose. The disciplined
+    // push through the afternoon slump (conscientiousness -); the self-aware
+    // notice they are running on empty and lie down (selfAwareness +). This is
+    // the FIRST mechanical reader `selfAwareness` has ever had — Plan 0's audit
+    // kept the axis because the character studio renders it, which is an
+    // argument for wiring rather than for deleting.
+    utility: {
+      baseAppeal: 0.20,
+      need: { need: 'energy', below: 50 },
+      temperamentWeights: { conscientiousness: -0.20, selfAwareness: 0.20 },
+      holdTicks: 3,
+      blockAppeal: { wind_down: 1.2 },
+    },
   },
   seek_company: {
-    gates: [{ need: 'social', op: 'below', threshold: 25 }],
+    gates: [],   // was `social below 25` — now utility.need (D14)
     weight: 0.25,
     blockFilter: ['leisure', 'evening', 'wind_down'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'social', delta: 15 } }],
@@ -3785,6 +4613,28 @@ const DRIVE_DEFS = {
     eventMood: 0.04,
     cooldownTicks: 6,
     moveToCommon: true,
+    // Coming out to where the people are because the room you were in was
+    // not helping. The sigh lands in the COMMON room they moved to, which is
+    // where the player is most likely to be — this is the highest-traffic
+    // carrier of the low band by some way.
+    expresses: { signal: 'sighing', when: { mood: { below: EXPRESSION_MOOD.low } }, intensity: SIGNALS_EMIT.sighing },
+    // Observed social range 0..100. Clears actionThreshold from about 36 down.
+    //
+    // Phase 3: warmth wants the company, assertiveness is what gets you off the
+    // bed and into the room where it is. Weighted heavier than
+    // chat_with_roommate on both, because this one costs something: you have to
+    // go and find people rather than talk to whoever is already here.
+    utility: {
+      // baseAppeal 0.20 → 0.22 in Phase 5, by measurement: with the cooldown
+      // bug fixed and eat retuned, seek_company had drifted to 10% of actions
+      // and felt thin — social is a first-class need, and the 0.02 raise keeps
+      // the need's champion drive visible without crowding the mix.
+      baseAppeal: 0.22,
+      need: { need: 'social', below: 50 },
+      temperamentWeights: { warmth: 0.35, assertiveness: 0.20 },
+      holdTicks: 2,
+      blockAppeal: { evening: 1.1, leisure: 1.1 },
+    },
   },
 
   // --- Chore behavior ---
@@ -3803,6 +4653,32 @@ const DRIVE_DEFS = {
     eventMood: 0.03,
     cooldownTicks: 20,
     cleansRoom: true,
+    // Cleaning up after other people is the classic place for both halves of
+    // this: the resentful bang and the contented pottering. Same ordering as
+    // `eat` — the worse day wins where both could apply.
+    expresses: [
+      { signal: 'cabinet_slam', when: { mood: { below: EXPRESSION_MOOD.veryLow } }, intensity: SIGNALS_EMIT.cabinetSlam },
+      { signal: 'humming',      when: { mood: { above: EXPRESSION_MOOD.high } },    intensity: SIGNALS_EMIT.humming },
+    ],
+    // The signal gate above STAYS a hard exclusion — you cannot tidy mess you
+    // cannot perceive, and cleansRoom cleans the room the NPC is standing in.
+    // `utility.signal` scores on top of it: the worse the mess looks, the more
+    // it nags. Perceived intensity is already attenuated for this NPC (D8), so
+    // an NPC across the flat is pulled less hard than one in the kitchen.
+    //
+    // The one drive that declared temperamentWeights in Phase 1, as the proof
+    // that the D7 mechanism works end to end (verify-c1 asserts two NPCs
+    // differing only in conscientiousness score it differently). Phase 3 authored
+    // the rest of the table around it and added the warmth term the plan's own
+    // data model sketched: tidying the common room is partly about the standard
+    // you hold yourself to and partly about the people you share it with.
+    utility: {
+      baseAppeal: 0.20,
+      signal: { signal: ['dirty_dishes', 'clutter', 'unmade_bed'], scale: 0.8 },
+      temperamentWeights: { conscientiousness: 0.4, warmth: 0.1 },
+      holdTicks: 2,
+      blockAppeal: { morning: 1.2 },
+    },
   },
   do_laundry: {
     gates: [], weight: 0.05,
@@ -3815,11 +4691,35 @@ const DRIVE_DEFS = {
     emptiesHamper: true,
     meters: [['laundry', 1], ['devices', 0.5]],
     emitsSignal: { signal: 'machine_running', intensity: SIGNALS_EMIT.laundry },
+    // The plan's own example of the split: an NPC can hum WHILE doing
+    // laundry, and cannot walk over to you while doing laundry.
+    expresses: { signal: 'humming', when: { mood: { above: EXPRESSION_MOOD.high } }, intensity: SIGNALS_EMIT.humming },
+    // No need and no signal drives this — laundry is a chore that simply wants
+    // doing — so base appeal is the only lever and has to carry the whole
+    // score. It clears actionThreshold in the morning block and not otherwise,
+    // which makes laundry a morning job; the 30-tick cooldown is what keeps it
+    // rare, rather than the near-zero weight it used to rely on.
+    //
+    // Phase 3: the purest chore in the table, and therefore the clearest place
+    // for conscientiousness to show — nothing else motivates laundry, so the
+    // whole of "does this person do it" is who they are. Because base × the
+    // morning multiplier lands just over actionThreshold, the practical effect
+    // is that roughly the conscientious half of the cast does laundry and the
+    // other half does not. That split is the intended reading of "chores against
+    // conscientiousness"; it barely moves with the size of the weight (see rule
+    // 2 in the header), so the weight is set for a visible effect size rather
+    // than to place the line.
+    utility: {
+      baseAppeal: 0.36,
+      temperamentWeights: { conscientiousness: 0.35 },
+      holdTicks: 3,
+      blockAppeal: { morning: 1.2, leisure: 0.85 },
+    },
   },
 
   // --- Social: NPC-to-NPC interaction ---
   chat_with_roommate: {
-    gates: [{ need: 'social', op: 'below', threshold: 40 }],
+    gates: [],   // was `social below 40` — now utility.need (D14)
     weight: 0.15,
     blockFilter: ['leisure', 'evening', 'wind_down', 'morning'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'social', delta: 20 } }],
@@ -3829,27 +4729,39 @@ const DRIVE_DEFS = {
     emitsSignal: { signal: 'voices', intensity: SIGNALS_EMIT.voices },
     // Produces a small rel delta between the two NPCs
     relDelta: { trust: 0.02, affection: 0.02 },
+    // A lower bar than seek_company: chatting to whoever is already here costs
+    // nothing, where seeking company means going and finding it. Clears
+    // actionThreshold from about social 41 down.
+    //
+    // Phase 3: the same pair as seek_company, scaled down for the same reason
+    // the base is — there is nobody to go and find, they are standing right
+    // there, so it takes less warmth and much less nerve.
+    utility: {
+      // baseAppeal 0.18 → 0.20 in Phase 5, by measurement — same session and
+      // same reasoning as seek_company: social was underrepresented in the mix
+      // after the cooldown fix retune. The lower-bar version stays 0.02 below
+      // seek_company's 0.22, preserving the authored gradient.
+      baseAppeal: 0.20,
+      need: { need: 'social', below: 60 },
+      temperamentWeights: { warmth: 0.30, assertiveness: 0.15 },
+      holdTicks: 2,
+      blockAppeal: { evening: 1.1, leisure: 1.1 },
+    },
   },
 
   // --- Social: NPC-to-player IM ---
-  text_player: {
-    gates: [],
-    weight: 0.04,
-    blockFilter: ['leisure', 'evening', 'wind_down', 'work'],
-    effects: [],
-    cooldownTicks: 24,
-    sendsIm: true,
-    // IM text templates — picked at random, filled with NPC name
-    imTemplates: [
-      'hey, you around?',
-      'can you grab milk on your way back?',
-      'the wifi is being weird again',
-      'someone left dishes in the sink again 🙄',
-      'you good?',
-      'movie night tonight?',
-      'i made extra food if you want some',
-    ],
-  },
+  // GONE in the initiative plan's Phase 4, and deliberately not replaced here.
+  // `text_player` is an OVERTURE_DEFS entry now (D8): the same act, scored by
+  // the same scorer, but motivated by a reason the NPC actually has instead of
+  // by a social need, and saying something about that reason instead of one of
+  // seven strings about the wifi. The id had to leave this table or it would
+  // have collided — candidateDef checks DRIVE_DEFS first, so a duplicate would
+  // have silently made the overture unreachable.
+  //
+  // What it cost: an NPC who is simply LONELY no longer texts, because D5 keeps
+  // `utility.need` off every overture. The in-person half of that need still
+  // has `seek_company` and `chat_with_roommate`. See the plan's Phase 4 handoff
+  // for the measured rate and the open question it parks.
 
   // --- Reactions to player presence ---
   react_to_player: {
@@ -3867,16 +4779,37 @@ const DRIVE_DEFS = {
     },
     relDeltaLow: { tension: 0.01 },
     relDeltaHigh: { affection: 0.01 },
+    // Acknowledging someone who just walked in is close to automatic, so this
+    // sits above actionThreshold unconditionally — which is only safe because
+    // Phase 2 gave it a candidacy condition (COGNITION's DRIVE_CANDIDACY): the
+    // player has to actually be in the room. Without it this was a candidate on
+    // every tick at a flat 0.42 and its resolver silently did nothing on almost
+    // all of them, which cost a wasted weight roll before and would cost a whole
+    // pursuit now.
+    //
+    // NO temperamentWeights, DELIBERATELY (Phase 3), and this is the one entry
+    // where that is a decision rather than an absence. "Unconditionally" above
+    // means base 0.42 against a threshold of 0.40 — 0.02 of headroom. A warmth
+    // weight of any size therefore does not make cold NPCs greet you less; it
+    // makes a third of the cast never greet you at all, and moving the weight
+    // barely moves where that line falls. Whether a cold roommate looks up when
+    // you walk in is worth having, but it is bought with `baseAppeal`, which is
+    // Phase 5's lever. See the header's rule 2.
+    utility: {
+      baseAppeal: 0.42,
+      holdTicks: 1,
+    },
   },
 
   // NPC Overhaul Phase 6 — comfort + stimulation drives
   seek_comfort: {
-    // D14: gate 25 → 40. Comfort is a quality-of-life need, not a survival
-    // one — "I'd like to go sit somewhere nice" is a mid-range motivation,
-    // where hunger at 25 is genuine deprivation. Measured against the rebased
-    // rates, comfort settles in the 30s-60s, so a gate of 25 meant this drive
-    // never fired at all and NPCs never chose to go and relax.
-    gates: [{ need: 'comfort', op: 'below', threshold: 40 }],
+    // The `comfort below 40` gate is deleted (D14). Plan 0 had already moved it
+    // once (25 → 40) for exactly this reason and it was still wrong: comfort is
+    // observed to floor at EXACTLY 40 against a strict `<`, so the drive missed
+    // by one unit and fired zero times in 84 in-game days. A threshold that has
+    // to be re-guessed every rebalance is the wrong mechanism; the curve in
+    // utility.need is the fix.
+    gates: [],
     weight: 0.2,
     blockFilter: ['leisure', 'wind_down', 'evening', 'morning'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'comfort', delta: 15 } }],
@@ -3885,9 +4818,31 @@ const DRIVE_DEFS = {
     moveToComfort: true,
     eventTemplate: '{name} settles into the couch, looking comfortable.',
     eventMood: 0.03,
+    // The sound of someone dropping onto a couch at the end of it. Pairs
+    // with sleep_recover — same "stop and recover" pair Phase 3 authored the
+    // temperament weights around, and they should sound the same.
+    expresses: { signal: 'sighing', when: { mood: { below: EXPRESSION_MOOD.low } }, intensity: SIGNALS_EMIT.sighing },
+    // D9, the other drive that could never fire. Comfort is observed to range
+    // 40..74 against a gate of `below 40` with a STRICT `<` — the floor is
+    // exactly the threshold, so it missed by one unit for the entire life of
+    // the drive system. `below: 70` puts the curve properly inside the range:
+    // it clears actionThreshold from about comfort 48 down, which is a real
+    // slice of where comfort actually sits, and a contented NPC at 70 scores
+    // its base and stays where they are. The gate above is what Phase 2 deletes.
+    // Phase 3: self-soothing. A volatile NPC reaches for the couch when the day
+    // has been a lot; a disciplined one is slower to decide they have earned it.
+    // Same pairing as sleep_recover with the axes swapped around — both are
+    // "stop and recover", and they should not read as the same person's habit.
+    utility: {
+      baseAppeal: 0.18,
+      need: { need: 'comfort', below: 70 },
+      temperamentWeights: { volatility: 0.25, conscientiousness: -0.15 },
+      holdTicks: 3,
+      blockAppeal: { wind_down: 1.15, leisure: 1.1 },
+    },
   },
   seek_stimulation: {
-    gates: [{ need: 'stimulation', op: 'below', threshold: 25 }],
+    gates: [],   // was `stimulation below 25` — now utility.need (D14)
     weight: 0.2,
     // D15: 'afternoon' is not a block any SCHEDULES template defines — it was
     // dead weight in this filter. The real block names are sleep/morning/
@@ -3898,6 +4853,28 @@ const DRIVE_DEFS = {
     cooldownTicks: 10,
     eventTemplate: '{name} seems restless, looking for something to occupy themselves.',
     eventMood: -0.02,
+    // Restless and not enjoying it. `chat_with_roommate` is deliberately
+    // silent by comparison: it already emits `voices`. (The other quiet one
+    // used to be `text_player`, now an overture — someone on their phone.)
+    expresses: { signal: 'sighing', when: { mood: { below: EXPRESSION_MOOD.low } }, intensity: SIGNALS_EMIT.sighing },
+    // Observed stimulation range 0..67. Clears actionThreshold from about 34
+    // down, so restlessness builds before it shows rather than switching on.
+    //
+    // Phase 3: the plan names this one specifically as openness's drive — an
+    // open NPC goes looking for something new, an incurious one is content to
+    // be bored. Volatility rides along at half the weight: restlessness is
+    // partly curiosity and partly not sitting still.
+    utility: {
+      // baseAppeal 0.18 → 0.20 in Phase 5, by measurement — the restlessness
+      // champion was being beaten to the punch by the same-term social drives;
+      // the 0.02 raise restores stimulation's place in the mix (66/679 = 9.7%
+      // at the Phase 5 measurement) without making the need curve redundant.
+      baseAppeal: 0.20,
+      need: { need: 'stimulation', below: 50 },
+      temperamentWeights: { openness: 0.35, volatility: 0.20 },
+      holdTicks: 2,
+      blockAppeal: { leisure: 1.1, evening: 1.05 },
+    },
   },
 
   // --- Phase 6: NPC peeps on player during vulnerable states ---
@@ -3916,6 +4893,23 @@ const DRIVE_DEFS = {
     cooldownTicks: 16,         // ~8 hours (matches NPC_PEEP_TUNING)
     effects: [],              // no standard effects — resolution is custom
     isPeepDrive: true,        // flag for evaluateDrives to dispatch to resolveNpcPeep
+    // D10: the resolver keeps deciding WHAT happens (the stealth contest); the
+    // scorer decides WHETHER, and DRIVES' canPeepPlayer decides whether it is
+    // even possible — a vulnerable player, in an adjacent room, and an NPC
+    // curious or attracted enough to try (D15).
+    //
+    // Phase 3: the weights are NPC_PEEP_TUNING.chanceModifiers' own numbers —
+    // openness 0.3 and lowConscientiousness 0.25, the second written as the
+    // signed weight this idiom takes. They cannot be referenced directly (that
+    // table is declared below this one), so verify-c3 asserts the two agree
+    // instead. Candidacy still asks whether an NPC is curious enough to try at
+    // all (canPeepPlayer's npcCuriosity floor); this says how badly the ones who
+    // are want to, which was a flat 0.45 for everybody before.
+    utility: {
+      baseAppeal: 0.45,
+      temperamentWeights: { openness: 0.30, conscientiousness: -0.25 },
+      holdTicks: 1,
+    },
   },
   // BrineOS Phase 9: same isPeepDrive dispatch shape, different resolver
   // (tryNpcSnoop). Any block works — unlike peeping (which needs the
@@ -3928,6 +4922,17 @@ const DRIVE_DEFS = {
     cooldownTicks: 16,
     effects: [],
     isSnoopDrive: true,
+    // As peep_player. Candidacy is DRIVES' findSnoopablePhone (D15): an
+    // unlocked, unread phone in the room the NPC is standing in, with the player
+    // elsewhere. Before that condition existed this was a candidate on 100% of
+    // npc-ticks and would have won 54% of them. The Phase 3 weights are
+    // SNOOP_TUNING.chanceModifiers', which are deliberately the same numbers as
+    // NPC_PEEP_TUNING's — same curiosity, same shape, one place to change it.
+    utility: {
+      baseAppeal: 0.45,
+      temperamentWeights: { openness: 0.30, conscientiousness: -0.25 },
+      holdTicks: 1,
+    },
   },
   // Perception plan Phase 5 — the proof-of-concept perception consumer, and
   // the first drive in the game motivated by something OUTSIDE the NPC. An
@@ -3945,6 +4950,21 @@ const DRIVE_DEFS = {
     cooldownTicks: 6,
     effects: [],
     isInvestigateDrive: true,
+    // The rot gate stays a hard exclusion: the resolver needs the source room
+    // off the perceived record, and there is nothing to investigate without
+    // one. `utility.signal` then scores how badly it reeks FROM HERE — the
+    // strongest single expression of D8 in the table, because the same rot
+    // scores differently for two roommates standing in different rooms.
+    // Phase 3: going to find out what that smell is takes curiosity (openness)
+    // and a willingness to be the one who deals with it (conscientiousness) —
+    // the only entry in the table where those two point the same way, which is
+    // what separates investigating a smell from snooping through a phone.
+    utility: {
+      baseAppeal: 0.15,
+      signal: { signal: 'rot', scale: 0.9 },
+      temperamentWeights: { openness: 0.25, conscientiousness: 0.20 },
+      holdTicks: 2,
+    },
   },
   // Phase 8 (D8): a fond NPC hands the player something they own. Custom
   // resolution (tryGiveGift in DRIVES) — affection-gated, cooldowned, and
@@ -3957,6 +4977,496 @@ const DRIVE_DEFS = {
     cooldownTicks: NPC_GIFT_TUNING.cooldownTicks, // single source of truth
     effects: [],
     isGiftDrive: true,
+    // As peep_player. Candidacy is DRIVES' giftableStack (D15) — real fondness
+    // AND a non-keyItem possession worth handing over. Phase 3 adds warmth on
+    // top, alone: affection is already the candidacy condition, so what is left
+    // to say is whether this is a person who expresses it by handing you things.
+    utility: {
+      baseAppeal: 0.45,
+      temperamentWeights: { warmth: 0.35 },
+      holdTicks: 1,
+    },
+  },
+};
+
+// --- NPC cognition: utility scoring (npc-cognition-plan.md, Phase 1) ---
+// The dials the scorer in cognition.js reads. Every number here was a FIRST
+// PASS set by arithmetic against the plan's Evidence, not by measurement.
+// Phase 5 (2026-08-11) then measured against targetActionsPerTick and kept
+// every COGNITION constant as-is — see the plan's Handoff for what was swept
+// and why it stayed: actionThreshold was the first lever tried and the bug
+// that made it look dead (the cooldown rollover in drives.js) was the real
+// suppressor; once fixed, the rate landed on target without touching any of
+// these. Raising actionThreshold would strand the five drives that carry no
+// need curve (react_to_player/peep_player/snoop_phone/gift_to_player/
+// do_laundry) below the bar, so 0.40 is load-bearing for Phase 3's
+// authored above/below-bar design rather than a tuning artifact.
+const COGNITION = {
+  // Below this a candidate is not worth departing from the scheduled activity
+  // for. Phase 1 authored every `baseAppeal` so that each drive clears this bar
+  // somewhere in its need's OBSERVED range (not its theoretical 0..100) — that
+  // is what verify-c1's reachability assertion pins, and it is the assertion
+  // that would have caught `sleep_recover` sitting under an unreachable gate.
+  actionThreshold: 0.40,
+  breakMargin: 0.25,           // a challenger must beat the held pursuit by this (D5, Phase 2)
+
+  // What a fully depleted need adds to a drive that declares `utility.need`.
+  // 0.70 against a 0.40 threshold means a need at its `below` point motivates
+  // nothing on its own and a need at zero outweighs any base appeal in the
+  // table — hunger at 0 should beat wanting to do laundry.
+  needWeight: 0.70,
+
+  // A drive done recently, but no longer on cooldown, is less appealing than
+  // one that is not. `recencyWindow` is in multiples of the drive's OWN
+  // cooldownTicks; the penalty applies between 1× and 2× it. Specified in the
+  // plan as applying "within its own cooldown", which cannot happen — the
+  // cooldown is a hard exclusion, so nothing inside it is ever scored. See
+  // cognition.js's recencyMultiplier.
+  recencyPenalty: 0.5,
+  recencyWindow: 2,
+
+  // Floor on the D7 personality multiplier: an unlucky sum could otherwise take
+  // `1 + Σ` negative, which would sort a drive below "do nothing" in a way no
+  // author intended. INTERRUPTION does not clamp because its four weights are
+  // small and fixed; this table is open for authoring, so it does.
+  //
+  // As authored in Phase 3 the worst case across all sixteen drives is 0.45
+  // (seek_stimulation at openness -1, volatility -1), so this is a safety net
+  // for future authoring and not a number any drive currently touches — which
+  // is the invariant verify-c3 pins, because a table that reaches the floor is
+  // one where two very different NPCs quietly score the same.
+  temperamentFloor: 0.1,
+
+  targetActionsPerTick: 0.25,  // D2 — measured 0.08 today; what Phase 5 tunes against
+  alwaysBreak: {               // D5's short list (Phase 2)
+    playerAddress: true,
+    calloutSalience: 0.70,     // matches SCENE_READER.calloutSalience — one idea of "this stops you"
+  },
+};
+
+// --- Overtures (npc-initiative-plan.md Phase 3, D1/D2/D5/D9/D10) -----------
+// The sibling table to DRIVE_DEFS, and deliberately the same SHAPE: a drive is
+// something an NPC does to the WORLD, an overture is something they direct at a
+// PERSON, and both are ranked by COGNITION's one scorer on one scale (D1).
+// There is no second selection system that could disagree with `npc.pursuit`
+// about what an NPC is doing — scoreCandidates walks both tables and
+// choosePursuit picks one winner, which is what makes design invariant 2
+// ("one committed intent per NPC") true by construction rather than by care.
+//
+// D5 — needs do not motivate overtures. `utility.need` is absent on every entry
+// here and `utility.motive` takes its place: the strongest of the entry's
+// `motives` supplies a [0,1] strength and OVERTURE.motiveWeight scales it into
+// appeal, exactly as COGNITION.needWeight scales a depleted need. A hungry NPC
+// eats; a curious one asks.
+const OVERTURE = {
+  // What a maximally motivated overture adds to its `baseAppeal`. The
+  // arithmetic this was authored against: 0.50 on a base of 0.30 tops out at
+  // 0.80, which is above every ordinary chore in DRIVE_DEFS (0.10..0.45) and
+  // BELOW a starving NPC's `eat` (0.27 + COGNITION.needWeight 0.70 = 0.97).
+  // That ordering is D5 expressed as a number. Phase 6 owns the retune.
+  motiveWeight: 0.50,
+
+  // D10's floors, one per motive source, so a source that has technically moved
+  // off zero does not immediately start crossing rooms. Each reuses a bar the
+  // game already authored where one exists (README rule 5) rather than
+  // inventing a parallel one:
+  //   curiosity — RUMINATION.raiseThreshold, via npc.js's topOpenQuestion. The
+  //     same bar Plan 4's D13 bridge raises a question at; a question worth
+  //     mentioning in conversation is a question worth crossing a room for.
+  //   affection — REL_CONSEQUENCES.affectionGiftThreshold, the existing "real
+  //     fondness" bar that gates gift_to_player.
+  //   desire    — npcInitiativeGate's `mayInitiate` (D12/D14), whole.
+  //   grievance — this, the one source with no authored bar of its own.
+  grievanceFloor: 0.3,         // matches addGrievance's own default severity
+
+  // How long a pending overture waits before it lapses. Two ticks is one in-game
+  // hour: long enough that the player can act between clock ticks, short enough
+  // that an ignored overture is over before the NPC's next cooldown window.
+  // Also the def's `utility.holdTicks`, read by openOverture.
+  lapseTicks: 2,
+
+  // How long before the same NPC may open another one. 12 ticks is six in-game
+  // hours — the same order as RUMINATION.intervalTicks, which is the cadence at
+  // which the curiosity source can produce a new reason to open at all.
+  cooldownTicks: 12,
+
+  // --- Phase 4's three other channels -------------------------------------
+  // Each cooldown is on the OVERTURE_DEFS entry and every one of them reads
+  // from here, so "how often does this cast reach for the player" stays one
+  // decision made in one place (D21).
+  //
+  // ALL THREE WERE RETUNED IN PHASE 6, AND TWO OF THEM WERE BROKEN (D34). A
+  // cooldown stamp is a 0..47 tick index that wraps at midnight, and
+  // isOnCooldown compares a WRAPPED delta — so a cooldown is not an elapsed
+  // duration, it is a fixed daily clock window `cooldownTicks` wide anchored
+  // at the stamp. At or above CLOCK.ticksPerDay the window is the whole day
+  // and the entry is on cooldown FOREVER after its first firing; from about
+  // half a day up it can land in the sleep block and never be asked again.
+  // Measured: at 48 and 96 an NPC proposed and knocked exactly ONCE per game.
+  // Every value here is now at or below 20, which is the largest one measured
+  // to keep every entry live on every resident. See D34 — the mechanism fix
+  // belongs to Plan 3's cooldown layer and is flagged, not improvised here.
+  //
+  // A text is the cheap channel — it costs the sender nothing and the player
+  // can read it whenever — and that is exactly why it needed the retune most:
+  // it is the only channel with no geometric limiter and an empty
+  // do-not-disturb list (D9), so it was two thirds of every arm's volume and
+  // reached a sleeping or absent player 4.5 times a day. 16 ticks is eight
+  // in-game hours. Measured on 8 households x 3 residents x 7 days at
+  // affection 0.9: texts 242 -> 72 and the whole cast 2.464 -> 1.405 per NPC
+  // per day, with the in-person channels unmoved (approach 152 -> 144). On an
+  // ABSENT player, where this is the only channel that can reach at all,
+  // 1.464 -> 0.452 per NPC per day and 0 of 24 residents went silent.
+  textCooldownTicks: 16,
+  // A knock is the most intrusive: they walked to a door you closed. Ten
+  // in-game hours, so being knocked on twice in an evening is not a thing that
+  // can happen. It WANTED two days and cannot have them (D34). The rate is
+  // geometry-limited rather than cooldown-limited in any case — measured 9
+  // knocks at 12 ticks against 8 at 96, because the channel needs the player
+  // behind a shut door and an NPC in the one adjoining room.
+  knockCooldownTicks: 20,
+  // A proposal books a piece of the player's future. It wanted a full day and
+  // cannot have one (D34); 20 ticks is the largest working value, and the next
+  // step up is where the wrap starts silencing residents outright — measured,
+  // 1 of 24 residents never proposed at 20 against 4 of 24 at 24.
+  proposeCooldownTicks: 20,
+
+  // --- D10, the refusal economy ------------------------------------------
+  // A refusal costs a relationship delta AND is remembered, and BOTH halves
+  // self-limit or the pair becomes a permanent grudge over a long game.
+  // `refusalDiminish` is the geometric decay applied per prior refusal inside
+  // `refusalWindowDays`: the second refusal moves half what the first did, the
+  // third a quarter. The same scale multiplies the motive strength, which is
+  // the other half of D10 — the NPC learns to STOP ASKING rather than learning
+  // to hate you, and one function is both.
+  refusalWindowDays: 3,
+  refusalDiminish: 0.5,
+  refusalDelta: { affection: -0.04, comfort: -0.03 },
+  // The remembered half. Written through addMemoryFact, so it carries normal
+  // provenance and confidence and decays like any other belief (D10).
+  refusalFactImportance: 'social',   // a MEMORY_IMPORTANCE key
+  refusalFactConfidence: 0.9,        // first-hand: they were standing right there
+};
+
+// D12 — the warm and charged paths must produce DIFFERENT overtures, different
+// narration and different remembered facts, or the distinction never reaches
+// the player. These two tables are the narration and the fact; the motive that
+// won is the overture. `{name}` is the only substitution.
+const OVERTURE_APPROACH_TEMPLATES = {
+  warm: [
+    '{name} crosses the room and stops in front of you.',
+    '{name} comes over, and it looks like they want to say something.',
+    '{name} drifts over and waits for you to look up.',
+  ],
+  charged: [
+    '{name} crosses the room and stands closer than they need to.',
+    '{name} comes over slowly, holding your eye the whole way.',
+    '{name} stops in front of you, close enough that you have to look up.',
+  ],
+};
+
+const OVERTURE_REFUSAL_FACTS = {
+  warm: 'You walked away when {name} came over to talk.',
+  charged: 'You walked away when {name} came over wanting you.',
+};
+
+// --- Phase 4's channels: what each one SAYS ---------------------------------
+// D8's other three. The machinery is identical — same scorer, same motive
+// readers, same record, same four named writers — so what actually
+// distinguishes a text from a knock is the surface it arrives on and the words
+// it arrives in. These are the words.
+
+// The text channel (initiative plan Phase 4). This table is what `text_player`
+// stopped pretending: it used to be seven strings picked at random with no
+// relationship to anything the NPC knew or wanted ("the wifi is being weird
+// again"), which is why it read as set dressing rather than as a person.
+// Keyed by MOTIVE, so a text is about the reason it was sent.
+//
+// `{topic}` is filled from the record's motiveRef and is the same phrase the
+// approach's opening line names. An entry that carries it is skipped when
+// there is no topic to put in it, which is why every list must also carry at
+// least one entry without one (verify-i4 asserts that — a motive whose whole
+// list needed a topic would silently send nothing).
+//
+// `charged` sits beside the four motives rather than nesting under desire,
+// exactly as OVERTURE_APPROACH_TEMPLATES is tone-keyed: 'charged' is reachable
+// only through the desire gate (D12), so one flat lookup covers both.
+const OVERTURE_TEXT_TEMPLATES = {
+  curiosity: [
+    'hey — been meaning to ask you about {topic}',
+    'random but i keep thinking about {topic}',
+    'you around later? something i want to ask you',
+  ],
+  grievance: [
+    'can we talk about {topic} at some point',
+    'not trying to start anything but {topic} is still bugging me',
+    'we should talk. not urgent. but we should',
+  ],
+  affection: [
+    'hey. hope today is being kind to you',
+    'no reason. just thinking about you',
+    'the flat is quiet without you in it',
+  ],
+  desire: [
+    'thinking about you. that is the whole message',
+    'are you coming home soon',
+  ],
+  charged: [
+    'i keep thinking about you and it is not helping',
+    'come home',
+  ],
+};
+
+// The knock channel. Narrated in the scene the moment the record opens — the
+// player is behind a closed door, so unlike an approach there is nobody to
+// look up at, and the SIGNAL_DEFS 'knocking' transient is what carries it to
+// anyone else in earshot. Tone-keyed for the same D12 reason as the approach.
+const OVERTURE_KNOCK_TEMPLATES = {
+  warm: [
+    'A knock at your door. "{name} — you in there?"',
+    'Three knocks, unhurried. It is {name}.',
+    'A knock, then {name}\'s voice: "Got a second?"',
+  ],
+  charged: [
+    'A knock at your door, and it is not a casual one. "{name}."',
+    '{name} knocks once and waits, close enough to the door that you can hear them breathing.',
+  ],
+};
+
+// The propose channel. The NPC is standing in front of you asking for a piece
+// of your week. `{when}` and `{where}` come from the proposal terms on the
+// record — a real day, a real window, a real room — because a proposal that
+// cannot name when is a mood, not a plan.
+const OVERTURE_PROPOSE_TEMPLATES = {
+  warm: [
+    '{name} comes over. "Are you around {when}? I thought we could just... be in the {where} at the same time for once."',
+    '{name} stops in front of you. "{when}. The {where}. Nothing planned, just — you and me not doing anything separately."',
+    '{name} drifts over. "Do you want to do something {when}? I will be in the {where} either way."',
+  ],
+};
+
+// D10's remembered half, per channel where the default does not fit. The base
+// OVERTURE_REFUSAL_FACTS above is written for someone you WALKED AWAY from;
+// turning down a plan and not opening a door are different things to remember,
+// and a fact tier that records all three identically is a fact tier that has
+// stopped being information. Read through the def, which falls back to the
+// tone-keyed base — so a channel that has nothing special to remember says
+// nothing special.
+const OVERTURE_PROPOSE_REFUSAL_FACTS = {
+  warm: 'You said no when {name} asked to spend some time together.',
+};
+const OVERTURE_KNOCK_REFUSAL_FACTS = {
+  warm: 'You did not open the door when {name} knocked.',
+  charged: 'You left {name} standing at your door.',
+};
+
+// D8's four channels. Phase 3 shipped `approach`; Phase 4 adds the other
+// three, and they are new ENTRIES rather than new machinery — the same scorer
+// ranks them, the same four named writers commit them, the same motive readers
+// supply the reason. What each entry owes is its own candidacy and its own
+// surface.
+//
+// The fields that differ between channels, and what reads each one:
+//   proximity      — OVERTURE_PROXIMITY (overture.js). Where the NPC has to be
+//                    standing, as a named predicate from a registry that fails
+//                    closed. Replaces Phase 3's `requiresAdjacent` boolean
+//                    (D29): three channels need three different answers, and
+//                    'remote' also carries whether the player has to be in the
+//                    flat at all — a text reaches someone who is out.
+//   requires       — the do-not-disturb registry read the other way up: these
+//                    states must be TRUE. A knock exists because the door is
+//                    shut, so the state that BLOCKS an approach is the state
+//                    that ENABLES a knock. One registry, two lists.
+//   awaitsAnswer   — whether the overture leaves a pending record at all. An
+//                    approach, a proposal and a knock are all questions and
+//                    wait for an answer; a text is delivered and over. This is
+//                    also what decides whether D27's hold applies, and it must
+//                    stay false for `text` or an NPC would stand frozen for two
+//                    ticks having sent a message.
+//   waitAt         — 'player' (they came to you and stand in front of you) or
+//                    'here' (they are at your door and stay on their side of
+//                    it). Only meaningful when awaitsAnswer.
+//   respond        — the two chips RENDER offers while the record is pending.
+//                    Absent means the channel is answered by something the
+//                    player already does: an approach is answered by doTalk and
+//                    refused by doMove (D8), which is why Phase 3 needed no new
+//                    surface and these two do.
+//   sendsText / emitsSignal — what happens in the tick at the moment it is
+//                    made. `emitsSignal` is the SAME field and shape a
+//                    DRIVE_DEFS entry carries, with one difference that follows
+//                    from what an overture is: it lands in the room the PLAYER
+//                    is in, because an overture is aimed at a person.
+//
+// `proximity: 'adjacent'` on the approach is D26 unchanged: the phase's goal
+// sentence is "an NPC crosses the room", and same-room means they were already
+// standing there. isRoomAdjacent returns true for the same room too, so one
+// predicate covers both and the walk is one tick. Two hops (a bedroom to the
+// kitchen) is a journey, and a journey is the knock below.
+const OVERTURE_DEFS = {
+  approach_player: {
+    channel: 'approach',
+    motives: ['curiosity', 'grievance', 'affection', 'desire'],
+    // Same field, same reader (COGNITION's isDriveCandidate) as a drive's.
+    // Nobody crosses a room to open a conversation on their way out to work.
+    blockFilter: ['leisure', 'evening', 'wind_down', 'morning'],
+    cooldownTicks: OVERTURE.cooldownTicks,
+    proximity: 'adjacent',
+    // D9 — the gate is a do-not-disturb SET, not player idleness. Firing only
+    // when the player is idle means NPCs never open at the moments that carry
+    // weight; firing always is harassment at any rate. Every key here is
+    // resolved by overture.js's OVERTURE_DND_SOURCES, which fails closed on an
+    // unknown one exactly as D23's `when` clauses do.
+    doNotDisturb: ['sleeping', 'showering', 'masturbating', 'in_conversation', 'locked_door'],
+    awaitsAnswer: true,
+    waitAt: 'player',
+    // Same field and same reader as a drive's: what the floor plan and the
+    // scene lines say this NPC is doing while the record is pending.
+    activityOverride: 'waiting to talk to you',
+    utility: {
+      baseAppeal: 0.30,
+      motive: { weight: OVERTURE.motiveWeight },
+      holdTicks: OVERTURE.lapseTicks,
+      // One axis, and the one that literally names the behaviour: how readily
+      // this character opens. Disinhibition already differentiates the desire
+      // path (D12) and openness already differentiates the curiosity one
+      // (rumination grows curiosity by it), so a second copy of either here
+      // would be double-counting.
+      temperamentWeights: { assertiveness: 0.25 },
+    },
+  },
+
+  // --- Phase 4: the text ---------------------------------------------------
+  // Was a DRIVE with seven hardcoded strings and a `social` need gate. It is an
+  // overture now (D8), which costs it the need — D5 keeps `utility.need` off
+  // every entry in this table — and buys it a reason. What it texts about is
+  // OVERTURE_TEXT_TEMPLATES keyed by the motive that won.
+  //
+  // The channel that reaches across the flat, and the only one that reaches
+  // OUT of it: `proximity: 'remote'` is what lets an NPC text a player who is
+  // not home, which is exactly the case the other three cannot cover. Its
+  // do-not-disturb set is EMPTY on purpose and that is not an oversight — a
+  // text is the channel that does not disturb. It waits in a thread until the
+  // player looks.
+  //
+  // baseAppeal sits below the approach's so that an NPC who can walk over
+  // walks over: at equal motive strength 0.22 + m loses to 0.30 + m every
+  // time, and the two are only ever both candidates when the NPC is adjacent.
+  // Out of adjacency the approach is not a candidate at all and this is what
+  // is left, which is the behaviour without a single line deciding it.
+  text_player: {
+    channel: 'text',
+    motives: ['curiosity', 'grievance', 'affection', 'desire'],
+    blockFilter: ['leisure', 'evening', 'wind_down', 'work', 'morning'],
+    cooldownTicks: OVERTURE.textCooldownTicks,
+    proximity: 'remote',
+    doNotDisturb: [],
+    awaitsAnswer: false,
+    sendsText: true,
+    utility: {
+      baseAppeal: 0.22,
+      motive: { weight: OVERTURE.motiveWeight },
+      // Texting is the low-nerve option — you do not have to be in the room or
+      // catch anyone's eye — so assertiveness is weighted BELOW the approach's,
+      // and warmth carries the rest. This is the split the old drive already
+      // authored (warmth 0.25 / assertiveness 0.15 against the in-person
+      // drives' assertiveness-first weighting); it survives the move.
+      temperamentWeights: { warmth: 0.20, assertiveness: 0.10 },
+    },
+  },
+
+  // --- Phase 4: the proposal ----------------------------------------------
+  // The only overture about the FUTURE. It books a real commitment record
+  // through COMMITMENTS, so accepting binds the NPC's schedule exactly as a
+  // dinner invitation does — the difference is who asked (D8).
+  //
+  // Motives: affection alone, and this is a decision rather than an omission
+  // (D30). Curiosity and grievance are about a THING and are answered by
+  // talking now, not by scheduling; and a charged proposal has no different
+  // outcome to point at until Phase 5's shared activities exist, which makes
+  // it exactly the tone-with-no-consequence D12 forbids. Warm only, one motive,
+  // until there is something for the other tones to mean.
+  //
+  // baseAppeal is the highest in the table so that a proposal does not lose its
+  // tick to a chore, and it still loses to a starving NPC's eat, which is D5's
+  // ordering.
+  //
+  // Its ORIGINAL justification was "a day-long cooldown and one live motive
+  // already make it scarce", and Phase 6 measured that false in both halves:
+  // the day-long cooldown never elapsed at all (D34), so the observed scarcity
+  // was the bug rather than the design. Swept at the working cooldown, this
+  // number is NOT the lever — 0.20 / 0.24 / 0.28 / 0.34 give 0.381 / 0.405 /
+  // 0.429 / 0.435 proposals per NPC per day, a 14% span, because a proposal is
+  // rarely in competition when it is a candidate at all (it needs adjacency,
+  // affection over the gift threshold, AND a free slot the proposer's own
+  // schedule allows). The cooldown is the lever and it is set above. Left at
+  // 0.34 deliberately: retuning a constant that does not move the number is
+  // how a table acquires figures nobody can account for.
+  propose_player: {
+    channel: 'propose',
+    motives: ['affection'],
+    blockFilter: ['leisure', 'evening', 'wind_down'],
+    cooldownTicks: OVERTURE.proposeCooldownTicks,
+    proximity: 'adjacent',
+    doNotDisturb: ['sleeping', 'showering', 'masturbating', 'in_conversation', 'locked_door'],
+    awaitsAnswer: true,
+    waitAt: 'player',
+    activityOverride: 'waiting on your answer',
+    // What accepting creates. The kind is a COMMITMENT_KINDS key, and the terms
+    // (which day, which window, which room) are picked in the tick and carried
+    // on the record — a proposal that could not name when would be a mood.
+    proposes: { kind: 'hangout' },
+    respond: { accept: 'Say yes to {name}', decline: 'Turn {name} down' },
+    refusalFacts: OVERTURE_PROPOSE_REFUSAL_FACTS,
+    utility: {
+      baseAppeal: 0.34,
+      motive: { weight: OVERTURE.motiveWeight },
+      holdTicks: OVERTURE.lapseTicks,
+      temperamentWeights: { assertiveness: 0.25, warmth: 0.15 },
+    },
+  },
+
+  // --- Phase 4: the knock --------------------------------------------------
+  // The journey D26 named. Everything else in this table needs the player
+  // reachable; this one needs them SHUT AWAY, which is why `locked_door` moves
+  // from the do-not-disturb list to `requires`. It is the same registry entry
+  // read the other way up, so the two lists can never disagree about what a
+  // closed door is.
+  //
+  // `waitAt: 'here'` matters as much as the candidacy: a knocker who got pulled
+  // into the player's room by the hold would have walked through the door they
+  // were knocking on. They stay on their side and the record ages out there.
+  //
+  // The remaining do-not-disturb entries are the approach's minus the door. A
+  // roommate who knows you are asleep and knocks anyway is the harassment D9
+  // exists to prevent; someone walking in on a locked bathroom is
+  // interruption.js's job and already modelled.
+  knock_player: {
+    channel: 'knock',
+    motives: ['curiosity', 'grievance', 'affection', 'desire'],
+    blockFilter: ['leisure', 'evening', 'wind_down', 'morning'],
+    cooldownTicks: OVERTURE.knockCooldownTicks,
+    proximity: 'outside',
+    requires: ['locked_door'],
+    doNotDisturb: ['sleeping', 'showering', 'masturbating', 'in_conversation'],
+    awaitsAnswer: true,
+    waitAt: 'here',
+    activityOverride: 'waiting at your door',
+    respond: { accept: 'Open the door for {name}', decline: 'Leave {name} at the door' },
+    refusalFacts: OVERTURE_KNOCK_REFUSAL_FACTS,
+    emitsSignal: { signal: 'knocking', intensity: SIGNALS_EMIT.knocking },
+    utility: {
+      // Below the approach's: crossing a room is ordinary and knocking on a
+      // door someone shut is not, so it should take more wanting. The two are
+      // never both candidates (one needs the door open, the other shut), so
+      // this gradient is a statement about the bar rather than a tiebreak.
+      baseAppeal: 0.26,
+      motive: { weight: OVERTURE.motiveWeight },
+      // Longer than the others. A knock is answered by crossing a room and
+      // opening a door, which is more than glancing up, and two ticks is one
+      // in-game hour of it going unanswered before it lapses.
+      holdTicks: OVERTURE.lapseTicks + 1,
+      temperamentWeights: { assertiveness: 0.30 },
+    },
   },
 };
 

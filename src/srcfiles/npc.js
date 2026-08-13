@@ -5,7 +5,6 @@
 
 // --- Memory management ---
 const MEMORY_BUDGET = {
-  maxFacts: 40,       // NPC Overhaul Phase 4.2 — increased from 20 for tiered system
   maxEpisodes: 30,    // NPC Overhaul Phase 4.3 — increased from 15 for tiered system
   maxSummaryLen: 500,
   episodeDecayPerTick: 0.002,
@@ -17,6 +16,9 @@ const MEMORY_BUDGET = {
   // the prompt shows the trailing 16 (~4 exchanges) of the matching channel.
   maxRecent: 40,
   promptRecentCount: 16,
+  // Facts budget moved to BELIEF.maxFacts (knowledge-gossip Phase 1, D15):
+  // the facts tier gained confidence/salience/pinned, and its eviction,
+  // retrieval and prompt window all read the new numbers from there.
 };
 
 // --- NPC Overhaul migration: backfill all new fields for existing saves ---
@@ -98,12 +100,14 @@ function migrateNpcToV2(npc) {
   const mem = npc.memory || {};
   if (!Array.isArray(mem.recent)) mem.recent = [];
   if (mem.summaryRevision === undefined) mem.summaryRevision = 0;
-  // facts: backfill category + valid on existing bare-string or partial-object facts
+  // facts: backfill category + valid + the belief record (provenance/
+  // confidence/salience/pinned/emotionalTag — knowledge-gossip Phase 1,
+  // D1/D2/D3) on existing bare-string or partial-object facts. The
+  // backfill is the single normalizer every legacy fact shape passes
+  // through (migrateNpcToV2 for v1 saves, migrateFactRecordV2 for v4,
+  // and sim.js's contractor-seed copy).
   if (Array.isArray(mem.facts)) {
-    mem.facts = mem.facts.map(f => {
-      if (typeof f === 'string') return { text: f, day: 0, importance: 1, category: 'other', valid: true };
-      return { ...f, category: f.category || 'other', valid: f.valid !== undefined ? f.valid : true };
-    });
+    mem.facts = mem.facts.map(backfillFactRecordV2);
   } else {
     mem.facts = [];
   }
@@ -136,7 +140,82 @@ function migrateNpcToV2(npc) {
   }
 
   npc.bible = b;
+  // Phase 3 (D9): openQuestions default + stable factIds on any legacy facts.
+  return backfillOpenQuestionsV2(npc);
+}
+
+// --- Belief record (knowledge-gossip-memory-plan Phase 1) ---
+// The single normalizer for fact-shape → full record: every legacy shape
+// (bare string, partial object, complete object) passes through here, and
+// the result always carries provenance + confidence + salience + pinned +
+// emotionalTag (the Phase 1 invariant: "every fact carries provenance and
+// confidence, always").
+//
+// D1 — provenance is written once, at storage time, and never rewritten.
+// Defaults to 'witnessed' (direct experience, including hearing the player
+// say it first-hand); a caller that KNOWS otherwise passes 'told_by:<id>'
+// / 'overheard' / 'inferred'. Confidence default 1.0; D2's three routes
+// (transmission down, inference down, re-witnessing up) are Phase 2/3.
+//
+// D3 — pinned protects what defines a relationship. Granted at write time
+// when importance >= significant (0.8) or when the caller declares the fact
+// references a participant the NPC is at close/intimate phase with
+// (fact.pinned — the relationship context only the WRITER has, e.g. the
+// Phase 2 receiver-write; facts carry no participant field, D14). Pinned
+// facts never evict.
+function backfillFactRecordV2(f) {
+  if (typeof f === 'string') {
+    return { text: f, day: 0, importance: 1, category: 'other', valid: true,
+      provenance: 'witnessed', confidence: 1.0, salience: BELIEF.salienceDefault,
+      pinned: 1 >= MEMORY_IMPORTANCE.significant, emotionalTag: '' };
+  }
+  const importance = f.importance !== undefined ? f.importance : 1;
+  let pinned = !!f.pinned;
+  if (importance >= MEMORY_IMPORTANCE.significant) pinned = true;
+  return {
+    ...f,
+    category: f.category || 'other',
+    valid: f.valid !== undefined ? f.valid : true,
+    provenance: f.provenance || 'witnessed',
+    confidence: f.confidence !== undefined ? f.confidence : 1.0,
+    salience: f.salience !== undefined ? f.salience : BELIEF.salienceDefault,
+    pinned,
+    emotionalTag: f.emotionalTag || '',
+  };
+}
+
+// npcs 4->5 migration fn (STATE's MIGRATIONS): backfill the belief record on
+// a saved NPC's facts. Runs over every saved NPC once per save.
+function migrateFactRecordV2(npc) {
+  if (!npc || typeof npc !== 'object') return npc;
+  const mem = npc.memory || {};
+  if (Array.isArray(mem.facts)) mem.facts = mem.facts.map(backfillFactRecordV2);
+  else mem.facts = [];
+  npc.memory = mem;
   return npc;
+}
+
+// D2 — read-time salience: how much the NPC cares about a fact RIGHT NOW.
+// Time drops salience; the stored value is the salience at write time, and
+// retrieval discounts it by the days since the fact was written
+// (BELIEF.salienceDecayPerDay), floored. Pure — nothing is rewritten; a
+// week-old witnessed fact is still believed (confidence 1.0) but barely
+// worth raising (salience ~0.15 after 7 days). nowDay null/absent → the
+// stored value unchanged.
+function factSalienceNow(f, nowDay) {
+  const base = (f && f.salience !== undefined ? f.salience : BELIEF.salienceDefault);
+  if (nowDay == null) return base;
+  const age = Math.max(0, nowDay - (f.day || 0));
+  return Math.max(BELIEF.salienceFloor, base - BELIEF.salienceDecayPerDay * age);
+}
+
+// D2 — the retrieval/eviction product: how much a fact counts right now.
+// importance (what kind of thing it is) × confidence (how sure it's true) ×
+// salience (how much they care at this moment).
+function factBeliefScore(f, nowDay) {
+  return (f.importance !== undefined ? f.importance : 1) *
+         (f.confidence !== undefined ? f.confidence : 1) *
+         factSalienceNow(f, nowDay);
 }
 
 // --- NPC inventories (inventory overhaul Phase 8, D8) ---
@@ -189,33 +268,70 @@ function seedNpcInventory(npc, day) {
 }
 
 // Add a fact to an NPC's memory. Fact can be a bare string (legacy) or an
-// object { text, day, importance, category }. NPC Overhaul: added category + valid.
+// object { text, day, importance, category }. NPC Overhaul: added category +
+// valid. Knowledge-gossip Phase 1 (D1/D2/D3/D10): the record is normalized
+// through backfillFactRecordV2, so every written fact carries provenance +
+// confidence + salience + pinned + emotionalTag. provenance defaults to
+// 'witnessed' and is written ONCE here — a fact that changes hands becomes a
+// NEW record in the receiver's memory (Phase 2), never an edit of this one.
 function addMemoryFact(npc, fact) {
   const facts = [...(npc.memory.facts || [])];
-  if (typeof fact === 'string') {
-    facts.push({ text: fact, day: 0, importance: 1, category: 'other', valid: true });
-  } else {
-    facts.push({
-      text: fact.text || '',
-      day: fact.day || 0,
-      importance: fact.importance !== undefined ? fact.importance : 1,
-      category: fact.category || 'other',
-      valid: fact.valid !== undefined ? fact.valid : true,
-    });
-  }
+  // Phase 3 (D9/D20): every fact gets a stable factId from the per-NPC
+  // counter the moment it is stored — the open-question lifecycle's factId
+  // reference points at it, and eviction may shift array positions, so the
+  // reference must be an id, never an index. Bare-string facts (the legacy
+  // shape addMemoryFact still accepts) get one the same way.
+  const nextId = npc.memory.nextFactId || 1;
+  const withId = typeof fact === 'string'
+    ? { text: fact, factId: nextId }
+    : (fact.factId != null ? fact : { ...fact, factId: nextId });
+  facts.push(backfillFactRecordV2(withId));
   // Correctness plan Phase 3 (D9): evict by importance rather than FIFO. Also
   // fixes an off-by-one — the old `if (length >= max) shift()` ran BEFORE the
   // push, so the tier actually settled at maxFacts, dropping one entry early
-  // on every add once full. Facts don't decay, so importance alone is the
-  // score. Invalidated facts (valid:false) are the cheapest thing to lose and
-  // sort to the bottom on their own.
+  // on every add once full. Knowledge-gossip Phase 1 (D2/D3): the score is
+  // now importance × confidence, and pinned facts never evict (D3). Facts
+  // don't decay, so confidence is the living part of the score. Invalidated
+  // facts (valid:false) are the cheapest thing to lose and sort to the
+  // bottom on their own. An all-pinned overflow is allowed to exceed the
+  // budget — the existing day-0 precedent.
   const kept = evictLowestScored(
     facts,
-    MEMORY_BUDGET.maxFacts,
-    f => (f.valid === false ? -1 : (f.importance ?? 1)),
-    null,
+    BELIEF.maxFacts,
+    f => (f.valid === false ? -1 : (f.importance ?? 1) * (f.confidence ?? 1)),
+    f => f.pinned === true,
   );
-  return { ...npc, memory: { ...npc.memory, facts: kept } };
+  return { ...npc, memory: { ...npc.memory, facts: kept, nextFactId: nextId + 1 } };
+}
+
+// Phase 3 (D9/D20) — backfill the open-question fields on a saved NPC:
+// default `memory.openQuestions` to [] and assign a stable `factId` to every
+// held fact that lacks one (pre-Phase-3 saves, the contractor seed, any other
+// legacy path that wrote facts outside addMemoryFact). Pure; a no-op for an
+// NPC already carrying both. Runs from migrateNpcToV2 and the npcs 5->6
+// migration so a pre-Phase-3 save gets ids without any fact being rewritten —
+// provenance is written once and never edited (invariant 3), and assigning an
+// id is not a rewrite of provenance or confidence.
+function backfillOpenQuestionsV2(npc) {
+  if (!npc || typeof npc !== 'object') return npc;
+  const mem = npc.memory || {};
+  let next = mem.nextFactId || 1;
+  let changed = !Array.isArray(mem.openQuestions);
+  const facts = (mem.facts || []).map(f => {
+    if (f && typeof f === 'object' && f.factId != null) return f;
+    changed = true;
+    return { ...f, factId: next++ };
+  });
+  if (!changed) return npc;
+  return {
+    ...npc,
+    memory: {
+      ...mem,
+      facts,
+      openQuestions: Array.isArray(mem.openQuestions) ? mem.openQuestions : [],
+      nextFactId: next,
+    },
+  };
 }
 
 // Correctness plan Phase 3 (D9) — evict the LEAST valuable entry, not the
@@ -334,7 +450,16 @@ function getUnresolvedGrievances(npc) {
 // without the tag, texting someone and then talking to them in person fed the
 // model a single transcript with two unrelated conversations interleaved.
 // Defaults to 'scene' so any caller that predates the parameter is unchanged.
-function addRecentExchange(npc, speaker, text, type, day, tick, channel) {
+//
+// Plan X-5 Phase 1: entries also carry the `sceneId` they happened in. The
+// Assessor windows on the scene (D2) and needs to know which exchanges belong
+// to the one that just closed; `meta.scene.id` is the window and it is already
+// persisted, so this stamps the existing id onto the existing buffer rather
+// than opening a second one. Additive — an entry written before this reads as
+// scene 0, exactly as a pre-Plan-2 sessionLog entry does. The two judgement
+// cursors (`assessed`, `processed`) are absent until a pass sets them, which
+// is what "not yet judged" means.
+function addRecentExchange(npc, speaker, text, type, day, tick, channel, sceneId) {
   const recent = [...(npc.memory?.recent || [])];
   recent.push({
     speaker, text,
@@ -342,6 +467,7 @@ function addRecentExchange(npc, speaker, text, type, day, tick, channel) {
     day: day || 0,
     tick: tick || 0,
     channel: channel || 'scene',
+    sceneId: sceneId || 0,
   });
   while (recent.length > MEMORY_BUDGET.maxRecent) recent.shift();
   return { ...npc, memory: { ...npc.memory, recent } };
@@ -469,7 +595,13 @@ function recallTimeLabel(day, tick, nowDay) {
 // NPC Overhaul Phase 4 — Keyword-scored memory retrieval
 // Tokenizes a query and scores facts/episodes by keyword overlap.
 // Returns top N relevant items from ALL tiers, not just recent.
-function retrieveRelevantMemories(npc, query, limit) {
+// Knowledge-gossip Phase 1 (D2): facts rank by keyword score × the belief
+// product (importance × confidence × salience-now), so a highly relevant but
+// barely-believed fact loses to a relevant one the NPC is sure of. `nowDay`
+// (optional) feeds the read-time salience decay — absent, stored salience is
+// used unchanged. Episodes keep their importance × decay ranking (D14: they
+// are the decaying event tier, not beliefs).
+function retrieveRelevantMemories(npc, query, limit, nowDay) {
   limit = limit || 5;
   if (!query) return { facts: [], episodes: [] };
 
@@ -488,10 +620,10 @@ function retrieveRelevantMemories(npc, query, limit) {
     return s;
   }
 
-  // Score facts
+  // Score facts — keyword relevance × the D2 belief product
   const validFacts = ((npc.memory?.facts) || []).filter(f => f.valid !== false);
   const scoredFacts = validFacts
-    .map(f => ({ fact: f, score: score(typeof f === 'string' ? f : f.text) }))
+    .map(f => ({ fact: f, score: score(typeof f === 'string' ? f : f.text) * factBeliefScore(f, nowDay) }))
     .filter(x => x.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
@@ -514,18 +646,351 @@ function retrieveRelevantMemories(npc, query, limit) {
 // Correctness plan Phase 1: `channel` selects which conversation surface's
 // history is shown (D6), and the slice depth comes from MEMORY_BUDGET rather
 // than a literal 5 (D5).
-function buildMemorySliceV2(npc, query, channel) {
-  const retrieved = query ? retrieveRelevantMemories(npc, query, 5) : { facts: [], episodes: [] };
+// Knowledge-gossip Phase 1 (D15): `facts` no longer joins EVERY valid fact —
+// it renders the FACT_DISPLAY window (pinned + significant always, then the
+// top keyword matches, then the most recent, capped at maxTotal), so the
+// raised budget (BELIEF.maxFacts 60) does not grow context per conversation.
+// `nowDay` (optional) feeds read-time salience decay in the retrieved rank.
+function buildMemorySliceV2(npc, query, channel, nowDay) {
+  const retrieved = query ? retrieveRelevantMemories(npc, query, FACT_DISPLAY.retrieved, nowDay) : { facts: [], episodes: [] };
   const mem = npc.memory || {};
   return {
     recent: getRecentExchanges(npc, MEMORY_BUDGET.promptRecentCount, channel),
-    facts: (mem.facts || []).filter(f => f.valid !== false).map(f => typeof f === 'string' ? f : f.text),
+    facts: buildFactDisplayWindow(mem.facts || [], retrieved.facts),
     retrievedFacts: retrieved.facts,
     episodes: (mem.episodes || []).filter(e => e.decay > 0.2).map(e => e.text),
     retrievedEpisodes: retrieved.episodes,
     summary: mem.summary || '',
     styleDirective: getStyleDirective(npc),
   };
+}
+
+// D15 — the prompt's [Memories — facts] window. Composition order:
+//   1. always: pinned or importance >= significant (FACT_DISPLAY.always)
+//   2. retrieved-top: the top keyword matches retrieval just produced
+//   3. most-recent: remaining valid facts, newest day first
+// Deduplicated by text (retrieval returns strings) and capped at
+// FACT_DISPLAY.maxTotal. Pinned+significant facts survive until the absolute
+// cap — that is the closest "always shown" can come to literal under a bound.
+function buildFactDisplayWindow(facts, retrievedTexts) {
+  const significant = MEMORY_IMPORTANCE.significant;
+  const valid = facts.filter(f => f.valid !== false);
+  const window = [];
+  const seen = new Set();
+  const push = (text) => {
+    if (text == null || seen.has(text)) return;
+    if (window.length >= FACT_DISPLAY.maxTotal) return;
+    seen.add(text);
+    window.push(text);
+  };
+
+  if (FACT_DISPLAY.always) {
+    for (const f of valid) {
+      if (f.pinned || (f.importance ?? 1) >= significant) push(f.text);
+    }
+  }
+  for (const t of retrievedTexts || []) push(t);
+  const recent = valid
+    .filter(f => !seen.has(f.text))
+    .sort((a, b) => (b.day ?? 0) - (a.day ?? 0))
+    .slice(0, FACT_DISPLAY.recent);
+  for (const f of recent) push(f.text);
+  return window;
+}
+
+// D11 (knowledge-gossip-memory-plan Phase 3) — the player model, DERIVED and
+// never stored (R7: what an NPC knows about the player was earned in play —
+// there is no second writer to drift from the belief store). A pure query
+// over the NPC's beliefs and episodes that reference the player:
+//   { observes: [...], shared: [...], derivesFrom: [...], honesty }
+// observes   — facts the NPC witnessed first-hand that reference the player
+// derivesFrom — player-relevant facts learned secondhand (told_by / overheard
+//              / inferred) — what they've been told about you
+// shared     — episodes whose participants include the player (shared activity)
+// honesty    — mean confidence across the facts feeding the player model
+//              (falls back to all facts when nothing references the player)
+// Named consumers: Phase 5's studio Memory tab renders this; nothing else
+// reads it yet (the NOTE_TEMPLATES precedent — the consumer is named, not
+// smuggled).
+function derivePlayerModel(npc) {
+  const facts = (npc?.memory?.facts || []).filter(f => f.valid !== false);
+  const playerRef = (text) => /(the player|player'?s|\byou\b|\byour\b)/i.test(text || '');
+  const observes = [];
+  const derivesFrom = [];
+  for (const f of facts) {
+    if (!playerRef(f.text)) continue;
+    const prov = f.provenance || 'witnessed';
+    const rec = { text: f.text, confidence: f.confidence ?? 1, provenance: prov };
+    if (prov === 'witnessed') observes.push(rec);
+    else derivesFrom.push(rec);
+  }
+  const shared = (npc?.memory?.episodes || [])
+    .filter(e => (e.participants || []).some(p => {
+      const s = String(p).toLowerCase();
+      return s === 'player' || s === 'you' || s === 'the player';
+    }))
+    .map(e => ({ text: e.text, day: e.day || 0, tag: e.emotionalTag || '' }));
+  const pool = [...observes, ...derivesFrom];
+  const mean = (arr) => arr.length > 0 ? arr.reduce((s, r) => s + r.confidence, 0) / arr.length : null;
+  const honesty = mean(pool) ?? mean(facts) ?? 1;
+  return { observes, shared, derivesFrom, honesty };
+}
+
+// D13 (knowledge-gossip-memory-plan Phase 4) — the bridge. PURE: reads the
+// NPC's open questions, writes nothing, returns the highest-curiosity record
+// at/above RUMINATION.raiseThreshold, or null. This is the phase's reader for
+// `openQuestions` and `curiosity` (R8/RI6) — the declared consumer the Phase 3
+// lifecycle named. It re-checks the question's premise against the SAME rule
+// the lifecycle's retire step uses, so the bridge and the lifecycle can never
+// disagree about whether a question is alive:
+//   - the referenced fact must still exist and be valid (a fact evicted since
+//     the last rumination pass would otherwise be raised as a stale belief),
+//   - it must still be low-confidence (re-witnessed past createThreshold ends
+//     wondering — D2's up-route — even between passes).
+// Ties break on factId so the function is deterministic for a given NPC.
+function topOpenQuestion(npc) {
+  const qs = npc?.memory?.openQuestions;
+  if (!Array.isArray(qs) || qs.length === 0) return null;
+  const facts = npc.memory.facts || [];
+  let best = null;
+  for (const q of qs) {
+    if ((q.curiosity ?? 0) < RUMINATION.raiseThreshold) continue;
+    const f = facts.find(x => x && x.factId === q.factId);
+    if (!f || f.valid === false) continue;
+    if ((f.confidence ?? 1) > RUMINATION.createThreshold) continue;
+    if (!best || q.curiosity > best.curiosity || (q.curiosity === best.curiosity && (q.factId ?? 0) < (best.factId ?? 0))) {
+      best = q;
+    }
+  }
+  return best;
+}
+
+// D17 (knowledge-gossip-memory-plan Phase 5) — the studio's grouped memory
+// view. PURE: reads the extended record and returns a display-ready
+// structure, writes nothing. This is the R8/RI6 reader for every field of
+// the extended fact record (provenance / confidence / salience / pinned /
+// emotionalTag / factId / day / importance / category / valid), the episode
+// record, recent exchanges, the summary, and the open-question records —
+// nothing the studio's Memory tab shows is a field nobody reads. The D13
+// bridge (topOpenQuestion) and the D11 player model are included because the
+// Memory tab renders them too — the same consumers the lifecycle named.
+//
+//   {
+//     facts:        [ { ...all fact fields } ],
+//     episodes:     [ { day, text, decay, importance, emotionalTag, participants } ],
+//     recent:       [ { speaker, text, day, tick, type, channel } ],
+//     summary, summaryRevision,
+//     openQuestions:[ { topic, factId, curiosity, age, born, targets } ],
+//     nextFactId,
+//     playerModel:  derivePlayerModel(npc),
+//     openQuestion: topOpenQuestion(npc),
+//   }
+function buildMemoryProfileView(npc) {
+  const mem = npc?.memory || {};
+  return {
+    facts: (mem.facts || []).map(f => ({
+      text: f.text, day: f.day ?? 0, importance: f.importance ?? 0.5,
+      category: f.category || 'other', valid: f.valid !== false,
+      provenance: f.provenance || 'witnessed',
+      confidence: f.confidence ?? 1, salience: f.salience ?? BELIEF.salienceDefault,
+      pinned: f.pinned === true, emotionalTag: f.emotionalTag || '',
+      factId: f.factId,
+    })),
+    episodes: (mem.episodes || []).map(e => ({
+      day: e.day ?? 0, text: e.text, decay: e.decay ?? 1,
+      importance: e.importance ?? MEMORY_IMPORTANCE.conversational,
+      emotionalTag: e.emotionalTag || '',
+      participants: Array.isArray(e.participants) ? [...e.participants] : [],
+    })),
+    recent: (mem.recent || []).map(e => ({
+      speaker: e.speaker || '', text: e.text || '',
+      day: e.day ?? 0, tick: e.tick ?? 0, type: e.type || '', channel: e.channel || 'scene',
+    })),
+    summary: mem.summary || '',
+    summaryRevision: mem.summaryRevision ?? 0,
+    openQuestions: (mem.openQuestions || []).map(q => ({
+      topic: q.topic || '', factId: q.factId, curiosity: q.curiosity ?? 0.2,
+      age: q.age ?? 0, born: q.born ?? 1, targets: Array.isArray(q.targets) ? [...q.targets] : [],
+    })),
+    nextFactId: mem.nextFactId ?? 1,
+    playerModel: derivePlayerModel(npc),
+    openQuestion: topOpenQuestion(npc),
+  };
+}
+
+// --- Transmission (knowledge-gossip-memory-plan Phase 2, D5/D6/D18) ---
+// Facts travel only through actual conversation events (R6). The deterministic
+// leg (the npc_chat drive) calls pickFactsToRaise for its speaker; the
+// model-assisted leg (applyProposal's overhearing) does the same over the
+// facts the model just wrote. All of it is arithmetic over state — nothing
+// here is async and nothing reaches the LLM (R2), which is what makes it
+// measurable.
+
+// D2 — how a fact's worth-raising decays with age. recency = 0.5^(age/halfLife).
+function factRecency(f, nowDay) {
+  const age = Math.max(0, (nowDay ?? f.day ?? 0) - (f.day ?? 0));
+  return Math.pow(0.5, age / TRANSMISSION.recencyHalfLifeDays);
+}
+
+// D10 — emotional weight is a config lookup keyed by the fact's tag. No
+// free-floating weight written by the model; unknown tags read the default.
+function factEmotionalWeight(f) {
+  const tag = (f && f.emotionalTag) || '';
+  return EMOTIONAL_WEIGHTS[tag] ?? EMOTIONAL_WEIGHTS.default;
+}
+
+// D4 — does this fact's category give the listener a reason to care?
+// Categories are free-form (the model writes them, the seeds say 'history'),
+// so the match is textual against the listener's interest names AND their
+// tags: a strong match is the category naming the interest, a match is it
+// touching one of the interest's tags. No match still pays a small floor —
+// people do tell each other things outside their hobbies.
+function factInterestRelevance(f, listener) {
+  const cat = ((f && f.category) || '').toLowerCase();
+  if (!cat || cat === 'other' || !Array.isArray(listener?.bible?.interests) || listener.bible.interests.length === 0) {
+    return TRANSMISSION.relevanceNoMatch;
+  }
+  for (const int of listener.bible.interests) {
+    const name = String((int && int.name) || '').toLowerCase();
+    if (name && (cat === name || cat.includes(name) || name.includes(cat))) return TRANSMISSION.relevanceStrong;
+    for (const tag of (int && int.tags) || []) {
+      const t = String(tag).toLowerCase();
+      if (t && (cat === t || cat.includes(t) || t.includes(cat))) return TRANSMISSION.relevanceMatch;
+    }
+  }
+  return TRANSMISSION.relevanceNoMatch;
+}
+
+// D6 — personality biases which facts qualify. The chooser's own temperament:
+// high openness toward novel/secondhand facts (inferred / told_by provenance),
+// high warmth toward social/relationship facts, high conscientiousness toward
+// practical facts. A second-hand fact is fully eligible — it is just never
+// raised as if witnessed (its provenance travels with it, and the receiver's
+// record is told_by:<last hop>, never 'witnessed').
+function factPersonalityBias(f, chooser) {
+  const t = chooser?.bible?.temperament || {};
+  let mult = 1;
+  const prov = (f && f.provenance) || '';
+  if (prov === 'inferred' || prov.startsWith('told_by:')) mult += Math.max(0, t.openness ?? 0) * TRANSMISSION.biasNovel;
+  const cat = ((f && f.category) || '').toLowerCase();
+  if (TRANSMISSION.socialCategories.includes(cat)) mult += Math.max(0, t.warmth ?? 0) * TRANSMISSION.biasSocial;
+  if (TRANSMISSION.practicalCategories.includes(cat)) mult += Math.max(0, t.conscientiousness ?? 0) * TRANSMISSION.biasPractical;
+  return mult;
+}
+
+// D6 — the overall-frequency knob. Floors at talkativenessBase and scales up
+// with how verbose + assertive the chooser is (the two things that make a
+// person bring things up).
+function talkativeness(npc) {
+  const t = npc?.bible?.temperament || {};
+  const verbosity = npc?.bible?.speech?.verbosity ?? 0.5;
+  return Math.max(TRANSMISSION.talkativenessBase, Math.min(0.9,
+    TRANSMISSION.talkativenessBase
+    + (verbosity - 0.5) * TRANSMISSION.talkativenessVerbosity
+    + (t.assertiveness ?? 0) * TRANSMISSION.talkativenessAssertiveness));
+}
+
+// D6 — the eligibility product: recency × emotionalWeight × relevanceToListener,
+// with the chooser's personality bias on top.
+function factRaiseScore(f, chooser, listener, nowDay) {
+  return factRecency(f, nowDay)
+    * factEmotionalWeight(f)
+    * factInterestRelevance(f, listener)
+    * factPersonalityBias(f, chooser);
+}
+
+// D5/D6 — PURE: which of the chooser's facts they'd actually raise to this
+// listener. `chooser` is whoever decides to speak (or, on the overhearing
+// leg, whoever decides to retain); `listener` is the target whose interests
+// gate relevance (the chooser themselves on the overhearing leg). Candidates
+// default to the chooser's own valid facts. Facts at or below the confidence
+// floor are never raised (D2: still stored, but not worth repeating).
+//
+// Scored descending, each candidate accepted with P = talkativeness ×
+// score ÷ raiseScoreRef (capped at 1) — the probability scales with the
+// ABSOLUTE score, not the top score, so a lone ancient/irrelevant fact is
+// still near-never raised (D6's negative case), and talkativeness sets the
+// overall frequency. Returns the fact RECORDS (not stripped payloads) so the
+// receiver-write can carry category / emotionalTag / importance across, not
+// just text. Pure given its rng: reads state, writes nothing.
+function pickFactsToRaise(chooser, listener, count, nowDay, rng, candidates) {
+  count = count || TRANSMISSION.factsPerChat;
+  const pool = (candidates || chooser?.memory?.facts || [])
+    .filter(f => f && f.valid !== false && (f.confidence ?? 1) > BELIEF.confidenceFloor);
+  const scored = pool
+    .map(f => ({ f, score: factRaiseScore(f, chooser, listener, nowDay) }))
+    .filter(x => x.score > 0)
+    .sort((a, b) => b.score - a.score);
+  if (scored.length === 0) return [];
+  const r = rng || Math.random;
+  const talk = talkativeness(chooser);
+  const out = [];
+  for (const { f, score } of scored) {
+    if (out.length >= count) break;
+    const p = Math.min(1, (talk * score) / TRANSMISSION.raiseScoreRef);
+    if (r() >= p) continue;
+    out.push(f);
+  }
+  return out;
+}
+
+// D2/D18 — the receiver-side write. PURE: takes the receiver and a raised fact
+// record, returns a NEW receiver. Two paths:
+//  - The receiver already holds the same text: that is re-witnessing, D2's one
+//    up-route — confidence boosts toward 1, day/salience refresh, provenance
+//    is NOT touched (invariant 3: provenance is written once and never
+//    rewritten). No duplicate record is created.
+//  - Otherwise a NEW record lands with `told_by:<sourceId>` (deterministic
+//    leg) or 'overheard' (model leg), confidence × hopAttenuation /
+//    × overheardAttenuation, floored at confidenceFloor — a fact at the floor
+//    is stored but can never be raised, so the floor is where decay stops.
+function receiveTransmittedFact(receiver, raised, opts) {
+  if (!receiver || !raised) return receiver;
+  const facts = receiver.memory?.facts || [];
+  const existing = facts.find(f => f.text === raised.text);
+  if (existing) {
+    const boosted = Math.min(1, (existing.confidence ?? 1) + TRANSMISSION.reWitnessBoost);
+    const refreshed = facts.map(f => (f === existing ? {
+      ...f,
+      confidence: boosted,
+      day: opts?.day ?? f.day,
+      salience: Math.max(f.salience ?? BELIEF.salienceDefault, BELIEF.salienceDefault),
+    } : f));
+    return { ...receiver, memory: { ...receiver.memory, facts: refreshed } };
+  }
+  const attenuation = opts?.kind === 'overheard' ? BELIEF.overheardAttenuation : BELIEF.hopAttenuation;
+  const confidence = Math.max(BELIEF.confidenceFloor, (raised.confidence ?? 1) * attenuation);
+  const provenance = opts?.provenance || (opts?.sourceId ? `told_by:${opts.sourceId}` : 'overheard');
+  const record = backfillFactRecordV2({
+    text: raised.text,
+    day: opts?.day ?? (raised.day ?? 0),
+    importance: raised.importance ?? MEMORY_IMPORTANCE.conversational,
+    category: raised.category || 'other',
+    valid: true,
+    provenance,
+    confidence,
+    emotionalTag: raised.emotionalTag || '',
+  });
+  return addMemoryFact(receiver, record);
+}
+
+// D5 — the scene line's topic: a short noun phrase derived deterministically
+// from the raised fact's text (the tick has no LLM). Attribution prefixes are
+// stripped ("X said", "The player's", "I noticed") and the result is cut to a
+// readable clause. R1-compatible: never a raw category slug or an internal
+// field.
+function factTopicPhrase(text) {
+  if (!text) return 'something';
+  let t = String(text).trim().replace(/^["“']|["”']$/g, '');
+  t = t.replace(/^(the player's?|my|their|his|her)\s+/i, '');
+  t = t.replace(/^(he|she|they|i|we)\s+(said|mentioned|told me|thinks?|believes?|heard|noticed|knows?|knew|reckons?|claims?|says?)\s+(that|about|how)?\s*/i, '');
+  t = t.replace(/^[A-Z][a-z]+(\s|'s\s)+(said|mentioned|told me|thinks?|believes?|heard|noticed|knows?|knew|reckons?|claims?|says?)\s+(that|about|how)?\s*/i, '');
+  t = t.replace(/^(about|that)\s+/i, '');
+  t = t.replace(/^(he's|she's|they're|he is|she is|they are|i'm|i am)\s+/i, '');
+  t = t.split(/\s+[-–—]\s+/)[0];
+  const words = t.split(/\s+/).filter(Boolean).slice(0, 6).join(' ').replace(/[.,!?;:]+$/, '');
+  if (!words) return 'something';
+  return words.charAt(0).toLowerCase() + words.slice(1);
 }
 
 // Decay all episodes for an NPC
@@ -847,6 +1312,9 @@ function assembleImContext(gameState, npcId) {
     contentConfig: gameState.meta.contentConfig || null,
     channel: 'im',
     imThread: threadTail,
+    // Knowledge-gossip Phase 1 (D2): the current in-game day, so the IM
+    // prompt's memory retrieval can apply read-time salience decay.
+    day: gameState.meta.clock.day,
     player: {
       name: 'You', mood: gameState.player.mood, money: gameState.player.money, flags: gameState.player.flags,
     },
@@ -1144,7 +1612,7 @@ function validateProposal(proposal, context) {
 // SIM's resolveBatch before or after the LLM call), not this function's;
 // clock advancement lived here previously but its return value was never
 // read by any caller, so it never actually cost the player anything.
-async function applyProposal(proposal, context, gameState, playerAction) {
+async function applyProposal(proposal, context, gameState, playerAction, opts = {}) {
   const events = [];
   const updatedNpcIds = new Set();
   const logEntries = [];
@@ -1188,7 +1656,51 @@ async function applyProposal(proposal, context, gameState, playerAction) {
       let updated = gameState.npcs[npcId];
       if (!updated) continue;
       if (additions.facts) {
-        for (const f of additions.facts) updated = addMemoryFact(updated, f);
+        const writtenFacts = [];
+        for (const fRaw of additions.facts) {
+          const f = typeof fRaw === 'string' ? { text: fRaw } : fRaw;
+          // D18 (Phase 2) — conversation-sourced facts are conversational-tier
+          // unless declared, the exact mirror of the episode clamp below.
+          // Phase 1 shipped this path defaulting to importance 1.0, which
+          // pinned nearly every model-written fact (D3); the Phase 1 Handoff
+          // flagged the pinned cohort's unbounded growth for this phase to
+          // decide. A proposal is untrusted input — it must not be able to
+          // mint a permanently unevictable belief by omission.
+          const declared = typeof f.importance === 'number'
+            ? Math.max(0, Math.min(MEMORY_IMPORTANCE.significant, f.importance))
+            : MEMORY_IMPORTANCE.conversational;
+          const record = backfillFactRecordV2({ ...f, importance: declared });
+          writtenFacts.push(record);
+          updated = addMemoryFact(updated, record);
+        }
+        // D18 — the overhearing leg: the same applyProposal call that wrote
+        // the speaker's facts also writes what was said to the OTHER active
+        // NPCs present. The same D6 bar decides what each listener retains
+        // (chooser === listener: their own temperament and interests drive
+        // whether they pay attention), and the write lands as provenance
+        // 'overheard' with confidence × overheardAttenuation. Ambient NPCs
+        // do not hear — activeNpcs is the whole room for this phase, and the
+        // no-osmosis assertion guards the rest.
+        const day = gameState.meta.clock.day;
+        const minutes = gameState.meta.clock.minutes;
+        // Overhear rolls draw from a state-derived rng so the same
+        // conversation state reproduces the same outcome; `opts.overhearRng`
+        // is the harness's injection point for deterministic assertions (the
+        // default is the live behaviour — production callers never pass it).
+        const overhearRng = opts.overhearRng || seededRng(gameState.seed, `overhear_${npcId}_${day}_${minutes}`);
+        for (const listenerCtx of context.activeNpcs) {
+          if (listenerCtx.id === npcId) continue;
+          const listener = gameState.npcs[listenerCtx.id];
+          if (!listener) continue;
+          const overheard = pickFactsToRaise(
+            listener, listener, TRANSMISSION.factsPerChat, day,
+            overhearRng,
+            writtenFacts,
+          );
+          for (const f of overheard) {
+            gameState.npcs[listenerCtx.id] = receiveTransmittedFact(gameState.npcs[listenerCtx.id], f, { kind: 'overheard', provenance: 'overheard', day });
+          }
+        }
       }
       if (additions.episodes) {
         // Correctness plan Phase 3 (D8): an episode the model proposed during
@@ -1199,7 +1711,20 @@ async function applyProposal(proposal, context, gameState, playerAction) {
           const declared = typeof e.importance === 'number'
             ? Math.max(0, Math.min(MEMORY_IMPORTANCE.significant, e.importance))
             : MEMORY_IMPORTANCE.conversational;
-          updated = addMemoryEpisode(updated, gameState.meta.clock.day, e.text || e, declared, e.emotionalTag || '', e.participants || []);
+          const text = e.text || e;
+          updated = addMemoryEpisode(updated, gameState.meta.clock.day, text, declared, e.emotionalTag || '', e.participants || []);
+          // D5 co-memory (roadmap inheritance): a shared episode is written
+          // to every participant who is present and not the addressed NPC —
+          // the same event lives in everyone who was there. Deduped by text
+          // so a participant who already holds it isn't handed a duplicate.
+          for (const p of e.participants || []) {
+            const pCtx = context.activeNpcs.find(n => n.id === p || n.name === p);
+            if (!pCtx || pCtx.id === npcId) continue;
+            const pNpc = gameState.npcs[pCtx.id];
+            if (!pNpc) continue;
+            if ((pNpc.memory?.episodes || []).some(ep => ep.text === text)) continue;
+            gameState.npcs[pCtx.id] = addMemoryEpisode(pNpc, gameState.meta.clock.day, text, declared, e.emotionalTag || '', e.participants || []);
+          }
         }
       }
       if (additions.grievances) {                                      // NPC Overhaul
@@ -1215,7 +1740,7 @@ async function applyProposal(proposal, context, gameState, playerAction) {
       // outside the memoryAdditions loop in Audit Fix so all active NPCs
       // get them, not just ones with memoryAdditions)
       if (additions.recentExchanges) {
-        for (const ex of additions.recentExchanges) updated = addRecentExchange(updated, ex.speaker, ex.text, ex.type, gameState.meta.clock.day, gameState.meta.clock.minutes, channel);
+        for (const ex of additions.recentExchanges) updated = addRecentExchange(updated, ex.speaker, ex.text, ex.type, gameState.meta.clock.day, gameState.meta.clock.minutes, channel, gameState.meta?.scene?.id ?? 0);
       }
       gameState.npcs[npcId] = updated;
       updatedNpcIds.add(npcId);
@@ -1325,11 +1850,16 @@ async function applyProposal(proposal, context, gameState, playerAction) {
   // channel (D6) so the scene and IM transcripts stay separable.
   const recentDay = gameState.meta.clock.day;
   const recentTick = gameState.meta.clock.minutes;
+  // Plan X-5 Phase 1 — the Assessor's window (D2). Read straight off meta
+  // rather than through SCENE's currentScene so this file keeps its "no
+  // cross-section calls from the apply path" shape; the fallback is the same
+  // synthetic scene 0 currentScene returns for a save written before Plan 2.
+  const recentScene = gameState.meta?.scene?.id ?? 0;
 
   if (playerAction) {
     for (const npcCtx of context.activeNpcs) {
       const npc = gameState.npcs[npcCtx.id];
-      if (npc) gameState.npcs[npcCtx.id] = addRecentExchange(npc, 'player', playerAction, 'player_input', recentDay, recentTick, channel);
+      if (npc) gameState.npcs[npcCtx.id] = addRecentExchange(npc, 'player', playerAction, 'player_input', recentDay, recentTick, channel, recentScene);
     }
   }
 
@@ -1338,7 +1868,7 @@ async function applyProposal(proposal, context, gameState, playerAction) {
       const npcMatch = context.activeNpcs.find(n => n.id === d.speaker || n.name === d.speaker);
       if (npcMatch) {
         const npc = gameState.npcs[npcMatch.id];
-        if (npc) gameState.npcs[npcMatch.id] = addRecentExchange(npc, d.speaker, d.text, 'dialogue', recentDay, recentTick, channel);
+        if (npc) gameState.npcs[npcMatch.id] = addRecentExchange(npc, d.speaker, d.text, 'dialogue', recentDay, recentTick, channel, recentScene);
       }
     }
   }

@@ -3,7 +3,48 @@
 // this is the instrument used to tune the numbers.
 const { loadEngine } = require('./loadgame.js');
 
-const GATES = { hunger: 35, hygiene: 30, energy: 20, social: 25, comfort: 25, stimulation: 25 };
+// The threshold column is DERIVED from DRIVE_DEFS, not typed in. It used to be
+// a hardcoded literal and it had drifted: it read `comfort: 25` while the def
+// said 40, so the instrument printed "reachable" for a drive that was
+// mathematically unable to fire. An instrument that can disagree with the table
+// it is measuring is worse than no instrument.
+//
+// The cognition plan's D14 deleted the last `{ need, op, threshold }` gate from
+// DRIVE_DEFS: a need is now a SCORE TERM (`utility.need.below`), not a boolean.
+// Per need this reports the WIDEST window any drive declares for it — the first
+// point at which something that services this need starts to become appealing —
+// and which drive that is.
+const { api: cfgApi } = loadEngine({ required: ['config.js'] });
+const GATE_TABLE = JSON.parse(cfgApi(`
+  (() => {
+    const t = {};
+    for (const [id, d] of Object.entries(DRIVE_DEFS)) {
+      const u = d.utility && d.utility.need;
+      if (!u) continue;
+      if (!t[u.need] || u.below > t[u.need].below) t[u.need] = { below: u.below, drive: id };
+    }
+    return JSON.stringify(t);
+  })()
+`));
+
+// `below` is where the scorer's need curve starts; the contribution rises from
+// 0 there to COGNITION.needWeight at a fully depleted need. A need whose
+// observed floor sits at or above `below` contributes nothing, ever — which is
+// what `energy` and `comfort` were under the old boolean gates, and is the
+// defect class the whole conversion exists to make impossible.
+function printNeeds(s, res) {
+  console.log('  need          min  max  avg  below  motivates?   (drive)');
+  for (const need of Object.keys(GATE_TABLE)) {
+    const lo = Math.min(...res.map(id => s[id][need].min));
+    const hi = Math.max(...res.map(id => s[id][need].max));
+    const av = Math.round(res.map(id => s[id][need].avg).reduce((a, b) => a + b, 0) / res.length);
+    const t = GATE_TABLE[need];
+    const ok = lo < t.below;
+    console.log(`  ${need.padEnd(13)}${String(lo).padStart(3)}${String(hi).padStart(5)}${String(av).padStart(5)}` +
+                `${String(t.below).padStart(7)}   ` +
+                `${(ok ? 'yes' : 'NO — dead term').padEnd(15)}${t.drive}`);
+  }
+}
 
 function run(label, { repaired, days = 5, seed = 20260810 }) {
   const { api } = loadEngine();
@@ -50,14 +91,7 @@ function run(label, { repaired, days = 5, seed = 20260810 }) {
   }
   const s = api('__s'), res = api('__res'), fired = api('__fired');
   console.log(`\n${label}`);
-  console.log('  need          min  max  avg   gate  drive can fire?');
-  for (const need of Object.keys(GATES)) {
-    const lo = Math.min(...res.map(id => s[id][need].min));
-    const hi = Math.max(...res.map(id => s[id][need].max));
-    const av = Math.round(res.map(id => s[id][need].avg).reduce((a, b) => a + b, 0) / res.length);
-    const ok = lo < GATES[need];
-    console.log(`  ${need.padEnd(13)}${String(lo).padStart(3)}${String(hi).padStart(5)}${String(av).padStart(5)}${String(GATES[need]).padStart(7)}   ${ok ? 'yes' : 'NO — unreachable'}`);
-  }
+  printNeeds(s, res);
   console.log(`  events: ${Object.entries(fired).map(([k, v]) => `${k}×${v}`).join(', ') || 'none'}`);
 }
 
@@ -103,14 +137,7 @@ function runRepaired(label, days = 5) {
   `);
   const s = api('__s'), res = api('__res'), fired = api('__fired');
   console.log(`\n${label}`);
-  console.log('  need          min  max  avg   gate  drive can fire?');
-  for (const need of Object.keys(GATES)) {
-    const lo = Math.min(...res.map(id => s[id][need].min));
-    const hi = Math.max(...res.map(id => s[id][need].max));
-    const av = Math.round(res.map(id => s[id][need].avg).reduce((a, b) => a + b, 0) / res.length);
-    const ok = lo < GATES[need];
-    console.log(`  ${need.padEnd(13)}${String(lo).padStart(3)}${String(hi).padStart(5)}${String(av).padStart(5)}${String(GATES[need]).padStart(7)}   ${ok ? 'yes' : 'NO — unreachable'}`);
-  }
+  printNeeds(s, res);
   console.log(`  events: ${Object.entries(fired).map(([k, v]) => `${k}×${v}`).join(', ') || 'none'}`);
 }
 

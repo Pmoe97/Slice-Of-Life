@@ -155,6 +155,10 @@ async function doPhoneCameraShare(photoId, npcId) {
     addLogEntry('system', `Photo sent to ${currentGameState.npcs[npcId]?.bible?.name || 'them'}.`);
     renderPhoneScreen(currentGameState);
     render(currentGameState, currentSceneState);
+    // Same Assessor early flush doImSend runs (Plan X-5 D17) — sharing a
+    // photo is the same act as sending a text and writes the same buffer.
+    if (await assessSceneIfFull()) render(currentGameState, currentSceneState);
+    await chronicleIfFull();                                    // D3's early flush
     await saveAtBoundary('phone-camera-share', currentGameState);
   } finally {
     imSending = false;

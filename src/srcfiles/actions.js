@@ -175,6 +175,13 @@ async function executeAction(actionId, gameState) {
 
   const minutes = resolveTimeCost(def, gameState, prepared);
 
+  // Initiative plan Phase 5 (D16/D17): the same act, with somebody in it with
+  // you. Declarative off `def.shared`, like `meters` and `emitsSignal` above.
+  // Resolved BEFORE the clock advances, and off the `ctx` built at the top of
+  // this function: the participants are the people who were here when it
+  // started, not whoever wandered in while it ran.
+  const shared = resolveSharedActivity(gameState, def, ctx, minutes);
+
   // Declaring `vulnerableState` on an action is all it takes for the NPC
   // peep system (DRIVES/STEALTH) to be able to catch the player mid-action:
   // the flag is live for exactly the ticks this action resolves, which is
@@ -184,7 +191,7 @@ async function executeAction(actionId, gameState) {
   // by construction.
   const ticks = await withVulnerableState(gameState, def.vulnerableState, () => advanceAndResolveMinutes(minutes));
 
-  return { ok: true, ticksSpent: ticks, minutesSpent: minutes, narration: narrateAction(def, ctx, prepared) };
+  return { ok: true, ticksSpent: ticks, minutesSpent: minutes, shared, narration: narrateAction(def, ctx, prepared, shared) };
 }
 
 // Runs `fn` with gameState.player.flags._vulnerableState set, restoring
@@ -263,7 +270,134 @@ function resolveTimeCost(def, gameState, prepared) {
   return Math.max(1, Math.round(minutes));
 }
 
-function narrateAction(def, ctx, prepared) {
+// --- Shared activities (initiative plan Phase 5, D16/D17) -------------------
+// Everything in Plan 5 up to here is an NPC reaching for the player. This is
+// the player's own verbs becoming things you can do WITH someone instead of
+// next to them — and D17 makes that a `shared` field on the ten ACTION_DEFS
+// entries that already exist rather than ten more entries to keep in step.
+//
+// Resolution lives here beside `meters` and `emitsSignal` rather than inside
+// ten `buildEffects` closures, for the same reason those two do: who is in the
+// room is not a question the ten entries should each answer for themselves.
+
+// Who is actually IN it with you. Residents only — a guest or a booked escort
+// standing in the room is not somebody you spent an evening with, and letting
+// them count would turn a visit into an affection tap. Sleepers and showerers
+// are excluded through SHARED_ACTIVITY.excludeActivities rather than an inline
+// string test; the registry's comment says why.
+//
+// Pure. Read by resolveSharedActivity AND by DEFS.ACTIONS'
+// presentResidentAffection, so the mood impulse and D16's consequences can
+// never acquire two different ideas of "together".
+function sharedActivityParticipants(ctx) {
+  const out = [];
+  for (const id of ctx?.presentNpcIds || []) {
+    const npc = ctx.gameState?.npcs?.[id];
+    if (!npc || npc.residency?.status !== 'resident') continue;
+    if (SHARED_ACTIVITY.excludeActivities.includes(npc.activity || '')) continue;
+    out.push(id);
+  }
+  return out;
+}
+
+// How many of this activity's minutes still buy relationship today. Past the
+// cap the time is still shared — the fact is still written, the narration still
+// names them — it just stops paying, which is what makes D16's "shared time
+// does not dominate" structural rather than a hope about the player. Pure.
+function sharedActivityCredit(npc, day, minutes) {
+  const rec = (npc && npc.flags && npc.flags._sharedActivity) || null;
+  const used = (rec && rec.day === day) ? (rec.minutes || 0) : 0;
+  const credited = Math.max(0, Math.min(minutes, SHARED_ACTIVITY.dailyCreditMinutes - used));
+  return { credited, used };
+}
+
+// The delta this activity pays for `minutes` of it, from the named rate the
+// entry declares. Fails closed on an unnamed or unknown rate (D23/D29's shape):
+// an entry that names a tier nobody authored pays nothing, rather than
+// defaulting to the most generous one on the table. Pure.
+function sharedActivityDelta(def, minutes) {
+  const rate = SHARED_ACTIVITY.rates[def?.shared?.rate];
+  if (!rate || !(minutes > 0)) return null;
+  const out = {};
+  for (const [axis, perHour] of Object.entries(rate)) out[axis] = perHour * minutes / 60;
+  return out;
+}
+
+// D16, both halves, and the ONE writer of either. Mutates gameState.npcs the
+// way UI's applyOvertureRefusal does — addMemoryFact and applyRelDelta both
+// return new NPCs, so the assignment is the write.
+//
+// The fact is minted at most ONCE per activity per NPC. The first evening in
+// front of the TV together is the thing that gets remembered; the thirtieth is
+// what the delta is for. That bounds this source at one fact per shareable
+// entry by construction, which is the property D24/D25 settled on in Phase 2 —
+// bounded rather than throttled.
+// `withIds` rather than `participants`, deliberately. An episode's and an
+// event's `participants` are a different list under different rules — they
+// include the player, and SIM's stampEventParticipants is their single writer
+// (verify-i2 scans for a second one across every file). Two lists with one
+// name is how a later reader passes one where the other was meant.
+function resolveSharedActivity(gameState, def, ctx, minutes) {
+  const result = { withIds: [], credited: {}, facts: [] };
+  if (!def || !def.shared || !gameState) return result;
+  const ids = sharedActivityParticipants(ctx);
+  if (ids.length === 0) return result;
+  const day = gameState.meta.clock.day;
+  result.withIds = ids;
+
+  for (const id of ids) {
+    let npc = gameState.npcs[id];
+    if (!npc) continue;
+    const text = String(def.shared.fact || '').replace('{name}', npc.bible?.name || 'your roommate');
+    // Exact-text dedupe is safe here where D25's repetition rule needed a tag:
+    // this string is rendered deterministically from the entry's own template
+    // and a name that does not change, so the same activity always produces
+    // the same fact. D25's exemplar episode did not.
+    if (text && !(npc.memory?.facts || []).some(f => f && f.text === text)) {
+      npc = addMemoryFact(npc, {
+        text, day,
+        importance: MEMORY_IMPORTANCE[SHARED_ACTIVITY.factImportance],
+        category: SHARED_ACTIVITY.factCategory,
+        provenance: 'witnessed',
+        confidence: SHARED_ACTIVITY.factConfidence,
+        emotionalTag: SHARED_ACTIVITY.factEmotionalTag,
+      });
+      result.facts.push({ npcId: id, text });
+    }
+
+    const { credited, used } = sharedActivityCredit(npc, day, minutes);
+    const delta = sharedActivityDelta(def, credited);
+    if (delta) {
+      npc = applyRelDelta(npc, delta, day);
+      npc.flags = { ...(npc.flags || {}), _sharedActivity: { day, minutes: used + credited } };
+    }
+    result.credited[id] = credited;
+    gameState.npcs[id] = npc;
+  }
+  return result;
+}
+
+// "Victor" / "Victor and Bruno" / "Victor, Bruno and Neve" — the {name} the
+// shared templates substitute. A shared activity with two roommates in the room
+// is one activity with two people in it, not two narrations.
+function sharedActivityNames(gameState, ids) {
+  const names = ids.map(id => gameState?.npcs?.[id]?.bible?.name || 'your roommate');
+  if (names.length <= 1) return names[0] || 'your roommate';
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+function narrateAction(def, ctx, prepared, shared) {
+  // D17's two-person version, and it wins over the solo line — dynamic or
+  // templated — because who was in the room is the thing the narration most
+  // has to reflect. Putting it in front of the dynamic branch is also what
+  // keeps the ten entries uniform: a builder that had to ask would be the
+  // eleventh copy of the question sharedActivityParticipants already answers.
+  const withIds = shared?.withIds || [];
+  if (withIds.length > 0 && def.shared?.templates?.length) {
+    const lines = def.shared.templates;
+    return lines[Math.floor(orbitalRandom() * lines.length)]
+      .replace('{name}', sharedActivityNames(ctx.gameState, withIds));
+  }
   if (def.narration?.mode === 'dynamic' && def.narration.build) return def.narration.build(ctx, prepared);
   const templates = def.narration?.templates || ['You do it.'];
   return templates[Math.floor(orbitalRandom() * templates.length)];

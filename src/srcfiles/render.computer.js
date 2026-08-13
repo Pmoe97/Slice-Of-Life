@@ -1857,10 +1857,62 @@ function renderRoomListQueue(body, gs, app, screen) {
 // bible field exposed. The player manually fills in whatever they want;
 // empty fields are rolled when the character is finalized. Includes a
 // live preview card and a "Generate with AI" section (Phase 5). ---
+// Phase 5 (D12/D16/D17): the Character Studio hosts TWO surfaces — the
+// existing create-a-character draft builder and the per-character profile.
+// Navigation state lives in classifieds.studio (the app object), never the
+// DOM: `mode` is 'create' | 'list' | 'profile'. The profile surface never
+// touches studio.draft (the top-of-phase check) — a saved game's residents
+// and an in-progress draft cannot share a struct.
 function renderRoomListStudio(body, gs, app, screen) {
   const classifieds = gs.world.computer.apps.classifieds;
-  const studio = classifieds.studio || (classifieds.studio = { draft: {}, aiBusy: false, aiPrompt: '', preview: null });
+  const studio = classifieds.studio || (classifieds.studio = studioDefaultState());
+  studio.mode = studio.mode || 'create';
+  if (studio.mode === 'list') { renderStudioListMode(body, gs, studio); return; }
+  if (studio.mode === 'profile') {
+    const npc = gs.npcs[studio.viewingNpcId];
+    if (npc) { renderStudioProfileMode(body, gs, studio, npc); return; }
+    // Stale viewingNpcId (evicted, former, or a save that referenced an id
+    // that no longer exists) — fall back to the list instead of a dead tab.
+    studio.mode = 'list';
+    studio.viewingNpcId = null;
+    renderStudioListMode(body, gs, studio);
+    return;
+  }
+  renderStudioCreateMode(body, gs, studio);
+}
+
+// Fresh-state fallback for old saves whose classifieds.studio predates the
+// Phase 5 profile keys (normalizeComputerState replaces the whole studio
+// object, so the defaults live here too, read-side).
+function studioDefaultState() {
+  return { draft: {}, aiBusy: false, aiPrompt: '', preview: null, mode: 'create', viewingNpcId: null, tab: 'personal', editMode: false, editSelections: {} };
+}
+
+// Mode-switch bar: "New Character" (create) and "Characters" (list), shown on
+// every studio surface so the two halves are never more than one click apart
+// (D16 — one home in the classifieds).
+function studioModeBar(body, studio, active) {
+  const row = document.createElement('div');
+  row.className = 'rl-studio-modebar';
+  for (const [mode, label] of [['create', '✎ New Character'], ['list', 'Characters']]) {
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny' + (studio.mode === mode ? ' rl-studio-modebar-active' : ' btn-secondary');
+    btn.setAttribute('data-action', 'classifieds.studio-set-mode');
+    btn.setAttribute('data-row-id', mode);
+    btn.textContent = label;
+    row.appendChild(btn);
+  }
+  body.appendChild(row);
+  return row;
+}
+
+// The draft builder — the pre-Phase-5 studio, unchanged except for the
+// mode bar on top and the action handlers routing through the same studio
+// object.
+function renderStudioCreateMode(body, gs, studio) {
+  const classifieds = gs.world.computer.apps.classifieds;
   const d = studio.draft || (studio.draft = {});
+  studioModeBar(body, studio, 'create');
 
   const hero = document.createElement('div');
   hero.className = 'rl-hero';
@@ -2072,6 +2124,80 @@ function studioTextArea(label, field, value, placeholder, maxLength) {
 }
 
 function studioPoolPicker(label, field, pool, selected, max) {
+  return studioPoolPickerFor(label, field, pool, selected, max, 'classifieds.studio-toggle-pool');
+}
+
+// --- Phase 5 (D12/D16/D17) — the Character Studio's profile surface ---
+// A per-character record for ANY existing NPC: tab-organized read-only view
+// of everything stored on them, with a schema-validated Edit Mode (D17). The
+// Memory tab is the studio's reader for the knowledge-gossip record; More
+// Details holds every mechanical field the fiction never shows.
+
+// Which fields each editable tab shows, grouped into sections. Paths are
+// resolved against CHARACTER_SCHEMA via validateNpcField — the tab contents
+// and the save validator literally share one schema, so the surface can
+// never offer a field the validator rejects (or vice versa).
+const STUDIO_TABS = {
+  personal: [
+    { label: 'Identity', paths: ['bible.name', 'bible.age', 'bible.gender', 'bible.genSeed'] },
+    { label: 'Temperament', paths: ['bible.temperament.warmth', 'bible.temperament.volatility', 'bible.temperament.openness', 'bible.temperament.conscientiousness', 'bible.temperament.assertiveness', 'bible.temperament.selfAwareness'] },
+    { label: 'Personality', paths: ['bible.personality.coreTrait', 'bible.personality.hiddenTrait', 'bible.personality.traits', 'bible.personality.quirks', 'bible.personality.likes', 'bible.personality.dislikes'] },
+    { label: 'Occupation', paths: ['bible.occupation.category', 'bible.occupation.title', 'bible.occupation.scheduleTemplate', 'bible.occupation.incomeBand', 'bible.occupation.hours'] },
+    { label: 'Speech', paths: ['bible.speech.verbosity', 'bible.speech.formality', 'bible.speech.humorStyle', 'bible.speech.profanityLevel', 'bible.speech.vocabularyLevel', 'bible.speech.textingStyle', 'bible.speech.verbalTics', 'bible.speech.catchphrases'] },
+    { label: 'Interests & Values', paths: ['bible.interests', 'bible.values'] },
+    { label: 'Narrative', paths: ['bible.baggage', 'bible.wound', 'bible.want', 'bible.blindSpot', 'bible.boundary'] },
+    { label: 'Prose', paths: ['bible.history', 'bible.sketch', 'bible.sampleLines'] },
+  ],
+  appearance: [
+    { label: 'Overview', paths: ['bible.visual'] },
+    { label: 'Height & Build', paths: ['bible.physical.height', 'bible.physical.build', 'bible.physical.heightBuild'] },
+    { label: 'Hair', paths: ['bible.physical.hair.color', 'bible.physical.hair.style', 'bible.physical.hair.length', 'bible.physical.hair.texture'] },
+    { label: 'Eyes', paths: ['bible.physical.eyes.color', 'bible.physical.eyes.shape'] },
+    { label: 'Skin', paths: ['bible.physical.skin.tone', 'bible.physical.skin.texture', 'bible.physical.skin.ethnicity'] },
+    { label: 'Face', paths: ['bible.physical.face.shape', 'bible.physical.face.nose', 'bible.physical.face.lips', 'bible.physical.face.cheekbones', 'bible.physical.face.jawline', 'bible.physical.face.ears'] },
+    { label: 'Body', paths: ['bible.physical.body.shape', 'bible.physical.body.chestSize', 'bible.physical.body.buttSize', 'bible.physical.body.legs', 'bible.physical.body.posture'] },
+    { label: 'Details', paths: ['bible.physical.distinguishingFeatures', 'bible.physical.piercings', 'bible.physical.tattoos'] },
+    { label: 'Style', paths: ['bible.physical.fashion', 'bible.physical.accessories', 'bible.physical.gait', 'bible.physical.scent'] },
+    { label: 'Attire', paths: ['bible.physical.typicalAttire.casual', 'bible.physical.typicalAttire.work', 'bible.physical.typicalAttire.sleep', 'bible.physical.typicalAttire.formal'] },
+    { label: 'Voice', paths: ['bible.physical.voice.pitch', 'bible.physical.voice.texture', 'bible.physical.voice.accent'] },
+  ],
+  relationship: [
+    { label: 'Your Relationship', paths: ['relPlayer.trust', 'relPlayer.affection', 'relPlayer.tension', 'relPlayer.respect', 'relPlayer.comfort', 'relPlayer.desire', 'relPlayer.firstMetDay', 'relPlayer.lastInteractionDay'] },
+    { label: 'Grievances', paths: ['relPlayer.grievances'] },
+  ],
+};
+const STUDIO_EDITABLE_TABS = ['personal', 'appearance', 'relationship'];
+
+// Read a value out of the live NPC object at a dotted path with [n]
+// segments ('bible.interests[0].name', 'relPlayer.grievances[0]').
+function studioGetPath(obj, path) {
+  let cur = obj;
+  for (const bit of String(path).split('.')) {
+    const m = /^([^[\]]*)(?:\[(\d+)\])?$/.exec(bit);
+    if (!m || (m[1] === '' && m[2] === undefined)) return undefined;
+    if (m[1] !== '') {
+      if (cur == null || typeof cur !== 'object') return undefined;
+      cur = cur[m[1]];
+    }
+    if (m[2] !== undefined) {
+      if (cur == null || !Array.isArray(cur)) return undefined;
+      cur = cur[Number(m[2])];
+    }
+  }
+  return cur;
+}
+
+// Schema-driven label for a path: the last key, capitalised (nested paths
+// show the full tail so two "color" fields don't collide in the UI).
+function studioPathLabel(path) {
+  const key = path.split('.').pop();
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+// Pool pickers used by BOTH surfaces — the draft builder toggles
+// studio.draft, the profile Edit Mode toggles studio.editSelections. The
+// action attribute is what splits them.
+function studioPoolPickerFor(label, field, pool, selected, max, action) {
   const wrap = document.createElement('div');
   wrap.className = 'rl-studio-field';
   wrap.innerHTML = `<label class="rl-studio-label tiny">${label}</label>`;
@@ -2082,13 +2208,552 @@ function studioPoolPicker(label, field, pool, selected, max) {
     const name = typeof item === 'string' ? item : item.name;
     const btn = document.createElement('button');
     btn.className = 'btn tiny rl-filter-btn rl-studio-pool-btn' + (selectedSet.has(name) ? ' active' : '');
-    btn.setAttribute('data-action', 'classifieds.studio-toggle-pool');
+    btn.setAttribute('data-action', action);
     btn.setAttribute('data-row-id', `${field}:${name}`);
     btn.textContent = name;
     grid.appendChild(btn);
   }
   wrap.appendChild(grid);
   return wrap;
+}
+
+// The character picker (D16's "view/edit any character" mode): every NPC
+// currently in the game, residents first, each row opening its profile.
+function renderStudioListMode(body, gs, studio) {
+  studioModeBar(body, studio, 'list');
+  const hero = document.createElement('div');
+  hero.className = 'rl-hero';
+  hero.innerHTML = '<div class="rl-hero-title">Characters</div><div class="dim tiny">Every character in your story — residents, visitors, applicants. Open one to view or edit their full record.</div>';
+  body.appendChild(hero);
+
+  const npcs = Object.entries(gs.npcs);
+  const statusRank = { resident: 0, partner_of_resident: 1, prospective: 2, visitor: 3, former: 4 };
+  npcs.sort((a, b) => {
+    const ra = statusRank[a[1]?.residency?.status] ?? 9;
+    const rb = statusRank[b[1]?.residency?.status] ?? 9;
+    if (ra !== rb) return ra - rb;
+    return (a[1]?.bible?.name || '').localeCompare(b[1]?.bible?.name || '');
+  });
+
+  if (npcs.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'rl-studio-section';
+    empty.innerHTML = '<div class="dim">No characters yet — build one above.</div>';
+    body.appendChild(empty);
+    return;
+  }
+
+  const groups = [
+    ['Residents', (n) => ['resident', 'partner_of_resident'].includes(n?.residency?.status)],
+    ['Visitors & Others', (n) => !['resident', 'partner_of_resident'].includes(n?.residency?.status)],
+  ];
+  for (const [groupLabel, match] of groups) {
+    const rows = npcs.filter(([, n]) => match(n));
+    if (rows.length === 0) continue;
+    const section = document.createElement('div');
+    section.className = 'rl-studio-section';
+    section.innerHTML = `<div class="rl-studio-section-title">${groupLabel}</div>`;
+    for (const [npcId, n] of rows) {
+      const b = n.bible || {};
+      const row = document.createElement('div');
+      row.className = 'rl-studio-charrow';
+      const statusLabel = (n.residency?.status || '').replace(/_/g, ' ');
+      row.innerHTML = `
+        <div class="rl-card-avatar rl-studio-char-avatar" style="background: ${hashToColor(b.name || npcId)};">${(b.name || '?').charAt(0)}</div>
+        <div class="rl-studio-char-info">
+          <div class="rl-studio-char-name">${b.name || 'Unnamed'}</div>
+          <div class="dim tiny">${b.age ?? '—'} · ${b.gender || '—'} · ${b.occupation?.title || '—'} · ${statusLabel}</div>
+        </div>`;
+      const openBtn = document.createElement('button');
+      openBtn.className = 'btn tiny';
+      openBtn.setAttribute('data-action', 'classifieds.studio-set-mode');
+      openBtn.setAttribute('data-row-id', `profile:${npcId}`);
+      openBtn.textContent = 'View';
+      row.appendChild(openBtn);
+      section.appendChild(row);
+    }
+    body.appendChild(section);
+  }
+}
+
+// The profile: header + tabs + tab content. Edit Mode (studio.editMode)
+// swaps Personal/Appearance/Relationship from read-only rows to
+// schema-validated inputs; Memory/Gallery/More Details are readers only.
+function renderStudioProfileMode(body, gs, studio, npc) {
+  const b = npc.bible || {};
+  studioModeBar(body, studio, 'profile');
+
+  const header = document.createElement('div');
+  header.className = 'rl-profile rl-studio-profile-header';
+  const statusLabel = (npc.residency?.status || '').replace(/_/g, ' ');
+  header.innerHTML = `
+    <div class="rl-profile-header">
+      <div class="rl-card-avatar rl-profile-avatar" style="background: ${hashToColor(b.name)};">${(b.name || '?').charAt(0)}</div>
+      <div>
+        <div class="rl-profile-name">${b.name || 'Unnamed'}</div>
+        <div class="dim tiny">${b.age ?? '—'} · ${b.gender || '—'} · ${b.occupation?.title || '—'}</div>
+        <div class="dim tiny">${statusLabel} · ${b.sketch ? `“${b.sketch}”` : ''}</div>
+      </div>
+    </div>
+  `;
+  body.appendChild(header);
+
+  // Edit Mode toggle — only meaningful on the editable tabs.
+  if (STUDIO_EDITABLE_TABS.includes(studio.tab)) {
+    const editRow = document.createElement('div');
+    editRow.className = 'rl-studio-actions';
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn tiny' + (studio.editMode ? ' rl-studio-modebar-active' : ' btn-secondary');
+    editBtn.setAttribute('data-action', 'classifieds.studio-edit-toggle');
+    editBtn.textContent = studio.editMode ? 'Done Editing' : 'Edit';
+    editRow.appendChild(editBtn);
+    if (studio.editMode) {
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'btn tiny';
+      saveBtn.setAttribute('data-action', 'classifieds.studio-save-edits');
+      saveBtn.textContent = 'Save Changes';
+      editRow.appendChild(saveBtn);
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'btn btn-secondary tiny';
+      cancelBtn.setAttribute('data-action', 'classifieds.studio-edit-discard');
+      cancelBtn.textContent = 'Discard';
+      editRow.appendChild(cancelBtn);
+    }
+    body.appendChild(editRow);
+  }
+
+  // Tab bar.
+  const tabBar = document.createElement('div');
+  tabBar.className = 'rl-studio-tabs';
+  const tabs = [['personal', 'Personal'], ['appearance', 'Appearance'], ['gallery', 'Gallery'], ['relationship', 'Relationship'], ['memory', 'Memory'], ['more', 'More Details']];
+  for (const [id, label] of tabs) {
+    const btn = document.createElement('button');
+    btn.className = 'rl-studio-tab' + (studio.tab === id ? ' active' : '');
+    btn.setAttribute('data-action', 'classifieds.studio-set-tab');
+    btn.setAttribute('data-row-id', id);
+    btn.textContent = label;
+    tabBar.appendChild(btn);
+  }
+  body.appendChild(tabBar);
+
+  const content = document.createElement('div');
+  content.className = 'rl-studio-tabcontent';
+  body.appendChild(content);
+
+  const renderers = {
+    personal: renderStudioPersonalTab,
+    appearance: renderStudioAppearanceTab,
+    gallery: renderStudioGalleryTab,
+    relationship: renderStudioRelationshipTab,
+    memory: renderStudioMemoryTab,
+    more: renderStudioMoreDetailsTab,
+  };
+  (renderers[studio.tab] || renderStudioPersonalTab)(content, gs, studio, npc);
+}
+
+// A schema-driven field row. editMode swaps it between a read-only display
+// and a validated input (data-studio-edit-path carries the path the Save
+// handler validates + writes).
+function studioFieldRow(spec, path, value, editMode) {
+  const wrap = document.createElement('div');
+  wrap.className = 'rl-studio-field';
+  if (!editMode) {
+    wrap.innerHTML = `<label class="rl-studio-label tiny">${studioPathLabel(path)}</label>`;
+    const body = document.createElement('div');
+    body.className = 'tiny rl-studio-readval';
+    let display = value;
+    if (Array.isArray(display)) {
+      display = display.map(v => (v && typeof v === 'object') ? (v.name ?? JSON.stringify(v)) : v).join(', ');
+    }
+    if (display === undefined || display === null || display === '') body.textContent = '—';
+    else body.textContent = String(display);
+    wrap.appendChild(body);
+    return wrap;
+  }
+  const label = document.createElement('label');
+  label.className = 'rl-studio-label tiny';
+  label.textContent = studioPathLabel(path);
+  wrap.appendChild(label);
+
+  if (spec.type === 'string') {
+    if (spec.enum) {
+      const sel = document.createElement('select');
+      sel.className = 'rl-studio-input';
+      sel.setAttribute('data-studio-edit-path', path);
+      for (const opt of spec.enum) {
+        const o = document.createElement('option');
+        o.value = opt; o.textContent = opt;
+        if (opt === value) o.selected = true;
+        sel.appendChild(o);
+      }
+      wrap.appendChild(sel);
+    } else {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'rl-studio-input';
+      input.value = value || '';
+      if (spec.maxLength) input.maxLength = spec.maxLength;
+      input.setAttribute('data-studio-edit-path', path);
+      wrap.appendChild(input);
+    }
+  } else if (spec.type === 'number') {
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.className = 'rl-studio-input';
+    if (spec.range) {
+      input.min = spec.range[0];
+      input.max = spec.range[1];
+      input.step = (spec.range[1] - spec.range[0]) <= 2 ? 0.1 : 1;
+    }
+    input.value = value ?? '';
+    input.setAttribute('data-studio-edit-path', path);
+    wrap.appendChild(input);
+  } else if (spec.type === 'boolean') {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = value === true;
+    cb.setAttribute('data-studio-edit-path', path);
+    wrap.appendChild(cb);
+  }
+  return wrap;
+}
+
+// String-array fields render as a textarea (one entry per line) in Edit Mode.
+function studioArrayTextarea(path, value) {
+  const wrap = document.createElement('div');
+  wrap.className = 'rl-studio-field';
+  wrap.innerHTML = `<label class="rl-studio-label tiny">${studioPathLabel(path)} — one per line</label>`;
+  const ta = document.createElement('textarea');
+  ta.className = 'rl-studio-input';
+  ta.rows = Math.max(2, Math.min(6, (value || []).length + 1));
+  ta.value = (value || []).join('\n');
+  ta.setAttribute('data-studio-edit-path', path);
+  ta.setAttribute('data-studio-edit-kind', 'array');
+  wrap.appendChild(ta);
+  return wrap;
+}
+
+// Shared section renderer: read-only rows, or the schema-driven editor.
+function renderStudioSections(content, gs, studio, npc, groups) {
+  for (const group of groups) {
+    const section = document.createElement('div');
+    section.className = 'rl-studio-section';
+    section.innerHTML = `<div class="rl-studio-section-title">${group.label}</div>`;
+    for (const path of group.paths) {
+      const spec = resolveNpcFieldSpec(path);
+      if (spec.error) continue;
+      const value = studioGetPath(npc, path);
+      if (studio.editMode) {
+        if (spec.arrayElement) {
+          if (spec.spec.itemFields) {
+            // Object arrays (interests/values) edit via their pools.
+            const field = path.split('[')[0];
+            const pool = field === 'bible.interests' ? INTEREST_POOL
+              : field === 'bible.values' ? VALUES_POOL : [];
+            if (pool.length > 0) {
+              const hasPending = studio.editSelections && Object.prototype.hasOwnProperty.call(studio.editSelections, path);
+              const names = hasPending ? (studio.editSelections[path] || []) : (value || []).map(v => (typeof v === 'object' && v) ? v.name : v);
+              const max = spec.spec.maxItems;
+              section.appendChild(studioPoolPickerFor(group.label + ' — ' + studioPathLabel(path), path, pool, names, max, 'classifieds.studio-edit-pool'));
+              continue;
+            }
+          }
+          section.appendChild(studioArrayTextarea(path, value || []));
+          continue;
+        }
+        if (spec.spec.type === 'array') {
+          // Plain string arrays without a pool → textarea.
+          const pool = studioPoolFor(path);
+          if (pool && pool.length > 0) {
+            const hasPending = studio.editSelections && Object.prototype.hasOwnProperty.call(studio.editSelections, path);
+            const names = hasPending ? (studio.editSelections[path] || []) : (value || []).map(v => (typeof v === 'object' && v) ? v.name : v);
+            section.appendChild(studioPoolPickerFor(group.label + ' — ' + studioPathLabel(path), path, pool, names, spec.spec.maxItems, 'classifieds.studio-edit-pool'));
+          } else {
+            section.appendChild(studioArrayTextarea(path, value || []));
+          }
+          continue;
+        }
+        section.appendChild(studioFieldRow(spec.spec, path, value, true));
+      } else {
+        section.appendChild(studioFieldRow(spec.spec, path, value, false));
+      }
+    }
+    content.appendChild(section);
+  }
+}
+
+// Which pool a field edits against, when one exists.
+function studioPoolFor(path) {
+  switch (path) {
+    case 'bible.personality.traits': return PERSONALITY_TRAITS_POOL;
+    case 'bible.personality.quirks': return QUIRKS_POOL;
+    case 'bible.personality.likes': return LIKES_POOL;
+    case 'bible.personality.dislikes': return DISLIKES_POOL;
+    case 'bible.interests': return INTEREST_POOL;
+    case 'bible.values': return VALUES_POOL;
+    default: return null;
+  }
+}
+
+function renderStudioPersonalTab(content, gs, studio, npc) {
+  renderStudioSections(content, gs, studio, npc, STUDIO_TABS.personal);
+}
+
+function renderStudioAppearanceTab(content, gs, studio, npc) {
+  renderStudioSections(content, gs, studio, npc, STUDIO_TABS.appearance);
+}
+
+// Relationship: the relPlayer axes (read-only bars or validated inputs), the
+// derived intimacyLevel/conversationPhase shown read-only (D17 — derived
+// fields recompute from what was edited, they are never written), and the
+// grievance log.
+function renderStudioRelationshipTab(content, gs, studio, npc) {
+  const rel = npc.relPlayer || {};
+  const derived = deriveConversationPhase(rel);
+
+  const derivedCard = buildProfileCard('Derived — recomputed from your edits');
+  const dRows = [
+    ['Conversation Phase', derived.conversationPhase],
+    ['Intimacy Level', `${derived.intimacyLevel}/100`],
+  ];
+  for (const [label, val] of dRows) {
+    derivedCard.appendChild(studioReadRow(label, val));
+  }
+  content.appendChild(derivedCard);
+
+  renderStudioSections(content, gs, studio, npc, STUDIO_TABS.relationship);
+
+  // Grievance log (read-only; grievances edit through the axis fields above).
+  const grv = buildProfileCard('Grievances');
+  const grievances = rel.grievances || [];
+  if (grievances.length === 0) grv.appendChild(studioReadRow('Open grievances', 'None'));
+  else grievances.forEach((g, i) => {
+    const text = typeof g === 'string' ? g : (g.text || JSON.stringify(g));
+    grv.appendChild(studioReadRow(`#${i + 1}`, text));
+  });
+  content.appendChild(grv);
+}
+
+function studioReadRow(label, value) {
+  const row = document.createElement('div');
+  row.className = 'rl-studio-readrow';
+  row.innerHTML = `<span class="rl-studio-label tiny">${label}</span><span class="tiny rl-studio-readval">${value === undefined || value === null || value === '' ? '—' : value}</span>`;
+  return row;
+}
+
+// Memory (Phase 5's reader for the knowledge-gossip record): every field of
+// the extended fact record, the episodes, recent exchanges, the summary, the
+// open questions, and the D11 player model. Fed by buildMemoryProfileView —
+// a pure npc.js reader, so the DOM half is a projection with no logic.
+function renderStudioMemoryTab(content, gs, studio, npc) {
+  const view = buildMemoryProfileView(npc);
+  const fmtPct = (v) => `${Math.round((v ?? 1) * 100)}%`;
+  const provLabel = (p) => p.startsWith('told_by:') ? `told by ${p.slice('told_by:'.length)}` : p;
+
+  // Player model (D11).
+  const pm = view.playerModel;
+  const pmCard = buildProfileCard('What they know about you');
+  pmCard.appendChild(studioReadRow('Observed first-hand', pm.observes.length === 0 ? 'Nothing yet' : pm.observes.map(o => o.text).join(' | ')));
+  pmCard.appendChild(studioReadRow('Told about you', pm.derivesFrom.length === 0 ? 'Nothing yet' : pm.derivesFrom.map(o => `${o.text} (${fmtPct(o.confidence)})`).join(' | ')));
+  pmCard.appendChild(studioReadRow('Shared moments', pm.shared.length === 0 ? 'None yet' : pm.shared.map(s => `${s.text} (Day ${s.day})`).join(' | ')));
+  pmCard.appendChild(studioReadRow('Honesty', fmtPct(pm.honesty)));
+  content.appendChild(pmCard);
+
+  // Open questions (D9) + the D13 bridge.
+  const qCard = buildProfileCard('Open questions');
+  if (view.openQuestions.length === 0) {
+    qCard.appendChild(studioReadRow('Wondering about', 'Nothing at the moment'));
+  } else {
+    for (const q of view.openQuestions) {
+      const raised = view.openQuestion && view.openQuestion.factId === q.factId ? ' — would raise this now' : '';
+      const targets = Array.isArray(q.targets) && q.targets.length > 0 ? ` → asks ${q.targets.join(', ')}` : '';
+      qCard.appendChild(studioReadRow(`Q on fact #${q.factId}${raised}`, `${q.topic} — curiosity ${q.curiosity.toFixed(2)}, ${q.age} days old${targets}`));
+    }
+  }
+  content.appendChild(qCard);
+
+  // Facts — every field of the extended record.
+  const fCard = buildProfileCard(`Facts (${view.facts.length})`);
+  if (view.facts.length === 0) {
+    fCard.appendChild(studioReadRow('Facts', 'None recorded yet'));
+  } else {
+    for (const f of view.facts) {
+      const flags = [
+        provLabel(f.provenance),
+        `conf ${fmtPct(f.confidence)}`,
+        `sal ${fmtPct(f.salience)}`,
+        f.pinned ? 'pinned' : '',
+        f.emotionalTag ? f.emotionalTag : '',
+        f.valid ? '' : 'invalid',
+        `#${f.factId}`,
+      ].filter(Boolean).join(' · ');
+      const row = document.createElement('div');
+      row.className = 'rl-memory-fact';
+      row.innerHTML = `<div class="tiny rl-memory-fact-text">${f.text}</div><div class="dim tiny">${flags}</div>`;
+      fCard.appendChild(row);
+    }
+  }
+  content.appendChild(fCard);
+
+  // Episodes.
+  const eCard = buildProfileCard(`Episodes (${view.episodes.length})`);
+  if (view.episodes.length === 0) {
+    eCard.appendChild(studioReadRow('Episodes', 'None recorded yet'));
+  } else {
+    for (const e of view.episodes.slice(0, 12)) {
+      const parts = [
+        `Day ${e.day}`,
+        e.emotionalTag ? e.emotionalTag : '',
+        e.participants.length > 0 ? `with ${e.participants.join(', ')}` : '',
+        `decay ${e.decay.toFixed(2)}`,
+      ].filter(Boolean).join(' · ');
+      const row = document.createElement('div');
+      row.className = 'rl-memory-fact';
+      row.innerHTML = `<div class="tiny rl-memory-fact-text">${e.text}</div><div class="dim tiny">${parts}</div>`;
+      eCard.appendChild(row);
+    }
+    if (view.episodes.length > 12) eCard.appendChild(studioReadRow('…and more', `${view.episodes.length - 12} older episodes in the record`));
+  }
+  content.appendChild(eCard);
+
+  // Summary + recent exchanges.
+  const sCard = buildProfileCard('Summary');
+  sCard.appendChild(studioReadRow('Summary', view.summary || '—'));
+  sCard.appendChild(studioReadRow('Summary revision', view.summaryRevision));
+  content.appendChild(sCard);
+
+  const rCard = buildProfileCard(`Recent exchanges (${view.recent.length})`);
+  if (view.recent.length === 0) {
+    rCard.appendChild(studioReadRow('Recent', 'No recent exchanges'));
+  } else {
+    for (const e of view.recent.slice(-12).reverse()) {
+      rCard.appendChild(studioReadRow(e.speaker || '—', `${e.text} <span class="dim">(Day ${e.day}, ${formatTime(e.tick)})</span>`));
+    }
+  }
+  content.appendChild(rCard);
+}
+
+// Gallery — the char_${genSeed}_* portrait key's reader. Each tile asks the
+// image cache through getCharacterImage (generating on first view, cached
+// forever after), exactly like room scenes. The tile DOM is created
+// synchronously with a placeholder; the image fills in when the async fetch
+// lands (the render.js thumbnail pattern).
+function renderStudioGalleryTab(content, gs, studio, npc) {
+  const intro = document.createElement('div');
+  intro.className = 'rl-studio-section';
+  intro.innerHTML = '<div class="rl-studio-section-title">Portraits</div><div class="dim tiny">Linked to this character via their generation seed. First view generates; after that they load from the shared image cache.</div>';
+  content.appendChild(intro);
+
+  const shots = [
+    { expression: 'neutral', pose: 'standing', label: 'Everyday' },
+    { expression: 'happy', pose: 'standing', label: 'Smiling' },
+    { expression: 'sad', pose: 'standing', label: 'Low day' },
+  ];
+  const grid = document.createElement('div');
+  grid.className = 'rl-studio-gallery';
+  for (const shot of shots) {
+    const tile = document.createElement('div');
+    tile.className = 'rl-studio-gallery-tile';
+    tile.innerHTML = `
+      <div class="rl-studio-gallery-canvas">
+        <div class="rl-studio-gallery-letter">${(npc.bible?.name || '?').charAt(0)}</div>
+        <div class="rl-studio-gallery-loader">…</div>
+      </div>
+      <div class="dim tiny">${shot.label}</div>`;
+    grid.appendChild(tile);
+    const canvasEl = tile.querySelector('.rl-studio-gallery-canvas');
+    const img = document.createElement('img');
+    img.alt = shot.label;
+    img.className = 'rl-studio-gallery-img';
+    canvasEl.appendChild(img);
+    getCharacterImage(npc, shot.expression, shot.pose).then((res) => {
+      if (!res || !res.url) {
+        tile.querySelector('.rl-studio-gallery-loader').textContent = 'Failed to generate';
+        return;
+      }
+      img.src = res.url;
+      img.classList.add('loaded');
+      tile.querySelector('.rl-studio-gallery-loader')?.remove();
+    }).catch(() => {
+      tile.querySelector('.rl-studio-gallery-loader').textContent = 'Failed to generate';
+    });
+  }
+  content.appendChild(grid);
+}
+
+// More Details — everything mechanical the fiction never shows. Read-only by
+// design (D12): schema types, derived values, ids, cooldowns, counters. This
+// is where the audit's mechanical fields finally have a visible home.
+function renderStudioMoreDetailsTab(content, gs, studio, npc) {
+  const mem = npc.memory || {};
+  const rel = npc.relPlayer || {};
+  const residency = npc.residency || {};
+
+  const sections = [
+    ['Identity', [
+      ['NPC id', studio.viewingNpcId || '—'],
+      ['genSeed', npc.bible?.genSeed ?? '—'],
+      ['bibleRevision', npc.bibleRevision ?? 0],
+      ['bibleChanges', Array.isArray(npc.bibleChanges) ? `${npc.bibleChanges.length} recorded` : '0 recorded'],
+    ]],
+    ['Residency', [
+      ['status', residency.status || '—'],
+      ['room', residency.room || '—'],
+      ['bed', residency.bed || '—'],
+      ['partnerOf', residency.partnerOf || '—'],
+      ['since', residency.since ?? '—'],
+      ['contributesRent', residency.contributesRent === true ? 'yes' : 'no'],
+      ['rentShare', residency.rentShare ?? '—'],
+    ]],
+    ['Whereabouts', [
+      ['location', npc.location || '—'],
+      ['activity', npc.activity || '—'],
+      ['clothing', npc.clothing || '—'],
+    ]],
+    ['Mood', [
+      ['mood', npc.mood ?? '—'],
+      ['moodReason', npc.moodReason || '—'],
+    ]],
+    ['Schedule', [
+      ['currentBlock', npc.schedule?.currentBlock || '—'],
+      ['nextBlock', npc.schedule?.nextBlock || '—'],
+      ['willReturnAt', npc.schedule?.willReturnAt ?? '—'],
+    ]],
+    ['Needs', [
+      ['hunger', npc.needs?.hunger ?? '—'],
+      ['hygiene', npc.needs?.hygiene ?? '—'],
+      ['energy', npc.needs?.energy ?? '—'],
+      ['social', npc.needs?.social ?? '—'],
+      ['comfort', npc.needs?.comfort ?? '—'],
+      ['stimulation', npc.needs?.stimulation ?? '—'],
+    ]],
+    ['Relationship (raw)', [
+      ['firstMetDay', rel.firstMetDay ?? '—'],
+      ['lastInteractionDay', rel.lastInteractionDay ?? '—'],
+      ['grievances', Array.isArray(rel.grievances) ? `${rel.grievances.length} entries` : '0'],
+    ]],
+    ['Memory (raw)', [
+      ['facts', Array.isArray(mem.facts) ? mem.facts.length : 0],
+      ['episodes', Array.isArray(mem.episodes) ? mem.episodes.length : 0],
+      ['recent', Array.isArray(mem.recent) ? mem.recent.length : 0],
+      ['openQuestions', Array.isArray(mem.openQuestions) ? mem.openQuestions.length : 0],
+      ['nextFactId', mem.nextFactId ?? 1],
+      ['summaryRevision', mem.summaryRevision ?? 0],
+    ]],
+    ['Social', [
+      ['contactKnown', npc.contactKnown === true ? 'yes' : 'no'],
+      ['socialCircle', Array.isArray(npc.socialCircle) ? npc.socialCircle.join(', ') : '—'],
+      ['suspicion', Object.keys(npc.suspicion || {}).length > 0 ? JSON.stringify(npc.suspicion) : '—'],
+      ['flags', Object.keys(npc.flags || {}).length > 0 ? JSON.stringify(npc.flags) : '—'],
+      ['inventory', Array.isArray(npc.inventory) ? `${npc.inventory.length} stacks` : '—'],
+    ]],
+  ];
+
+  for (const [label, rows] of sections) {
+    const card = buildProfileCard(label);
+    for (const [k, v] of rows) card.appendChild(studioReadRow(k, v));
+    content.appendChild(card);
+  }
 }
 
 // --- Room assignment screen: the player picks which bedroom the

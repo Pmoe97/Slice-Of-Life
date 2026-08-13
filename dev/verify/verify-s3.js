@@ -249,6 +249,21 @@ check('no transient def is orphaned', api(`
     const emitted = new Set(Object.keys(EVENT_SIGNALS).map(k => EVENT_SIGNALS[k].signal));
     for (const d of Object.values(DRIVE_DEFS))  if (d.emitsSignal) emitted.add(d.emitsSignal.signal);
     for (const d of Object.values(ACTION_DEFS)) if (d.emitsSignal) emitted.add(d.emitsSignal.signal);
+    // The initiative plan's Phase 1 added a THIRD declarative emitter beside
+    // emitsSignal and leaves: \`expresses\` emits a transient from an NPC's mood
+    // rather than from the act. This clause is what keeps RI1 an invariant
+    // rather than a list — the emotional channel is not exempt from needing a
+    // real emitter, it just has a different one. verify-i1 owns the rest of it.
+    for (const d of Object.values(DRIVE_DEFS)) {
+      if (!d.expresses) continue;
+      for (const r of (Array.isArray(d.expresses) ? d.expresses : [d.expresses])) emitted.add(r.signal);
+    }
+    // The initiative plan's Phase 4 added a FOURTH: an OVERTURE_DEFS entry
+    // carries the same \`emitsSignal\` field a drive does, differing only in
+    // where it lands (the player's room, because an overture is aimed at a
+    // person). Same field, same invariant — a knock nobody emits is a knock
+    // nobody hears.
+    for (const d of Object.values(OVERTURE_DEFS)) if (d.emitsSignal) emitted.add(d.emitsSignal.signal);
     emitted.add('footsteps');   // resolveTick, on movement
     emitted.add('cooking');     // tryEatFood's custom path
     const transients = Object.entries(SIGNAL_DEFS).filter(([, d]) => d.decayPerTick).map(([id]) => id);

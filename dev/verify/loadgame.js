@@ -11,9 +11,10 @@ const ORDER = [
   'config.js', 'icons.js', 'defs.world.js', 'defs.actions.js', 'defs.computer.js',
   'defs.menu.js', 'orbital.js', 'state.js', 'sim.js', 'commitments.js', 'world.js',
   'signals.js', 'scene.js',
-  'items.js', 'inventory.js', 'effects.js', 'drives.js', 'actions.js', 'intent.js',
+  'items.js', 'inventory.js', 'effects.js', 'drives.js', 'cognition.js', 'overture.js',
+  'actions.js', 'intent.js',
   'skills.js', 'stealth.js', 'time.js', 'computer.js', 'tracker.js', 'phone.js',
-  'npc.js', 'prompt.js', 'llm.js', 'interruption.js',
+  'npc.js', 'rumination.js', 'prompt.js', 'llm.js', 'x5.js', 'interruption.js',
 ];
 
 function loadEngine(opts = {}) {

@@ -22,7 +22,7 @@ which phase to work on — find it yourself using the steps below.
 ## Step 0 — find out where you are (cheap: the Status table, not the full doc)
 
 Read only the `## Handoff — read this first` section and the `## Status` table
-in `src/ref/wip/npc-cognition-plan.md`.
+in `src/ref/complete/npc-cognition-plan.md`.
 
 The first phase not marked **Done** is your phase.
 

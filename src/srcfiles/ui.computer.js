@@ -491,8 +491,7 @@ function doClassifiedsAssignRoom(npcId) {
 // draft object. Called on any studio action (create, clear, AI generate)
 // to harvest the current form state before acting.
 function collectStudioDraft() {
-  const classifieds = currentGameState.world.computer.apps.classifieds;
-  const studio = classifieds.studio || (classifieds.studio = { draft: {}, aiBusy: false, aiPrompt: '', preview: null });
+  const studio = studioState(currentGameState);
   // Start from existing draft so pool-toggled arrays (personality.traits,
   // interests, etc.) are preserved — those are managed by the toggle
   // handler directly on studio.draft, not via form inputs.
@@ -566,8 +565,7 @@ function doClassifiedsStudioTogglePool(rowId) {
   if (!rowId) return;
   const [field, name] = rowId.split(':');
   if (!field || !name) return;
-  const classifieds = currentGameState.world.computer.apps.classifieds;
-  const studio = classifieds.studio || (classifieds.studio = { draft: {}, aiBusy: false, aiPrompt: '', preview: null });
+  const studio = studioState(currentGameState);
   const draft = studio.draft || (studio.draft = {});
 
   // Navigate dotted path (e.g. "personality.traits")
@@ -583,7 +581,7 @@ function doClassifiedsStudioTogglePool(rowId) {
   if (idx >= 0) obj[key].splice(idx, 1);
   else obj[key].push(name);
 
-  renderComputerScreen(currentGameState);
+  rerenderStudio();
 }
 
 // Phase 4: Create the character from the current draft
@@ -611,7 +609,7 @@ async function doClassifiedsStudioCreate() {
 function doClassifiedsStudioClear() {
   const classifieds = currentGameState.world.computer.apps.classifieds;
   if (classifieds.studio) classifieds.studio.draft = {};
-  renderComputerScreen(currentGameState);
+  rerenderStudio();
 }
 
 // Phase 7: Interview — open an IM thread with the prospective applicant.
@@ -652,15 +650,14 @@ function doClassifiedsToggleFavFilter() {
 // Phase 5: AI-assisted generation — harvest the AI prompt, call LLM,
 // populate the draft, re-render
 async function doClassifiedsStudioAIGenerate() {
-  const classifieds = currentGameState.world.computer.apps.classifieds;
-  const studio = classifieds.studio || (classifieds.studio = { draft: {}, aiBusy: false, aiPrompt: '', preview: null });
+  const studio = studioState(currentGameState);
   // First harvest current form state (so manual edits aren't lost)
   collectStudioDraft();
   const prompt = studio.aiPrompt || '';
   if (!prompt.trim()) { addLogEntry('system', 'Describe a character first.'); return; }
 
   studio.aiBusy = true;
-  renderComputerScreen(currentGameState);
+  rerenderStudio();
   showLoading('AI is generating a character…');
   try {
     const result = await generateCharacterWithAI(currentGameState, prompt.trim());
@@ -677,12 +674,263 @@ async function doClassifiedsStudioAIGenerate() {
       studio.draft.temperament = { ...(existing.temperament || {}), ...result.draft.temperament };
     }
     addLogEntry('system', 'AI generated a character draft. Review and adjust in the Studio, then Create.');
-    renderComputerScreen(currentGameState);
+    rerenderStudio();
     await saveAtBoundary('classifieds-studio-ai', currentGameState);
   } finally {
     studio.aiBusy = false;
     hideLoading();
-    renderComputerScreen(currentGameState);
+    rerenderStudio();
+  }
+}
+
+// --- Phase 5 (D12/D16/D17) — the studio's profile surface handlers ---
+// Navigation state lives in classifieds.studio (never the DOM); profile
+// handlers touch studio.mode/viewingNpcId/tab/editMode/editSelections only,
+// never studio.draft — the create surface's handlers own that (the
+// top-of-phase check: a resident and an in-progress draft must not share a
+// struct).
+
+function studioState(gs) {
+  const classifieds = gs.world.computer.apps.classifieds;
+  if (!classifieds.studio) classifieds.studio = studioDefaultState();
+  return classifieds.studio;
+}
+
+// Re-render whichever shell is active — the studio is one shared surface
+// across the computer and the phone, and each renderer no-ops when its shell
+// is closed.
+function rerenderStudio() {
+  if (typeof renderComputerScreen === 'function') renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+}
+
+// rowId is a mode ('create' | 'list') or 'profile:<npcId>'.
+function doClassifiedsStudioSetMode(rowId) {
+  if (!rowId) return;
+  const studio = studioState(currentGameState);
+  if (rowId.startsWith('profile:')) {
+    const npcId = rowId.slice('profile:'.length);
+    if (!currentGameState.npcs[npcId]) return;
+    studio.mode = 'profile';
+    studio.viewingNpcId = npcId;
+    studio.tab = 'personal';
+    studio.editMode = false;
+    studio.editSelections = {};
+  } else if (rowId === 'create' || rowId === 'list') {
+    studio.mode = rowId;
+    studio.viewingNpcId = null;
+    studio.editMode = false;
+    studio.editSelections = {};
+  }
+  rerenderStudio();
+}
+
+function doClassifiedsStudioSetTab(tabId) {
+  const studio = studioState(currentGameState);
+  studio.tab = tabId || 'personal';
+  // Leaving the tab drops any half-typed edit — switching away is the
+  // player saying "that tab again", and unsaved edits silently vanishing is
+  // the predictable behaviour (no stale input surprise on the way back).
+  studio.editMode = false;
+  studio.editSelections = {};
+  rerenderStudio();
+}
+
+function doClassifiedsStudioEditToggle() {
+  const studio = studioState(currentGameState);
+  studio.editMode = !studio.editMode;
+  if (studio.editMode) {
+    // Snapshot the current pool values as the Edit Mode baseline — toggling
+    // then adds/removes against what the character actually holds (the same
+    // model the draft builder uses), and the chips highlight the pending
+    // selection, not just the committed one.
+    const npc = currentGameState.npcs[studio.viewingNpcId];
+    studio.editSelections = npc ? studioPoolSnapshot(npc) : {};
+  } else {
+    studio.editSelections = {};
+  }
+  rerenderStudio();
+}
+
+// The pool-backed fields, as paths into the live NPC.
+const STUDIO_POOL_PATHS = ['bible.personality.traits', 'bible.personality.quirks', 'bible.personality.likes', 'bible.personality.dislikes', 'bible.interests', 'bible.values'];
+
+function studioPoolSnapshot(npc) {
+  const snap = {};
+  for (const path of STUDIO_POOL_PATHS) {
+    const v = studioGetPath(npc, path);
+    snap[path] = (v || []).map(x => (x && typeof x === 'object') ? x.name : x).filter(Boolean);
+  }
+  return snap;
+}
+
+function doClassifiedsStudioEditDiscard() {
+  const studio = studioState(currentGameState);
+  studio.editMode = false;
+  studio.editSelections = {};
+  rerenderStudio();
+}
+
+// Edit Mode pool toggle — path:name, written to studio.editSelections so a
+// re-render (which highlights the active chips) does not lose the state.
+// Separate from doClassifiedsStudioTogglePool, which toggles the CREATE
+// surface's studio.draft.
+function doClassifiedsStudioEditPool(rowId) {
+  if (!rowId) return;
+  const sep = rowId.indexOf(':');
+  if (sep < 0) return;
+  const path = rowId.slice(0, sep);
+  const name = rowId.slice(sep + 1);
+  if (!path || !name) return;
+  const studio = studioState(currentGameState);
+  if (!studio.editSelections || typeof studio.editSelections !== 'object') studio.editSelections = {};
+  const arr = studio.editSelections[path] || [];
+  const idx = arr.indexOf(name);
+  if (idx >= 0) arr.splice(idx, 1);
+  else arr.push(name);
+  studio.editSelections[path] = arr;
+  rerenderStudio();
+}
+
+// Pool names → the schema item objects the validator expects. Interests carry
+// their pool tags (skill stays at the schema default 0 — INTEREST_POOL has no
+// authored skill); values carry their opposition pair.
+function studioPoolNamesToValues(path, names) {
+  if (path === 'bible.interests') {
+    return (names || []).map(n => {
+      const p = INTEREST_POOL.find(i => i.name === n);
+      return { name: n, tags: p ? (p.tags || []) : [], skill: 0 };
+    });
+  }
+  if (path === 'bible.values') {
+    return (names || []).map(n => {
+      const p = VALUES_POOL.find(v => v.name === n);
+      return { name: n, opposition: p ? (p.opposition || '') : '' };
+    });
+  }
+  return names || [];
+}
+
+// Write a validated value into the NPC object at a dotted path with [n]
+// segments ('bible.interests[0].name'). Returns whether anything was written.
+function applyNpcField(obj, path, value) {
+  const parts = [];
+  for (const bit of String(path).split('.')) {
+    const m = /^([^[\]]*)(?:\[(\d+)\])?$/.exec(bit);
+    if (!m || (m[1] === '' && m[2] === undefined)) return false;
+    const t = {};
+    if (m[1] !== '') t.k = m[1];
+    if (m[2] !== undefined) t.i = Number(m[2]);
+    parts.push(t);
+  }
+  if (parts.length === 0) return false;
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const p = parts[i];
+    if (p.k !== undefined) {
+      if (cur == null || typeof cur !== 'object') return false;
+      cur = cur[p.k];
+    }
+    if (p.i !== undefined) {
+      if (cur == null || !Array.isArray(cur) || p.i >= cur.length) return false;
+      cur = cur[p.i];
+    }
+  }
+  const last = parts[parts.length - 1];
+  if (last.i !== undefined) {
+    if (last.k !== undefined) {
+      if (cur == null || typeof cur !== 'object' || cur[last.k] == null) return false;
+      if (last.i >= cur[last.k].length) return false;
+      cur[last.k][last.i] = value;
+    } else {
+      if (cur == null || !Array.isArray(cur) || last.i >= cur.length) return false;
+      cur[last.i] = value;
+    }
+  } else {
+    if (cur == null || typeof cur !== 'object') return false;
+    cur[last.k] = value;
+  }
+  return true;
+}
+
+// D17 — the schema-guarded writer. Collects the Edit Mode inputs (scalar +
+// array textareas + pool selections), validates EACH through
+// validateNpcField (same schema the save validator uses), applies the valid
+// ones, logs the rejected ones, and recomputes the derived relationship
+// fields. Cannot produce a corrupt save: an invalid edit is refused, not
+// coerced.
+function doClassifiedsStudioSaveEdits() {
+  const gs = currentGameState;
+  const studio = studioState(gs);
+  const npcId = studio.viewingNpcId;
+  const npc = npcId ? gs.npcs[npcId] : null;
+  if (!npc) return;
+
+  const edits = [];
+  for (const el of document.querySelectorAll('[data-studio-edit-path]')) {
+    const path = el.getAttribute('data-studio-edit-path');
+    if (!path) continue;
+    const kind = el.getAttribute('data-studio-edit-kind');
+    let value;
+    if (kind === 'array') {
+      value = el.value.split('\n').map(s => s.trim()).filter(Boolean);
+    } else if (el.type === 'number') {
+      if (el.value === '') continue; // cleared number = "leave it"
+      value = Math.round(Number(el.value) * 100) / 100;
+    } else if (el.type === 'checkbox') {
+      value = el.checked;
+    } else {
+      value = el.value.trim();
+    }
+    edits.push({ path, value });
+  }
+  for (const [path, names] of Object.entries(studio.editSelections || {})) {
+    edits.push({ path, value: studioPoolNamesToValues(path, names) });
+  }
+
+  const errors = [];
+  let applied = 0;
+  let bibleTouched = false;
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  for (const { path, value } of edits) {
+    const res = validateNpcField(path, value);
+    if (!res.ok) { errors.push(`${path}: ${res.error}`); continue; }
+    // Skip no-op writes — an Edit Mode save also collects untouched inputs,
+    // and re-logging an identical value would fabricate a revision.
+    if (same(studioGetPath(npc, path), res.value)) continue;
+    if (applyNpcField(npc, path, res.value)) {
+      applied++;
+      if (path.startsWith('bible.')) {
+        bibleTouched = true;
+        if (!Array.isArray(npc.bibleChanges)) npc.bibleChanges = [];
+        npc.bibleChanges.push({ path, value: res.value, day: gs.meta.clock.day });
+      }
+    }
+  }
+
+  // One revision per save pass (D17: bibleRevision counts edit passes, not
+  // fields — a three-field save is one revision, three logged changes).
+  if (bibleTouched) npc.bibleRevision = (npc.bibleRevision || 0) + 1;
+
+  // Derived fields recompute from what was edited (D17); they are never
+  // written directly.
+  if (applied > 0 && npc.relPlayer) {
+    const d = deriveConversationPhase(npc.relPlayer);
+    npc.relPlayer.intimacyLevel = d.intimacyLevel;
+    npc.relPlayer.conversationPhase = d.conversationPhase;
+  }
+
+  studio.editMode = false;
+  studio.editSelections = {};
+  if (errors.length > 0) {
+    addLogEntry('system', `Studio: ${errors.length} field${errors.length === 1 ? '' : 's'} not saved — ${errors.slice(0, 3).join('; ')}${errors.length > 3 ? '…' : ''}`);
+  }
+  if (applied > 0) {
+    addLogEntry('narration', `Updated ${applied} field${applied === 1 ? '' : 's'} for ${npc.bible?.name || 'this character'}.`);
+  }
+  rerenderStudio();
+  if (applied > 0 || errors.length > 0) {
+    saveAtBoundary('classifieds-studio-edit', gs).catch(() => {});
   }
 }
 
@@ -755,6 +1003,14 @@ async function doImSend(npcId) {
     currentGameState.player = decayPlayerNeeds(currentGameState.player, 1, currentGameState);
     renderComputerScreen(currentGameState);
     render(currentGameState, currentSceneState);
+    // Plan X-5 Phase 2 (D17): IM is a judged surface. A text exchange lands
+    // in memory.recent stamped with whichever scene the player is standing
+    // in, so it is judged by the same Assessor on the same two triggers —
+    // this is the early-flush half, after the reply has painted (D6).
+    if (await assessSceneIfFull()) render(currentGameState, currentSceneState);
+    // Phase 3: and the Chronicler reads the same buffer on its own, wider
+    // window — a long text conversation teaches an NPC as much as a spoken one.
+    await chronicleIfFull();
     await saveAtBoundary('im-send', currentGameState);
   } finally {
     removeTyping();

@@ -52,7 +52,9 @@ CHARACTERS PRESENT (these are the ONLY people who can speak):
     // NPC Overhaul Phase 2 + Phase 4 (query for retrieval). Correctness plan
     // Phase 1 (D6): 'scene' selects the in-person half of memory.recent, so
     // this prompt never shows text messages back as spoken dialogue.
-    prompt += buildNpcBlockV2(npc, playerAction, 'scene');
+    // Knowledge-gossip Phase 1 (D2): pass the current day so retrieval's
+    // salience decay is read-time, not stale.
+    prompt += buildNpcBlockV2(npc, playerAction, 'scene', scene.day);
   }
 
   if (ambientNpcs.length > 0) {
@@ -83,17 +85,11 @@ CHARACTERS PRESENT (these are the ONLY people who can speak):
     { "speaker": "${activeNpcs[0]?.name || 'NPC'}", "text": "what they say, in their voice" }
   ],
   "internal": "optional: a brief thought an NPC has but doesn't say aloud",
-  "relationshipDeltas": {
-    "${activeNpcs[0]?.id || 'npc_id'}": { "trust": 0.0, "affection": 0.0, "tension": 0.0, "respect": 0.0, "comfort": 0.0, "desire": 0.0 }
-  },
   "moodDeltas": {
     "${activeNpcs[0]?.id || 'npc_id'}": 0.0
   },
   "moodReasons": {
     "${activeNpcs[0]?.id || 'npc_id'}": "optional: why their mood changed (e.g. 'frustrated about work', 'amused by the joke')"
-  },
-  "memoryAdditions": {
-    "${activeNpcs[0]?.id || 'npc_id'}": { "facts": [], "episodes": [], "grievances": [], "resolveGrievances": [] }
   },
   "topic": "optional: what this exchange was about (e.g. 'cooking', 'personal/feelings')",
   "advocateFor": "optional: use ONLY if an NPC present (or you, as the player) naturally suggests someone should move into the apartment. Set it to that person's NAME as listed in the speaker's [Relationships with others] section, and write the suggestion into their dialogue. Only use it when the speaker is close to that person (high affection/trust there) — a stranger shouldn't be vouched for. If set, narrate the suggestion in dialogue; the game turns it into a real move-in offer.",
@@ -106,9 +102,9 @@ CRITICAL RULES:
 - actions are physical actions in asterisks (e.g. "*leans against the counter*"). 0-3 per response. Omit if none.
 - internal is optional — a brief thought the NPC has but doesn't voice. Omit if none.
 - topic is optional — a short label for what this exchange was about. Used to track conversation variety.
-- Relationship deltas are tiny: trust/affection/tension/respect/comfort/desire range -0.3 to +0.3. Mood -0.2 to +0.2.
-- If nothing changes, set all deltas to 0.0 or omit the field.
-- memoryAdditions: facts/episodes/grievances the NPC should remember from this exchange. resolveGrievances: text of grievances that were addressed this turn. Omit if nothing notable.
+- Mood deltas are tiny: -0.2 to +0.2. If nobody's mood changed, omit the field.
+- Do NOT score the relationship. You write what happens; what it was worth is judged separately, afterwards, by someone who can read the whole conversation.
+- Do NOT decide what anyone remembers. What the conversation taught them is extracted separately, afterwards, from the whole day's transcript.
 - effects is optional: a list of world-change lines drawn ONLY from the OPTIONAL WORLD CHANGES list above (e.g. "ADJUST_NEED player energy -5"). Omit it or leave it empty if nothing applies. Never invent a new effect type or reference someone not listed above.
 - NEVER emit a hunger change for the player. Eating is an item-driven action the player takes; narration can describe a meal, but it must not feed them.
 - advocateFor is optional and RARE — only when someone naturally suggests moving in (usually a resident close to their friend/partner). One NPC can raise it per turn, max. Omit unless it genuinely fits the conversation.
@@ -140,7 +136,7 @@ function buildImPrompt(context, message) {
 
 ${buildStyleSection(context.contentConfig)}
 ${buildContentSection(context.contentConfig)}
-${buildNpcBlockV2(npc, message, 'im')}
+${buildNpcBlockV2(npc, message, 'im', context.day)}
 Texting style: ${npc.bible.speech.textingStyle}.
 ${transcript ? `\nTHE CONVERSATION SO FAR (oldest first — "You" is ${npc.name}, "Them" is the player):\n${transcript}\n` : ''}
 THE PLAYER JUST TEXTED: "${message}"
@@ -148,19 +144,17 @@ THE PLAYER JUST TEXTED: "${message}"
 RESPOND WITH VALID JSON IN THIS EXACT FORMAT (no other text, no markdown):
 {
   "dialogue": [ { "speaker": "${npc.name}", "text": "their reply, in their texting style" } ],
-  "relationshipDeltas": { "${npc.id}": { "trust": 0.0, "affection": 0.0, "tension": 0.0, "respect": 0.0 } },
   "moodDeltas": { "${npc.id}": 0.0 },
   "moodReasons": { "${npc.id}": "optional: why their mood changed" },
-  "memoryAdditions": { "${npc.id}": { "facts": [], "episodes": [] } },
   "topic": "optional: what this exchange was about",
   "advocateFor": "optional: use ONLY if the NPC naturally suggests in their reply that someone should move into the apartment — set it to that person's NAME as listed in their [Relationships with others] section. Only when they're close to that person. Omit otherwise."
 }
 
 CRITICAL RULES:
 - Write only what they'd actually text back — short, in their voice (verbosity ${npc.bible.speech.verbosity}, formality ${npc.bible.speech.formality}), matching their texting style.
-- Relationship deltas are tiny: -0.3 to +0.3. Mood -0.2 to +0.2. If nothing changes, omit them.
+- Mood deltas are tiny: -0.2 to +0.2. Omit if their mood didn't change. Do NOT score the relationship — that is judged separately, afterwards.
 - moodReasons: optional — why their mood changed. Omit if no mood delta.
-- memoryAdditions: optional — facts/episodes worth remembering. Omit if nothing notable.
+- Do NOT decide what they remember — that is extracted separately, afterwards.
 - topic is optional — a short label for what this exchange was about.
 - advocateFor is optional and RARE — only a natural, earned suggestion from this NPC, never forced.
 - 1-3 short messages max, not a paragraph. No narration field — dialogue only.`;
@@ -251,9 +245,11 @@ function possessionsLine(npc) {
 // (not pre-built with null in assembleContext) so retrieval actually fires.
 // Correctness plan Phase 1 (D6): `channel` ('scene' | 'im') selects which
 // conversation surface's history the [Memories — recent] line draws from.
-function buildNpcBlockV2(npc, query, channel) {
+// Knowledge-gossip Phase 1 (D2): `day` (the current in-game day, optional)
+// feeds read-time salience decay in the retrieval rank.
+function buildNpcBlockV2(npc, query, channel, day) {
   const b = npc.bible;
-  const memV2 = buildMemorySliceV2(npc, query, channel || 'scene');  // retrieval fires with real query
+  const memV2 = buildMemorySliceV2(npc, query, channel || 'scene', day);  // retrieval fires with real query
   const rel = npc.relPlayer;
 
   let block = `\n=== ${npc.name} (ID: ${npc.id}) ===\n`;
@@ -384,7 +380,8 @@ function buildNpcBlockV2(npc, query, channel) {
       block += `[Memories — retrieved]: ${parts.join(' | ')}\n`;
     }
 
-    // [Memories — facts] — all valid facts
+    // [Memories — facts] — the FACT_DISPLAY window (D15): pinned + significant
+    // always, then retrieved-top, then most-recent, capped at maxTotal.
     if (memV2.facts.length > 0) {
       block += `[Memories — facts]: ${memV2.facts.join('; ')}\n`;
     }
@@ -396,6 +393,22 @@ function buildNpcBlockV2(npc, query, channel) {
 
     // [Memories — summary]
     if (memV2.summary) block += `[Memories — summary]: ${memV2.summary}\n`;
+  }
+
+  // [Open question] — knowledge-gossip Phase 4 (D13), the bridge. An NPC
+  // holding an open question at raiseThreshold raises it the next time the
+  // player talks to them: the model renders the D9 record's topic on the
+  // player's time budget, in a call that was going to happen anyway (D8's
+  // LLM-at-moment-of-use — no background rumination call exists). Only NPCs
+  // actually in the conversation reach buildNpcBlockV2 (ambient NPCs get a
+  // one-line sketch in the prompt builders), so an ambient NPC's question
+  // cannot leak into a scene line. Legacy saves may hold id-shaped targets
+  // (pre-Phase-4 records stored npcIds); those are filtered rather than
+  // rendered as internal ids.
+  const openQ = topOpenQuestion(npc);
+  if (openQ) {
+    const names = (openQ.targets || []).filter(t => t && !/^npc_/.test(String(t)));
+    block += `[Open question]: You've been wondering about ${openQ.topic || 'something'} and it's been nagging at you — bring it up naturally over the next few exchanges (do NOT blurt it out in your first reply). ${names.length > 0 ? `You'd expect ${names.join(' or ')} to know more about it. ` : ''}Ask what they know.\n`;
   }
 
   // [Style tracking] — from the V2 slice (styleDirective() in llm.js is dead code,
@@ -427,6 +440,286 @@ function needsLine(needs) {
   if ((needs.stimulation || 50) < 30) flags.push('bored, restless');        // NPC Overhaul Phase 6
   const suffix = flags.length > 0 ? ` — ${flags.join(', ')}` : '';
   return `Needs: hunger ${Math.round(needs.hunger)}%, energy ${Math.round(needs.energy)}%, hygiene ${Math.round(needs.hygiene)}%, social ${Math.round(needs.social)}%, comfort ${Math.round(needs.comfort || 50)}%, stimulation ${Math.round(needs.stimulation || 50)}%${suffix}\n`;
+}
+
+// ===== Plan X-5 Phase 2 — the Assessor =====
+// A SECOND pass, over a window of exchanges that have already happened, whose
+// only job is to score what they did to the relationship. It writes no
+// dialogue, and the writer above no longer scores itself (D1/D5).
+//
+// The reason this is a separate call and not a field on the writing one: an
+// NPC who has just written a warm, generous line is the worst available judge
+// of whether the exchange earned warmth, and the deltas were emitted in the
+// same generation as the dialogue — describing intent, before the line
+// existed. The scoring happened before there was anything to score.
+//
+// The reason it is WINDOWED (D2) is drift. Judging per message multiplies any
+// small optimistic bias by every exchange in the game, which is monotonic
+// relationship inflation regardless of what the player does. A window makes
+// "nothing really changed here" the easy answer, and it lets the judge see an
+// arc — the player pushed three times and then backed off is legible across
+// five exchanges and invisible in any one of them.
+
+// One character's line in the roster: who they are, where the relationship
+// currently sits as WORDS (D10), and what they and the player actually said.
+function buildAssessorNpcBlock(gameState, npcId, entries) {
+  const npc = gameState.npcs[npcId];
+  if (!npc) return '';
+  const name = npc.bible?.name || npcId;
+  const rel = npc.relPlayer || {};
+  const transcript = formatWindowTranscript(entries, { npcName: name });
+  return `\n=== ${name} (ID: ${npcId}) ===
+How they see the player right now: ${rel.conversationPhase || 'early'} — ${x5RelationshipLabels(rel)}
+What was said (oldest first):
+${transcript || '(nothing on record)'}\n`;
+}
+
+// The rubric. Every load-bearing line here is a locked decision:
+//
+//   D8  zero is the modal answer, and the prompt leads with it. A judge that
+//       always finds some movement is the single most likely way this plan
+//       fails silently — it looks alive and is a straight line.
+//   D9  tension's valence is stated, twice. deriveConversationPhase SUBTRACTS
+//       it, so a sign error here inverts the relationship model rather than
+//       merely miscounting it.
+//   D10 labels in, integers out. The state above is words; the answer is
+//       integers. The prompt never shows a second number scale.
+//   D7  integers on the wire. A malformed integer is obvious; a malformed
+//       float is a plausible 10x error that parses cleanly.
+function buildAssessorPrompt(gameState, win) {
+  const clamp = X5.deltaClamp;
+  const roster = (win.npcIds || []).map(id => buildAssessorNpcBlock(gameState, id, win.byNpc[id]?.entries)).join('');
+  const idList = (win.npcIds || []).map(id => `"${id}"`).join(', ');
+  const sample = (win.npcIds || [])[0] || 'npc_id';
+
+  return `You are scoring a conversation in a slice-of-life apartment simulation. You did NOT write it — someone else did, and it has already happened. Your only job is to judge what it did to how each character below feels about the player.
+
+MOST CONVERSATIONS CHANGE NOTHING. Small talk, a passing question, sorting out the dishes, a greeting — all zeros. That is the correct and most common answer. Only move an axis when something in the transcript actually earned it: a confidence shared, a boundary pushed, a kindness, a cruelty, a promise kept or broken, a real moment between two people.
+
+Answer with whole numbers from -${clamp} to +${clamp} on each axis:
+- 0 — nothing happened on this axis. Most axes, most windows.
+- 1 to 3 — a small real shift.
+- 4 to 6 — a notable one; something in the conversation clearly landed.
+- 7 to ${clamp} — rare. Something that genuinely changes where these two stand.
+
+THE AXES:
+- trust — do they believe the player is honest and reliable? Moves on being confided in, on promises kept or broken, on being lied to or levelled with.
+- affection — do they like the player? Moves on warmth, on humour that lands, on generosity, on being dismissed or needled.
+- tension — friction between them. UP IS BAD: positive means the exchange left things worse (an argument, a boundary pushed, a sting left hanging). NEGATIVE means friction was defused — an apology accepted, air cleared. If nothing was strained either way, 0.
+- respect — do they take the player seriously? Moves on competence, on integrity, on holding a position, on embarrassing yourself.
+- comfort — physical and social ease around the player. Moves slowly, on relaxed and unforced contact, and drops on anything that makes them self-conscious.
+- desire — attraction. Moves on flirtation that actually lands, on intimacy, on being noticed. 0 unless the exchange genuinely carried it.
+
+WHO WAS IN IT:
+${roster}
+RESPOND WITH VALID JSON AND NOTHING ELSE — one object per character ID:
+{ ${(win.npcIds || []).map(id => `"${id}": { "trust": 0, "affection": 0, "tension": 0, "respect": 0, "comfort": 0, "desire": 0 }`).join(', ') || `"${sample}": { "trust": 0, "affection": 0, "tension": 0, "respect": 0, "comfort": 0, "desire": 0 }`} }
+
+Example — they talked about whose turn it was to buy washing powder (the ordinary case):
+{ "${sample}": { "trust": 0, "affection": 0, "tension": 0, "respect": 0, "comfort": 0, "desire": 0 } }
+
+Example — they admitted something they had been avoiding for weeks and the player was kind about it:
+{ "${sample}": { "trust": 5, "affection": 3, "tension": -2, "respect": 0, "comfort": 2, "desire": 0 } }
+
+Example — the player pushed a sore subject after being asked twice to drop it:
+{ "${sample}": { "trust": -2, "affection": -1, "tension": 6, "respect": -3, "comfort": -2, "desire": 0 } }
+
+RULES:
+- Use these character IDs exactly and no others: ${idList}.
+- Whole numbers only, -${clamp} to +${clamp}. Never a decimal. Never a percentage.
+- Judge the WHOLE window as one arc, not line by line. What it ended up being is what counts.
+- Judge what the exchange EARNED, not what would be pleasant. Effort the player put in that landed badly still landed badly.
+- Lines marked "(text)" were sent as text messages, not said in person.
+- Do not explain yourself, do not add commentary, do not use markdown. JSON only.`;
+}
+
+// The call. Returns { ok, deltas } where `deltas` is a relationshipDeltas
+// proposal fragment ready for validateProposal/applyProposal (D4).
+//
+// D14 — a failed pass is a NO-OP, and this function is where "failed" is
+// decided. It never throws and never retries: a doubled delta is worse than a
+// missing one, and there is nothing to fall back TO now that the writer has
+// stopped scoring (D5). `ok: false` and `ok: true` with empty deltas are
+// deliberately different things — the second is the judge saying nothing
+// changed (D8) — but the caller marks the window judged either way.
+//
+// LLM never writes state (this file's contract): the deltas are returned, and
+// UI's runAssessorPass hands them to NPC's applyProposal.
+async function callAssessor(gameState, win) {
+  const npcIds = (win?.npcIds || []).filter(id => gameState?.npcs?.[id]);
+  if (npcIds.length === 0) return { ok: false, deltas: {}, reason: 'empty window' };
+  try {
+    const response = await root.generateText({
+      instruction: buildAssessorPrompt(gameState, win),
+      startWith: '{',
+    });
+    // soleNpcId recovers the flat { "trust": 2 } shape a one-person window
+    // invites. With two people in the room there is nobody to attribute a
+    // flat answer to, and guessing whose relationship moved is worse than
+    // not moving one — parseAssessorReply returns null and this is a no-op.
+    const parsed = parseAssessorReply(response, { soleNpcId: npcIds.length === 1 ? npcIds[0] : null });
+    if (parsed === null) {
+      console.warn('Assessor reply unparseable; window judged as no-op');
+      return { ok: false, deltas: {}, reason: 'unparseable' };
+    }
+    return { ok: true, deltas: toProposalDeltas(parsed, npcIds) };
+  } catch (e) {
+    console.warn('Assessor call failed:', e.message);
+    return { ok: false, deltas: {}, reason: e.message };
+  }
+}
+
+// ===== Plan X-5 Phase 3 — the Chronicler =====
+// The second judging pass. Where the Assessor asks "what did that do to how
+// they feel", this one asks "what does this character now KNOW that they did
+// not know before" — and it is the only route conversation has into the
+// belief tier now that the writer has stopped writing memory (D5).
+//
+// The reason it is a separate call from the Assessor and not a second field
+// on it: they window differently on purpose (D3). Relationship movement is
+// legible over a scene; a fact is not. Facts extract more accurately from
+// more context, and a wider window dedupes for free — a thing raised three
+// times in one evening is one fact rather than three. So the Chronicler reads
+// a DAY per character, and the Assessor reads a room.
+//
+// The reason it exists at all is measured, not theoretical. Rumination's
+// inference rules key on episode `participants` and `emotionalTag`; the
+// ambient writer supplied neither, and a saturated 30-episode tier per
+// resident yielded 0 inferred facts and 0 open questions. Everything below
+// exists to make those two fields arrive populated (D13).
+
+// The extractor's vocabulary for emotionalTag, read from the table that
+// actually weighs it rather than restated here (README rule 5). An invented
+// tag is normalised to '' by x5NormalizeEmotionalTag, which costs the episode
+// its repetition-rule membership — so the prompt has to offer the real list.
+// 'default' is excluded: it is the weight-table fallback, not a theme anyone
+// would name.
+function chroniclerTagVocabulary() {
+  return Object.keys(EMOTIONAL_WEIGHTS).filter(t => t !== 'default');
+}
+
+// What this character already believes about the player, so the extractor can
+// spend its slots on what is NEW. D8's modal answer — "nothing new was said"
+// — is only expressible if the model can see what "already known" means.
+// Bounded: the whole point is a cheap orientation list, not a second memory
+// prompt. The enforcement is toProposalMemory's dedupe (D25), not this.
+function buildChroniclerKnownBlock(npc) {
+  const facts = (npc.memory?.facts || [])
+    .filter(f => f && f.valid !== false && f.text)
+    .slice(-FACT_DISPLAY.maxTotal)
+    .map(f => `- ${f.text}`);
+  const grievances = getUnresolvedGrievances(npc).map(g => `- ${g.text}`);
+  let out = '';
+  if (facts.length > 0) out += `\nWHAT THEY ALREADY BELIEVE (do not record any of this again):\n${facts.join('\n')}\n`;
+  if (grievances.length > 0) {
+    out += `\nUNRESOLVED GRIEVANCES THEY ARE CARRYING (quote the text EXACTLY to resolve one):\n${grievances.join('\n')}\n`;
+  }
+  return out;
+}
+
+// The rubric. Every load-bearing line is a locked decision:
+//
+//   D8  zero is the modal answer. Most conversations teach nobody anything,
+//       and an extractor that always finds something fills BELIEF.maxFacts
+//       with trivia in a week.
+//   D11 a claim is not a truth. What lands is "the player SAYS X", held at a
+//       confidence below certainty, because the alternative is that the
+//       player lies once and the gossip layer propagates it as established.
+//   D12 importance may declare that something matters and may never reach the
+//       bar that makes it permanent (>= MEMORY_IMPORTANCE.significant grants
+//       `pinned`, and pinned facts never evict).
+//   D13 participants and emotionalTag are MANDATORY on every episode. This is
+//       the cold-start fix and the whole reason Plan 5 sequences behind this.
+//
+// npcId is a separate parameter rather than read off the record: NPCs in
+// gameState.npcs are keyed by id and do not carry one on themselves (the same
+// reason findOpenQuestionTargets has to derive the caller's id by identity).
+function buildChroniclerPrompt(npc, npcId, win) {
+  const name = npc.bible?.name || 'this character';
+  const id = npcId || 'npc_id';
+  const transcript = formatWindowTranscript(win?.entries, { npcName: name });
+  const tags = chroniclerTagVocabulary();
+
+  return `You are recording what one character in a slice-of-life apartment simulation learned from talking to the player. You did NOT write this conversation — it has already happened. You are ${name}'s memory, not their voice: write nothing they would say, only what they now know.
+
+MOST CONVERSATIONS TEACH NOBODY ANYTHING. Small talk, sorting out the dishes, a greeting, a joke that went nowhere — nothing to record. Empty lists are the correct and most common answer. Only write something down when the player actually revealed something, or something happened between them worth remembering.
+
+WHAT ${name.toUpperCase()} HEARD (oldest first — "Player" is the person they were talking to; lines marked "(text)" arrived as text messages):
+${transcript || '(nothing on record)'}
+${buildChroniclerKnownBlock(npc)}
+WHAT TO RECORD:
+
+facts — things ${name} now believes, at most ${X5.maxFactsPerWindow}. Write them as ATTRIBUTED CLAIMS, not as truths: "The player says they grew up in Leeds", not "The player grew up in Leeds". ${name} heard it said; they did not verify it. Someone can lie to them, and they should be able to repeat it later as something they were told.
+  - text: one sentence, third person, naming the player as "the player".
+  - category: one lowercase word for what it is about — work, family, history, money, health, romance, home. Use "other" if nothing fits.
+  - confidence: 0 to ${X5.factConfidenceMax}, how sure ${name} can reasonably be. ${X5.factConfidenceDefault} for an ordinary thing the player said about themselves. Higher only for something they SHOWED rather than claimed. Lower for something offhand, hedged, or possibly a joke. Never 1 — they were told, not shown.
+  - importance: 0 to ${X5.factImportanceCeiling}. ${MEMORY_IMPORTANCE.social} for ordinary personal detail, ${MEMORY_IMPORTANCE.conversational} for something that would change how they see the player, ${X5.factImportanceCeiling} only for something that reframes the relationship.
+
+episodes — at most ${X5.maxEpisodesPerWindow}: the conversation itself as a thing that happened, in one sentence, from ${name}'s side. Skip entirely if the exchange was forgettable.
+  - text: what happened between them, not what was said verbatim.
+  - participants: exactly ["${id}", "player"].
+  - emotionalTag: REQUIRED, and one of exactly these words: ${tags.join(', ')}. Pick the one closest to how the exchange felt to ${name}. An invented word is discarded and the episode loses its meaning.
+
+grievances — at most ${X5.maxGrievancesPerWindow}: only if the player did something in this conversation that ${name} is going to hold against them. severity 0 to 1. Rare.
+
+resolveGrievances — the EXACT text of any grievance listed above that this conversation actually settled. Not "they were nice about it" — actually addressed, apologised for, or made right.
+
+RESPOND WITH VALID JSON AND NOTHING ELSE:
+{
+  "facts": [ { "text": "The player says they grew up in Leeds", "category": "history", "confidence": ${X5.factConfidenceDefault}, "importance": ${MEMORY_IMPORTANCE.social} } ],
+  "episodes": [ { "text": "They talked about where the player grew up", "participants": ["${id}", "player"], "emotionalTag": "warmth" } ],
+  "grievances": [],
+  "resolveGrievances": []
+}
+
+Example — they sorted out whose turn it was to buy washing powder (the ordinary case):
+{ "facts": [], "episodes": [], "grievances": [], "resolveGrievances": [] }
+
+RULES:
+- Record what was SAID in this transcript. Do not infer, do not embellish, do not invent a detail to round out a fact.
+- Nothing already in the believe-list above. If the conversation only repeated it, that is not a new fact.
+- Do not record what ${name} said about themselves — this is their memory of the PLAYER and of what passed between them.
+- Decimals for confidence and importance. Never a percentage.
+- Do not explain yourself, do not add commentary, do not use markdown. JSON only.`;
+}
+
+// The call. Returns { ok, additions } where `additions` is a memoryAdditions
+// proposal fragment keyed by npcId, ready for validateProposal/applyProposal
+// (D4) — the same door the writer used to come through, and the reason there
+// is no second ingestion path to get wrong.
+//
+// D14 — a failed pass is a NO-OP and this is where "failed" is decided. It
+// never throws and never retries. As with the Assessor, `ok: false` and
+// `ok: true` with nothing to write are different things: the second is the
+// extractor correctly saying the conversation taught nobody anything (D8).
+// The caller marks the window processed either way.
+//
+// LLM never writes state: the fragment is returned, and UI's
+// runChroniclerPass hands it to NPC's applyProposal.
+async function callChronicler(gameState, npcId, win) {
+  const npc = gameState?.npcs?.[npcId];
+  if (!npc) return { ok: false, additions: {}, reason: 'no such npc' };
+  if (!win || !(win.entries || []).length) return { ok: false, additions: {}, reason: 'empty window' };
+  try {
+    const response = await root.generateText({
+      instruction: buildChroniclerPrompt(npc, npcId, win),
+      startWith: '{',
+    });
+    const parsed = parseChroniclerReply(response);
+    if (parsed === null) {
+      console.warn('Chronicler reply unparseable; window marked processed as a no-op');
+      return { ok: false, additions: {}, reason: 'unparseable' };
+    }
+    // `npc` is passed so ingestion can drop anything this character already
+    // believes (D25) — the prompt asks, this enforces.
+    return {
+      ok: true,
+      additions: toProposalMemory(parsed, npcId, { day: gameState.meta?.clock?.day ?? 0, npc }),
+    };
+  } catch (e) {
+    console.warn('Chronicler call failed:', e.message);
+    return { ok: false, additions: {}, reason: e.message };
+  }
 }
 
 // --- Call LLM and parse response ---
@@ -499,6 +792,14 @@ async function callLLM(context, playerAction) {
       }
     }
 
+    // D5 — the writer does not grade itself, and asking nicely is not the
+    // enforcement. The prompt above no longer requests relationshipDeltas,
+    // but a model will volunteer them from habit, and applyProposal would
+    // apply them — quietly restoring the actor-grades-their-own-performance
+    // loop this plan exists to break. The Assessor is the only source of
+    // relationship movement from conversation now.
+    proposal = stripWriterJudgement(proposal);
+
     // Normalize: if LLM returned unexpected keys, wrap as narration
     if (!proposal.narration && !proposal.dialogue) {
       const rawText = proposal.text || proposal.action || proposal.response || JSON.stringify(proposal);
@@ -552,6 +853,7 @@ async function callImLLM(context, message) {
     }
 
     if (!proposal.dialogue) return { valid: false, errors: ['IM response missing dialogue'], proposal: null };
+    proposal = stripWriterJudgement(proposal);   // D5 — same reason as callLLM's
     const { valid, errors } = validateProposal(proposal, context);
     if (!valid) { console.warn('IM proposal failed validation:', errors); return { valid: false, errors, proposal: null }; }
     return { valid: true, errors: null, proposal };

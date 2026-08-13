@@ -89,6 +89,51 @@ for (const r of ['bathroom_a', 'hallway_a', 'bedroom_player', 'living_room', 'ki
   console.log(`  from bathroom_a -> ${r.padEnd(16)} hops ${hops('bathroom_a', r)}  mult ${reach.toFixed(4)}  (a 0.85 source arrives ${(reach * 0.85).toFixed(3)})`);
 }
 
+// The emotional channel (npc-initiative-plan.md Phase 1). These are the only
+// signals in the game emitted by a MOOD rather than by an act, and the brief
+// they were placed against was "noticeable in the room, not through a closed
+// door" — with the slam as the deliberate exception, because an expression
+// that reaches you somewhere else is what makes it a slam. Intensities are
+// read from the DRIVE_DEFS rules that emit them, so retuning the table
+// retunes this table.
+console.log('\n=== EXPRESSIONS: how far a mood carries (initiative plan Phase 1) ===');
+const EXPR = JSON.parse(api(`
+  (() => {
+    const out = {};
+    for (const d of Object.values(DRIVE_DEFS)) {
+      if (!d.expresses) continue;
+      for (const r of (Array.isArray(d.expresses) ? d.expresses : [d.expresses])) out[r.signal] = r.intensity;
+    }
+    return JSON.stringify(out);
+  })()
+`));
+api(`__setDoor('bedroom_2', 'unlocked');`);
+const att = api(`getPlayerPerception(__gs.player)`);
+const floorSound = api(`SIGNAL_TUNING.noticeFloor.sound`);
+console.log(`  (player attention ${att.toFixed(2)}, sound notice floor ${floorSound})`);
+// The four cases the intensities were placed against. `dining` is one open hop
+// from the kitchen and `living_room` is two — hops are asked of the adjacency
+// graph rather than assumed, because the first draft of this section labelled a
+// two-hop path as one and read as a sigh that carried half as far as it does.
+const hop1 = api(`reachMultipliers(__gs, 'dining', 'sound')['kitchen'] || 0`);
+const hop2 = api(`reachMultipliers(__gs, 'living_room', 'sound')['kitchen'] || 0`);
+const doorHop = api(`reachMultipliers(__gs, 'bedroom_2', 'sound')['hallway_a'] || 0`);
+api(`__setDoor('bedroom_2', 'locked');`);
+const lockHop = api(`reachMultipliers(__gs, 'bedroom_2', 'sound')['hallway_a'] || 0`);
+api(`__setDoor('bedroom_2', 'unlocked');`);
+console.log(`  (hops: dining is ${hops('kitchen', 'dining')} from the kitchen, living_room is ${hops('kitchen', 'living_room')})`);
+console.log('  signal          source   same room     1 open hop    2 open hops   closed door   locked door');
+for (const [sig, intensity] of Object.entries(EXPR)) {
+  const verdict = (m) => {
+    const arrived = intensity * m;
+    return `${arrived.toFixed(3)} ${arrived * att >= floorSound ? 'HEARD' : 'no   '}`;
+  };
+  console.log(`  ${sig.padEnd(15)} ${intensity.toFixed(2)}    ` +
+    [1, hop1, hop2, doorHop, lockHop].map(m => verdict(m).padEnd(14)).join(''));
+}
+console.log('  decay: ' + Object.keys(EXPR).map(s =>
+  `${s} lasts ~${Math.ceil(EXPR[s] / api(`SIGNAL_DEFS['${s}'].decayPerTick`))} tick(s)`).join(', '));
+
 console.log('\n=== Attention spread across the cast ===');
 console.log(`  player               ${api(`getPlayerPerception(__gs.player)`).toFixed(2)}`);
 for (const [id, name, att] of api(`

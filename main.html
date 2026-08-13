@@ -2719,6 +2719,33 @@ body {
 .rl-studio-pool-btn { padding: 2px 6px; font-size: var(--fs-xs); }
 .rl-studio-pool-btn.active { background: var(--color-accent); color: var(--color-bg); border-color: var(--color-accent); }
 .rl-studio-actions { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
+/* Phase 5 (D12/D16/D17) — the studio's profile surface: mode bar, tabs,
+   edit-mode rows, memory facts, gallery, character rows. */
+.rl-studio-modebar { display: flex; gap: var(--space-2); margin-bottom: var(--space-2); }
+.rl-studio-modebar-active { background: var(--color-accent); color: var(--color-bg); border-color: var(--color-accent); }
+.rl-studio-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: var(--space-2) 0; }
+.rl-studio-tab { padding: 4px 12px; font-size: var(--fs-xs); border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-card); color: var(--color-text); cursor: pointer; }
+.rl-studio-tab.active { background: var(--color-accent); color: var(--color-bg); border-color: var(--color-accent); font-weight: 600; }
+.rl-studio-tabcontent { display: flex; flex-direction: column; gap: var(--space-2); }
+.rl-studio-readval { color: var(--color-text); }
+.rl-studio-readrow { display: flex; gap: var(--space-2); padding: 2px 0; border-bottom: 1px dashed var(--color-border); align-items: baseline; }
+.rl-studio-readrow .rl-studio-label { flex: 0 0 150px; margin-bottom: 0; text-align: right; text-transform: capitalize; }
+.rl-studio-readrow .rl-studio-readval { flex: 1; }
+.rl-memory-fact { padding: 4px 0; border-bottom: 1px dashed var(--color-border); }
+.rl-memory-fact-text { color: var(--color-text); }
+.rl-studio-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--space-2); }
+.rl-studio-gallery-tile { text-align: center; }
+.rl-studio-gallery-canvas { position: relative; aspect-ratio: 3 / 4; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-sm); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.rl-studio-gallery-letter { font-size: var(--fs-lg); font-weight: 700; color: var(--color-text-dim); }
+.rl-studio-gallery-loader { position: absolute; bottom: 4px; right: 8px; font-size: var(--fs-xs); color: var(--color-text-dim); animation: pulse 1.2s infinite; }
+.rl-studio-gallery-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.3s; }
+.rl-studio-gallery-img.loaded { opacity: 1; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+.rl-studio-charrow { display: flex; align-items: center; gap: var(--space-2); padding: 6px 4px; border-bottom: 1px solid var(--color-border); }
+.rl-studio-char-avatar { width: 34px; height: 34px; font-size: var(--fs-sm); margin-bottom: 0; flex-shrink: 0; }
+.rl-studio-char-info { flex: 1; min-width: 0; }
+.rl-studio-char-name { font-weight: 600; font-size: var(--fs-sm); }
+.rl-studio-profile-header { margin-bottom: var(--space-2); }
 
 /* Phase 6: Full profile display */
 .rl-profile-sketch { font-style: italic; color: var(--color-text-dim); padding: var(--space-1) 0; border-top: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); margin: var(--space-2) 0; }
@@ -3634,17 +3661,17 @@ body {
      from CONFIG): CONFIG → ICONS → DEFS.WORLD → DEFS.ACTIONS →
      DEFS.COMPUTER → DEFS.MENU → ORBITAL → STATE → SIM → COMMITMENTS →
      WORLD → ITEMS → INVENTORY → EFFECTS → ACTIONS → SKILLS → COMPUTER →
-     NPC → PROMPT → LLM → IMAGE → RENDER → RENDER.COMPUTER →
+     NPC → RUMINATION → PROMPT → LLM → IMAGE → RENDER → RENDER.COMPUTER →
      RENDER.DESKTOP → UI → UI.COMPUTER → AFTERHOURS → UI.WINDOWMANAGER →
      UI.PHONE → MENU → BOOT (the BOOT call moved from the bottom of ui.js
      to the bottom of menu.js, the last script, so boot() can call into
      MENU/IMAGE). Functions calling into a LATER script are fine either way
      — those calls only happen at runtime, after every script below has
      finished loading. -->
-<script src="src/srcfiles/config.js?v=67"></script>
+<script src="src/srcfiles/config.js?v=85"></script>
 <script src="src/srcfiles/icons.js?v=14"></script>
 <script src="src/srcfiles/defs.world.js?v=19"></script>
-<script src="src/srcfiles/defs.actions.js?v=16"></script>
+<script src="src/srcfiles/defs.actions.js?v=17"></script>
 <script src="src/srcfiles/defs.computer.js?v=15"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
@@ -3653,12 +3680,12 @@ body {
 <!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/srcfiles/orbital.js?v=1"></script>
-<script src="src/srcfiles/state.js?v=31"></script>
-<script src="src/srcfiles/sim.js?v=36"></script>
+<script src="src/srcfiles/state.js?v=34"></script>
+<script src="src/srcfiles/sim.js?v=44"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
-<script src="src/srcfiles/commitments.js?v=1"></script>
+<script src="src/srcfiles/commitments.js?v=2"></script>
 <script src="src/srcfiles/world.js?v=16"></script>
 <script src="src/srcfiles/signals.js?v=3"></script>
 <script src="src/srcfiles/scene.js?v=2"></script>
@@ -3668,33 +3695,50 @@ body {
      time) and before render.js/ui.js, which call it at runtime. -->
 <script src="src/srcfiles/inventory.js?v=5"></script>
 <script src="src/srcfiles/effects.js?v=17"></script>
-<script src="src/srcfiles/drives.js?v=14"></script>
-<script src="src/srcfiles/actions.js?v=12"></script>
+<script src="src/srcfiles/drives.js?v=21"></script>
+<!-- NPC utility scoring (npc-cognition-plan.md). Loads after drives.js: it
+     reuses driveGateValue / isOnCooldown / DRIVE_COOLDOWN_KEY from it. -->
+<script src="src/srcfiles/cognition.js?v=5"></script>
+<!-- NPC initiative (npc-initiative-plan.md Phase 3). Loads after cognition.js:
+     scoreCandidates calls scoreOvertures, and evaluateDrives calls the writers
+     here for the tick it wins. -->
+<script src="src/srcfiles/overture.js?v=2"></script>
+<script src="src/srcfiles/actions.js?v=13"></script>
 <script src="src/srcfiles/intent.js?v=7"></script>
 <script src="src/srcfiles/skills.js?v=8"></script>
 <script src="src/srcfiles/stealth.js?v=7"></script>
 <script src="src/srcfiles/time.js?v=13"></script>
-<script src="src/srcfiles/computer.js?v=37"></script>
+<script src="src/srcfiles/computer.js?v=40"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
-<script src="src/srcfiles/tracker.js?v=3"></script>
+<script src="src/srcfiles/tracker.js?v=4"></script>
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
 <script src="src/srcfiles/phone.js?v=9"></script>
-<script src="src/srcfiles/npc.js?v=19"></script>
+<script src="src/srcfiles/npc.js?v=25"></script>
+<!-- Knowledge-gossip Phase 3: deterministic rumination (inference rules +
+     open-question lifecycle) — after npc.js (reuses addMemoryFact/
+     backfillFactRecordV2/factTopicPhrase/factInterestRelevance/factEmotionalWeight)
+     and called by sim.js at runtime only. -->
+<script src="src/srcfiles/rumination.js?v=4"></script>
 <script src="src/srcfiles/prompt.js?v=8"></script>
-<script src="src/srcfiles/llm.js?v=17"></script>
+<script src="src/srcfiles/llm.js?v=21"></script>
+<!-- Plan X-5 Phase 1: the wire for conversation consequences — parsing,
+     clamping, windowing and ingestion for the Assessor and the Chronicler.
+     After llm.js because the two passes' calls live there and are fired from
+     ui.js; x5.js itself is pure and calls no model. -->
+<script src="src/srcfiles/x5.js?v=4"></script>
 <script src="src/srcfiles/interruption.js?v=11"></script>
 <script src="src/srcfiles/image.js?v=13"></script>
-<script src="src/srcfiles/render.js?v=32"></script>
-<script src="src/srcfiles/render.computer.js?v=29"></script>
+<script src="src/srcfiles/render.js?v=33"></script>
+<script src="src/srcfiles/render.computer.js?v=30"></script>
 <script src="src/srcfiles/render.desktop.js?v=8"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
 <script src="src/srcfiles/render.phone.js?v=12"></script>
-<script src="src/srcfiles/ui.js?v=55"></script>
-<script src="src/srcfiles/ui.computer.js?v=27"></script>
+<script src="src/srcfiles/ui.js?v=62"></script>
+<script src="src/srcfiles/ui.computer.js?v=30"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
      site header with fake address bar + internal back/forward, footer, 404,
@@ -3704,7 +3748,7 @@ body {
 <script src="src/srcfiles/afterhours.js?v=18"></script>
 <script src="src/srcfiles/ui.windowmanager.js?v=8"></script>
 <!-- BrineOS Phase 3: phone shell orchestration — after ui.computer.js. -->
-<script src="src/srcfiles/ui.phone.js?v=8"></script>
+<script src="src/srcfiles/ui.phone.js?v=10"></script>
 <!-- Menu overhaul Phase 10: the main-menu component — after ui.js (calls
      resumeFromRecord/openSaveMenu/startAutosave and the data-action chain
      at runtime). Loads LAST: the bottom of menu.js invokes boot(), which

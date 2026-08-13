@@ -8,10 +8,20 @@
 // together).
 //
 // Record shape (see the plan's Data model):
-//   { id, kind:'meal', day, tickStart, tickEnd, roomId,
+//   { id, kind, day, tickStart, tickEnd, roomId,
 //     invitedIds, acceptedIds, declinedIds, status }
 // status: 'scheduled' (invite out, meal not yet held) → 'held' (the meal
 // happened during its window) | 'missed' (the window passed with no meal).
+//
+// `kind` is a COMMITMENT_KINDS key (config.js). Since the initiative plan's
+// Phase 4 there are two: 'meal', which the player books through
+// doInviteDinner, and 'hangout', which an NPC books by PROPOSING one and the
+// player accepting (D8) — the first commitment in the game whose invitation
+// came from the other side. What a kind changes is exactly one thing: the
+// schedule block resolveScheduleActivity returns while its window is live.
+// Everything else in this file is kind-agnostic and always was; only the two
+// MEAL-specific reads below (activeMealCommitmentsInRoom, mealAttendees) filter
+// on it, because only a dinner table has attendees.
 //
 // Like world.visits, commitments are WORLD-SCHEDULE state, not item state:
 // they are created by schedule-style helpers (createCommitment) and
@@ -52,9 +62,14 @@ function respondToCommitment(npc, npcId, commitment, gameState) {
   return { accept, reason: accept ? 'accept' : 'cool', block };
 }
 
-// Active commitment for a resident RIGHT NOW: a kind:'meal' commitment they
-// accepted, still 'scheduled', and the current clock inside its window.
-// This is what SIM's resolveScheduleActivity checks first.
+// Active commitment for a resident RIGHT NOW: one they accepted, still
+// 'scheduled', of a kind the game knows, and the current clock inside its
+// window. This is what SIM's resolveScheduleActivity checks first.
+//
+// The kind test used to be `=== 'meal'` and is now "is a COMMITMENT_KINDS key"
+// — which keeps it a real filter rather than dropping it. A record of an
+// unknown kind has no block to override the schedule WITH, so it must not be
+// found here; falling through to the template is the only safe answer.
 function activeCommitmentFor(npcId, gameState) {
   const clock = gameState?.meta?.clock;
   if (!clock || clock.day == null) return null;
@@ -62,7 +77,7 @@ function activeCommitmentFor(npcId, gameState) {
   const list = gameState?.world?.commitments;
   if (!Array.isArray(list)) return null;
   return list.find(c =>
-    c.kind === 'meal' &&
+    COMMITMENT_KINDS[c.kind] &&
     c.status === 'scheduled' &&
     c.day === clock.day &&
     tick >= c.tickStart && tick < c.tickEnd &&
@@ -86,18 +101,30 @@ function activeMealCommitmentsInRoom(gameState, roomId) {
   );
 }
 
-// Create one meal commitment and immediately resolve each invitee's answer
-// (you ask, they say yes/no on the spot). Dedupes an overlapping
-// same-slot invitation to the same NPC instead of stacking a second dinner
-// on top of itself. Returns { record, responses } where responses maps
-// npcId → { accept, reason, block } — the durable record keeps only
+// Create one commitment and immediately resolve each invitee's answer (you
+// ask, they say yes/no on the spot). Dedupes an overlapping same-slot
+// invitation to the same NPC instead of stacking a second dinner on top of
+// itself. Returns { record, responses } where responses maps npcId →
+// { accept, reason, block } — the durable record keeps only
 // acceptedIds/declinedIds; the reasons are narration-time flavour.
-function createCommitment(gameState, { day, tickStart, tickEnd, roomId, invitedIds }) {
+//
+// `kind` defaults to 'meal' so every existing caller reads unchanged.
+//
+// `proposerId` (initiative plan Phase 4) is an NPC who is not polled because
+// they are the one ASKING: they go straight into acceptedIds. Nobody declines
+// their own proposal, and putting them through respondToCommitment would let a
+// noise draw do exactly that. The slot they proposed was already checked
+// against their schedule by OVERTURE's proposeTerms, using this file's own
+// busyBlocks bar — so the one thing respondToCommitment would have caught has
+// been caught upstream, where it belongs.
+function createCommitment(gameState, { kind, day, tickStart, tickEnd, roomId, invitedIds, proposerId }) {
   const list = gameState.world.commitments || (gameState.world.commitments = []);
+  kind = kind || 'meal';
   const existing = list.find(c =>
-    c.day === day && c.kind === 'meal' &&
+    c.day === day && c.kind === kind &&
     c.tickStart === tickStart && c.tickEnd === tickEnd &&
-    (c.invitedIds || []).some(i => (invitedIds || []).includes(i))
+    ((c.invitedIds || []).some(i => (invitedIds || []).includes(i))
+     || (proposerId && (c.acceptedIds || []).includes(proposerId)))
   );
   if (existing) {
     const responses = {};
@@ -128,10 +155,10 @@ function createCommitment(gameState, { day, tickStart, tickEnd, roomId, invitedI
   }
   const record = {
     id: `commit_${day}_${tickStart}_${list.length}`,
-    kind: 'meal',
+    kind,
     day, tickStart, tickEnd, roomId,
     invitedIds: [...(invitedIds || [])],
-    acceptedIds: [],
+    acceptedIds: proposerId ? [proposerId] : [],
     declinedIds: [],
     status: 'scheduled',
   };

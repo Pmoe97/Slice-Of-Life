@@ -28,7 +28,7 @@ const FOLDER_VERSIONS = {
   meta: 2,
   player: 4,
   world: 4,
-  npcs: 4,
+  npcs: 6,
   images: 1,
   snapshots: 1,
   objects: 2,
@@ -256,6 +256,21 @@ const MIGRATIONS = {
       const { intimacyLevel, conversationPhase } = deriveConversationPhase(npc.relPlayer);
       return { ...npc, relPlayer: { ...npc.relPlayer, intimacyLevel, conversationPhase } };
     } },
+    // npcs 4->5 (knowledge-gossip-memory-plan Phase 1, D1/D2/D3/D10):
+    // backfill the belief record onto every fact — provenance/confidence/
+    // salience/pinned/emotionalTag — via the same normalizer migrateNpcToV2
+    // uses (backfillFactRecordV2). Bare-string and partial-object facts get
+    // 'witnessed'/1.0/0.5, pinned per D3 (importance >= significant). The
+    // invariant "every fact carries provenance and confidence" is asserted
+    // forever after by the plan's harness.
+    { from: 4, to: 5, fn: (npc) => migrateFactRecordV2(npc) },
+    // npcs 5->6 (knowledge-gossip-memory-plan Phase 3, D9/D20): default
+    // memory.openQuestions to [] and assign a stable factId to every held
+    // fact that lacks one (backfillOpenQuestionsV2). The open-question
+    // lifecycle's factId reference must resolve for facts written before
+    // this phase existed. Additive — no fact's provenance/confidence is
+    // rewritten (invariant 3).
+    { from: 5, to: 6, fn: (npc) => backfillOpenQuestionsV2(npc) },
   ],
   images: [],
   snapshots: [],
@@ -1357,6 +1372,176 @@ async function restoreSave(record) {
 }
 
 // ===== EXPORT / IMPORT =====
+// --- D17 (knowledge-gossip-memory-plan Phase 5) — the schema-guarded
+// single-field writer. The Character Studio's Edit Mode routes every edit
+// through this so it can change any *valid* value but cannot corrupt a save:
+// out-of-range numbers, enum violations and type mismatches are rejected
+// exactly where the save validator would reject them, and valid values come
+// back normalized (strings truncated to maxLength, array items defaulted per
+// itemFields) — the same normalization a save round-trip applies.
+//
+// `path` is dotted, with `[n]` for array elements:
+//   'bible.name'  'bible.temperament.warmth'  'bible.physical.hair.color'
+//   'bible.interests[0].name'  'bible.sampleLines[1]'
+//   'relPlayer.trust'  'needs.hunger'  'residency.status'
+//   'memory.facts[0].importance'  'mood'
+// The first segment is 'bible' or a mutable (top-level) field name; the
+// rest walk CHARACTER_SCHEMA's nested `fields` / `itemFields` (config.js),
+// the exact schema validateCharacter validates whole bibles against — two
+// validators over one schema cannot drift apart.
+//
+// Returns { ok:true, value } (normalized) or { ok:false, error }.
+function parseSchemaPath(path) {
+  const tokens = [];
+  for (const bit of String(path).split('.')) {
+    // A segment may be a key, an index ('[0]'), or both ('interests[0]').
+    const m = /^([^[\]]*)(?:\[(\d+)\])?$/.exec(bit);
+    if (!m || (m[1] === '' && m[2] === undefined)) return null;
+    const t = {};
+    if (m[1] !== '') t.k = m[1];
+    if (m[2] !== undefined) t.i = Number(m[2]);
+    tokens.push(t);
+  }
+  return tokens;
+}
+
+// Walk CHARACTER_SCHEMA down `tokens`. Returns { spec, arrayElement } where
+// arrayElement means the value being validated IS an element of an array
+// (tokens ended at an index), or { error }.
+function resolveNpcFieldSpec(path) {
+  const tokens = parseSchemaPath(path);
+  if (!tokens || tokens.length === 0) return { error: `Invalid path: ${path}` };
+  const first = tokens[0];
+  if (!first.k) return { error: `Invalid path: ${path}` };
+  // The bible root is a FIELD MAP (CHARACTER_SCHEMA.bible is not itself a
+  // spec node with type/fields — its keys ARE the fields); the mutable root
+  // is a map of spec nodes. Both are handled by the same walk below via the
+  // rootIsFieldMap flag.
+  let spec;
+  let rootIsFieldMap = false;
+  if (first.k === 'bible') {
+    spec = CHARACTER_SCHEMA.bible;
+    rootIsFieldMap = true;
+  } else {
+    spec = (CHARACTER_SCHEMA.mutable || {})[first.k];
+    if (!spec) return { error: `Unknown field: ${first.k}` };
+  }
+  let i = 1;
+  while (i < tokens.length) {
+    const t = tokens[i];
+    if (t.k !== undefined) {
+      let node;
+      if (rootIsFieldMap) {
+        node = spec[t.k];
+        rootIsFieldMap = false;
+      } else if (spec && spec.type === 'object' && spec.fields) {
+        node = spec.fields[t.k];
+      } else {
+        node = undefined;
+      }
+      if (node === undefined) return { error: `Unknown field: ${t.k}` };
+      spec = node;
+    }
+    if (t.i !== undefined) {
+      if (!spec || spec.type !== 'array') return { error: `Not an array: ${path}` };
+      i++;
+      if (i >= tokens.length) return { spec, arrayElement: true };
+      if (!spec.itemFields) return { error: `Array has no item schema: ${path}` };
+      const f = tokens[i];
+      if (!f.k || !spec.itemFields[f.k]) return { error: `Unknown item field: ${f.k}` };
+      spec = spec.itemFields[f.k];
+      i++;
+      continue;
+    }
+    i++;
+  }
+  return { spec, arrayElement: false };
+}
+
+function validateNpcScalar(spec, value, path) {
+  if (value === null) {
+    if (spec.nullable) return { ok: true, value: null };
+    return { ok: false, error: `${path} cannot be null` };
+  }
+  if (spec.type === 'number') {
+    if (typeof value !== 'number' || Number.isNaN(value)) return { ok: false, error: `${path} must be a number` };
+    if (spec.range && (value < spec.range[0] || value > spec.range[1])) {
+      return { ok: false, error: `${path} must be within [${spec.range[0]}, ${spec.range[1]}]` };
+    }
+    return { ok: true, value };
+  }
+  if (spec.type === 'string') {
+    if (typeof value !== 'string') return { ok: false, error: `${path} must be a string` };
+    let v = value;
+    if (spec.maxLength && v.length > spec.maxLength) v = v.substring(0, spec.maxLength);
+    if (spec.enum && !spec.enum.includes(v)) {
+      return { ok: false, error: `${path} must be one of: ${spec.enum.join(', ')}` };
+    }
+    return { ok: true, value: v };
+  }
+  if (spec.type === 'boolean') {
+    if (typeof value !== 'boolean') return { ok: false, error: `${path} must be true or false` };
+    return { ok: true, value };
+  }
+  if (spec.type === 'array') {
+    if (!Array.isArray(value)) return { ok: false, error: `${path} must be an array` };
+    if (spec.maxItems && value.length > spec.maxItems) {
+      return { ok: false, error: `${path} may have at most ${spec.maxItems} items` };
+    }
+    if (spec.itemFields) {
+      const items = [];
+      for (let i = 0; i < value.length; i++) {
+        const r = validateNpcItemObject(spec.itemFields, value[i], `${path}[${i}]`);
+        if (!r.ok) return r;
+        items.push(r.value);
+      }
+      return { ok: true, value: items };
+    }
+    for (let i = 0; i < value.length; i++) {
+      if (typeof value[i] !== 'string') return { ok: false, error: `${path}[${i}] must be a string` };
+    }
+    return { ok: true, value };
+  }
+  if (spec.type === 'object') {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return { ok: false, error: `${path} must be an object` };
+    }
+    return { ok: true, value };
+  }
+  return { ok: false, error: `Unsupported schema type: ${spec.type}` };
+}
+
+function validateNpcItemObject(itemFields, value, path) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return { ok: false, error: `${path} must be an object` };
+  }
+  const out = {};
+  for (const [field, spec] of Object.entries(itemFields)) {
+    let v = value[field];
+    if (v === undefined || v === null) {
+      if (spec.required) return { ok: false, error: `${path}.${field} is required` };
+      out[field] = spec.default !== undefined ? spec.default
+        : spec.type === 'string' ? '' : spec.type === 'number' ? 0
+        : spec.type === 'boolean' ? false : spec.type === 'array' ? [] : {};
+      continue;
+    }
+    const r = validateNpcScalar(spec, v, `${path}.${field}`);
+    if (!r.ok) return r;
+    out[field] = r.value;
+  }
+  return { ok: true, value: out };
+}
+
+function validateNpcField(path, value) {
+  const r = resolveNpcFieldSpec(path);
+  if (r.error) return { ok: false, error: r.error };
+  if (r.arrayElement) {
+    if (r.spec.itemFields) return validateNpcItemObject(r.spec.itemFields, value, path);
+    return validateNpcScalar({ type: 'string' }, value, path);
+  }
+  return validateNpcScalar(r.spec, value, path);
+}
+
 async function exportCharacter(npcId) {
   const npc = await getNpc(npcId);
   if (!npc) return null;

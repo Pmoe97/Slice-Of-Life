@@ -218,9 +218,17 @@ check('a past player bubble drops its accent fill, not just opacity',
       /\.conv-bubble\[data-past\]\[data-from="player"\]/.test(HTML),
       'D14 asks for past to be structurally marked, and a dimmed accent still shouts');
 check('.conv-separator and .conv-time are styled', /\.conv-separator\b/.test(HTML) && /\.conv-time\b/.test(HTML));
+// Pinned as a floor, not an equality. This phase bumped npc.js to 19 and ui.js
+// to 55, and both are the versions that carry Phase 5's changes — but a later
+// plan touching either file bumps it again, and an equality here would report
+// that as a Phase 5 regression. Versions only ever go up.
+const vOf = (f) => {
+  const m = HTML.match(new RegExp(`${f.replace('.', '\\.')}\\?v=(\\d+)`));
+  return m ? +m[1] : -1;
+};
 check('npc.js and ui.js both got their ?v= bumped',
-      /npc\.js\?v=19/.test(HTML) && /ui\.js\?v=55/.test(HTML),
-      'a partial bump is how a client ends up running half-old code');
+      vOf('npc.js') >= 19 && vOf('ui.js') >= 55,
+      `npc.js=${vOf('npc.js')} (>=19), ui.js=${vOf('ui.js')} (>=55) — a partial bump is how a client ends up running half-old code`);
 
 console.log(`\n${'='.repeat(46)}\n  ${pass} passed, ${fail} failed\n${'='.repeat(46)}`);
 process.exit(fail > 0 ? 1 : 0);
