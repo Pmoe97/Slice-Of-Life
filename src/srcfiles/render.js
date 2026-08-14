@@ -72,112 +72,548 @@ function renderHeader(gs) {
 }
 
 // --- Floor plan (SVG) ---
-// Replaces the flat room list with a 2D schematic of the apartment.
-// Rooms are positioned rectangles, connected by dashed adjacency lines.
-// The player's current room is highlighted; adjacent rooms are clickable;
-// distant rooms are dimmed. NPC presence shown as colored dots.
+// A real floor plan (floorplan-and-movement-plan.md Phase 4), not a diagram
+// of a graph. Rooms TILE — they share walls — so the picture is drawn the way
+// a plan is drawn: fills, then walls, then the openings cut into those walls.
+//
+// The previous version drew floating rectangles joined by dashed connector
+// lines, because zero of seventeen declared adjacencies actually shared a
+// wall. The connectors existed to bridge gaps that should never have been
+// there, and deleting them is most of what makes this read as an apartment.
+//
+// Every doorway is derived from the same sharedWallSegment() the walk cost
+// uses, so the door you SEE and the door you WALK THROUGH cannot disagree.
+
+// How wide a doorway is cut, in layout units. An `open` threshold takes the
+// whole shared wall (there is no wall); a door takes a fixed leaf width.
+const FP_DOOR_WIDTH = 16;
+
+// Every opening in the plan, as a segment on a wall. Locked doors are
+// deliberately NOT openings — a locked door is a closed door, and the plan
+// draws it sealed. That is the whole reason the lock is worth showing.
+function floorPlanOpenings(gs) {
+  const out = [];
+  for (const [key, type] of Object.entries(ROOM_THRESHOLDS)) {
+    const [a, b] = key.split('|');
+    if (!ROOM_LAYOUT[a] || !ROOM_LAYOUT[b]) continue;
+    const seg = sharedWallSegment(a, b);
+    if (!seg) continue;
+    const locked = type === 'door' && (getDoorState(gs, a) === 'locked' || getDoorState(gs, b) === 'locked');
+    const width = type === 'door' ? Math.min(FP_DOOR_WIDTH, seg.len * 0.7) : seg.len;
+    const vertical = seg.x1 === seg.x2;
+    const mid = vertical ? (seg.y1 + seg.y2) / 2 : (seg.x1 + seg.x2) / 2;
+    out.push({
+      vertical, type, locked, rooms: [a, b],
+      pos: vertical ? seg.x1 : seg.y1,
+      from: mid - width / 2,
+      to: mid + width / 2,
+    });
+  }
+  return out;
+}
+
+// Where a room's OWN rectangles meet each other. An L-shaped room is two
+// rects sharing an edge, and drawing all four sides of both puts a wall
+// straight down the middle of a single room — the Living Room and the Gym
+// both read as two rooms because of it. These seams are subtracted from the
+// wall pass exactly like doorways are: there is no wall there, so none is
+// drawn.
+//
+// Returned in the same shape as an opening so wallPieces can take them in
+// one list and does not need to know the difference.
+function roomInternalSeams(rects) {
+  const seams = [];
+  for (let i = 0; i < rects.length; i++) {
+    for (let j = i + 1; j < rects.length; j++) {
+      const [ax, ay, aw, ah] = rects[i];
+      const [bx, by, bw, bh] = rects[j];
+      // Vertical seam: side by side, overlapping in y.
+      if (Math.abs(ax + aw - bx) < 0.5 || Math.abs(bx + bw - ax) < 0.5) {
+        const y1 = Math.max(ay, by), y2 = Math.min(ay + ah, by + bh);
+        if (y2 - y1 > 0.5) {
+          seams.push({ vertical: true, pos: Math.abs(ax + aw - bx) < 0.5 ? ax + aw : bx + bw, from: y1, to: y2 });
+        }
+      }
+      // Horizontal seam: stacked, overlapping in x.
+      if (Math.abs(ay + ah - by) < 0.5 || Math.abs(by + bh - ay) < 0.5) {
+        const x1 = Math.max(ax, bx), x2 = Math.min(ax + aw, bx + bw);
+        if (x2 - x1 > 0.5) {
+          seams.push({ vertical: false, pos: Math.abs(ay + ah - by) < 0.5 ? ay + ah : by + bh, from: x1, to: x2 });
+        }
+      }
+    }
+  }
+  return seams;
+}
+
+// One rect edge, minus every opening that lies on it. Interval subtraction in
+// 1D: the wall is a range, the openings are holes, and what is left is drawn.
+function wallPieces(fixed, from, to, vertical, openings) {
+  let pieces = [[from, to]];
+  for (const o of openings) {
+    if (o.vertical !== vertical) continue;
+    if (Math.abs(o.pos - fixed) > WALL_TOUCH_TOLERANCE / 2) continue;
+    if (o.locked) continue;                      // sealed: no hole in the wall
+    const next = [];
+    for (const [s, e] of pieces) {
+      if (o.to <= s || o.from >= e) { next.push([s, e]); continue; }
+      if (o.from > s) next.push([s, o.from]);
+      if (o.to < e) next.push([o.to, e]);
+    }
+    pieces = next;
+  }
+  return pieces.filter(([s, e]) => e - s > 0.5);
+}
+
 function renderFloorPlan(gs) {
   const container = document.getElementById('floor-plan');
   if (!container) return;
   const currentRoom = gs.player.location;
   const adjacent = ROOM_ADJACENCY[currentRoom] || [];
 
-  // SVG viewBox — matches ROOM_LAYOUT coordinates
-  const vbW = 160, vbH = 220;
+  // Bounds derived from the geometry rather than hardcoded, so nudging a room
+  // in the mapper can never crop it out of the picture.
+  let maxX = 0, maxY = 0;
+  for (const rects of Object.values(ROOM_LAYOUT)) {
+    for (const [x, y, w, h] of rects) { maxX = Math.max(maxX, x + w); maxY = Math.max(maxY, y + h); }
+  }
+  const pad = 10;
+  let svg = `<svg viewBox="${-pad} ${-pad} ${maxX + pad * 2} ${maxY + pad * 2}" xmlns="http://www.w3.org/2000/svg">`;
+  svg += '<defs><pattern id="fp-hazard" patternUnits="userSpaceOnUse" width="14" height="14" patternTransform="rotate(45)">'
+       + '<rect width="14" height="14" fill="rgba(224,160,64,0.18)"/>'
+       + '<line x1="0" y1="0" x2="0" y2="14" stroke="rgba(224,160,64,0.5)" stroke-width="5"/></pattern>';
+  // One clip per NPC avatar; declared up front so the circles below can use them.
+  const present = {};
+  for (const roomId of ALL_ROOMS) present[roomId] = getPresentNpcIds(gs.npcs, roomId);
+  for (const ids of Object.values(present)) {
+    for (const id of ids) svg += `<clipPath id="fp-clip-${id}"><circle cx="0" cy="0" r="9"/></clipPath>`;
+  }
+  svg += '</defs>';
 
-  let svg = `<svg viewBox="0 0 ${vbW} ${vbH}" xmlns="http://www.w3.org/2000/svg">`;
-  svg += '<defs><pattern id="fp-hazard" patternUnits="userSpaceOnUse" width="7" height="7" patternTransform="rotate(45)"><rect width="7" height="7" fill="rgba(224,160,64,0.18)"/><line x1="0" y1="0" x2="0" y2="7" stroke="rgba(224,160,64,0.5)" stroke-width="2.5"/></pattern></defs>';
+  const openings = floorPlanOpenings(gs);
+  const signalMap = typeof signalsByRoom === 'function' ? signalsByRoom(gs) : {};
 
-  // Connectors (drawn first, behind rooms)
-  const drawn = new Set();
-  for (const [room, neighbors] of Object.entries(ROOM_ADJACENCY)) {
-    const r1 = ROOM_LAYOUT[room];
-    if (!r1) continue;
-    for (const n of neighbors) {
-      const pairKey = [room, n].sort().join('|');
-      if (drawn.has(pairKey)) continue;
-      drawn.add(pairKey);
-      const r2 = ROOM_LAYOUT[n];
-      if (!r2) continue;
-      const x1 = r1.x + r1.w / 2, y1 = r1.y + r1.h / 2;
-      const x2 = r2.x + r2.w / 2, y2 = r2.y + r2.h / 2;
-      svg += `<line class="fp-connector" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
+  // --- Layer 1: room fills. Clickable; every room, not just adjacent ones,
+  // because doMove auto-paths now and clicking somewhere far away is a walk
+  // rather than a refusal.
+  for (const roomId of ALL_ROOMS) {
+    const rects = ROOM_LAYOUT[roomId];
+    if (!rects) continue;
+    const isCurrent = roomId === currentRoom;
+    const isAdjacent = adjacent.includes(roomId);
+    const construction = getActiveJobForRoom(gs, roomId);
+    let attrs = `class="fp-room" data-room-id="${roomId}"`;
+    if (isCurrent) attrs += ' data-current=""';
+    else if (isAdjacent) attrs += ' data-adjacent=""';
+    if (construction) attrs += ' data-construction=""';
+    for (const [x, y, w, h] of rects) {
+      svg += `<rect ${attrs} x="${x}" y="${y}" width="${w}" height="${h}"/>`;
     }
   }
 
-  // Every signal in the apartment, keyed by the room it originates in
-  // (SIGNALS' signalsByRoom). Computed once for the whole plan rather than
-  // per room.
-  const signalMap = typeof signalsByRoom === 'function' ? signalsByRoom(gs) : {};
-
-  // Rooms
+  // --- Layer 2: walls, with the openings cut out of them.
   for (const roomId of ALL_ROOMS) {
-    const r = ROOM_LAYOUT[roomId];
-    if (!r) continue;
-    const isCurrent = roomId === currentRoom;
-    const isAdjacent = adjacent.includes(roomId);
-    const isDistant = !isCurrent && !isAdjacent;
-
-    let attrs = `class="fp-room" data-room-id="${roomId}" x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="2"`;
-    if (isCurrent) attrs += ' data-current=""';
-    else if (isAdjacent) attrs += ' data-adjacent=""';
-    if (isDistant) attrs += ' data-distant=""';
-    // Renovation overhaul Phase 3: any facility in this room with an active
-    // contracted job renders the room as a construction site.
-    const constructionJob = getActiveJobForRoom(gs, roomId);
-    if (constructionJob) attrs += ' data-construction=""';
-    svg += `<rect ${attrs}/>`;
-
-    // Label (shortened if room is small)
-    const name = ROOMS[roomId].name;
-    const label = r.w < 35 && name.length > 8 ? name.substring(0, 7) + '…' : name;
-    svg += `<text class="fp-room-label" x="${r.x + r.w / 2}" y="${r.y + r.h / 2 - 2}">${escapeHtml(label)}</text>`;
-
-    // Scene-reader plan Phase 3 (D9): what this room is EMITTING, not what
-    // the player perceives — the floor plan is a map of where things are
-    // coming from. Strongest first, capped, opacity by band.
-    const roomSignals = (signalMap[roomId] || []).slice(0, SIGNAL_ICONS.maxPerRoom);
-    if (roomSignals.length > 0) {
-      const glyphs = roomSignals.map((sig, i) => {
-        const gx = r.x + r.w / 2 + (i - (roomSignals.length - 1) / 2) * 6;
-        return `<text class="fp-signal" x="${gx}" y="${r.y + r.h / 2 + 7}" opacity="${SIGNAL_ICONS.bandOpacity[sig.band]}">${signalIcon(sig.signalId)}</text>`;
-      });
-      svg += glyphs.join('');
-    }
-
-    // Under-construction tag, below the room name (hazard fill applied via
-    // CSS on .fp-room[data-construction]).
-    if (constructionJob) {
-      svg += `<text class="fp-construction-label" x="${r.x + r.w / 2}" y="${r.y + r.h + 8}">Under construction</text>`;
-    }
-
-    // NPC dots
-    const present = getPresentNpcIds(gs.npcs, roomId);
-    if (present.length > 0) {
-      const dotR = 2.2;
-      const dotY = r.y + r.h / 2 + 4;
-      const spacing = 5;
-      const startX = r.x + r.w / 2 - (present.length - 1) * spacing / 2;
-      for (let i = 0; i < Math.min(present.length, 5); i++) {
-        const npc = gs.npcs[present[i]];
-        const sleeping = npc?.activity === 'sleeping' || npc?.activity === 'sleep';
-        const inTransit = !!npc?.transit;
-        let dotAttrs = `class="fp-npc-dot" cx="${startX + i * spacing}" cy="${dotY}" r="${dotR}"`;
-        if (sleeping) dotAttrs += ' data-sleeping=""';
-        if (inTransit) dotAttrs += ' data-transit=""';
-        svg += `<circle ${dotAttrs}/>`;
+    const rects = ROOM_LAYOUT[roomId];
+    if (!rects) continue;
+    // A room's own internal seams are cut out alongside the doorways: an
+    // L-shaped room is ONE room, and a line down its middle says otherwise.
+    const cuts = rects.length > 1 ? openings.concat(roomInternalSeams(rects)) : openings;
+    for (const [x, y, w, h] of rects) {
+      const sides = [
+        { fixed: y,     from: x, to: x + w, vertical: false },
+        { fixed: y + h, from: x, to: x + w, vertical: false },
+        { fixed: x,     from: y, to: y + h, vertical: true },
+        { fixed: x + w, from: y, to: y + h, vertical: true },
+      ];
+      for (const s of sides) {
+        for (const [a, b] of wallPieces(s.fixed, s.from, s.to, s.vertical, cuts)) {
+          svg += s.vertical
+            ? `<line class="fp-wall" x1="${s.fixed}" y1="${a}" x2="${s.fixed}" y2="${b}"/>`
+            : `<line class="fp-wall" x1="${a}" y1="${s.fixed}" x2="${b}" y2="${s.fixed}"/>`;
+        }
       }
     }
+  }
 
-    // Door lock indicator
-    const doorState = getDoorState(gs, roomId);
-    if (doorState === 'locked') {
-      svg += `<text class="fp-door-icon" x="${r.x + r.w - 3}" y="${r.y + 5}">🔒</text>`;
+  // --- Layer 3: the openings themselves, where they need drawing.
+  // A door gap and an open threshold are both simply absent wall. Glass and
+  // locked doors are things you can SEE, so they get a line of their own.
+  for (const o of openings) {
+    if (o.type === 'glass') {
+      svg += o.vertical
+        ? `<line class="fp-glass" x1="${o.pos}" y1="${o.from}" x2="${o.pos}" y2="${o.to}"/>`
+        : `<line class="fp-glass" x1="${o.from}" y1="${o.pos}" x2="${o.to}" y2="${o.pos}"/>`;
+    } else if (o.locked) {
+      svg += o.vertical
+        ? `<line class="fp-locked" x1="${o.pos}" y1="${o.from}" x2="${o.pos}" y2="${o.to}"/>`
+        : `<line class="fp-locked" x1="${o.from}" y1="${o.pos}" x2="${o.to}" y2="${o.pos}"/>`;
     }
+  }
+
+  // --- Layer 4: contents, labels, people.
+  for (const roomId of ALL_ROOMS) {
+    const rects = ROOM_LAYOUT[roomId];
+    if (!rects) continue;
+    const [cx, cy] = roomCentre(roomId);
+    const bodyCount = present[roomId].length + (roomId === currentRoom ? 1 : 0);
+
+    svg += renderRoomFurniture(gs, roomId);
+
+    svg += roomLabel(roomId, cx, cy - (bodyCount > 0 ? 8 : 0));
+
+    const roomSignals = (signalMap[roomId] || []).slice(0, SIGNAL_ICONS.maxPerRoom);
+    if (roomSignals.length > 0) {
+      svg += roomSignals.map((sig, i) => {
+        const gx = cx + (i - (roomSignals.length - 1) / 2) * 13;
+        return `<text class="fp-signal" x="${gx}" y="${cy + 20}" opacity="${SIGNAL_ICONS.bandOpacity[sig.band]}">${signalIcon(sig.signalId)}</text>`;
+      }).join('');
+    }
+
+    if (getActiveJobForRoom(gs, roomId)) {
+      svg += `<text class="fp-construction-label" x="${cx}" y="${cy + 10}">Under construction</text>`;
+    }
+
+    svg += renderRoomOccupants(gs, roomId, cx, cy, present[roomId]);
   }
 
   svg += '</svg>';
   container.innerHTML = svg;
+  // Avatar art is filled in afterwards and only from cache — see
+  // hydrateFloorPlanAvatars.
+  hydrateFloorPlanAvatars(gs, present);
+}
+
+// --- Furniture, top down (floorplan plan Phase 5) ---
+// A small symbol library rather than art. Each entry is a footprint and a
+// draw function returning SVG — geometric primitives only, so a bed is a
+// rounded rect with a pillow bar and a stove is a square with four rings.
+// Authored once, reused in every room that contains the object.
+//
+// `state` is the live object instance's state, so what the plan draws is what
+// the world says: a `crusty` stove burner, an `unmade` bed, a `cluttered`
+// surface. The data has been there since P1 and nothing has ever looked at it.
+//
+// Objects absent from this table simply are not drawn — `floor`, `phone`,
+// `diary` and the other small or abstract ones have no useful top-down
+// silhouette, and a plan crowded with them reads worse, not better.
+const FP_FURNITURE = {
+  bed: { w: 26, h: 34, draw: (x, y, w, h, s) => {
+    const messy = s?.made === 'unmade';
+    return `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="2"/>`
+         + `<rect class="fp-f-soft${messy ? ' messy' : ''}" x="${x + 2}" y="${y + 9}" width="${w - 4}" height="${h - 11}" rx="2"/>`
+         + `<rect class="fp-f-detail" x="${x + 3}" y="${y + 2}" width="${w - 6}" height="6" rx="2"/>`;
+  } },
+  desk: { w: 24, h: 11, draw: (x, y, w, h) =>
+    `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>` },
+  study_desk: { w: 24, h: 11, draw: (x, y, w, h) =>
+    `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>` },
+  wardrobe: { w: 20, h: 9, draw: (x, y, w, h) =>
+    `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}"/>`
+    + `<line class="fp-f-detail-l" x1="${x + w / 2}" y1="${y}" x2="${x + w / 2}" y2="${y + h}"/>` },
+  nightstand: { w: 9, h: 9, draw: (x, y, w, h) =>
+    `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>` },
+  bookshelf: { w: 22, h: 7, draw: (x, y, w, h) => shelfSymbol(x, y, w, h) },
+  study_bookshelf: { w: 22, h: 7, draw: (x, y, w, h) => shelfSymbol(x, y, w, h) },
+  desktop_computer: { w: 10, h: 6, draw: (x, y, w, h) =>
+    `<rect class="fp-f-detail" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>` },
+  // --- Bathroom / wet rooms ---
+  shower: { w: 14, h: 14, draw: (x, y, w, h, s) =>
+    `<rect class="fp-f${s?.grime === 'soap-scummed' ? ' dirty' : ''}" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>`
+    + `<circle class="fp-f-detail" cx="${x + w / 2}" cy="${y + h / 2}" r="2.5"/>` },
+  toilet: { w: 9, h: 12, draw: (x, y, w, h, s) =>
+    `<rect class="fp-f${s?.clean === 'dirty' ? ' dirty' : ''}" x="${x}" y="${y}" width="${w}" height="${h}" rx="4"/>` },
+  sink_bathroom: { w: 11, h: 8, draw: (x, y, w, h) => sinkSymbol(x, y, w, h) },
+  sink_kitchen: { w: 14, h: 10, draw: (x, y, w, h, s) => sinkSymbol(x, y, w, h, s?.dishes && s.dishes !== 'none') },
+  bathroom_mirror: { w: 12, h: 3, draw: (x, y, w, h) =>
+    `<rect class="fp-f-detail" x="${x}" y="${y}" width="${w}" height="${h}"/>` },
+  lockers: { w: 20, h: 8, draw: (x, y, w, h) =>
+    `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}"/>`
+    + [1, 2, 3].map(i => `<line class="fp-f-detail-l" x1="${x + (w / 4) * i}" y1="${y}" x2="${x + (w / 4) * i}" y2="${y + h}"/>`).join('') },
+  changing_bench: { w: 20, h: 6, draw: (x, y, w, h) =>
+    `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>` },
+  // --- Kitchen ---
+  stove: { w: 14, h: 12, draw: (x, y, w, h, s) => {
+    const dirty = s?.burner && s.burner !== 'clean';
+    const r = 1.9, dx = w / 4, dy = h / 4;
+    let out = `<rect class="fp-f${dirty ? ' dirty' : ''}" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>`;
+    for (const [i, j] of [[1, 1], [3, 1], [1, 3], [3, 3]]) {
+      out += `<circle class="fp-f-detail" cx="${x + dx * i}" cy="${y + dy * j}" r="${r}"/>`;
+    }
+    return out;
+  } },
+  fridge: { w: 12, h: 12, draw: (x, y, w, h) =>
+    `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>`
+    + `<line class="fp-f-detail-l" x1="${x + w - 3}" y1="${y + 2}" x2="${x + w - 3}" y2="${y + h - 2}"/>` },
+  pantry: { w: 11, h: 10, draw: (x, y, w, h) => shelfSymbol(x, y, w, h) },
+  kitchen_table: { w: 20, h: 14, draw: (x, y, w, h, s) => tableSymbol(x, y, w, h, s) },
+  dining_table: { w: 34, h: 20, draw: (x, y, w, h, s) => tableSymbol(x, y, w, h, s) },
+  coffee_table_lr: { w: 20, h: 11, draw: (x, y, w, h, s) => tableSymbol(x, y, w, h, s) },
+  balcony_table: { w: 14, h: 14, draw: (x, y, w, h, s) => tableSymbol(x, y, w, h, s) },
+  trash_kitchen: { w: 7, h: 7, draw: (x, y, w, h) =>
+    `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="2"/>` },
+  coffee_maker: { w: 6, h: 5, draw: (x, y, w, h) =>
+    `<rect class="fp-f-detail" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>` },
+  // --- Living / leisure ---
+  sofa: { w: 30, h: 13, draw: (x, y, w, h) =>
+    `<rect class="fp-f-soft" x="${x}" y="${y + 3}" width="${w}" height="${h - 3}" rx="2"/>`
+    + `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="4" rx="1"/>` },
+  armchair: { w: 12, h: 12, draw: (x, y, w, h) =>
+    `<rect class="fp-f-soft" x="${x}" y="${y + 3}" width="${w}" height="${h - 3}" rx="2"/>`
+    + `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="4" rx="1"/>` },
+  tv: { w: 22, h: 4, draw: (x, y, w, h) =>
+    `<rect class="fp-f-detail" x="${x}" y="${y}" width="${w}" height="${h}"/>` },
+  pool_table: { w: 30, h: 17, draw: (x, y, w, h) =>
+    `<rect class="fp-f-felt" x="${x}" y="${y}" width="${w}" height="${h}" rx="2"/>`
+    + `<circle class="fp-f-detail" cx="${x + w / 2}" cy="${y + h / 2}" r="1.6"/>` },
+  game_console: { w: 8, h: 5, draw: (x, y, w, h) =>
+    `<rect class="fp-f-detail" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>` },
+  dartboard: { w: 8, h: 8, draw: (x, y, w, h) =>
+    `<circle class="fp-f" cx="${x + w / 2}" cy="${y + h / 2}" r="${w / 2}"/>`
+    + `<circle class="fp-f-detail" cx="${x + w / 2}" cy="${y + h / 2}" r="1.5"/>` },
+  treadmill: { w: 12, h: 20, draw: (x, y, w, h) =>
+    `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>`
+    + `<rect class="fp-f-detail" x="${x + 1}" y="${y + 5}" width="${w - 2}" height="${h - 7}" rx="1"/>` },
+  weight_set: { w: 14, h: 7, draw: (x, y, w, h) =>
+    `<line class="fp-f-bar" x1="${x}" y1="${y + h / 2}" x2="${x + w}" y2="${y + h / 2}"/>`
+    + `<circle class="fp-f" cx="${x + 2}" cy="${y + h / 2}" r="3"/>`
+    + `<circle class="fp-f" cx="${x + w - 2}" cy="${y + h / 2}" r="3"/>` },
+  yoga_mat: { w: 8, h: 18, draw: (x, y, w, h) =>
+    `<rect class="fp-f-soft" x="${x}" y="${y}" width="${w}" height="${h}" rx="3"/>` },
+  swimming_pool: { w: 70, h: 50, draw: (x, y, w, h, s) =>
+    `<rect class="fp-f-water${s?.water === 'filled' ? '' : ' empty'}" x="${x}" y="${y}" width="${w}" height="${h}" rx="3"/>`
+    + `<rect class="fp-f-detail" x="${x + 4}" y="${y + 4}" width="${w - 8}" height="${h - 8}" rx="2" fill="none"/>` },
+  pool_loungers: { w: 8, h: 18, draw: (x, y, w, h) =>
+    `<rect class="fp-f-soft" x="${x}" y="${y}" width="${w}" height="${h}" rx="2"/>` },
+  pool_pump: { w: 8, h: 7, draw: (x, y, w, h) =>
+    `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>` },
+  plant_lr: { w: 7, h: 7, draw: (x, y, w, h) => plantSymbol(x, y, w, h) },
+  plant_balcony: { w: 7, h: 7, draw: (x, y, w, h) => plantSymbol(x, y, w, h) },
+  lamp_lr: { w: 6, h: 6, draw: (x, y, w, h) =>
+    `<circle class="fp-f-detail" cx="${x + w / 2}" cy="${y + h / 2}" r="${w / 2}"/>` },
+  // --- Utility / entry ---
+  washer: { w: 11, h: 11, draw: (x, y, w, h) => applianceSymbol(x, y, w, h) },
+  dryer: { w: 11, h: 11, draw: (x, y, w, h) => applianceSymbol(x, y, w, h) },
+  laundry_hamper: { w: 8, h: 8, draw: (x, y, w, h) =>
+    `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="2"/>` },
+  doormat: { w: 12, h: 6, draw: (x, y, w, h) =>
+    `<rect class="fp-f-soft" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>` },
+  shoe_rack: { w: 12, h: 5, draw: (x, y, w, h) => shelfSymbol(x, y, w, h) },
+  coat_rack: { w: 6, h: 6, draw: (x, y, w, h) =>
+    `<circle class="fp-f" cx="${x + w / 2}" cy="${y + h / 2}" r="${w / 2 - 1}"/>` },
+};
+
+// A room's name, sized and oriented to fit the room it names. Corridors are
+// the reason this is not one line: Hallway A is 32 units wide and 185 tall,
+// so a horizontal label at any readable size runs straight out of the room
+// and across the bedroom next door. Real plans turn corridor labels on their
+// side, so this does too.
+function roomLabel(roomId, cx, cy) {
+  const name = ROOMS[roomId]?.name || roomId;
+  const rects = ROOM_LAYOUT[roomId] || [];
+  if (rects.length === 0) return '';
+  const [, , w, h] = rects.slice().sort((a, b) => b[2] * b[3] - a[2] * a[3])[0];
+  const rotate = h > w * 1.8 && w < 70;
+  const along = rotate ? h : w;
+  // ~0.62 em per character at this weight; leave a little breathing room.
+  const size = Math.max(6, Math.min(11, (along - 8) / (name.length * 0.62)));
+  const attrs = `class="fp-room-label" x="${cx}" y="${cy}" style="font-size:${size.toFixed(1)}px"`;
+  return rotate
+    ? `<text ${attrs} transform="rotate(-90 ${cx} ${cy})">${escapeHtml(name)}</text>`
+    : `<text ${attrs}>${escapeHtml(name)}</text>`;
+}
+
+function shelfSymbol(x, y, w, h) {
+  return `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}"/>`
+       + `<line class="fp-f-detail-l" x1="${x}" y1="${y + h / 2}" x2="${x + w}" y2="${y + h / 2}"/>`;
+}
+function sinkSymbol(x, y, w, h, dirty) {
+  return `<rect class="fp-f${dirty ? ' dirty' : ''}" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>`
+       + `<circle class="fp-f-detail" cx="${x + w / 2}" cy="${y + h / 2}" r="2"/>`;
+}
+function tableSymbol(x, y, w, h, s) {
+  const laid = s?.clutter === 'cluttered';
+  return `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="2"/>`
+       + (laid ? `<circle class="fp-f-detail" cx="${x + w / 2}" cy="${y + h / 2}" r="${Math.min(w, h) / 4}"/>` : '');
+}
+function plantSymbol(x, y, w, h) {
+  return `<circle class="fp-f-plant" cx="${x + w / 2}" cy="${y + h / 2}" r="${w / 2 - 0.5}"/>`;
+}
+function applianceSymbol(x, y, w, h) {
+  return `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>`
+       + `<circle class="fp-f-detail" cx="${x + w / 2}" cy="${y + h / 2}" r="3"/>`;
+}
+
+// --- Authored placements (Home Design Studio) ---
+// A shape's parts are normalized to a 0..1 box, so drawing one is a single
+// affine map: scale the parts by the placement's w/h, translate to its x/y,
+// and rotate the whole group about its own centre. That is the entire reason
+// a designed object can be dragged, resized and turned as ONE thing — every
+// part is defined relative to the whole rather than pinned to the canvas.
+function renderDesignShape(place) {
+  const def = DESIGN_SHAPES[place.shape];
+  if (!def) return '';
+  const { x, y, w, h } = place;
+  const rot = place.rot || 0;
+  const variant = place.variant ? ` v-${place.variant}` : '';
+  let out = rot
+    ? `<g class="fp-prop${variant}" transform="rotate(${rot} ${x + w / 2} ${y + h / 2})">`
+    : `<g class="fp-prop${variant}">`;
+  for (const p of def.parts) {
+    const cls = `fp-p fp-p-${p.cls}`;
+    if (p.kind === 'rect') {
+      const rx = p.rx ? (p.rx * Math.min(w, h)).toFixed(2) : 0;
+      out += `<rect class="${cls}" x="${(x + p.x * w).toFixed(2)}" y="${(y + p.y * h).toFixed(2)}"`
+           + ` width="${(p.w * w).toFixed(2)}" height="${(p.h * h).toFixed(2)}" rx="${rx}"/>`;
+    } else if (p.kind === 'ellipse') {
+      out += `<ellipse class="${cls}" cx="${(x + p.cx * w).toFixed(2)}" cy="${(y + p.cy * h).toFixed(2)}"`
+           + ` rx="${(p.rx * w).toFixed(2)}" ry="${(p.ry * h).toFixed(2)}"/>`;
+    } else if (p.kind === 'line') {
+      out += `<line class="${cls}" x1="${(x + p.x1 * w).toFixed(2)}" y1="${(y + p.y1 * h).toFixed(2)}"`
+           + ` x2="${(x + p.x2 * w).toFixed(2)}" y2="${(y + p.y2 * h).toFixed(2)}"/>`;
+    }
+  }
+  return out + '</g>';
+}
+
+// A designed room's contents. Returns null when the room has no authored
+// design, which is the signal to fall back to the automatic layout — a room
+// is either designed or auto-arranged, never a confusing half of each.
+function renderAuthoredDecor(gs, roomId) {
+  const decor = (typeof ROOM_DECOR !== 'undefined' && ROOM_DECOR[roomId]) || null;
+  if (!decor || decor.length === 0) return null;
+  let out = '<g class="fp-furniture">';
+  for (const place of decor) {
+    if (typeof decorVisible === 'function' && !decorVisible(place, gs)) continue;
+    out += renderDesignShape(place);
+  }
+  return out + '</g>';
+}
+
+// Lay a room's furniture around the inside of its largest rectangle, walking
+// the perimeter. The FALLBACK for rooms nobody has designed yet: 19 rooms
+// times a dozen objects is 200-odd coordinates, and auto-placement means an
+// undesigned room still reads as furnished rather than as an empty box.
+// A room with a ROOM_DECOR entry uses that instead — see renderAuthoredDecor.
+function renderRoomFurniture(gs, roomId) {
+  const authored = renderAuthoredDecor(gs, roomId);
+  if (authored !== null) return authored;
+  return renderAutoFurniture(gs, roomId);
+}
+
+function renderAutoFurniture(gs, roomId) {
+  const rects = ROOM_LAYOUT[roomId] || [];
+  if (rects.length === 0) return '';
+  const bucket = gs.objects?.[`room_${roomId}`] || {};
+  const items = Object.values(bucket)
+    .filter(o => FP_FURNITURE[o.defId])
+    .sort((a, b) => {
+      const A = FP_FURNITURE[a.defId], B = FP_FURNITURE[b.defId];
+      return (B.w * B.h) - (A.w * A.h);   // biggest first: they claim the good walls
+    });
+  if (items.length === 0) return '';
+
+  // The largest rect is the room's body; the notch on an L-shape is left
+  // empty rather than half-filled with a bed that overlaps a wall.
+  const [rx, ry, rw, rh] = rects.slice().sort((a, b) => b[2] * b[3] - a[2] * a[3])[0];
+  const inset = 3;
+  let out = '<g class="fp-furniture">';
+  // Four walls' worth of slots, each tracking how far along it is filled.
+  const walls = [
+    { cursor: rx + inset, limit: rx + rw - inset, place: (d, fw, fh) => [d, ry + inset] },                  // top
+    { cursor: ry + inset, limit: ry + rh - inset, place: (d, fw, fh) => [rx + rw - inset - fw, d] },        // right
+    { cursor: rx + inset, limit: rx + rw - inset, place: (d, fw, fh) => [d, ry + rh - inset - fh] },        // bottom
+    { cursor: ry + inset, limit: ry + rh - inset, place: (d, fw, fh) => [rx + inset, d] },                  // left
+  ];
+  let wi = 0;
+  for (const obj of items) {
+    const def = FP_FURNITURE[obj.defId];
+    // Rotate the footprint to lie along the wall it is going on.
+    const along = (wi % 2 === 0);
+    const fw = along ? def.w : def.h;
+    const fh = along ? def.h : def.w;
+    let placed = false;
+    for (let tries = 0; tries < 4 && !placed; tries++) {
+      const wall = walls[wi % 4];
+      const span = along ? fw : fh;
+      if (wall.cursor + span <= wall.limit) {
+        const [fx, fy] = wall.place(wall.cursor, fw, fh);
+        out += def.draw(fx, fy, fw, fh, obj.state || {});
+        wall.cursor += span + 2;
+        placed = true;
+      }
+      wi++;
+    }
+    if (!placed) break;   // room is full; the rest simply are not drawn
+  }
+  return out + '</g>';
+}
+
+// Who is in the room. Circles carrying a portrait when one is already
+// cached, initials otherwise — see hydrateFloorPlanAvatars for why this
+// never triggers generation.
+function renderRoomOccupants(gs, roomId, cx, cy, presentIds) {
+  const bodies = [];
+  if (roomId === gs.player.location) bodies.push({ id: 'player', isPlayer: true });
+  for (const id of presentIds.slice(0, 5)) bodies.push({ id, npc: gs.npcs[id] });
+  if (bodies.length === 0) return '';
+
+  const spacing = 21;
+  const startX = cx - (bodies.length - 1) * spacing / 2;
+  let out = '<g class="fp-people">';
+  bodies.forEach((b, i) => {
+    const x = startX + i * spacing, y = cy + 6;
+    const npc = b.npc;
+    const sleeping = npc?.activity === 'sleeping' || npc?.activity === 'sleep';
+    const transit = !!npc?.transit;
+    let cls = 'fp-avatar';
+    if (b.isPlayer) cls += ' is-player';
+    if (sleeping) cls += ' is-sleeping';
+    if (transit) cls += ' is-transit';
+    out += `<g class="${cls}" transform="translate(${x},${y})">`;
+    out += `<circle class="fp-avatar-bg" cx="0" cy="0" r="9"/>`;
+    out += `<image class="fp-avatar-img" data-avatar-for="${b.id}" x="-9" y="-9" width="18" height="18" clip-path="url(#fp-clip-${b.id})" href="" hidden="hidden"/>`;
+    const label = b.isPlayer ? 'You' : initialsFor(npc);
+    out += `<text class="fp-avatar-initials" data-initials-for="${b.id}" x="0" y="3">${escapeHtml(label)}</text>`;
+    out += `<circle class="fp-avatar-ring" cx="0" cy="0" r="9"/>`;
+    out += '</g>';
+  });
+  return out + '</g>';
+}
+
+function initialsFor(npc) {
+  const name = npc?.bible?.name || '';
+  if (!name) return '?';
+  return name.split(/\s+/).slice(0, 2).map(p => p[0]).join('').toUpperCase();
+}
+
+// Fill in avatar art from the image cache ONLY — never by generating.
+// A floor plan redraws on essentially every interaction, and kicking off a
+// portrait generation from a render pass would spend real quota every time
+// somebody walked into a room. Portraits reach the cache through the surfaces
+// that legitimately generate them (the character studio, NPC portraits); this
+// picks them up for free once they exist and shows initials until then.
+async function hydrateFloorPlanAvatars(gs, present) {
+  if (typeof getCachedImage !== 'function') return;
+  const seen = new Set();
+  for (const ids of Object.values(present)) {
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const npc = gs.npcs[id];
+      if (!npc?.bible?.genSeed) continue;
+      const key = composeCharKey(npc, 'neutral', 'standing');
+      try {
+        const blob = await getCachedImage(key);
+        if (!blob) continue;
+        const url = createObjectUrl(key, blob);
+        for (const img of document.querySelectorAll(`[data-avatar-for="${id}"]`)) {
+          img.setAttribute('href', url);
+          img.removeAttribute('hidden');
+        }
+        for (const t of document.querySelectorAll(`[data-initials-for="${id}"]`)) t.setAttribute('hidden', 'hidden');
+      } catch (e) { /* cache miss is the normal case, not an error */ }
+    }
+  }
 }
 
 function escapeHtml(s) {
@@ -241,7 +677,12 @@ function renderScene(gs, sceneState) {
   const activeNpcs = (sceneState?.active || [])
     .map(id => (gs.npcs[id] ? { ...gs.npcs[id], id } : null))
     .filter(Boolean);
-  const sceneKey = composeSceneKey(roomId, phase, 'normal', activeNpcs.map(n => n.id));
+  // The room's objects are needed BEFORE the key now: a laid table is part of
+  // what makes this scene this scene (sceneDetailSignature), so the key has to
+  // see it or the dining room would keep serving its cached empty-table art
+  // through dinner.
+  const roomObjects = gs.objects?.[`room_${roomId}`];
+  const sceneKey = composeSceneKey(roomId, phase, 'normal', activeNpcs.map(n => n.id), sceneDetailSignature(roomObjects));
 
   // Idempotent: only touch the image (placeholder swap + async fetch) when
   // the scene actually changed. Re-stamping data-loading and swapping to
@@ -256,12 +697,13 @@ function renderScene(gs, sceneState) {
   img.src = getPlaceholder();
 
   // Generate scene async. roomObjects (WORLD) drives the room-specific
-  // detail phrase in the prompt — note the scene cache key doesn't yet
-  // reflect object state, so a room getting dirtier won't by itself
+  // detail phrase in the prompt — note the scene cache key still doesn't
+  // reflect ORDINARY object state, so a room getting dirtier won't by itself
   // trigger new art; that's a deliberate deferral (regenerating art on
-  // every state change would be expensive), not an oversight.
-  const roomObjects = gs.objects?.[`room_${roomId}`];
-  getSceneImage(roomId, phase, activeNpcs, roomObjects).then(result => {
+  // every state change would be expensive), not an oversight. A laid table is
+  // the one exception, because it is a thing the player did on purpose and
+  // the scene is about it. `player` puts the player in their own scene.
+  getSceneImage(roomId, phase, activeNpcs, roomObjects, { player: gs.player }).then(result => {
     if (img.getAttribute('data-scene-key') !== sceneKey) return; // scene moved on before this resolved
     if (result.url) {
       img.src = result.url;
@@ -411,7 +853,7 @@ function renderInventoryPanel(gs) {
   const inv = gs.player.inventory || [];
   let stacks = filterStacks(inv, invpSearchText);
   const grouped = invpSortMode === 'group';
-  if (!grouped) stacks = sortStacks(stacks, invpSortMode, gs.meta.clock.day);
+  if (!grouped) stacks = sortStacks(stacks, invpSortMode, gameDaysNow(gs.meta.clock));
 
   // Selection: keep the previously selected defId while still visible,
   // otherwise fall back to the first filtered stack.
@@ -447,12 +889,14 @@ function appendInventoryRow(container, tpl, stack, gs) {
   const row = node.querySelector('.invp-row');
   row.setAttribute('data-def-id', stack.defId);
   if (invpSelectedDefId === stack.defId) row.setAttribute('data-selected', '');
-  const d = describeStack(stack, { day: gs.meta.clock.day });
+  const d = describeStack(stack, { day: gameDaysNow(gs.meta.clock) });
   node.querySelector('.invp-row-name').textContent = d.label;
   node.querySelector('.invp-row-qty').textContent = `×${d.qty}`;
   node.querySelector('.invp-row-sublabel').textContent = d.sublabel;
   const tag = node.querySelector('.invp-freshness-tag');
-  if (d.freshness) {
+  // The 'good' rung carries an EMPTY label on purpose — food that is simply
+  // fine gets no tag at all, so a tag in the list always means something.
+  if (d.freshness?.label) {
     tag.textContent = d.freshness.label;
     tag.setAttribute('data-state', d.freshness.key);
   }
@@ -619,11 +1063,11 @@ function renderContainerColumn(listId, side, stacks, gs, containerDef) {
     if (ctrSelected?.side === side && ctrSelected?.defId === stack.defId) row.setAttribute('data-selected', '');
     // Phase 4: container-side rows compute freshness against THIS
     // container's preservation multiplier (bag side passes null).
-    const d = describeStack(stack, { day: gs.meta.clock.day, containerDef });
+    const d = describeStack(stack, { day: gameDaysNow(gs.meta.clock), containerDef });
     node.querySelector('.ctr-row-name').textContent = d.label;
     node.querySelector('.ctr-row-qty').textContent = `×${d.qty}`;
     const tag = node.querySelector('.ctr-freshness-tag');
-    if (d.freshness) {
+    if (d.freshness?.label) {
       tag.textContent = d.freshness.label;
       tag.setAttribute('data-state', d.freshness.key);
     }
@@ -793,11 +1237,12 @@ function openEatPicker(options) {
       if (sv > 1) metaParts.push(`serves ${sv}`);
       if (restore) metaParts.push(`restores ${restore}`);
       meta.textContent = `${option.sourceLabel} · ${metaParts.join(' · ')}`;
-      // Phase 4: flag non-Fresh options (the restore shown is the WHOLE
-      // item's — a Spoiling/Rotten one restores far less and may sicken
-      // you, see applyEatItem).
+      // Phase 4: flag options that have slipped down the ladder (the
+      // restore shown is the WHOLE item's — a Stale/Spoiled one restores
+      // less and a Spoiled one may sicken you, see applyEatItem). Fresh and
+      // plain-good both carry no tag: only a warning gets one.
       const fresh = freshnessOf(option.stack, option.containerDef ?? null, option.day);
-      if (fresh && fresh.key !== 'fresh') {
+      if (fresh?.label && fresh.key !== 'fresh') {
         const tag = document.createElement('span');
         tag.className = `eat-pick-freshness eat-pick-${fresh.key}`;
         tag.textContent = fresh.label;
@@ -816,6 +1261,113 @@ function openEatPicker(options) {
     cancel.textContent = 'Cancel';
     cancel.addEventListener('click', () => finish(null));
     actions.appendChild(cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+
+// --- Spread picker (set_meal) ---
+// The eat picker's sibling for laying out a TABLE: the same rows, but
+// multi-select, with the one number that decides whether the meal works —
+// servings on the table against people at it — kept live above the Serve
+// button. set_meal used to reuse the single-select eat picker, which is why
+// catering for a room was invisible: the player picked one dish and only
+// found out afterwards that three roommates got nothing.
+//
+// Resolves to an array of { defId, from } (empty/null on cancel).
+function openSpreadPicker(options, { seats = 1, max = 6 } = {}) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (choice) => { overlay.removeAttribute('data-open'); resolve(choice); };
+    title.textContent = seats > 1 ? `Lay out the table for ${seats}` : 'Lay out the table';
+    body.innerHTML = '';
+
+    const picked = [];       // [{ defId, from }] in the order they were added
+    const rowFor = new Map(); // key -> row element
+    const keyOf = (o) => `${o.from}::${o.stack.defId}`;
+
+    const tally = document.createElement('div');
+    tally.className = 'spread-tally';
+    const serveBtn = document.createElement('button');
+    serveBtn.type = 'button';
+    serveBtn.className = 'btn';
+    serveBtn.textContent = 'Serve';
+
+    const servingsOf = (o) => (typeof stackServingsLeft === 'function' ? stackServingsLeft(o.stack) : o.stack.qty || 1);
+    const refresh = () => {
+      const chosen = picked.map(p => options.find(o => keyOf(o) === `${p.from}::${p.defId}`)).filter(Boolean);
+      const total = chosen.reduce((sum, o) => sum + servingsOf(o), 0);
+      if (chosen.length === 0) {
+        tally.textContent = `Nothing on the table yet — ${seats} ${seats === 1 ? 'seat' : 'seats'} to fill.`;
+        tally.setAttribute('data-state', 'empty');
+      } else {
+        const short = seats - total;
+        tally.textContent = short > 0
+          ? `${total} ${total === 1 ? 'serving' : 'servings'} for ${seats} — ${short} ${short === 1 ? 'person goes' : 'people go'} without.`
+          : `${total} ${total === 1 ? 'serving' : 'servings'} for ${seats}${total > seats ? ` — ${total - seats} left over` : ' — just enough'}.`;
+        tally.setAttribute('data-state', short > 0 ? 'short' : 'ok');
+      }
+      serveBtn.disabled = chosen.length === 0;
+      for (const [key, row] of rowFor) {
+        const on = picked.some(p => `${p.from}::${p.defId}` === key);
+        row.toggleAttribute('data-picked', on);
+        // At the cap, un-picked rows stop responding — the bound is visible
+        // rather than a silent no-op on click.
+        row.toggleAttribute('data-disabled', !on && picked.length >= max);
+      }
+    };
+
+    const list = document.createElement('div');
+    list.className = 'eat-pick-list';
+    for (const option of options) {
+      const key = keyOf(option);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-block eat-pick-btn spread-pick-btn';
+      const name = document.createElement('span');
+      name.className = 'eat-pick-name';
+      name.textContent = option.def.label || 'Something';
+      const meta = document.createElement('span');
+      meta.className = 'eat-pick-meta';
+      const sv = servingsOf(option);
+      const metaParts = [`${sv} ${sv === 1 ? 'serving' : 'servings'}`];
+      const restore = consumableSummary(option.def, { perServing: itemServings(option.def) > 1 });
+      if (restore) metaParts.push(`restores ${restore}`);
+      meta.textContent = `${option.sourceLabel} · ${metaParts.join(' · ')}`;
+      const fresh = freshnessOf(option.stack, option.containerDef ?? null, option.day);
+      if (fresh?.label && fresh.key !== 'fresh') {
+        const tag = document.createElement('span');
+        tag.className = `eat-pick-freshness eat-pick-${fresh.key}`;
+        tag.textContent = fresh.label;
+        meta.appendChild(document.createTextNode(' · '));
+        meta.appendChild(tag);
+      }
+      btn.append(name, meta);
+      btn.addEventListener('click', () => {
+        const at = picked.findIndex(p => `${p.from}::${p.defId}` === key);
+        if (at >= 0) picked.splice(at, 1);
+        else if (picked.length < max) picked.push({ defId: option.stack.defId, from: option.from });
+        refresh();
+      });
+      rowFor.set(key, btn);
+      list.appendChild(btn);
+    }
+    body.appendChild(list);
+    body.appendChild(tally);
+
+    actions.innerHTML = '';
+    serveBtn.addEventListener('click', () => finish(picked.slice()));
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    actions.append(serveBtn, cancel);
+    refresh();
     overlay.setAttribute('data-open', '');
   });
 }

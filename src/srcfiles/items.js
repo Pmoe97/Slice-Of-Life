@@ -8,7 +8,8 @@
 //
 // Stack `meta` contract (inventory overhaul Phase 1 — later phases add
 // fields here, this is the single source):
-//   acquiredDay   game day the stack entered the world; stamped by
+//   acquiredDay   game time the stack entered the world, in CONTINUOUS days
+//                 (day + minutes/1440 — see gameDaysNow); stamped by
 //                 addStack's `day` argument when not already present
 //                 (null/absent = pre-Phase-1 legacy stack; freshness
 //                 treats it as acquired today — the safe default)
@@ -38,6 +39,19 @@ function stackCohort(stack) {
   return stack?.meta?.acquiredDay ?? null;
 }
 
+// Merge test for two freshness anchors. Non-perishables (null on both
+// sides) merge freely, exactly as before Phase 4. Perishables merge when
+// their anchors are within ROT.mergeToleranceHours: the anchor is
+// continuous now, so the old `===` would have made every minute of a
+// shopping trip its own stack. The tolerance is small enough that a merge
+// still cannot misrepresent either stack's remaining life — and addStack
+// keeps the OLDER of the two anchors anyway, so it can only ever err
+// toward "this is older than you think".
+function cohortsMergeable(a, b) {
+  if (a == null || b == null) return a === b;
+  return Math.abs(a - b) <= ROT.mergeToleranceHours / 24;
+}
+
 function stackQty(stacks, defId) {
   return (stacks || []).filter(s => s.defId === defId).reduce((sum, s) => sum + s.qty, 0);
 }
@@ -53,20 +67,26 @@ const SHOP_CATALOG_LIST = Object.values(ITEM_DEFS).filter(d => d.id !== '_unknow
 // (Phase 4 B2 fix — `defId + ownerId + cohort`, so milk bought today never
 // merges into milk bought last week and drags the fresh stack down with
 // it), else appending a new entry. Returns a new array — never mutates
-// the input. `day` (optional, game day) stamps meta.acquiredDay on NEW
-// stacks when the supplied meta doesn't already carry one, and stamps
-// meta.cohort (the freshness anchor) on NEW perishable stacks; the merge
-// path preserves the existing stack's meta (an older stack keeps its
-// age). Non-perishables keep cohort null and merge exactly as before.
+// the input. `day` (optional, CONTINUOUS game days — gameDaysNow) stamps
+// meta.acquiredDay on NEW stacks when the supplied meta doesn't already
+// carry one, and stamps meta.cohort (the freshness anchor) on NEW
+// perishable stacks; the merge path keeps the OLDER of the two anchors, so
+// fusing a fresh delivery into an hour-old one can never make the older
+// food read as newer than it is. Non-perishables keep cohort null and merge
+// exactly as before.
 function addStack(stacks, defId, qty, ownerId, meta, day) {
   const def = ITEM_DEFS[defId] || ITEM_DEFS._unknown;
   const list = [...(stacks || [])];
   const newCohort = stackCohort({ defId, meta }) ?? (def?.perishable?.days ? day ?? null : null);
   if (def.stackable) {
-    const idx = list.findIndex(s => s.defId === defId && s.ownerId === (ownerId ?? null) && stackCohort(s) === newCohort);
+    const idx = list.findIndex(s => s.defId === defId && s.ownerId === (ownerId ?? null) && cohortsMergeable(stackCohort(s), newCohort));
     if (idx >= 0) {
       const newQty = Math.min(def.maxStack || Infinity, list[idx].qty + qty);
-      list[idx] = { ...list[idx], qty: newQty };
+      const existingCohort = stackCohort(list[idx]);
+      const mergedMeta = (existingCohort != null && newCohort != null && newCohort < existingCohort)
+        ? { ...(list[idx].meta || {}), cohort: newCohort }
+        : list[idx].meta;
+      list[idx] = { ...list[idx], qty: newQty, meta: mergedMeta };
       return list;
     }
   }
@@ -103,19 +123,44 @@ function removeStack(stacks, defId, qty) {
 // preservation multiplier, and today's game day. It therefore survives
 // saves, reloads, and multi-day time skips untouched.
 //
-// Effective shelf life = def.perishable.days × container.preservation.
-// State ladder (ROT.freshnessThresholds): Fresh < 0.5 | Use soon 0.5–0.85
-// | Spoiling 0.85–1 | Rotten > 1. `containerDef` is the OBJECT_DEFS entry
-// of the container holding the stack (null = the player's bag, the 1.0
-// baseline). Returns null for a non-perishable or a stack whose age is
-// unknown (treated as freshly acquired — never instantly rotten). `pct` is
-// the unclamped fraction of shelf life elapsed (can exceed 1 when Rotten),
-// so sorters can rank urgency and eaters can scale restore.
+// Effective shelf life = def.perishable.days × container.preservation, and
+// `def.perishable.days` is the room-temperature time to ROTTEN — the end of
+// the ladder, not the first sign of trouble.
+//
+// State ladder (ROT.stages, fraction of that life consumed):
+//   Fresh   < stages.good AND under ROT.freshHours of actual elapsed time
+//   —       < stages.stale   (good; deliberately carries no label)
+//   Stale   < stages.spoiled
+//   Spoiled < 1              (edible, with penalties)
+//   Rotten  ≥ 1              (NOT edible)
+//
+// The Fresh window is absolute rather than fractional because "fresh" means
+// recently made. A fraction alone would call month-keeping butter Fresh for
+// two days and a milkshake Fresh for two hours, which is backwards for the
+// butter and only accidentally right for the shake.
+//
+// `containerDef` is the OBJECT_DEFS entry of the container holding the
+// stack (null = the player's bag, the 1.0 baseline). `day` is CONTINUOUS
+// game days (gameDaysNow) — passing a bare `clock.day` still works but
+// quantises the whole ladder to midnight, which is what this replaced.
+// Returns null for a non-perishable or a stack whose age is unknown
+// (treated as freshly acquired — never instantly rotten). `pct` is the
+// unclamped fraction of shelf life elapsed (can exceed 1 when Rotten), so
+// sorters can rank urgency and eaters can scale restore.
 function effectiveShelfDays(def, containerDef) {
   const shelf = def?.perishable?.days;
   if (!shelf) return null;
   const pres = containerDef?.container?.preservation ?? ROT.bagPreservation;
   return shelf * pres;
+}
+
+// Continuous game time in days. Whole-day `clock.day` arithmetic is what
+// made a short-life dish skip the entire ladder at rollover; the minutes
+// term gives the same derived model hour-level resolution without changing
+// its shape or storing anything.
+function gameDaysNow(clock) {
+  if (clock?.day == null) return null;
+  return clock.day + (clock.minutes ?? 0) / (CLOCK.ticksPerDay * 30);
 }
 
 function freshnessOf(stack, containerDef, day) {
@@ -129,13 +174,20 @@ function freshnessOf(stack, containerDef, day) {
   // stack into a slower container (its anchor lands in the future) — that
   // stack is still Rotten, never "fresh".
   const pct = elapsed < 0 ? 1 + (-elapsed) / shelfDays : elapsed / shelfDays;
-  const { useSoon, spoiling } = ROT.freshnessThresholds;
-  const key = pct > 1 ? 'rotten' : pct >= spoiling ? 'spoiling' : pct >= useSoon ? 'useSoon' : 'fresh';
+  const { good, stale, spoiled } = ROT.stages;
+  const key = pct >= 1 ? 'rotten'
+    : pct >= spoiled ? 'spoiled'
+    : pct >= stale ? 'stale'
+    : (pct >= good || elapsed * 24 >= ROT.freshHours) ? 'good'
+    : 'fresh';
   return {
     key,
-    label: { fresh: 'Fresh', useSoon: 'Use soon', spoiling: 'Spoiling', rotten: 'Rotten' }[key],
+    label: ROT.labels[key],
     pct,
-    rot: pct > 1,
+    ageDays: Math.max(0, elapsed),
+    shelfDays,
+    edible: key !== 'rotten',
+    rot: key === 'rotten',
   };
 }
 

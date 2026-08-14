@@ -232,58 +232,121 @@ body {
   height: auto;
   display: block;
 }
+/* Floor plan (floorplan-and-movement-plan.md Phase 4-5). Rooms TILE, so the
+   plan is drawn in layers: fills, then walls with the doorways cut out of
+   them, then furniture and people on top. `.fp-connector` is gone — it
+   existed only to bridge gaps between rooms that did not touch. */
 .fp-room {
   fill: var(--color-surface);
-  stroke: var(--color-border);
-  stroke-width: 1;
+  stroke: none;
   cursor: pointer;
-  transition: fill 0.15s, stroke 0.15s;
+  transition: fill 0.15s;
 }
 .fp-room:hover { fill: var(--color-surface-hover); }
-.fp-room[data-current] {
-  fill: var(--color-accent-dim);
-  stroke: var(--color-accent);
-  stroke-width: 2;
-}
-.fp-room[data-adjacent] {
+.fp-room[data-current] { fill: var(--color-accent-dim); }
+.fp-room[data-adjacent] { fill: var(--color-surface-alt); }
+/* Walls. Thick, flat-capped and a touch lighter than the border colour so
+   the plan reads as drawn rather than as a grid of outlined boxes. */
+.fp-wall {
   stroke: var(--color-border-strong);
-  stroke-dasharray: none;
-}
-.fp-room[data-distant] {
-  opacity: 0.45;
-  cursor: default;
+  stroke-width: 3;
+  stroke-linecap: square;
   pointer-events: none;
 }
-.fp-room[data-distant]:hover { fill: var(--color-surface); }
+/* A locked door is a CLOSED door: the renderer cuts no gap for it, and this
+   is what fills the doorway instead. The only place the plan draws a barrier
+   that is not a wall. */
+.fp-locked {
+  stroke: var(--color-warning);
+  stroke-width: 3.5;
+  stroke-linecap: butt;
+  pointer-events: none;
+}
+/* A glass threshold — sight passes, nothing else does. */
+.fp-glass {
+  stroke: var(--color-cool);
+  stroke-width: 2.5;
+  stroke-dasharray: 3 2.5;
+  stroke-linecap: butt;
+  pointer-events: none;
+  opacity: 0.85;
+}
 .fp-room-label {
   fill: var(--color-text);
-  font-size: 7px;
+  font-size: 11px;
   font-weight: 600;
   text-anchor: middle;
   pointer-events: none;
   text-transform: uppercase;
   letter-spacing: 0.3px;
+  paint-order: stroke;
+  stroke: var(--color-bg);
+  stroke-width: 3px;
+  stroke-linejoin: round;
 }
-.fp-room[data-distant] + .fp-room-label { opacity: 0.5; }
-.fp-npc-dot {
-  fill: var(--color-accent);
-  pointer-events: none;
+/* Furniture — one flat palette, deliberately quiet. The plan is a map of
+   where things are, not a picture of them; if the furniture competes with
+   the people on it the map has failed. */
+.fp-furniture { pointer-events: none; }
+.fp-f { fill: var(--color-surface-alt); stroke: var(--color-border-strong); stroke-width: 0.8; }
+.fp-f.dirty { fill: #4a3a2a; stroke: var(--color-warm); }
+.fp-f-soft { fill: var(--color-surface-hover); stroke: var(--color-border); stroke-width: 0.8; }
+.fp-f-soft.messy { fill: #43355e; }
+.fp-f-detail { fill: var(--color-border-strong); stroke: none; }
+.fp-f-detail-l { stroke: var(--color-border-strong); stroke-width: 0.8; }
+.fp-f-bar { stroke: var(--color-border-strong); stroke-width: 1.5; }
+.fp-f-felt { fill: #24503a; stroke: var(--color-border-strong); stroke-width: 0.8; }
+.fp-f-water { fill: #1d4a63; stroke: var(--color-cool); stroke-width: 0.8; }
+.fp-f-water.empty { fill: #33322c; stroke: var(--color-text-faint); }
+.fp-f-plant { fill: #2f5138; stroke: var(--color-positive); stroke-width: 0.7; }
+/* Authored props (Home Design Studio). One palette shared with the automatic
+   furniture above, so a designed room and an auto-arranged one look like the
+   same apartment. */
+.fp-p { stroke-width: 0.8; }
+.fp-p-frame { fill: var(--color-surface-alt); stroke: var(--color-border-strong); }
+.fp-p-soft { fill: var(--color-surface-hover); stroke: var(--color-border); }
+.fp-p-detail { fill: var(--color-border-strong); stroke: none; }
+.fp-p-detail-outline { fill: none; stroke: var(--color-border-strong); stroke-width: 0.7; }
+.fp-p-felt { fill: #24503a; stroke: var(--color-border-strong); }
+.fp-p-water { fill: #1d4a63; stroke: var(--color-cool); }
+.fp-p-coping { fill: #3a4256; stroke: var(--color-border-strong); }
+.fp-p-lane { stroke: rgba(108,199,246,0.35); stroke-width: 0.8; fill: none; }
+.fp-p-plant { fill: #2f5138; stroke: var(--color-positive); stroke-width: 0.7; }
+.fp-p-glass { fill: rgba(108,199,246,0.25); stroke: var(--color-cool); }
+.fp-p-void { fill: var(--color-bg); stroke: var(--color-border-strong); }
+/* An unfinished facility's placement — the dry basin before the pool works. */
+.fp-prop.v-empty .fp-p-water { fill: #33322c; stroke: var(--color-text-faint); }
+.fp-prop.v-empty .fp-p-lane { stroke: none; }
+/* People. A circle carrying a portrait when one is cached, initials when
+   not — the map never generates art (see hydrateFloorPlanAvatars). */
+.fp-people { pointer-events: none; }
+.fp-avatar-bg { fill: var(--color-surface-alt); }
+.fp-avatar-ring { fill: none; stroke: var(--color-border-strong); stroke-width: 1.5; }
+.fp-avatar.is-player .fp-avatar-ring { stroke: var(--color-accent); stroke-width: 2; }
+.fp-avatar.is-player .fp-avatar-bg { fill: var(--color-accent-dim); }
+.fp-avatar.is-sleeping { opacity: 0.4; }
+.fp-avatar.is-transit .fp-avatar-ring { stroke: var(--color-warning); stroke-dasharray: 3 2; }
+.fp-avatar-initials {
+  fill: var(--color-text);
+  font-size: 8px;
+  font-weight: 700;
+  text-anchor: middle;
+  letter-spacing: 0.2px;
 }
-.fp-npc-dot[data-sleeping] { opacity: 0.35; }
-.fp-npc-dot[data-transit] { fill: var(--color-warning); }
+.fp-avatar-img[hidden] { display: none; }
 .fp-door-icon {
   fill: var(--color-warning);
   font-size: 6px;
   text-anchor: middle;
   pointer-events: none;
 }
-.fp-connector {
-  stroke: var(--color-border);
-  stroke-width: 1.5;
-  stroke-dasharray: 2,2;
-  fill: none;
-  pointer-events: none;
-}
+/* Structural work in RenoFix (floorplan plan Phase 6) — a different KIND of
+   purchase to a facility upgrade, and marked out so it reads that way. */
+.upg-structural .upg-room-heading { color: var(--color-cool); }
+.upg-structural-note { margin: 0 0 var(--space-3); line-height: 1.5; }
+.upg-structural-effects { display: flex; flex-direction: column; gap: 3px; margin-top: 5px; }
+.upg-effect { color: var(--color-cool); opacity: 0.85; }
+.upg-effect::before { content: '→ '; opacity: 0.6; }
 /* Under-construction rooms (renovation overhaul Phase 3) — hazard-stripe
    fill via the #fp-hazard pattern the renderer emits, warning stroke. */
 .fp-room[data-construction] {
@@ -293,7 +356,7 @@ body {
 }
 .fp-construction-label {
   fill: var(--color-warning);
-  font-size: 5px;
+  font-size: 8px;
   font-weight: 700;
   text-anchor: middle;
   pointer-events: none;
@@ -391,7 +454,7 @@ body {
 
 /* Floor-plan sensory glyphs (Phase 3, D9) — drawn at the room a signal comes
    FROM, which is what makes the plan a map of the apartment's senses. */
-.fp-signal { font-size: 5px; text-anchor: middle; pointer-events: none; }
+.fp-signal { font-size: 12px; text-anchor: middle; pointer-events: none; }
 
 .sr-heading {
   flex: 0 0 auto;
@@ -958,6 +1021,13 @@ body {
 .btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .btn:active { transform: scale(0.97); }
 .btn:disabled { opacity: 0.4; cursor: default; }
+/* The CLASS, not the attribute. RenoFix's booking buttons mark themselves
+   `class="btn ... disabled"` when the player can't afford the job — and this
+   rule never existed, so an unaffordable Book button looked exactly like an
+   affordable one on every facility card in the game. The click is refused
+   correctly either way; it just gave no warning first. */
+.btn.disabled { opacity: 0.4; cursor: default; }
+.btn.disabled:hover { background: var(--color-accent); }
 .btn-secondary { background: var(--color-surface-alt); }
 .btn-secondary:hover { background: var(--color-surface-hover); }
 .btn-block { width: 100%; }
@@ -1055,8 +1125,8 @@ body {
 .invp-row-sublabel { color: var(--color-text-faint); font-size: var(--fs-xs); flex-shrink: 0; }
 .invp-freshness-tag { font-size: var(--fs-xs); padding: 1px 6px; border-radius: 3px; flex-shrink: 0; }
 .invp-freshness-tag[data-state="fresh"] { background: rgba(108, 246, 169, 0.15); color: var(--color-positive); }
-.invp-freshness-tag[data-state="useSoon"] { background: rgba(246, 215, 108, 0.15); color: var(--color-warning); }
-.invp-freshness-tag[data-state="spoiling"] { background: rgba(246, 169, 108, 0.15); color: var(--color-warm); }
+.invp-freshness-tag[data-state="stale"] { background: rgba(246, 215, 108, 0.15); color: var(--color-warning); }
+.invp-freshness-tag[data-state="spoiled"] { background: rgba(246, 169, 108, 0.15); color: var(--color-warm); }
 .invp-freshness-tag[data-state="rotten"] { background: rgba(246, 108, 140, 0.15); color: var(--color-negative); }
 .invp-empty { padding: var(--space-4); }
 .invp-detail {
@@ -1072,7 +1142,8 @@ body {
 .invp-detail-meta { font-size: var(--fs-xs); color: var(--color-text-dim); }
 .invp-detail-desc { font-size: var(--fs-sm); color: var(--color-text); line-height: var(--lh-loose); }
 .invp-detail-fresh { font-size: var(--fs-sm); color: var(--color-text-dim); }
-.invp-detail-fresh[data-state="spoiling"] { color: var(--color-warm); }
+.invp-detail-fresh[data-state="stale"] { color: var(--color-warning); }
+.invp-detail-fresh[data-state="spoiled"] { color: var(--color-warm); }
 .invp-detail-fresh[data-state="rotten"] { color: var(--color-negative); }
 .invp-detail-actions { display: flex; flex-direction: column; gap: var(--space-2); }
 .invp-qty-row { display: flex; align-items: center; gap: var(--space-2); }
@@ -1136,8 +1207,8 @@ body {
 .ctr-row-qty { color: var(--color-text-dim); flex-shrink: 0; }
 .ctr-freshness-tag { font-size: var(--fs-xs); padding: 1px 6px; border-radius: 3px; flex-shrink: 0; }
 .ctr-freshness-tag[data-state="fresh"] { background: rgba(108, 246, 169, 0.15); color: var(--color-positive); }
-.ctr-freshness-tag[data-state="useSoon"] { background: rgba(246, 215, 108, 0.15); color: var(--color-warning); }
-.ctr-freshness-tag[data-state="spoiling"] { background: rgba(246, 169, 108, 0.15); color: var(--color-warm); }
+.ctr-freshness-tag[data-state="stale"] { background: rgba(246, 215, 108, 0.15); color: var(--color-warning); }
+.ctr-freshness-tag[data-state="spoiled"] { background: rgba(246, 169, 108, 0.15); color: var(--color-warm); }
 .ctr-freshness-tag[data-state="rotten"] { background: rgba(246, 108, 140, 0.15); color: var(--color-negative); }
 .ctr-empty { padding: var(--space-4); }
 .ctr-actions {
@@ -1153,7 +1224,8 @@ body {
 .ctr-detail-meta { font-size: var(--fs-xs); color: var(--color-text-dim); }
 .ctr-detail-desc { font-size: var(--fs-sm); color: var(--color-text); line-height: var(--lh-loose); }
 .ctr-detail-fresh { font-size: var(--fs-sm); color: var(--color-text-dim); }
-.ctr-detail-fresh[data-state="spoiling"] { color: var(--color-warm); }
+.ctr-detail-fresh[data-state="stale"] { color: var(--color-warning); }
+.ctr-detail-fresh[data-state="spoiled"] { color: var(--color-warm); }
 .ctr-detail-fresh[data-state="rotten"] { color: var(--color-negative); }
 .ctr-action-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 
@@ -1299,8 +1371,38 @@ body {
   padding: 1px 6px;
   border-radius: 3px;
 }
-.eat-pick-spoiling { background: rgba(246, 169, 108, 0.15); color: var(--color-warm); }
-.eat-pick-rotten { background: rgba(246, 108, 140, 0.15); color: var(--color-negative); }
+.eat-pick-stale { background: rgba(246, 215, 108, 0.15); color: var(--color-warning); }
+.eat-pick-spoiled { background: rgba(246, 169, 108, 0.15); color: var(--color-warm); }
+
+/* Spread picker (set_meal): the eat picker's rows, multi-select, with the
+   servings-vs-seats tally that makes catering a visible decision.
+
+   These rows INVERT the .btn default. A row in the single-select eat picker
+   is an action, so accent-coloured is right there — clicking it is the
+   choice. A row here is a toggle, and leaving .btn's accent background on
+   made every un-picked dish read as already selected. Neutral until picked,
+   accented once it's on the table. */
+.spread-pick-btn {
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+.spread-pick-btn:hover { background: var(--color-surface); border-color: var(--color-text-faint); }
+.spread-pick-btn[data-picked] { background: var(--color-accent); color: #fff; border-color: var(--color-accent); }
+.spread-pick-btn[data-picked]:hover { background: var(--color-accent-hover); }
+.spread-pick-btn[data-picked] .eat-pick-name::before { content: '✓ '; }
+.spread-pick-btn[data-picked] .eat-pick-meta { color: rgba(255, 255, 255, 0.75); }
+.spread-pick-btn[data-disabled] { opacity: 0.4; pointer-events: none; }
+.spread-tally {
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  background: var(--color-surface-alt);
+}
+.spread-tally[data-state="empty"] { color: var(--color-text-dim); }
+.spread-tally[data-state="short"] { color: var(--color-warning); }
+.spread-tally[data-state="ok"] { color: var(--color-positive); }
 
 /* Container panel — the rot-mess throw-out button (overhaul Phase 4). */
 #ctr-mess-btn { color: var(--color-negative); }
@@ -1368,6 +1470,9 @@ body {
   background: var(--color-surface-alt);
 }
 .char-field-block-title { font-size: var(--fs-sm); font-weight: 700; color: var(--color-text); }
+/* The player's own block sits above the roommates and is marked as theirs —
+   it is the one character on this form who isn't a roommate. */
+.char-player-block { border-color: var(--color-accent); }
 
 .char-seed-display {
   display: flex; align-items: center; gap: var(--space-2);
@@ -1533,6 +1638,337 @@ body {
   background: rgba(10, 7, 19, 0.4);
 }
 .title-btn[hidden] { display: none !important; }
+
+/* ===== Player Design studio (player creation + intro plan, Phase 3) =====
+   z-index 200 sits above .main-menu's 190, so the title screen and its
+   slideshow stay visible behind the studio's translucent frame. The intro
+   cutscene is 210, above both. */
+.player-studio {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(8px, 2vh, 28px);
+  background: rgba(8, 6, 16, 0.86);
+  backdrop-filter: blur(3px);
+}
+.player-studio[hidden] { display: none !important; }
+.ps-frame {
+  display: flex;
+  flex-direction: column;
+  width: min(980px, 100%);
+  max-height: 100%;
+  background: linear-gradient(160deg, #12101f, #0d0b16);
+  border: 1px solid #2e2745;
+  border-radius: 10px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.6);
+  overflow: hidden;
+}
+.ps-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid #241f38;
+}
+.ps-title {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: clamp(18px, 3.4vh, 28px);
+  color: #d9b871;
+  letter-spacing: 2px;
+  margin: 0;
+}
+.ps-sub {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 13px;
+  color: #8e84ab;
+  margin: 4px 0 0;
+}
+.ps-header-btns { display: flex; gap: var(--space-2); }
+.ps-tabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid #241f38;
+  scrollbar-width: thin;
+}
+.ps-tab {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #7c7396;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 10px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ps-tab:hover { color: #c9c0e6; }
+.ps-tab.active { color: #d9b871; border-bottom-color: #d9b871; }
+.ps-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-5);
+  scrollbar-width: thin;
+}
+.ps-section { margin-bottom: var(--space-5); }
+.ps-section:last-child { margin-bottom: 0; }
+.ps-section-title {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 15px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: #9a8fc0;
+  margin: 0 0 var(--space-2);
+  padding-bottom: 4px;
+  border-bottom: 1px solid #211c33;
+}
+.ps-hint {
+  font-size: var(--fs-xs);
+  color: #6f6790;
+  margin: 0 0 var(--space-3);
+  line-height: 1.5;
+}
+.ps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--space-3);
+}
+.ps-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ps-label {
+  font-size: var(--fs-xs);
+  color: #8880a6;
+  letter-spacing: 0.4px;
+}
+.ps-control {
+  width: 100%;
+  box-sizing: border-box;
+  background: #191527;
+  border: 1px solid #2e2745;
+  border-radius: 4px;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 7px 9px;
+}
+.ps-control:focus { outline: none; border-color: #6f5cc4; }
+.ps-field-hint { font-size: 10px; color: #625a80; line-height: 1.4; }
+.ps-toggle-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.ps-toggle {
+  background: #191527;
+  border: 1px solid #2e2745;
+  border-radius: 999px;
+  color: #9990b8;
+  font-size: var(--fs-xs);
+  padding: 4px 11px;
+  cursor: pointer;
+}
+.ps-toggle:hover { border-color: #4a4070; color: #c9c0e6; }
+.ps-toggle.active { background: #3b2f66; border-color: #7b6cf6; color: #e6e0ff; }
+.ps-rows { display: flex; flex-direction: column; gap: var(--space-3); }
+.ps-row {
+  border: 1px solid #241f38;
+  border-radius: 6px;
+  padding: var(--space-3);
+  background: rgba(25, 21, 39, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.ps-row-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.ps-row-title { font-size: 13px; color: #c9c0e6; letter-spacing: 0.5px; }
+.ps-row-remove {
+  background: none;
+  border: 1px solid #3d2436;
+  border-radius: 4px;
+  color: #b06a84;
+  font-size: 10px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.ps-row-remove:hover { border-color: #f66c8c; color: #f66c8c; }
+.ps-add {
+  align-self: flex-start;
+  background: none;
+  border: 1px dashed #3a3357;
+  border-radius: 4px;
+  color: #8880a6;
+  font-size: var(--fs-xs);
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.ps-add:hover { border-color: #7b6cf6; color: #c9c0e6; }
+.ps-portrait-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 240px) minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+@media (max-width: 640px) { .ps-portrait-layout { grid-template-columns: 1fr; } }
+.ps-portrait-pane {
+  position: relative;
+  aspect-ratio: 512 / 768;
+  border: 1px solid #2e2745;
+  border-radius: 6px;
+  background: #12101f;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ps-portrait-img { width: 100%; height: 100%; object-fit: cover; }
+.ps-portrait-img[hidden] { display: none; }
+.ps-portrait-placeholder { font-size: var(--fs-xs); color: #574f75; text-align: center; padding: var(--space-3); }
+.ps-portrait-side { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ps-prompt { resize: vertical; line-height: 1.5; font-size: 12px; }
+.ps-portrait-btns { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-top: 4px; }
+.ps-note {
+  margin: 0;
+  padding: var(--space-2) var(--space-5);
+  font-size: var(--fs-xs);
+  color: #f6d76c;
+  background: rgba(80, 62, 20, 0.25);
+}
+.ps-note[hidden] { display: none !important; }
+.ps-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid #241f38;
+}
+.ps-btn {
+  background: rgba(10, 7, 19, 0.6);
+  border: 1px solid #4a4070;
+  border-radius: 4px;
+  color: #c9c0e6;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 8px 18px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.ps-btn:hover:not(:disabled) { border-color: #d9b871; color: #d9b871; }
+.ps-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.ps-btn-primary { border-color: #d9b871; color: #d9b871; }
+.ps-btn-primary:hover:not(:disabled) { background: rgba(217, 184, 113, 0.12); }
+.ps-btn-secondary { font-size: var(--fs-xs); padding: 6px 13px; }
+
+/* ===== The opening cutscene (Phase 5) ===== */
+.intro-cutscene {
+  position: fixed;
+  inset: 0;
+  z-index: 210;
+  background: #06050c;
+  overflow: hidden;
+}
+.intro-cutscene[hidden] { display: none !important; }
+.intro-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* contain, never cover — same reasoning as .title-bg-img: show the whole
+     composed frame. These shots are FRAMED to obscure the protagonist, so
+     cropping one could crop the very thing the framing is doing. */
+  object-fit: contain;
+  opacity: 0;
+  transition: opacity 0.9s ease-in-out;
+}
+.intro-img.visible { opacity: 1; }
+.intro-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(120% 90% at 50% 40%, transparent 45%, rgba(6,5,12,0.85) 100%);
+}
+.intro-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0 clamp(16px, 6vw, 90px) clamp(70px, 14vh, 130px);
+  cursor: pointer;
+}
+/* A beat with no art centres its text instead of bottom-anchoring it under an
+   empty frame. Both states are real: the art is pregenerated and dropped in
+   later (defs.intro.js), so until then EVERY beat is art-less, and a column
+   of prose pinned to the bottom of a black void reads as a broken image
+   rather than as a designed card. */
+.intro-stage.no-art {
+  align-items: center;
+  padding-bottom: clamp(16px, 6vw, 90px);
+}
+.intro-stage.no-art .intro-text { background: none; text-align: center; }
+.intro-text {
+  width: min(760px, 100%);
+  background: linear-gradient(180deg, rgba(6,5,12,0), rgba(6,5,12,0.82) 22%);
+  padding: clamp(14px, 3vh, 26px) clamp(14px, 3vw, 30px);
+  border-radius: 6px;
+}
+.intro-line {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: clamp(15px, 2.6vh, 21px);
+  line-height: 1.6;
+  color: #ded6f0;
+  margin: 0 0 10px;
+}
+.intro-line:last-child { margin-bottom: 0; }
+.intro-line-caption { font-style: italic; color: #9d94ba; }
+.intro-line-lawyer { color: #e8e0ff; }
+.intro-line-lawyer::before { content: '“'; }
+.intro-line-lawyer::after { content: '”'; }
+.intro-line-player { color: #d9b871; }
+.intro-line-player::before { content: '“'; }
+.intro-line-player::after { content: '”'; }
+.intro-line-titlecard {
+  text-align: center;
+  font-size: clamp(19px, 4vh, 32px);
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: #d9b871;
+  font-style: normal;
+}
+.intro-sfx {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: clamp(12px, 2vh, 15px);
+  font-style: italic;
+  letter-spacing: 1px;
+  color: #6cc7f6;
+  opacity: 0.75;
+  margin-bottom: 10px;
+}
+.intro-controls {
+  position: absolute;
+  right: clamp(12px, 3vw, 32px);
+  bottom: clamp(14px, 3vh, 30px);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  z-index: 2;
+}
+.intro-btn {
+  background: rgba(10, 7, 19, 0.7);
+  border: 1px solid #3a3357;
+  border-radius: 4px;
+  color: #9990b8;
+  font-size: 14px;
+  min-width: 34px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.intro-btn:hover { border-color: #d9b871; color: #d9b871; }
+.intro-skip { font-size: var(--fs-xs); letter-spacing: 1px; }
+.intro-progress { font-size: 10px; color: #574f75; min-width: 46px; text-align: center; }
+
 .menu-loading, .menu-unavailable {
   font-family: 'Cormorant Garamond', Georgia, serif;
   font-size: 13px;
@@ -3323,6 +3759,55 @@ body {
   </a>
 </div>
 
+<!-- Player Design studio (player creation + intro plan, Phase 3).
+     A sibling of #main-menu, not a child, and NOT the modal: 30+ fields plus
+     a portrait pane do not fit .modal-box. Sits one z-layer above the menu so
+     the title screen stays visible behind it — pressing New Game never blanks
+     the backdrop. Everything inside #ps-body is generated by studio.js from
+     PLAYER_STUDIO_TABS; there is deliberately no per-field markup here, so a
+     field can never exist in the HTML and not in the table. -->
+<div id="player-studio" class="player-studio" hidden>
+  <div class="ps-frame">
+    <header class="ps-header">
+      <div>
+        <h1 class="ps-title">Who are you?</h1>
+        <p class="ps-sub" id="ps-name-note">Everything unset will be rolled for you.</p>
+      </div>
+      <div class="ps-header-btns">
+        <button class="ps-btn ps-btn-secondary" data-action="studio.roll-all">Roll everything</button>
+        <button class="ps-btn ps-btn-secondary" data-action="studio.clear-all">Clear</button>
+      </div>
+    </header>
+    <nav class="ps-tabs" id="ps-tabs"></nav>
+    <div class="ps-body" id="ps-body"></div>
+    <p class="ps-note" id="ps-note" hidden></p>
+    <footer class="ps-footer">
+      <button class="ps-btn ps-btn-secondary" data-action="studio.cancel">Back to menu</button>
+      <button class="ps-btn ps-btn-primary" data-action="studio.confirm">Begin</button>
+    </footer>
+  </div>
+</div>
+
+<!-- The opening cutscene (Phase 5). Above the studio and the menu both,
+     since it plays after the studio closes and before the game shell is
+     uncovered. Two <img> layers for the same crossfade the title gallery
+     uses. The images are PREGENERATED and identical for every player (see
+     defs.intro.js) — a beat with no art renders as a text-only card. -->
+<div id="intro-cutscene" class="intro-cutscene" hidden>
+  <img id="intro-img-a" class="intro-img" alt="">
+  <img id="intro-img-b" class="intro-img" alt="">
+  <div class="intro-vignette"></div>
+  <div class="intro-stage" id="intro-stage" data-action="intro.advance">
+    <div class="intro-text" id="intro-text"></div>
+  </div>
+  <div class="intro-controls">
+    <button class="intro-btn" data-action="intro.back">‹</button>
+    <span class="intro-progress" id="intro-progress"></span>
+    <button class="intro-btn" data-action="intro.advance">›</button>
+    <button class="intro-btn intro-skip" data-action="intro.skip">Skip</button>
+  </div>
+</div>
+
 <!-- Modal -->
 <div id="modal-overlay">
   <div class="modal-box">
@@ -3452,6 +3937,15 @@ body {
 <aside id="debug-panel">
   <h3>Debug — Cast Viewer</h3>
   <button class="btn btn-secondary" data-action="debug-close">Close</button>
+  <!-- The legacy cast-creation form (player creation + intro plan, D2). New
+       Game no longer opens it — that route is the Player Design studio and a
+       solo start — but it is the only way to spawn a game that already has
+       roommates in it, which is genuinely useful for testing anything
+       downstream of a populated household. Kept here rather than deleted. -->
+  <div class="dbg-section">
+    <div class="dbg-title">New game with roommates (testing)</div>
+    <button class="btn btn-secondary" data-action="new-game-manual">Open cast form</button>
+  </div>
   <div class="dbg-section">
     <div class="dbg-title" data-debug="seed">Seed &amp; House Info ▸</div>
     <pre id="dbg-seed" class="hidden"></pre>
@@ -3605,6 +4099,60 @@ body {
       <input type="text" name="nudges" placeholder="e.g. introvert, nightowl">
     </div>
     <div class="form-hint" data-char-hint>Leave fields blank to roll randomly. Fill in any to guide generation.</div>
+    <!-- You: the player's own appearance. Every select is built from the same
+         PHYS_POOL_* tables the cast rolls from (populatePlayerLookFields), so
+         the options here can never drift from what the generator can produce.
+         "Roll it" on any field means exactly that — the same draw a roommate
+         gets. This is what lets the player be DRAWN into a scene at all; before
+         it, the player had no appearance and every scene image left them out. -->
+    <div class="char-field-block char-player-block" data-player-look>
+      <label class="char-field-block-title">You</label>
+      <div class="form-hint">However much of this you leave on “Roll it” gets rolled, same as a roommate.</div>
+      <div class="form-row">
+        <div>
+          <label>Gender</label>
+          <select data-look="gender"></select>
+        </div>
+        <div>
+          <label>Age</label>
+          <input type="number" data-look="age" min="18" max="80" placeholder="Roll it">
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label>Height</label>
+          <select data-look="height"></select>
+        </div>
+        <div>
+          <label>Build</label>
+          <select data-look="build"></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label>Hair colour</label>
+          <select data-look="hairColor"></select>
+        </div>
+        <div>
+          <label>Hair length</label>
+          <select data-look="hairLength"></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label>Eye colour</label>
+          <select data-look="eyeColor"></select>
+        </div>
+        <div>
+          <label>Skin tone</label>
+          <select data-look="skinTone"></select>
+        </div>
+      </div>
+      <div>
+        <label>Everyday style</label>
+        <select data-look="fashion"></select>
+      </div>
+    </div>
     <div class="char-manual-fields" data-char-fields></div>
   </div>
 </template>
@@ -3668,91 +4216,104 @@ body {
      MENU/IMAGE). Functions calling into a LATER script are fine either way
      — those calls only happen at runtime, after every script below has
      finished loading. -->
-<script src="src/srcfiles/config.js?v=85"></script>
-<script src="src/srcfiles/icons.js?v=14"></script>
-<script src="src/srcfiles/defs.world.js?v=19"></script>
-<script src="src/srcfiles/defs.actions.js?v=17"></script>
-<script src="src/srcfiles/defs.computer.js?v=15"></script>
+<script src="src/srcfiles/config.js?v=99"></script>
+<script src="src/srcfiles/icons.js?v=25"></script>
+<script src="src/srcfiles/defs.world.js?v=32"></script>
+<script src="src/srcfiles/defs.actions.js?v=30"></script>
+<script src="src/srcfiles/defs.computer.js?v=26"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
      at runtime; IMAGE's titleGallery consumes genTitlePrompt. -->
-<script src="src/srcfiles/defs.menu.js?v=8"></script>
+<script src="src/srcfiles/defs.menu.js?v=19"></script>
+<!-- The opening cutscene's script, as data (player creation + intro plan,
+     Phase 5). Pure strings — no dependency on anything, but grouped with the
+     other defs.* files because that is what it is. -->
+<script src="src/srcfiles/defs.intro.js?v=12"></script>
+<!-- The interior: the composite-shape library and the authored room designs
+     (Home Design Studio). Pure data; authored in dev/designer.html. -->
+<script src="src/srcfiles/defs.design.js?v=2"></script>
 <!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
-<script src="src/srcfiles/orbital.js?v=1"></script>
-<script src="src/srcfiles/state.js?v=34"></script>
-<script src="src/srcfiles/sim.js?v=44"></script>
+<script src="src/srcfiles/orbital.js?v=12"></script>
+<script src="src/srcfiles/state.js?v=46"></script>
+<script src="src/srcfiles/sim.js?v=56"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
-<script src="src/srcfiles/commitments.js?v=2"></script>
-<script src="src/srcfiles/world.js?v=16"></script>
-<script src="src/srcfiles/signals.js?v=3"></script>
-<script src="src/srcfiles/scene.js?v=2"></script>
-<script src="src/srcfiles/items.js?v=10"></script>
+<script src="src/srcfiles/commitments.js?v=13"></script>
+<script src="src/srcfiles/world.js?v=27"></script>
+<script src="src/srcfiles/signals.js?v=15"></script>
+<script src="src/srcfiles/scene.js?v=13"></script>
+<script src="src/srcfiles/items.js?v=22"></script>
 <!-- Inventory overhaul Phase 1: pure inventory query/sort/describe helpers
      (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
      time) and before render.js/ui.js, which call it at runtime. -->
-<script src="src/srcfiles/inventory.js?v=5"></script>
-<script src="src/srcfiles/effects.js?v=17"></script>
-<script src="src/srcfiles/drives.js?v=21"></script>
+<script src="src/srcfiles/inventory.js?v=17"></script>
+<script src="src/srcfiles/effects.js?v=30"></script>
+<script src="src/srcfiles/drives.js?v=33"></script>
 <!-- NPC utility scoring (npc-cognition-plan.md). Loads after drives.js: it
      reuses driveGateValue / isOnCooldown / DRIVE_COOLDOWN_KEY from it. -->
-<script src="src/srcfiles/cognition.js?v=5"></script>
+<script src="src/srcfiles/cognition.js?v=16"></script>
 <!-- NPC initiative (npc-initiative-plan.md Phase 3). Loads after cognition.js:
      scoreCandidates calls scoreOvertures, and evaluateDrives calls the writers
      here for the tick it wins. -->
-<script src="src/srcfiles/overture.js?v=2"></script>
-<script src="src/srcfiles/actions.js?v=13"></script>
-<script src="src/srcfiles/intent.js?v=7"></script>
-<script src="src/srcfiles/skills.js?v=8"></script>
-<script src="src/srcfiles/stealth.js?v=7"></script>
-<script src="src/srcfiles/time.js?v=13"></script>
-<script src="src/srcfiles/computer.js?v=40"></script>
+<script src="src/srcfiles/overture.js?v=13"></script>
+<script src="src/srcfiles/actions.js?v=24"></script>
+<script src="src/srcfiles/intent.js?v=18"></script>
+<script src="src/srcfiles/skills.js?v=19"></script>
+<script src="src/srcfiles/stealth.js?v=18"></script>
+<script src="src/srcfiles/time.js?v=24"></script>
+<script src="src/srcfiles/computer.js?v=52"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
-<script src="src/srcfiles/tracker.js?v=4"></script>
+<script src="src/srcfiles/tracker.js?v=15"></script>
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
-<script src="src/srcfiles/phone.js?v=9"></script>
-<script src="src/srcfiles/npc.js?v=25"></script>
+<script src="src/srcfiles/phone.js?v=20"></script>
+<script src="src/srcfiles/npc.js?v=37"></script>
 <!-- Knowledge-gossip Phase 3: deterministic rumination (inference rules +
      open-question lifecycle) — after npc.js (reuses addMemoryFact/
      backfillFactRecordV2/factTopicPhrase/factInterestRelevance/factEmotionalWeight)
      and called by sim.js at runtime only. -->
-<script src="src/srcfiles/rumination.js?v=4"></script>
-<script src="src/srcfiles/prompt.js?v=8"></script>
-<script src="src/srcfiles/llm.js?v=21"></script>
+<script src="src/srcfiles/rumination.js?v=15"></script>
+<script src="src/srcfiles/prompt.js?v=19"></script>
+<script src="src/srcfiles/llm.js?v=32"></script>
 <!-- Plan X-5 Phase 1: the wire for conversation consequences — parsing,
      clamping, windowing and ingestion for the Assessor and the Chronicler.
      After llm.js because the two passes' calls live there and are fired from
      ui.js; x5.js itself is pure and calls no model. -->
-<script src="src/srcfiles/x5.js?v=4"></script>
-<script src="src/srcfiles/interruption.js?v=11"></script>
-<script src="src/srcfiles/image.js?v=13"></script>
-<script src="src/srcfiles/render.js?v=33"></script>
-<script src="src/srcfiles/render.computer.js?v=30"></script>
-<script src="src/srcfiles/render.desktop.js?v=8"></script>
+<script src="src/srcfiles/x5.js?v=15"></script>
+<script src="src/srcfiles/interruption.js?v=22"></script>
+<script src="src/srcfiles/image.js?v=25"></script>
+<script src="src/srcfiles/render.js?v=46"></script>
+<script src="src/srcfiles/render.computer.js?v=41"></script>
+<script src="src/srcfiles/render.desktop.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
-<script src="src/srcfiles/render.phone.js?v=12"></script>
-<script src="src/srcfiles/ui.js?v=62"></script>
-<script src="src/srcfiles/ui.computer.js?v=30"></script>
+<script src="src/srcfiles/render.phone.js?v=23"></script>
+<script src="src/srcfiles/ui.js?v=75"></script>
+<script src="src/srcfiles/ui.computer.js?v=41"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
      site header with fake address bar + internal back/forward, footer, 404,
      skeleton grid, and every AfterHours renderer + handler. After
      ui.computer.js (doBrowserVisit calls AH.onSiteOpen at runtime) and
      before ui.windowmanager.js. -->
-<script src="src/srcfiles/afterhours.js?v=18"></script>
-<script src="src/srcfiles/ui.windowmanager.js?v=8"></script>
+<script src="src/srcfiles/afterhours.js?v=29"></script>
+<script src="src/srcfiles/ui.windowmanager.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell orchestration — after ui.computer.js. -->
-<script src="src/srcfiles/ui.phone.js?v=10"></script>
+<script src="src/srcfiles/ui.phone.js?v=21"></script>
+<!-- The Player Design studio and the opening cutscene (player creation +
+     intro plan, Phases 3-5). BEFORE menu.js, because menu.js's last line
+     invokes boot() — anything loading after that runs once boot has already
+     started, which is a race nobody should have to reason about. Calls into
+     SIM/IMAGE/STATE at runtime only, so it needs nothing at load time. -->
+<script src="src/srcfiles/studio.js?v=12"></script>
 <!-- Menu overhaul Phase 10: the main-menu component — after ui.js (calls
      resumeFromRecord/openSaveMenu/startAutosave and the data-action chain
      at runtime). Loads LAST: the bottom of menu.js invokes boot(), which
      ui.js can no longer call itself because boot() reaches into MENU/IMAGE
      functions defined after UI. -->
-<script src="src/srcfiles/menu.js?v=6"></script>
+<script src="src/srcfiles/menu.js?v=17"></script>
 <!-- ===== /SECTION: SCRIPTS ===== -->

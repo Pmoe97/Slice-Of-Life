@@ -3502,6 +3502,90 @@ function renderUpgradesDashboard(body, gs, app, screen) {
     }
     body.appendChild(section);
   }
+
+  renderStructuralSection(body, gs);
+}
+
+// --- Structural work (floorplan plan Phase 6) ---
+// Kept as its own section rather than mixed in with the facilities above,
+// because it is a different KIND of purchase and the player should feel
+// that: a facility upgrade makes a room better, a structural job changes
+// what the apartment IS. Two of the five make it smaller and quieter rather
+// than bigger and nicer, which no other screen in the game offers.
+function renderStructuralSection(body, gs) {
+  const defs = Object.values(STRUCTURAL_UPGRADES || {});
+  if (defs.length === 0) return;
+
+  const section = document.createElement('div');
+  section.className = 'upg-room-section upg-structural';
+  const heading = document.createElement('div');
+  heading.className = 'upg-room-heading';
+  heading.textContent = 'Structural Work';
+  section.appendChild(heading);
+
+  const blurb = document.createElement('div');
+  blurb.className = 'dim tiny upg-structural-note';
+  blurb.textContent = 'Walls, doors and what a room is for. These change the layout itself — some of them by closing it down.';
+  section.appendChild(blurb);
+
+  for (const def of defs) {
+    const state = structuralUpgradeState(gs, def.id);
+    const card = document.createElement('div');
+    card.className = 'upg-facility-card' + (state.built ? ' maxed' : '') + (state.job ? ' working' : '');
+
+    let actionHtml;
+    if (state.job) {
+      const stage = getRenovationJobStage(state.job, gs.meta.clock.day);
+      const dayN = Math.max(1, Math.min(state.job.durationDays, gs.meta.clock.day - state.job.startDay + 1));
+      actionHtml = `
+        <div class="upg-job">
+          <span class="upg-job-stage">${escapeHtml(stage.label)}</span>
+          <span class="upg-job-progress">day ${dayN} of ${state.job.durationDays}</span>
+          <span class="upg-job-eta dim tiny">ETA ${formatDate(state.job.etaDay)}</span>
+        </div>`;
+    } else if (state.built) {
+      actionHtml = '<span class="upg-maxed-badge">Done</span>';
+    } else {
+      const affordable = gs.player.money >= def.cost;
+      const etaDay = gs.meta.clock.day + (def.durationDays || 1);
+      actionHtml = `
+        <button class="btn tiny upg-book-btn ${affordable ? '' : 'disabled'}" data-action="upgrades.book-structural" data-row-id="${def.id}">Book — $${def.cost.toLocaleString()}</button>
+        <span class="upg-book-preview dim tiny">${def.durationDays || 1}d job · done Day ${etaDay}</span>`;
+    }
+
+    // What it actually does to the graph, in the player's terms. Derived from
+    // the same `edits` list the applier runs, so the description can never
+    // promise something the upgrade does not do.
+    const effects = (def.edits || []).map(e => {
+      if (e.threshold) {
+        const [a, b] = e.threshold.split('|');
+        return `Fits a ${e.to} between ${ROOMS[a]?.name || a} and ${ROOMS[b]?.name || b}`;
+      }
+      if (e.addEdge) {
+        const [a, b] = e.addEdge.split('|');
+        return e.as === 'glass'
+          ? `Glazes through from ${ROOMS[a]?.name || a} to ${ROOMS[b]?.name || b} — you see it, you still walk round`
+          : `Opens a way between ${ROOMS[a]?.name || a} and ${ROOMS[b]?.name || b}`;
+      }
+      if (e.removeEdge) {
+        const [a, b] = e.removeEdge.split('|');
+        return `Walls up the way between ${ROOMS[a]?.name || a} and ${ROOMS[b]?.name || b}`;
+      }
+      if (e.roomType) return `Turns ${ROOMS[e.roomType]?.name || e.roomType} into a ${e.to}`;
+      return '';
+    }).filter(Boolean);
+
+    card.innerHTML = `
+      <div class="upg-facility-main">
+        <div class="upg-facility-name">${escapeHtml(def.label)}</div>
+        <div class="upg-facility-desc dim tiny">${escapeHtml(def.desc)}</div>
+        <div class="upg-structural-effects tiny">${effects.map(t => `<span class="upg-effect">${escapeHtml(t)}</span>`).join('')}</div>
+      </div>
+      <div class="upg-facility-action">${actionHtml}</div>
+    `;
+    section.appendChild(card);
+  }
+  body.appendChild(section);
 }
 
 // --- Phase 11: Investing dashboard ---

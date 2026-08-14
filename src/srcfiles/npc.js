@@ -1910,8 +1910,19 @@ function validateNestedObject(prefix, obj, fields, errors, normalized) {
 // for LLM prompts and image generation. Reads npc.bible.physical and
 // composes a natural-language description. Falls back to bible.visual
 // (legacy flat string) if physical is absent or empty.
-function getPhysicalDescriptionForPrompt(npc) {
-  const b = npc?.bible;
+//
+// Also serves the PLAYER, whose `player.appearance` is deliberately the same
+// { age, gender, physical } shape an NPC's bible carries (SIM's
+// generatePlayerAppearance). One accessor, one composer — the player is
+// described to the image generator and the model by exactly the machinery
+// that describes the cast, rather than a parallel one that could drift.
+//
+// `opts.intimate` is condition 1 of the three-part gate on physical.intimate
+// (see the bottom of this function). It defaults OFF, which is why every call
+// site that predates the intimate layer returns byte-identical output — an
+// ordinary scene, prompt or portrait never opts in.
+function getPhysicalDescriptionForPrompt(npc, opts = {}) {
+  const b = npc?.bible || npc?.appearance;
   const p = b?.physical;
   if (!p || !p.hair || !p.hair.color) {
     return b?.visual || 'a young adult';
@@ -2002,7 +2013,78 @@ function getPhysicalDescriptionForPrompt(npc) {
     else if (clothing === 'undressed') parts.push('currently undressed');
   }
 
+  // The undressed layer. THE reader for physical.intimate — the field the
+  // schema pruned once for not having one. Three conditions, all required,
+  // and they are deliberately different KINDS of check so no single mistake
+  // opens all three:
+  //   1. the caller asked (opts.intimate) — an ordinary scene never does, so
+  //      every pre-existing call site is byte-identical to before;
+  //   2. the content flags allow it — the same activeContentFlags gate the
+  //      browser's adult sites go through, not a second notion of "mature";
+  //   3. the subject is actually undressed — a clothed character has nothing
+  //      to describe here no matter who asked.
+  if (opts.intimate && intimateAllowed(opts.gameState) && clothing === 'undressed') {
+    const intimateBits = composeIntimateDescription(p.intimate);
+    if (intimateBits) parts.push(intimateBits);
+  }
+
   return parts.join('. ') + '.';
+}
+
+// Condition 2 of the gate, kept separate so it reads as one question with one
+// answer. Goes through computer.js's activeContentFlags rather than reading
+// meta.contentConfig directly, so "is mature content on" means the same thing
+// here as it does for the browser's adult sites — one notion, not three.
+//
+// FAILS CLOSED. A caller that opts into intimate description without handing
+// over the state to check is refused, rather than falling back to
+// CONTENT_CONFIG's defaults (which have everything on by design, and would
+// turn a forgotten argument into an open gate — exactly the wrong direction
+// for this particular field).
+function intimateAllowed(gameState) {
+  if (!gameState || !gameState.meta) return false;
+  if (typeof activeContentFlags !== 'function') return false;
+  return activeContentFlags(gameState).mature === true;
+}
+
+// physical.intimate → one prose clause, or '' when there is nothing to say.
+// Walks GENITAL_TYPE_FIELDS rather than branching per type, so a new genital
+// type is described correctly the day its config row lands.
+function composeIntimateDescription(intimate) {
+  if (!intimate || typeof intimate !== 'object') return '';
+  const bits = [];
+
+  const b = intimate.breasts || {};
+  // `flat` is a real, chosen value, not an absence — describing "flat chest"
+  // is correct, so the guard is on size being SET, not on it being non-flat.
+  const breastBits = [b.size, b.shape && `${b.shape}`].filter(Boolean);
+  if (breastBits.length > 0) {
+    let clause = `${breastBits.join(', ')} breasts`;
+    const detail = [
+      b.nipples && `${b.nipples} nipples`,
+      b.areola && `${b.areola} areolae`,
+    ].filter(Boolean);
+    if (detail.length > 0) clause += ` with ${detail.join(' and ')}`;
+    if (b.sensitivity) clause += `, ${b.sensitivity} sensitivity`;
+    bits.push(clause);
+  }
+
+  for (const g of intimate.genitals || []) {
+    const fields = GENITAL_TYPE_FIELDS[g?.type];
+    if (!fields) continue;
+    // Order comes from the config row, so the prose reads in the order the
+    // studio offers the fields rather than in object-key order.
+    const detail = Object.keys(fields)
+      .filter(k => k !== 'description' && g[k])
+      .map(k => `${k} ${g[k]}`);
+    let clause = g.type;
+    if (detail.length > 0) clause += `: ${detail.join(', ')}`;
+    if (g.description) clause += ` (${g.description})`;
+    bits.push(clause);
+  }
+
+  if (intimate.bodyHair) bits.push(`body hair ${intimate.bodyHair}`);
+  return bits.length > 0 ? bits.join('; ') : '';
 }
 
 // --- Character validation ---

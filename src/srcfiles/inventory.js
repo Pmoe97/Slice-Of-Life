@@ -53,7 +53,7 @@ function buildInventoryCtx(gs) {
   const roomObjects = (gs.objects && gs.objects[`room_${gs.player.location}`]) || {};
   return {
     gameState: gs,
-    day: gs.meta.clock.day,
+    day: gameDaysNow(gs.meta.clock),
     roomId: gs.player.location,
     roomObjects,
     presentNpcIds: getPresentNpcIds(gs.npcs, gs.player.location),
@@ -140,6 +140,15 @@ function freshnessState(stack, day, containerDef) {
   return freshnessOf(stack, containerDef, day);
 }
 
+// Hours below a day, days above it — the one unit rule for every span the
+// freshness UI prints. A span the player reads as "18h" is exactly the span
+// that used to round to "day 0" and tell them nothing.
+function formatFreshnessSpan(days) {
+  if (!(days > 0)) return '0h';
+  if (days < 1) return `${Math.max(1, Math.round(days * 24))}h`;
+  return `${days < 10 ? Math.round(days * 10) / 10 : Math.round(days)}d`;
+}
+
 // --- Edibility & servings (Phase 3) ---
 // Item-driven eating: a def is edible when it has a consumable effect AND
 // its category is something you'd eat or drink (food/meal/snack/drink).
@@ -207,11 +216,15 @@ function consumableSummary(def, { perServing = false } = {}) {
 // ref EAT_ITEM consumes from and the source label the picker shows.
 function edibleStacks(gs, ctx) {
   const out = [];
-  const day = gs?.meta?.clock?.day;
+  const day = gameDaysNow(gs?.meta?.clock);
   const collect = (list, from, sourceLabel, containerDef) => {
     for (const stack of list || []) {
       const def = stackDef(stack);
       if (!edibleDef(def)) continue;
+      // Rotten is refuse, not a bad choice — it never reaches the picker.
+      // EFFECTS' applyEatItem refuses it too, so the two agree by
+      // construction rather than by both remembering to check.
+      if (freshnessOf(stack, containerDef, day)?.key === 'rotten') continue;
       out.push({ stack, def, from, sourceLabel, containerDef, day });
     }
   };
@@ -277,15 +290,17 @@ function describeStack(stack, ctx = {}) {
     : (stack?.name && !stack?.defId ? stack.name
       : (def.id === '_unknown' ? (stack?.meta?.origName || def.label) : def.label));
   const freshness = freshnessState(stack, day, containerDef);
-  const anchor = freshness && stack?.meta ? (stack.meta.cohort ?? stack.meta.acquiredDay) : null;
   return {
     label,
     qty: typeof stack === 'object' && stack?.qty != null ? stack.qty : 1,
     sublabel: SORT_GROUPS[def.sortGroup]?.label || def.category || 'Item',
     description: buildItemDescription(stack, def),
     freshness,
-    freshnessText: freshness && anchor != null && day != null
-      ? `${freshness.label} · day ${Math.max(0, Math.round(day - anchor))}/${Math.round(def.perishable.days)}`
+    // Age and remaining life read in HOURS below a day, which is the whole
+    // point of the continuous model — "day 0/1" told the player nothing
+    // about a dish that had four good hours left in it.
+    freshnessText: freshness
+      ? `${freshness.label || 'Good'} · ${formatFreshnessSpan(freshness.ageDays)} old · keeps ~${formatFreshnessSpan(freshness.shelfDays)} here`
       : null,
     tooltip: def.id === '_unknown'
       ? 'The game doesn\u2019t recognize this item — probably from before the item system. It won\u2019t spoil or do anything until you use or dispose of it.'
@@ -314,7 +329,7 @@ function buildItemDescription(stack, def) {
     parts.push('Not consumable.');
   }
   if (def.perishable?.days) {
-    parts.push(`Perishable — keeps about ${def.perishable.days} days out in the open, longer in the fridge.`);
+    parts.push(`Perishable — about ${formatFreshnessSpan(def.perishable.days)} out in the open before it's inedible, ${OBJECT_DEFS.fridge?.container?.preservation ?? 4}× that in the fridge. It goes stale, then spoiled, then rotten.`);
   }
   if (stack?.meta?.keyItem || def.keyItem) {
     parts.push('A personal item — you can\u2019t drop, trash, or give it away.');

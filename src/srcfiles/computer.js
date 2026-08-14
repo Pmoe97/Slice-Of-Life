@@ -2509,7 +2509,7 @@ function performMaidVisit(gameState, contract, entry) {
       const itemId = MAID_TUNING.cookingMealItems[Math.floor(rng() * MAID_TUNING.cookingMealItems.length)];
       if (!ITEM_DEFS[itemId]) continue;
       if (fridge) {
-        fridge.contents = addStack(fridge.contents, itemId, 1, null, {}, gameState.meta.clock.day);
+        fridge.contents = addStack(fridge.contents, itemId, 1, null, {}, gameDaysNow(gameState.meta.clock));
         result.mealsCooked++;
       }
     }
@@ -2963,6 +2963,66 @@ function bookRenovationJob(gameState, facilityId, jobType, opts = {}) {
     startDay);
   // Tier/condition do NOT change here — only at job completion.
   return { ok: true, facilityId, jobId, jobType, fromTier: job.fromTier, toTier: job.toTier, cost, durationDays, etaDay: job.etaDay, label: nextTier.label };
+}
+
+// --- Structural jobs (floorplan plan Phase 6) ---
+// A structural upgrade goes through the SAME contractor pipeline as a
+// facility job — Del's crew, a real cost, real days on site, the one-job-at-
+// a-time cap — because from the player's side it is the same transaction.
+// What differs is only what completing it does: a facility job moves a tier,
+// a structural job sets a flag that rebuilds the room graph.
+//
+// The job record carries `structuralId` where a facility job carries
+// `facilityId`, and every downstream reader branches on which is present
+// rather than on a `kind` field nobody would remember to set.
+function structuralUpgradeState(gameState, upgradeId) {
+  const def = STRUCTURAL_UPGRADES[upgradeId];
+  if (!def) return null;
+  const built = !!gameState.world?.flags?.[`structural_${upgradeId}`];
+  const job = (gameState.world?.renovationJobs || [])
+    .find(j => j.structuralId === upgradeId && j.status === 'active') || null;
+  return { def, built, job };
+}
+
+function bookStructuralJob(gameState, upgradeId, opts = {}) {
+  const state = structuralUpgradeState(gameState, upgradeId);
+  if (!state) return { ok: false, reason: 'No such conversion.' };
+  const { def, built, job } = state;
+  if (built) return { ok: false, reason: 'Already done.' };
+  if (job) return { ok: false, reason: 'The crew is already on this one.' };
+
+  const jobs = gameState.world.renovationJobs || (gameState.world.renovationJobs = []);
+  const activeCount = jobs.filter(j => j.status === 'active').length;
+  if (activeCount >= MAX_CONCURRENT_JOBS) return { ok: false, reason: 'Only one renovation at a time — let the crew finish first.' };
+
+  const rush = !!opts.rush;
+  const cost = Math.round(def.cost * (rush ? RENOVATION_RUSH_MULTIPLIER : 1));
+  if (gameState.player.money < cost) {
+    return { ok: false, reason: `Can't afford $${cost} (you have $${Math.round(gameState.player.money)}).` };
+  }
+
+  const startDay = gameState.meta.clock.day;
+  const durationDays = def.durationDays || 1;
+  const newJob = {
+    id: `job_${startDay}_${jobs.length}`,
+    structuralId: upgradeId,
+    roomId: def.room,
+    jobType: 'structural',
+    startDay,
+    durationDays,
+    etaDay: rush ? startDay + durationDays : addWorkingDays(startDay, durationDays),
+    rush,
+    cost,
+    status: 'active',
+    contractorId: CONTRACTOR_ID,
+  };
+
+  gameState.player.money -= cost;
+  jobs.push(newJob);
+  scheduleContractorVisitsForJob(gameState, newJob);
+  setContractorJobFact(gameState, 'renovation_job',
+    `I just started on ${def.label} — structural work, due day ${newJob.etaDay}.`, startDay);
+  return { ok: true, structuralId: upgradeId, jobId: newJob.id, cost, durationDays, etaDay: newJob.etaDay, label: def.label };
 }
 
 // Pure stage derivation for an active job — stage label/index progress

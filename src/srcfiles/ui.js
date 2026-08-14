@@ -614,7 +614,7 @@ async function doOvertureRespond(npcId, accepted) {
       kind: p.kind, day: p.day, tickStart: p.tickStart, tickEnd: p.tickEnd,
       roomId: p.roomId, invitedIds: [], proposerId: npcId,
     });
-    addLogEntry('narration', `You tell ${name} yes. ${proposalWhen(p)}, in the ${ROOMS[p.roomId]?.name || 'flat'} — it is in the diary now.`);
+    addLogEntry('narration', `You tell ${name} yes. ${proposalWhen(p)}, in ${roomPhrase(p.roomId)} — it is in the diary now.`);
   }
   await advanceAndResolve(1);
   render(currentGameState, currentSceneState);
@@ -879,7 +879,7 @@ function processDeliveriesForDay(day) {
     d.status = 'delivered';
     const label = ITEM_DEFS[d.defId]?.label || d.defId || 'a package';
     if (doormat && d.defId) {
-      doormat.contents = addStack(doormat.contents, d.defId, d.qty || 1, null, {}, currentGameState.meta.clock.day);
+      doormat.contents = addStack(doormat.contents, d.defId, d.qty || 1, null, {}, gameDaysNow(currentGameState.meta.clock));
       addLogEntry('narration', `A delivery has arrived: ${label}. It's waiting by the front door.`);
     } else {
       addLogEntry('narration', `A delivery has arrived: ${label}.`);
@@ -919,12 +919,32 @@ function processRenovationJobsForDay(day) {
     }
     if (!completing) continue;
     job.status = 'complete';
+    // Structural jobs (floorplan plan Phase 6) finish differently: there is
+    // no tier to advance, only a flag that rebuilds the room graph. Done
+    // before the facility branch because a structural job has no facilityId
+    // at all and would otherwise fall out of the `!upgrade` guard silently.
+    if (job.structuralId) {
+      const sdef = STRUCTURAL_UPGRADES[job.structuralId];
+      currentGameState.world.flags = currentGameState.world.flags || {};
+      currentGameState.world.flags[`structural_${job.structuralId}`] = true;
+      applyStructuralUpgrades(currentGameState);
+      // A structural change can alter what rooms EXIST as bedrooms
+      // (study_to_bedroom), which is a rent input — so rent is recomputed
+      // for the same reason a facility completion recomputes it.
+      currentGameState.world.rent = computeRent(currentGameState.npcs, currentGameState);
+      addLogEntry('narration', `The crew wrapped up on ${sdef ? sdef.label : job.structuralId}. The place is laid out differently now.`);
+      setContractorJobFact(currentGameState, 'renovation_done',
+        `I finished the ${sdef ? sdef.label : 'structural work'} — changed the shape of the place.`,
+        currentGameState.meta.clock.day);
+      continue;
+    }
     const upgrade = currentGameState.world.upgrades[job.facilityId];
     if (!upgrade) continue;
     upgrade.tier = job.toTier;
     upgrade.condition = MAINTENANCE.startingCondition;
     upgrade.activeJobId = null;
     currentGameState.world.rent = computeRent(currentGameState.npcs, currentGameState);
+    applyFacilityCompletionStates(currentGameState, job.facilityId);
     const def = FACILITY_DEFS[job.facilityId];
     addLogEntry('narration', `The crew wrapped up on ${def ? def.label : job.facilityId} — ${job.toTier === 'upgraded' ? 'upgraded' : 'repaired'} and ready.`);
     // Contractor tutorial (contractor doc Phase 3): completing the free tutorial job fires the "first one's on me" nudge. Paid jobs have no milestone — the wrapped-up narration line above covers them.
@@ -935,6 +955,26 @@ function processRenovationJobsForDay(day) {
       `I finished the ${def ? def.label : job.facilityId} ${job.jobType} on day ${day} — ${job.toTier === 'upgraded' ? 'upgraded and ready' : 'repaired and ready'}.`,
       day);
   }
+}
+
+// A completed renovation writes the object states its facility OWNS
+// (FACILITY_DEFS' `completionStates`, keyed by OBJECT_DEFS id and applied to
+// every instance in the facility's room). The pool is the case that needed
+// it: `swimming_pool.water` was a state the def described, the tier-0 copy
+// promised ("It holds no water") and nothing ever wrote — so a dry basin
+// with a torn liner emitted the smell of stagnant green water for the whole
+// game. Declared on the facility rather than branched on here, so the next
+// renovation that owns a state adds a line of data, not a special case.
+function applyFacilityCompletionStates(gameState, facilityId) {
+  const def = FACILITY_DEFS[facilityId];
+  if (!def?.completionStates) return;
+  const bucket = gameState.objects?.[`room_${def.room}`];
+  if (!bucket) return;
+  for (const obj of Object.values(bucket)) {
+    const states = def.completionStates[obj.defId];
+    if (states) obj.state = { ...obj.state, ...states };
+  }
+  refreshRoomCleanliness(gameState, def.room);
 }
 
 // Contractor tutorial (contractor doc Phase 3): one-shot apartment-quality
@@ -1213,12 +1253,16 @@ function handOverFoodOrder(order, day) {
   order.handedTo = toPlayer ? 'player' : 'doormat';
 
   const doormat = Object.values(currentGameState.objects?.room_entry || {}).find(o => o.defId === 'doormat');
+  // Continuous time, not the whole day: the dish is stamped at the minute it
+  // arrives, so its Fresh window is the couple of hours after the handover
+  // rather than "whatever is left of today".
+  const now = gameDaysNow(currentGameState.meta.clock);
   for (const line of order.items) {
     if (!ITEM_DEFS[line.itemId]) continue;
     if (toPlayer) {
-      currentGameState.player.inventory = addStack(currentGameState.player.inventory, line.itemId, line.qty, 'player', {}, currentGameState.meta.clock.day);
+      currentGameState.player.inventory = addStack(currentGameState.player.inventory, line.itemId, line.qty, 'player', {}, now);
     } else if (doormat) {
-      doormat.contents = addStack(doormat.contents, line.itemId, line.qty, null, {}, currentGameState.meta.clock.day);
+      doormat.contents = addStack(doormat.contents, line.itemId, line.qty, null, {}, now);
     }
   }
 
@@ -1968,7 +2012,7 @@ function inventoryActionQty(stack) {
 }
 
 function inventoryStackLabel(stack) {
-  return describeStack(stack, { day: currentGameState.meta.clock.day }).label;
+  return describeStack(stack, { day: gameDaysNow(currentGameState.meta.clock) }).label;
 }
 
 function inventoryUseNarration(stack) {
@@ -2089,7 +2133,7 @@ function containerTransferQty(stack) {
 }
 
 function containerStackLabel(stack) {
-  return describeStack(stack, { day: currentGameState.meta.clock.day }).label;
+  return describeStack(stack, { day: gameDaysNow(currentGameState.meta.clock) }).label;
 }
 
 async function applyContainerVerb(lines, minutes, narration, reason) {
@@ -2410,7 +2454,14 @@ const MENU_ACTIONS = ['menu', 'new-game-solo', 'new-game-random', 'new-game-guid
   'menu.resume', 'menu.exit', 'menu.back', 'menu.prev', 'menu.next',
   'menu.debug', 'options.bg-art', 'options.autosave',
   'prefs.gender-f', 'prefs.gender-m', 'prefs.gender-nb',
-  'prefs.pairing-hetero', 'prefs.pairing-gay', 'prefs.pairing-lesbian'];
+  'prefs.pairing-hetero', 'prefs.pairing-gay', 'prefs.pairing-lesbian',
+  // Player creation + intro plan (Phases 3-5): the studio and the cutscene
+  // are pre-game surfaces by definition — they run BEFORE a game exists, so
+  // every one of their verbs must be reachable with currentGameState null.
+  'studio.tab', 'studio.toggle', 'studio.row-add', 'studio.row-remove',
+  'studio.roll-all', 'studio.clear-all', 'studio.cancel', 'studio.confirm',
+  'studio.portrait-generate', 'studio.portrait-reset',
+  'intro.advance', 'intro.back', 'intro.skip'];
 
 // Actions that can be performed even when energy is at 0. Travel ('move')
 // must always be allowed — if the player can't reach their bedroom they're
@@ -2444,6 +2495,13 @@ const ENERGY_GATE_EXEMPT = new Set([
   'menu.debug', 'options.bg-art', 'options.autosave',
   'prefs.gender-f', 'prefs.gender-m', 'prefs.gender-nb',
   'prefs.pairing-hetero', 'prefs.pairing-gay', 'prefs.pairing-lesbian',
+  // Same reasoning as the menu's own verbs, one step further: the studio and
+  // cutscene run before any player exists to be exhausted. The gate reads
+  // currentGameState.player.energy, which is null on these surfaces.
+  'studio.tab', 'studio.toggle', 'studio.row-add', 'studio.row-remove',
+  'studio.roll-all', 'studio.clear-all', 'studio.cancel', 'studio.confirm',
+  'studio.portrait-generate', 'studio.portrait-reset',
+  'intro.advance', 'intro.back', 'intro.skip',
 ]);
 
 function isActionExemptFromEnergyGate(action) {
@@ -2764,6 +2822,9 @@ async function handleAction(action, npcId, extra) {
     case 'upgrades.book-confirm':
       await doUpgradeBook(extra?.rowId);
       break;
+    case 'upgrades.book-structural':
+      await doBookStructural(extra?.rowId);
+      break;
     case 'upgrades.repair':
       await doUpgradeRepair(extra?.rowId);
       break;
@@ -2926,7 +2987,16 @@ async function handleAction(action, npcId, extra) {
       await doMenuContinue();
       break;
     case 'menu.new-game':
-      showCharCreationModal('random');
+      // Player creation + intro plan (D2). This used to open
+      // showCharCreationModal('random') — the legacy form whose "Number of
+      // Roommates" select defaults to 2, which meant New Game handed the
+      // player a pre-populated household and quietly contradicted the solo
+      // start the whole rent economy is built on (ECONOMY.opening.soloStart,
+      // and startSoloGame, which existed but was reachable from no button).
+      // The route is now studio → cutscene → startSoloGame. The old modal is
+      // still reachable from the debug panel, where a pre-populated house is
+      // genuinely useful for testing.
+      openPlayerStudio();
       break;
     case 'menu.load':
       openSaveMenu('load');
@@ -2988,6 +3058,49 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'back-to-form':
       showCharCreationModal('guided');
+      break;
+
+    // --- Player Design studio (player creation + intro plan, Phases 3-4) ---
+    case 'studio.tab':
+      doStudioTab(extra.rowId);
+      break;
+    case 'studio.toggle':
+      doStudioToggle(extra.rowId);
+      break;
+    case 'studio.row-add':
+      doStudioRowAdd(extra.rowId);
+      break;
+    case 'studio.row-remove':
+      doStudioRowRemove(extra.rowId);
+      break;
+    case 'studio.roll-all':
+      doStudioRollAll();
+      break;
+    case 'studio.clear-all':
+      doStudioClearAll();
+      break;
+    case 'studio.cancel':
+      doStudioCancel();
+      break;
+    case 'studio.confirm':
+      doStudioConfirm();
+      break;
+    case 'studio.portrait-generate':
+      await doStudioPortraitGenerate();
+      break;
+    case 'studio.portrait-reset':
+      doStudioPortraitReset();
+      break;
+
+    // --- The opening cutscene (Phase 5) ---
+    case 'intro.advance':
+      doIntroAdvance();
+      break;
+    case 'intro.back':
+      doIntroBack();
+      break;
+    case 'intro.skip':
+      doIntroSkip();
       break;
     case 'continue':
       await continueGame();
@@ -3110,7 +3223,7 @@ async function doLookAround() {
     const roomId = currentGameState.player.location;
     const room = currentGameState.world.rooms[roomId] || {};
     const present = getPresentNpcIds(currentGameState.npcs, roomId);
-    let desc = `You are in the ${ROOMS[roomId]?.name || roomId}. `;
+    let desc = `You are in ${roomPhrase(roomId)}. `;
     desc += room.cleanliness > 70 ? 'The room is tidy. ' : room.cleanliness > 40 ? 'The room is lived-in. ' : 'The room is messy. ';
     if (present.length > 0) {
       desc += present.map(id => {
@@ -3620,17 +3733,64 @@ async function doStepAway(npcId) {
   await saveAtBoundary('step-away', currentGameState);
 }
 
-async function doMove(roomId) {
-  // Phase 3: Gated movement — can only move to adjacent rooms.
+// One line for the whole walk, deterministic and template-driven — same
+// no-LLM-in-a-move discipline as the construction lines below. States the
+// destination when the player got there, and states what stopped them when
+// they did not, because "you move to the Kitchen" after being intercepted in
+// the Living Room is a lie the player can see through.
+function walkNarration(walk, targetRoomId) {
+  const here = roomPhrase(walk.stoppedAt);
+  if (!walk.reason) {
+    // A single step reads as a step; a real journey reads as one.
+    return walk.crossed.length > 1
+      ? `You make your way through to ${here}.`
+      : `You move to ${here}.`;
+  }
+  // When the blocked room IS the destination, naming it twice reads as a
+  // stammer ("You head for Bedroom 2, but Bedroom 2 is locked"). Say it once.
+  const atDestination = walk.blockedBy === targetRoomId;
+  const heading = `You head for ${roomPhrase(targetRoomId)}`;
+  if (walk.reason === 'locked') {
+    return atDestination
+      ? `${heading}, but the door is locked. You stop in ${here}.`
+      : `${heading}, but ${roomPhrase(walk.blockedBy)} is locked. You stop in ${here}.`;
+  }
+  if (walk.reason === 'construction') {
+    return atDestination
+      ? `${heading}, but the crew has it torn open. You stop in ${here}.`
+      : `${heading}, but the crew has ${roomPhrase(walk.blockedBy)} torn open. You stop in ${here}.`;
+  }
+  if (walk.reason === 'overture') {
+    // A generated NPC's name is empty until prose expansion runs, so
+    // "someone" is a real state and not a defensive fallback.
+    const who = currentGameState?.npcs?.[walk.blockedBy]?.bible?.name;
+    return `${heading}, but ${who || 'someone'} is waiting in ${here}.`;
+  }
+  return `${heading}, and stop in ${here}.`;
+}
+
+// Floorplan plan Phase 3: the player clicks a room and WALKS there, however
+// far it is. Adjacency-gating was a restriction the old free-and-instant cost
+// never justified — and it meant clicking the Study from the Kitchen produced
+// a scolding rather than a walk, across a threshold that is not even a wall.
+//
+// WORLD's resolveWalk decides what happens on the way (pure, deterministic).
+// This function's job is only to APPLY that: mutate location, narrate, and —
+// crucially (D10) — run the arrival sequence exactly once, for the room the
+// player actually ended up in, no matter how many rooms they crossed.
+async function doMove(targetRoomId) {
   const currentRoom = currentGameState?.player?.location;
-  if (currentRoom && roomId !== currentRoom && !isRoomAdjacent(currentRoom, roomId)) {
-    const targetName = ROOMS[roomId]?.name || roomId;
-    const path = findPath(currentRoom, roomId);
-    if (path && path.length > 2) {
-      const next = ROOMS[path[1]]?.name || path[1];
-      addLogEntry('narration', `You can't get to the ${targetName} from here — you'd have to go through the ${next} first.`);
-    } else {
-      addLogEntry('narration', `You can't get to the ${targetName} from here directly.`);
+  const walk = resolveWalk(currentGameState, currentRoom, targetRoomId);
+  const roomId = walk.stoppedAt;
+
+  // Nowhere to go, or blocked before the first step.
+  if (roomId === currentRoom) {
+    if (walk.reason === 'locked') {
+      addLogEntry('narration', `${roomPhrase(walk.blockedBy)} is locked.`.replace(/^the /, 'The '));
+    } else if (walk.reason === 'construction') {
+      addLogEntry('narration', `The crew has ${roomPhrase(walk.blockedBy)} torn open — there's no getting through.`);
+    } else if (walk.route.length < 2) {
+      addLogEntry('narration', `You can't get to ${roomPhrase(targetRoomId)} from here.`);
     }
     render(currentGameState, currentSceneState);
     return;
@@ -3642,12 +3802,19 @@ async function doMove(roomId) {
     // room being LEFT, so this has to run before the move — after it, there is
     // no record of where the player was standing when they turned away.
     refuseOverturesInRoom(currentGameState.player.location);
+    // Stealth fires for EVERY room crossed, not just the destination (D10):
+    // being seen letting yourself through someone's bedroom is a boundary
+    // crossing whether or not you stopped to look around. The destination's
+    // own check is the one below, whose result drives the arrival narration.
+    for (const mid of walk.crossed.slice(0, -1)) {
+      currentGameState.player.location = mid;
+      resolveRoomEntryStealth(currentGameState, mid);
+    }
     currentGameState.player.location = roomId;
     // Boundary-crossing check runs on entry, before any time passes, so
     // "who was home" reflects who was actually there when the player
     // walked in (see STEALTH's resolveRoomEntryStealth). Trusted producer,
-    // no LLM — safe to run unconditionally on every move. Room travel is
-    // instant: no tick advances, only the passive clock keeps ticking.
+    // no LLM — safe to run unconditionally on every move.
     const stealthResult = resolveRoomEntryStealth(currentGameState, roomId);
     // Recompute scene participants for the new room — active starts
     // populated (see getSceneParticipants) rather than empty.
@@ -3663,10 +3830,15 @@ async function doMove(roomId) {
     // assumed because openScene is idempotent per room: re-entering the room
     // you are already standing in closes nothing, and judging that window
     // would score a conversation that is still going on.
+    //
+    // D10: openScene runs ONCE, for where the player ended up — never per
+    // room crossed. A six-room walk that minted six scenes would hand Plan
+    // X-5's Assessor a queue of zero-tick conversation windows to judge; it
+    // would not error, it would quietly corrupt relationship scoring.
     const closingSceneId = currentGameState.meta?.scene?.id ?? 0;
     openScene(currentGameState, roomId);
     const sceneClosed = (currentGameState.meta.scene.id !== closingSceneId);
-    addLogEntry('narration', `You move to the ${ROOMS[roomId]?.name || roomId}.`);
+    addLogEntry('narration', walkNarration(walk, targetRoomId));
     // Renovation overhaul Phase 3: entering a room with an active contracted
     // job gets a deterministic construction-scene line — template keyed by
     // job type + current stage, no LLM call.
@@ -3700,6 +3872,14 @@ async function doMove(roomId) {
     }
 
     render(currentGameState, currentSceneState);
+    // D9: the walk costs SECONDS. advanceAndResolveMinutes takes a float and
+    // a sub-minute span crosses no 30-minute boundary, so this is a clock
+    // nudge and a proportional need decay rather than a simulation tick —
+    // right up until a walk happens to straddle one, when the tick fires
+    // correctly and for free. Done AFTER the render so the player is never
+    // waiting on it, and after the arrival narration so the beat is logged
+    // at the time it happened.
+    if (walk.seconds > 0) await advanceAndResolveMinutes(walk.seconds / 60);
     // D2's primary trigger: the scene the player just walked out of is now a
     // closed window, and this is the moment it can be judged as a whole. D6 —
     // after the new room has rendered, so the player is never waiting on it.
@@ -3745,6 +3925,7 @@ function showCharCreationModal(mode) {
   const seedInput = body.querySelector('[name="seed"]');
   const countSelect = body.querySelector('[data-char-count]');
   const fieldsContainer = body.querySelector('[data-char-fields]');
+  populatePlayerLookFields(body.querySelector('[data-player-look]'));
   populateCharManualFields(fieldsContainer, parseInt(countSelect.value, 10));
   countSelect.addEventListener('change', () => {
     populateCharManualFields(fieldsContainer, parseInt(countSelect.value, 10));
@@ -3753,6 +3934,68 @@ function showCharCreationModal(mode) {
 
   actions.innerHTML = '<button class="btn" data-action="generate-cast">Generate</button><button class="btn btn-secondary" data-action="close-modal">Cancel</button>';
   overlay.setAttribute('data-open', '');
+}
+
+// The player's own appearance fields, and the ONE table saying which form
+// control maps to which pool and where the chosen value lands in the
+// `{ age, gender, physical }` shape SIM's generatePlayerAppearance takes.
+// populate and read below both walk this, so a field can never be offered
+// and then silently dropped — the failure mode a second hand-written reader
+// invites. Options come straight from the PHYS_POOL_* arrays, so the form
+// cannot offer a value the generator wouldn't roll.
+const PLAYER_LOOK_FIELDS = [
+  { key: 'gender',     pool: () => Object.keys(CHAR_GEN.genderWeights), path: ['gender'] },
+  { key: 'height',     pool: () => PHYS_POOL_HEIGHT,      path: ['physical', 'height'] },
+  { key: 'build',      pool: () => PHYS_POOL_BUILD,       path: ['physical', 'build'] },
+  { key: 'hairColor',  pool: () => PHYS_POOL_HAIR_COLOR,  path: ['physical', 'hair', 'color'] },
+  { key: 'hairLength', pool: () => PHYS_POOL_HAIR_LENGTH, path: ['physical', 'hair', 'length'] },
+  { key: 'eyeColor',   pool: () => PHYS_POOL_EYE_COLOR,   path: ['physical', 'eyes', 'color'] },
+  { key: 'skinTone',   pool: () => PHYS_POOL_SKIN_TONE,   path: ['physical', 'skin', 'tone'] },
+  { key: 'fashion',    pool: () => PHYS_POOL_FASHION,     path: ['physical', 'fashion'] },
+];
+
+function populatePlayerLookFields(block) {
+  if (!block) return;
+  for (const field of PLAYER_LOOK_FIELDS) {
+    const select = block.querySelector(`[data-look="${field.key}"]`);
+    if (!select) continue;
+    select.innerHTML = '';
+    // Empty value = "Roll it", and it is the default: the form's standing
+    // promise is that a blank field rolls.
+    const rollOpt = document.createElement('option');
+    rollOpt.value = '';
+    rollOpt.textContent = 'Roll it';
+    select.appendChild(rollOpt);
+    for (const val of field.pool()) {
+      const opt = document.createElement('option');
+      opt.value = val;
+      opt.textContent = String(val).replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
+      select.appendChild(opt);
+    }
+  }
+}
+
+// Form → the authored-appearance object SIM_generateHouse takes. Returns null
+// when the player touched nothing, which is the same signal as omitting the
+// argument entirely: roll the lot.
+function readPlayerLookFromForm(body) {
+  const block = body?.querySelector('[data-player-look]');
+  if (!block) return null;
+  const out = {};
+  let authoredAny = false;
+  const setPath = (path, value) => {
+    let node = out;
+    for (const seg of path.slice(0, -1)) node = (node[seg] = node[seg] || {});
+    node[path[path.length - 1]] = value;
+    authoredAny = true;
+  };
+  for (const field of PLAYER_LOOK_FIELDS) {
+    const value = block.querySelector(`[data-look="${field.key}"]`)?.value;
+    if (value) setPath(field.path, value);
+  }
+  const age = parseInt(block.querySelector('[data-look="age"]')?.value || '', 10);
+  if (Number.isFinite(age)) setPath(['age'], clamp(age, 18, 80));
+  return authoredAny ? out : null;
 }
 
 function populateCharManualFields(container, count) {
@@ -3835,10 +4078,11 @@ async function handleGenerateCast() {
   const tone = body.querySelector('[name="tone"]')?.value || CONTENT_CONFIG.tone;
   const contentPrefs = (body.querySelector('[name="content"]')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
   const partials = readCharFormPartials(body, count);
+  const playerLook = readPlayerLookFromForm(body);
 
   showLoading('Rolling household...');
   try {
-    pendingCast = SIM_generateHouse(seed, count, partials);
+    pendingCast = SIM_generateHouse(seed, count, partials, playerLook);
     // Build contentFlags from prefs, falling back to defaults for
     // anything not explicitly mentioned.
     const flags = { ...CONTENT_CONFIG.contentFlags };
@@ -3925,11 +4169,19 @@ async function handleRerollChar(npcId) {
 }
 
 // Phase 7: solo start. The player inherits an empty, run-down apartment
-// alone — no cast generation, no character creation modal, no roommates.
-// This is the Stardew-like opening: the empty bedrooms are the visible
-// statement of the problem, and the first objective (repair a bedroom via
-// RenoFix, then post a Classifieds listing) writes itself.
-async function startSoloGame() {
+// alone — no cast generation, no roommates. This is the Stardew-like
+// opening: the empty bedrooms are the visible statement of the problem, and
+// the first objective (repair a bedroom via RenoFix, then post a Classifieds
+// listing) writes itself.
+//
+// `draft` is what the Player Design studio authored, threaded through to
+// SIM_generateHouse's 4th parameter. Omitted (the debug path, and any caller
+// predating the studio) means every field rolls — the same contract a blank
+// form has always had.
+//
+// This is the ONE ending of the studio → cutscene sequence: whether the
+// player watched every beat or skipped on the first, they arrive here.
+async function startSoloGame(draft) {
   stopAutosave();
   stopClockLoop();
   closeModal();
@@ -3937,12 +4189,15 @@ async function startSoloGame() {
   showLoading('Moving in...');
   try {
     const seed = genSeed();
-    pendingCast = SIM_generateHouse(seed, 0, []);
+    pendingCast = SIM_generateHouse(seed, 0, [], draft);
     await writeGeneratedGameState(pendingCast);
     pendingCast = null;
     await syncGameStateFromKv();
     currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
-    addLogEntry('system', "You've inherited a luxury apartment. It's a wreck — most rooms are barely functional — and the rent is $1,900 a week. You have 14 days before the first bill. Good luck.");
+    // The cutscene has now TOLD the inheritance story, so this line no longer
+    // has to state it — it picks up where the last beat left off and says the
+    // one thing the fiction did not: the number, and the deadline.
+    addLogEntry('system', `The keys are still in your hand. Rent on this place is $${ECONOMY.rent.total.toLocaleString()} a week, and the first bill lands in ${ECONOMY.opening?.rentGraceDays ?? ECONOMY.payPeriodDays} days. Most of the rooms barely work. Best get started.`);
     // Phase 7: populate the gig board for day 1 so the player can start
     // earning immediately — the opening's first objective is income.
     // Done after syncGameStateFromKv so it operates on the loaded state.

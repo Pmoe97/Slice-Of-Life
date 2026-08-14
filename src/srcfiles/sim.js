@@ -1157,7 +1157,7 @@ function resolveTick(gameState) {
           const nextStep = Math.min(step + 1, path.length - 1);
           location = path[nextStep];
           if (nextStep < path.length - 1) {
-            activity = `heading to the ${ROOMS[existingTarget]?.name || existingTarget}`;
+            activity = `heading to ${roomPhrase(existingTarget)}`;
           }
           transit = { path, progress: nextStep, destination: existingTarget };
           if (nextStep >= path.length - 1) transit = null;
@@ -1173,7 +1173,7 @@ function resolveTick(gameState) {
           const nextStep = 1;
           location = path[nextStep];
           if (nextStep < path.length - 1) {
-            activity = `heading to the ${ROOMS[target]?.name || target}`;
+            activity = `heading to ${roomPhrase(target)}`;
           }
           transit = { path, progress: nextStep, destination: target };
           if (nextStep >= path.length - 1) transit = null;
@@ -2028,6 +2028,20 @@ function computeRent(npcs, gameState) {
   };
 }
 
+// `bedroomDesirability` lived here and is DELETED (2026-08-14). It scaled a
+// roommate's rent share by how exposed their bedroom was to the kitchen, on
+// the reading that the south wing was "the cheap seats". That was an
+// over-reading: the design intent is that every bedroom in this apartment is
+// equally desirable — the rooms are large and the building has good bones,
+// which is to say real insulation. What the south wing gets is not a worse
+// room, it is a different SENSORY position: they know first when something
+// has gone off in the kitchen, and they also get the smell of a good dinner
+// before anyone else. Both directions, and neither is a price.
+//
+// The exposure asymmetry is real, measurable and kept — it lives entirely in
+// the signal layer, where it belongs. See D7 in
+// src/ref/wip/floorplan-and-movement-plan.md.
+
 // How much of the rent any one roommate can be asked to carry, given the
 // state of the apartment. Nobody pays penthouse rates for a wreck.
 function roommateShareCeiling(quality) {
@@ -2130,12 +2144,250 @@ function getSceneParticipants(player, npcs, world) {
 
 // ===== HOUSE GENERATION (deterministic) =====
 
+// NPC Overhaul Phase 1's physical block, lifted out of generateCast so the
+// PLAYER can have one too. It used to be forty lines inline in the cast
+// loop, which is why the player — generated on a different path entirely —
+// had no appearance at all: `player` was a stats bag with no `bible`, so
+// IMAGE's buildImagePrompt could only ever composite NPCs into a scene and
+// the person the scene is actually about was never in it.
+//
+// One implementation, two callers. `rng` is the caller's seeded generator
+// (an NPC's charRng, or the player's own seeded stream), so both stay
+// deterministic and neither can drift from the other's pools.
+// --- Intimate detail (player creation + intro plan, Phase 1) ---
+// Everything below is drawn from GENITAL_TYPE_FIELDS rather than a
+// hand-written per-type branch, so a new genital type is a config row and
+// nothing here changes.
+
+// One entry of the `genitals` array, with exactly the keys its type applies.
+function rollGenitalEntry(rng, type) {
+  const fields = GENITAL_TYPE_FIELDS[type];
+  if (!fields) return null;
+  const entry = { type };
+  for (const [key, spec] of Object.entries(fields)) {
+    // A pool-less field (`description`) is authored, never rolled — leaving
+    // it empty is the honest default, not a missing draw.
+    if (!spec.pool) { entry[key] = ''; continue; }
+    const pool = spec.pool();
+    entry[key] = pool[Math.floor(rng() * pool.length)];
+  }
+  return entry;
+}
+
+// The default set for a gender. Unknown genders fall back to female's set
+// rather than producing an empty array — a character with no genitals at all
+// is a data hole, and failing to a body is safer than failing to nothing.
+function rollGenitals(rng, gender) {
+  const types = GENDER_DEFAULT_GENITALS[gender] || GENDER_DEFAULT_GENITALS.female;
+  return types.map(t => rollGenitalEntry(rng, t)).filter(Boolean);
+}
+
+// Strip keys that do not apply to an entry's `type`, and drop entries whose
+// type has no table row. The schema validates against the UNION of every
+// type's keys (it must — see CHARACTER_SCHEMA's comment), so a round-trip
+// through validateNpcItemObject default-fills `girth: ''` onto a vagina.
+// This is what puts that back. Pure; safe to call on already-clean data.
+function normalizeGenitals(genitals) {
+  if (!Array.isArray(genitals)) return [];
+  const out = [];
+  for (const raw of genitals) {
+    const fields = GENITAL_TYPE_FIELDS[raw?.type];
+    if (!fields) continue;
+    const entry = { type: raw.type };
+    for (const key of Object.keys(fields)) {
+      entry[key] = typeof raw[key] === 'string' ? raw[key] : '';
+    }
+    out.push(entry);
+  }
+  return out;
+}
+
+function generateIntimate(rng, gender) {
+  const pickPhys = (pool) => pool[Math.floor(rng() * pool.length)];
+  return {
+    breasts: {
+      size: pickPhys(PHYS_POOL_BREAST_SIZE),
+      shape: pickPhys(PHYS_POOL_BREAST_SHAPE),
+      areola: pickPhys(PHYS_POOL_BREAST_AREOLA),
+      nipples: pickPhys(PHYS_POOL_BREAST_NIPPLES),
+      sensitivity: pickPhys(PHYS_POOL_SENSITIVITY),
+    },
+    genitals: rollGenitals(rng, gender),
+    bodyHair: pickPhys(PHYS_POOL_BODY_HAIR),
+  };
+}
+
+// NOTE: the intimate group is NOT rolled here, and that is deliberate. It is
+// derived from `gender`, which both callers roll AFTER this function returns
+// (rollCastSlot's `structured.gender`, generatePlayerAppearance's `a.gender`).
+// Folding it in would mean hoisting the gender draw above this one, and draw
+// ORDER is what makes a seed reproduce a cast — every existing seed would
+// produce a different household. So `generateIntimate` stays a separate call
+// each caller makes once it knows the gender, appending new draws at the end
+// where they disturb nothing.
+function generatePhysical(rng) {
+  const pickPhys = (pool) => pool[Math.floor(rng() * pool.length)];
+  const height = pickPhys(PHYS_POOL_HEIGHT);
+  const build = pickPhys(PHYS_POOL_BUILD);
+  return {
+    height,
+    build,
+    heightBuild: `${height} and ${build}`,
+    hair: {
+      color: pickPhys(PHYS_POOL_HAIR_COLOR),
+      style: pickPhys(PHYS_POOL_HAIR_STYLE),
+      length: pickPhys(PHYS_POOL_HAIR_LENGTH),
+      texture: pickPhys(PHYS_POOL_HAIR_TEXTURE),
+    },
+    eyes: {
+      color: pickPhys(PHYS_POOL_EYE_COLOR),
+      shape: pickPhys(PHYS_POOL_EYE_SHAPE),
+    },
+    skin: {
+      tone: pickPhys(PHYS_POOL_SKIN_TONE),
+      texture: pickPhys(PHYS_POOL_SKIN_TEXTURE),
+      ethnicity: pickPhys(PHYS_POOL_SKIN_ETHNICITY),
+    },
+    face: {
+      shape: pickPhys(PHYS_POOL_FACE_SHAPE),
+      nose: pickPhys(PHYS_POOL_NOSE),
+      lips: pickPhys(PHYS_POOL_LIPS),
+      cheekbones: pickPhys(PHYS_POOL_CHEEKBONES),
+      jawline: pickPhys(PHYS_POOL_JAWLINE),
+      ears: pickPhys(PHYS_POOL_EARS),
+    },
+    body: {
+      shape: pickPhys(PHYS_POOL_BODY_SHAPE),
+      chestSize: pickPhys(PHYS_POOL_CHEST_SIZE),
+      buttSize: pickPhys(PHYS_POOL_BUTT_SIZE),
+      legs: pickPhys(PHYS_POOL_LEGS),
+      posture: pickPhys(PHYS_POOL_POSTURE),
+    },
+    distinguishingFeatures: pickUnique(rng, PHYS_POOL_FEATURES, 1 + Math.floor(rng() * 2)),
+    piercings: rng() < 0.4 ? [{ location: pickPhys(PHYS_POOL_PIERCING_LOC), type: pickPhys(PHYS_POOL_PIERCING_TYPE), description: '' }] : [],
+    tattoos: rng() < 0.35 ? [{ location: pickPhys(PHYS_POOL_TATTOO_LOC), description: '', style: pickPhys(PHYS_POOL_TATTOO_STYLE) }] : [],
+    fashion: pickPhys(PHYS_POOL_FASHION),
+    // Filled by the prose expansion (LLM's expandCharacterProse merges its
+    // `accessories` field in here) and read by
+    // getPhysicalDescriptionForPrompt — which feeds both the conversation
+    // prompt and image.js's character prompts.
+    accessories: '',
+    voice: {
+      pitch: pickPhys(PHYS_POOL_VOICE_PITCH),
+      texture: pickPhys(PHYS_POOL_VOICE_TEXTURE),
+      accent: pickPhys(PHYS_POOL_VOICE_ACCENT),
+    },
+    gait: pickPhys(PHYS_POOL_GAIT),
+    scent: pickPhys(PHYS_POOL_SCENT),
+  };
+}
+
+// The player's own appearance, in the SAME shape an NPC's bible carries —
+// `bible.physical` plus the `age`/`gender` fields getPhysicalDescriptionForPrompt
+// leads with. Giving it that shape rather than a bespoke one is the whole
+// point: NPC.getPhysicalDescriptionForPrompt then serves the player with no
+// second code path, so the player is described to the image generator by
+// exactly the machinery that describes everyone else.
+//
+// `authored` carries anything the player chose at character creation; every
+// field they left blank is rolled from the same pools the cast uses.
+function generatePlayerAppearance(seed, authored) {
+  const rng = seededRng(seed, 'player_appearance');
+  const physical = generatePhysical(rng);
+  const a = authored || {};
+  // Age and gender are resolved BEFORE the merge below (which draws no
+  // randomness, so their relative RNG position is unchanged) because the
+  // intimate roll needs the gender — same derivation as the cast's.
+  const age = a.age ?? (22 + Math.floor(rng() * 10));
+  // Same weighted enum the cast rolls from (rollGender), not a coin flip —
+  // the player is drawn from the same table as everyone they live with.
+  const gender = a.gender || rollGender(rng);
+  physical.intimate = generateIntimate(rng, gender);
+
+  if (a.physical) {
+    // A shallow per-group merge, not a wholesale replace: creation may author
+    // only hair colour, and the rest must stay rolled rather than vanish.
+    for (const [group, val] of Object.entries(a.physical)) {
+      if (group === 'intimate') continue;   // handled below — it nests deeper
+      physical[group] = (val && typeof val === 'object' && !Array.isArray(val))
+        ? { ...physical[group], ...val }
+        : val;
+    }
+    // `intimate` is the one group with a level BELOW the per-group merge, so
+    // the generic pass above would flatten it: authoring only `breasts.size`
+    // would replace the whole breasts object and drop the rolled shape,
+    // areola and nipples. Merge its object half a level deeper, and REPLACE
+    // its array half — a genitals list the player built is the complete list,
+    // and unioning it with a rolled one would hand them parts they removed.
+    const ai = a.physical.intimate;
+    if (ai) {
+      if (ai.breasts) physical.intimate.breasts = { ...physical.intimate.breasts, ...ai.breasts };
+      if (Array.isArray(ai.genitals)) physical.intimate.genitals = normalizeGenitals(ai.genitals);
+      if (typeof ai.bodyHair === 'string') physical.intimate.bodyHair = ai.bodyHair;
+    }
+    // `heightBuild` is a DERIVED field that generatePhysical composes at roll
+    // time, and getPhysicalDescriptionForPrompt prefers it over the height/
+    // build pair. Recompose it after the merge or an authored build lands in
+    // the data and never reaches the prose — the player picks "athletic" and
+    // every prompt still calls them lean.
+    physical.heightBuild = `${physical.height} and ${physical.build}`;
+  }
+  return { age, gender, physical };
+}
+
+// Surnames. The cast has never needed one (a roommate is "Mira", not "Mira
+// Vance") so CHAR_GEN.namePools carries first names only — but the player's
+// surname is load-bearing: the intro's will names `Julius <surname>`, which
+// is how the grandfather gets an identity at all without a second authoring
+// step. Kept here beside the name pools it complements rather than in
+// CHAR_GEN, which is the cast's table.
+const PLAYER_SURNAME_POOL = [
+  'Ashford', 'Beckett', 'Calloway', 'Doyle', 'Ellery', 'Fairbanks', 'Grieves',
+  'Hollis', 'Ives', 'Jarrow', 'Keating', 'Lockhart', 'Marchetti', 'Novak',
+  'Oakes', 'Pemberton', 'Quimby', 'Rademacher', 'Sinclair', 'Thorne',
+  'Underhill', 'Vance', 'Whitlock', 'Yarrow', 'Zeller',
+];
+
+// A blank name rolls, exactly like a blank appearance field does — the
+// studio's standing "Roll it" promise applies to identity too. First names
+// come from CHAR_GEN.namePools matched to gender, the same table the cast
+// draws from, so the player is named from the same world as everyone else.
+function rollPlayerName(seed, gender, authored) {
+  const a = authored || {};
+  const rng = seededRng(seed, 'player_name');
+  const pick = (pool) => pool[Math.floor(rng() * pool.length)];
+  const pools = CHAR_GEN.namePools;
+  // trans_male/trans_female draw from the pool matching their gender, not
+  // their assigned sex — the same rule CHAR_GEN's own comment states for the
+  // cast. futanari leans female, also per that comment.
+  const firstPool =
+    gender === 'male' || gender === 'trans_male' ? pools.first_m :
+    gender === 'female' || gender === 'trans_female' || gender === 'futanari' ? pools.first_f :
+    pools.first_n;
+  return {
+    name: (a.name || '').trim() || pick(firstPool),
+    surname: (a.surname || '').trim() || pick(PLAYER_SURNAME_POOL),
+  };
+}
+
 // Full house generation: structured draws + constraint satisfaction.
 // `partials` (optional) is an array, index-aligned with residents, of
 // per-character partial-authoring objects (see rollCastSlot) — this is
 // what lets "guided" and "manual" creation reuse the exact same generator
 // as "full random" (partials = [] or omitted).
-function SIM_generateHouse(seed, residentCount, partials) {
+//
+// `playerDraft` (optional) is the SAME idea for the player themselves:
+// whatever the Player Design studio authored, with every unauthored field
+// rolled from the cast's pools. Omitted = fully random, exactly like a
+// partials-free cast.
+//
+// It WIDENED from the old `playerAppearance` ({ age, gender, physical }) to
+// carry identity and portrait too ({ name, surname, age, gender, physical,
+// portrait }) when the studio landed. The extra keys pass straight through
+// generatePlayerAppearance untouched — it reads only what it knows — and are
+// picked off separately by buildGameState. Callers passing the old narrower
+// shape still work and simply author no name.
+function SIM_generateHouse(seed, residentCount, partials, playerDraft) {
   const actualSeed = seed || genSeed();
   const clock = { day: 1, weekday: 0, minutes: CLOCK.startMinutes, phase: getPhase(CLOCK.startMinutes) };
 
@@ -2143,7 +2395,7 @@ function SIM_generateHouse(seed, residentCount, partials) {
   // is 0, skip cast generation entirely — the player starts alone in an
   // empty apartment. Roommates are recruited later via the Classifieds app.
   if (ECONOMY.opening?.soloStart && residentCount === 0) {
-    const emptyCast = { npcs: {}, npcIds: [], castWeb: {} };
+    const emptyCast = { npcs: {}, npcIds: [], castWeb: {}, playerDraft };
     return buildGameState(actualSeed, emptyCast, clock, []);
   }
 
@@ -2167,7 +2419,7 @@ function SIM_generateHouse(seed, residentCount, partials) {
   }
 
   // Build game state from best cast
-  return buildGameState(actualSeed, bestCast, clock, droppedConstraints);
+  return buildGameState(actualSeed, { ...bestCast, playerDraft }, clock, droppedConstraints);
 }
 
 function getQualityThreshold(residentCount) {
@@ -2279,60 +2531,7 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
     };
 
     // NPC Overhaul Phase 1: Physical description — seeded from charRng
-    const pickPhys = (pool) => pool[Math.floor(charRng() * pool.length)];
-    const height = pickPhys(PHYS_POOL_HEIGHT);
-    const build = pickPhys(PHYS_POOL_BUILD);
-    const physical = {
-      height,
-      build,
-      heightBuild: `${height} and ${build}`,
-      hair: {
-        color: pickPhys(PHYS_POOL_HAIR_COLOR),
-        style: pickPhys(PHYS_POOL_HAIR_STYLE),
-        length: pickPhys(PHYS_POOL_HAIR_LENGTH),
-        texture: pickPhys(PHYS_POOL_HAIR_TEXTURE),
-      },
-      eyes: {
-        color: pickPhys(PHYS_POOL_EYE_COLOR),
-        shape: pickPhys(PHYS_POOL_EYE_SHAPE),
-      },
-      skin: {
-        tone: pickPhys(PHYS_POOL_SKIN_TONE),
-        texture: pickPhys(PHYS_POOL_SKIN_TEXTURE),
-        ethnicity: pickPhys(PHYS_POOL_SKIN_ETHNICITY),
-      },
-      face: {
-        shape: pickPhys(PHYS_POOL_FACE_SHAPE),
-        nose: pickPhys(PHYS_POOL_NOSE),
-        lips: pickPhys(PHYS_POOL_LIPS),
-        cheekbones: pickPhys(PHYS_POOL_CHEEKBONES),
-        jawline: pickPhys(PHYS_POOL_JAWLINE),
-        ears: pickPhys(PHYS_POOL_EARS),
-      },
-      body: {
-        shape: pickPhys(PHYS_POOL_BODY_SHAPE),
-        chestSize: pickPhys(PHYS_POOL_CHEST_SIZE),
-        buttSize: pickPhys(PHYS_POOL_BUTT_SIZE),
-        legs: pickPhys(PHYS_POOL_LEGS),
-        posture: pickPhys(PHYS_POOL_POSTURE),
-      },
-      distinguishingFeatures: pickUnique(charRng, PHYS_POOL_FEATURES, 1 + Math.floor(charRng() * 2)),
-      piercings: charRng() < 0.4 ? [{ location: pickPhys(PHYS_POOL_PIERCING_LOC), type: pickPhys(PHYS_POOL_PIERCING_TYPE), description: '' }] : [],
-      tattoos: charRng() < 0.35 ? [{ location: pickPhys(PHYS_POOL_TATTOO_LOC), description: '', style: pickPhys(PHYS_POOL_TATTOO_STYLE) }] : [],
-      fashion: pickPhys(PHYS_POOL_FASHION),
-      // Filled by the prose expansion (LLM's expandCharacterProse merges its
-      // `accessories` field in here) and read by
-      // getPhysicalDescriptionForPrompt — which feeds both the conversation
-      // prompt and image.js's character prompts.
-      accessories: '',
-      voice: {
-        pitch: pickPhys(PHYS_POOL_VOICE_PITCH),
-        texture: pickPhys(PHYS_POOL_VOICE_TEXTURE),
-        accent: pickPhys(PHYS_POOL_VOICE_ACCENT),
-      },
-      gait: pickPhys(PHYS_POOL_GAIT),
-      scent: pickPhys(PHYS_POOL_SCENT),
-    };
+    const physical = generatePhysical(charRng);
 
     // Build structured character (name/visual/history/sketch/sampleLines
     // are prose, expanded later by LLM — except name, which the player may
@@ -2359,7 +2558,7 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
       genSeed: Math.floor(charRng() * 1000000),
       age: partial.age ?? rollAge(charRng),           // Phase 0: first-class age, authorable via partial
       gender: partial.gender || rollGender(charRng),  // Phase 0: first-class gender, authorable via partial
-      physical,                                           // NPC Overhaul Phase 1
+      physical,                                           // NPC Overhaul Phase 1 (+ .intimate attached below)
       history: '',
       temperament,
       personality,                                           // NPC Overhaul Phase 5
@@ -2376,6 +2575,11 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
       sketch: '',
       sampleLines: [],
     };
+
+    // The undressed layer, attached once `gender` above has actually been
+    // decided — the genital set is derived from it. Appended after every
+    // pre-existing draw so no seed's household changes (see generatePhysical).
+    structured.physical.intimate = generateIntimate(charRng, structured.gender);
 
     const result = validateCharacter({ bible: structured });
     if (!result.valid) {
@@ -2707,8 +2911,36 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
   // world object is assembled.
   let rent = { total: ECONOMY.rent.total, playerShare: ECONOMY.rent.total, roommateShares: {}, coveredByRoommates: 0, contributorCount: 0, shareCeiling: 0 };
 
-  // Player state
+  // Player state. Appearance and name are resolved first because the name
+  // roll depends on the resolved gender — a blank name on a male player must
+  // draw from the male pool, and the gender is only settled once the authored
+  // draft and the roll have been reconciled.
+  const playerAppearance = generatePlayerAppearance(seed, cast.playerDraft);
+  const playerName = rollPlayerName(seed, playerAppearance.gender, cast.playerDraft);
+
   const player = {
+    // What the player LOOKS like, in the same shape an NPC's bible carries
+    // (age/gender/physical) so NPC's getPhysicalDescriptionForPrompt reads it
+    // with no second code path. Before this the player had no appearance at
+    // all, which is why every scene image in the game drew the roommates and
+    // left out the person the scene is about. Authored fields come from the
+    // Player Design studio; the rest are rolled from the cast's own pools.
+    appearance: playerAppearance,
+    // Who the player IS, as opposed to what they look like. Before the Player
+    // Design studio the player had no name at all — `gs.player?.name || 'You'`
+    // on the save card was the only reference in the codebase, and it always
+    // took the fallback. `surname` is separate because the intro's will names
+    // the grandfather `Julius <surname>`: his identity is derived from the
+    // player's rather than authored on its own.
+    name: playerName.name,
+    surname: playerName.surname,
+    // The portrait the studio generated, stored the way takePhoto stores a
+    // photo — the PROMPT and SEED that reproduce it, never the blob, because
+    // the image cache is a shared LRU that can evict the pixels at any time.
+    // `promptDirty` records that the player hand-edited the prompt, which
+    // freezes it against any further rebuild from the appearance fields.
+    portrait: (cast.playerDraft && cast.playerDraft.portrait)
+      || { prompt: '', seed: 0, promptDirty: false },
     money: ECONOMY.startingMoney,
     // Phase 8: energy as a levelled stat. The player starts with a lower
     // energy ceiling (ENERGY.startingMax) that grows over the game via
@@ -3025,9 +3257,29 @@ function initUtilitiesState() {
 }
 
 // --- Create NPC object from validated bible ---
+// The intimate group, guaranteed. rollCastSlot attaches it to every bible it
+// generates, but a generated cast is not the only way an NPC gets made:
+// CONTRACTOR_BIBLE is hand-authored in config, createExternalNpc builds one
+// from a stub, escorts come from a roster, and importCharacter takes one from
+// a file. Every one of those paths funnels through createNpcFromBible, so
+// this is where "every character has a body" becomes true rather than at four
+// call sites that each have to remember.
+//
+// Seeded from the bible's OWN genSeed, so the same character always gets the
+// same body — and idempotent, so a bible that already carries one (the
+// generated case, and any save already migrated) passes through untouched.
+function ensureIntimate(bible) {
+  if (!bible || typeof bible !== 'object') return bible;
+  const physical = bible.physical;
+  if (!physical || typeof physical !== 'object') return bible;
+  if (physical.intimate && Array.isArray(physical.intimate.genitals)) return bible;
+  const rng = seededRng(bible.genSeed || 0, 'intimate_ensure');
+  return { ...bible, physical: { ...physical, intimate: generateIntimate(rng, bible.gender) } };
+}
+
 function createNpcFromBible(bible, residencyStatus) {
   const npc = {
-    bible,
+    bible: ensureIntimate(bible),
     bibleRevision: 0,
     bibleChanges: [],
     residency: {

@@ -19,89 +19,340 @@ const CONTENT_CONFIG = {
 // Bedrooms in the corners, two hallways (north/south) each with their own
 // bathroom, common spaces bridging them. See src/ref/complete/apartment-expansion-plan.md
 // for the full layout and adjacency graph.
+// Floor plan + movement overhaul (src/ref/wip/floorplan-and-movement-plan.md).
+// The hand-drawn plan is authoritative; the geometry below and in
+// ROOM_LAYOUT/ROOM_THRESHOLDS came out of dev/mapper.html. Open that tool
+// before editing any adjacency by hand — it is what proves every declared
+// connection sits on a wall that actually exists.
+//
+// The shape, in one paragraph: an OPEN CORE (entry → living → dining →
+// kitchen, with both hallways hanging off it, joined entirely by
+// zero-threshold transitions) and every private room exactly one door off
+// it. The east wing is the sole exception — behind one door at the Game
+// Room, and internally looped.
+//
+// D3: bedroom ids keep their MEANING, not their position. `bedroom_1` moved
+// from the south wing to the north; since `residency.room` stores the id,
+// no save migration is needed and only `wing` changed.
 const ROOMS = {
-  // North wing — Hallway A
+  // North wing — Hallway A. The good seats: the hallway opens onto the
+  // Living Room, so these two are insulated from the kitchen.
   bedroom_player: { name: "Your Bedroom", capacity: 2, type: 'bedroom', isPlayer: true, wing: 'north' },
-  bedroom_2:      { name: "Bedroom 2", capacity: 2, type: 'bedroom', wing: 'north' },
+  bedroom_1:      { name: "Bedroom 1", capacity: 2, type: 'bedroom', wing: 'north' },
   hallway_a:      { name: "Hallway A", capacity: 4, type: 'common', wing: 'north' },
   bathroom_a:     { name: "Bathroom A", capacity: 1, type: 'common', wing: 'north' },
-  entry:          { name: "Entry", capacity: 3, type: 'common', wing: 'north' },
 
-  // South wing — Hallway B
-  bedroom_1:      { name: "Bedroom 1", capacity: 2, type: 'bedroom', wing: 'south' },
+  // South wing — Hallway B. The cheap seats, and deliberately so (D7):
+  // Hallway B opens onto the KITCHEN with no threshold between, so these
+  // rooms sit downstream of cooking smell and clatter with one door in the
+  // way. That asymmetry is the layout's, not an oversight.
+  bedroom_2:      { name: "Bedroom 2", capacity: 2, type: 'bedroom', wing: 'south' },
   bedroom_3:      { name: "Bedroom 3", capacity: 2, type: 'bedroom', wing: 'south' },
   hallway_b:      { name: "Hallway B", capacity: 4, type: 'common', wing: 'south' },
   bathroom_b:     { name: "Bathroom B", capacity: 1, type: 'common', wing: 'south' },
 
-  // Center — common spaces
+  // The open core.
+  entry:          { name: "Entry", capacity: 3, type: 'common', wing: 'center' },
   living_room:    { name: "Living Room", capacity: 6, type: 'common', wing: 'center' },
   dining:         { name: "Dining Room", capacity: 6, type: 'common', wing: 'center' },
   kitchen:        { name: "Kitchen", capacity: 4, type: 'common', wing: 'center' },
-  // Recreation Wing — game room → gym → pool room, chained off the living
-  // room. The pool is its own space, not part of the gym: they're separate
-  // but attached, and the pool is the wing's flagship restoration.
-  game_room:      { name: "Game Room", capacity: 4, type: 'common', wing: 'east' },
-  gym:            { name: "Gym", capacity: 2, type: 'common', wing: 'east' },
-  pool_room:      { name: "Pool Room", capacity: 4, type: 'common', wing: 'east' },
+
+  // West service rooms — one door each, both off the open core.
   study:          { name: "Study", capacity: 2, type: 'common', wing: 'west' },
-  balcony:        { name: "Balcony", capacity: 3, type: 'common', wing: 'west' },
   laundry:        { name: "Laundry Room", capacity: 2, type: 'common', wing: 'west' },
+
+  // East leisure wing. Entered ONLY through the Game Room (D14), which is
+  // what makes that room a chokepoint everyone heading for the gym or the
+  // pool passes through. Internally it is a circuit rather than a chain:
+  // Game Room → Changing → Gym → Balcony → back, and Game Room → Pool →
+  // Balcony → back.
+  game_room:      { name: "Game Room", capacity: 4, type: 'common', wing: 'east' },
+  changing_room:  { name: "Changing Room", capacity: 2, type: 'common', wing: 'east' },
+  gym:            { name: "Gym", capacity: 2, type: 'common', wing: 'east' },
+  balcony:        { name: "Balcony", capacity: 3, type: 'common', wing: 'east' },
+  pool_room:      { name: "Pool Room", capacity: 4, type: 'common', wing: 'east' },
 };
 
 const COMMON_ROOMS = Object.keys(ROOMS).filter(id => ROOMS[id].type === 'common');
 const ALL_ROOMS = Object.keys(ROOMS);
+
+// A room's name with the right article in front of it. Eight narration sites
+// wrote `the ${ROOMS[id].name}` by hand, which produced "the Your Bedroom"
+// and "the Bedroom 2" — read past for a long time because the log rarely
+// named a room, and impossible to miss once walking started narrating routes.
+//
+// Two names take no article: a designator name ("Bedroom 2", "Hallway B" —
+// the number or letter makes it a proper noun) and the player's own room,
+// which becomes possessive instead.
+function roomPhrase(roomId) {
+  const name = ROOMS[roomId]?.name || roomId;
+  if (/^Your\b/.test(name)) return name.toLowerCase();
+  if (/\s+([0-9]+|[A-Z])$/.test(name)) return name;
+  return `the ${name}`;
+}
 
 // --- Room adjacency (The Mirrored H floor plan) ---
 // First-class CONFIG constant — the authoritative spatial graph. Promoted
 // from drives.js where it was only used for peep checks. isRoomAdjacent
 // (drives.js) and the floor plan visual both read this.
 // Symmetric: if A→B, B→A. Self-adjacency (A→A) is not listed.
-const ROOM_ADJACENCY = {
-  hallway_a:   ['bedroom_player', 'bedroom_2', 'bathroom_a', 'living_room'],
-  hallway_b:   ['bedroom_1', 'bedroom_3', 'bathroom_b', 'kitchen'],
-  entry:       ['living_room'],
-  living_room: ['entry', 'dining', 'game_room', 'study', 'balcony', 'hallway_a'],
-  dining:      ['living_room', 'kitchen'],
-  kitchen:     ['dining', 'laundry', 'hallway_b'],
-  game_room:   ['living_room', 'gym'],
-  gym:         ['game_room', 'pool_room'],
-  pool_room:   ['gym'],
-  study:       ['living_room'],
-  balcony:     ['living_room'],
-  laundry:     ['kitchen'],
-  bathroom_a:  ['hallway_a'],
-  bathroom_b:  ['hallway_b'],
+// The MOVEMENT graph, and only the movement graph. `glass` edges are
+// deliberately absent (D5): they carry sight and nothing else, and an NPC
+// pathing through a window is precisely the bug that decision prevents.
+// Generated by dev/mapper.html — regenerate there rather than hand-editing,
+// so the map and this table cannot drift apart.
+const ROOM_ADJACENCY_BASE = {
   bedroom_player: ['hallway_a'],
-  bedroom_1:   ['hallway_b'],
-  bedroom_2:   ['hallway_a'],
-  bedroom_3:   ['hallway_b'],
+  hallway_a:      ['bedroom_player', 'bedroom_1', 'bathroom_a', 'living_room'],
+  bedroom_1:      ['hallway_a'],
+  gym:            ['changing_room', 'balcony'],
+  bathroom_a:     ['hallway_a'],
+  entry:          ['living_room'],
+  living_room:    ['hallway_a', 'entry', 'dining', 'game_room'],
+  changing_room:  ['game_room', 'gym'],
+  game_room:      ['living_room', 'changing_room', 'balcony', 'pool_room'],
+  balcony:        ['game_room', 'gym', 'pool_room'],
+  pool_room:      ['game_room', 'balcony'],
+  dining:         ['living_room', 'kitchen', 'study'],
+  kitchen:        ['dining', 'laundry', 'hallway_b'],
+  study:          ['dining'],
+  laundry:        ['kitchen'],
+  hallway_b:      ['kitchen', 'bedroom_2', 'bedroom_3', 'bathroom_b'],
+  bathroom_b:     ['hallway_b'],
+  bedroom_3:      ['hallway_b'],
+  bedroom_2:      ['hallway_b'],
 };
 
-// --- Floor plan coordinates (schematic, in SVG viewBox units) ---
-// Each room gets {x, y, w, h} for the floor plan visual (Phase 2).
-// Arranged to mirror the Mirrored H layout — north wing at top, south at
-// bottom, common spaces in the center column.
+// --- Thresholds (floorplan plan, D4) ---
+// What is actually BETWEEN two rooms. Adjacency says you can get there;
+// this says what you pass through, which is a different question and the
+// one the signal layer cares about.
+//
+//   'door'   a real door. Attenuates per channel, and can be locked.
+//   'open'   a zero-threshold transition: NO WALL, NO BARRIER. The line
+//            between the Kitchen and the Dining Room is imaginary — they
+//            are one space with two names, and nothing is attenuated
+//            crossing it.
+//   'glass'  passes SIGHT only. Not in ROOM_ADJACENCY; not walkable.
+//
+// Keys are the two room ids SORTED and joined with '|'. Never index this
+// directly — thresholdBetween(a, b) owns the sort so no caller has to.
+const ROOM_THRESHOLDS_BASE = {
+  'balcony|game_room':        'door',
+  'balcony|gym':              'door',
+  'balcony|pool_room':        'door',
+  'bathroom_a|hallway_a':     'door',
+  'bathroom_b|hallway_b':     'door',
+  'bedroom_1|hallway_a':      'door',
+  'bedroom_2|hallway_b':      'door',
+  'bedroom_3|hallway_b':      'door',
+  'bedroom_player|hallway_a': 'door',
+  'changing_room|game_room':  'door',
+  'changing_room|gym':        'door',
+  'dining|study':             'door',
+  'game_room|living_room':    'door',
+  'game_room|pool_room':      'door',
+  'kitchen|laundry':          'door',
+  // The open core (D6). These five edges are why the apartment reads as one
+  // continuous space with rooms hanging off it rather than as a corridor.
+  'dining|kitchen':           'open',
+  'dining|living_room':       'open',
+  'entry|living_room':        'open',
+  'hallway_a|living_room':    'open',
+  'hallway_b|kitchen':        'open',   // D7: why the south wing is the cheap seats
+  // The pool's glass wall is NOT here: D14 makes it an upgrade rather than a
+  // starting condition, so it lives in STRUCTURAL_UPGRADES.pool_window below.
+};
+
+// --- Structural upgrades (floorplan plan Phase 6, D13) ---
+// A structural upgrade EDITS THE GRAPH. That is what distinguishes it from
+// the facility upgrades in FACILITY_DEFS, which move a quality number: these
+// change what connects to what, what a crossing is made of, or what a room
+// IS. The apartment's shape becomes something the player negotiates rather
+// than inherits.
+//
+// Two of the five ADD a barrier. Upgrade systems almost always only open
+// things up; being able to close your house down is a lever nobody uses and
+// this layout hands it over for free — the open core is wonderful until you
+// are trying to sleep next to the kitchen.
+//
+// `edits` is a list of graph operations applied in order:
+//   { threshold: 'a|b', to: 'door' }   retype an existing crossing
+//   { addEdge: 'a|b', as: 'glass' }    create one that was not there
+//   { removeEdge: 'a|b' }              wall one up
+//   { roomType: 'study', to: 'bedroom' }  change what a room is
+const STRUCTURAL_UPGRADES = {
+  // A PREFERENCE, not a fix — and the description says so, because it used
+  // to say otherwise. This was sold as the cure for the south wing being
+  // "the cheap seats", back when D7 priced the wing asymmetry into rent.
+  // That pricing is gone (see D7): every bedroom here is equally desirable,
+  // and what the south wing has is a sensory position, not a defect. You
+  // might want to close it off. You might like being able to smell dinner
+  // from bed. Both are legitimate, so this sells the choice rather than a
+  // remedy.
+  kitchen_hall_door: {
+    id: 'kitchen_hall_door', label: 'Door onto Hallway B',
+    room: 'kitchen', cost: 2200, durationDays: 3, reversible: true,
+    desc: 'Frame and hang a door in the kitchen archway. The south bedrooms stop smelling breakfast — for better or worse.',
+    edits: [{ threshold: 'hallway_b|kitchen', to: 'door' }],
+  },
+  // The showpiece. Sight only, never a door (D14) — the Game Room stays the
+  // sole way into the east wing, because a chokepoint everyone passes through
+  // is where unforced encounters happen.
+  pool_window: {
+    id: 'pool_window', label: 'Pool Viewing Wall',
+    room: 'pool_room', cost: 9500, durationDays: 6,
+    desc: 'Cut the living room wall through to the pool and glaze it. You see the water from the sofa; you still walk round.',
+    edits: [{ addEdge: 'living_room|pool_room', as: 'glass' }],
+  },
+  // A fourth rentable room against losing an amenity — the most direct
+  // economic decision in the set, and the one that speaks to the rent
+  // pressure the whole game runs on.
+  study_to_bedroom: {
+    id: 'study_to_bedroom', label: 'Convert Study to Bedroom',
+    room: 'study', cost: 7000, durationDays: 7,
+    desc: 'Wardrobe, bed, a lock on the door. You lose the study; you gain a room that pays rent.',
+    edits: [{ roomType: 'study', to: 'bedroom' }],
+  },
+  // Total privacy, bought at everyone else's expense. Seal Bathroom A off the
+  // hallway and open it into the player's room: the north wing loses a
+  // bathroom and the whole household starts queueing for Bathroom B.
+  // Roommates SHOULD resent this, and an upgrade that raises tension is
+  // exactly the kind this game should be able to sell you.
+  ensuite: {
+    id: 'ensuite', label: 'Private Ensuite',
+    room: 'bathroom_a', cost: 5400, durationDays: 5,
+    desc: 'Wall up the hallway door and cut through from your bedroom. Yours alone — and nobody else\'s any more.',
+    edits: [
+      { removeEdge: 'bathroom_a|hallway_a' },
+      { addEdge: 'bathroom_a|bedroom_player', as: 'door' },
+    ],
+  },
+  // The reversible one, and the only upgrade that is a preference rather
+  // than a progression: close the acoustic core when you want to sleep,
+  // open it when you want a party.
+  dining_doors: {
+    id: 'dining_doors', label: 'Dining Room Doors',
+    room: 'dining', cost: 1600, durationDays: 2, reversible: true,
+    desc: 'Hang double doors in the living room archway. Quieter nights, colder parties.',
+    edits: [{ threshold: 'dining|living_room', to: 'door' }],
+  },
+};
+
+// --- The live graph ---
+// ROOM_ADJACENCY and ROOM_THRESHOLDS are the tables everything reads, and
+// they are DERIVED: base layout plus whichever structural upgrades this save
+// has built. Rebuilt IN PLACE rather than reassigned, so every existing
+// reader (findPath, isRoomAdjacent, reachMultipliers, the renderer) keeps
+// working untouched — there is no version of this that threads a gameState
+// through all of them without touching thirty call sites.
+const ROOM_ADJACENCY = {};
+const ROOM_THRESHOLDS = {};
+
+// Rebuild the live graph. `gameState` omitted = the base layout alone, which
+// is what the tables hold at load time before any save exists.
+function applyStructuralUpgrades(gameState) {
+  for (const k of Object.keys(ROOM_ADJACENCY)) delete ROOM_ADJACENCY[k];
+  for (const k of Object.keys(ROOM_THRESHOLDS)) delete ROOM_THRESHOLDS[k];
+  for (const [room, ns] of Object.entries(ROOM_ADJACENCY_BASE)) ROOM_ADJACENCY[room] = ns.slice();
+  Object.assign(ROOM_THRESHOLDS, ROOM_THRESHOLDS_BASE);
+  // Room types are patched onto ROOMS the same way, and reset first so
+  // reverting an upgrade actually reverts it.
+  for (const [id, def] of Object.entries(ROOMS)) {
+    if (def._baseType === undefined) def._baseType = def.type;
+    def.type = def._baseType;
+  }
+
+  const flags = gameState?.world?.flags || {};
+  for (const up of Object.values(STRUCTURAL_UPGRADES)) {
+    if (!flags[`structural_${up.id}`]) continue;
+    for (const edit of up.edits) {
+      if (edit.threshold) {
+        if (ROOM_THRESHOLDS[edit.threshold]) ROOM_THRESHOLDS[edit.threshold] = edit.to;
+      } else if (edit.addEdge) {
+        const [a, b] = edit.addEdge.split('|');
+        ROOM_THRESHOLDS[edit.addEdge] = edit.as;
+        // Glass is a threshold, never a route (D5) — it must not reach the
+        // movement graph or NPCs will path through a window.
+        if (edit.as !== 'glass') {
+          if (!ROOM_ADJACENCY[a].includes(b)) ROOM_ADJACENCY[a].push(b);
+          if (!ROOM_ADJACENCY[b].includes(a)) ROOM_ADJACENCY[b].push(a);
+        }
+      } else if (edit.removeEdge) {
+        const [a, b] = edit.removeEdge.split('|');
+        delete ROOM_THRESHOLDS[edit.removeEdge];
+        ROOM_ADJACENCY[a] = (ROOM_ADJACENCY[a] || []).filter(n => n !== b);
+        ROOM_ADJACENCY[b] = (ROOM_ADJACENCY[b] || []).filter(n => n !== a);
+      } else if (edit.roomType && ROOMS[edit.roomType]) {
+        ROOMS[edit.roomType].type = edit.to;
+      }
+    }
+  }
+  // SIGNALS derives its own edge list from ROOM_THRESHOLDS; it has to follow.
+  if (typeof rebuildSignalEdges === 'function') rebuildSignalEdges();
+  return { ROOM_ADJACENCY, ROOM_THRESHOLDS };
+}
+
+// Populate the live tables at load, before anything reads them.
+applyStructuralUpgrades();
+
+// The one accessor. Owns the sorted-key convention so a caller can ask in
+// either direction and a rename can never leave half the table unreachable.
+// Rooms that are not connected at all return null, which is distinct from
+// 'open' — "no barrier" and "no connection" are opposite answers.
+function thresholdBetween(a, b) {
+  return ROOM_THRESHOLDS[[a, b].sort().join('|')] || null;
+}
+
+// --- Floor plan geometry (schematic, in a 500x660 space) ---
+// A room is a LIST of [x, y, w, h] rects, not one box (D2). The Gym wraps
+// around Bedroom 1 and the Living Room wraps under the Entry — both are
+// genuinely L-shaped, and flattening them to single boxes is what made the
+// old plan read as a pile of disconnected rectangles.
+//
+// Traced from the hand-drawn plan via dev/mapper.html. Adjacent rooms TILE:
+// every edge in ROOM_ADJACENCY shares a real wall, asserted in
+// dev/verify/verify-plan.js so the map and the graph cannot disagree.
 const ROOM_LAYOUT = {
-  bedroom_player: { x: 0,   y: 0,   w: 50, h: 35 },
-  hallway_a:      { x: 55,  y: 5,   w: 50, h: 25 },
-  bedroom_2:      { x: 110, y: 0,   w: 50, h: 35 },
-  bathroom_a:     { x: 60,  y: 35,  w: 40, h: 20 },
-  entry:          { x: 0,   y: 60,  w: 40, h: 25 },
-  living_room:    { x: 45,  y: 60,  w: 50, h: 35 },
-  game_room:      { x: 100, y: 60,  w: 35, h: 20 },
-  gym:            { x: 100, y: 85,  w: 35, h: 20 },
-  // Sits below the gym and clear of laundry (x 85-115, y 125-145) — the
-  // only rectangle it could otherwise have collided with.
-  pool_room:      { x: 120, y: 110, w: 40, h: 28 },
-  study:          { x: 0,   y: 90,  w: 35, h: 25 },
-  balcony:        { x: 75,  y: 100, w: 30, h: 15 },
-  dining:         { x: 40,  y: 100, w: 30, h: 15 },
-  kitchen:        { x: 30,  y: 120, w: 50, h: 25 },
-  laundry:        { x: 85,  y: 125, w: 30, h: 20 },
-  hallway_b:      { x: 50,  y: 150, w: 50, h: 25 },
-  bathroom_b:     { x: 0,   y: 155, w: 40, h: 20 },
-  bedroom_1:      { x: 0,   y: 180, w: 50, h: 35 },
-  bedroom_3:      { x: 110, y: 180, w: 50, h: 35 },
+  bedroom_player: [[90,5,110,130]],
+  hallway_a:      [[200,5,32,185]],
+  bedroom_1:      [[232,5,123,115]],
+  gym:            [[232,120,208,70], [355,30,85,90]],
+  bathroom_a:     [[105,140,90,48]],
+  entry:          [[40,190,125,50]],
+  living_room:    [[165,190,160,165], [40,240,125,115]],
+  changing_room:  [[325,190,85,42]],
+  game_room:      [[325,232,85,78]],
+  balcony:        [[415,190,55,120]],
+  pool_room:      [[325,315,150,135]],
+  dining:         [[40,355,170,95]],
+  kitchen:        [[210,355,115,95]],
+  study:          [[55,455,110,90]],
+  laundry:        [[185,455,95,65]],
+  hallway_b:      [[280,450,40,160]],
+  bathroom_b:     [[320,450,90,40]],
+  bedroom_3:      [[320,490,100,120]],
+  bedroom_2:      [[165,520,115,110]],
+};
+
+// The schematic units above are ~5cm each: the plan spans 500 units across
+// what a penthouse of this footprint would be, call it 25 metres. At an
+// unhurried indoor walking pace (~1.4 m/s) that is a shade under 28 units
+// per second, which is where WALK.unitsPerSecond comes from.
+//
+// It matters that this is DERIVED (D9). Walk time is the path's length in
+// these units, not a per-room number somebody maintains — so the apartment's
+// size is mechanically real and there is no table that can disagree with the
+// map. Crossing the whole flat lands around 15-20 game-seconds; a step
+// between neighbouring rooms is 3-6.
+const WALK = {
+  unitsPerSecond: 28,
+  // Every doorway costs a beat regardless of distance — you slow down, you
+  // handle a door. Keeps two tiny adjacent rooms from being free.
+  secondsPerThreshold: { door: 1.5, open: 0.4, glass: Infinity },
+  // A floor is never truly free even standing still; this is the floor on a
+  // single move so a click always advances the clock a little.
+  minSeconds: 1,
 };
 
 // --- Economy (luxury penthouse scale — see apartment-expansion-plan.md) ---
@@ -152,6 +403,13 @@ const ECONOMY = {
     // also keeps private rooms worth more, which gives converting space a
     // point.
     sharedRoomShareMultiplier: 0.8,
+    // A `roomDesirability` block lived here and is DELETED (2026-08-14). It
+    // priced the north/south wing asymmetry into rent. The intent is the
+    // opposite: EVERY BEDROOM IN THIS APARTMENT IS EQUALLY DESIRABLE. The
+    // rooms are large and the building has good bones, which is to say real
+    // insulation — the south wing's position by the kitchen is a sensory
+    // fact, not a defect, and it cuts both ways (they are first to know
+    // about the bin, and first to smell dinner). See D7.
   },
   // Phase 7: the opening. The player starts alone in a wreck apartment
   // with starter money that covers roughly two weeks of solo rent. A
@@ -500,35 +758,67 @@ const MAINTENANCE = {
   },
 };
 
-// --- Spoilage / rot (inventory overhaul Phase 4) ---
+// --- Spoilage / rot (inventory overhaul Phase 4; food-decay overhaul) ---
 // Food decays, and rot becomes a mess with consequences (D5/D6). One
 // tuning surface for the whole model. Freshness is DERIVED from elapsed
-// game days (invariant 5 — never a stored countdown): a stack's effective
+// game time (invariant 5 — never a stored countdown): a stack's effective
 // shelf life is `def.perishable.days × container.preservation`, and the
 // container's preservation multiplier lives on its OBJECT_DEFS entry
-// (fridge 4.0 / pantry 2.0 / bag 1.0 / floor & doormat 0.5 — see
+// (fridge 4.0 / pantry 2.0 / bag 1.0 / doormat 0.75 / floor 0.5 — see
 // DEFS.WORLD's container block). Moving a stack between containers
 // recomputes its remaining life (ITEMS' retimeStack) rather than resetting
-// it. `freshnessThresholds` and `bagPreservation` absorbed from
-// INVENTORY_TUNING, which referenced this block's model before it existed.
+// it.
+//
+// Elapsed time is CONTINUOUS — `day + minutes/1440` (ITEMS' gameDaysNow),
+// not `clock.day` alone. That was the whole bug the overhaul fixed: at
+// whole-day resolution nothing aged at all inside a day and then aged a
+// full day at once at rollover, so a 1-day takeout dish was Fresh right up
+// to midnight and Rotten immediately after, never passing through the
+// ladder the player was being shown.
+//
+// The ladder, in fraction of edible life consumed:
+//   Fresh     just cooked or just delivered. An ABSOLUTE window
+//             (`freshHours`), because "fresh" means recently made, not
+//             "a fixed fraction of the way to the bin" — a stick of butter
+//             is not fresh for two days just because it keeps for a month.
+//   (none)    perfectly good, simply not fresh any more. Carries NO label,
+//             which is the point: most food, most of the time, is fine.
+//   Stale     been sitting out a while. Not bad. Not great.
+//   Spoiled   still edible, and it costs you — reduced restore plus a mood
+//             and energy hit (the food-poisoning beat, once per meal).
+//   Rotten    NOT edible. It is refuse, and `graceDays` later it is a mess.
+//
+// `def.perishable.days` is therefore the time from acquisition to ROTTEN at
+// the 1.0 (room-temperature) baseline, not the time until it first looks
+// iffy — the ingredient shelf lives in DEFS.WORLD were re-authored against
+// that reading.
+//
 // The Rotten→mess conversion runs in the day-rollover spoilage pass (SIM's
 // processSpoilageForDay) and feeds the EXISTING cleanliness machinery via
 // each container def's `rotten_food` state (DEFS.WORLD), so the maid's
 // cleanRoomObjects and the player's throw-out button clear it with no
 // parallel mess system.
 const ROT = {
-  graceDays: 2,                  // days a stack stays Rotten (still eatable, with penalties) before it becomes a mess
+  graceDays: 2,                  // days a Rotten (inedible) stack sits there before it becomes a mess
   bagPreservation: 1.0,          // the player's bag is the neutral baseline (1.0 row of the preservation table)
-  freshnessThresholds: { useSoon: 0.5, spoiling: 0.85 },  // fraction-of-life ladder: Fresh < .5 | Use soon .5–.85 | Spoiling .85–1 | Rotten > 1
+  freshHours: 4,                 // absolute Fresh window at the 1.0 baseline — "just made", not a fraction of shelf life
+  stages: { good: 0.15, stale: 0.45, spoiled: 0.75 },  // fraction-of-life ladder: Fresh/— < .15 | Stale .45 | Spoiled .75 | Rotten ≥ 1
+  labels: { fresh: 'Fresh', good: '', stale: 'Stale', spoiled: 'Spoiled', rotten: 'Rotten' },
+  // Two perishable stacks merge only when their freshness anchors are this
+  // close. At whole-day resolution the test was anchor equality, which IS
+  // this test at day resolution; with hours in play, exact equality would
+  // split a single shopping trip into one stack per minute.
+  mergeToleranceHours: 6,
   rottenMessGrime: 0.9,          // dirtyWhen grime a rot mess contributes via `rotten_food: 'rotten'` on the container
-  // Eating spoiled food: Spoiling restores a fraction; Rotten restores a
-  // fraction AND costs mood and energy on top (the food-poisoning beat).
-  // The penalties are per eating event, not per serving — one meal of
-  // rotten food makes you sick once.
+  // Eating past its best: Stale is a small ding, Spoiled restores half AND
+  // costs mood and energy on top. The penalties are per eating event, not
+  // per serving — one spoiled meal makes you sick once. Rotten has no entry
+  // here because Rotten cannot be eaten at all (the picker filters it and
+  // EFFECTS' applyEatItem refuses it).
+  staleRestoreMultiplier: 0.9,
   spoiledRestoreMultiplier: 0.5,
-  rottenRestoreMultiplier: 0.25,
-  rottenMoodPenalty: 0.05,
-  rottenEnergyPenalty: 10,
+  spoiledMoodPenalty: 0.05,
+  spoiledEnergyPenalty: 10,
   // (Phase 5: the standing-in-a-smelly-room mood cost moved OUT of the
   // per-tick subtraction and INTO the mood target's comfort term —
   // MOOD_TARGET.comfort.odorPenalty — so it doesn't fight the easing.)
@@ -548,6 +838,9 @@ const MAX_CONCURRENT_JOBS = 1;
 const RENOVATION_STAGE_TEMPLATES = {
   repair:  ['Strip-out', 'Rebuild', 'Finish'],
   upgrade: ['Demo', 'Install', 'Detail work', 'Finish'],
+  // Structural work (floorplan plan Phase 6) — walls come down or go up, so
+  // the stages are the building's rather than a fitting's.
+  structural: ['Survey', 'Demolition', 'Framing', 'Making good'],
 };
 
 // Construction-scene narration (Phase 3). Both pools are keyed by job type
@@ -845,7 +1138,31 @@ const COMMITMENT_TUNING = {
   relationshipCap: 0.05,
   relationshipTensionRelief: 0.01,
   attendanceMultFed: 1.0,
+  // Someone who sat down and did NOT get fed. This multiplier already
+  // existed and was already the right number; what it lacked was a way to
+  // happen on purpose. set_meal used to serve ONE dish and cap the eaters at
+  // its servings, so a 1-serving steak with three roommates at the table fed
+  // the player and left three people sitting there — silently, with no way
+  // for the player to have chosen otherwise. The spread (below) makes
+  // catering a decision, and this the price of getting it wrong.
   attendanceMultPresent: 0.5,
+  // --- The spread ---
+  // A shared meal is several dishes laid out, not one item everybody somehow
+  // shares. Servings pool across the whole spread and each person at the
+  // table takes one, round-robin across the dishes so a table of four eating
+  // pizza + fries + salad eats some of each rather than four slices of pizza.
+  //
+  // Quality (DEFS.ACTIONS' spreadQuality) is the table's BEST dish plus this
+  // much per ADDITIONAL distinct dish: three dishes on the table genuinely is
+  // a better dinner than one, and the relationship delta should be able to say
+  // so. Bounded by the 0..1 clamp quality already has, so this cannot run
+  // away. (Not the mean — averaging made adding a side dish score worse than
+  // serving the centrepiece alone, which punished the exact behaviour the
+  // spread exists to encourage.)
+  spreadVarietyBonus: 0.08,
+  // Not a rule about realism — a bound on the picker so one action can't
+  // enqueue an unbounded pile of EAT_ITEM lines.
+  maxSpreadDishes: 6,
   // How long a held/missed commitment record is kept before the rollover
   // sweep prunes it (same retention rationale as VISIT_TUNING.retainDoneDays).
   retainedDays: 7,
@@ -1181,20 +1498,48 @@ const FACILITY_DEFS = {
         desc: 'Treadmill, weights, bench, rack, and a proper yoga corner.' },
     ],
   },
+  // --- Changing room: plumbing and fixtures ---
+  // The east wing's wet room. Its whole mechanical argument is CONDITIONAL
+  // relief: it is a third place to get clean, but only worth using if you
+  // are already on the pool side of the apartment, so it takes pressure off
+  // the two contested bathrooms without flatly removing the contention that
+  // makes a shared flat a shared flat. Modest qualityWeight for the same
+  // reason — it is a convenience, not a showpiece.
+  changing_fixtures: {
+    id: 'changing_fixtures', label: 'Changing Room Fixtures', room: 'changing_room',
+    qualityWeight: 1, gatesActions: ['self.shower'],
+    appeal: { 'fitness': 1.5, 'yoga': 1.0, '*': 0.4 },
+    tiers: [
+      { tier: 'broken', label: 'Dead Plumbing', qualityValue: 0, cost: 0, durationDays: 0,
+        desc: 'The shower runs brown for a minute and then not at all. Half the lockers are rusted shut.' },
+      { tier: 'functional', label: 'Working Changing Room', qualityValue: 0.5, cost: 1800, durationDays: 3,
+        desc: 'Hot water, a working drain, lockers that open. Somewhere to change that isn\'t a bathroom queue.' },
+      { tier: 'upgraded', label: 'Spa Changing Room', qualityValue: 1.0, cost: 6500, durationDays: 5,
+        desc: 'Rainfall shower, heated benches, proper ventilation and stacked towels.' },
+    ],
+  },
   // --- Pool room: liner, filtration, pump ---
   // The wing's flagship renovation and the single most expensive thing in
   // the apartment. A pool room is only a pool room in name until the water
-  // system actually runs — until then it's a dry concrete hole with a
-  // torn liner, which is exactly the kind of inherited-wreck detail the
-  // opening is built on. Highest qualityWeight of any facility: nothing
-  // else moves what a room commands like a working pool.
+  // system actually runs — until then it's a dry tiled basin with a torn
+  // liner, sealed in a room with no working ventilation, which is exactly
+  // the kind of inherited-wreck detail the opening is built on. Highest
+  // qualityWeight of any facility: nothing else moves what a room commands
+  // like a working pool.
   pool_systems: {
     id: 'pool_systems', label: 'Pool Systems', room: 'pool_room',
     qualityWeight: 5, gatesActions: ['self.swim'],
     appeal: { 'fitness': 2.0, 'yoga': 1.0, 'hiking': 0.5, '*': 1.2 },
+    // Object states this facility OWNS, written when a job completes it
+    // (UI's applyFacilityCompletionStates). `swimming_pool.water` was a
+    // state the def described and nothing ever set — which is how a pool
+    // whose own tier-0 line says "It holds no water" spent the whole game
+    // emitting the smell of stagnant green water. The renovation is what
+    // puts water in it, so the renovation is what says so.
+    completionStates: { swimming_pool: { water: 'filled', clarity: 'clear' } },
     tiers: [
       { tier: 'broken', label: 'Derelict Pool', qualityValue: 0, cost: 0, durationDays: 0,
-        desc: 'Torn liner, seized pump, filters full of ten-year-old leaves. It holds no water.' },
+        desc: 'Torn liner, seized pump, filters packed with a decade of dried sludge. It holds no water, and the room smells of it.' },
       { tier: 'functional', label: 'Working Pool', qualityValue: 0.5, cost: 12000, durationDays: 8,
         desc: 'New liner, rebuilt pump, clean filtration. The water is clear and it circulates.' },
       { tier: 'upgraded', label: 'Heated Pool', qualityValue: 1.0, cost: 34000, durationDays: 12,
@@ -1345,6 +1690,7 @@ const ROOM_FACILITIES = {
   bathroom_b: ['bathroom_b_plumbing'],
   living_room: ['living_room_entertainment'],
   gym: ['gym_equipment'],
+  changing_room: ['changing_fixtures'],
   pool_room: ['pool_systems'],
   laundry: ['laundry_machines'],
   game_room: ['game_room_setup'],
@@ -2065,6 +2411,10 @@ const SIGNAL_DEFS = {
       strong: ['there is nowhere clear to put anything down'],
     },
   },
+  // A pool with water in it that nobody is filtering. Guarded on
+  // `water: 'filled'` at the emitter (DEFS.WORLD's swimming_pool), because
+  // these phrases are about WATER — the derelict basin has its own signal
+  // below and its own, drier problem.
   stagnant_water: {
     channel: 'smell',
     salience: 0.6,
@@ -2072,6 +2422,22 @@ const SIGNAL_DEFS = {
       faint:  ['a faint chlorine-and-something-else smell off the water'],
       clear:  ['the pool has gone cloudy and it smells like it'],
       strong: ['the pool is green, and the smell carries'],
+    },
+  },
+  // The tier-0 pool: torn liner, seized pump, dead filtration. It holds no
+  // water, so it cannot smell like water — and it is INDOORS, on the top
+  // floor of a building, so it cannot smell like leaves or rain either.
+  // What a sealed, unventilated pool room actually gives you is damp: black
+  // mould in the grout, the ghost of old chloramine that never left the
+  // tiles, perished vinyl liner, and whatever has gone septic standing in
+  // the drain — the one place in a "dry" pool that is never dry.
+  derelict_pool: {
+    channel: 'smell',
+    salience: 0.5,
+    phrases: {
+      faint:  ['the flat, shut-up damp of a room nobody has aired out'],
+      clear:  ['the empty pool smells of mildew and old chlorine'],
+      strong: ['the pool basin reeks — black mould in the grout and something gone sour in the drain'],
     },
   },
 
@@ -2276,6 +2642,7 @@ const SIGNAL_ICONS = {
     rot:             '🦠',
     dirty_dishes:    '🍽',
     stagnant_water:  '💧',
+    derelict_pool:   '🧫',
     // The emotional channel (initiative plan Phase 1). On the floor plan
     // these read as "someone in that room is having a day", which is the
     // information the signal carries and the reason it exists.
@@ -2510,6 +2877,23 @@ const SIGNAL_TUNING = {
     sound: { unlocked: 0.45, locked: 0.30 },
     sight: { unlocked: 0.05, locked: 0.02 },
   },
+  // A GLASS threshold (floorplan plan D4) — the pool wall. Sound and smell
+  // are stopped DEAD, which is what makes it a wall rather than a door;
+  // sight passes completely unimpeded, because that is what glass is.
+  //
+  // sight: 1 rather than a fraction is deliberate. `attenuation.sight` is
+  // already 0.10 a hop, so the pane does not need to dim anything for the
+  // result to be modest — living-room-to-pool lands at 0.10 against a
+  // noticeFloor of 0.08. At 0.85 it landed on 0.085, close enough to the
+  // floor that a slightly inattentive observer would fail to see straight
+  // through a window, which is not a thing. Distance dims the view here;
+  // the glass does not.
+  glassMultiplier: { smell: 0, sound: 0, sight: 1 },
+  // An `open` threshold — a zero-threshold transition, no wall, no barrier.
+  // Declared rather than left as a bare 1 so it reads as a decision in the
+  // table alongside the other two, and so the day someone wants a beaded
+  // curtain there is one number to change.
+  openMultiplier: { smell: 1, sound: 1, sight: 1 },
   // Below this, after the perceiver's attention is applied, the signal is not
   // noticed. Attention GATES perception; it does not scale how intense the
   // thing seems (plan D8) — a keen observer notices faint things a dull one
@@ -2970,9 +3354,60 @@ const CHARACTER_SCHEMA = {
         // longer emits four empty strings for it; the schema default covers a
         // generated NPC until something fills it.
         //
-        // `genitals` was declared here and IS pruned: mature-gated content
-        // that no generator, authored character, or prompt ever wrote to or
-        // read — no producer and no consumer.
+        // `genitals` was declared here and pruned once for having no producer
+        // and no consumer. It is back, as part of `intimate` below, and this
+        // time BOTH exist: generatePhysical (sim.js) rolls it for every
+        // character, the Player Design studio authors it, and
+        // getPhysicalDescriptionForPrompt (npc.js) reads it. If a future audit
+        // finds the reader gone, prune it again — per RI6 the rule is the
+        // rule.
+        //
+        // The undressed layer. One NESTED group rather than fields scattered
+        // across `physical`, and that nesting is load-bearing: the describer
+        // gates the whole group at one place (mature flag + explicit opt-in +
+        // undressed) instead of remembering a gate per field. `body.chestSize`
+        // above is untouched and still means the clothed silhouette —
+        // `intimate.breasts` is a second level of detail for a second context,
+        // not a replacement.
+        //
+        // `genitals` is an ARRAY of typed objects, discriminated on `type`,
+        // specifically so one character can carry more than one set.
+        //
+        // `itemFields` is the UNION of every type's keys rather than a
+        // per-type schema, because the existing validator walk
+        // (resolveNpcFieldSpec → validateNpcItemObject, state.js) resolves an
+        // array element against one flat `itemFields` map and nothing else.
+        // Teaching it a second, type-dispatched shape would mean a second
+        // validator for one field — and "the tab contents and the save
+        // validator literally share one schema" is the invariant the
+        // Character Studio rests on. Which keys actually APPLY to a type is
+        // GENITAL_TYPE_FIELDS below, read by the roller, the describer and
+        // the studio alike; normalizeGenitals (sim.js) is what strips the
+        // inapplicable ones back out, so stored data stays clean without the
+        // validator needing to know.
+        intimate:             { type: 'object', default: {},
+          fields: {
+            breasts: { type: 'object', default: {},
+              fields: { size: { type: 'string', default: '' }, shape: { type: 'string', default: '' }, areola: { type: 'string', default: '' }, nipples: { type: 'string', default: '' }, sensitivity: { type: 'string', default: '' } } },
+            genitals: { type: 'array', default: [], maxItems: 4,
+              itemFields: {
+                type:        { type: 'string', required: true, enum: ['vagina', 'penis'] },
+                hair:        { type: 'string', default: '' },
+                sensitivity: { type: 'string', default: '' },
+                description: { type: 'string', default: '', maxLength: 200 },
+                labia:       { type: 'string', default: '' },   // vagina
+                color:       { type: 'string', default: '' },   // vagina
+                length:      { type: 'string', default: '' },   // penis
+                girth:       { type: 'string', default: '' },   // penis
+                cut:         { type: 'string', default: '' },   // penis
+                balls:       { type: 'string', default: '' },   // penis
+              } },
+            bodyHair: { type: 'string', default: '' },
+            // `preferences` is deliberately absent. It has no reader, and the
+            // comment above is what happens to a field in that state. It
+            // arrives with the intimacy layer that consumes it.
+          }
+        },
         typicalAttire:        { type: 'object', default: {},
           fields: { casual: { type: 'string', default: '' }, work: { type: 'string', default: '' }, sleep: { type: 'string', default: '' }, formal: { type: 'string', default: '' } } },
         voice:                { type: 'object', default: {},
@@ -3543,6 +3978,70 @@ const PHYS_POOL_VOICE_ACCENT = ['neutral American', 'Southern', 'British', 'Aust
 const PHYS_POOL_GAIT = ['long confident strides', 'a slight slouch', 'quick short steps', 'a relaxed amble', 'an upright purposeful walk', 'a slight limp', 'bouncy steps'];
 const PHYS_POOL_SCENT = ['faint bergamot', 'clean laundry', 'woody cologne', 'vanilla', 'coffee', 'cigarettes and leather', 'fresh soap', 'lavender', 'sandalwood', 'nothing distinctive', 'gunpowder and mint', 'cinnamon'];
 
+// --- Intimate detail pools (player creation + intro plan, Phase 1) ---
+// The undressed layer, mirroring the clothed pools above in every respect:
+// flat string arrays, drawn by generatePhysical's same `pickPhys`, offered
+// by the Player Design studio through the same one-table populate/read.
+// Deliberately NOT a parallel vocabulary — `body.chestSize` above stays the
+// CLOTHED silhouette every ordinary scene reads; these are only ever reached
+// through getPhysicalDescriptionForPrompt's three-part gate (see npc.js).
+const PHYS_POOL_BREAST_SIZE = ['flat', 'barely-there', 'small', 'modest', 'average', 'full', 'large', 'very large', 'heavy'];
+const PHYS_POOL_BREAST_SHAPE = ['round', 'teardrop', 'bell-shaped', 'east-west', 'side-set', 'close-set', 'athletic', 'slender', 'pert'];
+const PHYS_POOL_BREAST_AREOLA = ['small and pale', 'small and pink', 'medium pink', 'medium dusky', 'wide and pale', 'wide and dark', 'dark brown', 'rosy'];
+const PHYS_POOL_BREAST_NIPPLES = ['small', 'pert', 'puffy', 'prominent', 'inverted', 'wide', 'perpetually stiff'];
+const PHYS_POOL_SENSITIVITY = ['low', 'muted', 'average', 'responsive', 'high', 'exquisite'];
+const PHYS_POOL_BODY_HAIR = ['bare', 'waxed smooth', 'trimmed short', 'neatly kept', 'natural', 'full and untrimmed'];
+
+// Per-type genital pools. `type` is the discriminator on each entry of the
+// `genitals` array — the array shape is what lets one character carry more
+// than one set (a futanari draw, or anything the player builds in the studio).
+const PHYS_POOL_GENITAL_TYPES = ['vagina', 'penis'];
+const PHYS_POOL_VULVA_LABIA = ['neat and tucked', 'prominent', 'full', 'asymmetric', 'delicate', 'plush'];
+const PHYS_POOL_VULVA_COLOR = ['pale pink', 'rosy', 'dusky', 'deep pink', 'mauve', 'brown'];
+const PHYS_POOL_PENIS_LENGTH = ['short', 'modest', 'average', 'above average', 'long', 'very long'];
+const PHYS_POOL_PENIS_GIRTH = ['slim', 'average', 'thick', 'very thick'];
+const PHYS_POOL_PENIS_CUT = ['circumcised', 'uncircumcised'];
+const PHYS_POOL_PENIS_BALLS = ['small and tight', 'average', 'heavy', 'low-hanging'];
+
+// Which keys of a `genitals` entry actually apply to which `type`, and the
+// pool each one draws from. The schema's `itemFields` is the union of these
+// (it has to be — see the comment there); THIS is the table that says what
+// belongs where. Three readers, one table: rollGenitals (sim.js) draws from
+// `pool`, normalizeGenitals (sim.js) strips anything absent here, and the
+// Player Design studio builds the Intimate tab's rows from it. Adding a
+// genital type means adding a row here plus its schema keys — nothing else.
+const GENITAL_TYPE_FIELDS = {
+  vagina: {
+    labia:       { label: 'Labia',       pool: () => PHYS_POOL_VULVA_LABIA },
+    color:       { label: 'Colour',      pool: () => PHYS_POOL_VULVA_COLOR },
+    hair:        { label: 'Hair',        pool: () => PHYS_POOL_BODY_HAIR },
+    sensitivity: { label: 'Sensitivity', pool: () => PHYS_POOL_SENSITIVITY },
+    description: { label: 'Notes',       pool: null },   // free text
+  },
+  penis: {
+    length:      { label: 'Length',      pool: () => PHYS_POOL_PENIS_LENGTH },
+    girth:       { label: 'Girth',       pool: () => PHYS_POOL_PENIS_GIRTH },
+    cut:         { label: 'Cut',         pool: () => PHYS_POOL_PENIS_CUT },
+    balls:       { label: 'Testicles',   pool: () => PHYS_POOL_PENIS_BALLS },
+    hair:        { label: 'Hair',        pool: () => PHYS_POOL_BODY_HAIR },
+    sensitivity: { label: 'Sensitivity', pool: () => PHYS_POOL_SENSITIVITY },
+    description: { label: 'Notes',       pool: null },   // free text
+  },
+};
+
+// Default genital set per gender. A DEFAULT, not a constraint: the Player
+// Design studio can add or remove any entry afterward, which is exactly how
+// a player builds a body the five-value `gender` enum has no word for. The
+// generated cast simply never overrides it, so `futanari` is the only NPC
+// draw that carries two.
+const GENDER_DEFAULT_GENITALS = {
+  female:       ['vagina'],
+  trans_female: ['vagina'],
+  male:         ['penis'],
+  trans_male:   ['penis'],
+  futanari:     ['vagina', 'penis'],
+};
+
 // --- NPC Overhaul Phase 5: Personality generation pools ---
 const PERSONALITY_TRAITS_POOL = [
   'reliable', 'sarcastic', 'anxious', 'ambitious', 'nurturing', 'guarded', 'impulsive', 'methodical',
@@ -3946,7 +4445,7 @@ const HOBBY_TUNING = {
 // Phase 4 moved the freshness ladder and the bag-preservation baseline
 // into the ROT block (one tuning surface for the whole spoilage model) —
 // see ROT, which absorbs what was `freshnessThresholds`/`bagPreservation`
-// here.
+// here (the ladder itself is now ROT.stages + ROT.freshHours).
 const INVENTORY_TUNING = {
   useTimeMinutes: { drink: 5, snack: 10, food: 10, meal: 25, _default: 10 },
   dropMinutes: 1,

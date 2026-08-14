@@ -17,8 +17,9 @@
 //   container: {
 //     capacity: null,      // null = uncapped (D4); field exists for future caps
 //     preservation: 4.0,   // Phase 4 shelf-life multiplier — fridge 4.0,
-//                          // pantry 2.0, floor/doormat 0.5, everything else
-//                          // 1.0 (the neutral indoor default, same as the bag)
+//                          // pantry 2.0, doormat 0.75, floor 0.5, everything
+//                          // else 1.0 (the neutral indoor default, same as
+//                          // the bag)
 //     label: 'Fridge'      // UI title for the browse panel
 //   }
 // `container: false` on non-holding defs is unchanged. The browse/transfer
@@ -280,6 +281,29 @@ const OBJECT_DEFS = {
     affords: ['shower.use', 'clean.object', 'inspect.object'],
     imagePhrase: 'a shower with a frosted glass door',
   },
+  // --- Changing room (floorplan plan Phase 1) ---
+  // The east wing's wet room: a hygiene facility that is NOT one of the two
+  // contested bathrooms, and only convenient if you are already on the pool
+  // side. That conditionality is the point — it relieves bathroom
+  // contention without flatly removing it.
+  lockers: {
+    id: 'lockers', label: 'Lockers', nouns: ['lockers', 'locker'],
+    portable: false, breakable: false, container: true, private: false,
+    states: { clutter: ['tidy', 'cluttered'] }, defaultState: { clutter: 'tidy' },
+    dirtyWhen: { clutter: { cluttered: 0.35 } }, cleanlinessWeight: 1,
+    emits: { clutter: { cluttered: { signal: 'clutter', intensity: 0.35 } } },
+    affords: ['clean.object', 'inspect.object'],
+    imagePhrase: 'a bank of narrow metal lockers',
+  },
+  changing_bench: {
+    id: 'changing_bench', label: 'Bench', nouns: ['bench', 'changing bench'],
+    portable: false, breakable: false, container: false, private: false,
+    states: { clutter: ['tidy', 'cluttered'] }, defaultState: { clutter: 'tidy' },
+    dirtyWhen: { clutter: { cluttered: 0.3 } }, cleanlinessWeight: 1,
+    emits: { clutter: { cluttered: { signal: 'clutter', intensity: 0.3 } } },
+    affords: ['clean.object', 'inspect.object'],
+    imagePhrase: 'a slatted wooden bench with towels folded on it',
+  },
   toilet: {
     id: 'toilet', label: 'Toilet', nouns: ['toilet'],
     portable: false, breakable: false, container: false, private: false,
@@ -390,9 +414,14 @@ const OBJECT_DEFS = {
   },
 
   // --- Hallway ---
+  // 0.75, not the floor's 0.5: a doormat is a covered indoor hallway, so
+  // food left on it is at room temperature and merely uncovered. Under the
+  // whole-day freshness model the distinction never showed; with continuous
+  // time it is the difference between "collect your groceries this morning"
+  // and "your delivery rotted while you were in the shower".
   doormat: {
     id: 'doormat', label: 'Doormat', nouns: ['doormat', 'mat'],
-    portable: false, breakable: false, container: { capacity: null, preservation: 0.5, label: 'Doormat' }, private: false,
+    portable: false, breakable: false, container: { capacity: null, preservation: 0.75, label: 'Doormat' }, private: false,
     states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 0,
     emits: EMITS_ROT,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
@@ -490,16 +519,40 @@ const OBJECT_DEFS = {
   },
   // --- Pool Room (Recreation Wing) ---
   // `water` tracks what the pool systems facility has actually restored:
-  // 'empty' until the liner and pump are fixed, then 'filled'. Cleanliness
-  // weight is high because a green, stagnant pool drags a whole wing down.
+  // 'empty' until the liner and pump are fixed, then 'filled' — and it IS
+  // set now, by the facility's `completionStates` (CONFIG's FACILITY_DEFS,
+  // applied at job completion in UI). It used to be a state nothing ever
+  // wrote, which is how the derelict pool ended up smelling of stagnant
+  // water it does not contain: the emitter keyed on `clarity` alone, so a
+  // dry basin with a torn liner announced itself as green pool water.
+  //
+  // The two states now say different things. `water` is what the renovation
+  // restored; `clarity` is upkeep — how much has grown in the basin, whether
+  // that basin is full or dry. The same `clarity: 'green'` therefore means
+  // two different smells, so the emitters are guarded on which side of the
+  // renovation the pool is on: filled → stagnant water, empty → the mildew
+  // and dead-chlorine damp of a sealed indoor pool room (this is a penthouse
+  // and the pool is INDOORS — no leaves, no rain, nothing blows in; what
+  // rots here is mould in the grout and standing water in the drain). All
+  // four combinations read coherently, and the tier-0 description ("It holds
+  // no water") is finally true of the room you walk into.
+  //
+  // `dirtyWhen` stays keyed on `clarity` ALONE and must — cleanRoomObjects
+  // resets every dirtyWhen key to `states[key][0]`, so listing `water` here
+  // would let the housekeeper rebuild a $12,000 pool with a mop. Scrubbing
+  // the basin out is what cleaning a derelict pool can do; filling it is the
+  // contractor's job.
   swimming_pool: {
     id: 'swimming_pool', label: 'Swimming Pool', nouns: ['pool', 'swimming pool', 'the water'],
     portable: false, breakable: false, container: false, private: false,
     states: { water: ['filled', 'empty'], clarity: ['clear', 'cloudy', 'green'] },
     defaultState: { water: 'empty', clarity: 'green' },
     dirtyWhen: { clarity: { cloudy: 0.5, green: 1.0 } }, cleanlinessWeight: 4,
-    emits: { clarity: { cloudy: { signal: 'stagnant_water', intensity: 0.4 },
-                        green:  { signal: 'stagnant_water', intensity: 0.85 } } },
+    emits: {
+      water:   { empty: { signal: 'derelict_pool', intensity: 0.7, when: { clarity: 'green' } } },
+      clarity: { cloudy: { signal: 'stagnant_water', intensity: 0.4, when: { water: 'filled' } },
+                 green:  { signal: 'stagnant_water', intensity: 0.85, when: { water: 'filled' } } },
+    },
     affords: ['self.swim', 'clean.object', 'inspect.object'],
     imagePhrase: 'an indoor swimming pool',
   },
@@ -712,6 +765,14 @@ const APARTMENT_LAYOUT = {
     { defId: 'treadmill' }, { defId: 'weight_set' }, { defId: 'yoga_mat' },
     { defId: 'floor' },
   ],
+  // Doors on both faces (north to the Gym, south to the Game Room), which is
+  // what puts this room ON the path through the east wing rather than in a
+  // detour off it.
+  changing_room: [
+    { defId: 'shower' }, { defId: 'lockers' }, { defId: 'changing_bench' },
+    { defId: 'bathroom_mirror' },
+    { defId: 'floor' },
+  ],
   pool_room: [
     { defId: 'swimming_pool' }, { defId: 'pool_pump' }, { defId: 'pool_loungers' },
     { defId: 'floor' },
@@ -758,22 +819,30 @@ const ITEM_DEFS = {
   personal_phone: { id: 'personal_phone', label: 'Phone', nouns: ['phone', 'cellphone', 'cell phone'], category: 'key', keyItem: true, stackable: false, maxStack: 1 },
 
   // Ingredients
-  eggs: { id: 'eggs', label: 'Eggs', nouns: ['egg', 'eggs'], category: 'ingredient', stackable: true, maxStack: 24, perishable: { days: 14 }, consumable: { hunger: 6 }, price: 4, buyQty: 12 },
-  milk: { id: 'milk', label: 'Milk', nouns: ['milk'], category: 'ingredient', stackable: true, maxStack: 4, perishable: { days: 7 }, consumable: { hunger: 3 }, price: 3, buyQty: 1 },
+  // `perishable.days` is the ROOM-TEMPERATURE time to inedible (see the ROT
+  // block in CONFIG) — the end of the ladder, not the first sign of trouble.
+  // A container's preservation multiplier stretches the whole ladder, so
+  // these read as "on the counter", and the fridge's 4× is what makes them
+  // read as a real week or a real month.
+  eggs: { id: 'eggs', label: 'Eggs', nouns: ['egg', 'eggs'], category: 'ingredient', stackable: true, maxStack: 24, perishable: { days: 7 }, consumable: { hunger: 6 }, price: 4, buyQty: 12 },
+  milk: { id: 'milk', label: 'Milk', nouns: ['milk'], category: 'ingredient', stackable: true, maxStack: 4, perishable: { days: 2.5 }, consumable: { hunger: 3 }, price: 3, buyQty: 1 },
   bread: { id: 'bread', label: 'Bread', nouns: ['bread', 'loaf'], category: 'ingredient', stackable: true, maxStack: 4, perishable: { days: 5 }, consumable: { hunger: 10 }, price: 3, buyQty: 1 },
   pasta_dry: { id: 'pasta_dry', label: 'Dry Pasta', nouns: ['pasta'], category: 'ingredient', stackable: true, maxStack: 8, consumable: { hunger: 15 }, price: 2, buyQty: 2 },
   tomato_sauce: { id: 'tomato_sauce', label: 'Tomato Sauce', nouns: ['tomato sauce', 'sauce'], category: 'ingredient', stackable: true, maxStack: 8, consumable: { hunger: 4 }, price: 3, buyQty: 2 },
   rice: { id: 'rice', label: 'Rice', nouns: ['rice'], category: 'ingredient', stackable: true, maxStack: 8, consumable: { hunger: 12 }, price: 4, buyQty: 2 },
-  chicken_raw: { id: 'chicken_raw', label: 'Raw Chicken', nouns: ['chicken'], category: 'ingredient', stackable: true, maxStack: 6, perishable: { days: 3 }, consumable: { hunger: 5 }, price: 8, buyQty: 2 },
-  ground_beef: { id: 'ground_beef', label: 'Ground Beef', nouns: ['ground beef', 'beef'], category: 'ingredient', stackable: true, maxStack: 6, perishable: { days: 3 }, consumable: { hunger: 5 }, price: 9, buyQty: 1 },
-  cheese: { id: 'cheese', label: 'Cheese', nouns: ['cheese'], category: 'ingredient', stackable: true, maxStack: 6, perishable: { days: 20 }, consumable: { hunger: 4 }, price: 5, buyQty: 1 },
-  butter: { id: 'butter', label: 'Butter', nouns: ['butter'], category: 'ingredient', stackable: true, maxStack: 4, perishable: { days: 30 }, price: 4, buyQty: 1 },
+  // Raw meat is the shortest-lived thing you can buy, but not so short that
+  // a Nile order can rot on the doormat before you get up — 1 day out is
+  // 18h on the mat and 4 days in the fridge.
+  chicken_raw: { id: 'chicken_raw', label: 'Raw Chicken', nouns: ['chicken'], category: 'ingredient', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 5 }, price: 8, buyQty: 2 },
+  ground_beef: { id: 'ground_beef', label: 'Ground Beef', nouns: ['ground beef', 'beef'], category: 'ingredient', stackable: true, maxStack: 6, perishable: { days: 1 }, consumable: { hunger: 5 }, price: 9, buyQty: 1 },
+  cheese: { id: 'cheese', label: 'Cheese', nouns: ['cheese'], category: 'ingredient', stackable: true, maxStack: 6, perishable: { days: 7 }, consumable: { hunger: 4 }, price: 5, buyQty: 1 },
+  butter: { id: 'butter', label: 'Butter', nouns: ['butter'], category: 'ingredient', stackable: true, maxStack: 4, perishable: { days: 14 }, price: 4, buyQty: 1 },
   onion: { id: 'onion', label: 'Onion', nouns: ['onion'], category: 'ingredient', stackable: true, maxStack: 10, consumable: { hunger: 2 }, price: 1, buyQty: 3 },
   garlic: { id: 'garlic', label: 'Garlic', nouns: ['garlic'], category: 'ingredient', stackable: true, maxStack: 10, price: 1, buyQty: 3 },
   potatoes: { id: 'potatoes', label: 'Potatoes', nouns: ['potato', 'potatoes'], category: 'ingredient', stackable: true, maxStack: 10, consumable: { hunger: 8 }, price: 3, buyQty: 5 },
-  lettuce: { id: 'lettuce', label: 'Lettuce', nouns: ['lettuce'], category: 'ingredient', stackable: true, maxStack: 4, perishable: { days: 6 }, consumable: { hunger: 3 }, price: 2, buyQty: 1 },
-  tomato: { id: 'tomato', label: 'Tomato', nouns: ['tomato'], category: 'ingredient', stackable: true, maxStack: 8, perishable: { days: 6 }, consumable: { hunger: 2 }, price: 1, buyQty: 4 },
-  bacon: { id: 'bacon', label: 'Bacon', nouns: ['bacon'], category: 'ingredient', stackable: true, maxStack: 4, perishable: { days: 10 }, consumable: { hunger: 5 }, price: 6, buyQty: 1 },
+  lettuce: { id: 'lettuce', label: 'Lettuce', nouns: ['lettuce'], category: 'ingredient', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 3 }, price: 2, buyQty: 1 },
+  tomato: { id: 'tomato', label: 'Tomato', nouns: ['tomato'], category: 'ingredient', stackable: true, maxStack: 8, perishable: { days: 5 }, consumable: { hunger: 2 }, price: 1, buyQty: 4 },
+  bacon: { id: 'bacon', label: 'Bacon', nouns: ['bacon'], category: 'ingredient', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 5 }, price: 6, buyQty: 1 },
   flour: { id: 'flour', label: 'Flour', nouns: ['flour'], category: 'ingredient', stackable: true, maxStack: 4, price: 3, buyQty: 1 },
   sugar: { id: 'sugar', label: 'Sugar', nouns: ['sugar'], category: 'ingredient', stackable: true, maxStack: 4, price: 3, buyQty: 1 },
   coffee_beans: { id: 'coffee_beans', label: 'Coffee', nouns: ['coffee', 'coffee beans'], category: 'ingredient', stackable: true, maxStack: 4, consumable: { energy: 8, mood: 0.02 }, price: 8, buyQty: 1 },
@@ -781,16 +850,19 @@ const ITEM_DEFS = {
   cereal: { id: 'cereal', label: 'Cereal', nouns: ['cereal'], category: 'ingredient', stackable: true, maxStack: 3, consumable: { hunger: 12 }, price: 4, buyQty: 1 },
 
   // Prepared meals (produced by RECIPES below)
-  meal_pasta: { id: 'meal_pasta', label: 'Pasta', nouns: ['pasta'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 3 }, consumable: { hunger: 40, mood: 0.03 } },
+  // Cooked food, same room-temperature-to-inedible reading as the
+  // ingredients. A day or two on the counter; four to eight in the fridge,
+  // which is where leftovers actually live.
+  meal_pasta: { id: 'meal_pasta', label: 'Pasta', nouns: ['pasta'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 2 }, consumable: { hunger: 40, mood: 0.03 } },
   meal_omelette: { id: 'meal_omelette', label: 'Omelette', nouns: ['omelette'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 30, mood: 0.02 } },
-  meal_stirfry: { id: 'meal_stirfry', label: 'Stir-fry', nouns: ['stir-fry', 'stirfry'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 3 }, consumable: { hunger: 42, mood: 0.03 } },
+  meal_stirfry: { id: 'meal_stirfry', label: 'Stir-fry', nouns: ['stir-fry', 'stirfry'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 2 }, consumable: { hunger: 42, mood: 0.03 } },
   meal_sandwich: { id: 'meal_sandwich', label: 'Sandwich', nouns: ['sandwich'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 25 } },
   // --- New meal items (P8) ---
   meal_breakfast: { id: 'meal_breakfast', label: 'Bacon and Eggs', nouns: ['bacon and eggs', 'breakfast'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 1 }, consumable: { hunger: 35, mood: 0.03 } },
   meal_burger: { id: 'meal_burger', label: 'Burger', nouns: ['burger'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, consumable: { hunger: 38, mood: 0.04 } },
   meal_salad: { id: 'meal_salad', label: 'Salad', nouns: ['salad'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 1 }, consumable: { hunger: 22, mood: 0.02 } },
-  meal_fried_rice: { id: 'meal_fried_rice', label: 'Fried Rice', nouns: ['fried rice'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 3 }, consumable: { hunger: 40, mood: 0.03 } },
-  meal_soup: { id: 'meal_soup', label: 'Tomato Soup', nouns: ['soup', 'tomato soup'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 4 }, consumable: { hunger: 28, mood: 0.02 } },
+  meal_fried_rice: { id: 'meal_fried_rice', label: 'Fried Rice', nouns: ['fried rice'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 40, mood: 0.03 } },
+  meal_soup: { id: 'meal_soup', label: 'Tomato Soup', nouns: ['soup', 'tomato soup'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 3 }, consumable: { hunger: 28, mood: 0.02 } },
   meal_potato: { id: 'meal_potato', label: 'Loaded Potato', nouns: ['potato', 'baked potato'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, consumable: { hunger: 30, mood: 0.03 } },
 
   // Delivered restaurant dishes (external-world plan Phase 5). Real items,
@@ -817,7 +889,7 @@ const ITEM_DEFS = {
 
   dish_double_burger: { id: 'dish_double_burger', label: 'Double Cheeseburger', nouns: ['burger', 'cheeseburger'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 50, mood: 0.05 } },
   dish_fries: { id: 'dish_fries', label: 'Basket of Fries', nouns: ['fries'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 22, mood: 0.04 } },
-  dish_milkshake: { id: 'dish_milkshake', label: 'Milkshake', nouns: ['milkshake', 'shake'], category: 'drink', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 15, mood: 0.06 } },
+  dish_milkshake: { id: 'dish_milkshake', label: 'Milkshake', nouns: ['milkshake', 'shake'], category: 'drink', stackable: true, maxStack: 4, perishable: { days: 0.5 }, consumable: { hunger: 15, mood: 0.06 } },
 
   dish_salmon_roll: { id: 'dish_salmon_roll', label: 'Salmon Roll Set', nouns: ['sushi', 'salmon roll'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 40, mood: 0.07 } },
   dish_tempura_udon: { id: 'dish_tempura_udon', label: 'Tempura Udon', nouns: ['udon', 'tempura udon'], category: 'meal', stackable: true, maxStack: 3, perishable: { days: 1 }, consumable: { hunger: 46, mood: 0.05 } },
@@ -842,7 +914,7 @@ const ITEM_DEFS = {
   dish_house_fried_rice: { id: 'dish_house_fried_rice', label: 'House Fried Rice', nouns: ['fried rice', 'house fried rice'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 1 }, consumable: { hunger: 42, mood: 0.04 } },
   dish_beef_broccoli: { id: 'dish_beef_broccoli', label: 'Beef & Broccoli', nouns: ['beef and broccoli', 'broccoli'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 46, mood: 0.05 } },
   dish_wonton_soup: { id: 'dish_wonton_soup', label: 'Wonton Soup', nouns: ['wonton soup'], category: 'meal', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 20, mood: 0.04 } },
-  dish_fortune_cookies: { id: 'dish_fortune_cookies', label: 'Fortune Cookies', nouns: ['fortune cookies', 'fortune cookie'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 2 }, consumable: { hunger: 8, mood: 0.03 } },
+  dish_fortune_cookies: { id: 'dish_fortune_cookies', label: 'Fortune Cookies', nouns: ['fortune cookies', 'fortune cookie'], category: 'meal', stackable: true, maxStack: 6, perishable: { days: 14 }, consumable: { hunger: 8, mood: 0.03 } },
 
   // Sal's Pizzeria
   dish_cheese_pizza: { id: 'dish_cheese_pizza', label: 'Cheese Pizza', nouns: ['cheese pizza', 'pizza'], category: 'meal', stackable: true, maxStack: 2, perishable: { days: 2 }, servings: 4, consumable: { hunger: 48, mood: 0.05 } },

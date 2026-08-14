@@ -1202,6 +1202,23 @@ async function doUpgradeBook(facilityId) {
   await saveAtBoundary('upgrade-book', currentGameState);
 }
 
+// Structural work (floorplan plan Phase 6). No booking modal: a structural
+// job has no tier ladder and no quality projection to preview, so the
+// facility flow's whole reason for a confirmation step does not apply. The
+// card already states the cost, the duration and exactly what it does to the
+// layout, which is more than the facility modal shows.
+async function doBookStructural(upgradeId) {
+  if (!upgradeId) return;
+  const def = STRUCTURAL_UPGRADES[upgradeId];
+  if (!def) return;
+  const result = bookStructuralJob(currentGameState, upgradeId, {});
+  if (!result.ok) { addLogEntry('system', result.reason); renderComputerScreen(currentGameState); return; }
+  addLogEntry('narration', `You book the ${def.label} — $${result.cost.toLocaleString()} paid upfront. The crew finishes ${formatDate(result.etaDay)}.`);
+  renderComputerScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('structural-book', currentGameState);
+}
+
 // Phase 9: repair facility condition (maintenance without tier upgrade).
 async function doUpgradeRepair(facilityId) {
   if (!facilityId) return;

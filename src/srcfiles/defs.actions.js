@@ -816,11 +816,13 @@ function eatNarration(ctx, prepared) {
   const def = option.def;
   const label = def.label || 'something';
   // Phase 4: surface the eaten item's freshness — the picker shows the
-  // same freshness tags, and the Rotten/Spoiling lines match the restore
-  // penalties applyEatItem applies.
-  const fresh = freshnessOf(option.stack, option.containerDef ?? null, ctx?.gameState?.meta?.clock?.day);
-  if (fresh?.key === 'rotten') return `You force down some ${label.toLowerCase()} despite the smell. You regret it immediately.`;
-  if (fresh?.key === 'spoiling') return `You eat some ${label.toLowerCase()}. It tastes... off.`;
+  // same freshness tags, and the Stale/Spoiled lines match the restore
+  // penalties applyEatItem applies. There is no Rotten line: rotten food
+  // never reaches the picker (INVENTORY's edibleStacks) and applyEatItem
+  // would refuse it anyway.
+  const fresh = freshnessOf(option.stack, option.containerDef ?? null, gameDaysNow(ctx?.gameState?.meta?.clock));
+  if (fresh?.key === 'spoiled') return `You eat some ${label.toLowerCase()}. It tastes off, and you know it the whole way down.`;
+  if (fresh?.key === 'stale') return `You eat some ${label.toLowerCase()}. It has been sitting a while — it does the job.`;
   // Phase 6: eating with a liked resident is its own line — the social
   // bonus buildEatEffects added deserves narration.
   if ((prepared?.affection ?? 0) > 0) return `You share a meal with someone who actually likes you. The ${label.toLowerCase()} never tasted better.`;
@@ -830,47 +832,89 @@ function eatNarration(ctx, prepared) {
 }
 
 // --- set_meal's runtime logic (inventory overhaul Phase 7, D7) ---
-// prepare() picks the food once and snapshots the table (attendees,
-// commitment state, dining-table instance, who gets fed); buildEffects and
+// prepare() lays out the SPREAD once and snapshots the table (attendees,
+// commitment state, dining-table instance, who eats what); buildEffects and
 // the narration both read that SAME snapshot so what happened and what got
 // said about it can't disagree (the ACTIONS two-step contract).
 //
-// The meal feeds the player plus every resident present at the table, one
-// serving each in presence order, until the dish runs out — multi-serving
-// dishes are exactly what a shared dinner is for (a 4-serving pizza with
-// three people at the table leaves one serving of leftovers). The picker
-// is the same one self.eat uses (it shows the serving count and per-serving
-// restore); the action's time cost is the flat set_meal stretch, not the
-// item category, since the point is the gathering, not the bite.
+// The spread is several dishes, not one. It used to be one: the player
+// picked a single item, and `fedNpcIds` was capped at that item's servings
+// minus the player's own. A 1-serving steak with three roommates at the
+// table therefore fed the player and nobody else — the other three collected
+// the attendance mood bonus, the comfort restore and a relationship delta for
+// watching. The cap was right; having only one dish to cap against was not.
+//
+// Now: pick up to COMMITMENT_TUNING.maxSpreadDishes dishes, their servings
+// pool, and everyone at the table takes one serving round-robin across the
+// dishes (allocateSpread). Catering for the room becomes a visible decision —
+// the picker shows servings against seats — and under-catering costs the
+// unfed their attendanceMultFed rather than doing so silently.
+//
+// The action's time cost is still the flat set_meal stretch, not the item
+// category, since the point is the gathering, not the bite.
 async function prepareSetMeal(ctx) {
   const affection = presentResidentAffection(ctx);
   const options = edibleStacks(ctx.gameState, ctx);
-  if (options.length === 0) return { options, option: null, cancelled: true, affection };
-  let option;
-  if (options.length === 1) {
-    option = options[0];
-  } else {
-    const choice = await openEatPicker(options);
-    if (!choice) return { options, option: null, cancelled: true, affection };
-    option = options.find(o => o.from === choice.from && o.stack.defId === choice.defId) || null;
-  }
-  if (!option) return { options, option: null, cancelled: true, affection };
+  if (options.length === 0) return { options, spread: [], cancelled: true, affection };
   const attendees = mealAttendees(ctx.gameState, ctx.roomId);
+  const seats = 1 + attendees.length; // the player plus everyone at the table
+  const chosen = await openSpreadPicker(options, { seats, max: COMMITMENT_TUNING.maxSpreadDishes });
+  if (!chosen || chosen.length === 0) return { options, spread: [], cancelled: true, affection };
+  const spread = chosen
+    .map(c => options.find(o => o.from === c.from && o.stack.defId === c.defId))
+    .filter(Boolean);
+  if (spread.length === 0) return { options, spread: [], cancelled: true, affection };
+
   const hasCommitment = activeMealCommitmentsInRoom(ctx.gameState, ctx.roomId).length > 0;
   // The dining table is the household's table even when the player cooks in
   // the kitchen — but the mess only lands on it if the meal actually
   // happened there (the player.location === 'dining' guard in buildEffects).
   const diningTable = Object.values(ctx.gameState.objects?.['room_dining'] || {})
     .find(o => o.defId === 'dining_table') || null;
-  // Who actually gets fed: the player's own serving first, then present
-  // NPCs in presence order, one serving each, until the dish runs out.
-  const remaining = Math.max(0, stackServingsLeft(option.stack) - 1);
-  const fedNpcIds = [];
-  for (const a of attendees) {
-    if (fedNpcIds.length >= remaining) break;
-    fedNpcIds.push(a.npcId);
+
+  // Seat order is the player first, then present NPCs in presence order —
+  // the host serves themselves, then the table.
+  const eaters = ['player', ...attendees.map(a => a.npcId)];
+  const servings = allocateSpread(spread, eaters);
+  const fedNpcIds = servings.filter(s => s.who !== 'player').map(s => s.who);
+  return {
+    options, spread, servings, affection, attendees, hasCommitment, diningTable, fedNpcIds,
+    seats, totalServings: spreadServings(spread),
+  };
+}
+
+// Total servings on the table.
+function spreadServings(spread) {
+  return (spread || []).reduce((sum, o) => sum + stackServingsLeft(o.stack), 0);
+}
+
+// Who eats what. Each eater in seat order takes ONE serving, round-robin
+// across the dishes rather than draining the first — a table of four with
+// pizza (4), fries (1) and salad (1) eats pizza, fries, salad, pizza and
+// leaves two slices, which is how a real table of food gets eaten. Draining
+// in order would have fed all four from the pizza and left the fries and
+// salad untouched, which makes laying out a spread pointless.
+//
+// Returns one { who, defId, from, def } per serving actually served; an eater
+// the spread ran out for simply doesn't appear, and that IS the under-catering
+// signal every caller reads.
+function allocateSpread(spread, eaters) {
+  const left = spread.map(o => stackServingsLeft(o.stack));
+  const out = [];
+  let dish = 0;
+  for (const who of eaters) {
+    // Walk from the round-robin cursor to the first dish with anything left.
+    let tried = 0;
+    while (tried < spread.length && left[dish] <= 0) {
+      dish = (dish + 1) % spread.length;
+      tried++;
+    }
+    if (left[dish] <= 0) break; // the whole spread is gone — the rest go unfed
+    left[dish] -= 1;
+    out.push({ who, defId: spread[dish].stack.defId, from: spread[dish].from, def: spread[dish].def });
+    dish = (dish + 1) % spread.length;
   }
-  return { options, option, affection, attendees, hasCommitment, diningTable, fedNpcIds };
+  return out;
 }
 
 // How good a meal this dish is, 0..1 — hunger is the bulk, mood and energy
@@ -882,47 +926,69 @@ function foodQuality(def) {
   return clamp(raw / 60, 0, 1);
 }
 
-// Per-attendee relationship delta for a shared meal, scaled by food
+// How good the WHOLE TABLE is: its BEST dish, plus
+// COMMITMENT_TUNING.spreadVarietyBonus per additional distinct dish. This is
+// the only place that judgement is made — mealRelDelta reads it rather than
+// re-deriving it.
+//
+// Best-plus-variety rather than the mean, which was the first thing tried and
+// is simply the wrong function: averaging makes putting fries and a salad next
+// to a good pizza score WORSE than serving the pizza alone, so the mechanic
+// would have punished laying out a spread — the exact opposite of the point.
+// A dinner is judged by its centrepiece and by how much there is to choose
+// from. The existing 0..1 clamp bounds the variety term, so a six-dish
+// banquet tops out rather than running away.
+function spreadQuality(spread) {
+  if (!spread || spread.length === 0) return 0;
+  const best = Math.max(...spread.map(o => foodQuality(o.def)));
+  const variety = (new Set(spread.map(o => o.def.id)).size - 1) * COMMITMENT_TUNING.spreadVarietyBonus;
+  return clamp(best + variety, 0, 1);
+}
+
+// Per-attendee relationship delta for a shared meal, scaled by the spread's
 // quality, whether they actually ate ("attendance"), and the existing
 // relationship (someone who already likes you warms faster). All numbers
 // from COMMITMENT_TUNING.
-function mealRelDelta(def, npc, fed) {
-  const q = foodQuality(def);
+function mealRelDelta(quality, npc, fed) {
   const existing = Math.max(0, npc?.relPlayer?.affection || 0);
-  const raw = (COMMITMENT_TUNING.relationshipBase + q * COMMITMENT_TUNING.relationshipQualityWeight)
+  const raw = (COMMITMENT_TUNING.relationshipBase + quality * COMMITMENT_TUNING.relationshipQualityWeight)
     * (fed ? COMMITMENT_TUNING.attendanceMultFed : COMMITMENT_TUNING.attendanceMultPresent)
     * (1 + existing * COMMITMENT_TUNING.relationshipExistingWeight);
   return Math.round(Math.min(COMMITMENT_TUNING.relationshipCap, raw) * 1000) / 1000;
 }
 
 function buildSetMealEffects(ctx, prepared) {
-  const option = prepared?.option;
-  if (!option) return [];
-  const { stack, def, from } = option;
+  const spread = prepared?.spread || [];
+  if (spread.length === 0) return [];
   const attendees = prepared?.attendees || [];
+  const servings = prepared?.servings || [];
   const fedNpcIds = prepared?.fedNpcIds || [];
   const lines = [];
 
-  // The player's own serving — real consumption, per-serving restore,
-  // freshness-aware (EAT_ITEM).
-  lines.push(`EAT_ITEM ${stack.defId} 1 ${from} player`);
-  // Every fed attendee's serving comes out of the same real dish
-  // (EAT_ITEM's Phase 7 `who` routes the restore to their needs — an NPC
-  // who eats genuinely eats; nothing is restored from nowhere).
-  for (const npcId of fedNpcIds) {
-    lines.push(`EAT_ITEM ${stack.defId} 1 ${from} ${npcId}`);
+  // One EAT_ITEM per serving actually served, naming BOTH the dish and the
+  // eater. EAT_ITEM's Phase 7 `who` routes the restore to their needs — an
+  // NPC who eats genuinely eats, out of the real stack, at the real dish's
+  // per-serving value; nothing is restored from nowhere and nobody is fed
+  // from a dish that ran out.
+  for (const s of servings) {
+    lines.push(`EAT_ITEM ${s.defId} 1 ${s.from} ${s.who}`);
   }
 
-  const per = perServingConsumable(def);
-  const foodMood = per.mood || 0;
+  // Quality is the table's, not one dish's — computed once here and passed
+  // to every delta, so the "was this a good dinner" judgement is made in one
+  // place (spreadQuality) rather than per-attendee.
+  const quality = spreadQuality(spread);
+  // What each fed attendee's own serving does for their mood, from the dish
+  // they actually got rather than an average of dishes they didn't.
+  const moodByEater = new Map(servings.map(s => [s.who, perServingConsumable(s.def).mood || 0]));
   for (const a of attendees) {
     const isFed = fedNpcIds.includes(a.npcId);
-    const moodBoost = COMMITMENT_TUNING.attendeeMoodBonus + (isFed ? (foodMood || 0) : 0);
+    const moodBoost = COMMITMENT_TUNING.attendeeMoodBonus + (isFed ? (moodByEater.get(a.npcId) || 0) : 0);
     if (moodBoost > 0) lines.push(`MOOD_DELTA ${a.npcId} +${Math.round(moodBoost * 100) / 100}`);
     // A properly set meal restores comfort for everyone who sat down.
     lines.push(`ADJUST_NEED ${a.npcId} comfort +${COMMITMENT_TUNING.attendeeComfortRestore}`);
-    // Relationship: scaled by food quality, attendance, existing rel.
-    const delta = mealRelDelta(def, a.npc, isFed);
+    // Relationship: scaled by the spread's quality, attendance, existing rel.
+    const delta = mealRelDelta(quality, a.npc, isFed);
     if (delta > 0) lines.push(`REL_DELTA ${a.npcId} affection +${delta}`);
     if (isFed && COMMITMENT_TUNING.relationshipTensionRelief > 0) {
       lines.push(`REL_DELTA ${a.npcId} tension -${COMMITMENT_TUNING.relationshipTensionRelief}`);
@@ -940,38 +1006,63 @@ function buildSetMealEffects(ctx, prepared) {
 
   // The table is left with plates and crumbs — meals at the table leave a
   // mess, feeding the EXISTING cleanliness machinery (dining_table's
-  // dirtyWhen clutter), which the maid's cleanRoomObjects clears.
+  // dirtyWhen clutter), which the maid's cleanRoomObjects clears. The spread
+  // itself is recorded alongside it so the scene art can draw what is
+  // actually on the table (IMAGE's tableSpreadPhrase); it is READ only while
+  // clutter is 'cluttered', so clearing the table clears the spread with no
+  // second cleanup path to forget.
   if (prepared?.diningTable && ctx.gameState.player.location === 'dining') {
     lines.push(`SET_OBJECT_STATE ${prepared.diningTable.id} clutter cluttered`);
+    lines.push(`SET_TABLE_SPREAD ${prepared.diningTable.id} ${spread.map(o => o.stack.defId).join(' ')}`);
   }
   return lines;
 }
 
+// Joins labels the way a person would: "a", "a and b", "a, b and c".
+function joinList(items) {
+  if (items.length <= 1) return items[0] || '';
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
 function setMealNarration(ctx, prepared) {
-  const option = prepared?.option;
-  if (!option) return 'You sit down to eat, but there is nothing to put on the table.';
-  const def = option.def;
-  const label = def.label.toLowerCase();
+  const spread = prepared?.spread || [];
+  if (spread.length === 0) return 'You sit down to eat, but there is nothing to put on the table.';
   const attendees = prepared?.attendees || [];
-  const fedNpcIds = prepared?.fedNpcIds || [];
+  const servings = prepared?.servings || [];
   const names = attendees.map(a => ctx.gameState.npcs[a.npcId]?.bible?.name || 'a roommate');
-  const fedCount = fedNpcIds.length;
-  const fresh = freshnessOf(option.stack, option.containerDef ?? null, ctx.gameState.meta.clock.day);
-  if (fresh?.key === 'rotten') {
-    return `You set the table and serve some ${label} that has clearly turned. ${names.length ? `${names.join(' and ')} ${names.length > 1 ? 'make' : 'makes'} a face but eats anyway.` : 'You grimace and eat it anyway.'}`;
-  }
-  const sv = itemServings(def);
-  const leftoverServings = Math.max(0, sv - 1 - fedCount);
-  const leftover = leftoverServings > 0 ? ' — there are leftovers for later' : '';
+  const dishes = joinList(spread.map(o => o.def.label.toLowerCase()));
   const setting = prepared?.hasCommitment ? ' The table is properly set.' : '';
+
+  // Anything on the table that has turned gets its own line — it's the most
+  // important thing about the meal, and it applies to the SPREAD now, so a
+  // single bad dish among four is named as the one that's off.
+  const now = gameDaysNow(ctx.gameState.meta.clock);
+  const off = spread.filter(o => freshnessOf(o.stack, o.containerDef ?? null, now)?.key === 'spoiled');
+  if (off.length > 0) {
+    const offLabels = joinList(off.map(o => o.def.label.toLowerCase()));
+    const reaction = names.length
+      ? `${joinList(names)} ${names.length > 1 ? 'make' : 'makes'} a face but eats anyway.`
+      : 'You grimace and eat it anyway.';
+    return `You lay out ${dishes}. The ${offLabels} is past its best and everyone can tell. ${reaction}`;
+  }
+
+  // Under-catering is now something the player chose, so it gets said out
+  // loud rather than quietly halving somebody's relationship delta.
+  const unfed = attendees.length - (prepared?.fedNpcIds?.length || 0);
+  if (unfed > 0) {
+    const shortNames = joinList(names.slice(-unfed));
+    return `You lay out ${dishes} and sit down with ${joinList(names)}.${setting} There isn't enough to go round — ${shortNames} ${unfed > 1 ? 'end up' : 'ends up'} picking at an empty plate.`;
+  }
+
+  const leftover = Math.max(0, spreadServings(spread) - servings.length) > 0
+    ? ' — there are leftovers for later' : '';
   if (names.length > 0) {
-    const eaters = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
-    return `You set the table and share dinner with ${eaters}.${setting} The ${label} tastes better for the company${leftover}.`;
+    return `You lay out ${dishes} and share dinner with ${joinList(names)}.${setting} It all tastes better for the company${leftover}.`;
   }
   if (prepared?.hasCommitment) {
-    return `You set the table properly and eat alone. Nobody showed${leftover}.`;
+    return `You lay out ${dishes} and set the table properly. Nobody showed${leftover}.`;
   }
-  return `You set the table and eat some ${label}${leftover}.`;
+  return `You set the table with ${dishes} and eat${leftover}.`;
 }
 
 // --- self.dishes' runtime logic ---

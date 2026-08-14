@@ -26,7 +26,12 @@ function liveRefs(ident) {
 }
 
 console.log('\nPRUNED — no non-comment reference anywhere');
-for (const ident of ['stressProfile', 'genitals', 'lastJobMention', 'lastHobbyMention']) {
+// `genitals` was on this list and has deliberately LEFT it: the player
+// creation + intro plan (Phase 1) reintroduced it under `physical.intimate`
+// WITH the producer and consumer whose absence got it pruned in the first
+// place. It is now asserted the other way up, below — the rule was never
+// "this field is banned", it was RI6, "a field needs both halves".
+for (const ident of ['stressProfile', 'lastJobMention', 'lastHobbyMention']) {
   const refs = liveRefs(ident);
   check(`${ident.padEnd(18)} fully removed`, refs.length === 0, refs.slice(0, 3).join('\n        '));
 }
@@ -37,7 +42,13 @@ check('arcs               fully removed', arcRefs.length === 0, arcRefs.join('\n
 console.log('\nPRUNED — and the schema no longer declares them');
 const S = api('CHARACTER_SCHEMA');
 check('bible.occupation has no stressProfile', !('stressProfile' in S.bible.occupation.fields));
-check('bible.physical has no genitals', !('genitals' in S.bible.physical.fields));
+// NOT a prune check any more. `genitals` is back, one level down, and the
+// thing worth asserting is that it did not sneak back to the TOP level (where
+// it would be outside the single gate `intimate` exists to provide) — a check
+// that would otherwise pass silently for the wrong reason.
+check('bible.physical has no top-level genitals', !('genitals' in S.bible.physical.fields));
+check('genitals lives under physical.intimate instead',
+      !!S.bible.physical.fields.intimate?.fields?.genitals);
 check('memory.styleCounters has no lastJobMention/lastHobbyMention',
       !('lastJobMention' in S.mutable.memory.fields.styleCounters.fields) &&
       !('lastHobbyMention' in S.mutable.memory.fields.styleCounters.fields));
@@ -143,7 +154,8 @@ check('no generated NPC carries a pruned field', api(`
     for (const npc of Object.values(h.npcs)) {
       if ('arcs' in npc) return false;
       if ('stressProfile' in (npc.bible.occupation || {})) return false;
-      if ('genitals' in (npc.bible.physical || {})) return false;
+      if ('genitals' in (npc.bible.physical || {})) return false;   // top level only — see above
+
       const sc = npc.memory.styleCounters || {};
       if ('lastJobMention' in sc || 'lastHobbyMention' in sc) return false;
     }
