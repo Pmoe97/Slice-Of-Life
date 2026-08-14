@@ -7,9 +7,39 @@
 const activeImageUrls = new Map(); // sceneKey → objectURL
 
 // --- Scene key composition ---
-function composeSceneKey(roomId, phase, lighting, npcIds) {
+// `detail` (optional) is a short signature for room state the art must
+// actually reflect — currently just a laid table (sceneDetailSignature). It
+// is APPENDED and omitted when empty, so every key composed before it existed
+// is byte-identical and no cached image is orphaned by the addition.
+//
+// The cache key deliberately still ignores most object state (a room getting
+// dirtier doesn't repaint it — regenerating art on every state change would
+// be ruinous). A spread earns its place because it is the one piece of room
+// state a scene is explicitly ABOUT: the player laid it out on purpose, and
+// it lasts until the table is cleared rather than changing every tick.
+function composeSceneKey(roomId, phase, lighting, npcIds, detail) {
   const npcPart = npcIds && npcIds.length > 0 ? npcIds.slice().sort().join('-') : 'empty';
-  return `${roomId}_${phase}_${lighting || 'normal'}_${npcPart}`;
+  const base = `${roomId}_${phase}_${lighting || 'normal'}_${npcPart}`;
+  return detail ? `${base}_${detail}` : base;
+}
+
+// What is on the table in this room right now, or '' for "nothing worth
+// repainting". Reads the spread EFFECTS' applySetTableSpread recorded, but
+// only while the surface is still `clutter: 'cluttered'` — clearing the table
+// is what ends the meal, so there is no separate expiry to forget and a maid
+// who tidies up restores the plain cached background for free.
+function tableSpreadIds(roomObjects) {
+  for (const obj of Object.values(roomObjects || {})) {
+    if (obj.state?.clutter !== 'cluttered') continue;
+    const spread = obj.flags?.spread;
+    if (Array.isArray(spread) && spread.length > 0) return spread;
+  }
+  return [];
+}
+
+function sceneDetailSignature(roomObjects) {
+  const spread = tableSpreadIds(roomObjects);
+  return spread.length > 0 ? `meal-${spread.slice().sort().join('-')}` : '';
 }
 
 function composeCharKey(npc, expression, pose) {
@@ -36,20 +66,47 @@ function phaseLighting(phase) {
 // that never reflected what was actually there. Falls back to the old
 // generic phrasing when objects aren't available (e.g. a caller that
 // hasn't loaded WORLD state), so this stays non-breaking.
-function buildImagePrompt(roomId, phase, activeNpcs, roomObjects) {
+// `opts.player` is the player object — passing it puts THEM in the picture.
+// Until they had an appearance at all (SIM's generatePlayerAppearance) this
+// function could only ever draw the roommates, so every scene was shot from
+// the perspective of someone who wasn't in it.
+//
+// `opts.seated` is who is actually at the table when a meal is laid out:
+// people sitting down to eat should be drawn sitting down to eat, not
+// standing around a room that happens to have food in it.
+function buildImagePrompt(roomId, phase, activeNpcs, roomObjects, opts = {}) {
   const room = ROOMS[roomId];
   const roomName = String(room?.name || roomId);
   const roomType = room?.type || 'common';
   const light = phaseLighting(phase);
+  const describe = (who, fallback) =>
+    (typeof getPhysicalDescriptionForPrompt === 'function' ? getPhysicalDescriptionForPrompt(who) : null)
+    || who?.bible?.visual || fallback;
 
   let prompt = `Interior of a ${roomType === 'bedroom' ? 'cozy bedroom' : roomName.toLowerCase()} in a shared apartment, ${light}. `;
   prompt += roomObjectsPhrase(roomObjects) || fallbackRoomPhrase(roomId, roomType);
 
-  // Character layers
+  // A laid table, named dish by dish. This is the whole reason the scene key
+  // carries a spread signature — without the phrase the key would just be
+  // regenerating the same picture under a different name.
+  const spread = tableSpreadIds(roomObjects);
+  const seated = spread.length > 0;
+  if (seated) {
+    const dishes = spread.map(id => (ITEM_DEFS[id]?.label || id).toLowerCase());
+    const unique = [...new Set(dishes)];
+    prompt += `The table is set for a shared meal: ${unique.join(', ')}, laid out on plates and serving dishes with cutlery and glasses. `;
+  }
+
+  // Character layers. The player first — it is their apartment and their
+  // scene — then the roommates who are present.
+  const posture = seated ? ', seated at the table' : '';
+  if (opts.player) {
+    prompt += `${describe(opts.player, 'a young adult')}${posture}. `;
+  }
   if (activeNpcs && activeNpcs.length > 0) {
     for (const npc of activeNpcs) {
-      const v = (typeof getPhysicalDescriptionForPrompt === 'function' ? getPhysicalDescriptionForPrompt(npc) : null) || npc.bible.visual || 'a person';  // NPC Overhaul Phase 1
-      const expr = npc.activity ? `, ${npc.activity}` : '';
+      const v = describe(npc, 'a person');  // NPC Overhaul Phase 1
+      const expr = seated ? posture : (npc.activity ? `, ${npc.activity}` : '');
       prompt += `${v}${expr}. `;
     }
   }
@@ -79,6 +136,7 @@ function fallbackRoomPhrase(roomId, roomType) {
   if (roomId === 'game_room') return 'Pool table, game console, dartboard. ';
   if (roomId === 'gym') return 'Treadmill, weights, yoga mat. ';
   if (roomId === 'pool_room') return 'An indoor swimming pool, loungers, tiled surround. ';
+  if (roomId === 'changing_room') return 'Lockers, a slatted bench, a tiled shower. ';
   if (roomId === 'study') return 'A desk, bookshelves, armchair. ';
   if (roomId === 'balcony') return 'Bistro table, potted plants, city view. ';
   if (roomId === 'laundry') return 'Washer, dryer, hamper. ';
@@ -90,9 +148,53 @@ function buildCharacterPrompt(npc, expression, pose) {
   return `${v}, ${expression || 'neutral expression'}, ${pose || 'standing casually'}, anime-inspired illustration style, full body, clean background, character sheet pose, warm lighting.`;
 }
 
+// --- The player's portrait (player creation + intro plan, Phase 4) ---
+// Composed from the studio draft through the SAME describer that serves every
+// NPC portrait, so the player is drawn by the machinery that draws the cast.
+// The draft is `{ name, surname, age, gender, physical, portrait }`, and
+// getPhysicalDescriptionForPrompt reads `{ age, gender, physical }` off
+// `.appearance` — so it is handed a shim with that key rather than a second
+// composer being written for the same job.
+//
+// Deliberately does NOT opt into the intimate layer: a character-sheet
+// portrait is a clothed, face-and-figure shot, and the describer's gate wants
+// an explicit request plus an undressed subject. This is the honest default,
+// not an oversight.
+function buildPlayerPortraitPrompt(draft) {
+  const shim = { appearance: { age: draft?.age, gender: draft?.gender, physical: draft?.physical || {} } };
+  const desc = (typeof getPhysicalDescriptionForPrompt === 'function'
+    ? getPhysicalDescriptionForPrompt(shim)
+    : null) || 'a young adult';
+  return `${desc}, neutral confident expression, standing casually, `
+    + 'anime-inspired illustration style, upper body portrait, clean simple background, warm lighting.';
+}
+
+// Keyed on the portrait's own seed rather than on the draft's contents: the
+// prompt is editable, so "what this portrait is" is the prompt+seed pair the
+// record froze, exactly like a photo record (takePhoto, below). Two different
+// prompts are two different keys; regenerating an unchanged prompt hits cache.
+async function getPlayerPortraitImage(portrait) {
+  const key = `player_portrait_${portrait.seed}`;
+  const cached = await getCachedImage(key);
+  if (cached) return { url: createObjectUrl(key, cached), cached: true };
+  try {
+    const result = await root.generateImage(portrait.prompt, {
+      resolution: IMAGE_CACHE.resolutions.char,
+      seed: portrait.seed,
+      negativePrompt: 'blurry, distorted, extra limbs, low quality, text, watermark',
+    });
+    const blob = await canvasToBlob(result.canvas);
+    await setCachedImage(key, blob);
+    return { url: createObjectUrl(key, blob), cached: false };
+  } catch (e) {
+    console.warn('Player portrait generation failed:', e.message);
+    return { url: null, cached: false, error: e.message };
+  }
+}
+
 // --- Generate or retrieve cached background ---
-async function getSceneImage(roomId, phase, activeNpcs, roomObjects) {
-  const sceneKey = composeSceneKey(roomId, phase, 'normal', activeNpcs?.map(n => n.id) || []);
+async function getSceneImage(roomId, phase, activeNpcs, roomObjects, opts = {}) {
+  const sceneKey = composeSceneKey(roomId, phase, 'normal', activeNpcs?.map(n => n.id) || [], sceneDetailSignature(roomObjects));
 
   // Check cache
   const cached = await getCachedImage(sceneKey);
@@ -102,7 +204,7 @@ async function getSceneImage(roomId, phase, activeNpcs, roomObjects) {
 
   // Generate new
   try {
-    const prompt = buildImagePrompt(roomId, phase, activeNpcs, roomObjects);
+    const prompt = buildImagePrompt(roomId, phase, activeNpcs, roomObjects, opts);
     const result = await root.generateImage(prompt, {
       resolution: IMAGE_CACHE.resolutions.bg,
       negativePrompt: 'blurry, distorted, extra limbs, low quality',

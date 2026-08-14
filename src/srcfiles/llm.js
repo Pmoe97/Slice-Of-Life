@@ -20,7 +20,7 @@ function buildSensoryLine(scene) {
   const signals = scene.signals || [];
   const parts = signals.slice(0, 4).map(rec => {
     if (!rec.phrase) return null;
-    return rec.here ? rec.phrase : `${rec.phrase} (drifting in from the ${ROOMS[rec.sourceRoomId]?.name || rec.sourceRoomId})`;
+    return rec.here ? rec.phrase : `${rec.phrase} (drifting in from ${roomPhrase(rec.sourceRoomId)})`;
   }).filter(Boolean);
   if (parts.length === 0) return '- Nothing much registers — no smells, nothing out of place.';
   return `- What you can sense: ${parts.join('; ')}.`;
@@ -339,7 +339,7 @@ function buildNpcBlockV2(npc, query, channel, day) {
   if (npc.perceived?.length > 0) {
     const bits = npc.perceived
       .filter(r => r.phrase)
-      .map(r => r.here ? r.phrase : `${r.phrase} (from the ${ROOMS[r.sourceRoomId]?.name || r.sourceRoomId})`);
+      .map(r => r.here ? r.phrase : `${r.phrase} (from ${roomPhrase(r.sourceRoomId)})`);
     if (bits.length > 0) block += `[Senses]: ${bits.join('; ')}\n`;
   }
 

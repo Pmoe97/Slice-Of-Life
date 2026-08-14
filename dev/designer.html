@@ -1,0 +1,1892 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Home Design Studio — Slice of Life</title>
+<style>
+  :root {
+    --bg:#14121f; --panel:#1c1930; --line:#2e2745; --text:#ded6f0; --dim:#8d84ac;
+    --gold:#d9b871; --cool:#6cc7f6; --bad:#f66c8c; --good:#6cf6a9; --accent:#7b6cf6;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; display:flex; height:100vh; overflow:hidden; background:var(--bg);
+         color:var(--text); font:13px/1.5 'Segoe UI',system-ui,sans-serif; }
+
+  /* ---- canvas ---- */
+  #stage { flex:1 1 auto; position:relative; overflow:auto; background:#0e0c17; }
+  #stage.grabbing { cursor:grabbing; }
+  svg { display:block; }
+  .room-fill { fill:#231e36; stroke:none; }
+  .room-fill.sel { fill:#3b3260; }
+  .room-fill.dim { opacity:.35; }
+  .wall { stroke:#4a4070; stroke-width:3; stroke-linecap:square; pointer-events:none; }
+  .rlabel { fill:var(--dim); font:9px sans-serif; text-anchor:middle; pointer-events:none;
+            paint-order:stroke; stroke:#0e0c17; stroke-width:3px; stroke-linejoin:round; }
+  .grid { stroke:#1c1930; stroke-width:.5; pointer-events:none; }
+
+  .p { stroke-width:.8; }
+  .p-frame { fill:#2a2a4a; stroke:#4a4070; }
+  .p-soft { fill:#32326a; stroke:#3a3a5c; }
+  .p-detail { fill:#4a4070; stroke:none; }
+  .p-detail-outline { fill:none; stroke:#4a4070; stroke-width:.7; }
+  .p-felt { fill:#24503a; stroke:#4a4070; }
+  .p-water { fill:#1d4a63; stroke:var(--cool); }
+  .p-coping { fill:#3a4256; stroke:#4a4070; }
+  .p-lane { stroke:rgba(108,199,246,.35); stroke-width:.8; fill:none; }
+  .p-plant { fill:#2f5138; stroke:var(--good); stroke-width:.7; }
+  .p-glass { fill:rgba(108,199,246,.25); stroke:var(--cool); }
+  .p-void { fill:#0e0c17; stroke:#4a4070; }
+  .prop.v-empty .p-water { fill:#33322c; stroke:#5a5a7c; }
+  .prop.v-empty .p-lane { stroke:none; }
+  .prop { cursor:move; }
+  .prop.gated { opacity:.45; }
+  .prop.selected .p { stroke:var(--gold) !important; }
+
+  .selbox { fill:none; stroke:var(--gold); stroke-width:1; stroke-dasharray:3 2; pointer-events:none; }
+  .handle { fill:var(--gold); stroke:#0e0c17; stroke-width:1; cursor:nwse-resize; }
+  .handle.rot { fill:var(--cool); cursor:grab; }
+  .rectbox { fill:none; stroke:var(--cool); stroke-width:1; stroke-dasharray:4 3; pointer-events:none; }
+  .rectgrip { fill:var(--cool); stroke:#0e0c17; stroke-width:1; cursor:move; }
+
+  /* ---- panel ---- */
+  #panel { flex:0 0 340px; background:var(--panel); border-left:1px solid var(--line);
+           display:flex; flex-direction:column; overflow:hidden; }
+  header { padding:10px 12px; border-bottom:1px solid var(--line); }
+  h1 { margin:0; font-size:14px; color:var(--gold); letter-spacing:1px; }
+  .hint { color:var(--dim); font-size:11px; margin:5px 0 0; line-height:1.45; }
+  .tabs { display:flex; border-bottom:1px solid var(--line); }
+  .tab { flex:1; padding:7px; background:none; border:none; cursor:pointer; color:var(--dim);
+         font:inherit; font-size:12px; border-bottom:2px solid transparent; }
+  .tab.on { color:var(--gold); border-bottom-color:var(--gold); }
+  .pane { flex:1 1 auto; overflow-y:auto; padding:10px 12px; display:none; }
+  .pane.on { display:block; }
+  .grp { margin-bottom:14px; }
+  .grp h3 { margin:0 0 6px; font-size:11px; letter-spacing:1px; text-transform:uppercase;
+            color:var(--dim); border-bottom:1px solid var(--line); padding-bottom:3px; }
+  .row { display:flex; align-items:center; gap:6px; padding:3px 4px; border-radius:3px; font-size:12px; }
+  .row:hover { background:#252038; }
+  .row.on { background:#3b3260; }
+  .row .nm { flex:1 1 auto; cursor:pointer; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  select, input[type=text], input[type=number] {
+    background:#191527; border:1px solid var(--line); border-radius:3px; color:var(--text);
+    font:inherit; font-size:12px; padding:4px 6px; width:100%; }
+  label.f { display:block; font-size:10px; color:var(--dim); margin:6px 0 2px; }
+  .f2 { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  button.act { background:none; border:1px solid #4a4070; color:var(--text); padding:5px 10px;
+               border-radius:3px; cursor:pointer; font:inherit; font-size:11px; }
+  button.act:hover { border-color:var(--gold); color:var(--gold); }
+  button.act.warn:hover { border-color:var(--bad); color:var(--bad); }
+  .bar { display:flex; gap:5px; flex-wrap:wrap; margin:8px 0; }
+  .palette { display:grid; grid-template-columns:repeat(2,1fr); gap:5px; }
+  .pal { background:#191527; border:1px solid var(--line); border-radius:4px; padding:6px 4px;
+         cursor:pointer; text-align:center; font-size:10px; color:var(--dim); }
+  .pal:hover { border-color:var(--gold); color:var(--text); }
+  .pal svg { display:block; margin:0 auto 3px; }
+  textarea { width:100%; height:220px; background:#0e0c17; color:var(--text); border:1px solid var(--line);
+             border-radius:3px; padding:7px; font:11px/1.4 Consolas,monospace; resize:vertical; }
+  footer { border-top:1px solid var(--line); padding:7px 12px; font-size:10px; color:var(--dim);
+           display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .kbd { background:#191527; border:1px solid var(--line); border-radius:3px; padding:0 4px; }
+  #toast { position:fixed; bottom:14px; left:14px; background:#191527; border:1px solid var(--line);
+           border-left:3px solid var(--good); padding:7px 12px; border-radius:4px; font-size:12px;
+           opacity:0; transition:opacity .25s; pointer-events:none; z-index:99; }
+  #toast.on { opacity:1; }
+</style>
+</head>
+<body>
+
+<div id="stage"><svg id="map"></svg></div>
+
+<div id="panel">
+  <header>
+    <h1>Home Design Studio</h1>
+    <p class="hint" id="modehint"></p>
+  </header>
+
+  <div class="tabs">
+    <button class="tab on" data-pane="place">Place</button>
+    <button class="tab" data-pane="rooms">Rooms</button>
+    <button class="tab" data-pane="obj">Selected</button>
+    <button class="tab" data-pane="io">Save</button>
+  </div>
+
+  <!-- PLACE -->
+  <div class="pane on" id="pane-place">
+    <div class="grp">
+      <h3>Room</h3>
+      <select id="roomsel"></select>
+      <p class="hint" id="roomstat"></p>
+    </div>
+    <div class="grp">
+      <h3>Preview as</h3>
+      <select id="tiersel">
+        <option value="">Everything (design view)</option>
+        <option value="broken">Broken — before any work</option>
+        <option value="functional">Functional — repaired</option>
+        <option value="upgraded">Upgraded — the best it gets</option>
+      </select>
+      <p class="hint">Gated pieces stack in design view — the dry pool basin
+        and the filled one occupy the same footprint on purpose. Pick a tier
+        to see the room as a player at that stage of renovation would.</p>
+    </div>
+    <div class="grp">
+      <h3>Palette — click to add</h3>
+      <div class="palette" id="palette"></div>
+    </div>
+  </div>
+
+  <!-- ROOMS -->
+  <div class="pane" id="pane-rooms">
+    <p class="hint">Reshape the room itself. A room is a LIST of rectangles —
+      add more to build L-shapes and wings. Drag a rectangle's corner grip on
+      the canvas to resize it, or its middle to move it.</p>
+    <div class="grp">
+      <h3>Rectangles</h3>
+      <div id="rectlist"></div>
+      <div class="bar">
+        <button class="act" id="addrect">+ Add rectangle</button>
+      </div>
+    </div>
+    <div class="grp">
+      <h3>Snap</h3>
+      <div class="bar">
+        <button class="act" id="snaptoggle">Grid snap: on</button>
+        <button class="act" id="gridsize">Grid: 5</button>
+      </div>
+      <p class="hint">Rooms must TILE — neighbours share walls. The status
+        line flags any adjacency that stops touching.</p>
+      <p class="hint" id="tilestat"></p>
+    </div>
+  </div>
+
+  <!-- SELECTED -->
+  <div class="pane" id="pane-obj">
+    <div id="objempty" class="hint">Nothing selected. Click a piece on the canvas.</div>
+    <div id="objedit" style="display:none">
+      <div class="grp">
+        <h3 id="objname"></h3>
+        <label class="f">Shape</label>
+        <select id="objshape"></select>
+        <div class="f2">
+          <div><label class="f">X</label><input type="number" id="objx" step="1"></div>
+          <div><label class="f">Y</label><input type="number" id="objy" step="1"></div>
+          <div><label class="f">Width</label><input type="number" id="objw" step="1" min="2"></div>
+          <div><label class="f">Height</label><input type="number" id="objh" step="1" min="2"></div>
+          <div><label class="f">Rotation°</label><input type="number" id="objr" step="15"></div>
+          <div><label class="f">Variant</label><input type="text" id="objv" placeholder="(none)"></div>
+        </div>
+      </div>
+      <div class="grp">
+        <h3>Only show when…</h3>
+        <p class="hint">Gate this piece on a renovation. Lets one design
+          describe the finished room — the pool basin appears dry, then fills.</p>
+        <label class="f">Facility</label>
+        <select id="objfac"></select>
+        <div class="f2">
+          <div><label class="f">Min tier</label><select id="objmin"></select></div>
+          <div><label class="f">Max tier</label><select id="objmax"></select></div>
+        </div>
+      </div>
+      <div class="bar">
+        <button class="act" id="dup">Duplicate</button>
+        <button class="act" id="front">Bring to front</button>
+        <button class="act warn" id="del">Delete</button>
+      </div>
+    </div>
+    <div class="grp">
+      <h3>In this room</h3>
+      <div id="objlist"></div>
+    </div>
+  </div>
+
+  <!-- SAVE -->
+  <div class="pane" id="pane-io">
+    <p class="hint">Work is saved to this browser automatically on every
+      change, and kept as a rolling history you can step back through. Nothing
+      is lost by closing the tab.</p>
+    <div class="grp">
+      <h3>Named saves</h3>
+      <div class="bar">
+        <input type="text" id="slotname" placeholder="name this design…">
+      </div>
+      <div class="bar"><button class="act" id="saveslot">Save</button></div>
+      <div id="slotlist"></div>
+    </div>
+    <div class="grp">
+      <h3>Export</h3>
+      <div class="bar">
+        <button class="act" id="copy">Copy to clipboard</button>
+        <button class="act" id="dl">Download .js</button>
+        <button class="act" id="imp">Import…</button>
+      </div>
+      <textarea id="out" readonly></textarea>
+      <input type="file" id="impfile" accept=".js,.json,.txt" style="display:none">
+    </div>
+    <div class="grp">
+      <h3>Danger</h3>
+      <div class="bar"><button class="act warn" id="reset">Reset everything to the shipped design</button></div>
+    </div>
+  </div>
+
+  <footer>
+    <span><span class="kbd">Del</span> remove · <span class="kbd">Ctrl+Z</span> undo ·
+      <span class="kbd">Ctrl+D</span> duplicate · <span class="kbd">[ ]</span> rotate</span>
+    <span id="undostat"></span>
+  </footer>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ===========================================================================
+// The Home Design Studio.
+//
+// Two editors on one canvas: ROOMS (the shell — rectangles that tile) and
+// PLACE (the contents — composite shapes that move, resize and rotate as one
+// object). They share a selection model, an undo stack, and one autosave.
+//
+// The composite-shape idea is the whole reason this is usable: a shape's
+// parts are normalized to a 0..1 box, so a placement only ever stores
+// x/y/w/h/rot and every part follows. Nothing here manipulates a part.
+// ===========================================================================
+
+// --- Data, mirrored from src/srcfiles ---------------------------------------
+// Kept as a literal rather than fetched: a file:// page cannot fetch a
+// sibling, and a dev tool that only works behind a server is a dev tool
+// nobody opens. The Save tab exports back into the same shape.
+const SHIPPED_LAYOUT = {
+  bedroom_player: [[90,5,110,130]],
+  hallway_a:      [[200,5,32,185]],
+  bedroom_1:      [[232,5,123,115]],
+  gym:            [[232,120,208,70],[355,30,85,90]],
+  bathroom_a:     [[105,140,90,48]],
+  entry:          [[40,190,125,50]],
+  living_room:    [[165,190,160,165],[40,240,125,115]],
+  changing_room:  [[325,190,85,42]],
+  game_room:      [[325,232,85,78]],
+  balcony:        [[415,190,55,120]],
+  pool_room:      [[325,315,150,135]],
+  dining:         [[40,355,170,95]],
+  kitchen:        [[210,355,115,95]],
+  study:          [[55,455,110,90]],
+  laundry:        [[185,455,95,65]],
+  hallway_b:      [[280,450,40,160]],
+  bathroom_b:     [[320,450,90,40]],
+  bedroom_3:      [[320,490,100,120]],
+  bedroom_2:      [[165,520,115,110]],
+};
+const ROOM_NAMES = {
+  bedroom_player:"Your Bedroom", hallway_a:"Hallway A", bedroom_1:"Bedroom 1", gym:"Gym",
+  bathroom_a:"Bathroom A", entry:"Entry", living_room:"Living Room", changing_room:"Changing Room",
+  game_room:"Game Room", balcony:"Balcony", pool_room:"Pool Room", dining:"Dining Room",
+  kitchen:"Kitchen", study:"Study", laundry:"Laundry Room", hallway_b:"Hallway B",
+  bathroom_b:"Bathroom B", bedroom_3:"Bedroom 3", bedroom_2:"Bedroom 2",
+};
+const ADJ = {
+  bedroom_player:['hallway_a'], hallway_a:['bedroom_player','bedroom_1','bathroom_a','living_room'],
+  bedroom_1:['hallway_a'], gym:['changing_room','balcony'], bathroom_a:['hallway_a'],
+  entry:['living_room'], living_room:['hallway_a','entry','dining','game_room'],
+  changing_room:['game_room','gym'], game_room:['living_room','changing_room','balcony','pool_room'],
+  balcony:['game_room','gym','pool_room'], pool_room:['game_room','balcony'],
+  dining:['living_room','kitchen','study'], kitchen:['dining','laundry','hallway_b'],
+  study:['dining'], laundry:['kitchen'],
+  hallway_b:['kitchen','bedroom_2','bedroom_3','bathroom_b'],
+  bathroom_b:['hallway_b'], bedroom_3:['hallway_b'], bedroom_2:['hallway_b'],
+};
+const FACILITIES = ['', 'bedroom_habitability_player','bedroom_habitability_1','bedroom_habitability_2',
+  'bedroom_habitability_3','kitchen_stove','kitchen_appliances','bathroom_a_plumbing','bathroom_b_plumbing',
+  'living_room_entertainment','gym_equipment','changing_fixtures','pool_systems','laundry_machines',
+  'game_room_setup','study_setup','balcony_setup','entry_condition','dining_setup',
+  'hallway_a_upkeep','hallway_b_upkeep'];
+const TIERS = ['', 'broken','functional','upgraded'];
+
+const SHAPES = {
+ "bed": {
+  "label": "Bed",
+  "w": 26,
+  "h": 34,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.05,
+    "cls": "frame"
+   },
+   {
+    "kind": "rect",
+    "x": 0.06,
+    "y": 0.27,
+    "w": 0.88,
+    "h": 0.68,
+    "rx": 0.04,
+    "cls": "soft"
+   },
+   {
+    "kind": "rect",
+    "x": 0.12,
+    "y": 0.05,
+    "w": 0.76,
+    "h": 0.17,
+    "rx": 0.05,
+    "cls": "detail"
+   }
+  ]
+ },
+ "bed_double": {
+  "label": "Double Bed",
+  "w": 36,
+  "h": 34,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.04,
+    "cls": "frame"
+   },
+   {
+    "kind": "rect",
+    "x": 0.05,
+    "y": 0.27,
+    "w": 0.9,
+    "h": 0.68,
+    "rx": 0.03,
+    "cls": "soft"
+   },
+   {
+    "kind": "rect",
+    "x": 0.08,
+    "y": 0.05,
+    "w": 0.38,
+    "h": 0.17,
+    "rx": 0.05,
+    "cls": "detail"
+   },
+   {
+    "kind": "rect",
+    "x": 0.54,
+    "y": 0.05,
+    "w": 0.38,
+    "h": 0.17,
+    "rx": 0.05,
+    "cls": "detail"
+   }
+  ]
+ },
+ "nightstand": {
+  "label": "Nightstand",
+  "w": 9,
+  "h": 9,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.12,
+    "cls": "frame"
+   },
+   {
+    "kind": "line",
+    "x1": 0.2,
+    "y1": 0.55,
+    "x2": 0.8,
+    "y2": 0.55,
+    "cls": "detail"
+   }
+  ]
+ },
+ "wardrobe": {
+  "label": "Wardrobe",
+  "w": 22,
+  "h": 9,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "cls": "frame"
+   },
+   {
+    "kind": "line",
+    "x1": 0.5,
+    "y1": 0,
+    "x2": 0.5,
+    "y2": 1,
+    "cls": "detail"
+   }
+  ]
+ },
+ "desk": {
+  "label": "Desk",
+  "w": 24,
+  "h": 11,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.04,
+    "cls": "frame"
+   },
+   {
+    "kind": "rect",
+    "x": 0.62,
+    "y": 0.12,
+    "w": 0.32,
+    "h": 0.76,
+    "rx": 0.06,
+    "cls": "detail"
+   }
+  ]
+ },
+ "bookshelf": {
+  "label": "Bookshelf",
+  "w": 22,
+  "h": 7,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "cls": "frame"
+   },
+   {
+    "kind": "line",
+    "x1": 0,
+    "y1": 0.5,
+    "x2": 1,
+    "y2": 0.5,
+    "cls": "detail"
+   }
+  ]
+ },
+ "sofa": {
+  "label": "Sofa",
+  "w": 32,
+  "h": 14,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0.22,
+    "w": 1,
+    "h": 0.78,
+    "rx": 0.08,
+    "cls": "soft"
+   },
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 0.3,
+    "rx": 0.1,
+    "cls": "frame"
+   },
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0.2,
+    "w": 0.1,
+    "h": 0.8,
+    "rx": 0.2,
+    "cls": "frame"
+   },
+   {
+    "kind": "rect",
+    "x": 0.9,
+    "y": 0.2,
+    "w": 0.1,
+    "h": 0.8,
+    "rx": 0.2,
+    "cls": "frame"
+   }
+  ]
+ },
+ "armchair": {
+  "label": "Armchair",
+  "w": 13,
+  "h": 13,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0.22,
+    "w": 1,
+    "h": 0.78,
+    "rx": 0.14,
+    "cls": "soft"
+   },
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 0.3,
+    "rx": 0.16,
+    "cls": "frame"
+   }
+  ]
+ },
+ "coffee_table": {
+  "label": "Coffee Table",
+  "w": 22,
+  "h": 12,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.1,
+    "cls": "frame"
+   }
+  ]
+ },
+ "rug": {
+  "label": "Rug",
+  "w": 44,
+  "h": 30,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.03,
+    "cls": "soft"
+   },
+   {
+    "kind": "rect",
+    "x": 0.05,
+    "y": 0.07,
+    "w": 0.9,
+    "h": 0.86,
+    "rx": 0.02,
+    "cls": "detail-outline"
+   }
+  ]
+ },
+ "rug_round": {
+  "label": "Round Rug",
+  "w": 30,
+  "h": 30,
+  "parts": [
+   {
+    "kind": "ellipse",
+    "cx": 0.5,
+    "cy": 0.5,
+    "rx": 0.5,
+    "ry": 0.5,
+    "cls": "soft"
+   },
+   {
+    "kind": "ellipse",
+    "cx": 0.5,
+    "cy": 0.5,
+    "rx": 0.4,
+    "ry": 0.4,
+    "cls": "detail-outline"
+   }
+  ]
+ },
+ "tv": {
+  "label": "TV",
+  "w": 24,
+  "h": 4,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.08,
+    "cls": "detail"
+   }
+  ]
+ },
+ "dining_table": {
+  "label": "Dining Table",
+  "w": 36,
+  "h": 20,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.08,
+    "cls": "frame"
+   }
+  ]
+ },
+ "dining_table_round": {
+  "label": "Round Table",
+  "w": 26,
+  "h": 26,
+  "parts": [
+   {
+    "kind": "ellipse",
+    "cx": 0.5,
+    "cy": 0.5,
+    "rx": 0.5,
+    "ry": 0.5,
+    "cls": "frame"
+   }
+  ]
+ },
+ "chair": {
+  "label": "Chair",
+  "w": 8,
+  "h": 8,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0.1,
+    "y": 0.15,
+    "w": 0.8,
+    "h": 0.85,
+    "rx": 0.15,
+    "cls": "soft"
+   },
+   {
+    "kind": "rect",
+    "x": 0.05,
+    "y": 0,
+    "w": 0.9,
+    "h": 0.2,
+    "rx": 0.1,
+    "cls": "frame"
+   }
+  ]
+ },
+ "counter": {
+  "label": "Counter Run",
+  "w": 40,
+  "h": 10,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "cls": "frame"
+   },
+   {
+    "kind": "line",
+    "x1": 0,
+    "y1": 0.82,
+    "x2": 1,
+    "y2": 0.82,
+    "cls": "detail"
+   }
+  ]
+ },
+ "stove": {
+  "label": "Stove",
+  "w": 14,
+  "h": 12,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.06,
+    "cls": "frame"
+   },
+   {
+    "kind": "ellipse",
+    "cx": 0.28,
+    "cy": 0.28,
+    "rx": 0.15,
+    "ry": 0.15,
+    "cls": "detail"
+   },
+   {
+    "kind": "ellipse",
+    "cx": 0.72,
+    "cy": 0.28,
+    "rx": 0.15,
+    "ry": 0.15,
+    "cls": "detail"
+   },
+   {
+    "kind": "ellipse",
+    "cx": 0.28,
+    "cy": 0.72,
+    "rx": 0.15,
+    "ry": 0.15,
+    "cls": "detail"
+   },
+   {
+    "kind": "ellipse",
+    "cx": 0.72,
+    "cy": 0.72,
+    "rx": 0.15,
+    "ry": 0.15,
+    "cls": "detail"
+   }
+  ]
+ },
+ "fridge": {
+  "label": "Fridge",
+  "w": 13,
+  "h": 13,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.06,
+    "cls": "frame"
+   },
+   {
+    "kind": "line",
+    "x1": 0.78,
+    "y1": 0.15,
+    "x2": 0.78,
+    "y2": 0.85,
+    "cls": "detail"
+   }
+  ]
+ },
+ "sink": {
+  "label": "Sink",
+  "w": 14,
+  "h": 10,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.08,
+    "cls": "frame"
+   },
+   {
+    "kind": "ellipse",
+    "cx": 0.5,
+    "cy": 0.55,
+    "rx": 0.28,
+    "ry": 0.3,
+    "cls": "detail"
+   }
+  ]
+ },
+ "island": {
+  "label": "Kitchen Island",
+  "w": 30,
+  "h": 16,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.06,
+    "cls": "frame"
+   },
+   {
+    "kind": "rect",
+    "x": 0.08,
+    "y": 0.12,
+    "w": 0.84,
+    "h": 0.5,
+    "rx": 0.05,
+    "cls": "detail-outline"
+   }
+  ]
+ },
+ "shower": {
+  "label": "Shower",
+  "w": 15,
+  "h": 15,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.05,
+    "cls": "frame"
+   },
+   {
+    "kind": "ellipse",
+    "cx": 0.5,
+    "cy": 0.5,
+    "rx": 0.16,
+    "ry": 0.16,
+    "cls": "detail"
+   }
+  ]
+ },
+ "bathtub": {
+  "label": "Bathtub",
+  "w": 30,
+  "h": 14,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.2,
+    "cls": "frame"
+   },
+   {
+    "kind": "rect",
+    "x": 0.06,
+    "y": 0.14,
+    "w": 0.88,
+    "h": 0.72,
+    "rx": 0.2,
+    "cls": "void"
+   }
+  ]
+ },
+ "toilet": {
+  "label": "Toilet",
+  "w": 9,
+  "h": 13,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0.1,
+    "y": 0,
+    "w": 0.8,
+    "h": 0.32,
+    "rx": 0.1,
+    "cls": "frame"
+   },
+   {
+    "kind": "ellipse",
+    "cx": 0.5,
+    "cy": 0.66,
+    "rx": 0.42,
+    "ry": 0.34,
+    "cls": "frame"
+   }
+  ]
+ },
+ "vanity": {
+  "label": "Vanity",
+  "w": 16,
+  "h": 8,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.06,
+    "cls": "frame"
+   },
+   {
+    "kind": "ellipse",
+    "cx": 0.5,
+    "cy": 0.5,
+    "rx": 0.2,
+    "ry": 0.28,
+    "cls": "detail"
+   }
+  ]
+ },
+ "lockers": {
+  "label": "Lockers",
+  "w": 22,
+  "h": 8,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "cls": "frame"
+   },
+   {
+    "kind": "line",
+    "x1": 0.25,
+    "y1": 0,
+    "x2": 0.25,
+    "y2": 1,
+    "cls": "detail"
+   },
+   {
+    "kind": "line",
+    "x1": 0.5,
+    "y1": 0,
+    "x2": 0.5,
+    "y2": 1,
+    "cls": "detail"
+   },
+   {
+    "kind": "line",
+    "x1": 0.75,
+    "y1": 0,
+    "x2": 0.75,
+    "y2": 1,
+    "cls": "detail"
+   }
+  ]
+ },
+ "bench": {
+  "label": "Bench",
+  "w": 22,
+  "h": 6,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.1,
+    "cls": "frame"
+   }
+  ]
+ },
+ "pool": {
+  "label": "Swimming Pool",
+  "w": 90,
+  "h": 70,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.03,
+    "cls": "coping"
+   },
+   {
+    "kind": "rect",
+    "x": 0.07,
+    "y": 0.09,
+    "w": 0.86,
+    "h": 0.82,
+    "rx": 0.02,
+    "cls": "water"
+   },
+   {
+    "kind": "line",
+    "x1": 0.35,
+    "y1": 0.09,
+    "x2": 0.35,
+    "y2": 0.91,
+    "cls": "lane"
+   },
+   {
+    "kind": "line",
+    "x1": 0.65,
+    "y1": 0.09,
+    "x2": 0.65,
+    "y2": 0.91,
+    "cls": "lane"
+   }
+  ]
+ },
+ "lounger": {
+  "label": "Lounger",
+  "w": 9,
+  "h": 22,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0.25,
+    "w": 1,
+    "h": 0.75,
+    "rx": 0.2,
+    "cls": "soft"
+   },
+   {
+    "kind": "rect",
+    "x": 0.05,
+    "y": 0,
+    "w": 0.9,
+    "h": 0.3,
+    "rx": 0.3,
+    "cls": "frame"
+   }
+  ]
+ },
+ "pool_table": {
+  "label": "Pool Table",
+  "w": 32,
+  "h": 18,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.06,
+    "cls": "frame"
+   },
+   {
+    "kind": "rect",
+    "x": 0.06,
+    "y": 0.1,
+    "w": 0.88,
+    "h": 0.8,
+    "rx": 0.03,
+    "cls": "felt"
+   },
+   {
+    "kind": "ellipse",
+    "cx": 0.5,
+    "cy": 0.5,
+    "rx": 0.05,
+    "ry": 0.09,
+    "cls": "detail"
+   }
+  ]
+ },
+ "treadmill": {
+  "label": "Treadmill",
+  "w": 13,
+  "h": 22,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.06,
+    "cls": "frame"
+   },
+   {
+    "kind": "rect",
+    "x": 0.12,
+    "y": 0.28,
+    "w": 0.76,
+    "h": 0.66,
+    "rx": 0.04,
+    "cls": "detail"
+   }
+  ]
+ },
+ "weight_rack": {
+  "label": "Weight Rack",
+  "w": 20,
+  "h": 8,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0.3,
+    "w": 1,
+    "h": 0.4,
+    "cls": "frame"
+   },
+   {
+    "kind": "ellipse",
+    "cx": 0.12,
+    "cy": 0.5,
+    "rx": 0.12,
+    "ry": 0.45,
+    "cls": "detail"
+   },
+   {
+    "kind": "ellipse",
+    "cx": 0.88,
+    "cy": 0.5,
+    "rx": 0.12,
+    "ry": 0.45,
+    "cls": "detail"
+   }
+  ]
+ },
+ "yoga_mat": {
+  "label": "Yoga Mat",
+  "w": 9,
+  "h": 20,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.15,
+    "cls": "soft"
+   }
+  ]
+ },
+ "washer": {
+  "label": "Washer",
+  "w": 12,
+  "h": 12,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.06,
+    "cls": "frame"
+   },
+   {
+    "kind": "ellipse",
+    "cx": 0.5,
+    "cy": 0.55,
+    "rx": 0.26,
+    "ry": 0.26,
+    "cls": "detail"
+   }
+  ]
+ },
+ "plant": {
+  "label": "Plant",
+  "w": 9,
+  "h": 9,
+  "parts": [
+   {
+    "kind": "ellipse",
+    "cx": 0.5,
+    "cy": 0.5,
+    "rx": 0.48,
+    "ry": 0.48,
+    "cls": "plant"
+   }
+  ]
+ },
+ "plant_large": {
+  "label": "Large Plant",
+  "w": 14,
+  "h": 14,
+  "parts": [
+   {
+    "kind": "ellipse",
+    "cx": 0.5,
+    "cy": 0.5,
+    "rx": 0.5,
+    "ry": 0.5,
+    "cls": "plant"
+   },
+   {
+    "kind": "ellipse",
+    "cx": 0.5,
+    "cy": 0.5,
+    "rx": 0.22,
+    "ry": 0.22,
+    "cls": "detail"
+   }
+  ]
+ },
+ "lamp": {
+  "label": "Floor Lamp",
+  "w": 7,
+  "h": 7,
+  "parts": [
+   {
+    "kind": "ellipse",
+    "cx": 0.5,
+    "cy": 0.5,
+    "rx": 0.5,
+    "ry": 0.5,
+    "cls": "detail"
+   }
+  ]
+ },
+ "shelf": {
+  "label": "Shelf",
+  "w": 16,
+  "h": 5,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "cls": "frame"
+   }
+  ]
+ },
+ "doormat": {
+  "label": "Doormat",
+  "w": 14,
+  "h": 7,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.08,
+    "cls": "soft"
+   }
+  ]
+ },
+ "desk_chair": {
+  "label": "Desk Chair",
+  "w": 9,
+  "h": 9,
+  "parts": [
+   {
+    "kind": "ellipse",
+    "cx": 0.5,
+    "cy": 0.55,
+    "rx": 0.45,
+    "ry": 0.45,
+    "cls": "soft"
+   },
+   {
+    "kind": "rect",
+    "x": 0.1,
+    "y": 0,
+    "w": 0.8,
+    "h": 0.22,
+    "rx": 0.1,
+    "cls": "frame"
+   }
+  ]
+ },
+ "glass_partition": {
+  "label": "Glass Partition",
+  "w": 40,
+  "h": 3,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "cls": "glass"
+   }
+  ]
+ }
+};
+const SHIPPED_DECOR = {
+ "pool_room": [
+  {
+   "shape": "pool",
+   "x": 372,
+   "y": 352,
+   "w": 96,
+   "h": 92,
+   "rot": 0,
+   "requires": {
+    "facility": "pool_systems",
+    "minTier": "functional"
+   }
+  },
+  {
+   "shape": "pool",
+   "x": 372,
+   "y": 352,
+   "w": 96,
+   "h": 92,
+   "rot": 0,
+   "variant": "empty",
+   "requires": {
+    "facility": "pool_systems",
+    "maxTier": "broken"
+   }
+  },
+  {
+   "shape": "lounger",
+   "x": 336,
+   "y": 356,
+   "w": 9,
+   "h": 22,
+   "rot": 0
+  },
+  {
+   "shape": "lounger",
+   "x": 336,
+   "y": 384,
+   "w": 9,
+   "h": 22,
+   "rot": 0
+  },
+  {
+   "shape": "plant_large",
+   "x": 334,
+   "y": 414,
+   "w": 14,
+   "h": 14,
+   "rot": 0
+  },
+  {
+   "shape": "bench",
+   "x": 372,
+   "y": 326,
+   "w": 22,
+   "h": 6,
+   "rot": 0
+  },
+  {
+   "shape": "plant",
+   "x": 458,
+   "y": 324,
+   "w": 9,
+   "h": 9,
+   "rot": 0
+  }
+ ]
+};
+
+// --- State ------------------------------------------------------------------
+let layout, decor, room = 'pool_room', sel = null, selRect = null;
+let snap = true, gridSize = 5;
+let undoStack = [], redoStack = [];
+const LS_KEY = 'sol_designer_wip', LS_SLOTS = 'sol_designer_slots';
+
+function blank() {
+  return { layout: JSON.parse(JSON.stringify(SHIPPED_LAYOUT)),
+           decor: JSON.parse(JSON.stringify(SHIPPED_DECOR)) };
+}
+function snapshot() { return JSON.stringify({ layout, decor }); }
+function restore(s) { const o = JSON.parse(s); layout = o.layout; decor = o.decor; }
+
+// Every mutation goes through this. The undo stack is the data-loss guard
+// that matters most — autosave protects against closing the tab, undo
+// protects against the far likelier disaster of a confident wrong drag.
+function commit(label) {
+  undoStack.push(snapshot());
+  if (undoStack.length > 200) undoStack.shift();
+  redoStack.length = 0;
+  persist();
+  draw();
+}
+let pendingCommit = null;
+function beginDrag() { pendingCommit = snapshot(); }
+function endDrag() {
+  if (pendingCommit && pendingCommit !== snapshot()) {
+    undoStack.push(pendingCommit);
+    if (undoStack.length > 200) undoStack.shift();
+    redoStack.length = 0;
+    persist();
+  }
+  pendingCommit = null;
+  drawPanel();
+}
+function undo() {
+  if (!undoStack.length) return;
+  redoStack.push(snapshot());
+  restore(undoStack.pop());
+  persist(); draw(); toast('Undone');
+}
+function redo() {
+  if (!redoStack.length) return;
+  undoStack.push(snapshot());
+  restore(redoStack.pop());
+  persist(); draw(); toast('Redone');
+}
+function persist() {
+  try { localStorage.setItem(LS_KEY, snapshot()); } catch (e) {}
+  const el = document.getElementById('undostat');
+  if (el) el.textContent = undoStack.length + ' undo';
+}
+
+// --- Geometry ---------------------------------------------------------------
+const G = (v) => snap ? Math.round(v / gridSize) * gridSize : Math.round(v);
+function roomBounds(id) {
+  const rs = layout[id] || [];
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for (const [x,y,w,h] of rs) { x0=Math.min(x0,x); y0=Math.min(y0,y); x1=Math.max(x1,x+w); y1=Math.max(y1,y+h); }
+  return rs.length ? [x0,y0,x1,y1] : [0,0,0,0];
+}
+function roomCentre(id) {
+  const rs = layout[id] || []; let ax=0,ay=0,t=0;
+  for (const [x,y,w,h] of rs) { const a=w*h; ax+=(x+w/2)*a; ay+=(y+h/2)*a; t+=a; }
+  return t ? [ax/t, ay/t] : [0,0];
+}
+// Internal seams — where a room's own rects meet. Not walls.
+function seams(rects) {
+  const out=[];
+  for (let i=0;i<rects.length;i++) for (let j=i+1;j<rects.length;j++) {
+    const [ax,ay,aw,ah]=rects[i], [bx,by,bw,bh]=rects[j];
+    if (Math.abs(ax+aw-bx)<.5 || Math.abs(bx+bw-ax)<.5) {
+      const y1=Math.max(ay,by), y2=Math.min(ay+ah,by+bh);
+      if (y2-y1>.5) out.push({v:true,pos:Math.abs(ax+aw-bx)<.5?ax+aw:bx+bw,from:y1,to:y2});
+    }
+    if (Math.abs(ay+ah-by)<.5 || Math.abs(by+bh-ay)<.5) {
+      const x1=Math.max(ax,bx), x2=Math.min(ax+aw,bx+bw);
+      if (x2-x1>.5) out.push({v:false,pos:Math.abs(ay+ah-by)<.5?ay+ah:by+bh,from:x1,to:x2});
+    }
+  }
+  return out;
+}
+function pieces(fixed, from, to, vertical, cuts) {
+  let ps=[[from,to]];
+  for (const c of cuts) {
+    if (c.v!==vertical) continue;
+    if (Math.abs(c.pos-fixed)>7) continue;
+    const nx=[];
+    for (const [s,e] of ps) {
+      if (c.to<=s||c.from>=e) { nx.push([s,e]); continue; }
+      if (c.from>s) nx.push([s,c.from]);
+      if (c.to<e) nx.push([c.to,e]);
+    }
+    ps=nx;
+  }
+  return ps.filter(([s,e])=>e-s>.5);
+}
+// Mirrors decorVisible (defs.design.js) against a hypothetical tier, so the
+// preview shows exactly what the game would draw. Deliberately the same
+// fail-closed rule: an ungatable placement is not shown by a tier preview.
+const TIER_ORDER=['broken','functional','upgraded'];
+function gatePasses(pl, tier) {
+  if (!pl.requires) return true;
+  const at=TIER_ORDER.indexOf(tier);
+  if (at<0) return false;
+  if (pl.requires.minTier && at<TIER_ORDER.indexOf(pl.requires.minTier)) return false;
+  if (pl.requires.maxTier && at>TIER_ORDER.indexOf(pl.requires.maxTier)) return false;
+  return true;
+}
+
+function sharedWall(a,b) {
+  let best=0;
+  for (const [ax,ay,aw,ah] of (layout[a]||[])) for (const [bx,by,bw,bh] of (layout[b]||[])) {
+    if (Math.min(Math.abs(ax+aw-bx),Math.abs(bx+bw-ax))<=14)
+      best=Math.max(best, Math.min(ay+ah,by+bh)-Math.max(ay,by));
+    if (Math.min(Math.abs(ay+ah-by),Math.abs(by+bh-ay))<=14)
+      best=Math.max(best, Math.min(ax+aw,bx+bw)-Math.max(ax,bx));
+  }
+  return Math.max(0,best);
+}
+
+// --- Draw -------------------------------------------------------------------
+const NS='http://www.w3.org/2000/svg';
+const el=(n,a)=>{const e=document.createElementNS(NS,n); for(const k in a) e.setAttribute(k,a[k]); return e;};
+
+function draw() {
+  const svg = document.getElementById('map');
+  let maxX=0,maxY=0;
+  for (const rs of Object.values(layout)) for (const [x,y,w,h] of rs) { maxX=Math.max(maxX,x+w); maxY=Math.max(maxY,y+h); }
+  const pad=20, vw=maxX+pad*2, vh=maxY+pad*2, scale=1.55;
+  svg.setAttribute('viewBox', `${-pad} ${-pad} ${vw} ${vh}`);
+  svg.setAttribute('width', Math.round(vw*scale));
+  svg.setAttribute('height', Math.round(vh*scale));
+  svg.innerHTML='';
+
+  // grid
+  const g=el('g',{});
+  for (let x=0;x<=maxX;x+=gridSize*4) g.appendChild(el('line',{class:'grid',x1:x,y1:0,x2:x,y2:maxY}));
+  for (let y=0;y<=maxY;y+=gridSize*4) g.appendChild(el('line',{class:'grid',x1:0,y1:y,x2:maxX,y2:y}));
+  svg.appendChild(g);
+
+  // fills
+  for (const id of Object.keys(layout)) {
+    for (const [x,y,w,h] of layout[id]) {
+      const r=el('rect',{class:'room-fill'+(id===room?' sel':' dim'),x,y,width:w,height:h});
+      r.addEventListener('mousedown',(ev)=>{ if(ev.target===r){ selectRoom(id); } });
+      svg.appendChild(r);
+    }
+  }
+  // walls
+  for (const id of Object.keys(layout)) {
+    const rects=layout[id]; const cuts=rects.length>1?seams(rects):[];
+    for (const [x,y,w,h] of rects) {
+      const sides=[{f:y,a:x,b:x+w,v:false},{f:y+h,a:x,b:x+w,v:false},
+                   {f:x,a:y,b:y+h,v:true},{f:x+w,a:y,b:y+h,v:true}];
+      for (const s of sides) for (const [p,q] of pieces(s.f,s.a,s.b,s.v,cuts))
+        svg.appendChild(el('line', s.v?{class:'wall',x1:s.f,y1:p,x2:s.f,y2:q}
+                                     :{class:'wall',x1:p,y1:s.f,x2:q,y2:s.f}));
+    }
+    const [cx,cy]=roomCentre(id);
+    const t=el('text',{class:'rlabel',x:cx,y:cy}); t.textContent=ROOM_NAMES[id]||id; svg.appendChild(t);
+  }
+
+  // props of every room (other rooms dimmed via the fill, props still shown
+  // so you can design against what is next door)
+  const tier = document.getElementById('tiersel')?.value || '';
+  for (const id of Object.keys(decor)) {
+    (decor[id]||[]).forEach((pl,i)=>{
+      // Tier preview shows the room as a player at that renovation stage
+      // would see it. Design view shows everything, stacked.
+      if (tier && !gatePasses(pl, tier)) return;
+      const g=drawProp(pl, id===room && sel===i, id!==room);
+      if (id===room) {
+        g.addEventListener('mousedown',(ev)=>startPropDrag(ev,i));
+      } else { g.style.pointerEvents='none'; g.style.opacity='.3'; }
+      svg.appendChild(g);
+    });
+  }
+
+  // selection handles
+  if (sel!==null && (decor[room]||[])[sel]) {
+    const p=decor[room][sel];
+    svg.appendChild(el('rect',{class:'selbox',x:p.x,y:p.y,width:p.w,height:p.h}));
+    const hs=[['nw',p.x,p.y],['ne',p.x+p.w,p.y],['sw',p.x,p.y+p.h],['se',p.x+p.w,p.y+p.h]];
+    for (const [k,hx,hy] of hs) {
+      const h=el('circle',{class:'handle',cx:hx,cy:hy,r:3.2});
+      h.addEventListener('mousedown',(ev)=>startResize(ev,k));
+      svg.appendChild(h);
+    }
+    const rh=el('circle',{class:'handle rot',cx:p.x+p.w/2,cy:p.y-9,r:3.4});
+    rh.addEventListener('mousedown',startRotate);
+    svg.appendChild(rh);
+  }
+
+  // room-rect grips (Rooms tab)
+  if (activePane()==='rooms') {
+    (layout[room]||[]).forEach((r,i)=>{
+      const [x,y,w,h]=r;
+      svg.appendChild(el('rect',{class:'rectbox',x,y,width:w,height:h}));
+      const mv=el('circle',{class:'rectgrip',cx:x+w/2,cy:y+h/2,r:4});
+      mv.addEventListener('mousedown',(ev)=>startRectDrag(ev,i,'move'));
+      svg.appendChild(mv);
+      const rz=el('circle',{class:'rectgrip',cx:x+w,cy:y+h,r:4});
+      rz.addEventListener('mousedown',(ev)=>startRectDrag(ev,i,'size'));
+      svg.appendChild(rz);
+    });
+  }
+  drawPanel();
+}
+
+function drawProp(pl, selected, ghost) {
+  const def=SHAPES[pl.shape];
+  const g=el('g',{class:'prop'+(pl.variant?' v-'+pl.variant:'')+(selected?' selected':'')
+                  +(pl.requires?' gated':'')});
+  if (pl.rot) g.setAttribute('transform',`rotate(${pl.rot} ${pl.x+pl.w/2} ${pl.y+pl.h/2})`);
+  if (!def) { g.appendChild(el('rect',{class:'p p-frame',x:pl.x,y:pl.y,width:pl.w,height:pl.h})); return g; }
+  for (const p of def.parts) {
+    const cls='p p-'+p.cls;
+    if (p.kind==='rect') g.appendChild(el('rect',{class:cls,x:pl.x+p.x*pl.w,y:pl.y+p.y*pl.h,
+      width:p.w*pl.w,height:p.h*pl.h,rx:p.rx?p.rx*Math.min(pl.w,pl.h):0}));
+    else if (p.kind==='ellipse') g.appendChild(el('ellipse',{class:cls,cx:pl.x+p.cx*pl.w,cy:pl.y+p.cy*pl.h,
+      rx:p.rx*pl.w,ry:p.ry*pl.h}));
+    else if (p.kind==='line') g.appendChild(el('line',{class:cls,x1:pl.x+p.x1*pl.w,y1:pl.y+p.y1*pl.h,
+      x2:pl.x+p.x2*pl.w,y2:pl.y+p.y2*pl.h}));
+  }
+  return g;
+}
+
+// --- Pointer ----------------------------------------------------------------
+function pt(ev) {
+  const svg=document.getElementById('map');
+  const p=svg.createSVGPoint(); p.x=ev.clientX; p.y=ev.clientY;
+  const q=p.matrixTransform(svg.getScreenCTM().inverse());
+  return [q.x,q.y];
+}
+let drag=null;
+function startPropDrag(ev,i) {
+  ev.preventDefault(); ev.stopPropagation();
+  sel=i; beginDrag();
+  const p=decor[room][i], [mx,my]=pt(ev);
+  drag={kind:'move',ox:mx-p.x,oy:my-p.y};
+  draw();
+}
+function startResize(ev,corner) {
+  ev.preventDefault(); ev.stopPropagation(); beginDrag();
+  drag={kind:'size',corner,start:{...decor[room][sel]}};
+}
+function startRotate(ev) {
+  ev.preventDefault(); ev.stopPropagation(); beginDrag();
+  drag={kind:'rot'};
+}
+function startRectDrag(ev,i,mode) {
+  ev.preventDefault(); ev.stopPropagation(); beginDrag();
+  selRect=i;
+  const [mx,my]=pt(ev), r=layout[room][i];
+  drag={kind:'rect',mode,i,ox:mx-r[0],oy:my-r[1],start:[...r]};
+}
+window.addEventListener('mousemove',(ev)=>{
+  if (!drag) return;
+  const [mx,my]=pt(ev);
+  if (drag.kind==='move') {
+    const p=decor[room][sel]; p.x=G(mx-drag.ox); p.y=G(my-drag.oy);
+  } else if (drag.kind==='size') {
+    const p=decor[room][sel], s=drag.start;
+    if (drag.corner.includes('e')) p.w=Math.max(3,G(mx-s.x));
+    if (drag.corner.includes('s')) p.h=Math.max(3,G(my-s.y));
+    if (drag.corner.includes('w')) { const nx=G(mx); p.w=Math.max(3,s.x+s.w-nx); p.x=nx; }
+    if (drag.corner.includes('n')) { const ny=G(my); p.h=Math.max(3,s.y+s.h-ny); p.y=ny; }
+  } else if (drag.kind==='rot') {
+    const p=decor[room][sel];
+    const a=Math.atan2(my-(p.y+p.h/2), mx-(p.x+p.w/2))*180/Math.PI+90;
+    p.rot=Math.round(a/(ev.shiftKey?1:15))*(ev.shiftKey?1:15);
+  } else if (drag.kind==='rect') {
+    const r=layout[room][drag.i];
+    if (drag.mode==='move') { r[0]=G(mx-drag.ox); r[1]=G(my-drag.oy); }
+    else { r[2]=Math.max(6,G(mx-r[0])); r[3]=Math.max(6,G(my-r[1])); }
+  }
+  draw();
+});
+window.addEventListener('mouseup',()=>{ if (drag) { drag=null; endDrag(); } });
+
+// --- Panel ------------------------------------------------------------------
+const activePane=()=>document.querySelector('.tab.on').dataset.pane;
+function selectRoom(id) { room=id; sel=null; selRect=null;
+  document.getElementById('roomsel').value=id; draw(); }
+
+function drawPanel() {
+  document.getElementById('modehint').textContent = activePane()==='rooms'
+    ? 'Reshaping ' + (ROOM_NAMES[room]||room) + '. Drag the blue grips: middle moves, corner resizes.'
+    : 'Click a piece to select. Drag to move, corners resize, the blue dot above rotates.';
+
+  const list=document.getElementById('objlist'); list.innerHTML='';
+  (decor[room]||[]).forEach((p,i)=>{
+    const r=document.createElement('div'); r.className='row'+(i===sel?' on':'');
+    const n=document.createElement('span'); n.className='nm';
+    n.textContent=(SHAPES[p.shape]?.label||p.shape)+(p.requires?' · gated':'')+(p.rot?` · ${p.rot}°`:'');
+    n.onclick=()=>{ sel=i; draw(); };
+    const up=document.createElement('button'); up.className='act'; up.textContent='↑';
+    up.onclick=()=>{ if(i>0){ const a=decor[room]; [a[i-1],a[i]]=[a[i],a[i-1]]; sel=i-1; commit(); } };
+    const x=document.createElement('button'); x.className='act warn'; x.textContent='×';
+    x.onclick=()=>{ decor[room].splice(i,1); sel=null; commit(); };
+    r.append(n,up,x); list.appendChild(r);
+  });
+
+  const has = sel!==null && (decor[room]||[])[sel];
+  document.getElementById('objempty').style.display = has?'none':'';
+  document.getElementById('objedit').style.display = has?'':'none';
+  if (has) {
+    const p=decor[room][sel];
+    document.getElementById('objname').textContent=SHAPES[p.shape]?.label||p.shape;
+    document.getElementById('objshape').value=p.shape;
+    for (const [k,id] of [['x','objx'],['y','objy'],['w','objw'],['h','objh']])
+      document.getElementById(id).value=Math.round(p[k]);
+    document.getElementById('objr').value=p.rot||0;
+    document.getElementById('objv').value=p.variant||'';
+    document.getElementById('objfac').value=p.requires?.facility||'';
+    document.getElementById('objmin').value=p.requires?.minTier||'';
+    document.getElementById('objmax').value=p.requires?.maxTier||'';
+  }
+
+  const rl=document.getElementById('rectlist'); rl.innerHTML='';
+  (layout[room]||[]).forEach((r,i)=>{
+    const row=document.createElement('div'); row.className='row'+(i===selRect?' on':'');
+    const n=document.createElement('span'); n.className='nm';
+    n.textContent=`#${i+1} — ${r[2]}×${r[3]} at ${r[0]},${r[1]}`;
+    n.onclick=()=>{ selRect=i; draw(); };
+    const x=document.createElement('button'); x.className='act warn'; x.textContent='×';
+    x.onclick=()=>{ if((layout[room]||[]).length<2){ toast('A room needs at least one rectangle'); return; }
+                    layout[room].splice(i,1); selRect=null; commit(); };
+    row.append(n,x); rl.appendChild(row);
+  });
+
+  const bad=[];
+  for (const [a,ns] of Object.entries(ADJ)) for (const b of ns)
+    if (a<b && sharedWall(a,b)<8) bad.push(`${ROOM_NAMES[a]}~${ROOM_NAMES[b]}`);
+  const ts=document.getElementById('tilestat');
+  ts.innerHTML = bad.length
+    ? `<span style="color:var(--bad)">${bad.length} adjacency no longer shares a wall: ${bad.join(', ')}</span>`
+    : '<span style="color:var(--good)">All adjacencies still share a wall.</span>';
+  document.getElementById('roomstat').textContent =
+    `${(decor[room]||[]).length} pieces placed · ${(layout[room]||[]).length} rectangle(s)`;
+  buildOut();
+}
+
+function buildOut() {
+  let s='// Generated by dev/designer.html — paste into src/srcfiles/\n\n';
+  s+='// --- ROOM_LAYOUT (config.js) ---\nconst ROOM_LAYOUT = {\n';
+  for (const [id,rs] of Object.entries(layout))
+    s+=`  ${(id+':').padEnd(16)} [${rs.map(r=>`[${r.map(Math.round).join(',')}]`).join(', ')}],\n`;
+  s+='};\n\n// --- ROOM_DECOR (defs.design.js) ---\nconst ROOM_DECOR = {\n';
+  for (const [id,ps] of Object.entries(decor)) {
+    if (!ps || !ps.length) continue;
+    s+=`  ${id}: [\n`;
+    for (const p of ps) {
+      let line=`    { shape: '${p.shape}', x: ${Math.round(p.x)}, y: ${Math.round(p.y)}, w: ${Math.round(p.w)}, h: ${Math.round(p.h)}, rot: ${p.rot||0}`;
+      if (p.variant) line+=`, variant: '${p.variant}'`;
+      if (p.requires) {
+        const bits=[`facility: '${p.requires.facility}'`];
+        if (p.requires.minTier) bits.push(`minTier: '${p.requires.minTier}'`);
+        if (p.requires.maxTier) bits.push(`maxTier: '${p.requires.maxTier}'`);
+        line+=`,\n      requires: { ${bits.join(', ')} }`;
+      }
+      s+=line+' },\n';
+    }
+    s+='  ],\n';
+  }
+  s+='};\n';
+  document.getElementById('out').value=s;
+}
+
+function toast(msg) {
+  const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('on');
+  clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove('on'),1600);
+}
+
+// --- Wiring -----------------------------------------------------------------
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===t));
+  document.querySelectorAll('.pane').forEach(p=>p.classList.toggle('on',p.id==='pane-'+t.dataset.pane));
+  draw();
+});
+const rs=document.getElementById('roomsel');
+for (const id of Object.keys(SHIPPED_LAYOUT)) {
+  const o=document.createElement('option'); o.value=id; o.textContent=ROOM_NAMES[id]||id; rs.appendChild(o);
+}
+rs.onchange=()=>selectRoom(rs.value);
+rs.value = room;                                    // keep the control honest on boot
+document.getElementById('tiersel').onchange = () => draw();
+
+const pal=document.getElementById('palette');
+for (const [id,def] of Object.entries(SHAPES)) {
+  const b=document.createElement('div'); b.className='pal';
+  const r=Math.max(def.w,def.h), s=30/r;
+  b.innerHTML=`<svg width="34" height="26" viewBox="${-1} ${-1} ${def.w*s+2} ${def.h*s+2}"></svg><div>${def.label}</div>`;
+  const svg=b.querySelector('svg');
+  const g=drawProp({shape:id,x:0,y:0,w:def.w*s,h:def.h*s,rot:0},false,false);
+  svg.appendChild(g);
+  b.onclick=()=>{
+    const [x0,y0,x1,y1]=roomBounds(room);
+    decor[room]=decor[room]||[];
+    decor[room].push({shape:id,x:G((x0+x1)/2-def.w/2),y:G((y0+y1)/2-def.h/2),w:def.w,h:def.h,rot:0});
+    sel=decor[room].length-1; commit(); toast('Added '+def.label);
+  };
+  pal.appendChild(b);
+}
+const shsel=document.getElementById('objshape');
+for (const [id,def] of Object.entries(SHAPES)) {
+  const o=document.createElement('option'); o.value=id; o.textContent=def.label; shsel.appendChild(o);
+}
+shsel.onchange=()=>{ const p=decor[room][sel]; p.shape=shsel.value;
+  const d=SHAPES[p.shape]; if(d){ p.w=d.w; p.h=d.h; } commit(); };
+for (const [k,id] of [['x','objx'],['y','objy'],['w','objw'],['h','objh'],['rot','objr']]) {
+  document.getElementById(id).onchange=(e)=>{ decor[room][sel][k]=Number(e.target.value)||0; commit(); };
+}
+document.getElementById('objv').onchange=(e)=>{
+  const v=e.target.value.trim(); const p=decor[room][sel];
+  if (v) p.variant=v; else delete p.variant; commit(); };
+for (const id of ['objfac','objmin','objmax']) {
+  const s=document.getElementById(id);
+  const src = id==='objfac'?FACILITIES:TIERS;
+  for (const v of src) { const o=document.createElement('option'); o.value=v; o.textContent=v||'(none)'; s.appendChild(o); }
+  s.onchange=()=>{
+    const p=decor[room][sel];
+    const fac=document.getElementById('objfac').value;
+    const mn=document.getElementById('objmin').value, mx=document.getElementById('objmax').value;
+    if (!fac) delete p.requires;
+    else { p.requires={facility:fac}; if(mn)p.requires.minTier=mn; if(mx)p.requires.maxTier=mx; }
+    commit();
+  };
+}
+document.getElementById('dup').onclick=()=>{
+  const p={...decor[room][sel]}; if(p.requires)p.requires={...p.requires};
+  p.x+=gridSize*2; p.y+=gridSize*2; decor[room].push(p); sel=decor[room].length-1; commit(); };
+document.getElementById('front').onclick=()=>{
+  const p=decor[room].splice(sel,1)[0]; decor[room].push(p); sel=decor[room].length-1; commit(); };
+document.getElementById('del').onclick=()=>{ decor[room].splice(sel,1); sel=null; commit(); };
+document.getElementById('addrect').onclick=()=>{
+  const [x0,y0,x1,y1]=roomBounds(room);
+  layout[room].push([G(x1), G(y0), 60, 40]); selRect=layout[room].length-1; commit(); };
+document.getElementById('snaptoggle').onclick=(e)=>{ snap=!snap; e.target.textContent='Grid snap: '+(snap?'on':'off'); };
+document.getElementById('gridsize').onclick=(e)=>{ gridSize=gridSize===5?10:gridSize===10?1:5; e.target.textContent='Grid: '+gridSize; draw(); };
+
+document.getElementById('copy').onclick=()=>{ const t=document.getElementById('out');
+  t.select(); document.execCommand('copy'); toast('Copied'); };
+document.getElementById('dl').onclick=()=>{
+  const b=new Blob([document.getElementById('out').value],{type:'text/javascript'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='home-design.js'; a.click(); };
+document.getElementById('imp').onclick=()=>document.getElementById('impfile').click();
+document.getElementById('impfile').onchange=(e)=>{
+  const f=e.target.files[0]; if(!f) return;
+  const rd=new FileReader();
+  rd.onload=()=>{
+    try {
+      // Accept either a raw JSON dump or the exported .js — the export is
+      // two object literals, so pull them out rather than demanding JSON.
+      const txt=rd.result;
+      let o;
+      try { o=JSON.parse(txt); } catch (_) {
+        const lay=txt.match(/const ROOM_LAYOUT = (\{[\s\S]*?\n\});/);
+        const dec=txt.match(/const ROOM_DECOR = (\{[\s\S]*?\n\});/);
+        o={ layout: lay?Function('return '+lay[1])():layout,
+            decor: dec?Function('return '+dec[1])():decor };
+      }
+      if (!o.layout || !o.decor) throw new Error('no layout/decor found');
+      undoStack.push(snapshot());
+      layout=o.layout; decor=o.decor; sel=null; selRect=null;
+      persist(); draw(); toast('Imported');
+    } catch (err) { alert('Could not import: '+err.message); }
+  };
+  rd.readAsText(f); e.target.value='';
+};
+document.getElementById('reset').onclick=()=>{
+  if (!confirm('Discard your work and go back to the shipped design?')) return;
+  undoStack.push(snapshot());
+  const b=blank(); layout=b.layout; decor=b.decor; sel=null; selRect=null;
+  persist(); draw(); toast('Reset');
+};
+document.getElementById('saveslot').onclick=()=>{
+  const nm=document.getElementById('slotname').value.trim(); if(!nm) { toast('Name it first'); return; }
+  const slots=JSON.parse(localStorage.getItem(LS_SLOTS)||'{}');
+  slots[nm]={ when:Date.now(), data:snapshot() };
+  localStorage.setItem(LS_SLOTS,JSON.stringify(slots));
+  document.getElementById('slotname').value=''; drawSlots(); toast('Saved “'+nm+'”');
+};
+function drawSlots() {
+  const slots=JSON.parse(localStorage.getItem(LS_SLOTS)||'{}');
+  const box=document.getElementById('slotlist'); box.innerHTML='';
+  for (const [nm,s] of Object.entries(slots)) {
+    const r=document.createElement('div'); r.className='row';
+    const n=document.createElement('span'); n.className='nm';
+    n.textContent=nm+' — '+new Date(s.when).toLocaleString();
+    const ld=document.createElement('button'); ld.className='act'; ld.textContent='Load';
+    ld.onclick=()=>{ undoStack.push(snapshot()); restore(s.data); persist(); draw(); toast('Loaded “'+nm+'”'); };
+    const x=document.createElement('button'); x.className='act warn'; x.textContent='×';
+    x.onclick=()=>{ delete slots[nm]; localStorage.setItem(LS_SLOTS,JSON.stringify(slots)); drawSlots(); };
+    r.append(n,ld,x); box.appendChild(r);
+  }
+  if (!Object.keys(slots).length) box.innerHTML='<div class="hint">No named saves yet.</div>';
+}
+
+document.addEventListener('keydown',(e)=>{
+  if (e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT') return;
+  const p = sel!==null ? (decor[room]||[])[sel] : null;
+  if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='z') { e.preventDefault(); e.shiftKey?redo():undo(); }
+  else if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='d') { e.preventDefault(); if(p) document.getElementById('dup').click(); }
+  else if (e.key==='Delete'||e.key==='Backspace') { if(p){ e.preventDefault(); decor[room].splice(sel,1); sel=null; commit(); } }
+  else if (e.key==='['||e.key===']') { if(p){ p.rot=((p.rot||0)+(e.key==='['?-15:15)+360)%360; commit(); } }
+  else if (e.key==='Escape') { sel=null; selRect=null; draw(); }
+  else if (p && ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)) {
+    e.preventDefault(); const d=e.shiftKey?1:gridSize;
+    if(e.key==='ArrowLeft')p.x-=d; if(e.key==='ArrowRight')p.x+=d;
+    if(e.key==='ArrowUp')p.y-=d; if(e.key==='ArrowDown')p.y+=d;
+    commit();
+  }
+});
+
+// --- Boot -------------------------------------------------------------------
+// Restore work in progress before anything else. Losing a design to a closed
+// tab is the failure this tool most has to avoid.
+(function boot(){
+  const wip=localStorage.getItem(LS_KEY);
+  if (wip) { try { restore(wip); toast('Restored work in progress'); } catch(e){ const b=blank(); layout=b.layout; decor=b.decor; } }
+  else { const b=blank(); layout=b.layout; decor=b.decor; }
+  drawSlots(); draw();
+})();
+</script>
+</body>
+</html>

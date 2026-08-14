@@ -326,11 +326,19 @@ api(`
 check('a sigh is heard in the room it happens in', api(`
   (() => { const g = __mk(); return !!__hear(g, 'living_room', 'living_room', 'sighing', __exprIntensity('sighing')); })()
 `));
-check('a sigh does NOT carry through a closed bedroom door', api(`
+// The bedroom/hallway pair is DERIVED from the adjacency graph rather than
+// named. These three assertions hardcoded bedroom_2 → hallway_a, and the
+// floorplan overhaul moved bedroom_2 to the south wing: __hear across a
+// non-edge returns null, so "a sigh does NOT carry" kept passing for the
+// WRONG REASON while "a slam DOES carry" failed honestly. A derived pair is
+// the only way this contrast keeps testing what it claims to.
+const BR = api(`ALL_ROOMS.find(r => ROOMS[r].type === 'bedroom' && !ROOMS[r].isPlayer)`);
+const HALL = api(`(ROOM_ADJACENCY['${BR}'] || [])[0]`);
+check(`a sigh does NOT carry through a closed bedroom door (${BR}→${HALL})`, api(`
   (() => {
     const g = __mk();
-    __door(g, 'bedroom_2', 'unlocked');
-    return __hear(g, 'hallway_a', 'bedroom_2', 'sighing', __exprIntensity('sighing')) === null;
+    __door(g, '${BR}', 'unlocked');
+    return __hear(g, '${HALL}', '${BR}', 'sighing', __exprIntensity('sighing')) === null;
   })()
 `), 'the brief: noticeable in the room, private through a door — a sigh is not an announcement');
 // The authored contrast, and the reason there are three signals rather than
@@ -338,15 +346,15 @@ check('a sigh does NOT carry through a closed bedroom door', api(`
 check('a slammed cabinet DOES carry through that same closed door', api(`
   (() => {
     const g = __mk();
-    __door(g, 'bedroom_2', 'unlocked');
-    return !!__hear(g, 'hallway_a', 'bedroom_2', 'cabinet_slam', __exprIntensity('cabinet_slam'));
+    __door(g, '${BR}', 'unlocked');
+    return !!__hear(g, '${HALL}', '${BR}', 'cabinet_slam', __exprIntensity('cabinet_slam'));
   })()
 `), 'if both stopped at the door the three signals would be one signal in three costumes');
 check('...but not through a LOCKED one', api(`
   (() => {
     const g = __mk();
-    __door(g, 'bedroom_2', 'locked');
-    return __hear(g, 'hallway_a', 'bedroom_2', 'cabinet_slam', __exprIntensity('cabinet_slam')) === null;
+    __door(g, '${BR}', 'locked');
+    return __hear(g, '${HALL}', '${BR}', 'cabinet_slam', __exprIntensity('cabinet_slam')) === null;
   })()
 `));
 check('a sigh fades with distance rather than stopping at a wall', api(`

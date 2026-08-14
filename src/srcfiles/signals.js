@@ -22,6 +22,19 @@
 // instance's live state. Carry buckets (carry_player / carry_<npcId>) are
 // skipped on purpose: a signal needs a place to propagate from, and something
 // in a pocket has no room of its own.
+//
+// A payload may carry `when: { otherKey: value, ... }` — every entry must
+// match the instance's state for the signal to emit. Phase 2 noted that
+// `emits` could not express a conjunction of two state keys and deliberately
+// left the guard out until something needed it; the swimming pool is that
+// something. It was emitting "the pool is green, and the smell carries" off
+// its `clarity` alone while its `water` said `empty` and the facility that
+// owns it says, in its own tier-0 description, that it holds no water.
+function emitsGuardMet(guard, state) {
+  if (!guard) return true;
+  return Object.entries(guard).every(([k, v]) => state?.[k] === v);
+}
+
 function deriveStandingSignals(gameState) {
   const out = [];
   const buckets = gameState.objects || {};
@@ -37,6 +50,7 @@ function deriveStandingSignals(gameState) {
         if (current === undefined) continue;
         const payload = byValue[current];
         if (!payload || !SIGNAL_DEFS[payload.signal]) continue;
+        if (!emitsGuardMet(payload.when, obj.state)) continue;
         out.push({
           signalId: payload.signal,
           roomId,
@@ -123,19 +137,66 @@ function liveTransients(gameState, nowTick) {
   return out;
 }
 
-// --- Door attenuation (plan D6) ---
-// 1 when the room has no door object at all — NOT the `unlocked` multiplier.
-// WORLD's getDoorState returns 'unlocked' for a doorless room too, which would
-// have muffled every hallway-to-kitchen hop as if a door were standing there.
-function roomDoorFactor(gameState, roomId, channel) {
-  const bucket = gameState.objects?.[`room_${roomId}`];
-  if (!bucket) return 1;
-  const door = Object.values(bucket).find(o => o.defId === 'bedroom_door' || o.defId === 'bathroom_door');
-  if (!door) return 1;
-  const lock = door.state?.lock || 'unlocked';
+// --- Threshold attenuation (signals D6; floorplan plan Phase 2) ---
+// What sits BETWEEN two rooms, per channel. This replaced a per-ROOM door
+// lookup, and the difference matters in both directions:
+//
+//   - The old version asked "does this room contain a door object", so an
+//     authored door with no object behind it (Living Room → Game Room) let
+//     everything through as if the rooms were open to each other.
+//   - It also multiplied by BOTH rooms' factors on every hop, which happened
+//     to give the right answer only because the doored rooms in the old
+//     layout were all dead ends.
+//
+// ROOM_THRESHOLDS is now the authority for what a hop crosses; the door
+// OBJECT is consulted only for the lock state, which is the one thing the
+// object genuinely knows and the table cannot.
+function edgeFactor(gameState, a, b, channel) {
+  const t = thresholdBetween(a, b);
+  if (!t) return 0;                                    // not connected at all
+  if (t === 'open') return SIGNAL_TUNING.openMultiplier[channel] ?? 1;
+  if (t === 'glass') return SIGNAL_TUNING.glassMultiplier[channel] ?? 0;
   const byLock = SIGNAL_TUNING.doorMultiplier[channel] || SIGNAL_TUNING.doorMultiplier.sound;
-  return byLock[lock] ?? byLock.unlocked;
+  return byLock[edgeLockState(gameState, a, b)] ?? byLock.unlocked;
 }
+
+// A door belongs to ONE of the two rooms it joins — the bedroom, not the
+// hallway. So the lock is whichever side actually carries the object; an edge
+// the table calls a door with no object on either side is a door that simply
+// cannot be locked (an interior doorway), and reads as unlocked.
+function edgeLockState(gameState, a, b) {
+  for (const roomId of [a, b]) {
+    const bucket = gameState.objects?.[`room_${roomId}`];
+    if (!bucket) continue;
+    const door = Object.values(bucket).find(o => o.defId === 'bedroom_door' || o.defId === 'bathroom_door');
+    if (door) return door.state?.lock || 'unlocked';
+  }
+  return 'unlocked';
+}
+
+// Every edge a signal may traverse, keyed by room. Derived from
+// ROOM_THRESHOLDS rather than ROOM_ADJACENCY because the two are deliberately
+// different relations: `glass` is a threshold that is NOT walkable, and sight
+// has to cross it. Movement reads ROOM_ADJACENCY; propagation reads this.
+// edgeFactor returns 0 for a channel a threshold blocks, so one traversal
+// serves all three channels without branching on the threshold type here.
+//
+// REBUILT rather than computed once at load, because ROOM_THRESHOLDS is now
+// derived from base + structural upgrades (CONFIG's applyStructuralUpgrades)
+// and can change mid-game — glazing the pool wall adds a sight edge that has
+// to start carrying sight the moment the job completes.
+let SIGNAL_EDGES = {};
+function rebuildSignalEdges() {
+  const out = {};
+  for (const key of Object.keys(ROOM_THRESHOLDS)) {
+    const [a, b] = key.split('|');
+    (out[a] = out[a] || []).push(b);
+    (out[b] = out[b] || []).push(a);
+  }
+  SIGNAL_EDGES = out;
+  return out;
+}
+rebuildSignalEdges();
 
 // --- Propagation (plan D4) ---
 // How strongly a signal originating in each room arrives at `targetRoom`, for
@@ -150,17 +211,24 @@ function roomDoorFactor(gameState, roomId, channel) {
 function reachMultipliers(gameState, targetRoom, channel) {
   const atten = SIGNAL_TUNING.attenuation[channel];
   const best = { [targetRoom]: 1 };
-  const doorFactor = {};
-  const factorOf = (r) => (doorFactor[r] !== undefined ? doorFactor[r] : (doorFactor[r] = roomDoorFactor(gameState, r, channel)));
+  // Memoised per edge, not per room — the threshold is a property of the
+  // crossing. Keyed on the sorted pair so both directions share one entry.
+  const cache = {};
+  const factorOf = (a, b) => {
+    const k = a < b ? a + '|' + b : b + '|' + a;
+    return cache[k] !== undefined ? cache[k] : (cache[k] = edgeFactor(gameState, a, b, channel));
+  };
 
   let changed = true;
   let guard = 0;
   while (changed && guard++ < 32) {
     changed = false;
     for (const [room, mult] of Object.entries(best)) {
-      for (const neighbour of (ROOM_ADJACENCY[room] || [])) {
-        // A hop passes through BOTH rooms' doors, if they have them.
-        const next = mult * atten * factorOf(room) * factorOf(neighbour);
+      for (const neighbour of (SIGNAL_EDGES[room] || [])) {
+        // ONE threshold per hop. A bedroom-to-hallway step crosses a single
+        // door, and the old both-rooms multiplication only looked right
+        // because the doored rooms all happened to be dead ends.
+        const next = mult * atten * factorOf(room, neighbour);
         if (next < SIGNAL_TUNING.floor) continue;
         if (next > (best[neighbour] || 0)) {
           best[neighbour] = next;

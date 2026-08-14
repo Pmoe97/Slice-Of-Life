@@ -26,9 +26,9 @@ function assert(cond, msg, context) {
 // --- Folder versions (independent migration) ---
 const FOLDER_VERSIONS = {
   meta: 2,
-  player: 4,
+  player: 5,
   world: 4,
-  npcs: 6,
+  npcs: 7,
   images: 1,
   snapshots: 1,
   objects: 2,
@@ -156,6 +156,41 @@ const MIGRATIONS = {
       mealsToday: player.mealsToday ?? 0,
       moodEvents: player.moodEvents ?? [],
     }) },
+    // player 4->5 (player creation + intro plan, Phases 1-2): the player
+    // becomes a person. Three additions, all safe defaults:
+    //
+    //  - name/surname. The player had NO name at all before this — the only
+    //    reference was a dead `gs.player?.name || 'You'` fallback on the save
+    //    card. A pre-migration save keeps reading "You" because the fallback
+    //    is still there; it does NOT invent a name, since a name the player
+    //    never chose is worse than no name, and the studio is where names get
+    //    chosen.
+    //  - portrait. The prompt/seed pair, never the blob (same reason as
+    //    takePhoto's photo records — the image LRU can evict pixels).
+    //  - appearance.physical.intimate, matching the npcs 6->7 backfill.
+    //    An NPC seeds this off bible.genSeed; the player's appearance record
+    //    carries no such field, and a per-key migration fn is handed only the
+    //    player object (never meta.seed). So the seed is DERIVED from the
+    //    already-rolled appearance itself — stable for a given body, which is
+    //    the property that matters: rerunning the migration must not reroll.
+    { from: 4, to: 5, fn: (player) => {
+      if (!player || typeof player !== 'object') return player;
+      const next = {
+        ...player,
+        name: typeof player.name === 'string' ? player.name : '',
+        surname: typeof player.surname === 'string' ? player.surname : '',
+        portrait: player.portrait ?? { prompt: '', seed: 0, promptDirty: false },
+      };
+      const physical = next.appearance?.physical;
+      if (physical && typeof physical === 'object' && !(physical.intimate && physical.intimate.genitals)) {
+        const rng = seededRng(hashStr(JSON.stringify(physical)), 'player_intimate_backfill');
+        next.appearance = {
+          ...next.appearance,
+          physical: { ...physical, intimate: generateIntimate(rng, next.appearance.gender) },
+        };
+      }
+      return next;
+    } },
   ],
   world: [
     // world 1->2 (WORLD section): rooms[].objects was a spec'd field that
@@ -271,6 +306,25 @@ const MIGRATIONS = {
     // this phase existed. Additive — no fact's provenance/confidence is
     // rewritten (invariant 3).
     { from: 5, to: 6, fn: (npc) => backfillOpenQuestionsV2(npc) },
+    // npcs 6->7 (player creation + intro plan, Phase 1): backfill
+    // bible.physical.intimate. Derived from the NPC's OWN stored gender and
+    // seeded from their OWN genSeed, so the backfill is deterministic and an
+    // NPC who existed before this layer gets the same body every time the
+    // migration runs — not a fresh roll on each load.
+    { from: 6, to: 7, fn: (npc) => {
+      if (!npc || typeof npc !== 'object' || !npc.bible) return npc;
+      const physical = npc.bible.physical;
+      if (!physical || typeof physical !== 'object') return npc;
+      if (physical.intimate && physical.intimate.genitals) return npc;   // already migrated
+      const rng = seededRng(npc.bible.genSeed || 0, 'intimate_backfill');
+      return {
+        ...npc,
+        bible: {
+          ...npc.bible,
+          physical: { ...physical, intimate: generateIntimate(rng, npc.bible.gender) },
+        },
+      };
+    } },
   ],
   images: [],
   snapshots: [],
@@ -863,6 +917,14 @@ async function loadGameState() {
   if (!meta || !meta.seed) return null;
 
   const player = await getPlayer();
+  // The player's appearance is new; every save written before it has none.
+  // Backfilled here rather than as a `player` folder migration on purpose —
+  // a migration `fn` receives one key's VALUE and nothing else, and a rolled
+  // appearance needs the save's seed to stay deterministic (reload the same
+  // save twice, get the same person). meta.seed is in hand right here and
+  // nowhere in there, so this is the honest place for it. Same pattern as
+  // the WORLD_KEY_FALLBACKS above: absent key, safe default at read time.
+  if (player && !player.appearance) player.appearance = generatePlayerAppearance(meta.seed, null);
   const npcs = await getAllNpcs();
   const rooms = await getWorld('rooms') || {};
   const castWeb = await getWorld('castWeb') || {};
@@ -966,10 +1028,31 @@ async function loadGameState() {
     droppedConstraints: meta.droppedConstraints || [],
     world: { rooms, castWeb, quests, events, deliveries, renovationJobs, visits, commitments, foodOrders, externalStubs, escortRoster, escortBookings, moveInOffers, rent, computer, taxes, bills, upgrades, utilities, phone, afterHours, hotSinglesRoster, flags },
   };
+  // Rebuild the live room graph from base + whichever structural upgrades
+  // this save has built (floorplan plan Phase 6). MUST run before anything
+  // reads ROOM_ADJACENCY/ROOM_THRESHOLDS for this save — a game with the
+  // ensuite built has a different apartment, and object spawning, pathing
+  // and signal propagation all need to be looking at the right one.
+  applyStructuralUpgrades(gameState);
   // Lazily spawns any bucket missing from kv (a pre-WORLD save, or a
   // resident who moved in since the last full write) rather than needing a
   // destructive migration — see WORLD's ensureAllObjectBuckets.
   gameState.objects = await ensureAllObjectBuckets(gameState);
+  // Room shells for any room in the CONFIG that this save has never seen
+  // (floorplan plan Phase 1 added `changing_room`). Same "absent key, safe
+  // default at read time" convention as the player.appearance fallback
+  // above, and self-healing for any room a later layout adds — a migration
+  // would have to be written again next time. Runs AFTER the object buckets
+  // exist so cleanliness is derived from real contents rather than guessed.
+  for (const roomId of ALL_ROOMS) {
+    if (gameState.world.rooms[roomId]) continue;
+    gameState.world.rooms[roomId] = {
+      capacity: ROOMS[roomId].capacity,
+      cleanliness: recomputeRoomCleanliness(gameState.objects[`room_${roomId}`]),
+      lastEvent: null,
+    };
+    queueWrite('world', 'rooms', gameState.world.rooms);
+  }
   return gameState;
 }
 

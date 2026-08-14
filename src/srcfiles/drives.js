@@ -654,7 +654,7 @@ function resolveStandardDrive(driveId, drive, c) {
         },
         template: raised.length > 0
           ? `{name} and {other} were chatting about ${topic}.`
-          : `{name} and {other} were chatting in the ${ROOMS[location]?.name || 'room'}.`,
+          : `{name} and {other} were chatting in ${roomPhrase(location)}.`,
         seenByPlayer: false,
     });
   }
@@ -897,6 +897,9 @@ function resolveSnoopPhone(gameState, npcId, phone) {
 function tryEatFood(npc, npcId, resolved, gameState, rng, drive) {
   const day = gameState.meta.clock.day;
   const tick = getTickIndex(gameState.meta.clock.minutes);
+  // Freshness works in continuous days; events are stamped with the whole
+  // one. Two different clocks for two different jobs — don't fuse them.
+  const now = gameDaysNow(gameState.meta.clock);
   const sources = [];
   const addList = (list, from, containerDef) => {
     for (const stack of list || []) {
@@ -905,7 +908,7 @@ function tryEatFood(npc, npcId, resolved, gameState, rng, drive) {
       // Anything that restores hunger counts — groceries and meals alike
       // (the point is the groceries disappear, not a nutrition lecture).
       if (!def?.consumable || !(def.consumable.hunger > 0)) continue;
-      if (freshnessOf(stack, containerDef, day)?.key === 'rotten') continue;
+      if (freshnessOf(stack, containerDef, now)?.key === 'rotten') continue;
       sources.push({ def, from, stack });
     }
   };

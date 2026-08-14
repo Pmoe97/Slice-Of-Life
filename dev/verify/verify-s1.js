@@ -34,8 +34,47 @@ console.log('\nStanding signals derive from real object state (D1)');
 // these assertions scope to the kitchen rather than expecting global silence.
 const kitchenSignals = () => api(`deriveStandingSignals(__gs).filter(s => s.roomId === 'kitchen')`);
 check('a fresh apartment already smells of the neglected pool',
-      api(`deriveStandingSignals(__gs).some(s => s.signalId === 'stagnant_water' && s.roomId === 'pool_room')`),
+      api(`deriveStandingSignals(__gs).some(s => s.signalId === 'derelict_pool' && s.roomId === 'pool_room')`),
       'the day-one apartment should announce its own disrepair');
+// ...and it is the DRY basin it smells of. The tier-0 pool's own description
+// says it holds no water, so it cannot emit the smell of stagnant water; the
+// `when` guard on the emitter is what keeps those two facts from disagreeing.
+check('but not of water it does not hold',
+      !api(`deriveStandingSignals(__gs).some(s => s.signalId === 'stagnant_water')`),
+      'an empty pool emitted stagnant_water');
+check('filling it swaps which of the two it emits',
+      api(`(() => {
+        const pool = Object.values(__gs.objects['room_pool_room']).find(o => o.defId === 'swimming_pool');
+        pool.state = { water: 'filled', clarity: 'green' };
+        const sig = deriveStandingSignals(__gs).filter(s => s.roomId === 'pool_room').map(s => s.signalId);
+        pool.state = { water: 'empty', clarity: 'green' };
+        return sig.length === 1 && sig[0] === 'stagnant_water';
+      })()`),
+      'a filled green pool should smell of stagnant water and nothing else');
+check('and scrubbing the basin out silences the empty one',
+      api(`(() => {
+        const pool = Object.values(__gs.objects['room_pool_room']).find(o => o.defId === 'swimming_pool');
+        pool.state = { water: 'empty', clarity: 'clear' };
+        const sig = deriveStandingSignals(__gs).filter(s => s.roomId === 'pool_room');
+        pool.state = { water: 'empty', clarity: 'green' };
+        return sig.length === 0;
+      })()`),
+      'a scrubbed-out empty basin should emit nothing');
+// The pool is INDOORS, in a penthouse (ECONOMY's header; image.js renders it
+// as "An indoor swimming pool, loungers, tiled surround"). Nothing blows into
+// it, so nothing it says about itself may reach for outdoor decay.
+check('and nothing about the derelict pool describes outdoor debris',
+      api(`JSON.stringify([
+        ...Object.values(SIGNAL_DEFS.derelict_pool.phrases).flat(),
+        FACILITY_DEFS.pool_systems.tiers[0].desc,
+      ])`).match(/\b(leaf|leaves|rain|rainwater|twig|storm|wind|gutter)\b/i) === null,
+      api(`JSON.stringify([...Object.values(SIGNAL_DEFS.derelict_pool.phrases).flat(), FACILITY_DEFS.pool_systems.tiers[0].desc])`));
+// The housekeeper resets every dirtyWhen key to states[key][0]; `water` lists
+// 'filled' first, so putting it in dirtyWhen would let a mop rebuild a $12,000
+// pool. This is the assertion that keeps the two tables from being merged.
+check('and no amount of cleaning can fill it',
+      !Object.keys(api(`OBJECT_DEFS.swimming_pool.dirtyWhen`)).includes('water'),
+      'swimming_pool.dirtyWhen must not list `water` — cleanRoomObjects would set it to `filled`');
 check('but the kitchen starts quiet', kitchenSignals().length === 0,
       `emitted: ${JSON.stringify(kitchenSignals())}`);
 api(`__set('kitchen', 'fridge', 'rotten_food', 'rotten');`);
@@ -70,34 +109,50 @@ check('the record names where it came from', oneHop.sourceRoomId === 'kitchen' &
 check('and flags a source in the same room as here', inRoom.here === true);
 
 console.log('\nDoors attenuate, and locked doors attenuate harder (D6)');
+// The room pair is DERIVED from the adjacency graph, not named. This test
+// hardcoded bedroom_2 → hallway_a, and the floorplan overhaul moved
+// bedroom_2 to the south wing — so both sides of the comparison silently
+// became 0 and `locked < open` failed on a correctness property that had
+// not changed at all. Deriving the pair means a future layout move cannot
+// make this assertion quietly stop testing anything.
+const DOOR_ROOM = api(`ALL_ROOMS.find(r => ROOMS[r].type === 'bedroom' && !ROOMS[r].isPlayer)`);
+const DOOR_NEIGHBOUR = api(`(ROOM_ADJACENCY['${DOOR_ROOM}'] || [])[0]`);
 const doorMult = (room, ch, lock) => {
   api(`__door('${room}', '${lock}');`);
-  return api(`reachMultipliers(__gs, '${room}', '${ch}')['hallway_a'] || 0`);
+  return api(`reachMultipliers(__gs, '${room}', '${ch}')['${DOOR_NEIGHBOUR}'] || 0`);
 };
 for (const ch of ['smell', 'sound']) {
-  const open = doorMult('bedroom_2', ch, 'unlocked');
-  const locked = doorMult('bedroom_2', ch, 'locked');
-  check(`${ch}: a locked door blocks more than an unlocked one`, locked < open,
+  const open = doorMult(DOOR_ROOM, ch, 'unlocked');
+  const locked = doorMult(DOOR_ROOM, ch, 'locked');
+  check(`${ch}: a locked door blocks more than an unlocked one (${DOOR_ROOM}→${DOOR_NEIGHBOUR})`, locked < open,
         `unlocked ${open.toFixed(3)} vs locked ${locked.toFixed(3)}`);
 }
-api(`__door('bedroom_2', 'unlocked');`);
-check('a doorless room is NOT penalised as if it had a door', api(`
+api(`__door('${DOOR_ROOM}', 'unlocked');`);
+// Was: delete the door OBJECT from a bedroom and expect less attenuation.
+// That probe stopped meaning anything when the floorplan overhaul made
+// ROOM_THRESHOLDS the authority on whether a crossing is a door — removing
+// the object now only means the door cannot be LOCKED. The invariant it was
+// protecting is intact and better expressed directly: a crossing with no
+// barrier must not be attenuated as though one were standing there.
+const OPEN_EDGE = api(`Object.keys(ROOM_THRESHOLDS).find(k => ROOM_THRESHOLDS[k] === 'open').split('|')`);
+check(`an OPEN threshold is not penalised as if it had a door (${OPEN_EDGE[0]}↔${OPEN_EDGE[1]})`, api(`
   (() => {
-    const save = __gs.objects['room_bedroom_2'];
-    __gs.objects['room_bedroom_2'] = {};
-    const noDoor = reachMultipliers(__gs, 'bedroom_2', 'smell')['hallway_a'] || 0;
-    __gs.objects['room_bedroom_2'] = save;
-    const withDoor = reachMultipliers(__gs, 'bedroom_2', 'smell')['hallway_a'] || 0;
-    return noDoor > withDoor;
+    const m = reachMultipliers(__gs, '${OPEN_EDGE[0]}', 'smell')['${OPEN_EDGE[1]}'] || 0;
+    // Exactly one hop of plain attenuation, nothing else applied.
+    return Math.abs(m - SIGNAL_TUNING.attenuation.smell) < 1e-9;
   })()
-`), 'getDoorState returns "unlocked" for a doorless room — roomDoorFactor must not');
+`), 'an open threshold is no wall at all — the hop costs distance and nothing more');
+check('...and a door crossing is strictly worse than an open one', api(`
+  (reachMultipliers(__gs, '${DOOR_ROOM}', 'smell')['${DOOR_NEIGHBOUR}'] || 0)
+    < (reachMultipliers(__gs, '${OPEN_EDGE[0]}', 'smell')['${OPEN_EDGE[1]}'] || 0)
+`));
 // `undefined` here is the strongest possible pass: the room never even made it
 // into the reach map, because the product fell under SIGNAL_TUNING.floor. The
 // first version of this assertion compared the raw value with `<`, and
 // `undefined < 0.01` is false — it failed on the best possible outcome.
 check('a door blocks sight essentially completely', api(`
-  (reachMultipliers(__gs, 'bedroom_2', 'sight')['hallway_a'] || 0) < 0.01
-`), `got ${api(`String(reachMultipliers(__gs, 'bedroom_2', 'sight')['hallway_a'])`)}`);
+  (reachMultipliers(__gs, '${DOOR_ROOM}', 'sight')['${DOOR_NEIGHBOUR}'] || 0) < 0.01
+`), `got ${api(`String(reachMultipliers(__gs, '${DOOR_ROOM}', 'sight')['${DOOR_NEIGHBOUR}'])`)}`);
 
 console.log('\nChannels behave differently (D5)');
 api(`__set('kitchen', 'sink_kitchen', 'dishes', 'many');`);

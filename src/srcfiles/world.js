@@ -45,6 +45,131 @@ function getDoorState(gameState, roomId) {
   return door?.state?.lock || 'unlocked';
 }
 
+// ===== Walking (floorplan plan Phase 3) =====
+// The player clicks a room; this decides what actually happens on the way.
+//
+// PURE and DETERMINISTIC (D12): no RNG, no LLM, no mutation. Every blocker
+// and interrupt is a read of state that already exists. The caller applies
+// the result — which is what lets the harness drive every branch without a
+// game running.
+//
+// Two outcome classes, and the difference is where the player ends up:
+//   BLOCKED     — they do not enter; they stop in the previous room
+//   INTERRUPTED — they enter, and that is where they stop
+
+// How long a walk takes, in game-SECONDS, derived from the map (D9) rather
+// than authored per room. Centre → shared-wall → centre for each leg, so a
+// long room genuinely takes longer to cross than a short one, plus a fixed
+// beat per threshold because handling a door costs time regardless of
+// distance. Minutes would be absurd here: a doorway is not half an hour.
+function walkSeconds(route) {
+  if (!Array.isArray(route) || route.length < 2) return 0;
+  let units = 0, thresholdCost = 0;
+  for (let i = 0; i < route.length - 1; i++) {
+    const a = route[i], b = route[i + 1];
+    const seg = sharedWallSegment(a, b);
+    const ca = roomCentre(a), cb = roomCentre(b);
+    if (seg) {
+      const mid = [(seg.x1 + seg.x2) / 2, (seg.y1 + seg.y2) / 2];
+      units += Math.hypot(mid[0] - ca[0], mid[1] - ca[1]) + Math.hypot(cb[0] - mid[0], cb[1] - mid[1]);
+    } else {
+      units += Math.hypot(cb[0] - ca[0], cb[1] - ca[1]);
+    }
+    const t = thresholdBetween(a, b);
+    thresholdCost += WALK.secondsPerThreshold[t] ?? WALK.secondsPerThreshold.door;
+  }
+  return Math.max(WALK.minSeconds, units / WALK.unitsPerSecond + thresholdCost);
+}
+
+// Area-weighted centre, so an L-shaped room's centre lands in its bulk
+// rather than in the notch — which for the Gym and the Living Room is
+// outside the room entirely.
+function roomCentre(roomId) {
+  const rects = ROOM_LAYOUT[roomId] || [];
+  let ax = 0, ay = 0, tot = 0;
+  for (const [x, y, w, h] of rects) { const a = w * h; ax += (x + w / 2) * a; ay += (y + h / 2) * a; tot += a; }
+  return tot > 0 ? [ax / tot, ay / tot] : [0, 0];
+}
+
+// The longest wall two rooms share, as a segment, or null. Shared with the
+// floor-plan renderer: the same segment that decides where a door is DRAWN
+// decides how far you walk to reach it, so the picture and the clock cannot
+// disagree about the same doorway.
+function sharedWallSegment(a, b) {
+  let best = null;
+  const keep = (len, seg) => { if (len > (best ? best.len : 0)) best = { ...seg, len }; };
+  for (const [ax, ay, aw, ah] of (ROOM_LAYOUT[a] || [])) {
+    for (const [bx, by, bw, bh] of (ROOM_LAYOUT[b] || [])) {
+      if (Math.min(Math.abs(ax + aw - bx), Math.abs(bx + bw - ax)) <= WALL_TOUCH_TOLERANCE) {
+        const y1 = Math.max(ay, by), y2 = Math.min(ay + ah, by + bh);
+        const x = Math.abs(ax + aw - bx) <= WALL_TOUCH_TOLERANCE ? (ax + aw + bx) / 2 : (bx + bw + ax) / 2;
+        keep(y2 - y1, { x1: x, y1, x2: x, y2 });
+      }
+      if (Math.min(Math.abs(ay + ah - by), Math.abs(by + bh - ay)) <= WALL_TOUCH_TOLERANCE) {
+        const x1 = Math.max(ax, bx), x2 = Math.min(ax + aw, bx + bw);
+        const y = Math.abs(ay + ah - by) <= WALL_TOUCH_TOLERANCE ? (ay + ah + by) / 2 : (by + bh + ay) / 2;
+        keep(x2 - x1, { x1, y1: y, x2, y2: y });
+      }
+    }
+  }
+  return best && best.len > 0 ? best : null;
+}
+// Slack for rectangles traced by hand off a drawing; they rarely meet to the
+// pixel. Also the tolerance dev/verify/verify-plan.js asserts against, so a
+// room nudged past this stops sharing a wall and the harness says so.
+const WALL_TOUCH_TOLERANCE = 14;
+
+// Can the player enter this room at all? Returns a reason string or null.
+// This is where a locked door FIRST becomes real for the player: getDoorState
+// has had four readers since it was written and `doMove` was never one of
+// them, so the floor plan has been drawing a padlock on a room anyone could
+// stroll into.
+function entryBlockedReason(gameState, roomId) {
+  if (getDoorState(gameState, roomId) === 'locked') return 'locked';
+  if (typeof getActiveJobForRoom === 'function' && getActiveJobForRoom(gameState, roomId)) return 'construction';
+  return null;
+}
+
+// Something that stops the player IN a room they successfully entered.
+// Deliberately reads systems that already exist rather than inventing an
+// event type: an NPC who crossed the apartment to wait for you is exactly
+// what should catch you walking past, and Plan 5 already models it.
+function walkInterruptIn(gameState, roomId) {
+  for (const [id, npc] of Object.entries(gameState.npcs || {})) {
+    if (npc?.location !== roomId) continue;
+    if (typeof isOverturePending === 'function' && isOverturePending(npc) && npc.overture.targetId === 'player') {
+      return { reason: 'overture', blockedBy: id };
+    }
+  }
+  return null;
+}
+
+function resolveWalk(gameState, fromRoom, toRoom) {
+  const route = (typeof findPath === 'function' ? findPath(fromRoom, toRoom) : null) || [];
+  const out = { route, crossed: [], stoppedAt: fromRoom, reason: null, blockedBy: null, seconds: 0 };
+  if (route.length < 2) return out;
+
+  for (let i = 1; i < route.length; i++) {
+    const next = route[i];
+    const blocked = entryBlockedReason(gameState, next);
+    if (blocked) {
+      // Stopped BEFORE the door: the player is still in the previous room.
+      out.reason = blocked;
+      out.blockedBy = next;
+      break;
+    }
+    out.crossed.push(next);
+    out.stoppedAt = next;
+    // The destination is not an interruption — arriving is the point.
+    if (i === route.length - 1) break;
+    const hit = walkInterruptIn(gameState, next);
+    if (hit) { out.reason = hit.reason; out.blockedBy = hit.blockedBy; break; }
+  }
+
+  out.seconds = walkSeconds([fromRoom, ...out.crossed]);
+  return out;
+}
+
 function resolvePlacementOwner(placement, roomId, npcs) {
   if (placement.ownerFrom === 'roomResident') return roomOwnerId(roomId, npcs);
   return placement.ownerId ?? null;

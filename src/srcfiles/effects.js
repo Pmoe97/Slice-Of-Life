@@ -319,6 +319,23 @@ function applySetObjectState(p, ctx) {
   const obj = findObjectById(ctx.gameState, p.objId);
   if (obj) obj.state = { ...obj.state, [p.key]: p.value };
 }
+// What is laid out on a table right now, as an ordered list of ITEM_DEFS ids.
+// It lives in `flags` rather than `state` because state values must stay
+// string enums (cleanRoomObjects and validateObjectStateChange both depend on
+// that), and a spread is a list — same reason the phone's numeric battery is
+// a flag. Unknown ids are dropped rather than trusted, and the list is capped,
+// so this can't become an arbitrary write.
+//
+// Nothing clears it, on purpose: IMAGE reads it only while the table's
+// `clutter` state is 'cluttered', so clearing the table is what ends the
+// spread. One state change, no second cleanup path to forget — the same
+// derive-don't-mirror rule the rot signal follows.
+function applySetTableSpread(p, ctx) {
+  const obj = findObjectById(ctx.gameState, p.objId);
+  if (!obj) return;
+  const ids = String(p.defIds || '').split(/\s+/).filter(id => ITEM_DEFS[id]);
+  obj.flags = { ...(obj.flags || {}), spread: ids.slice(0, COMMITMENT_TUNING.maxSpreadDishes) };
+}
 function applyAdjustObjectCondition(p, ctx) {
   const obj = findObjectById(ctx.gameState, p.objId);
   if (obj) obj.condition = clamp((obj.condition ?? 100) + Number(p.delta), 0, 100);
@@ -347,11 +364,12 @@ function applyMoveItem(p, ctx) {
   const { stacks: afterRemove, removed } = removeStack(fromList, p.defId, Number(p.qty));
   writeLocationStackList(p.from, ctx.gameState, afterRemove);
   if (removed <= 0) return;
+  const now = gameDaysNow(ctx.gameState.meta.clock);
   const toList = locationStackListMutable(p.to, ctx.gameState) || [];
   const movedMeta = srcStack
-    ? retimeStack(srcStack, containerDefForRef(p.from, ctx.gameState), containerDefForRef(p.to, ctx.gameState), ctx.gameState.meta.clock.day).meta
+    ? retimeStack(srcStack, containerDefForRef(p.from, ctx.gameState), containerDefForRef(p.to, ctx.gameState), now).meta
     : srcStack?.meta;
-  writeLocationStackList(p.to, ctx.gameState, addStack(toList, p.defId, removed, p.to === 'player' ? 'player' : null, movedMeta, ctx.gameState.meta.clock.day));
+  writeLocationStackList(p.to, ctx.gameState, addStack(toList, p.defId, removed, p.to === 'player' ? 'player' : null, movedMeta, now));
 }
 function applyConsumeItem(p, ctx) {
   const fromList = locationStackListMutable(p.from, ctx.gameState);
@@ -390,14 +408,17 @@ function applyConsumeItem(p, ctx) {
 // consumable's mood is skipped for an NPC (npc mood is the direct bar, not
 // the needs map — set_meal pushes it separately via MOOD_DELTA).
 //
-// Phase 4 (spoiled-food penalties, D5/D6): restore is scaled by the eaten
-// stack's freshness at its current container — Spoiling restores
-// ROT.spoiledRestoreMultiplier, Rotten restores ROT.rottenRestoreMultiplier
-// and additionally costs mood + energy (the food-poisoning beat, once per
-// eating event), routed to whoever ate it. Freshness is derived
-// (freshnessOf), so a stack left in a fridge stays edible far longer than
-// the same stack in a bag, and eating either late is punished the moment
-// it actually is late.
+// Phase 4 (spoiled-food penalties, D5/D6) + the food-decay overhaul:
+// restore is scaled by the eaten stack's freshness at its current container
+// — Stale restores ROT.staleRestoreMultiplier, Spoiled restores
+// ROT.spoiledRestoreMultiplier and additionally costs mood + energy (the
+// food-poisoning beat, once per eating event), routed to whoever ate it.
+// Rotten is NOT edible and is skipped outright: the picker filters it
+// (INVENTORY's edibleStacks) and this refuses it, so the two can't drift
+// into a state where the UI offers something the applier won't serve.
+// Freshness is derived (freshnessOf), so a stack left in a fridge stays
+// edible far longer than the same stack in a bag, and eating either late is
+// punished the moment it actually is late.
 // Trusted-only (llm:false): eating is the player's own verb; the narrator
 // still uses CONSUME_ITEM for incidental consumption.
 function applyEatItem(p, ctx) {
@@ -408,19 +429,23 @@ function applyEatItem(p, ctx) {
   const who = p.who || 'player';
   const sv = itemServings(def);
   const fromDef = containerDefForRef(p.from, ctx.gameState);
+  const now = gameDaysNow(ctx.gameState.meta.clock);
   let remaining = Math.max(0, Math.floor(Number(p.qty) || 0));
-  let ateRotten = false;
+  let ateSpoiled = false;
   const out = [];
   for (const s of fromList) {
     if (remaining <= 0 || s.defId !== p.defId) { out.push(s); continue; }
     const have = stackServingsLeft(s);
     if (have <= 0) { out.push(s); continue; }
+    const fresh = freshnessOf(s, fromDef, now);
+    // Rotten is refuse, not food — it stays in the container untouched and
+    // the eater moves on to the next stack (or goes hungry).
+    if (fresh?.key === 'rotten') { out.push(s); continue; }
     const eat = Math.min(remaining, have);
     remaining -= eat;
-    const fresh = freshnessOf(s, fromDef, ctx.gameState.meta.clock.day);
-    const mult = fresh?.key === 'rotten' ? ROT.rottenRestoreMultiplier
-      : fresh?.key === 'spoiling' ? ROT.spoiledRestoreMultiplier : 1;
-    if (fresh?.key === 'rotten') ateRotten = true;
+    const mult = fresh?.key === 'spoiled' ? ROT.spoiledRestoreMultiplier
+      : fresh?.key === 'stale' ? ROT.staleRestoreMultiplier : 1;
+    if (fresh?.key === 'spoiled') ateSpoiled = true;
     for (const [need, amt] of Object.entries(def.consumable || {})) {
       // NPCs have no mood NEED — their mood is the direct bar, which
       // ADJUST_NEED doesn't touch; the caller (set_meal) adds MOOD_DELTA.
@@ -440,16 +465,16 @@ function applyEatItem(p, ctx) {
       out.push({ ...s, qty, meta });
     }
   }
-  if (ateRotten) {
+  if (ateSpoiled) {
     // The food-poisoning beat applies to whoever ate it. Player mood is an
     // impulse (ADJUST_NEED mood routes through pushMoodImpulse); an NPC's
     // mood is their direct bar, so it goes through MOOD_DELTA semantics.
     if (who === 'player') {
-      applyAdjustNeed({ who: 'player', need: 'mood', delta: String(-ROT.rottenMoodPenalty) }, ctx);
+      applyAdjustNeed({ who: 'player', need: 'mood', delta: String(-ROT.spoiledMoodPenalty) }, ctx);
     } else {
-      applyMoodDeltaEffect({ who, delta: String(-ROT.rottenMoodPenalty) }, ctx);
+      applyMoodDeltaEffect({ who, delta: String(-ROT.spoiledMoodPenalty) }, ctx);
     }
-    applyAdjustNeed({ who, need: 'energy', delta: String(-ROT.rottenEnergyPenalty) }, ctx);
+    applyAdjustNeed({ who, need: 'energy', delta: String(-ROT.spoiledEnergyPenalty) }, ctx);
   }
   writeLocationStackList(p.from, ctx.gameState, out);
 }
@@ -460,7 +485,7 @@ function applyDestroyItem(p, ctx) {
 }
 function applySpawnItem(p, ctx) {
   const toList = locationStackListMutable(p.to, ctx.gameState) || [];
-  writeLocationStackList(p.to, ctx.gameState, addStack(toList, p.defId, Number(p.qty), p.to === 'player' ? 'player' : null, undefined, ctx.gameState.meta.clock.day));
+  writeLocationStackList(p.to, ctx.gameState, addStack(toList, p.defId, Number(p.qty), p.to === 'player' ? 'player' : null, undefined, gameDaysNow(ctx.gameState.meta.clock)));
 }
 // SPAWN_OBJECT (inventory overhaul Phase 6): place a buyable hobby OBJECT_DEFS
 // instance into a room bucket — the second half of the Place verb (the first
@@ -604,6 +629,15 @@ const EFFECT_DEFS = {
     paramShape: ['objId', 'key', 'value'], llm: true, implemented: true,
     validate: (p, ctx) => validateObjectStateChange(p.objId, p.key, p.value, ctx),
     apply: applySetObjectState,
+  },
+  // Trusted-only (llm:false): what is on the table is a consequence of the
+  // set_meal action having actually consumed those dishes, not something the
+  // narrator may assert. `...defIds` takes the rest of the line as a
+  // space-separated id list.
+  SET_TABLE_SPREAD: {
+    paramShape: ['objId', '...defIds'], llm: false, implemented: true,
+    validate: (p, ctx) => !!ctx.roomObjects[p.objId] || `Not reachable: ${p.objId}`,
+    apply: applySetTableSpread,
   },
   ADJUST_OBJECT_CONDITION: {
     paramShape: ['objId', 'delta'], llm: true, implemented: true,

@@ -463,23 +463,37 @@ check('clean_common fires when there is visible mess to clean', api(`
 
 // ---------------------------------------------------------------------------
 console.log('\n(D12) npc.pursuit persists, and survives the tick');
+// Measured over the POPULATION rather than over one sample. This originally
+// took the first tick on which resident[0] held a pursuit with ticksLeft > 1
+// and asserted it survived exactly one more tick — which conflates "the merge
+// dropped it" with "the drive legitimately completed". The floorplan overhaul
+// perturbed the sim enough that that one sample landed on a real break (an
+// `eat` pursuit ending because the NPC ate), and the assertion failed while
+// the mechanism it names was working perfectly.
+//
+// Survival is not universal BY DESIGN — a pursuit is broken by satisfaction
+// and by higher-priority need, which is Plan 3's whole point. What the merge
+// hazard would look like is survival collapsing toward zero, so that is what
+// is asserted: survival dominates, over a sample big enough to mean it.
 check('a pursuit opened this tick is still there next tick', api(`
   (() => {
     let g = __mk();
-    const id = __ids(g)[0];
+    const ids = __ids(g);
+    let survived = 0, broken = 0;
     for (let t = 0; t < 200; t++) {
-      const next = resolveBatch(g, 1);
-      const before = g.npcs[id].pursuit;
-      g = next.state;
-      const after = g.npcs[id].pursuit;
-      if (after && after.ticksLeft > 1) {
-        // resolveBatch's { ...state.npcs[id], ...update } merge threw away
-        // memory replacements once; this is the same hazard for pursuit.
-        const then = resolveBatch(g, 1).state.npcs[id].pursuit;
-        return !!then && then.driveId === after.driveId;
+      const before = {};
+      for (const id of ids) before[id] = g.npcs[id].pursuit;
+      // resolveBatch's { ...state.npcs[id], ...update } merge threw away
+      // memory replacements once; this is the same hazard for pursuit.
+      g = resolveBatch(g, 1).state;
+      for (const id of ids) {
+        const b = before[id];
+        if (!b || b.ticksLeft <= 1) continue;
+        const a = g.npcs[id].pursuit;
+        if (a && a.driveId === b.driveId) survived++; else broken++;
       }
     }
-    return false;
+    return survived >= 5 && survived > broken * 2;
   })()
 `), 'the NPC field merge at the end of resolveTick is where Plan 0 lost memory replacements');
 check('a released pursuit does not come back through the merge', api(`
