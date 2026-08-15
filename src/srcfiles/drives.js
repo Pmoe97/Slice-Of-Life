@@ -63,25 +63,27 @@ function candidateDef(id) {
   return DRIVE_DEFS[id] || OVERTURE_DEFS[id];
 }
 
-function isOnCooldown(npc, driveId, currentTick) {
+// npc-initiative-retiming-plan Phase 2 (D2): the stamp is an ABSOLUTE minute
+// (clockToAbsolute: day*1440 + minutes) and "am I still cooling down" is one
+// monotonic subtraction — `nowAbs - stampedAbs < cd`. No wrap branch, no
+// CLOCK.ticksPerDay ceiling: a cooldown longer than a day is the same check
+// as a short one. The old 0..47 per-day index wrapped at midnight, so a raw
+// delta read a drive that fired late in the previous day as permanently on
+// cooldown, and the wrap that fixed that could not express a cooldown >= a
+// day at all (D34) — the D34 bug class requires a wrap to exist, and this
+// representation has none.
+function isOnCooldown(npc, driveId, nowAbs) {
   const cooldowns = npc.flags?.[DRIVE_COOLDOWN_KEY] || {};
-  const last = cooldowns[driveId];
-  if (last === undefined) return false;
+  const stampedAbs = cooldowns[driveId];
+  if (stampedAbs === undefined) return false;
   const def = candidateDef(driveId);
-  const cd = (def && def.cooldownTicks) || 0;
-  // currentTick is a 0..47 per-day index and wraps at midnight. A raw
-  // `currentTick - last` reads a drive that fired late in the previous day as
-  // permanently on cooldown: the delta is huge and negative, so it is always
-  // below `cd` — measured at 51.5% of all cooldown stamps landing in that fatal
-  // zone, which suppressed the self-directed action rate to ~0.157 at home.
-  // All cooldownTicks are well under ticksPerDay, so a wrapped delta is exact.
-  const since = currentTick >= last ? currentTick - last : currentTick + CLOCK.ticksPerDay - last;
-  return since < cd;
+  const cd = (def && def.cooldownMinutes) || 0;
+  return (nowAbs - stampedAbs) < cd;
 }
 
-function setCooldown(npc, driveId, currentTick) {
+function setCooldown(npc, driveId, nowAbs) {
   const cooldowns = { ...(npc.flags?.[DRIVE_COOLDOWN_KEY] || {}) };
-  cooldowns[driveId] = currentTick;
+  cooldowns[driveId] = nowAbs;
   return { ...npc, flags: { ...npc.flags, [DRIVE_COOLDOWN_KEY]: cooldowns } };
 }
 
@@ -102,10 +104,10 @@ function setCooldown(npc, driveId, currentTick) {
 // It is now score → choose → commit. COGNITION's `scoreCandidates` ranks
 // everything this NPC could do; `choosePursuit` takes the best one above
 // COGNITION.actionThreshold; the winner resolves exactly as it always did; and
-// `openPursuit` commits the NPC to it for `utility.holdTicks`. On a held tick
-// the pursuit is NOT re-resolved — it re-applies its activity and its room and
-// returns, which is what makes behaviour read as one person doing one thing
-// rather than as a queue of coincidences.
+// `openCommitment` commits the NPC to it for `utility.holdTicks`. On a held
+// tick the commitment is NOT re-resolved — it re-applies its activity and its
+// room and returns, which is what makes behaviour read as one person doing one
+// thing rather than as a queue of coincidences.
 //
 // Exactly one drive can resolve per npc-tick now, so the `activityOverride`
 // clobber the roadmap describes is impossible by construction (D3) rather than
@@ -124,6 +126,11 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
 
   const block = resolved.block;
   const location = resolved.location;
+
+  // Absolute-minute address of this tick (npc-initiative-retiming D2). Every
+  // cooldown stamp and comparison is in this space — one monotonic number,
+  // never a wrapping tick index.
+  const nowAbs = clockToAbsolute(gameState.meta.clock);
 
   // Perception plan Phase 5: what this NPC can sense from where they are
   // standing this tick, through the SAME query the player's perception uses
@@ -150,19 +157,21 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
   const candidates = scoreCandidates(updatedNpc, npcId, gameState, resolved, perceived, opts);
 
   // --- 2. Is this NPC already in the middle of something? ----------------
-  // resolveTick has already aged the pursuit by one tick, so anything still
-  // here has ticks left to run.
-  const held = updatedNpc.pursuit;
+  // resolveTick has already aged the commitment by one tick, so anything still
+  // here has time left to run.
+  const held = updatedNpc.commitment;
   if (held) {
     const breakReason = shouldBreakPursuit(updatedNpc, candidates, ctx);
     if (!breakReason) {
       // Carry on. No effects, no event, no cooldown — the action happened on
-      // the tick the pursuit opened; these ticks are it still going on.
-      if (held.activity) activityOverride = held.activity;
-      if (held.roomId && held.roomId !== location) locationOverride = held.roomId;
+      // the tick the commitment opened; these ticks are it still going on.
+      const heldActivity = commitmentActivity(held);
+      if (heldActivity) activityOverride = heldActivity;
+      const heldRoom = held.anchor && held.anchor.roomId;
+      if (heldRoom && heldRoom !== location) locationOverride = heldRoom;
       return result();
     }
-    releasePursuit(gameState, npcId);
+    releaseCommitment(gameState, npcId);
   }
 
   // --- 3. Choose one thing -----------------------------------------------
@@ -173,7 +182,7 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
   // aimed at the player rather than at the world. It came out of the same
   // ranked list and the same chooser as every drive, so this is a branch on
   // what won, never a second decision. Returning here is what makes design
-  // invariant 2 true: openPursuit is below, and this tick cannot reach it.
+  // invariant 2 true: openCommitment is below, and this tick cannot reach it.
   //
   // The act itself is the crossing. There is no resolver, no effects and no
   // event — an approach produces LANGUAGE, and language is generated at the
@@ -194,7 +203,7 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
   if (overture) {
     const odef = OVERTURE_DEFS[overture.overtureId];
     const playerRoom = gameState.player && gameState.player.location;
-    updatedNpc = setCooldown(updatedNpc, overture.overtureId, currentTick);
+    updatedNpc = setCooldown(updatedNpc, overture.overtureId, nowAbs);
 
     if (odef.awaitsAnswer) {
       // Opened BEFORE the delivery below, so anything that reads the record
@@ -250,13 +259,13 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
     // caught-peeping bubble; silent ones are invisible to the player.
     const peepResult = tryNpcPeep(updatedNpc, npcId, resolved, gameState);
     if (peepResult) { peepResults.push(peepResult); acted = true; }
-    updatedNpc = setCooldown(updatedNpc, driveId, currentTick);
+    updatedNpc = setCooldown(updatedNpc, driveId, nowAbs);
 
   } else if (drive.isSnoopDrive) {
     // Silent, unlike a peep — nobody "catches" someone reading a phone they
     // found lying around, because by construction the player isn't in the room.
     if (trySnoopPhone(updatedNpc, npcId, resolved, gameState)) acted = true;
-    updatedNpc = setCooldown(updatedNpc, driveId, currentTick);
+    updatedNpc = setCooldown(updatedNpc, driveId, nowAbs);
 
   } else if (drive.isEatDrive) {
     // Phase 8 (NPC inventories): a hungry NPC really consumes what it finds
@@ -269,7 +278,7 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
       events.push(...eatResult.events);
       acted = true;
     }
-    updatedNpc = setCooldown(updatedNpc, driveId, currentTick);
+    updatedNpc = setCooldown(updatedNpc, driveId, nowAbs);
 
   } else if (drive.isInvestigateDrive) {
     // Acting on a smell needs to know WHERE it is coming from, which only the
@@ -292,7 +301,7 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
     // clearing AND for a dead end (null: a perceived record that outlives the
     // object it names — the livelock guard Phase 2's unconditional set
     // existed for).
-    if (!investigateResult?.stillWalking) updatedNpc = setCooldown(updatedNpc, driveId, currentTick);
+    if (!investigateResult?.stillWalking) updatedNpc = setCooldown(updatedNpc, driveId, nowAbs);
 
   } else if (drive.isGiftDrive) {
     const giftResult = tryGiveGift(updatedNpc, npcId, resolved, gameState);
@@ -301,31 +310,44 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
       events.push(...giftResult.events);
       acted = true;
     }
-    updatedNpc = setCooldown(updatedNpc, driveId, currentTick);
+    updatedNpc = setCooldown(updatedNpc, driveId, nowAbs);
 
   } else {
     acted = resolveStandardDrive(driveId, drive, {
-      npcId, npcs, gameState, rng, currentTick, location, decayFacilities,
+      npcId, npcs, gameState, rng, currentTick, nowAbs, location, decayFacilities,
       events, imMessages, relDeltas, factTransfers,
       setActivity: (a) => { activityOverride = a; },
       setLocation: (l) => { locationOverride = l; },
       setClothing: (c) => { clothingState = c; },
       npc: updatedNpc,
     });
-    updatedNpc = setCooldown(updatedNpc, driveId, currentTick);
+    updatedNpc = setCooldown(updatedNpc, driveId, nowAbs);
   }
 
   // --- 5. Commit to it ----------------------------------------------------
-  // openPursuit is the ONE writer of npc.pursuit (D3). Nothing is committed to
-  // when the resolver came back empty — there is no activity to hold.
+  // openCommitment is the ONE writer of npc.commitment (D3). Nothing is
+  // committed to when the resolver came back empty — there is no activity to
+  // hold.
   if (acted) {
-    openPursuit(gameState, npcId, {
+    openCommitment(gameState, npcId, {
       driveId,
       score: choice.score,
-      startedTick: currentTick,
       roomId: locationOverride || location || null,
+      // Phase 4: where the NPC is standing THIS tick — the physical layer
+      // walks from here to the commitment's anchor (not from last tick's
+      // npc.location, which resolveTick has not applied yet).
+      startRoom: location || npc.location || null,
       activity: activityOverride || null,
       perceived,
+      // D2: a drive that wraps an ACTION_DEFS entry (`actionId`, config.js)
+      // gets a real object anchor from the action's own anchor system — the
+      // stove/washer/shower, not room-centroid — while durationMinutes pins
+      // the wrap to the drive's OWN holdMinutes, so wiring the anchor up
+      // does not silently retune how long the commitment holds.
+      ...(drive.actionId ? {
+        kind: 'action', actionId: drive.actionId, actorId: npcId,
+        durationMinutes: drive.utility?.holdMinutes || CLOCK.tickMinutes,
+      } : {}),
     });
   }
 
@@ -451,7 +473,7 @@ function applyDriveExpression(gameState, expresses, roomId, npc, npcId) {
 // exactly one drive per tick now, so nothing can clobber anything, and this
 // keeps it that way by construction rather than by ordering.
 function resolveStandardDrive(driveId, drive, c) {
-  const { npc, npcId, npcs, gameState, rng, currentTick, location, decayFacilities,
+  const { npc, npcId, npcs, gameState, rng, currentTick, nowAbs, location, decayFacilities,
           events, imMessages, relDeltas, factTransfers } = c;
   let activityOverride = null;
   let locationOverride = null;
@@ -618,7 +640,7 @@ function resolveStandardDrive(driveId, drive, c) {
       id !== npcId &&
       (npcs[id].residency.status === 'resident' || npcs[id].residency.status === 'visitor') &&
       npcs[id].location === location &&
-      !isOnCooldown(npcs[id], driveId, currentTick)
+      !isOnCooldown(npcs[id], driveId, nowAbs)
     );
     if (otherIds.length === 0) return false;
     const otherId = otherIds[Math.floor(rng() * otherIds.length)];
@@ -798,14 +820,14 @@ function giftableStack(npc) {
 // "chatting with a roommate" alone in a room still banked the social restore
 // and still wore the activity label. That cost one wasted roll in 5237 ticks
 // under the old model and would have won 148 ticks under selection.
-function hasChatPartner(npc, npcId, location, gameState, driveId, currentTick) {
+function hasChatPartner(npc, npcId, location, gameState, driveId, nowAbs) {
   if (!location) return false;
   const npcs = gameState.npcs || {};
   return Object.keys(npcs).some(id =>
     id !== npcId &&
     (npcs[id].residency?.status === 'resident' || npcs[id].residency?.status === 'visitor') &&
     npcs[id].location === location &&
-    !isOnCooldown(npcs[id], driveId, currentTick)
+    !isOnCooldown(npcs[id], driveId, nowAbs)
   );
 }
 

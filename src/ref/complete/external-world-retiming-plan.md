@@ -1,8 +1,8 @@
 # External-world retiming: visits, restaurants, delivery, gigs
 
-Status: **planned — not started**. Design session complete 2026-08-14; all
-decisions locked. Documentation only — no code written.
-Last updated 2026-08-14.
+Status: **built** — all 4 phases (visit spine, restaurant hours, delivery
+ETAs/slots, gig work blocks) complete and verified. Design session complete
+2026-08-14; all decisions locked. Last updated 2026-08-14.
 
 Companions:
 - `CONTINUOUS-SIMULATION-ROADMAP.md` (the umbrella — implements C1).
@@ -24,35 +24,52 @@ Handoff section immediately below before anything else.**
 
 ## Handoff — read this first
 
-**Resume at:** Phase 1. Nothing has been built.
+**Resume at:** nothing — this document is complete (all 4 phases built,
+verified, shipped). Next row of the shared checklist is row 17:
+`npc-initiative-retiming-plan.md` Phase 1 (config field conversion).
 
-**Last session's notes (design session, 2026-08-14 — no code written):**
-- Every tick-indexed field this plan touches was grep-verified against the
-  live tree, not recalled — see Evidence for exact file:line citations.
-- `isRestaurantOpen` (computer.js:2541) already has genuinely wrap-aware
-  logic (`open > close` means the window crosses midnight) — this plan's
-  absolute-minute conversion has to preserve that property, not simplify
-  it away. Absolute-minute comparison actually makes the wrap case
-  *simpler* to express correctly (a single inequality on a monotonic
-  value) than the current tick-space special-case does — noted as a
-  reason to be confident this conversion is a genuine simplification, not
-  just a unit change.
-- `getActiveVisits` (sim.js:421) and `scheduleVisit` (sim.js:457) both use
-  `day` + `startTick`/`endTick` as **separate** fields, checked against
-  `getTickIndex(clock.minutes)` — i.e. a visit is scoped to one calendar
-  day already. This plan's conversion to `clockToAbsolute`-space windows
-  has to decide whether to collapse `day`+`tick` into one absolute number
-  (cleaner, matches this plan's stated direction) or keep the day-scoping
-  and only convert the intra-day tick pair — recorded as Phase 1's first
-  decision to confirm against `getActiveVisits`'s actual call sites, not
-  guessed here.
-- **Gig work blocks resolved (cross-check pass, 2026-08-14, no code
-  written):** confirmed by reading `generateGigsForDay`/
-  `processGigDeadlinesForDay`/`deliverGig`/`doGigWorkBlock` in full —
-  gigs carry zero tick-range fields; `deadlineDay` is already plain
-  `day`-arithmetic. The only tick-shaped thing is one flat time-cost
-  literal. Phase 4 is now fully scoped — see D5 and its own phase block.
-  Nothing here is still "TBD."
+**Last session's notes (2026-08-14 — Phase 4 built and verified):**
+- Phase 4 (D5) — gig work blocks' one time-cost literal: `doGigWorkBlock`
+  (ui.computer.js:122) now calls
+  `await advanceAndResolveMinutes(GIG_TUNING.workBlockMinutes)` instead of
+  `CLOCK.tickMinutes`. The new constant is `const GIG_TUNING = {
+  workBlockMinutes: 30 }` in `src/srcfiles/defs.computer.js`, next to
+  `GIG_ENERGY_PER_BLOCK` — the plan's Files entry said `config.js`, but the
+  plan's own implementation-time fallback ("confirm by grep for `GIG_REP_`")
+  lands in defs.computer.js, where every `GIG_*` constant already lives.
+  `CLOCK.tickMinutes` stays 30 (config.js:2143), so the swap is provably
+  behavior-neutral; the point is that a gig block's cost no longer reads
+  the tick grid as if it carried scheduling meaning (C1/D5).
+- Verification (translation rule — the Node `dev/verify` suite is
+  unavailable here; no `dev/verify/*.js` harness references
+  doGigWorkBlock/GIG_TUNING, grep-verified): all `browser_eval` against the
+  live engine, final `browser_refresh` clean (no syntaxErrors /
+  perchanceErrors / console errors).
+  - Live probe after reload: `GIG_TUNING.workBlockMinutes === 30 ===
+    CLOCK.tickMinutes` (strict equality).
+  - Full behavioral run on a fresh deterministic house
+    (`SIM_generateHouse('gigtest_phase4b', 3, [])` with `meta` synthesized
+    as `{ clock: cast.clock, seed: cast.seed }` — see gotcha below), board
+    generated, one gig accepted, then the REAL `doGigWorkBlock(gigId,
+    'computer')` with `window.addLogEntry` wrapped to capture the narration
+    and `window.saveAtBoundary` no-op'd (both are `function` declarations
+    → window properties, so a wrap shadows them for the whole call chain).
+    Result: `deltaAbs === 30` (clock 08:00 → 08:30, day 1 unchanged),
+    `blocksDone` 0 → 0.6, narration byte-identical to the pre-change
+    format — `You work on "Data Entry Batch". Progress: 9% (0.60/7
+    blocks).` with `Math.round((blocksDone/blocks)*100)` (asserted
+    `narrationMatches: true` against the expected string).
+- **Surprises / gotchas:**
+  - First behavioral run read the clock off the passed-in state object and
+    saw delta 0: `advanceAndResolve` (ui.js:44) reassigns the global
+    `currentGameState` to the fresh `resolveBatch` copy, so any reference
+    captured before the call goes stale. The game reads the global; so must
+    a test. Re-measured via `currentGameState` → exact 30. This is the
+    game's normal copy-on-write, not a defect from the swap.
+  - `SIM_generateHouse` returns `clock` at top level, not `meta.clock` (the
+    real game's `meta` is written by `writeGeneratedGameState` and reloaded
+    by `loadGameState`); synthesize `meta` before calling anything that
+    reads `meta.clock` — the same gotcha decor-economy Phase 3 recorded.
 
 **Blockers / flagged deviations:** None.
 
@@ -144,6 +161,22 @@ dependency at all); rent (`ECONOMY.payPeriodDays`, day-indexed); bills
   `timeCost: {base: 2, ...}`, not a `[startAbs,endAbs)` window. Phase 4 is
   narrowed accordingly: it converts that one literal multiplier, nothing
   else, and does not need D1/D2/D3's window machinery at all.
+- **D6 — Visit records collapse `day`+`tick` into one absolute-minute
+  window; day-scoping is derived, never stored.** This resolves the
+  Handoff's first decision (and the Open questions entry below), confirmed
+  against `getActiveVisits`'s actual call sites. Every consumer either
+  asks the active-window question — which the monotonic abs comparison
+  subsumes, because a window scheduled for another day cannot contain
+  `clockToAbsolute(now)`, so the old `v.day === day` check is redundant —
+  or needs the visit's DAY for bookkeeping (scheduleVisit idempotency per
+  source+day, `countVisitorsForDay`'s soft cap, `processVisitsForDay`
+  retirement/retention, `doInviteOver`/AfterHours "already coming that
+  day" checks), which is derived once via `visitDay(v)` =
+  `Math.floor(v.startAbs / 1440)`. No consumer needs a stored day. Old
+  saves store `day`; `visitDay` falls back to it so those records still
+  retire/sweep on the same cadence (migration waived per the roadmap) —
+  and stay inactive in `getActiveVisits` (accepted degradation, see
+  Handoff).
 
 ---
 
@@ -228,10 +261,10 @@ swap with zero intended behavior change.
 
 | Phase | Status | What it does |
 |---|---|---|
-| 1 | Not started | Visit spine → absolute-minute windows |
-| 2 | Not started | Restaurant hours → recurring minute-pairs |
-| 3 | Not started | Delivery ETAs/slots → absolute minutes |
-| 4 | Not started | Gig work blocks' one time-cost literal detached from `CLOCK.tickMinutes` (D5 — narrow scope, resolved) |
+| 1 | Done | Visit spine → absolute-minute windows (`[startAbs, endAbs)`, `visitDay` day-scoping, all six schedulers + tuning converted; verified behavior-invisible live) |
+| 2 | Done | Restaurant hours → recurring minute-pairs (D2; all twelve `RESTAURANT_DEFS.hours` ×30, wrap preserved, verified across all 1440 minutes) |
+| 3 | Done | Delivery ETAs/slots → absolute minutes (`arrivalAbs` on orders, no tick-ceiling, old-shape fallback via `foodOrderArrivalAbs`) |
+| 4 | Done | Gig work blocks' one time-cost literal detached from `CLOCK.tickMinutes` (`GIG_TUNING.workBlockMinutes: 30` in defs.computer.js, D5) |
 
 ---
 
@@ -253,10 +286,9 @@ address, not because this plan's code calls into that plan's).
 
 ## Open questions (parked, none blocking)
 
-- **Does `getActiveVisits` collapse `day`+`tick` into one absolute number,
-  or keep day-scoping with only the intra-day pair converted?** Phase 1's
-  first decision (see Handoff) — resolve by reading `getActiveVisits`'s
-  actual call sites before writing the conversion, not by guessing here.
+- ~~**Does `getActiveVisits` collapse `day`+`tick` into one absolute number,
+  or keep day-scoping with only the intra-day pair converted?**~~ —
+  **resolved in Phase 1, see D6.** No longer open.
 - ~~Gig work blocks' exact current mechanism~~ — **resolved this session,
   see D5.** No longer open.
 

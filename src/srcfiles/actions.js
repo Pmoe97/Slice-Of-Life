@@ -20,7 +20,7 @@ function resolveAvailableActions(gameState) {
 }
 
 function actionSourceMatches(def, ctx) {
-  if (def.source.kind === 'room') return def.source.roomIds.includes(ctx.gameState.player.location);
+  if (def.source.kind === 'room') return def.source.roomIds.includes(ctx.roomId);
   if (def.source.kind === 'self') return true;
   if (def.source.kind === 'object') {
     if (Array.isArray(def.source.objDefs)) return def.source.objDefs.some(d => !!findObjectInRoom(ctx, d));
@@ -29,10 +29,29 @@ function actionSourceMatches(def, ctx) {
   return false; // 'npc'/'item'/'app' sources arrive in later phases
 }
 
-function buildActionContext(gameState) {
-  const roomId = gameState.player.location;
+// Which actor is executing an action. 'player' is the default and today's
+// only caller; continuous-behavior-engine Phase 3 generalizes the engine to
+// an arbitrary actor id so NPCs can eventually execute the same verbs, and
+// every player-specific read in this file resolves through this one lookup.
+// Returns null for an unknown id, and callers that dereference it treat null
+// as "no actor" rather than crashing.
+function actionActor(gameState, actorId) {
+  const id = actorId || 'player';
+  return id === 'player' ? (gameState.player || null) : (gameState.npcs?.[id] || null);
+}
+
+// The context every availability/requirement/resolution read hangs off.
+// `actorId` threads the executing actor through: the room, the room's object
+// bucket, and who else is present are all answers ABOUT the actor, not about
+// the player specifically. presentNpcIds excludes the actor themselves (an
+// NPC executing an action is not "in it with themselves" — the same filter
+// the player path gets for free because 'player' is never an NPC id).
+function buildActionContext(gameState, actorId) {
+  const actor = actionActor(gameState, actorId);
+  const roomId = actor ? actor.location : null;
   const roomObjects = (gameState.objects && gameState.objects[`room_${roomId}`]) || {};
-  return { gameState, presentNpcIds: getPresentNpcIds(gameState.npcs, roomId), roomId, roomObjects };
+  const presentNpcIds = getPresentNpcIds(gameState.npcs, roomId).filter(id => id !== actorId);
+  return { gameState, actorId: actorId || 'player', presentNpcIds, roomId, roomObjects };
 }
 
 // Find the (first) instance of a given OBJECT_DEFS id in the current room
@@ -73,10 +92,11 @@ function checkRequirements(def, ctx) {
 // said about it. Actions that don't need this (the four simple ones)
 // leave `prepare`/`buildEffects` unset and keep using the static
 // `effects`/`narration.templates` shape from P0. ---
-async function executeAction(actionId, gameState) {
+async function executeAction(actionId, gameState, actorId) {
   const def = ACTION_DEFS[actionId];
   if (!def) return { ok: false, reason: 'Unknown action.' };
-  const ctx = buildActionContext(gameState);
+  const ctx = buildActionContext(gameState, actorId);
+  const actor = actionActor(gameState, actorId);
 
   const check = checkRequirements(def, ctx);
   if (!check.ok) return { ok: false, reason: check.reason, ticksSpent: 0 };
@@ -94,7 +114,7 @@ async function executeAction(actionId, gameState) {
   // unconditionally is correct, not a "gained XP for nothing" risk.
   if (def.skill) effectLines.push(`ADD_SKILL_XP ${def.skill.id} ${def.skill.xp}`);
   const effects = effectLines.map(line => parseEffectDSL(line)[0]).filter(Boolean);
-  const effCtx = buildEffectContext(gameState, [], ctx.presentNpcIds, ctx.roomObjects, gameState.player.inventory || []);
+  const effCtx = buildEffectContext(gameState, [], ctx.presentNpcIds, ctx.roomObjects, actor ? (actor.inventory || []) : []);
   applyEffects(effects, effCtx);
 
   // Phase 7 (D7): an action that dirtied a room's objects (SET_OBJECT_STATE
@@ -132,9 +152,9 @@ async function executeAction(actionId, gameState) {
   if (def.emitsSignal) {
     emitTransient(gameState, {
       id: def.emitsSignal.signal,
-      roomId: gameState.player.location,
+      roomId: actor?.location ?? ctx.roomId,
       intensity: def.emitsSignal.intensity,
-      sourceId: 'player',
+      sourceId: actorId || 'player',
     });
   }
 
@@ -155,10 +175,10 @@ async function executeAction(actionId, gameState) {
         }
       } else if (req.startsWith('facilityFunctionalHere:')) {
         // Room-inferred facility: 'facilityFunctionalHere:self.shower'
-        // Look up which facility in the player's current room gates
+        // Look up which facility in the actor's current room gates
         // this action, and decay that facility.
         const actionId = req.split(':')[1];
-        const roomId = gameState.player.location;
+        const roomId = ctx.roomId;
         const facilityIds = (typeof ROOM_FACILITIES !== 'undefined' && ROOM_FACILITIES[roomId]) || [];
         for (const fid of facilityIds) {
           const facDef = FACILITY_DEFS[fid];
@@ -173,7 +193,7 @@ async function executeAction(actionId, gameState) {
     }
   }
 
-  const minutes = resolveTimeCost(def, gameState, prepared);
+  const minutes = resolveTimeCost(def, gameState, prepared, actorId);
 
   // Initiative plan Phase 5 (D16/D17): the same act, with somebody in it with
   // you. Declarative off `def.shared`, like `meters` and `emitsSignal` above.
@@ -236,7 +256,7 @@ async function withVulnerableState(gameState, state, fn) {
 // and `compute` put a function in what is otherwise pure data — the thing
 // this whole registry exists to avoid. Both removed; add them back if a
 // real action needs them.
-function resolveTimeCost(def, gameState, prepared) {
+function resolveTimeCost(def, gameState, prepared, actorId) {
   const tc = def.timeCost;
   if (typeof tc === 'number') return Math.max(1, tc);
   let minutes = tc.base ?? 0;
@@ -246,8 +266,15 @@ function resolveTimeCost(def, gameState, prepared) {
   // INVENTORY_TUNING.useTimeMinutes, the SAME table the inventory
   // panel's Use verb reads, so the Eat chip and the panel can never
   // disagree about how long eating takes.
-  if (tc.byItemCategory && prepared?.option?.def) {
-    minutes = INVENTORY_TUNING.useTimeMinutes[prepared.option.def.category] ?? INVENTORY_TUNING.useTimeMinutes._default;
+  if (tc.byItemCategory) {
+    // The eaten item's category when a pick exists (the player path); the
+    // table's _default when resolving for an actor before anything has been
+    // picked (the NPC commitment-resolution path, continuous-behavior-engine
+    // Phase 3) — the category is only knowable at execution time, and 1
+    // minute would be a lie either way.
+    minutes = prepared?.option?.def
+      ? (INVENTORY_TUNING.useTimeMinutes[prepared.option.def.category] ?? INVENTORY_TUNING.useTimeMinutes._default)
+      : INVENTORY_TUNING.useTimeMinutes._default;
   }
 
   if (tc.perIngredient && prepared?.recipe) {
@@ -261,13 +288,117 @@ function resolveTimeCost(def, gameState, prepared) {
     minutes += level * tc.perDirtyDish;
   }
   if (tc.skill && tc.curve) {
-    const mod = skillMod(gameState.player, tc.skill, tc.curve);
+    // Whose skill shrinks the time is the actor's — the player for today's
+    // path, whatever NPC the action engine generalizes to next.
+    const actor = actionActor(gameState, actorId);
+    const mod = skillMod(actor, tc.skill, tc.curve);
     minutes = minutes * mod;
   }
 
   if (tc.max != null) minutes = Math.min(minutes, tc.max);
   if (tc.min != null) minutes = Math.max(minutes, tc.min);
   return Math.max(1, Math.round(minutes));
+}
+
+// --- Anchor resolution (continuous-behavior-engine Phase 3, D2/C3) --------
+// Where an ACTION_DEFS commitment's effects anchor. C3's answer: `source`
+// resolves to a stand-point — the source OBJECT when one exists, a PLACED
+// decor object the activity prefers (ACTION_ANCHOR_OBJS, defs.actions.js),
+// or the room's centroid when neither exists (C5: an empty room is genuinely
+// inert, and the room-centroid is the generic room-center idle it degrades
+// to). A base fixture with no recorded coordinate still names the anchor
+// (objId) but contributes its room's centroid as the stand-point, which is
+// exactly "no couch → generic room-center idle" until a sofa is bought,
+// delivered and placed — the decor-economy worked example.
+//
+// `point` is apartment-wide floor-plan space (ROOM_LAYOUT's space — the same
+// space placeDecorItem writes pos in and roomCentre returns), so Phase 4's
+// physical layer can walk to it without a coordinate conversion.
+//
+// Deterministic and pure: reads gameState.objects / ROOMS / config only — no
+// rng, no clock, no model. Returns { roomId, objId, point } or null when no
+// room can be resolved (an object-sourced action whose object does not exist
+// anywhere, i.e. an action that is genuinely not available).
+function objectSourceDefIds(source) {
+  return source.objDefs ? [...source.objDefs] : (source.objDef ? [source.objDef] : []);
+}
+
+function roomsContainingObject(gameState, source) {
+  const ids = objectSourceDefIds(source);
+  const rooms = [];
+  for (const [bucket, bucketMap] of Object.entries(gameState.objects || {})) {
+    if (!bucket.startsWith('room_')) continue;
+    if (Object.values(bucketMap).some(o => ids.includes(o.defId))) rooms.push(bucket.slice('room_'.length));
+  }
+  return rooms;
+}
+
+function resolveActionAnchor(gameState, actionId, actorId) {
+  const def = ACTION_DEFS[actionId];
+  if (!def || !gameState) return null;
+  const actor = actionActor(gameState, actorId);
+
+  // Candidate rooms the action can anchor in, from its source. 'room' names
+  // them directly; 'object' derives them from wherever an instance lives; a
+  // 'self' action anchors wherever the actor is standing.
+  let rooms = [];
+  if (def.source.kind === 'room') rooms = def.source.roomIds;
+  else if (def.source.kind === 'object') rooms = roomsContainingObject(gameState, def.source);
+  else if (def.source.kind === 'self' && actor?.location) rooms = [actor.location];
+
+  // Deterministic pick: the actor's own room when it is one of the
+  // candidates (that is where the action is already happening), else the
+  // source's first room. Phase 4's physical layer owns which candidate is
+  // NEAREST; this phase resolves the anchor, not the route.
+  const actorRoom = actor?.location;
+  const roomId = rooms.includes(actorRoom) ? actorRoom : rooms[0];
+  if (!roomId || !ROOMS[roomId]) return null;
+
+  const bucket = (gameState.objects && gameState.objects[`room_${roomId}`]) || {};
+  // The defIds that make a good stand-point for THIS action: the source
+  // object itself, then the decor/anchor preference table.
+  const wanted = def.source.kind === 'object'
+    ? objectSourceDefIds(def.source)
+    : (ACTION_ANCHOR_OBJS[actionId] || []);
+
+  let bestObj = null;
+  if (wanted.length > 0) {
+    for (const obj of Object.values(bucket)) {
+      if (!wanted.includes(obj.defId)) continue;
+      // Prefer a PLACED object (it has a real coordinate); a base object
+      // with no pos still names the anchor but contributes its room's
+      // centroid. Object values are iterated in bucket insertion order,
+      // which is deterministic for a given save (seeded ids).
+      if (!bestObj || (obj.pos && !bestObj.pos)) bestObj = obj;
+      if (obj.pos) break;
+    }
+  }
+
+  if (bestObj?.pos) {
+    return {
+      roomId,
+      objId: bestObj.id,
+      point: { x: bestObj.pos.x + bestObj.pos.w / 2, y: bestObj.pos.y + bestObj.pos.h / 2 },
+    };
+  }
+  const [cx, cy] = roomCentre(roomId);
+  return { roomId, objId: bestObj ? bestObj.id : null, point: { x: cx, y: cy } };
+}
+
+// --- Action commitment resolution (continuous-behavior-engine Phase 3) ----
+// The full answer to "an NPC commits to an ACTION_DEFS id": a real duration
+// (reusing resolveTimeCost, skill-aware for the actor) and a resolved anchor
+// (via source, decor-extended, room-centroid fallback). This is the record
+// shape the plan's Data model names a kind:'action' commitment from —
+// openCommitment (cognition.js) consumes exactly this result. Pure and
+// deterministic: no rng, no clock, no model.
+function resolveActionCommitment(gameState, actionId, actorId) {
+  const def = ACTION_DEFS[actionId];
+  if (!def || !gameState) return null;
+  const durationMinutes = resolveTimeCost(def, gameState, null, actorId);
+  const anchor = resolveActionAnchor(gameState, actionId, actorId);
+  if (!anchor) return null;
+  return { id: actionId, kind: 'action', durationMinutes, anchor };
 }
 
 // --- Shared activities (initiative plan Phase 5, D16/D17) -------------------

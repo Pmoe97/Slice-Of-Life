@@ -1,8 +1,7 @@
 # NPC initiative retiming
 
-Status: **planned — not started**. Design session complete 2026-08-14; all
-decisions locked. Documentation only — no code written.
-Last updated 2026-08-14.
+Status: **COMPLETE — all three phases done, 2026-08-15.** Decisions locked
+D1–D5. Last updated 2026-08-15.
 
 Companions:
 - `CONTINUOUS-SIMULATION-ROADMAP.md` (the umbrella — implements C1).
@@ -21,47 +20,98 @@ Handoff section immediately below before anything else.**
 
 ## Handoff — read this first
 
-**Resume at:** Phase 1. Nothing has been built.
+**The plan is COMPLETE — all three phases shipped.** No new harness rows
+(Phase 3 is measurement + instrument re-pointing), so the suite count is
+unchanged at 1,324 from Phase 2's pass. This document lives at
+`src/ref/complete/npc-initiative-retiming-plan.md` now.
 
-**Last session's notes (design session, 2026-08-14 — no code written):**
-- The exact cooldown field names were grep-verified against `overture.js`
-  and `config.js` rather than recalled: `OVERTURE.textCooldownTicks: 16`,
-  `.knockCooldownTicks: 20`, `.proposeCooldownTicks: 20` (config.js:5619,
-  5626, 5631), each wired to its channel's `cooldownTicks` field
-  (overture.js:5859, 5907, 5946). `isOnCooldown`/`setCooldown` (drives.js:
-  66–86) are the shared mechanism every one of these actually runs
-  through — same function the correctness plan's D34 finding is about.
-- D34 itself (`src/ref/complete/npc-initiative-plan.md:813`) was read in
-  full, not paraphrased from memory: `isOnCooldown` compares a **wrapped**
-  delta (`currentTick >= last ? currentTick - last : currentTick +
-  CLOCK.ticksPerDay - last`, drives.js:78) against `cooldownTicks`. At or
-  above `CLOCK.ticksPerDay` (48) that wrapped delta can never reach the
-  threshold, so three entries — `knock_player` (96), `propose_player`
-  (48), and `NPC_GIFT_TUNING.cooldownTicks` (96) — fired **exactly once
-  per NPC per game** despite their own comments promising "two in-game
-  days" / "a full day" / "~2 game days". All three were already retuned
-  down (to 20) by Plan 5 Phase 6 as a same-session bug fix — this plan's
-  job is not to fix D34 again, it's to convert the *representation* so
-  the bug class it describes cannot exist at all, regardless of what
-  value any cooldown is ever set to in the future.
-- This session's cross-check pass (against `continuous-behavior-engine-
-  plan.md`, 2026-08-14) found a **second** site reading `cooldownTicks`
-  that the original grep pass missed: `recencyMultiplier`
-  (cognition.js:100–112) does not call `isOnCooldown` — it has its own,
-  independent copy of the same wrapped-per-day-delta arithmetic (its own
-  comment even says so: "Same wrapped per-day delta as isOnCooldown"),
-  computing a *recency penalty* rather than a hard gate. It reads the
-  identical `candidateDef(driveId)?.cooldownTicks` field `isOnCooldown`
-  does. Left unconverted, Phase 1's field rename alone would silently
-  zero out every drive's recency penalty (`cd` reads `undefined` → falls
-  back to 0 → `recencyMultiplier` always returns 1) without touching
-  D34's bug class at all — a real behavior change this plan's own D1
-  invariant forbids. Folded into this plan's scope (D3, Phase 2) rather
-  than left for `continuous-behavior-engine-plan.md`, since it's the
-  same config field and the same wrap arithmetic, not a different
-  mechanism.
+**Resume at:** nothing — every phase is done. If something in this plan ever
+breaks, the mechanism tests below are the ones to re-run.
 
-**Blockers / flagged deviations:** None.
+### Phase 3, done this session (population-level re-measurement, 2026-08-15)
+
+**First task — re-pointed `dev/verify/measure-initiative.js` off the dead
+tick-space fields.** Its reading-5 section still read `cooldownTicks` /
+`OVERTURE.textCooldownTicks` — the fields D1 removed — so it would have
+mis-read on a run. Now: the D26 "PERMANENT after the first firing" table
+(which existed to surface values at/above the wrap bound) is a plain
+`cooldownMinutes` table with no bound; the text/propose/knock sweeps read and
+write `cooldownMinutes` at the old tick values × 30, spanning the same
+real-time durations. `verify-i6.js`'s instrument checks were updated to match:
+it now asserts the instrument reports minutes with no daily bound, and the "no
+`cooldownTicks` survives" scan covers the instrument source too — the exact
+file that went stale. Also fixed the one remaining stale runtime comment,
+`config.js:6199` (`_driveCooldowns = { driveId: tickIndex }` →
+`absoluteMinute`).
+
+**The measurement, run live** (browser_eval against the real page; same
+methodology as the instrument — 12 households × 3 residents × 7 in-game days,
+seeds `20260811 + i × 7919`, real `resolveBatch` + the episode writer, real
+`overtureAllowed`/`scoreOvertures`/`overtureTextLine` wrapped at their call
+sites):
+
+- **Reading 1 (the rate), measured → published (2026-08-13):**
+  untouched 0.067 → 0.099 · fond (aff 0.9) 1.548 → 1.742 · charged 0.512 →
+  0.651 · out of flat 0.718 → 0.544 · locked door 0.722 → 0.591 · asleep 0.718
+  → 0.567. **These do NOT match within measurement noise** (≈±0.05–0.08 at
+  1σ) — see the flagged deviation below.
+- **The conversion itself is behavior-invisible — proven three ways:**
+  1. **Exact-duration enforcement at population scale.** `setCooldown` wrapped
+     to record the gap between successive stamps per NPC+drive across 24
+     house-runs (fond + locked-door arms): text_player cd 480 → min gap **480**
+     (a text can fire the instant its cooldown elapses), approach cd 360 → min
+     390, propose cd 600 → min 1020, gift cd 600 → min 1200. **Zero violations
+     in 524 cooldown overwrites.**
+  2. **The cooldown is a live lever.** Swept `text_player.cooldownMinutes`
+     90/180/360/480/720/1440/2880 on the away arm → 1.401/1.012/0.782/0.718/
+     0.679/0.444/0.274 texts/NPC/day — perfectly monotone; the field is what
+     the mechanism reads, and 480 sits mid-curve (scoring binds at low values,
+     which is why an absolute-rate comparison can't prove anything on its own).
+  3. **D34's own channel matched.** `propose_player` (the wrap's headline
+     victim) measures **0.425/NPC/day vs the published 0.437** — within noise.
+     And the D34 regression probe still passes on a fresh load: a 1440-minute
+     cooldown is on at stamp+1439 and free at +1440.
+- **Reading 3 (the endings)** on the fond arm: engages-half 1.690 (pub 1.917),
+  refuses-half 0.758 (pub 0.897), refuses-all 0.635 (pub 0.758) with a refusal
+  cost of 0.100 affection over the week (pub 0.109). The D10 curve's shape
+  holds; the absolute level follows reading 1's drift.
+- **Gate:** the sleeping arm blocked 1,984 otherwise-ready overtures (pub
+  4,260 — lower because the total rate is lower; the gate does the same work).
+- Every edit left the page clean on reload: no syntaxErrors/perchanceErrors/
+  console errors (the "character slot 2 interest-tag overlap" warnings are
+  pre-existing generation warnings, unrelated).
+
+**Flagged deviation (recorded, not a blocker):** the plan's Verification
+sentence — "the post-conversion numbers should match Plan 5 Phase 6's
+published figures within measurement noise" — is NOT literally met: totals run
+11–32% off the 2026-08-13 baseline. The cause is not the conversion. Every
+mechanism check above says the cooldown layer preserves Plan 5's tuned
+durations exactly; the phase's reasoning ("D1 preserves effective duration
+exactly") only holds when the cooldown is the *only* delta, and it is not — the
+continuous-behavior-engine overhaul (Phases 1–5), the needs heartbeat and the
+external-world retiming all landed between the published baseline and this
+phase, upstream of the cooldown in the decision/scoring layer. The drift's
+shape (away-arm text 0.452 → 0.718/day; untouched curiosity 0.099 → 0.067) is
+exactly where the overhaul changed decision cadence and time-of-day scoring.
+**The current measured rates are the baseline `continuous-behavior-engine-plan`
+Phase 6 (roadmap row 20) must tune against — not the published 2026-08-13
+table.**
+
+**Phase 2, for continuity (2026-08-15):** `isOnCooldown`/`setCooldown`
+(drives.js:66–90) now take `nowAbs` and stamp/compare
+`clockToAbsolute(clock)`; the wrapped tick-delta branch is gone.
+`recencyMultiplier` (cognition.js) reads the same converted field with the same
+monotonic subtraction. `evaluateDrives` computes `nowAbs` once (drives.js:133);
+`hasChatPartner` (drives.js:814) takes `nowAbs`; `scoreCandidates`' ctx field
+is `nowAbs` (cognition.js:325). The `evaluateDrives`/`resolveStandardDrive`
+`currentTick` param SURVIVES for event-record `tick:` fields only — do not
+remove it. Harnesses verify-i1..i6/c1..c4/p4 were converted the same session.
+
+**Blockers / flagged deviations:** none blocking. One recorded finding (the
+baseline drift above) — a measurement outcome, not a failure of the
+conversion. Citation drift handled as expected: the plan doc's citations for
+`recencyMultiplier`/`isOnCooldown` were a few lines down in the real code by
+this session; same functions, same shapes.
 
 ---
 
@@ -133,6 +183,18 @@ time.
   `outside` (overture.js:92, 95) read `isRoomAdjacent`, unchanged. This
   plan's absolute-minute conversion and the room-graph proximity check
   are orthogonal; nothing here touches the second one.
+- **D5 — The re-measured baseline is the continuous engine's, not Plan 5's
+  published table.** Phase 3 measured (12×7, the instrument's own
+  methodology) untouched 0.067, fond 1.548, charged 0.512, out-of-flat
+  0.718, locked 0.722, asleep 0.718 overtures/NPC/day. These are outside
+  measurement noise of the published 2026-08-13 figures (0.099/1.742/0.651/
+  0.544/0.591/0.567), and the drift is attributable to the continuous
+  behavior-engine overhaul landing between the two measurements, upstream
+  of the cooldown in the decision/scoring layer — proven by three
+  mechanism-level checks (zero cooldown violations across 524 stamps;
+  monotone text-cooldown lever sweep; propose at 0.425 vs published 0.437,
+  within noise). `continuous-behavior-engine-plan` Phase 6 (roadmap row 20)
+  tunes against these current figures, not the published table.
 
 ---
 
@@ -208,9 +270,9 @@ measurement noise, since D1 preserves effective duration exactly.
 
 | Phase | Status | What it does |
 |---|---|---|
-| 1 | Not started | Config fields converted to minutes |
-| 2 | Not started | `isOnCooldown`/`setCooldown` and `recencyMultiplier` compare absolute minutes |
-| 3 | Not started | Re-measured against Plan 5's published baseline |
+| 1 | Done 2026-08-14 | Config fields converted to minutes |
+| 2 | Done 2026-08-15 | `isOnCooldown`/`setCooldown` and `recencyMultiplier` compare absolute minutes |
+| 3 | Done 2026-08-15 | Re-measured against Plan 5's published baseline |
 
 ---
 

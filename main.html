@@ -334,6 +334,7 @@ body {
   letter-spacing: 0.2px;
 }
 .fp-avatar-img[hidden] { display: none; }
+.fp-avatar[hidden] { display: none; }
 .fp-door-icon {
   fill: var(--color-warning);
   font-size: 6px;
@@ -2984,6 +2985,32 @@ body {
 .nile-cart-item { display: flex; justify-content: space-between; align-items: center; font-size: var(--fs-xs); padding: 4px 0; gap: 4px; }
 .nile-checkout-btn { width: 100%; margin-top: 8px; }
 
+/* Home placement screen (decor-economy plan Phase 2) — the in-game Studio.
+   The canvas reuses the floor plan's fp-* palette so the edit surface reads
+   as the same apartment; only the screen chrome and the selection handles
+   are new. */
+.hp-rooms { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: var(--space-2); }
+.hp-rooms .chip { font-size: var(--fs-xs); padding: 4px 10px; }
+.hp-rooms .chip[data-active] { border-color: var(--color-accent); color: var(--color-text); background: var(--color-accent-dim); }
+.hp-layout { display: grid; grid-template-columns: 168px 1fr; gap: var(--space-3); align-items: start; }
+.hp-palette { display: flex; flex-direction: column; gap: 6px; background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-2); }
+.hp-palette-head { font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-dim); }
+.hp-palette-empty { line-height: 1.4; }
+.hp-palette-item { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 6px 8px; background: var(--color-surface-alt); border: 1px solid var(--color-border); border-radius: var(--radius-sm); color: var(--color-text); font-size: var(--fs-sm); cursor: pointer; text-align: left; }
+.hp-palette-item:hover { background: var(--color-surface-hover); border-color: var(--color-accent); }
+.hp-palette-qty { color: var(--color-text-dim); font-size: var(--fs-xs); }
+.hp-canvas-wrap { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-2); user-select: none; -webkit-user-select: none; touch-action: none; overflow: hidden; }
+.hp-canvas { width: 100%; height: auto; display: block; }
+.hp-canvas .hp-backdrop { opacity: 0.55; }
+.hp-obj { cursor: move; }
+.hp-obj:hover { filter: brightness(1.25); }
+.hp-draft { filter: drop-shadow(0 0 4px var(--color-accent)); }
+.hp-selbox { fill: none; stroke: var(--color-accent); stroke-width: 1.2; pointer-events: none; }
+.hp-handle { fill: var(--color-accent); stroke: var(--color-bg); stroke-width: 1; cursor: nwse-resize; }
+.hp-handle.rot { cursor: grab; }
+.hp-bar { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); flex-wrap: wrap; }
+.hp-bar .dim { flex: 1; min-width: 120px; }
+
 /* WorkHub */
 .wh-header { background: var(--color-card); border: 1px solid var(--color-border); border-radius: 6px; padding: 12px; margin-bottom: 8px; }
 .wh-rep-bar { height: 6px; background: var(--color-border); border-radius: 3px; overflow: hidden; margin: 8px 0; }
@@ -4216,11 +4243,11 @@ body {
      MENU/IMAGE). Functions calling into a LATER script are fine either way
      — those calls only happen at runtime, after every script below has
      finished loading. -->
-<script src="src/srcfiles/config.js?v=99"></script>
+<script src="src/srcfiles/config.js?v=105"></script>
 <script src="src/srcfiles/icons.js?v=25"></script>
 <script src="src/srcfiles/defs.world.js?v=32"></script>
 <script src="src/srcfiles/defs.actions.js?v=30"></script>
-<script src="src/srcfiles/defs.computer.js?v=26"></script>
+<script src="src/srcfiles/defs.computer.js?v=28"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
      at runtime; IMAGE's titleGallery consumes genTitlePrompt. -->
@@ -4236,12 +4263,13 @@ body {
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/srcfiles/orbital.js?v=12"></script>
 <script src="src/srcfiles/state.js?v=46"></script>
-<script src="src/srcfiles/sim.js?v=56"></script>
+<script src="src/srcfiles/sim.js?v=63"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
 <script src="src/srcfiles/commitments.js?v=13"></script>
-<script src="src/srcfiles/world.js?v=27"></script>
+<script src="src/srcfiles/world.js?v=28"></script>
+<script src="src/srcfiles/movement.js?v=2"></script>
 <script src="src/srcfiles/signals.js?v=15"></script>
 <script src="src/srcfiles/scene.js?v=13"></script>
 <script src="src/srcfiles/items.js?v=22"></script>
@@ -4250,10 +4278,10 @@ body {
      time) and before render.js/ui.js, which call it at runtime. -->
 <script src="src/srcfiles/inventory.js?v=17"></script>
 <script src="src/srcfiles/effects.js?v=30"></script>
-<script src="src/srcfiles/drives.js?v=33"></script>
+<script src="src/srcfiles/drives.js?v=34"></script>
 <!-- NPC utility scoring (npc-cognition-plan.md). Loads after drives.js: it
      reuses driveGateValue / isOnCooldown / DRIVE_COOLDOWN_KEY from it. -->
-<script src="src/srcfiles/cognition.js?v=16"></script>
+<script src="src/srcfiles/cognition.js?v=20"></script>
 <!-- NPC initiative (npc-initiative-plan.md Phase 3). Loads after cognition.js:
      scoreCandidates calls scoreOvertures, and evaluateDrives calls the writers
      here for the tick it wins. -->
@@ -4262,8 +4290,8 @@ body {
 <script src="src/srcfiles/intent.js?v=18"></script>
 <script src="src/srcfiles/skills.js?v=19"></script>
 <script src="src/srcfiles/stealth.js?v=18"></script>
-<script src="src/srcfiles/time.js?v=24"></script>
-<script src="src/srcfiles/computer.js?v=52"></script>
+<script src="src/srcfiles/time.js?v=27"></script>
+<script src="src/srcfiles/computer.js?v=55"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -4271,7 +4299,7 @@ body {
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
 <script src="src/srcfiles/phone.js?v=20"></script>
-<script src="src/srcfiles/npc.js?v=37"></script>
+<script src="src/srcfiles/npc.js?v=39"></script>
 <!-- Knowledge-gossip Phase 3: deterministic rumination (inference rules +
      open-question lifecycle) — after npc.js (reuses addMemoryFact/
      backfillFactRecordV2/factTopicPhrase/factInterestRelevance/factEmotionalWeight)
@@ -4286,14 +4314,14 @@ body {
 <script src="src/srcfiles/x5.js?v=15"></script>
 <script src="src/srcfiles/interruption.js?v=22"></script>
 <script src="src/srcfiles/image.js?v=25"></script>
-<script src="src/srcfiles/render.js?v=46"></script>
-<script src="src/srcfiles/render.computer.js?v=41"></script>
+<script src="src/srcfiles/render.js?v=48"></script>
+<script src="src/srcfiles/render.computer.js?v=43"></script>
 <script src="src/srcfiles/render.desktop.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
 <script src="src/srcfiles/render.phone.js?v=23"></script>
-<script src="src/srcfiles/ui.js?v=75"></script>
-<script src="src/srcfiles/ui.computer.js?v=41"></script>
+<script src="src/srcfiles/ui.js?v=78"></script>
+<script src="src/srcfiles/ui.computer.js?v=45"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
      site header with fake address bar + internal back/forward, footer, 404,
@@ -4303,7 +4331,7 @@ body {
 <script src="src/srcfiles/afterhours.js?v=29"></script>
 <script src="src/srcfiles/ui.windowmanager.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell orchestration — after ui.computer.js. -->
-<script src="src/srcfiles/ui.phone.js?v=21"></script>
+<script src="src/srcfiles/ui.phone.js?v=22"></script>
 <!-- The Player Design studio and the opening cutscene (player creation +
      intro plan, Phases 3-5). BEFORE menu.js, because menu.js's last line
      invokes boot() — anything loading after that runs once boot has already

@@ -1,8 +1,9 @@
 # The decor economy: furniture, purchase, and player-facing placement
 
-Status: **planned — not started**. Design session complete 2026-08-14; all
-decisions locked. Documentation only — no code written.
-Last updated 2026-08-14.
+Status: **built** — all 3 phases complete (Home app catalog + checkout
+reusing Nile's delivery; in-game placement screen writing real object
+instances; end-to-end anchor-availability proof against behavior-engine
+Phase 3's `resolveActionAnchor`). Last updated 2026-08-14.
 
 Companions:
 - `CONTINUOUS-SIMULATION-ROADMAP.md` (the umbrella — implements C3, C5).
@@ -23,31 +24,60 @@ Handoff section immediately below before anything else.**
 
 ## Handoff — read this first
 
-**Resume at:** Phase 1. Nothing has been built.
+**Resume at:** nothing — this document is complete (all 3 phases built,
+verified, shipped). Next row of the shared checklist is row 7:
+`continuous-behavior-engine-plan.md` Phase 4 (physical layer).
 
-**Last session's notes (design session, 2026-08-14 — no code written):**
-- Nile's checkout/delivery pipeline was read in full, not assumed:
-  `checkoutCart` (computer.js:658) charges `cartSubtotal + ECONOMY.
-  deliveryFee`, writes one `world.deliveries` record per cart line with
-  `etaDay = clock.day + 1`; `processDeliveriesForDay` (ui.js:874) finds
-  the entry hallway's `doormat` object and calls `addStack` on its
-  `.contents`. This plan's delivery reuse means literally this — a decor
-  purchase becomes one more `world.deliveries` entry with a `defId` the
-  existing pipeline already knows how to hand off, not a parallel
-  mechanism.
-- `APP_DEFS.shop` (Nile's own definition, defs.computer.js:37) was read as
-  the structural template for the new Home app — same shape
-  (`id`/`label`/`category`/`devices`/`entryScreen`/`screens`), new catalog
-  source.
-- `STRUCTURAL_UPGRADES` (config.js, built this session in
-  `floorplan-and-movement-plan.md`) already covers walls/doors/room-type
-  changes, contractor-booked with real crew days. Decor is deliberately
-  **not** routed through that system — see D1's reasoning, which was a
-  direct, explicit choice in this session's second AskUserQuestion round
-  (a "Home" app with Nile-style delivery, not a RenoFix-style booking).
+**Last session's notes (2026-08-14 — Phase 3 built and verified):**
+- Phase 3 is the integration proof, not new decor-side work — zero code
+  changes were needed. The buy→deliver→place→anchor chain already works
+  end to end across the Phases 1–2 code and behavior-engine Phase 3's
+  `resolveActionAnchor` (actions.js). All verification was `browser_eval`
+  on the live engine against an in-memory state built from a real spawned
+  house (`SIM_generateHouse(20260814, 4)`), never touching kv or a real
+  save. Gotcha that made the first eval throw: a freshly generated house
+  carries its clock at `gameState.clock`, while the runtime shape reads
+  `gameState.meta.clock` — tests must add
+  `g.meta = { seed, clock: g.clock, sessionLog: [] }` before calling any
+  function that reads `meta.clock`.
+- Checks run (14/14 assertions passed):
+  - Baseline (D6 degradation): truly empty living-room bucket →
+    `resolveActionAnchor(g, 'self.watch_tv', 'player')` returns
+    `{roomId:'living_room', objId:null, point: roomCentre}`. Base sofa
+    present but unplaced → `objId` = base sofa, `point` still the room
+    centroid (194.76, 281.31) — "no couch → generic room-center idle".
+  - Buy: `addToCart`(sofa_basic + tv_basic, catalog
+    `DECOR_CATALOG_DEFS`, cartPath `apps.home.cart`) → `checkoutCart`
+    → total 628 (340+280+`ECONOMY.deliveryFee`), money 3800→3172, cart
+    cleared, two `world.deliveries` records `{defId, qty:1, etaDay:2}`.
+  - Deliver: `g.meta.clock.day = 2` then the REAL
+    `processDeliveriesForDay(2)` → doormat contents gain `sofa_basic ×1`
+    and `tv_basic ×1` (label falls back to raw defId — D8's known
+    cosmetic gap, unchanged). To run this leg on an in-memory state you
+    must swap `currentGameState = g` AND stub `addLogEntry`/`queueWrite`
+    to no-ops in a try/finally — `addLogEntry` → `queueWrite` would
+    write to real kv.
+  - Pickup: the real MOVE_ITEM path —
+    `applyEffects([parseEffectDSL(transferPlan(doormat.id, 'player',
+    defId, 1)[0])[0]], buildInventoryCtx(g))` with
+    `g.player.location = 'entry'` → both stacks in `player.inventory`,
+    doormat cleared.
+  - Place: `placeDecorItem` → `obj_10i9zn2_sofa_basic` at
+    `{x:40,y:60,w:20,h:10,rot:0}` and `obj_z4bz67_tv_basic` at
+    `{x:170,y:200,w:24,h:4}`, inventory consumed, bucket 7→9.
+  - Anchor: `resolveActionAnchor` →
+    `{objId:'obj_10i9zn2_sofa_basic', point:{x:50,y:65}}` — the placed
+    sofa's centre, NOT the room centroid, and it WINS over the base sofa
+    still in the bucket (the resolver's pos-preference branch).
+    `resolveActionCommitment` → `{kind:'action', durationMinutes:30,
+    anchor: same}`. 14/14 inline assertions green.
+- `dev/` and its verify suite do not exist in this workspace — Node
+  harnesses can't run here; browser_eval translation is the only path.
+- The "catalog breadth" floor is confirmed satisfied end to end: a sofa
+  and a TV are literally buyable, deliverable, placeable, and anchoring —
+  the worked example is not hypothetical.
 
 **Blockers / flagged deviations:** None.
-
 ---
 
 ## The thesis
@@ -131,6 +161,44 @@ screen instead of only `dev/designer.html`.
   pack" or force every room to have a minimum viable anchor set. An empty
   room stays empty until the player spends money on it. That absence is
   the whole reason this economy has a reason to exist.
+- **D7 — The shared `nile` renderer is data-driven, and both catalog apps
+  declare their fields explicitly.** Added in Phase 1: a browse screen def
+  carries `catalog` (`ITEM_DEFS` | `DECOR_CATALOG_DEFS`, resolved via the
+  new `CATALOG_DEFS` map), `cartPath`, `cartRowAction`, `checkoutAction`,
+  plus the pre-existing `source`/`rowAction`/`rowActionLabel`. Nile's and
+  Home's browse defs both name them — no shop-specific defaults live in
+  the renderer, so a third catalog app is pure data. (Also fixed the
+  renderer's sidebar × button, which read `data-row-id` from `row.id` —
+  undefined on `{ defId, units }` cart entries, so it never removed
+  anything; it now uses `row.defId`.)
+- **D8 — A delivered decor item is a normal inventory stack whose defId IS
+  the catalog id.** `addStack` resolves stackability through
+  `ITEM_DEFS._unknown` for defIds it doesn't know but preserves the given
+  defId, so a delivered sofa is `{ defId: 'sofa_basic', qty: 1, ... }` in
+  the doormat stack — exactly the shape Phase 2's placement consumes.
+  Accepted cosmetic gap: the doormat narration label falls back to the raw
+  defId ("A delivery has arrived: sofa_basic.") because
+  `processDeliveriesForDay` labels via `ITEM_DEFS[d.defId]?.label`. Not
+  worth touching the shared pipeline for; noted rather than patched around.
+- **D9 — The `place` screen def ships with its renderer, in Phase 2.**
+  The data model's sketch shows `place: { renderer: 'home-placement' }`
+  inside `APP_DEFS.home` from day one; it is deliberately not registered
+  in Phase 1, because a screen pointing at a nonexistent renderer is a
+  dead-nav landmine. Phase 2 adds the screen entry and the
+  `home-placement` renderer together.
+- **D10 — Placed decor renders through the shared floor-plan path via
+  shape-to-symbol aliasing, not a decor special case.** Added in Phase 2:
+  `DECOR_SYMBOL_ALIASES` (render.js) maps each decor shape id onto an
+  existing `FP_FURNITURE` symbol entry (`sofa_basic→sofa`, `tv_basic→tv`,
+  `rug→rug`, `plant→plant_lr`, `bed_basic→bed`, ...), cloned into
+  `FP_FURNITURE` at load, so `renderAutoFurniture` draws a placed object
+  exactly as it draws any other bucket object — which is the whole point
+  of D4's "real object instance". Trade-off accepted: symbols are
+  approximations (a desk chair reuses the armchair silhouette), which is
+  fine at floor-plan zoom. Consequence flagged: rooms WITH a `ROOM_DECOR`
+  entry route to `renderAuthoredDecor` and skip the auto path entirely,
+  so placed decor there would be invisible; zero such rooms exist in the
+  game today, so this is latent, not live.
 
 ---
 
@@ -247,9 +315,9 @@ whole economy does what it exists to do.
 
 | Phase | Status | What it does |
 |---|---|---|
-| 1 | Not started | Home app catalog + checkout, reusing Nile's delivery |
-| 2 | Not started | In-game placement screen, writing real object instances |
-| 3 | Not started | End-to-end anchor-availability proof |
+| 1 | Done | Home app catalog + checkout, reusing Nile's delivery |
+| 2 | Done | In-game placement screen, writing real object instances |
+| 3 | Done | End-to-end anchor-availability proof |
 
 ---
 

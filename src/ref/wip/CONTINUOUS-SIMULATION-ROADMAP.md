@@ -1,11 +1,18 @@
 # Continuous Simulation Roadmap
 
-Status: **the umbrella for five linked plans, none built.** Design session
-2026-08-14, all five plan documents written the same session — see each for
-its own Handoff. This file stays in `wip/` as the umbrella once phases
-begin landing, the way `SENSORY-AND-SOCIAL-ROADMAP.md` did for the six
-plans before it.
-Last updated 2026-08-14.
+Status: **the umbrella for five linked plans** — Plan 1 (the continuous
+behavior engine) is built and has moved to `complete/` (all six phases,
+including the Phase 6 tuning pass); Plan 5 (the decor economy) is built
+and has moved to `complete/`; Plan 2 (needs and the heartbeat) is built
+and has moved to `complete/`; Plan 3 (external-world retiming) is built
+and has moved to `complete/`; Plan 4 (NPC initiative retiming) is built
+and has moved to `complete/`. Every plan the umbrella indexes is now
+**built**. Design
+session 2026-08-14, all five plan documents
+written the same session — see each for its own Handoff. This file stays
+in `wip/` as the umbrella once phases begin landing, the way
+`SENSORY-AND-SOCIAL-ROADMAP.md` did for the six plans before it.
+Last updated 2026-08-15.
 
 Companions:
 - [`continuous-simulation-handoff-prompt.md`](continuous-simulation-handoff-prompt.md)
@@ -31,6 +38,45 @@ logic is callable and assertable headlessly. Nothing about removing the
 tick grid changes that — the replacement decision step (Phase 2 of
 `continuous-behavior-engine-plan.md`) stays synchronous and model-free by
 the same invariant (C6) `resolveTick` has always had.
+
+---
+
+## Addendum (2026-08-15) — a completeness audit, and one gap none of the five plans owned
+
+A full audit of this roadmap after all five plans reported Done found
+three real issues (plus several bugs in the `dev/verify` suite itself,
+unrelated to the game code — documented inline where fixed). Two were
+each plan's own — see `continuous-behavior-engine-plan.md`'s and
+`needs-and-heartbeat-plan.md`'s own Addendum sections. This one is here
+because it belongs to neither:
+
+**`src/srcfiles/commitments.js` (the meal/hangout invitation system — a
+different "commitment" than this roadmap's `npc.commitment`, confusingly)
+and `overture.js`'s `proposeTerms` were never converted.** Both compared
+raw `tickStart`/`tickEnd`/`getTickIndex()` against the clock, squarely
+inside C1's "nothing in the... visit, or initiative layer may branch on a
+tick index again" — `commitments.js`'s own header even calls itself "the
+resident-side sibling of `world.visits[]`", the exact thing Plan 3
+converted. No plan document ever mentions this file; it fell through the
+cracks between Plan 3 (which owned `world.visits[]`) and Plan 4 (which
+owned overture cooldowns but not overture *proposals*).
+
+Fixed the same way Plan 3 converted visits: records now carry
+`startAbs`/`endAbs` (`clockToAbsolute` space) instead of `day` +
+`tickStart`/`tickEnd`, with the day derived where needed
+(`commitmentDay()`, mirroring `sim.js`'s `visitDay()`) rather than stored
+twice. `COMMITMENT_TUNING.mealSlots` and `COMMITMENT_KINDS.hangout.slots`
+now express their windows as `startMinute`/`endMinute`
+(`RESTAURANT_DEFS.hours`' own convention) rather than ticks. Touched:
+`config.js`, `commitments.js`, `overture.js`, `ui.js` (the two commitment
+creation call sites and their narration), `render.js` (the dinner-invite
+picker). `dev/verify/verify-i4.js` — the one harness that already
+exercised this system — needed its own fixtures updated to the new shape
+and now passes clean; the DOM-layer picker was verified live in
+`dev-harness.html` (out of headless reach) end to end: opened the picker,
+clicked a slot, confirmed the resolved `{startAbs, endAbs}`, created the
+commitment, and confirmed `resolveScheduleActivity` picks it up and
+relocates the NPC inside its window.
 
 ---
 
@@ -163,7 +209,11 @@ pattern `SENSORY-AND-SOCIAL-ROADMAP.md`'s `R1`–`R8` established.
   `` seededRng(seed, `tick_${day}_${tick}`) `` to
   `` seededRng(seed, `npc_${npcId}_decision_${absoluteMinute}`) `` — still
   fully reproducible from seed + absolute time. Nothing about determinism
-  loosens because the grid disappeared.
+  loosens because the grid disappeared. *(Landed in behavior-engine Phase
+  5, 2026-08-14: each deciding NPC's stream is
+  `` seededRng(seed, `npc_${npcId}_decision_${absoluteMinute}`) `` and the
+  ambient per-tick stream addresses by absolute minute — no tick index in
+  any behavior-layer seed.)*
 - **C7 — Fast-forward always resolves analytically, never by looping a
   fine heartbeat.** An 8-hour sleep jump computes decay as
   `elapsed_minutes × decayPerMinute`, closed-form — never hundreds of
@@ -190,10 +240,10 @@ pattern `SENSORY-AND-SOCIAL-ROADMAP.md`'s `R1`–`R8` established.
 
 ## The five plans
 
-### Plan 1 — Continuous Behavior Engine *(planned — see [`continuous-behavior-engine-plan.md`](continuous-behavior-engine-plan.md))*
+### Plan 1 — Continuous Behavior Engine *(built — see [../complete/continuous-behavior-engine-plan.md](../complete/continuous-behavior-engine-plan.md))*
 
 **The core.** Retires `SCHEDULES` and `resolveScheduleActivity`'s tick-
-range lookup. `npc.commitment` replaces `npc.pursuit` — same role (an
+range lookup as the unit decisions happen in. `npc.commitment` replaces `npc.pursuit` — same role (an
 NPC holds one scored choice instead of re-rolling), different unit
 (absolute-minute completion time instead of a tick countdown). Decision
 cadence becomes event-driven: each NPC carries its own next-decision
@@ -203,20 +253,23 @@ boundary — a day-shift worker still clearly reads as a day-shift worker,
 just without a wall-clock second where they're forced to stop being one.
 Absorbs the floor plan's position/walk/render-split work as its own
 physical-output layer (C4). Work/commute becomes one long commitment
-rather than a block sequence. 6 phases planned.
+rather than a block sequence. 6 phases; **all built** — Phase 6 (the
+tuning pass) landed the D16 tuning changes and watched three simulated
+days live.
 
-### Plan 2 — Needs and the Heartbeat *(planned — see [`needs-and-heartbeat-plan.md`](needs-and-heartbeat-plan.md))*
+### Plan 2 — Needs and the Heartbeat *(built — see [`../complete/needs-and-heartbeat-plan.md`](../complete/needs-and-heartbeat-plan.md))*
 
 Needs decay/restoration, phone battery, and memory decay move off
 `resolveTick`'s per-30-minute pass onto their own fine periodic heartbeat
-(proposed 1 simulated minute), because they have to keep moving even
-during a long uninterrupted commitment with no decision points. Every
-`decayPerTick` rate converts to `decayPerMinute` mechanically — this plan
-is explicit that it is not a rebalance of any of the correctness plan's
-hard-won tuning. Closed-form fast-forward (C7) is this plan's own
-invariant to defend. 4 phases planned.
+(confirmed at 5 game-minutes by the Phase-4 tuning pass — locked decision
+D8), because they have to keep moving even during a long uninterrupted
+commitment with no decision points. Every `decayPerTick` rate converts to
+`decayPerMinute` mechanically — this plan is explicit that it is not a
+rebalance of any of the correctness plan's hard-won tuning. Closed-form
+fast-forward (C7) is this plan's own invariant to defend. 4 phases; all
+built.
 
-### Plan 3 — External-World Retiming *(planned — see [`external-world-retiming-plan.md`](external-world-retiming-plan.md))*
+### Plan 3 — External-World Retiming *(built — see [../complete/external-world-retiming-plan.md](../complete/external-world-retiming-plan.md))*
 
 The visit spine, restaurant hours, food-delivery ETAs/slots, and gig work
 blocks all convert from `[startTick,endTick)` (0–47 space) to
@@ -225,22 +278,30 @@ blocks all convert from `[startTick,endTick)` (0–47 space) to
 window, and the conversion has to preserve that distinction rather than
 flatten every tick-indexed thing into the same shape. Explicitly confirms
 what does *not* change: day rollover, rent, bills — all already
-day-indexed and out of scope. 4 phases planned, independent of each other.
+day-indexed and out of scope. 4 phases; all built. Gig work's one
+time-cost literal now reads `GIG_TUNING.workBlockMinutes`, not
+`CLOCK.tickMinutes` (D5).
 
-### Plan 4 — NPC Initiative Retiming *(planned — see [`npc-initiative-retiming-plan.md`](npc-initiative-retiming-plan.md))*
+### Plan 4 — NPC Initiative Retiming *(built — see [`../complete/npc-initiative-retiming-plan.md`](../complete/npc-initiative-retiming-plan.md))*
 
-Overture cooldowns (`textCooldownTicks`, `knockCooldownTicks`,
-`proposeCooldownTicks`) and the shared `isOnCooldown`/`setCooldown`
+Overture cooldowns (`textCooldownMinutes`, `knockCooldownMinutes`,
+`proposeCooldownMinutes`) and the shared `isOnCooldown`/`setCooldown`
 mechanism every `DRIVE_DEFS` cooldown runs through convert to absolute
 minutes. Directly resolves the representational hazard behind **D34** (a
 documented Plan 5 finding: a wrapped-tick cooldown at or above
 `CLOCK.ticksPerDay` never elapses) — not by retuning again, but by
 removing the wraparound arithmetic that made the bug class possible at
 any value. Proximity channels (`adjacent`/`outside`) stay room-graph-based;
-literal-proximity channels are explicitly deferred to C8. 3 phases
-planned, narrow scope, mechanical by design.
+literal-proximity channels are explicitly deferred to C8. 3 phases, narrow
+scope, mechanical by design — **all built** (2026-08-15). Phase 3's
+re-measurement confirmed the conversion behavior-invisible at the mechanism
+level (zero cooldown violations across 524 population-scale stamps;
+`propose_player` 0.425/NPC/day vs Plan 5's published 0.437) and found the
+population totals have drifted from Plan 5 Phase 6's published table with
+the continuous behavior-engine overhaul — see D5 and the Handoff for the
+current baseline.
 
-### Plan 5 — The Decor Economy *(planned — see [`decor-economy-plan.md`](decor-economy-plan.md))*
+### Plan 5 — The Decor Economy *(built — see [`../complete/decor-economy-plan.md`](../complete/decor-economy-plan.md))*
 
 A new "Home" computer app sells furniture through a catalog, checkout
 reuses Nile's exact delivery mechanism (`world.deliveries` →

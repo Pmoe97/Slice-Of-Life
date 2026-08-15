@@ -53,7 +53,12 @@ api(`
     return g;
   };
   __ids = (g) => Object.keys(g.npcs).filter(id => g.npcs[id].residency.status === 'resident');
-  __ctx = (block, extra) => Object.assign({ perceived: [], block: block, currentTick: 0 }, extra || {});
+  __ctx = (block, extra) => Object.assign({ perceived: [], block: block, nowAbs: 0,
+    // D4 (continuous-behavior-engine Phase 3): the routine term is a function
+    // of the current MINUTE of day, so a ctx names a representative minute
+    // from the block's first window (midpoint) when the block maps to one.
+    minutesOfDay: BLOCK_TIME_OF_DAY[block] ? (BLOCK_TIME_OF_DAY[block][0][0] + BLOCK_TIME_OF_DAY[block][0][1]) / 2 : 720,
+  }, extra || {});
 
   // An NPC with one axis pinned and everything else left alone. Used both for
   // scoring one drive and for running a whole cast.
@@ -73,7 +78,14 @@ api(`
       const before = (npc.flags || {})[DRIVE_COOLDOWN_KEY] || {};
       const res = orig(npc, npcId, npcs, resolved, gameState, rng, currentTick, opts);
       const after = (res.updatedNpc && res.updatedNpc.flags && res.updatedNpc.flags[DRIVE_COOLDOWN_KEY]) || {};
-      rows.push(Object.keys(after).filter(d => after[d] === currentTick && before[d] !== currentTick));
+      // npc-initiative-retiming Phase 2 (D2) moved cooldown stamps from a
+      // within-day tick index to an absolute minute (clockToAbsolute space).
+      // This harness predates that and was still comparing against
+      // currentTick — a 0..47 index a stamp in the thousands can never equal
+      // — so the filter matched nothing, every arm read 0 actions across 0
+      // drives, and every downstream personality comparison read 0 vs 0.
+      const nowAbs = clockToAbsolute(gameState.meta.clock);
+      rows.push(Object.keys(after).filter(d => after[d] === nowAbs && before[d] !== nowAbs));
       return res;
     };
     try {
@@ -246,7 +258,7 @@ for (const driveId of ALL) {
       const npc = { ...npc0, needs: { ...npc0.needs, [d.utility.need.need]: 100 },
                     bible: { ...npc0.bible, temperament: { ...__flat(npc0, 0).bible.temperament, ...t } } };
       let top = 0, at = null;
-      for (const block of (d.blockFilter || ['leisure'])) {
+      for (const block of (d.timeOfDay || ['leisure'])) {
         const s = scoreDrive('${driveId}', npc, __ctx(block));
         if (s.score > top) { top = s.score; at = block; }
       }

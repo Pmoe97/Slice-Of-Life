@@ -50,17 +50,30 @@ async function advanceAndResolve(ticks, opts = {}) {
   // Initiative plan Phase 3: who was already waiting on the player, so the
   // arrival narration below fires only for records this batch OPENED.
   const overturesBefore = pendingOvertureIds(currentGameState);
-  const { state: newState, events, peepResults } = resolveBatch(currentGameState, ticks, { advanceClock: advanceClockToo });
+  const { state: newState, events, peepResults } = resolveBatch(currentGameState, ticks, { advanceClock: advanceClockToo, suppressNeeds: opts.suppressNeeds });
   currentGameState = newState;
   appendWorldEvents(events);
 
   // BrineOS Phase 2: the phone's battery lives on the world object and
-  // advances with the sim. Hooked here — not in the checkpoint path alone
-  // — because both the continuous clock's sim checkpoints and every
-  // discrete action (sleep, work blocks, gigs, all ACTION_DEFS verbs)
-  // resolve through this same function (decision C: an 8-hour sleep must
-  // still drain the battery).
-  advancePhoneBattery(currentGameState, ticks);
+  // advances with the sim. Heartbeat plan Phase 3: the DISCRETE path runs
+  // it here in closed form for the whole batch (minutes x per-minute rate,
+  // once — never per tick). The CONTINUOUS path (suppressNeeds — the clock
+  // loop's checkpoints) skips it because clockFrame's heartbeat accumulator
+  // already owns every one of those minutes at per-minute cadence; running
+  // it here too would double the drain. An 8-hour sleep must still drain
+  // the battery (decision C) — on the discrete path it does, right here.
+  //
+  // needsMinutes defaults to ticks*CLOCK.tickMinutes (exact for every direct
+  // caller here, which all pass whole tick counts for an exact-minutes
+  // span) but advanceAndResolveMinutes overrides it with the TRUE requested
+  // span — ticks is a grid-boundary-crossing count, not a duration, so for
+  // a span that does not land on a tick boundary the two can diverge in
+  // either direction (this audit's gap-fix: D1's "one heartbeat, every
+  // consumer" applies here exactly as it does to decayPlayerNeeds below).
+  const needsMinutes = opts.needsMinutes ?? (ticks * CLOCK.tickMinutes);
+  if (!opts.suppressNeeds) {
+    advancePhoneBattery(currentGameState, needsMinutes);
+  }
 
   // In-memory, not a kv round-trip via updateNpc: this loop used to read-
   // modify-write through kv per npc, which silently clobbered any earlier
@@ -120,10 +133,12 @@ async function advanceAndResolve(ticks, opts = {}) {
     }
   }
 
-  for (const [id, npc] of Object.entries(currentGameState.npcs)) {
-    if (npc.residency.status === 'former' || npc.residency.status === 'prospective') continue;
-    if (!npc.memory.episodes || npc.memory.episodes.length === 0) continue;
-    currentGameState.npcs[id] = decayMemory(npc, ticks);
+  // Heartbeat plan Phase 3: memory decay moved out of this inline loop into
+  // the shared decayAllMemories (npc.js), closed form over the batch's
+  // game-minutes. Discrete path only — the continuous path's checkpoints
+  // suppress it (suppressNeeds) so the heartbeat owns memory there too.
+  if (!opts.suppressNeeds) {
+    currentGameState = decayAllMemories(currentGameState, needsMinutes);
   }
 
   // Initiative plan Phase 3: an NPC crossed the room. Narrated here rather
@@ -470,10 +485,11 @@ function fillOvertureLine(template, npc, record) {
 // invitation reads the same whichever side of it asked.
 function proposalWhen(p) {
   const today = currentGameState.meta.clock.day;
-  const when = p.day === today ? 'later today'
-    : p.day === today + 1 ? 'tomorrow'
-      : formatDate(p.day);
-  return `${when} at ${formatTime(p.tickStart * CLOCK.tickMinutes)}`;
+  const day = Math.floor(p.startAbs / 1440);
+  const when = day === today ? 'later today'
+    : day === today + 1 ? 'tomorrow'
+      : formatDate(day);
+  return `${when} at ${formatTime(absoluteToClock(p.startAbs).minutes)}`;
 }
 
 // The opening line the conversation starts on when the NPC is the one who
@@ -611,7 +627,7 @@ async function doOvertureRespond(npcId, accepted) {
   const p = record && record.proposal;
   if (p) {
     createCommitment(currentGameState, {
-      kind: p.kind, day: p.day, tickStart: p.tickStart, tickEnd: p.tickEnd,
+      kind: p.kind, startAbs: p.startAbs, endAbs: p.endAbs,
       roomId: p.roomId, invitedIds: [], proposerId: npcId,
     });
     addLogEntry('narration', `You tell ${name} yes. ${proposalWhen(p)}, in ${roomPhrase(p.roomId)} — it is in the diary now.`);
@@ -995,14 +1011,15 @@ function maybeFireContractorQualityMilestone() {
 // still active — scheduleContractorVisitsForJob already covered the full
 // run at booking, so this is purely the backstop for saves that have an
 // in-flight job but predate visits. Mirrors processRenovationJobsForDay's
-// shape (an array of world records resolved at day rollover).
+// shape (an array of world records resolved at day rollover). Day-scoping
+// uses SIM's visitDay — records carry absolute-minute windows now.
 function processVisitsForDay(day) {
   if (!currentGameState?.world) return;
   const visits = currentGameState.world.visits || (currentGameState.world.visits = []);
   // Retire past visits; a visit whose window has passed must not leave its
   // visitor lingering in the room they were in.
   for (const v of visits) {
-    if (v.day >= day) continue;
+    if (visitDay(v) >= day) continue;
     if (v.status === 'done' || v.status === 'deferred') continue;
     v.status = 'done';
     const visitor = currentGameState.npcs[v.npcId];
@@ -1014,13 +1031,14 @@ function processVisitsForDay(day) {
   }
   // Retention: world.visits is append-only otherwise, and it is written into
   // the save in full on every boundary. Retired records older than the
-  // retention window can't affect anything (getActiveVisits is same-day) and
-  // exist only to grow the save — every delivery, maid day, contractor day
-  // and invite leaves one forever. Drop them once they're safely in the past.
+  // retention window can't affect anything (getActiveVisits only matches an
+  // active window) and exist only to grow the save — every delivery, maid
+  // day, contractor day and invite leaves one forever. Drop them once
+  // they're safely in the past.
   const cutoff = day - VISIT_TUNING.retainDoneDays;
   for (let i = visits.length - 1; i >= 0; i--) {
     const v = visits[i];
-    if (v.day < cutoff && (v.status === 'done' || v.status === 'deferred')) visits.splice(i, 1);
+    if (visitDay(v) < cutoff && (v.status === 'done' || v.status === 'deferred')) visits.splice(i, 1);
   }
   // Re-ensure today's contractor windows for still-active jobs.
   for (const job of currentGameState.world.renovationJobs || []) {
@@ -1031,8 +1049,8 @@ function processVisitsForDay(day) {
     scheduleVisit(currentGameState, job.id, day, {
       npcId: job.contractorId || CONTRACTOR_ID,
       purpose: 'contractor',
-      startTick: win.startTick,
-      endTick: win.endTick,
+      startAbs: day * 1440 + win.startMinute,
+      endAbs: day * 1440 + win.endMinute,
       roomId: job.roomId,
     });
   }
@@ -1102,8 +1120,11 @@ function processMaidForDay(day) {
   scheduleVisit(currentGameState, `maid_${day}`, day, {
     npcId: contract.npcId,
     purpose: 'maid',
-    startTick: entry.startTick,
-    endTick: entry.endTick,
+    // The contract's weekly grid is still expressed in ticks (its UI and
+    // cost math are not this plan's to convert); the visit window is the
+    // absolute-minute form of the entry's window.
+    startAbs: day * 1440 + entry.startTick * 30,
+    endAbs: day * 1440 + entry.endTick * 30,
     roomId: 'living_room',
   });
 
@@ -1130,7 +1151,7 @@ function processFriendVisitsForDay(day) {
       addLogEntry('narration', `${host} thought about having someone over, then looked at how many people are already in and out today and left it.`);
       continue;
     }
-    addLogEntry('narration', `${p.hostName} mentions that their friend ${p.guestName} is coming by around ${formatTime(p.startTick * 30)}.`);
+    addLogEntry('narration', `${p.hostName} mentions that their friend ${p.guestName} is coming by around ${formatTime(p.startMinute)}.`);
   }
 }
 
@@ -1224,16 +1245,14 @@ function processFoodOrdersNow() {
   if (!currentGameState?.world) return;
   const orders = currentGameState.world.foodOrders || [];
   if (orders.length === 0) return;
-  const { day, minutes } = currentGameState.meta.clock;
-  const tick = getTickIndex(minutes);
+  const { day } = currentGameState.meta.clock;
   for (const order of orders) {
     if (order.status !== 'ordered') continue;
-    // Phase 2: an order whose arrival crossed midnight is day+1's delivery.
-    // Orders saved before arrivalDay existed (no kv migration) treat the
-    // arrival day as the order day, preserving the old same-day behavior.
-    const arrivalDay = order.arrivalDay != null ? order.arrivalDay : order.day;
-    if (day < arrivalDay) continue;
-    if (day === arrivalDay && tick < order.arrivalTick) continue;
+    // The handover fires the moment the clock reaches the order's absolute
+    // arrival minute — cross-midnight arrivals are naturally day+1's
+    // delivery. Orders saved before arrivalAbs existed (no kv migration)
+    // resolve via foodOrderArrivalAbs's old-shape fallback.
+    if (clockToAbsolute(currentGameState.meta.clock) < foodOrderArrivalAbs(order)) continue;
     handOverFoodOrder(order, day);
   }
 }
@@ -1348,11 +1367,12 @@ async function doFoodPlaceOrder(device) {
   if (!currentGameState) return;
   const scope = device === 'phone' ? document.getElementById('phone-screen') : document;
   const select = scope?.querySelector?.('#food-time') || document.getElementById('food-time');
-  // The select value is "<day>:<tick>" (today or tomorrow) — the same
-  // value shape the escort booking select uses; the cart can now offer
-  // tomorrow's early-morning slots for orders whose arrival crosses midnight.
-  const [requestedDay, requestedTick] = (select?.value || '').split(':');
-  const result = placeFoodOrder(currentGameState, { requestedDay: Number(requestedDay), requestedTick: Number(requestedTick) });
+  // The select value is an absolute minute (today or tomorrow); the cart
+  // offers tomorrow's early-morning slots for orders whose arrival crosses
+  // midnight. No value (or a malformed one) means ASAP — 0 is a no-op
+  // against the arrival max().
+  const requestedAbs = Number(select?.value || '');
+  const result = placeFoodOrder(currentGameState, Number.isFinite(requestedAbs) ? { requestedAbs } : {});
   if (!result.ok) { addLogEntry('system', result.reason); return; }
   const driver = currentGameState.npcs[result.order.driverNpcId];
   const eta = getFoodOrderEtaMinutes(result.order, currentGameState.meta.clock);
@@ -1452,7 +1472,7 @@ async function doInviteOver(npcId, source) {
   }
   const day = currentGameState.meta.clock.day + 1;
   const existing = (currentGameState.world.visits || []).find(v =>
-    v.npcId === npcId && v.day === day && v.status !== 'done' && v.status !== 'deferred');
+    v.npcId === npcId && visitDay(v) === day && v.status !== 'done' && v.status !== 'deferred');
   if (existing) {
     const reason = `${name} is already coming over that day.`;
     addLogEntry('system', reason);
@@ -1463,8 +1483,8 @@ async function doInviteOver(npcId, source) {
   scheduleVisit(currentGameState, ahSource ? `ah_${npcId}_${day}` : `invite_${npcId}_${day}`, day, {
     npcId,
     purpose: 'social',
-    startTick: win.startTick,
-    endTick: win.endTick,
+    startAbs: day * 1440 + win.startMinute,
+    endAbs: day * 1440 + win.endMinute,
     roomId: 'living_room',
     followPlayer: ahSource,
   });
@@ -1495,16 +1515,17 @@ async function doInviteDinner(npcId) {
   const choice = await openDinnerInvitePicker(name);
   if (!choice) return;
   const { record, responses } = createCommitment(currentGameState, {
-    day: choice.day, tickStart: choice.tickStart, tickEnd: choice.tickEnd,
+    startAbs: choice.startAbs, endAbs: choice.endAbs,
     roomId: 'dining', invitedIds: [npcId],
   });
   const resp = responses?.[npcId];
-  const when = choice.day === currentGameState.meta.clock.day
+  const choiceDay = Math.floor(choice.startAbs / 1440);
+  const when = choiceDay === currentGameState.meta.clock.day
     ? 'today'
-    : choice.day === currentGameState.meta.clock.day + 1
+    : choiceDay === currentGameState.meta.clock.day + 1
       ? 'tomorrow'
-      : formatDate(choice.day);
-  const at = formatTime(choice.tickStart * 30);
+      : formatDate(choiceDay);
+  const at = formatTime(absoluteToClock(choice.startAbs).minutes);
   if (resp?.accept) {
     addLogEntry('narration', `${name} says yes — dinner ${when} at ${at}. You'll set the table in the dining room.`);
   } else if (resp?.reason === 'busy') {
@@ -1802,7 +1823,7 @@ async function doPeep(roomId) {
     return;
   }
   addLogEntry('narration', result.narration);
-  currentGameState.player = decayPlayerNeeds(currentGameState.player, 1, currentGameState);
+  currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('peep', currentGameState);
 }
@@ -1838,7 +1859,7 @@ async function doKnock(roomId) {
     }
   }
   await advanceAndResolve(1);
-  currentGameState.player = decayPlayerNeeds(currentGameState.player, 1, currentGameState);
+  currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('knock', currentGameState);
 }
@@ -2642,6 +2663,36 @@ async function handleAction(action, npcId, extra) {
     case 'shop.checkout':
       await doShopCheckout();
       break;
+    case 'home.add-to-cart':
+      await doHomeAddToCart(extra?.rowId);
+      break;
+    case 'home.remove-from-cart':
+      await doHomeRemoveFromCart(extra?.rowId);
+      break;
+    case 'home.checkout':
+      await doHomeCheckout();
+      break;
+    case 'home.place-room':
+      await doHomePlaceRoom(extra?.roomId);
+      break;
+    case 'home.place-item':
+      await doHomePlaceItem(extra?.rowId);
+      break;
+    case 'home.place-commit':
+      await doHomePlaceCommit();
+      break;
+    case 'home.place-cancel':
+      await doHomePlaceCancel();
+      break;
+    case 'home.place-select':
+      await doHomePlaceSelect(extra?.objId);
+      break;
+    case 'home.place-pickup':
+      await doHomePlacePickup(extra?.objId);
+      break;
+    case 'home.place-snap':
+      await doHomePlaceToggleSnap();
+      break;
     case 'browser.visit':
       await doBrowserVisit(extra?.rowId, extra?.device);
       break;
@@ -3182,7 +3233,7 @@ async function doPlayerAction(actionText) {
     }
 
     // Decay player needs
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1, currentGameState);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
 
     render(currentGameState, currentSceneState);
     // D6 — after the response has rendered, never before it. D2's early
@@ -3246,7 +3297,7 @@ async function doWait() {
   showLoading();
   try {
     await advanceAndResolve(2);
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, 2, currentGameState);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, 2 * CLOCK.tickMinutes, currentGameState);
     addLogEntry('narration', 'You wait a while. Time passes.');
     render(currentGameState, currentSceneState);
     await saveAtBoundary('wait', currentGameState);
@@ -3300,7 +3351,7 @@ async function doSleep() {
     // Decay player needs for the time spent sleeping (hunger, hygiene,
     // mood — energy is restored separately below). advanceAndResolve
     // only decays NPC needs, not the player's.
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, sleepTicks, currentGameState);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, sleepTicks * CLOCK.tickMinutes, currentGameState);
     // Energy back is proportional to hours actually slept, so a night cut
     // short (by the alarm) genuinely leaves you short.
     // Phase 8: energy is capped at player.energyMax (which starts at 70
@@ -3663,7 +3714,7 @@ async function doConvSend(forcedText) {
       convAddBeat(`They seem distracted and don't respond.`);
     }
 
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1, currentGameState);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
     convSetStatus('In conversation');
     render(currentGameState, currentSceneState);
     // D2's early flush — the reply is already painted into the overlay, so

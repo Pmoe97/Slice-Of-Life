@@ -26,6 +26,7 @@ const COMPUTER_RENDERERS = {
   applicant: renderApplicantProfile,
   streamly: renderStreamly,
   nile: renderNile,
+  'home-placement': renderHomePlacement,
   gigboard: renderGigBoard,
   gigaccepted: renderGigAccepted,
   browser: renderBrowserHome,
@@ -83,7 +84,10 @@ function makePanel(html) {
 // debugging time to find; see ARCHITECTURE.md's P4 notes.
 // NOTE: JOB_DEFS was removed in the Phase 2 gig rewrite — the board now
 // uses a bespoke renderer (renderGigBoard) over live state, not a catalog.
-const CATALOG_SOURCES = { SHOP_CATALOG_LIST, SITE_DEFS_LIST, COURSE_DEFS_LIST, SERVICE_DEFS_LIST, STREAM_DEFS_LIST };
+const CATALOG_SOURCES = { SHOP_CATALOG_LIST, SITE_DEFS_LIST, COURSE_DEFS_LIST, SERVICE_DEFS_LIST, STREAM_DEFS_LIST, DECOR_CATALOG_LIST };
+// Defs tables keyed for the 'nile' renderer's price/label lookups — the
+// data half of a `screen.catalog` field ('ITEM_DEFS' | 'DECOR_CATALOG_DEFS').
+const CATALOG_DEFS = { ITEM_DEFS, DECOR_CATALOG_DEFS };
 
 function renderCatalog(body, gs, app, screen) {
   const source = CATALOG_SOURCES[screen.source];
@@ -435,12 +439,16 @@ function renderStreamly(body, gs, app, screen) {
   body.appendChild(grid);
 }
 
-// --- Nile: product grid with item thumbnails, prices, and a cart
-// sidebar showing items and total. ---
+// --- Nile / Home browse: product grid with item thumbnails, prices, and
+// a cart sidebar showing items and total. ---
+// Shared by Nile and the Home app (decor-economy plan Phase 1): the screen
+// def's `source`/`catalog`/`cartPath`/`cartRowAction`/`checkoutAction`
+// fields point this one renderer at either catalog. Both browse defs carry
+// those fields explicitly (defs.computer.js) — no shop-specific defaults.
 function renderNile(body, gs, app, screen) {
-  const shop = gs.world.computer.apps.shop;
-  const cart = shop?.cart || [];
-  const cartTotal = cart.reduce((sum, row) => sum + (ITEM_DEFS[row.defId]?.price || 0) * row.units, 0);
+  const defs = CATALOG_DEFS[screen.catalog] || ITEM_DEFS;
+  const cart = resolveCart(gs, screen.cartPath).cart;
+  const cartTotal = cart.reduce((sum, row) => sum + (defs[row.defId]?.price || 0) * row.units, 0);
 
   const layout = document.createElement('div');
   layout.className = 'nile-layout';
@@ -448,8 +456,8 @@ function renderNile(body, gs, app, screen) {
   // Product grid
   const grid = document.createElement('div');
   grid.className = 'nile-grid';
-  for (const row of SHOP_CATALOG_LIST) {
-    const def = ITEM_DEFS[row.id] || row;
+  for (const row of resolveScreenSource(gs, screen) || SHOP_CATALOG_LIST) {
+    const def = defs[row.id] || row;
     if (!def) continue;
     const card = document.createElement('div');
     card.className = 'nile-card';
@@ -463,9 +471,9 @@ function renderNile(body, gs, app, screen) {
     `;
     const btn = document.createElement('button');
     btn.className = 'btn tiny nile-add-btn';
-    btn.setAttribute('data-action', 'shop.add-to-cart');
+    btn.setAttribute('data-action', screen.rowAction);
     btn.setAttribute('data-row-id', row.id);
-    btn.textContent = 'Add to Cart';
+    btn.textContent = screen.rowActionLabel || 'Add to Cart';
     card.appendChild(btn);
     grid.appendChild(card);
   }
@@ -479,26 +487,332 @@ function renderNile(body, gs, app, screen) {
     sidebar.innerHTML += '<div class="dim tiny">Empty cart.</div>';
   } else {
     for (const row of cart) {
-      const def = ITEM_DEFS[row.defId];
+      const def = defs[row.defId];
       const item = document.createElement('div');
       item.className = 'nile-cart-item';
       item.innerHTML = `<span>${def?.label || row.defId} × ${row.units}</span><span class="dim tiny">${(def?.price || 0) * row.units}</span>`;
       const rm = document.createElement('button');
       rm.className = 'btn tiny';
-      rm.setAttribute('data-action', 'shop.remove-from-cart');
-      rm.setAttribute('data-row-id', row.id);
+      rm.setAttribute('data-action', screen.cartRowAction);
+      // data-row-id must be the defId — cart entries are { defId, units }
+      // with no `id`. (The old hardcoded `row.id` here silently made Nile's
+      // sidebar × a no-op; the cart screen's own row renderer always used
+      // `row.id || row.defId`, which is why only this sidebar was broken.)
+      rm.setAttribute('data-row-id', row.defId);
       rm.textContent = '×';
       item.appendChild(rm);
       sidebar.appendChild(item);
     }
     const checkout = document.createElement('button');
     checkout.className = 'btn nile-checkout-btn';
-    checkout.setAttribute('data-action', 'shop.checkout');
+    checkout.setAttribute('data-action', screen.checkoutAction);
     checkout.textContent = `Checkout (${cartTotal})`;
     sidebar.appendChild(checkout);
   }
   layout.appendChild(sidebar);
   body.appendChild(layout);
+}
+
+// --- Home placement screen (decor-economy plan Phase 2) ---
+// The in-game Studio: the same select/drag/resize/rotate interaction
+// dev/designer.html's Place tab has, over the player's OWN placed decor
+// objects instead of the dev-authored ROOM_DECOR config. Placed decor is
+// any object in the room's bucket carrying a `pos` (D4 — the placement
+// records live in gameState.objects, not in a config table).
+//
+// Transient interaction state — which room is being edited, what's
+// selected, an in-progress placement draft, the live drag gesture — lives
+// in homePlacementUI (UI.COMPUTER), the same split renderWindows has with
+// dragGesture: this renderer only READS it, and gestures that are
+// mid-flight when a background render fires keep operating because the
+// module-level state survives the rebuild (the canvas always reads the
+// current pos out of gameState, so a rebuild mid-drag shows exactly where
+// the piece already is).
+function renderHomePlacement(body, gs, app, screen) {
+  const hp = (typeof homePlacementUI !== 'undefined' && homePlacementUI) || null;
+  const roomId = (hp && hp.roomId) || gs.player.location;
+
+  // --- Room selector ---
+  const roomsRow = document.createElement('div');
+  roomsRow.className = 'hp-rooms';
+  for (const id of ALL_ROOMS) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    if (id === roomId) chip.setAttribute('data-active', '');
+    chip.setAttribute('data-action', 'home.place-room');
+    chip.setAttribute('data-room-id', id);
+    chip.textContent = ROOMS[id].name;
+    roomsRow.appendChild(chip);
+  }
+  body.appendChild(roomsRow);
+
+  // --- Palette + canvas ---
+  const layout = document.createElement('div');
+  layout.className = 'hp-layout';
+
+  const owned = (gs.player.inventory || []).filter(s => DECOR_CATALOG_DEFS[s.defId] && s.qty > 0);
+  const doormat = Object.values(gs.objects?.room_entry || {}).find(o => o.defId === 'doormat');
+  const onDoormat = (doormat?.contents || []).some(s => DECOR_CATALOG_DEFS[s.defId] && s.qty > 0);
+
+  const palette = document.createElement('div');
+  palette.className = 'hp-palette';
+  const head = document.createElement('div');
+  head.className = 'hp-palette-head';
+  head.textContent = 'Your furniture';
+  palette.appendChild(head);
+  if (owned.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'dim tiny hp-palette-empty';
+    empty.textContent = onDoormat
+      ? 'A delivery is waiting by the front door — pick it up first, then it will be here to place.'
+      : 'Nothing to place yet. Buy something on the Browse tab — it arrives by the door the next day.';
+    palette.appendChild(empty);
+  } else {
+    for (const s of owned) {
+      const btn = document.createElement('button');
+      btn.className = 'hp-palette-item';
+      btn.setAttribute('data-action', 'home.place-item');
+      btn.setAttribute('data-row-id', s.defId);
+      const def = DECOR_CATALOG_DEFS[s.defId];
+      const name = document.createElement('span');
+      name.className = 'hp-palette-label';
+      name.textContent = def.label;
+      const qty = document.createElement('span');
+      qty.className = 'hp-palette-qty';
+      qty.textContent = `×${s.qty}`;
+      btn.appendChild(name);
+      btn.appendChild(qty);
+      palette.appendChild(btn);
+    }
+  }
+  layout.appendChild(palette);
+
+  const canvasWrap = document.createElement('div');
+  canvasWrap.className = 'hp-canvas-wrap';
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.classList.add('hp-canvas');
+  buildHomePlacementCanvas(svg, gs, hp, roomId);
+  canvasWrap.appendChild(svg);
+  layout.appendChild(canvasWrap);
+  body.appendChild(layout);
+
+  // --- Footer action bar ---
+  const bar = document.createElement('div');
+  bar.className = 'hp-bar';
+  const snapBtn = document.createElement('button');
+  snapBtn.className = 'chip';
+  snapBtn.setAttribute('data-action', 'home.place-snap');
+  snapBtn.textContent = `Grid snap: ${hp ? (hp.snap ? 'on' : 'off') : 'on'}`;
+  bar.appendChild(snapBtn);
+
+  const bucket = gs.objects[`room_${roomId}`] || {};
+  const draftDef = hp && hp.draft ? DECOR_CATALOG_DEFS[hp.draft.defId] : null;
+  const selObj = hp && hp.selectedId ? bucket[hp.selectedId] : null;
+  const selDef = selObj ? DECOR_CATALOG_DEFS[selObj.defId] : null;
+  if (draftDef) {
+    const lbl = document.createElement('span');
+    lbl.className = 'dim tiny';
+    lbl.textContent = `Placing ${draftDef.label} in ${ROOMS[roomId].name} — drag to move, corners resize, the dot above rotates.`;
+    bar.appendChild(lbl);
+    const place = document.createElement('button');
+    place.className = 'btn tiny';
+    place.setAttribute('data-action', 'home.place-commit');
+    place.textContent = 'Place here';
+    bar.appendChild(place);
+    const cancel = document.createElement('button');
+    cancel.className = 'btn tiny btn-secondary';
+    cancel.setAttribute('data-action', 'home.place-cancel');
+    cancel.textContent = 'Cancel';
+    bar.appendChild(cancel);
+  } else if (selObj && selDef) {
+    const lbl = document.createElement('span');
+    lbl.className = 'dim tiny';
+    lbl.textContent = `${selDef.label} — drag to move, corners resize, the dot above rotates.`;
+    bar.appendChild(lbl);
+    const pickup = document.createElement('button');
+    pickup.className = 'btn tiny btn-secondary';
+    pickup.setAttribute('data-action', 'home.place-pickup');
+    pickup.setAttribute('data-obj-id', selObj.id);
+    pickup.textContent = 'Pick up';
+    bar.appendChild(pickup);
+  } else {
+    const lbl = document.createElement('span');
+    lbl.className = 'dim tiny';
+    lbl.textContent = 'Pick an item from the palette, then drag it into place.';
+    bar.appendChild(lbl);
+  }
+  body.appendChild(bar);
+}
+
+// One room's floor plan, as an editable canvas: room fills + walls with the
+// same openings the real floor plan cuts, the room's auto-arranged base
+// furniture dimmed as a backdrop, then the player's placed decor (objects
+// with a `pos`) at their real positions and the in-progress draft on top.
+// Geometry is drawn with the SAME helpers the floor plan uses, so the
+// canvas and the map cannot disagree about where a wall or a doorway is.
+function buildHomePlacementCanvas(svg, gs, hp, roomId) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const rects = ROOM_LAYOUT[roomId] || [];
+  if (rects.length === 0) return;
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (const [x, y, w, h] of rects) {
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y);
+    x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h);
+  }
+  const pad = 14;
+  svg.setAttribute('viewBox', `${x0 - pad} ${y0 - pad} ${(x1 - x0) + pad * 2} ${(y1 - y0) + pad * 2}`);
+  svg.innerHTML = '';
+
+  // Room fills — deliberately NO data-room-id, so the global click
+  // dispatcher's "rect + data-room-id → walk there" rule can't hijack a
+  // click that's meant to deselect. Deselect is the mousedown handler.
+  for (const [x, y, w, h] of rects) {
+    const r = document.createElementNS(NS, 'rect');
+    r.setAttribute('class', 'fp-room');
+    r.setAttribute('x', x); r.setAttribute('y', y);
+    r.setAttribute('width', w); r.setAttribute('height', h);
+    r.addEventListener('mousedown', (ev) => {
+      ev.preventDefault();
+      if (typeof doHomePlaceSelect === 'function') doHomePlaceSelect(null);
+    });
+    svg.appendChild(r);
+  }
+
+  // Walls, cut exactly where the floor plan cuts them.
+  const openings = typeof floorPlanOpenings === 'function' ? floorPlanOpenings(gs) : [];
+  const cuts = rects.length > 1 ? openings.concat(roomInternalSeams(rects)) : openings;
+  for (const [x, y, w, h] of rects) {
+    const sides = [
+      { fixed: y, from: x, to: x + w, vertical: false },
+      { fixed: y + h, from: x, to: x + w, vertical: false },
+      { fixed: x, from: y, to: y + h, vertical: true },
+      { fixed: x + w, from: y, to: y + h, vertical: true },
+    ];
+    for (const s of sides) {
+      for (const [a, b] of wallPieces(s.fixed, s.from, s.to, s.vertical, cuts)) {
+        const ln = document.createElementNS(NS, 'line');
+        ln.setAttribute('class', 'fp-wall');
+        if (s.vertical) {
+          ln.setAttribute('x1', s.fixed); ln.setAttribute('y1', a);
+          ln.setAttribute('x2', s.fixed); ln.setAttribute('y2', b);
+        } else {
+          ln.setAttribute('x1', a); ln.setAttribute('y1', s.fixed);
+          ln.setAttribute('x2', b); ln.setAttribute('y2', s.fixed);
+        }
+        svg.appendChild(ln);
+      }
+    }
+  }
+
+  // Room label, centered the way the floor plan centers it.
+  const [cx, cy] = typeof roomCentre === 'function' ? roomCentre(roomId) : [(x0 + x1) / 2, (y0 + y1) / 2];
+  const label = document.createElementNS(NS, 'text');
+  label.setAttribute('class', 'fp-room-label');
+  label.setAttribute('x', cx); label.setAttribute('y', cy);
+  label.textContent = ROOMS[roomId]?.name || roomId;
+  svg.appendChild(label);
+
+  // Base furniture backdrop: the room's OTHER objects, drawn by the same
+  // auto-arranger the floor plan uses, dimmed, so the player can arrange
+  // around what is already there. Placed decor is excluded (it is drawn on
+  // top at its real position) via a read-only clone of the bucket — no
+  // mutation, just a filtered view handed to a pure function.
+  const bucket = gs.objects?.[`room_${roomId}`] || {};
+  const baseOnly = {};
+  for (const [id, o] of Object.entries(bucket)) {
+    if (!o.pos) baseOnly[id] = o;
+  }
+  if (typeof renderAutoFurniture === 'function') {
+    const gsClone = { ...gs, objects: { ...gs.objects, [`room_${roomId}`]: baseOnly } };
+    const backdrop = renderAutoFurniture(gsClone, roomId);
+    if (backdrop) {
+      const bg = document.createElementNS(NS, 'g');
+      bg.classList.add('hp-backdrop');
+      bg.innerHTML = backdrop;
+      svg.appendChild(bg);
+    }
+  }
+
+  // Placed decor, at their real positions.
+  for (const o of Object.values(bucket)) {
+    if (!o.pos) continue;
+    svg.appendChild(buildHomePlacementObjectNode(o, gs, hp, false));
+  }
+
+  // The in-progress draft.
+  if (hp && hp.draft) {
+    svg.appendChild(buildHomePlacementObjectNode(hp.draft, gs, hp, true));
+  }
+
+  // Selection / draft handles.
+  if (hp) {
+    const target = hp.draft ? hp.draft : (hp.selectedId ? bucket[hp.selectedId] : null);
+    if (target && target.pos) {
+      buildHomePlacementHandles(svg, target, hp.draft ? 'draft' : target.id);
+    }
+  }
+}
+
+function buildHomePlacementObjectNode(o, gs, hp, isDraft) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const p = o.pos;
+  const g = document.createElementNS(NS, 'g');
+  g.classList.add('hp-obj');
+  if (isDraft) g.classList.add('hp-draft');
+  else if (hp && hp.selectedId === o.id) g.classList.add('hp-selected');
+
+  const def = DECOR_CATALOG_DEFS[o.defId];
+  const shapeId = def?.shape;
+  const shape = document.createElementNS(NS, 'g');
+  if (shapeId && typeof renderDesignShape === 'function') {
+    shape.innerHTML = renderDesignShape({ shape: shapeId, x: p.x, y: p.y, w: p.w, h: p.h, rot: p.rot || 0 });
+  } else {
+    const fallback = document.createElementNS(NS, 'rect');
+    fallback.setAttribute('class', 'fp-p fp-p-frame');
+    fallback.setAttribute('x', p.x); fallback.setAttribute('y', p.y);
+    fallback.setAttribute('width', p.w); fallback.setAttribute('height', p.h);
+    fallback.setAttribute('rx', 2);
+    shape.appendChild(fallback);
+  }
+  g.appendChild(shape);
+
+  const key = isDraft ? 'draft' : o.id;
+  g.addEventListener('mousedown', (ev) => {
+    if (typeof homePlacementStartMove === 'function') homePlacementStartMove(ev, key, isDraft);
+  });
+  return g;
+}
+
+function buildHomePlacementHandles(svg, target, key) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const p = target.pos;
+  const box = document.createElementNS(NS, 'rect');
+  box.setAttribute('class', 'hp-selbox');
+  box.setAttribute('x', p.x); box.setAttribute('y', p.y);
+  box.setAttribute('width', p.w); box.setAttribute('height', p.h);
+  svg.appendChild(box);
+
+  const mk = (name, attrs) => {
+    const el = document.createElementNS(NS, name);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    return el;
+  };
+  const corners = [
+    ['nw', p.x, p.y], ['ne', p.x + p.w, p.y],
+    ['sw', p.x, p.y + p.h], ['se', p.x + p.w, p.y + p.h],
+  ];
+  for (const [corner, hx, hy] of corners) {
+    const h = mk('circle', { class: 'hp-handle', cx: hx, cy: hy, r: 3.4 });
+    h.addEventListener('mousedown', (ev) => {
+      if (typeof homePlacementStartResize === 'function') homePlacementStartResize(ev, key, corner);
+    });
+    svg.appendChild(h);
+  }
+  const rh = mk('circle', { class: 'hp-handle rot', cx: p.x + p.w / 2, cy: p.y - 9, r: 3.6 });
+  rh.addEventListener('mousedown', (ev) => {
+    if (typeof homePlacementStartRotate === 'function') homePlacementStartRotate(ev, key);
+  });
+  svg.appendChild(rh);
 }
 
 // --- WorkHub: task cards with progress, earnings summary, and a
@@ -914,7 +1228,7 @@ const FOOD_BROWSE_FILTERS = [
 ];
 
 function renderDoorDropBrowse(body, gs, app, screen) {
-  const nowTick = getTickIndex(gs.meta.clock.minutes);
+  const nowMinutes = gs.meta.clock.minutes;
   const cartId = getFoodCartRestaurantId(gs);
   // Meal-category filter row — a single-select toggle of chips in the same
   // styling family as the tip selector: the active chip is the filled .btn,
@@ -934,11 +1248,11 @@ function renderDoorDropBrowse(body, gs, app, screen) {
   // still shows (so the player can see the hours), just dimmed and last.
   const list = RESTAURANT_DEFS_LIST
     .filter(def => foodBrowseFilterService === 'all' || def.service === foodBrowseFilterService)
-    .sort((a, b) => (isRestaurantOpen(b, nowTick) ? 1 : 0) - (isRestaurantOpen(a, nowTick) ? 1 : 0));
+    .sort((a, b) => (isRestaurantOpen(b, nowMinutes) ? 1 : 0) - (isRestaurantOpen(a, nowMinutes) ? 1 : 0));
   const grid = document.createElement('div');
   grid.className = 'dd-grid';
   for (const def of list) {
-    const open = isRestaurantOpen(def, nowTick);
+    const open = isRestaurantOpen(def, nowMinutes);
     const card = document.createElement('div');
     card.className = `dd-card${open ? '' : ' dd-closed'}`;
     card.innerHTML = `
@@ -1040,23 +1354,20 @@ function renderDoorDropCart(body, gs, app, screen) {
   // Delivery time. The earliest option is the kitchen's prep plus travel —
   // the same number placeFoodOrder will use, since both are seeded on the
   // day and the order count (see getFoodEarliestArrival). Slots are
-  // "{day}:{tick}" values (today or tomorrow) from earliest up to
-  // earliest + maxScheduleAheadTicks — the same value shape the escort
-  // booking select uses, and the same reason: a late-night order
-  // legitimately offers tomorrow's early-morning slots now that arrivals
-  // can cross midnight.
+  // absolute-minute values (today or tomorrow) from earliest up to
+  // earliest + maxScheduleAheadMinutes — a late-night order legitimately
+  // offers tomorrow's early-morning slots now that arrivals can cross
+  // midnight.
   const seq = (gs.world.foodOrders || []).length;
-  const earliest = getFoodEarliestArrival(gs, restaurantId, seq);
+  const earliestAbs = getFoodEarliestArrival(gs, restaurantId, seq);
   const nowDay = gs.meta.clock.day;
-  const earliestAbs = earliest.day * 1440 + earliest.tick * 30;
-  const maxAbs = earliestAbs + FOOD_TUNING.maxScheduleAheadTicks * 30;
+  const maxAbs = earliestAbs + FOOD_TUNING.maxScheduleAheadMinutes;
   const timeWrap = document.createElement('div');
   timeWrap.className = 'dd-time';
   let opts = '';
   let curDay = null;
   for (let abs = earliestAbs; abs <= maxAbs; abs += 30) {
     const d = Math.floor(abs / 1440);
-    const t = Math.floor((abs % 1440) / 30);
     if (d !== curDay) {
       if (curDay !== null) opts += '</optgroup>';
       const group = d === nowDay ? 'Today' : d === nowDay + 1 ? 'Tomorrow' : `Day ${d}`;
@@ -1064,10 +1375,10 @@ function renderDoorDropCart(body, gs, app, screen) {
       curDay = d;
     }
     const isFirst = abs === earliestAbs;
-    const timeLabel = formatTime(t * 30);
+    const timeLabel = formatTime(abs % 1440);
     const prefix = d === nowDay ? '' : d === nowDay + 1 ? 'Tomorrow ' : `Day ${d} `;
     const label = isFirst ? `ASAP — ${prefix}${timeLabel}` : `${prefix}${timeLabel}`;
-    opts += `<option value="${d}:${t}">${label}</option>`;
+    opts += `<option value="${abs}">${label}</option>`;
   }
   if (curDay !== null) opts += '</optgroup>';
   timeWrap.innerHTML = `<label class="dim tiny">Deliver at</label> <select id="food-time">${opts}</select>`;
@@ -1133,16 +1444,16 @@ function renderDoorDropCart(body, gs, app, screen) {
 
 // One arrival-label string for both the orders renderer and the live ETA
 // ticker (updateFoodOrderEtas), so the two can never disagree about what
-// "arriving" means. Cross-midnight orders (arrivalDay > order day) label
-// their slot "Tomorrow HH:MM"; old saved orders without arrivalDay read as
-// same-day.
+// "arriving" means. Cross-midnight orders label their slot "Tomorrow HH:MM";
+// old saved orders without arrivalAbs read as same-day.
 function foodArrivalWhenLabel(order, gs) {
-  const arrivalDay = order.arrivalDay != null ? order.arrivalDay : order.day;
-  return arrivalDay === gs.meta.clock.day
-    ? formatTime(order.arrivalTick * 30)
-    : arrivalDay === gs.meta.clock.day + 1
-      ? `Tomorrow ${formatTime(order.arrivalTick * 30)}`
-      : `Day ${arrivalDay}, ${formatTime(order.arrivalTick * 30)}`;
+  const abs = foodOrderArrivalAbs(order);
+  const day = Math.floor(abs / 1440);
+  return day === gs.meta.clock.day
+    ? formatTime(abs % 1440)
+    : day === gs.meta.clock.day + 1
+      ? `Tomorrow ${formatTime(abs % 1440)}`
+      : `Day ${day}, ${formatTime(abs % 1440)}`;
 }
 
 function renderDoorDropOrders(body, gs, app, screen) {

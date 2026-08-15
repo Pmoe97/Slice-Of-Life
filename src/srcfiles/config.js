@@ -353,6 +353,9 @@ const WALK = {
   // A floor is never truly free even standing still; this is the floor on a
   // single move so a click always advances the clock a little.
   minSeconds: 1,
+  // Phase 4 (continuous-behavior-engine): a walk to a stand-point this close
+  // is a walk to where you already are — skip it and arrive instantly.
+  arriveEpsilon: 2,
 };
 
 // --- Economy (luxury penthouse scale — see apartment-expansion-plan.md) ---
@@ -1050,21 +1053,23 @@ const CONTRACTOR_QUALITY_MILESTONE_THRESHOLD = 0.25;
 // world.visits[] is the single source of truth for "who is onsite and why",
 // written by every source (renovation jobs today; maid contracts, food
 // orders, roommates' friends, player invitations in later phases) and read
-// by one question: SIM's getActiveVisits. Ticks are 0-47 half-hour
-// increments (getTickIndex, matching SCHEDULES). The soft cap applies to
-// ORGANIC visits only — paid/scheduled visits always honor their booking.
+// by one question: SIM's getActiveVisits. Records carry absolute-minute
+// windows [startAbs, endAbs) (external-world retiming D1); these tuning
+// values express the same windows in minutes-from-midnight so the sources
+// can build those absolutes directly. The soft cap applies to ORGANIC
+// visits only — paid/scheduled visits always honor their booking.
 const VISIT_TUNING = {
   softCap: 3,               // concurrent visitors that triggers organic-visit deferral (Phase 6)
   // How many days a retired ('done'/'deferred') visit record is kept before
-  // processVisitsForDay sweeps it. getActiveVisits only ever matches the
-  // current day, so anything older is inert — but the array is written into
-  // the save in full on every boundary, and without a sweep it grows for the
-  // life of the playthrough. A week is plenty of slack for anything that
-  // wants to look back at recent visits.
+  // processVisitsForDay sweeps it. getActiveVisits only ever matches an
+  // active window, so anything older is inert — but the array is written
+  // into the save in full on every boundary, and without a sweep it grows
+  // for the life of the playthrough. A week is plenty of slack for anything
+  // that wants to look back at recent visits.
   retainDoneDays: 7,
   contractor: {
-    startTick: 18,          // 09:00 — Del's locked presence window (decision 10)
-    endTick: 33,            // 16:30 — weekday only, see isWeekend
+    startMinute: 540,       // 09:00 — Del's locked presence window (decision 10)
+    endMinute: 990,         // 16:30 — weekday only, see isWeekend
   },
   // Purpose-derived activity strings, picked per tick with the tick's
   // seeded rng. The plan's example phrasing ("scrubbing the counters",
@@ -1099,12 +1104,13 @@ const VISIT_TUNING = {
 // a roommate who dislikes you says no, and the reason they give is
 // information.
 const COMMITMENT_TUNING = {
-  // Meal windows in ticks (30-min units). Offered as invite targets in
-  // exactly this order.
+  // Meal windows in minutes-of-day (RESTAURANT_DEFS.hours' own convention —
+  // continuous-simulation roadmap C1: nothing that gates a decision branches
+  // on a tick index). Offered as invite targets in exactly this order.
   mealSlots: [
-    { id: 'breakfast', label: 'Breakfast', startTick: 16, endTick: 20 }, // 08:00-10:00
-    { id: 'lunch', label: 'Lunch', startTick: 26, endTick: 30 },         // 13:00-15:00
-    { id: 'dinner', label: 'Dinner', startTick: 38, endTick: 44 },       // 19:00-22:00
+    { id: 'breakfast', label: 'Breakfast', startMinute: 480, endMinute: 600 },  // 08:00-10:00
+    { id: 'lunch', label: 'Lunch', startMinute: 780, endMinute: 900 },          // 13:00-15:00
+    { id: 'dinner', label: 'Dinner', startMinute: 1140, endMinute: 1320 },      // 19:00-22:00
   ],
   // Day offsets 0..maxInviteAheadDays-1 are offered (today, +1, +2).
   maxInviteAheadDays: 3,
@@ -1181,9 +1187,10 @@ const COMMITMENT_TUNING = {
 // generalisation cannot change what a dinner does.
 //
 // `hangout` uses the EXISTING 'leisure' block rather than inventing one. A new
-// block name would appear in no `blockFilter` in DRIVE_DEFS, so the NPC would
-// sit in the room doing literally nothing for the window — which is a
-// convincing description of a bug and an unconvincing one of company. Under
+// block name would appear in no `timeOfDay` in DRIVE_DEFS, so the NPC would
+// sit in the room scoring every drive at the out-of-band routine weight —
+// effectively doing nothing for the window, which is a convincing description
+// of a bug and an unconvincing one of company. Under
 // 'leisure' they are in the room, at leisure, available. What there is to
 // actually DO together is Phase 5's.
 const COMMITMENT_KINDS = {
@@ -1204,7 +1211,7 @@ const COMMITMENT_KINDS = {
     // is when this cast is home and off-shift, and a proposal that could land
     // at four different times is a scheduling UI, not a beat.
     roomId: 'living_room',
-    slots: [{ id: 'evening', startTick: 38, endTick: 42 }],  // 19:00–21:00
+    slots: [{ id: 'evening', startMinute: 1140, endMinute: 1260 }],  // 19:00-21:00
     // Today and tomorrow. Further out than that and the player has forgotten
     // by the time the window opens.
     maxAheadDays: 2,
@@ -1273,13 +1280,13 @@ const FOOD_TUNING = {
   // "everyone persists forever" (locked decision 5) plus repeat drivers is
   // what makes a delivery person someone you can actually get to know.
   driverPoolSize: 5,
-  // The handover window, in ticks. One (thirty minutes) — long enough that
-  // the player can realistically be in the entry to catch the driver, but
-  // not absurdly long.
-  driverWindowTicks: 1,
-  // How far ahead a scheduled order can be placed, in ticks past the
+  // The handover window, in minutes. Thirty — long enough that the player
+  // can realistically be in the entry to catch the driver, but not absurdly
+  // long.
+  driverWindowMinutes: 30,
+  // How far ahead a scheduled order can be placed, in minutes past the
   // earliest possible arrival.
-  maxScheduleAheadTicks: 12,
+  maxScheduleAheadMinutes: 360,
 };
 
 // --- Friends of roommates (src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 6) ---
@@ -1303,10 +1310,10 @@ const FRIEND_TUNING = {
   // service works, and after a day_shift resident's commute home (SCHEDULES:
   // work ends tick 34, evening starts 36) — a guest who arrives while their
   // host is still at the office would just stand in the living room alone.
-  startTickMin: 35,          // 17:30
-  startTickMax: 40,          // 20:00
-  durationTicksMin: 4,       // 2h
-  durationTicksMax: 8,       // 4h
+  startMinuteMin: 1050,      // 17:30
+  startMinuteMax: 1200,      // 20:00
+  durationMinutesMin: 120,   // 2h
+  durationMinutesMax: 240,   // 4h
   // The same friend doesn't turn up two days running.
   perFriendCooldownDays: 3,
 };
@@ -1751,6 +1758,18 @@ const QUEST_CONFIG = {
 // decayPerTick here — it eases toward MOOD_TARGET, see below). energy and
 // hygiene stay per-tick rates, both scaled by NEEDS.idleDecayMultiplier
 // while idling (D12).
+// Heartbeat plan Phase 1 added a per-MINUTE form of every rate, meant to sit
+// alongside the per-tick forms until Phase 2's heartbeat switched readers
+// over to it. It never did: decayPlayerNeeds (SIM) instead kept the
+// per-tick rate and multiplies it by a FRACTIONAL tick count
+// (minutes/CLOCK.tickMinutes) — mathematically identical to rate/30*minutes,
+// chosen to stay byte-exact with old saves on whole-30-min spans and avoid a
+// second source of float drift — and applyNeedsHeartbeat's NPC path reads
+// its own separate npc*PerMinute constants below, never these. The
+// decayPerMinute fields this comment used to describe were dead from the
+// day Phase 3 shipped; removed rather than wired up a second time, per the
+// same dead-field-triage precedent as the NPC correctness plan's Phase 5
+// (this audit's gap-fix).
 const NEEDS = {
   // sleepRestore moved to the SLEEP block — energy recovered by sleeping is
   // now a function of hours actually slept, not a flat per-tick rate.
@@ -1796,17 +1815,23 @@ const NEEDS = {
   // shower drive had been mechanically dead since it was written (and with
   // it the towel clothing state, NPC water metering, and a peep target).
   npcEnergyDecay: 2,
+  npcEnergyDecayPerMinute: 2/30,
   // D11: 3 → 1.5. Tuned against measured drive throughput, not by feel: the
-  // eat drive can only fire on non-transit ticks inside its blockFilter, which
-  // works out to roughly one meal a day per NPC. At 2/tick a meal (which tops
+  // eat drive can only fire on non-transit ticks inside its timeOfDay set,
+  // which works out to roughly one meal a day per NPC. At 2/tick a meal (which tops
   // out at NPC_INVENTORY.eatUntilHunger = 65) burned off in ~33 ticks and the
   // cast lived at an average hunger of 20.
   npcHungerDecay: 1.5,
+  npcHungerDecayPerMinute: 1.5/30,
   npcHygieneDecay: 1,       // ~1 shower/day needed at 48 ticks (D10)
+  npcHygieneDecayPerMinute: 1/30,
   npcSocialDecay: 1,        // D12: 2 → 1
+  npcSocialDecayPerMinute: 1/30,
   // NPC Overhaul Phase 6 — NPC comfort + stimulation decay rates
   npcComfortDecay: 0.5,
+  npcComfortDecayPerMinute: 0.5/30,
   npcStimulationDecay: 1,
+  npcStimulationDecayPerMinute: 1/30,
   npcSocialMax: 100, // hunger/hygiene/energy each carry their own .max above; social has no player-facing counterpart, so its max lives here
   // NPC need restoration per tick, keyed to schedule block rather than
   // parsing activity strings (activity labels are flavor text, not a
@@ -1817,14 +1842,18 @@ const NEEDS = {
   // rates alongside the code that read them, so a future reader can't
   // reintroduce a passive restore by wiring up an orphaned constant.
   npcSleepRestore: 6,    // per tick while in the 'sleep' block
+  npcSleepRestorePerMinute: 6/30,
   // A committed dinner (inventory overhaul Phase 7, D7) survives D11's
   // removal of passive hunger restore: a 'meal' block is an NPC actually
   // sitting down at the table, which is a real act with a real commitment
   // record behind it, not background topping-up.
   npcMealRestore: 12,    // per tick while in the 'meal' block
+  npcMealRestorePerMinute: 12/30,
   npcSocialRestore: 5,   // D12: 4 → 5, per tick sharing a room with another resident
+  npcSocialRestorePerMinute: 5/30,
   // NPC Overhaul Phase 6 — comfort + stimulation restore
   npcComfortRestore: 2,     // per tick in a comfortable room (living room with working entertainment, or an UPGRADED bedroom)
+  npcComfortRestorePerMinute: 2/30,
   // D14: a small unconditional floor in the living room or your own bedroom,
   // regardless of upgrade tier. The upgrade incentive is preserved (2 vs 0.5);
   // what's removed is the pre-upgrade state where comfort could only ever
@@ -1832,13 +1861,16 @@ const NEEDS = {
   // 0.5 exactly cancels npcComfortDecay, so a comfortable room HOLDS comfort
   // rather than raising it — the facility upgrade is what actually restores.
   npcComfortBaselineRestore: 0.5,
+  npcComfortBaselineRestorePerMinute: 0.5/30,
   npcComfortProximityBonus: 2, // extra comfort when sharing a room with a trusted NPC (comfort > 0.5 in castWeb)
+  npcComfortProximityBonusPerMinute: 2/30,
   // D13: 4 → 2. The passive restore is deliberately smaller than the
   // seek_stimulation drive's +20, so the DRIVE is what relieves boredom and
   // the passive trickle only slows the slide. At 4/tick over the widened
   // block set the need pinned at ~84 and its drive never fired — the same
   // failure as the old hygiene ceiling, just in a different need.
   npcStimulationRestore: 2,
+  npcStimulationRestorePerMinute: 2/30,
 };
 
 // --- Hunger rhythm (Phase 5, D1) ---
@@ -2241,6 +2273,19 @@ const TIME_DILATION = {
   // knob was declared here but never read by anything, so it's gone rather
   // than sitting around implying a guard that doesn't exist.
   simCheckpointMinutes: 30,
+  // Needs heartbeat (needs-and-heartbeat-plan.md Phase 2, D1/D2): the decay /
+  // restore cadence for NPC and player needs inside clockFrame's continuous
+  // loop — one accumulator beside simCheckpointMinutes'. Phase 4 (tuning)
+  // RETUNED the proposed 1 → 5 by live pass: 1/5/30-min chunking of the
+  // closed form is byte-identical for every need, phone battery, and memory
+  // over a full day (max NPC-need diff 0.0 even across checkpoint block
+  // transitions; player mood diff 1.8e-6), so the cadence is a pure cost
+  // trade — 5 fires 5× fewer calls (288 vs 1440/day) at identical outcomes,
+  // yet stays far finer than the 30-min sim checkpoints that bound restore
+  // staleness anyway. Anything finer than 5 buys nothing a reader can see
+  // (needs surface as 5%-bucketed bars; decision reads happen at ≥30-gm
+  // cadence). See locked decision D8 in needs-and-heartbeat-plan.md.
+  HEARTBEAT_MINUTES: 5,
   // When the page is hidden (tab switch), freeze the clock so time
   // doesn't accumulate absurdly while away
   freezeWhenHidden: true,
@@ -2259,6 +2304,13 @@ const PHONE = {
   batteryDrainPerCheckpoint: 2,        // % per 30 game-minutes ≈ 25h to empty
   batteryChargePerCheckpoint: 6,       // % per 30 game-minutes plugged in
   chargeMeterDevicesPerCheckpoint: 0.5, // hours of the `devices` meter per charging checkpoint
+  // Heartbeat plan Phase 3: the per-MINUTE forms (= per-checkpoint / 30, a
+  // pure conversion). The continuous path's heartbeat and the discrete
+  // path's closed-form batch calls both read these (advancePhoneBattery);
+  // the per-checkpoint fields above stay as the authored feel knobs.
+  batteryDrainPerMinute: 2/30,
+  batteryChargePerMinute: 6/30,
+  chargeMeterDevicesPerMinute: 0.5/30,
 };
 
 // --- Camera (BrineOS Phase 8) ---
@@ -3721,6 +3773,38 @@ const SCHEDULES = {
   },
 };
 
+// --- Block time-of-day windows (continuous-behavior-engine Phase 3, D4) ---
+// The canonical minutes-from-midnight ranges each schedule block occupies —
+// the table the routine weight curve (COGNITION's driveTimeOfDayWeight) keys
+// on. A drive's former `blockFilter` block names translate, per name, into
+// real time ranges, so "morning" can score in-band at 09:00 and a soft
+// penalty at 14:00 with no hard boundary anyone can catch fraying (D4).
+//
+// Authored rather than derived from SCHEDULES: the templates are shift-
+// specific, and the union of every template's sleep window is most of the
+// day, which is not a routine anyone would recognise. These are the
+// canonical windows — when a block *feels like* it happens for a normal
+// (day-shift / standard) schedule. The routine weight is about time of day,
+// not about any one NPC's template: a night-shift worker's sleep still
+// happens during the day, but the question "does 22:00 feel like wind-down"
+// has one answer for everyone. Phase 6 owns the curve's shape; this table
+// is the shape's data, and every name below appears as a schedule block
+// somewhere in SCHEDULES (verify harnesses assert the union of block names
+// used by drives stays inside it).
+const BLOCK_TIME_OF_DAY = {
+  sleep:        [[0, 420], [1260, 1440]],     // 00:00–07:00, 21:00–24:00
+  morning:      [[300, 600]],                 // 05:00–10:00
+  prep:         [[300, 480], [900, 1020]],    // 05:00–08:00, 15:00–17:00
+  commute:      [[360, 600]],                 // 06:00–10:00
+  work:         [[480, 1080]],                // 08:00–18:00
+  commute_home: [[1020, 1140]],               // 17:00–19:00
+  midday:       [[600, 960]],                 // 10:00–16:00
+  evening:      [[960, 1320]],                // 16:00–22:00
+  leisure:      [[360, 1080]],                // 06:00–18:00
+  wind_down:    [[1200, 1440]],               // 20:00–24:00
+  meal:         [[720, 900], [1080, 1260]],   // 12:00–15:00, 18:00–21:00
+};
+
 // --- Activity tables per schedule-block ---
 const ACTIVITY_TABLES = {
   sleep:    ['sleeping'],
@@ -4535,7 +4619,7 @@ const NPC_GIFT_TUNING = {
   // 0.9: one gift per 4.9 NPC-days at 20 against one per 15.3 at 96 — the
   // second figure being what "once, ever" looks like averaged out. A gesture,
   // not a drip, which is what the line below always intended.
-  cooldownTicks: 20,        // ~10 in-game hours between gift attempts
+  cooldownMinutes: 600,        // ~10 in-game hours between gift attempts
   baseChance: 0.02,         // per-tick probability once the gate passes
   // Categories the drive will gift, in preference order — the kinds of
   // thing you'd hand someone. Toiletries/cleaning/keys stay theirs.
@@ -4784,8 +4868,18 @@ const CONTENT_DIRECTIVES = {
 // Need gates use a threshold + direction: { need: 'hunger', op: 'below',
 // threshold: 30 } fires when npc.needs.hunger < 30. Multiple gates = AND.
 // weight is the per-tick probability the drive fires once gates pass.
-// blockFilter limits drives to specific schedule blocks.
-// cooldownTicks prevents the same drive from firing again too soon.
+// cooldownMinutes prevents the same drive from firing again too soon.
+//
+// --- `timeOfDay` (continuous-behavior-engine Phase 3, D4) ----------------
+// The former `blockFilter` was a HARD gate: a drive whose current schedule
+// block was not in the list was not even scored. D4 replaces the gate with
+// a scoring weight — the drive stays reachable everywhere, but scores
+// COGNITION.routineOutOfBand outside the time-of-day windows its declared
+// blocks occupy and its `blockAppeal` multiplier inside them. Each name in
+// `timeOfDay` maps to real minute ranges through BLOCK_TIME_OF_DAY (never a
+// silently dropped name — the phase's verification greps every set). The
+// same field on OVERTURE_DEFS entries is still a hard gate; that table's
+// conversion belongs to npc-initiative-retiming-plan's D3.
 //
 // --- `utility` (npc-cognition-plan.md Phase 1) ---------------------------
 // Every entry also carries a `utility` block, which is what cognition.js's
@@ -4796,8 +4890,8 @@ const CONTENT_DIRECTIVES = {
 //     need:   { need: 'hygiene', below: 45 },            // rises as the need falls under `below` (D6)
 //     signal: { signal: ['dirty_dishes'], scale: 0.8 },  // at the NPC's own attenuated intensity (D8)
 //     temperamentWeights: { conscientiousness: 0.4 },    // 1 + Σ(axis × weight) (D7)
-//     blockAppeal: { morning: 1.2 },                     // schedule-block multiplier, default 1
-//     holdTicks: 2,                                      // required — how long the pursuit is held (D4)
+//     blockAppeal: { morning: 1.2 },                     // in-window multiplier, default 1 (D4)
+//     holdMinutes: 60,                                   // required — how long the pursuit is held (D4; was holdTicks 2)
 //   }
 //
 // `weight` IS RETIRED (D1, Phase 2). Selection is `utility.baseAppeal` scored
@@ -4895,15 +4989,6 @@ const CONTENT_DIRECTIVES = {
 // source — `mood`, the only motivation source measured alive (see the plan's
 // Evidence) — and the later phases add the rest as they make them live.
 const DRIVE_DEFS = {
-  // --- Need-driven self-care ---
-  // Phase 8: the eat drive (formerly `cook`). A hungry NPC no longer
-  // conjures hunger from nowhere — it searches the fridge, the pantry and
-  // its own bag and REALLY consumes what it finds (your groceries
-  // disappear; D8). Only when every reachable source is genuinely empty
-  // does it fall back to the abstract scrounge, so nobody starves because
-  // the player forgot to shop. Resolution is custom (tryEatFood in DRIVES),
-  // the same dispatch shape as the peep/snoop drives — the `effects` list
-  // is deliberately empty.
   eat: {
     // The `hunger below 35` gate that used to sit here is now utility.need
     // (D6/D14). Plan 0's D11 had raised it 25 → 35 because with no passive
@@ -4915,7 +5000,7 @@ const DRIVE_DEFS = {
     // rooms constantly during evening blocks, so the effective firing rate is
     // far below the nominal weight. Measured at 0.3 the cast averaged one meal
     // every three days.
-    blockFilter: ['morning', 'evening', 'wind_down', 'leisure', 'midday'],
+    timeOfDay: ['morning', 'evening', 'wind_down', 'leisure', 'midday'],
     effects: [],
     // 8 → 14 in Phase 5, and it is a CONSEQUENCE of the cooldown rollover bug
     // fix (see isOnCooldown in drives.js), not a judgement about appetite: the
@@ -4923,7 +5008,7 @@ const DRIVE_DEFS = {
     // when the wrap fix landed the raw eat rate overshot the target at ~35% of
     // all actions. The longer cooldown plus the base/block cuts below are the
     // measured compensation that brought the total back to the Phase 5 target.
-    cooldownTicks: 14,
+    cooldownMinutes: 420,
     isEatDrive: true,
     // Phase 4 (traces): the standing-signal half of this drive's footprint.
     // A kitchen meal is the NPC's cooking — dishes in the sink, grease on
@@ -4970,22 +5055,29 @@ const DRIVE_DEFS = {
       // a full belly does not dull the base term). The three changes together
       // bring eat to 27% of actions at the Phase 5 target rate. baseAppeal is
       // NOT zeroed because a sated NPC must still eat eventually: blockAppeal
-      // and holdTicks already vary meal size, and zeroing would make the drive
+      // and holdMinutes already vary meal size, and zeroing would make the drive
       // read as dead on the instrument.
       baseAppeal: 0.27,
       need: { need: 'hunger', below: 45 },
-      holdTicks: 2,
+      holdMinutes: 60, // was holdTicks 2 — 2 × 30-min ticks
       blockAppeal: { morning: 1.05, midday: 1.0, evening: 1.05, wind_down: 0.8 },
     },
   },
+
   shower: {
     gates: [], weight: 0.3,   // was `hygiene below 30` — now utility.need (D14)
-    blockFilter: ['morning', 'wind_down', 'leisure'],
+    // continuous-behavior-engine Phase 3 (D2): wraps self.shower for a real
+    // object anchor (ACTION_ANCHOR_OBJS' 'shower') instead of room-centroid.
+    // holdMinutes below still governs the commitment's HELD duration — only
+    // the stand-point is borrowed, not self.shower's own (player-paced)
+    // timeCost.
+    actionId: 'self.shower',
+    timeOfDay: ['morning', 'wind_down', 'leisure'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'hygiene', delta: 40 } }],
     activityOverride: 'showering',
     eventTemplate: '{name} took a shower.',
     eventMood: 0.02,
-    cooldownTicks: 10,
+    cooldownMinutes: 300,
     // Singing in the shower, more or less. The running water is already the
     // loudest transient in the game (0.85), so this is not what tells you
     // someone is in there — it is what tells you how their day is going.
@@ -5022,7 +5114,7 @@ const DRIVE_DEFS = {
       baseAppeal: 0.25,
       need: { need: 'hygiene', below: 45 },
       temperamentWeights: { conscientiousness: 0.20 },
-      holdTicks: 1,
+      holdMinutes: 30, // was holdTicks 1 — 1 × 30-min ticks
       blockAppeal: { morning: 1.3, wind_down: 1.1, leisure: 0.9 },
     },
   },
@@ -5039,14 +5131,15 @@ const DRIVE_DEFS = {
   // and no towel state or utility metering. Disrepair still costs you a
   // household of visibly grubby roommates — it just no longer bottoms out at
   // an unrecoverable zero where every NPC reads identically.
+
   wash_up: {
     gates: [], weight: 0.25,  // was `hygiene below 25` — now utility.need (D14)
-    blockFilter: ['morning', 'wind_down', 'leisure', 'evening'],
+    timeOfDay: ['morning', 'wind_down', 'leisure', 'evening'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'hygiene', delta: 20 } }],
     activityOverride: 'washing up at the sink',
     eventTemplate: '{name} washed up as best they could.',
     eventMood: -0.01,
-    cooldownTicks: 14,
+    cooldownMinutes: 420,
     // The consolation-prize version of a shower, and it reads like one.
     expresses: { signal: 'sighing', when: { mood: { below: EXPRESSION_MOOD.low } }, intensity: SIGNALS_EMIT.sighing },
     // Deliberately worse than a shower in appeal as well as in effect, so an
@@ -5056,9 +5149,10 @@ const DRIVE_DEFS = {
       baseAppeal: 0.20,
       need: { need: 'hygiene', below: 35 },
       temperamentWeights: { conscientiousness: 0.20 },   // as shower — see there
-      holdTicks: 1,
+      holdMinutes: 30, // was holdTicks 1 — 1 × 30-min ticks
     },
   },
+
   sleep_recover: {
     // The `energy below 20` gate is deleted (D14). Energy is observed to range
     // 28..100 — it never once reached 20, so this drive fired zero times in 84
@@ -5066,7 +5160,11 @@ const DRIVE_DEFS = {
     // impossible, not a threshold to nudge.
     gates: [],
     weight: 0.4,
-    blockFilter: ['leisure', 'wind_down'],
+    // continuous-behavior-engine Phase 3 (D2): wraps self.nap — a bed/sofa
+    // anchor instead of room-centroid. holdMinutes below still governs the
+    // held duration, not self.nap's own ACTION_TUNING.napMinutes.
+    actionId: 'self.nap',
+    timeOfDay: ['leisure', 'wind_down'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'energy', delta: 25 } }],
     activityOverride: 'napping',
     // No `leaves`. The obvious trace — napping in a bedroom leaves the bed
@@ -5077,7 +5175,7 @@ const DRIVE_DEFS = {
     // puts NPCs in bedrooms during the day, this is one config line away.
     eventTemplate: '{name} crashed for a nap.',
     eventMood: 0.05,
-    cooldownTicks: 16,
+    cooldownMinutes: 480,
     // Lying down at the end of a bad one. This drive and seek_comfort carry
     // the two lowest mean moods in the table (−0.015 and 0.006 against a cast
     // mean of 0.109), so the low band actually catches them.
@@ -5098,19 +5196,20 @@ const DRIVE_DEFS = {
       baseAppeal: 0.20,
       need: { need: 'energy', below: 50 },
       temperamentWeights: { conscientiousness: -0.20, selfAwareness: 0.20 },
-      holdTicks: 3,
+      holdMinutes: 90, // was holdTicks 3 — 3 × 30-min ticks
       blockAppeal: { wind_down: 1.2 },
     },
   },
+
   seek_company: {
     gates: [],   // was `social below 25` — now utility.need (D14)
     weight: 0.25,
-    blockFilter: ['leisure', 'evening', 'wind_down'],
+    timeOfDay: ['leisure', 'evening', 'wind_down'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'social', delta: 15 } }],
     activityOverride: 'hanging out',
     eventTemplate: '{name} came out to the common area for some company.',
     eventMood: 0.04,
-    cooldownTicks: 6,
+    cooldownMinutes: 180,
     moveToCommon: true,
     // Coming out to where the people are because the room you were in was
     // not helping. The sigh lands in the COMMON room they moved to, which is
@@ -5131,12 +5230,13 @@ const DRIVE_DEFS = {
       baseAppeal: 0.22,
       need: { need: 'social', below: 50 },
       temperamentWeights: { warmth: 0.35, assertiveness: 0.20 },
-      holdTicks: 2,
+      holdMinutes: 60, // was holdTicks 2 — 2 × 30-min ticks
       blockAppeal: { evening: 1.1, leisure: 1.1 },
     },
   },
 
   // --- Chore behavior ---
+
   clean_common: {
     // Perception plan Phase 5: gated on actually SEEING mess, rather than
     // firing on a bare weight roll wherever the NPC happened to be. Sight
@@ -5145,12 +5245,12 @@ const DRIVE_DEFS = {
     // longer tidies a room that was already clean.
     gates: [{ signal: ['dirty_dishes', 'clutter', 'unmade_bed'], op: 'above', threshold: 0.25 }],
     weight: 0.35,
-    blockFilter: ['morning', 'leisure', 'wind_down'],
+    timeOfDay: ['morning', 'leisure', 'wind_down'],
     effects: [],
     activityOverride: 'cleaning up',
     eventTemplate: '{name} tidied up the {room}.',
     eventMood: 0.03,
-    cooldownTicks: 20,
+    cooldownMinutes: 600,
     cleansRoom: true,
     // Cleaning up after other people is the classic place for both halves of
     // this: the resentful bang and the contented pottering. Same ordering as
@@ -5175,18 +5275,24 @@ const DRIVE_DEFS = {
       baseAppeal: 0.20,
       signal: { signal: ['dirty_dishes', 'clutter', 'unmade_bed'], scale: 0.8 },
       temperamentWeights: { conscientiousness: 0.4, warmth: 0.1 },
-      holdTicks: 2,
+      holdMinutes: 60, // was holdTicks 2 — 2 × 30-min ticks
       blockAppeal: { morning: 1.2 },
     },
   },
+
   do_laundry: {
     gates: [], weight: 0.05,
-    blockFilter: ['morning', 'leisure'],
+    // continuous-behavior-engine Phase 3 (D2): wraps self.laundry — the
+    // washer's own object anchor (source:{kind:'object'}, so no decor-table
+    // fallback needed) instead of room-centroid. holdMinutes below still
+    // governs the held duration, not self.laundry's own timeCost.
+    actionId: 'self.laundry',
+    timeOfDay: ['morning', 'leisure'],
     effects: [],
     activityOverride: 'doing laundry',
     eventTemplate: '{name} started a load of laundry.',
     eventMood: 0.02,
-    cooldownTicks: 30,
+    cooldownMinutes: 900,
     emptiesHamper: true,
     meters: [['laundry', 1], ['devices', 0.5]],
     emitsSignal: { signal: 'machine_running', intensity: SIGNALS_EMIT.laundry },
@@ -5196,7 +5302,7 @@ const DRIVE_DEFS = {
     // No need and no signal drives this — laundry is a chore that simply wants
     // doing — so base appeal is the only lever and has to carry the whole
     // score. It clears actionThreshold in the morning block and not otherwise,
-    // which makes laundry a morning job; the 30-tick cooldown is what keeps it
+    // which makes laundry a morning job; the 900-minute cooldown is what keeps it
     // rare, rather than the near-zero weight it used to rely on.
     //
     // Phase 3: the purest chore in the table, and therefore the clearest place
@@ -5211,19 +5317,20 @@ const DRIVE_DEFS = {
     utility: {
       baseAppeal: 0.36,
       temperamentWeights: { conscientiousness: 0.35 },
-      holdTicks: 3,
+      holdMinutes: 90, // was holdTicks 3 — 3 × 30-min ticks
       blockAppeal: { morning: 1.2, leisure: 0.85 },
     },
   },
 
   // --- Social: NPC-to-NPC interaction ---
+
   chat_with_roommate: {
     gates: [],   // was `social below 40` — now utility.need (D14)
     weight: 0.15,
-    blockFilter: ['leisure', 'evening', 'wind_down', 'morning'],
+    timeOfDay: ['leisure', 'evening', 'wind_down', 'morning'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'social', delta: 20 } }],
     activityOverride: 'chatting with a roommate',
-    cooldownTicks: 12,
+    cooldownMinutes: 360,
     npcToNpc: true,
     emitsSignal: { signal: 'voices', intensity: SIGNALS_EMIT.voices },
     // Produces a small rel delta between the two NPCs
@@ -5243,7 +5350,7 @@ const DRIVE_DEFS = {
       baseAppeal: 0.20,
       need: { need: 'social', below: 60 },
       temperamentWeights: { warmth: 0.30, assertiveness: 0.15 },
-      holdTicks: 2,
+      holdMinutes: 60, // was holdTicks 2 — 2 × 30-min ticks
       blockAppeal: { evening: 1.1, leisure: 1.1 },
     },
   },
@@ -5263,12 +5370,13 @@ const DRIVE_DEFS = {
   // for the measured rate and the open question it parks.
 
   // --- Reactions to player presence ---
+
   react_to_player: {
     gates: [],
     weight: 0.2,
-    blockFilter: ['leisure', 'evening', 'wind_down', 'morning'],
+    timeOfDay: ['leisure', 'evening', 'wind_down', 'morning'],
     effects: [],
-    cooldownTicks: 8,
+    cooldownMinutes: 240,
     reactsToPlayer: true,
     // Mood-gated: if NPC mood is low, they're more likely to be curt
     // If mood is high, they're warm. Effects are small rel deltas.
@@ -5296,11 +5404,12 @@ const DRIVE_DEFS = {
     // Phase 5's lever. See the header's rule 2.
     utility: {
       baseAppeal: 0.42,
-      holdTicks: 1,
+      holdMinutes: 30, // was holdTicks 1 — 1 × 30-min ticks
     },
   },
 
   // NPC Overhaul Phase 6 — comfort + stimulation drives
+
   seek_comfort: {
     // The `comfort below 40` gate is deleted (D14). Plan 0 had already moved it
     // once (25 → 40) for exactly this reason and it was still wrong: comfort is
@@ -5310,10 +5419,10 @@ const DRIVE_DEFS = {
     // utility.need is the fix.
     gates: [],
     weight: 0.2,
-    blockFilter: ['leisure', 'wind_down', 'evening', 'morning'],
+    timeOfDay: ['leisure', 'wind_down', 'evening', 'morning'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'comfort', delta: 15 } }],
     activityOverride: 'relaxing',
-    cooldownTicks: 12,
+    cooldownMinutes: 360,
     moveToComfort: true,
     eventTemplate: '{name} settles into the couch, looking comfortable.',
     eventMood: 0.03,
@@ -5336,20 +5445,21 @@ const DRIVE_DEFS = {
       baseAppeal: 0.18,
       need: { need: 'comfort', below: 70 },
       temperamentWeights: { volatility: 0.25, conscientiousness: -0.15 },
-      holdTicks: 3,
+      holdMinutes: 90, // was holdTicks 3 — 3 × 30-min ticks
       blockAppeal: { wind_down: 1.15, leisure: 1.1 },
     },
   },
+
   seek_stimulation: {
     gates: [],   // was `stimulation below 25` — now utility.need (D14)
     weight: 0.2,
     // D15: 'afternoon' is not a block any SCHEDULES template defines — it was
     // dead weight in this filter. The real block names are sleep/morning/
     // prep/commute/work/commute_home/midday/evening/leisure/wind_down/meal.
-    blockFilter: ['leisure', 'evening', 'wind_down', 'midday'],
+    timeOfDay: ['leisure', 'evening', 'wind_down', 'midday'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'stimulation', delta: 20 } }],
     activityOverride: 'looking for something to do',
-    cooldownTicks: 10,
+    cooldownMinutes: 300,
     eventTemplate: '{name} seems restless, looking for something to occupy themselves.',
     eventMood: -0.02,
     // Restless and not enjoying it. `chat_with_roommate` is deliberately
@@ -5371,7 +5481,7 @@ const DRIVE_DEFS = {
       baseAppeal: 0.20,
       need: { need: 'stimulation', below: 50 },
       temperamentWeights: { openness: 0.35, volatility: 0.20 },
-      holdTicks: 2,
+      holdMinutes: 60, // was holdTicks 2 — 2 × 30-min ticks
       blockAppeal: { leisure: 1.1, evening: 1.05 },
     },
   },
@@ -5385,11 +5495,12 @@ const DRIVE_DEFS = {
   // evaluateDrives when this drive fires), not by the standard drive
   // effects pipeline — the outcome depends on a stealth roll against
   // player perception and may produce a DOM-injected bubble.
+
   peep_player: {
     gates: [],
     weight: 0.0,              // actual chance computed in evaluateDrives via condition
-    blockFilter: ['leisure', 'evening', 'wind_down'],
-    cooldownTicks: 16,         // ~8 hours (matches NPC_PEEP_TUNING)
+    timeOfDay: ['leisure', 'evening', 'wind_down'],
+    cooldownMinutes: 480,         // ~8 hours (matches NPC_PEEP_TUNING)
     effects: [],              // no standard effects — resolution is custom
     isPeepDrive: true,        // flag for evaluateDrives to dispatch to resolveNpcPeep
     // D10: the resolver keeps deciding WHAT happens (the stealth contest); the
@@ -5407,18 +5518,19 @@ const DRIVE_DEFS = {
     utility: {
       baseAppeal: 0.45,
       temperamentWeights: { openness: 0.30, conscientiousness: -0.25 },
-      holdTicks: 1,
+      holdMinutes: 30, // was holdTicks 1 — 1 × 30-min ticks
     },
   },
   // BrineOS Phase 9: same isPeepDrive dispatch shape, different resolver
   // (tryNpcSnoop). Any block works — unlike peeping (which needs the
   // player in a vulnerable state at a specific moment), a phone can be
   // found any time the NPC happens to be alone with it.
+
   snoop_phone: {
     gates: [],
     weight: 0.0,
-    blockFilter: null,
-    cooldownTicks: 16,
+    timeOfDay: null,
+    cooldownMinutes: 480,
     effects: [],
     isSnoopDrive: true,
     // As peep_player. Candidacy is DRIVES' findSnoopablePhone (D15): an
@@ -5430,7 +5542,7 @@ const DRIVE_DEFS = {
     utility: {
       baseAppeal: 0.45,
       temperamentWeights: { openness: 0.30, conscientiousness: -0.25 },
-      holdTicks: 1,
+      holdMinutes: 30, // was holdTicks 1 — 1 × 30-min ticks
     },
   },
   // Perception plan Phase 5 — the proof-of-concept perception consumer, and
@@ -5442,11 +5554,12 @@ const DRIVE_DEFS = {
   // Weight 0 — resolution is custom (tryInvestigateSmell in DRIVES), because
   // acting on a smell needs the source room and object the perceived record
   // carries and the generic weight roll has neither.
+
   investigate_smell: {
     gates: [{ signal: 'rot', op: 'above', threshold: 0.2 }],
     weight: 0.0,
-    blockFilter: ['morning', 'midday', 'evening', 'leisure', 'wind_down'],
-    cooldownTicks: 6,
+    timeOfDay: ['morning', 'midday', 'evening', 'leisure', 'wind_down'],
+    cooldownMinutes: 180,
     effects: [],
     isInvestigateDrive: true,
     // The rot gate stays a hard exclusion: the resolver needs the source room
@@ -5462,18 +5575,19 @@ const DRIVE_DEFS = {
       baseAppeal: 0.15,
       signal: { signal: 'rot', scale: 0.9 },
       temperamentWeights: { openness: 0.25, conscientiousness: 0.20 },
-      holdTicks: 2,
+      holdMinutes: 60, // was holdTicks 2 — 2 × 30-min ticks
     },
   },
   // Phase 8 (D8): a fond NPC hands the player something they own. Custom
   // resolution (tryGiveGift in DRIVES) — affection-gated, cooldowned, and
   // only when they actually have a non-keyItem possession worth gifting.
   // The item arrives in the player's bag via MOVE_ITEM.
+
   gift_to_player: {
     gates: [],
     weight: 0.0,              // actual chance computed in evaluateDrives
-    blockFilter: ['leisure', 'evening', 'wind_down', 'morning'],
-    cooldownTicks: NPC_GIFT_TUNING.cooldownTicks, // single source of truth
+    timeOfDay: ['leisure', 'evening', 'wind_down', 'morning'],
+    cooldownMinutes: NPC_GIFT_TUNING.cooldownMinutes, // single source of truth
     effects: [],
     isGiftDrive: true,
     // As peep_player. Candidacy is DRIVES' giftableStack (D15) — real fondness
@@ -5483,7 +5597,7 @@ const DRIVE_DEFS = {
     utility: {
       baseAppeal: 0.45,
       temperamentWeights: { warmth: 0.35 },
-      holdTicks: 1,
+      holdMinutes: 30, // was holdTicks 1 — 1 × 30-min ticks
     },
   },
 };
@@ -5517,12 +5631,35 @@ const COGNITION = {
 
   // A drive done recently, but no longer on cooldown, is less appealing than
   // one that is not. `recencyWindow` is in multiples of the drive's OWN
-  // cooldownTicks; the penalty applies between 1× and 2× it. Specified in the
+  // cooldownMinutes; the penalty applies between 1× and 2× it. Specified in the
   // plan as applying "within its own cooldown", which cannot happen — the
   // cooldown is a hard exclusion, so nothing inside it is ever scored. See
   // cognition.js's recencyMultiplier.
+  // Phase 6 (continuous-behavior-engine tuning pass): 2 → 1.5. At 2×, eat's
+  // suppression ran 14 in-game hours after a meal — past breakfast, which is
+  // why the measured household ate only ~0.42 meals/day, almost always dinner
+  // (a 13.5h-old meal still scored ×0.5 and lost to a shower at 08:00). At
+  // 1.5× the penalty still stops grazing inside the cooldown's own stretch
+  // (7-10.5h) but wears off before the next meal would naturally land. Measured
+  // effect on the other drives is negligible (their need cycles are all longer
+  // than their new windows); the meal rhythm was the only real consumer.
   recencyPenalty: 0.5,
-  recencyWindow: 2,
+  recencyWindow: 1.5,
+
+  // D4 (continuous-behavior-engine Phase 3): the routine weight curve. A
+  // drive's former `blockFilter` hard gate is now a multiplier evaluated at
+  // the current minute-of-day: its declared `timeOfDay` blocks map through
+  // BLOCK_TIME_OF_DAY to real windows, where it scores its `blockAppeal`
+  // (default 1); outside them it scores `routineOutOfBand` instead of being
+  // excluded. The ramp width is what makes the curve CONTINUOUS — the weight
+  // fades linearly over `routineRampMinutes` on each side of a window edge
+  // rather than stepping at a boundary, so nothing about the shape ever
+  // depends on where a 30-minute tick boundary happened to land. Out-of-band
+  // stays non-zero so a routine is a strong preference, never an
+  // impossibility (a starving night-shift worker must still be able to eat).
+  // Both numbers are tuning surface for Phase 6's live pass.
+  routineOutOfBand: 0.25,
+  routineRampMinutes: 30,
 
   // Floor on the D7 personality multiplier: an unlucky sum could otherwise take
   // `1 + Σ` negative, which would sort a drive below "do nothing" in a way no
@@ -5541,13 +5678,24 @@ const COGNITION = {
     playerAddress: true,
     calloutSalience: 0.70,     // matches SCENE_READER.calloutSalience — one idea of "this stops you"
   },
+  // Phase 5 (D6): the urgency thresholds the commitment interrupt scan
+  // compares against. A need that has CROSSED below its bar since the
+  // commitment opened (an edge, via the commitment's needsAtOpen snapshot)
+  // releases the NPC and re-decides. Aligned with each need's warnBelow where
+  // one exists (energy 20, hygiene 25, comfort 20, stimulation 20); hunger
+  // and social, which carry no player-facing bar, get their own. The served
+  // need of the held drive is excluded — an NPC napping because energy is low
+  // must not be interrupted about energy. Tuning surface for Phase 6's pass.
+  interruptUrgency: {
+    hunger: 30, hygiene: 25, energy: 20, social: 25, comfort: 20, stimulation: 20,
+  },
 };
 
 // --- Overtures (npc-initiative-plan.md Phase 3, D1/D2/D5/D9/D10) -----------
 // The sibling table to DRIVE_DEFS, and deliberately the same SHAPE: a drive is
 // something an NPC does to the WORLD, an overture is something they direct at a
 // PERSON, and both are ranked by COGNITION's one scorer on one scale (D1).
-// There is no second selection system that could disagree with `npc.pursuit`
+// There is no second selection system that could disagree with `npc.commitment`
 // about what an NPC is doing — scoreCandidates walks both tables and
 // choosePursuit picks one winner, which is what makes design invariant 2
 // ("one committed intent per NPC") true by construction rather than by care.
@@ -5584,51 +5732,54 @@ const OVERTURE = {
   // Also the def's `utility.holdTicks`, read by openOverture.
   lapseTicks: 2,
 
-  // How long before the same NPC may open another one. 12 ticks is six in-game
+  // How long before the same NPC may open another one. 360 minutes is six in-game
   // hours — the same order as RUMINATION.intervalTicks, which is the cadence at
   // which the curiosity source can produce a new reason to open at all.
-  cooldownTicks: 12,
+  cooldownMinutes: 360,
 
   // --- Phase 4's three other channels -------------------------------------
   // Each cooldown is on the OVERTURE_DEFS entry and every one of them reads
   // from here, so "how often does this cast reach for the player" stays one
   // decision made in one place (D21).
   //
-  // ALL THREE WERE RETUNED IN PHASE 6, AND TWO OF THEM WERE BROKEN (D34). A
-  // cooldown stamp is a 0..47 tick index that wraps at midnight, and
-  // isOnCooldown compares a WRAPPED delta — so a cooldown is not an elapsed
-  // duration, it is a fixed daily clock window `cooldownTicks` wide anchored
-  // at the stamp. At or above CLOCK.ticksPerDay the window is the whole day
-  // and the entry is on cooldown FOREVER after its first firing; from about
-  // half a day up it can land in the sleep block and never be asked again.
-  // Measured: at 48 and 96 an NPC proposed and knocked exactly ONCE per game.
-  // Every value here is now at or below 20, which is the largest one measured
-  // to keep every entry live on every resident. See D34 — the mechanism fix
-  // belongs to Plan 3's cooldown layer and is flagged, not improvised here.
+  // ALL THREE WERE RETUNED IN PHASE 6, AND TWO OF THEM WERE BROKEN (D34). Back
+  // then a cooldown stamp was a 0..47 tick index that wrapped at midnight and
+  // isOnCooldown compared a WRAPPED delta — a cooldown was not an elapsed
+  // duration but a fixed daily clock window anchored at the stamp, and at or
+  // above CLOCK.ticksPerDay that window never elapsed at all. Measured: at 48
+  // and 96 an NPC proposed and knocked exactly ONCE per game. Every value here
+  // was kept at or below 600 minutes, the largest value measured to keep every
+  // entry live on every resident. The mechanism is now absolute-minute
+  // (npc-initiative-retiming D2; isOnCooldown/setCooldown in drives.js) — the
+  // wrap and its ceiling are gone, so a cooldown longer than a day is the same
+  // check as a short one if a channel ever wants to retune for it.
   //
   // A text is the cheap channel — it costs the sender nothing and the player
   // can read it whenever — and that is exactly why it needed the retune most:
   // it is the only channel with no geometric limiter and an empty
   // do-not-disturb list (D9), so it was two thirds of every arm's volume and
-  // reached a sleeping or absent player 4.5 times a day. 16 ticks is eight
+  // reached a sleeping or absent player 4.5 times a day. 480 minutes is eight
   // in-game hours. Measured on 8 households x 3 residents x 7 days at
   // affection 0.9: texts 242 -> 72 and the whole cast 2.464 -> 1.405 per NPC
   // per day, with the in-person channels unmoved (approach 152 -> 144). On an
   // ABSENT player, where this is the only channel that can reach at all,
   // 1.464 -> 0.452 per NPC per day and 0 of 24 residents went silent.
-  textCooldownTicks: 16,
+  textCooldownMinutes: 480,
   // A knock is the most intrusive: they walked to a door you closed. Ten
   // in-game hours, so being knocked on twice in an evening is not a thing that
-  // can happen. It WANTED two days and cannot have them (D34). The rate is
-  // geometry-limited rather than cooldown-limited in any case — measured 9
-  // knocks at 12 ticks against 8 at 96, because the channel needs the player
-  // behind a shut door and an NPC in the one adjoining room.
-  knockCooldownTicks: 20,
+  // can happen. It wanted two days and the old wrapped stamp could not express
+  // that (D34); the value stays where Phase 6 tuned it — this is a retiming,
+  // not a rebalance. The rate is geometry-limited rather than cooldown-limited
+  // in any case — measured 9 knocks at 12 ticks against 8 at 96, because the
+  // channel needs the player behind a shut door and an NPC in the one adjoining
+  // room.
+  knockCooldownMinutes: 600,
   // A proposal books a piece of the player's future. It wanted a full day and
-  // cannot have one (D34); 20 ticks is the largest working value, and the next
-  // step up is where the wrap starts silencing residents outright — measured,
-  // 1 of 24 residents never proposed at 20 against 4 of 24 at 24.
-  proposeCooldownTicks: 20,
+  // the old wrapped stamp could not have one (D34); 600 minutes (20 ticks) is
+  // the largest working value, and the next step up is where the wrap starts
+  // silencing residents outright — measured, 1 of 24 residents never proposed
+  // at 20 against 4 of 24 at 24.
+  proposeCooldownMinutes: 600,
 
   // --- D10, the refusal economy ------------------------------------------
   // A refusal costs a relationship delta AND is remembered, and BOTH halves
@@ -5808,7 +5959,7 @@ const OVERTURE_DEFS = {
     // Same field, same reader (COGNITION's isDriveCandidate) as a drive's.
     // Nobody crosses a room to open a conversation on their way out to work.
     blockFilter: ['leisure', 'evening', 'wind_down', 'morning'],
-    cooldownTicks: OVERTURE.cooldownTicks,
+    cooldownMinutes: OVERTURE.cooldownMinutes,
     proximity: 'adjacent',
     // D9 — the gate is a do-not-disturb SET, not player idleness. Firing only
     // when the player is idle means NPCs never open at the moments that carry
@@ -5856,7 +6007,7 @@ const OVERTURE_DEFS = {
     channel: 'text',
     motives: ['curiosity', 'grievance', 'affection', 'desire'],
     blockFilter: ['leisure', 'evening', 'wind_down', 'work', 'morning'],
-    cooldownTicks: OVERTURE.textCooldownTicks,
+    cooldownMinutes: OVERTURE.textCooldownMinutes,
     proximity: 'remote',
     doNotDisturb: [],
     awaitsAnswer: false,
@@ -5904,7 +6055,7 @@ const OVERTURE_DEFS = {
     channel: 'propose',
     motives: ['affection'],
     blockFilter: ['leisure', 'evening', 'wind_down'],
-    cooldownTicks: OVERTURE.proposeCooldownTicks,
+    cooldownMinutes: OVERTURE.proposeCooldownMinutes,
     proximity: 'adjacent',
     doNotDisturb: ['sleeping', 'showering', 'masturbating', 'in_conversation', 'locked_door'],
     awaitsAnswer: true,
@@ -5943,7 +6094,7 @@ const OVERTURE_DEFS = {
     channel: 'knock',
     motives: ['curiosity', 'grievance', 'affection', 'desire'],
     blockFilter: ['leisure', 'evening', 'wind_down', 'morning'],
-    cooldownTicks: OVERTURE.knockCooldownTicks,
+    cooldownMinutes: OVERTURE.knockCooldownMinutes,
     proximity: 'outside',
     requires: ['locked_door'],
     doNotDisturb: ['sleeping', 'showering', 'masturbating', 'in_conversation'],
@@ -5978,7 +6129,7 @@ const OVERTURE_DEFS = {
 // Phase 5 interruption bubble system). ---
 const NPC_PEEP_TUNING = {
   baseChance: 0.08,            // per-tick probability (after gates + condition)
-  // The attempt cooldown is DRIVE_DEFS.peep_player.cooldownTicks — that's
+  // The attempt cooldown is DRIVE_DEFS.peep_player.cooldownMinutes — that's
   // the one evaluateDrives enforces. A second copy lived here and was read
   // by nothing; the two could drift with no error.
   chanceModifiers: {
@@ -6077,7 +6228,8 @@ const NPC_PEEP_RESPONSES = {
 };
 
 // Per-NPC drive cooldown tracking (in-memory, reset on load)
-// Stored as npc.flags._driveCooldowns = { driveId: tickIndex }
+// Stored as npc.flags._driveCooldowns = { driveId: absoluteMinute }
+// (clockToAbsolute space — day*1440 + minutes, npc-initiative-retiming D2)
 const DRIVE_COOLDOWN_KEY = '_driveCooldowns';
 
 // --- Save system v2 (inventory overhaul Phase 9, D9/D10) ---

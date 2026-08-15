@@ -12,8 +12,9 @@
 // Every language beat in this game except two adult-content interruptions is
 // initiated by the player. This file is where an NPC crosses the room because
 // they want something. `overture` is the word, because `commitment` is
-// commitments.js, `pursuit` is Plan 3 and `intent` is the player's classifier
-// (D2).
+// commitments.js, `npc.commitment` is Plan 3's held activity (now the
+// continuous-behavior-engine's commitment substrate) and `intent` is the
+// player's classifier (D2).
 //
 // WHAT IS HERE AND WHAT IS NOT. Selection is not here. An overture is ranked by
 // COGNITION's `scoreCandidates` in the same list as every drive and picked by
@@ -291,7 +292,7 @@ function scoreOvertures(npc, npcId, gameState, ctx) {
     // restricted to VISITOR_DRIVE_ALLOWLIST; an overture table they are not on
     // is the same answer.
     if (ctx.isVisitor) continue;
-    if (isOnCooldown(npc, overtureId, ctx.currentTick)) continue;
+    if (isOnCooldown(npc, overtureId, ctx.nowAbs)) continue;
     if (!overtureAllowed(gameState, overtureId).allowed) continue;
     // D29 — where this channel needs the NPC to be standing, as a named
     // predicate. An unknown name has already blocked in overtureAllowed above,
@@ -375,22 +376,28 @@ function chooseOverture(choice) {
 // NPC who proposed a slot they would be at work for would be answered yes and
 // then not turn up, which is worse than not asking.
 //
-// Returns { kind, day, tickStart, tickEnd, roomId } or null — and null means
+// Returns { kind, startAbs, endAbs, roomId } or null — and null means
 // no candidacy at all, so an NPC with nothing to offer never opens the record.
+//
+// npc-initiative-retiming-plan's own conversion never reached this function
+// (it was scoped to overture cooldowns, not proposals) — clockToAbsolute
+// space here matches every other "when" in the continuous-simulation roadmap.
 function proposeTerms(npc, def, gameState) {
   const spec = def && def.proposes;
   const kindDef = spec && COMMITMENT_KINDS[spec.kind];
   if (!kindDef || !Array.isArray(kindDef.slots)) return null;
   const clock = gameState.meta && gameState.meta.clock;
   if (!clock) return null;
-  const nowTick = getTickIndex(clock.minutes);
+  const nowAbs = clockToAbsolute(clock);
   for (let offset = 0; offset < (kindDef.maxAheadDays || 1); offset++) {
     const day = clock.day + offset;
     for (const slot of kindDef.slots) {
-      if (offset === 0 && slot.startTick <= nowTick) continue;
-      const { block } = resolveScheduleActivity(npc, { day, minutes: slot.startTick * CLOCK.tickMinutes });
+      const startAbs = day * 1440 + slot.startMinute;
+      const endAbs = day * 1440 + slot.endMinute;
+      if (startAbs <= nowAbs) continue;
+      const { block } = resolveScheduleActivity(npc, absoluteToClock(startAbs));
       if (COMMITMENT_TUNING.busyBlocks.includes(block)) continue;
-      return { kind: spec.kind, day, tickStart: slot.startTick, tickEnd: slot.endTick, roomId: kindDef.roomId };
+      return { kind: spec.kind, startAbs, endAbs, roomId: kindDef.roomId };
     }
   }
   return null;
@@ -460,7 +467,7 @@ function overtureWaitRoom(gameState, npc) {
 
 // Absent means no overture, never an empty object — so this deletes rather than
 // nulls, and a save written mid-overture round-trips to genuinely absent (the
-// releasePursuit convention, for the same save-shape reason).
+// releaseCommitment convention, for the same save-shape reason).
 //
 // Returns the record it removed, STAMPED with the outcome. That stamp is what
 // gives `status` its readers on both sides: 'pending' is the only value ever
@@ -530,8 +537,8 @@ function overtureRespondTargets(gameState) {
 // ACTIVITY_ROOM_PREFERENCES, so ageing out on "they are not standing where the
 // player is" would kill most records on the tick after the one that walked the
 // NPC over — measured, the same mistake cancelled 233 of 485 pursuits before
-// agePursuit stopped releasing on transit. SIM pins the waiting NPC in place
-// instead; see the hold branch there.
+// ageCommitment stopped releasing on transit. SIM pins the waiting NPC in
+// place instead; see the hold branch there.
 //
 // Returns the surviving record, or null.
 function ageOverture(gameState, npcId, resolved) {

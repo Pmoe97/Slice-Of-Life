@@ -14,15 +14,15 @@
 //      the need never gets under is a term that contributes nothing, forever.
 //   4. Whether the apartment gets dirty on its own, which is what the
 //      perception term has to score against.
-//   5. The score distribution, and (since Phase 2) what pursuits actually get
-//      opened, held and broken.
+//   5. The score distribution, and (since Phase 2) what commitments actually
+//      get opened, held and broken.
 //
 // HOW IT WORKS. evaluateDrives is wrapped in the vm context: we re-run its own
 // candidacy filter on its real arguments to capture the candidate set, then
 // call the original and diff the cooldown stamps. setCooldown is called on
 // exactly the firing paths, so a drive whose stamp equals currentTick after the
 // call and did not before is one that fired. This survived the plan's Phase 2
-// rewrite as promised — a pursuit still sets a cooldown when it opens.
+// rewrite as promised — a commitment still sets a cooldown when it opens.
 //
 // TRAP: resolveBatch returns { state, events, peepResults } and does NOT mutate
 // its argument. Read gameState.npcs after calling it and every need reads as a
@@ -86,23 +86,30 @@ api(`
     const eligible = ranked.map(c => c.driveId);
 
     // What the NPC was already in the middle of, BEFORE this tick's resolution.
-    // resolveTick has already aged it, so a pursuit here is one with ticks left.
-    const heldBefore = npc.pursuit ? npc.pursuit.driveId : null;
+    // resolveTick has already aged it, so a commitment here is one with time
+    // left to run.
+    const heldBefore = npc.commitment ? npc.commitment.id : null;
 
     const before = (npc.flags || {})[DRIVE_COOLDOWN_KEY] || {};
     const res = __origEvaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick, opts);
     const after = (res.updatedNpc && res.updatedNpc.flags && res.updatedNpc.flags[DRIVE_COOLDOWN_KEY]) || {};
-    const heldAfter = gameState.npcs[npcId] && gameState.npcs[npcId].pursuit;
+    const heldAfter = gameState.npcs[npcId] && gameState.npcs[npcId].commitment;
+    // npc-initiative-retiming Phase 2 (D2) moved cooldown stamps from a
+    // within-day tick index to an absolute minute (clockToAbsolute space).
+    // This instrument predates that and was still comparing against
+    // currentTick — a 0..47 index a stamp in the thousands can never equal —
+    // so "fired" always came back empty and every count below read 0.
+    const nowAbs = clockToAbsolute(gameState.meta.clock);
     __rows.push({
       eligible,
-      fired: Object.keys(after).filter(d => after[d] === currentTick && before[d] !== currentTick),
+      fired: Object.keys(after).filter(d => after[d] === nowAbs && before[d] !== nowAbs),
       scored: ranked.map(c => [c.driveId, +c.score.toFixed(4)]),
       heldBefore,
-      // A pursuit that was held coming in and is not the one held going out was
-      // broken this tick — either by a challenger clearing breakMargin or by
-      // D5's short list.
-      broke: !!(heldBefore && (!heldAfter || heldAfter.driveId !== heldBefore)),
-      opened: !!(heldAfter && heldAfter.startedTick === currentTick && heldAfter.driveId !== heldBefore),
+      // A commitment that was held coming in and is not the one held going out
+      // was broken this tick — either by a challenger clearing breakMargin or
+      // by D5's short list.
+      broke: !!(heldBefore && (!heldAfter || heldAfter.id !== heldBefore)),
+      opened: !!(heldAfter && heldAfter.startedAtAbs === clockToAbsolute(gameState.meta.clock) && heldAfter.id !== heldBefore),
     });
     return res;
   };
@@ -310,7 +317,7 @@ console.log('  That is the point — three ticks of one chore reads as a person 
 console.log('  something, three separate actions read as a queue of coincidences.\n');
 console.log(`  Actions per npc-tick: ${(clean.totalFired / clean.samples).toFixed(3)} against a target of ${clean.target} (D2).`);
 console.log('  PHASE 5 TUNES THIS, not Phase 2. The levers are actionThreshold, the');
-console.log('  per-drive baseAppeal values, and holdTicks. Read the "won the tick"');
+console.log('  per-drive baseAppeal values, and holdMinutes. Read the "won the tick"');
 console.log('  column beside "over thr" before moving any of them: a drive that is');
 console.log('  often a candidate, often over the bar and never the winner is losing');
 console.log('  to something specific, and raising its base fixes the wrong thing.\n');

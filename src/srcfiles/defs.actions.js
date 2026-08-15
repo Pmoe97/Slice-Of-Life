@@ -453,6 +453,43 @@ const ACTION_DEFS = {
   },
 };
 
+// --- Anchor preference table (continuous-behavior-engine Phase 3, D2/C3) ---
+// For each action id, the object defIds — base OBJECT_DEFS ids and
+// DECOR_CATALOG_DEFS ids alike — that make a good stand-point for it, in
+// preference order. This is the "decor plan's table" the roadmap's C3/C5
+// describe: it is what lets a furnished living room resolve `self.watch_tv`
+// to the placed sofa's position instead of room-centroid, and an unfurnished
+// one degrade to room-centroid (C5: an empty room is genuinely inert).
+// actions.js's resolveActionAnchor scans the action's room bucket for the
+// first placed (pos-carrying) object whose defId is listed here; base
+// furniture has no recorded coordinate yet, so it can only ever contribute
+// its room's centroid, which is exactly "no couch → generic room-center
+// idle". An action with no entry (or no match) falls back to the room's
+// centroid — the resolver never needs this table to produce a valid anchor.
+const ACTION_ANCHOR_OBJS = {
+  'self.eat': ['dining_table', 'kitchen_table', 'dining_chair'],
+  'set_meal': ['dining_table'],
+  'self.cook': ['stove'],
+  'self.shower': ['shower'],
+  'self.long_shower': ['shower'],
+  'self.watch_tv': ['sofa', 'sofa_basic', 'armchair'],
+  'self.relax': ['sofa', 'sofa_basic', 'armchair'],
+  'self.nap': ['sofa', 'sofa_basic', 'bed', 'bed_basic'],
+  'self.dishes': ['sink_kitchen'],
+  'self.lock_door': ['bedroom_door', 'bathroom_door'],
+  'self.unlock_door': ['bedroom_door', 'bathroom_door'],
+  'self.read_note': ['note'],
+  'self.bin_note': ['note'],
+  'self.workout': ['treadmill'],
+  'self.swim': ['swimming_pool'],
+  'self.play_games': ['pool_table', 'game_console', 'dartboard'],
+  'self.laundry': ['washer'],
+  'self.study': ['desk', 'desktop_computer'],
+  'self.listen_music': ['sofa', 'sofa_basic', 'armchair'],
+  'self.balcony_sit': ['plant', 'plant_lr'],
+  'self.take_walk': [],
+};
+
 // Name→predicate registry, mirroring SIM's CAST_REQUIREMENT_CHECKERS
 // (config-declared requirement names, one predicate implementation per
 // name). Each checker takes (ctx, ...args) and returns true, or a string
@@ -561,12 +598,16 @@ const ACTION_REQUIREMENT_CHECKERS = {
     return true;
   },
   // Like facilityFunctional, but infers which facility to check from the
-  // player's current room — for actions available in multiple rooms that
+  // actor's current room — for actions available in multiple rooms that
   // each have their own facility (showers in bathroom_a vs bathroom_b).
-  // Looks up ROOM_FACILITIES for the player's room and finds the first
-  // facility whose gatesActions includes the calling action.
+  // Looks up ROOM_FACILITIES for the room the actor is standing in and
+  // finds the first facility whose gatesActions includes the calling
+  // action. Reads ctx.roomId (actions.js's buildActionContext, set from
+  // the actor's location) rather than reaching for the player directly, so
+  // the same checker serves whichever actor the action engine generalizes
+  // to (continuous-behavior-engine Phase 3).
   facilityFunctionalHere: (ctx, actionId) => {
-    const roomId = ctx.gameState.player.location;
+    const roomId = ctx.roomId || ctx.gameState.player.location;
     const facilityIds = ROOM_FACILITIES[roomId] || [];
     for (const fid of facilityIds) {
       const def = FACILITY_DEFS[fid];

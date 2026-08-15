@@ -39,6 +39,11 @@ function defaultComputerState() {
       // same-day generation (same pattern as generateApplicantsForDay).
       gigs: { board: [], accepted: [], reputation: 0, lastRefreshDay: 0 },
       shop: { cart: [], wishlist: [] },
+      // Home app (decor-economy plan Phase 1): a second cart, same shape as
+      // shop's. The app's catalog is DECOR_CATALOG_DEFS (defs.computer.js),
+      // so cart entries are { defId, units } in this array exactly like
+      // Nile's — checkoutCart is shared, pointed here by cartPath.
+      home: { cart: [] },
       // historyIndex points at `history`'s current position for real
       // Back/Forward — -1 means nothing visited yet. A save from before
       // this field existed just reads it as undefined; browserGoBack/
@@ -624,50 +629,73 @@ function processGigDeadlinesForDay(gameState, day) {
   return results;
 }
 
-// --- Nile (shop) app ---
+// --- Nile (shop) / Home (decor) apps ---
 // Cart entries are { defId, units } — one "unit" is one click of Add to
-// Cart, costing ITEM_DEFS[defId].price and, on checkout, delivering
-// ITEM_DEFS[defId].buyQty items. Keeping "how many times you clicked" and
+// Cart, costing <catalog>[defId].price and, on checkout, delivering
+// <catalog>[defId].buyQty items. Keeping "how many times you clicked" and
 // "how many items that yields" separate is what lets a $4 dozen eggs be
 // one cart line instead of a quantity-12 stack the player has to type.
+//
+// Both apps share ONE cart implementation (decor-economy plan D2): a
+// `cartPath` ('apps.shop.cart' / 'apps.home.cart') says which cart to
+// read and clear, a `catalog` (ITEM_DEFS / DECOR_CATALOG_DEFS) says which
+// defs table prices come from. The defaults keep plain shop calls working
+// exactly as before.
 
-function addToCart(gameState, defId) {
-  const def = ITEM_DEFS[defId];
+// Resolves a 'apps.<app>.cart'-style path to its holder object + key + the
+// cart array, so add/remove/checkout never hand-resolve the same path
+// three different ways. `holder` is null only if the path is unreachable.
+function resolveCart(gameState, cartPath) {
+  const parts = (cartPath || 'apps.shop.cart').split('.');
+  const key = parts.pop();
+  const holder = parts.reduce((cur, k) => cur && cur[k], gameState.world.computer);
+  return { holder, key, cart: (holder && holder[key]) || [] };
+}
+
+function addToCart(gameState, defId, opts = {}) {
+  const def = (opts.catalog || ITEM_DEFS)[defId];
   if (!def || def.price == null) return { ok: false, reason: 'Not sold here.' };
-  const cart = gameState.world.computer.apps.shop.cart;
+  const { holder, key, cart } = resolveCart(gameState, opts.cartPath);
   const existing = cart.find(c => c.defId === defId);
   if (existing) existing.units += 1;
   else cart.push({ defId, units: 1 });
+  if (holder && !holder[key]) holder[key] = cart;
   return { ok: true };
 }
 
-function removeFromCart(gameState, defId) {
-  const shop = gameState.world.computer.apps.shop;
-  shop.cart = shop.cart.filter(c => c.defId !== defId);
+function removeFromCart(gameState, defId, opts = {}) {
+  const { holder, key, cart } = resolveCart(gameState, opts.cartPath);
+  if (holder) holder[key] = cart.filter(c => c.defId !== defId);
 }
 
-function cartSubtotal(cart) {
-  return cart.reduce((sum, c) => sum + (ITEM_DEFS[c.defId]?.price || 0) * c.units, 0);
+function cartSubtotal(cart, catalog) {
+  return cart.reduce((sum, c) => sum + ((catalog || ITEM_DEFS)[c.defId]?.price || 0) * c.units, 0);
 }
 
 // SPEND_MONEY covers the cart total + one flat delivery fee, and each
 // cart line becomes a world.deliveries entry. Nothing lands in inventory
 // yet — UI's processDeliveriesForDay SPAWN_ITEMs it onto the hallway
 // doormat when the ETA hits, so the player (or a quick roommate) has to
-// actually go get it.
-function checkoutCart(gameState) {
-  const shop = gameState.world.computer.apps.shop;
-  if (shop.cart.length === 0) return { ok: false, reason: 'Your cart is empty.' };
-  const total = cartSubtotal(shop.cart) + ECONOMY.deliveryFee;
-  if (gameState.player.money < total) return { ok: false, reason: `Can't afford $${total} (you have $${Math.round(gameState.player.money)}).` };
+// actually go get it. `cartPath`/`catalog` let Home (decor-economy plan
+// Phase 1) reuse this exact function with its own cart and catalog — one
+// function owns the charge/tax/delivery logic so the two callers can
+// never drift apart.
+function checkoutCart(gameState, opts = {}) {
+  const catalog = opts.catalog || ITEM_DEFS;
+  const { holder, key, cart } = resolveCart(gameState, opts.cartPath);
+  if (cart.length === 0) return { ok: false, reason: 'Your cart is empty.' };
+  const total = cartSubtotal(cart, catalog) + ECONOMY.deliveryFee;
+  if (gameState.player.money < total) return { ok: false, reason: `Can't afford ${total} (you have ${Math.round(gameState.player.money)}).` };
 
   gameState.player.money -= total;
   // Phase 6: tech/electronics/tool purchases are tax-deductible for a
   // freelancer. Record the deductible portion (item price, not delivery
-  // fee — delivery is a personal expense).
+  // fee — delivery is a personal expense). Decor categories are room
+  // names, never in TAX_CONFIG.deductibleCategories, so furniture never
+  // deducts.
   let deductible = 0;
-  shop.cart.forEach(c => {
-    const def = ITEM_DEFS[c.defId];
+  cart.forEach(c => {
+    const def = catalog[c.defId];
     if (def && TAX_CONFIG.deductibleCategories.includes(def.category)) {
       deductible += def.price * c.units;
     }
@@ -675,16 +703,102 @@ function checkoutCart(gameState) {
   if (deductible > 0) recordTaxDeduction(gameState, deductible);
   const etaDay = gameState.meta.clock.day + 1;
   const deliveries = gameState.world.deliveries || (gameState.world.deliveries = []);
-  shop.cart.forEach((c, i) => {
-    const def = ITEM_DEFS[c.defId];
+  cart.forEach((c, i) => {
+    const def = catalog[c.defId];
     deliveries.push({
       id: `del_${gameState.meta.clock.day}_${gameState.meta.clock.minutes}_${i}`,
       defId: c.defId, qty: (def.buyQty || 1) * c.units,
       status: 'ordered', etaDay, orderedDay: gameState.meta.clock.day,
     });
   });
-  shop.cart = [];
+  if (holder) holder[key] = [];
   return { ok: true, total, etaDay, deductible };
+}
+
+// --- Decor placement (decor-economy plan Phase 2) ---
+// Placing is the second half of the Home app: an owned, delivered decor
+// item — an inventory stack whose defId is a DECOR_CATALOG_DEFS entry (D3/D8)
+// — is consumed and becomes a REAL object instance in the target room's
+// bucket (D4), carrying the `pos` the in-game Studio screen wrote. Not a
+// ROOM_DECOR visual entry: every later system reads it exactly like any
+// other object in that bucket (anchors, cleanliness, signals all treat it
+// as furniture that's simply always been there).
+// The instance is built inline rather than via makeObjectInstance because
+// decor defIds are deliberately NOT in OBJECT_DEFS (they are priced in the
+// Home catalog, never in ITEM_DEFS or OBJECT_DEFS — D1's boundary), and
+// makeObjectInstance returns null for unknown defIds. Same seeded id shape
+// (genObjectId + uniqueObjectSlot), so a given save reproduces the same
+// instances byte-for-byte.
+function placeDecorItem(gameState, { defId, roomId, pos }) {
+  const def = DECOR_CATALOG_DEFS[defId];
+  if (!def) return { ok: false, reason: 'That is not a buyable furniture item.' };
+  if (!ROOMS[roomId]) return { ok: false, reason: 'That room does not exist.' };
+  if (!DESIGN_SHAPES[def.shape]) return { ok: false, reason: `No placement shape for ${def.label}.` };
+  const p = pos || {};
+  const x = Number(p.x), y = Number(p.y), w = Number(p.w), h = Number(p.h);
+  const rot = Number(p.rot) || 0;
+  if (![x, y, w, h].every(Number.isFinite)) return { ok: false, reason: 'Give it a position first.' };
+  if (w < 2 || h < 2) return { ok: false, reason: 'It needs to be big enough to stand on.' };
+  const owned = (gameState.player.inventory || []).find(s => s.defId === defId);
+  if (!owned || owned.qty < 1) return { ok: false, reason: `You don't own a ${def.label} to place.` };
+
+  const { stacks } = removeStack(gameState.player.inventory, defId, 1);
+  gameState.player.inventory = stacks;
+
+  const bucketId = `room_${roomId}`;
+  const bucketMap = gameState.objects[bucketId] || (gameState.objects[bucketId] = {});
+  const slot = uniqueObjectSlot(bucketMap, gameState.meta.seed, bucketId, defId);
+  const id = genObjectId(gameState.meta.seed, bucketId, slot, defId);
+  bucketMap[id] = {
+    id, defId, bucket: bucketId,
+    pos: { x, y, w, h, rot },
+    ownerId: null,
+    state: {}, condition: 100, contents: [], evidence: null,
+    discovered: {}, flags: {}, spawnedDay: gameState.meta.clock.day,
+    meta: { placedDay: gameState.meta.clock.day },
+  };
+  return { ok: true, id, defId };
+}
+
+// Move/resize/rotate an already-placed decor object — the editor writes the
+// new pos back into the instance. Objects without a `pos` are the world's
+// own furniture and are not movable (D5: the player furnishes, not reshapes).
+function moveDecorObject(gameState, objId, pos) {
+  const obj = findObjectById(gameState, objId);
+  if (!obj || !obj.pos) return { ok: false, reason: 'That is not a placed item.' };
+  const p = pos || {};
+  const x = Number(p.x), y = Number(p.y), w = Number(p.w), h = Number(p.h);
+  const rot = Number(p.rot) || 0;
+  if (![x, y, w, h].every(Number.isFinite)) return { ok: false, reason: 'Invalid placement.' };
+  if (w < 2 || h < 2) return { ok: false, reason: 'It needs to be big enough to stand on.' };
+  obj.pos = { x, y, w, h, rot };
+  return { ok: true };
+}
+
+// The player-safe form of the designer's Delete: a placed decor object
+// returns to inventory as a normal stack (D3 again — it is a good until it
+// is placed). Nothing is ever destroyed. Decor defIds are unknown to
+// ITEM_DEFS, so addStack's merge path (which keys on `stackable`) appends a
+// fresh stack; coalescing same-defId stacks afterwards keeps the placement
+// palette reading as one row per piece rather than a growing list of
+// singles.
+function pickUpDecorObject(gameState, objId) {
+  const obj = findObjectById(gameState, objId);
+  if (!obj || !obj.pos) return { ok: false, reason: 'That is not a placed item.' };
+  if (!DECOR_CATALOG_DEFS[obj.defId]) return { ok: false, reason: 'This cannot be picked up.' };
+  const bucketMap = gameState.objects[obj.bucket];
+  if (bucketMap) delete bucketMap[obj.id];
+  let inv = addStack(
+    gameState.player.inventory, obj.defId, 1, 'player', obj.meta,
+    gameDaysNow(gameState.meta.clock)
+  );
+  const same = inv.filter(s => s.defId === obj.defId);
+  if (same.length > 1) {
+    inv = inv.filter(s => s.defId !== obj.defId);
+    inv.push({ defId: obj.defId, qty: same.reduce((n, s) => n + (s.qty || 0), 0), ownerId: 'player', meta: same[0].meta });
+  }
+  gameState.player.inventory = inv;
+  return { ok: true, defId: obj.defId };
 }
 
 // --- Browser app ---
@@ -2530,39 +2644,43 @@ function foodMenuEntry(restaurantId, itemId) {
 }
 
 // A kitchen that's closed refuses the order outright rather than silently
-// delivering at 4am. Hours are [openTick, closeTick] in 0-47 half-hour ticks,
+// delivering at 4am. Hours are [openMinute, closeMinute) in minutes-from-
+// midnight — a RECURRING daily rule, not a one-shot day-scoped window —
 // possibly as an array of windows; a window with open > close wraps across
-// midnight. [0, 47] is the 24h sentinel.
+// midnight. [0, 1410] is the all-day sentinel (old tick sentinel [0, 47] × 30).
 function getRestaurantWindows(def) {
-  const hours = def?.hours || [0, 47];
+  const hours = def?.hours || [0, 1410];
   return Array.isArray(hours[0]) ? hours : [hours];
 }
 
-function isRestaurantOpen(def, tick) {
+// `minutes` is the intra-day minute (clock.minutes, 0-1439), day-independent —
+// hours repeat every day, so no day-scoping or absolute-minute arithmetic
+// applies (external-world-retiming D2's recurring-rule distinction).
+function isRestaurantOpen(def, minutes) {
   if (!def) return false;
   return getRestaurantWindows(def).some(([open, close]) => {
-    if (open === 0 && close === 47) return true; // [0, 47] = 24 hours
-    if (open > close) return tick >= open || tick < close; // wraps midnight
-    return tick >= open && tick < close;
+    if (open === 0 && close === 1410) return true; // [0, 1410] = all day
+    if (open > close) return minutes >= open || minutes < close; // wraps midnight
+    return minutes >= open && minutes < close;
   });
 }
 
 // One hours string for both the browse card and the closed-refusal message,
 // so the two can never disagree about what "open" means. A wrap window reads
-// fine as raw 24h times ("17:00–04:00"); [0, 47] gets its own phrasing.
+// fine as raw 24h times ("17:00–04:00"); [0, 1410] gets its own phrasing.
 function formatRestaurantHours(def) {
   const windows = getRestaurantWindows(def);
-  const label = ([open, close]) => open === 0 && close === 47
+  const label = ([open, close]) => open === 0 && close === 1410
     ? 'Open 24 hours'
-    : `${formatTime(open * 30)}–${formatTime(close * 30)}`;
+    : `${formatTime(open)}–${formatTime(close)}`;
   return windows.map(label).join(', ');
 }
 
-// Dev-only coverage helper: how many places are open at a given tick. Not
-// wired into any UI — Phase 4's verification uses it to assert the ≥2-open
-// invariant across all 48 ticks.
-function countRestaurantsOpenAt(tick) {
-  return RESTAURANT_DEFS_LIST.filter(def => isRestaurantOpen(def, tick)).length;
+// Dev-only coverage helper: how many places are open at a given minute of the
+// day (0-1439). Not wired into any UI — Phase 2's verification asserts the
+// ≥2-open invariant across all 1440 minutes.
+function countRestaurantsOpenAt(minutes) {
+  return RESTAURANT_DEFS_LIST.filter(def => isRestaurantOpen(def, minutes)).length;
 }
 
 function getFoodApp(gameState) {
@@ -2630,28 +2748,18 @@ function getFoodTravelMinutes(gameState, seq) {
   return FOOD_TUNING.travelMinutesBase + Math.floor(rng() * FOOD_TUNING.travelMinutesVariance);
 }
 
-// Absolute-arrival math (Phase 2): an arrival that lands past midnight is
-// DAY+1's delivery, not tick 47 clamped back into today. Convert an absolute
-// minute count into a { day, tick } record; a landing in the final half hour
-// of a day (1410 < m < 1440) rolls over to tick 0 of the next day.
-function foodArrivalFromAbs(abs) {
-  let day = Math.floor(abs / 1440);
-  let tick = Math.ceil((abs % 1440) / 30);
-  if (tick === 48) { tick = 0; day += 1; }
-  return { day, tick };
-}
-
-// The soonest the food could physically arrive: the kitchen's prep time plus
-// travel, rounded up to the next whole tick. Returns { day, tick } because a
-// slow kitchen ordered from late at night legitimately lands on tomorrow's
-// record. Seeded on the day and the order number so the ETA quoted on the
-// cart screen is exactly the ETA the order is placed with.
+// The soonest the food could physically arrive, as an absolute minute
+// (day*1440 + minutes): the kitchen's prep time plus travel added straight
+// onto the clock — no rounding up to a half-hour boundary, so a 12:37 order
+// with 45 minutes of prep+travel arrives at 13:22, not 13:30. A slow
+// kitchen ordered from late at night legitimately lands on tomorrow's
+// absolute range. Seeded on the day and the order number so the ETA quoted
+// on the cart screen is exactly the ETA the order is placed with.
 function getFoodEarliestArrival(gameState, restaurantId, seq) {
   const def = RESTAURANT_DEFS[restaurantId];
   if (!def) return null;
   const clock = gameState.meta.clock;
-  const abs = clock.day * 1440 + clock.minutes + (def.prepMinutes || 0) + getFoodTravelMinutes(gameState, seq);
-  return foodArrivalFromAbs(abs);
+  return clockToAbsolute(clock) + (def.prepMinutes || 0) + getFoodTravelMinutes(gameState, seq);
 }
 
 // Drivers are a small persistent pool rather than a fresh stranger per order:
@@ -2669,11 +2777,12 @@ function pickFoodDriver(gameState, seq) {
 // Place the order: charge, pick the driver, schedule their visit at the
 // entry, and record the order. Nothing enters inventory here — the handover
 // is processFoodOrdersNow's job when the driver actually turns up.
-// `requestedDay`/`requestedTick` (optional) is a scheduled delivery slot
-// ("today 19:30" or "tomorrow 00:30"); the order still can't beat the
-// kitchen, so the real arrival is the later of the two. The order keeps
-// `day` = the day it was placed (the Orders list) plus `arrivalDay` = the
-// day the driver physically turns up, which is day+1 for late-night orders.
+// `requestedAbs` (optional) is a scheduled delivery slot — an absolute
+// minute (day*1440 + minutes, e.g. "today 19:30" or "tomorrow 00:30"); the
+// order still can't beat the kitchen, so the real arrival is the later of
+// the two. The order keeps `day` = the day it was placed (the Orders list)
+// plus `arrivalAbs` = the absolute minute the driver physically turns up,
+// which lands in day+1's range for late-night orders.
 function placeFoodOrder(gameState, opts = {}) {
   const app = getFoodApp(gameState);
   if (!app) return { ok: false, reason: 'DoorDrop is unavailable.' };
@@ -2683,8 +2792,7 @@ function placeFoodOrder(gameState, opts = {}) {
   if (!def) return { ok: false, reason: 'That restaurant is gone.' };
 
   const { day, minutes } = gameState.meta.clock;
-  const nowTick = getTickIndex(minutes);
-  if (!isRestaurantOpen(def, nowTick)) {
+  if (!isRestaurantOpen(def, minutes)) {
     return { ok: false, reason: `${def.label} is closed right now (${formatRestaurantHours(def)}).` };
   }
 
@@ -2695,26 +2803,21 @@ function placeFoodOrder(gameState, opts = {}) {
     return { ok: false, reason: `Can't afford $${totals.total} (you have $${Math.round(gameState.player.money)}).` };
   }
 
-  const earliest = getFoodEarliestArrival(gameState, restaurantId, seq);
-  const requestedDay = Number(opts.requestedDay);
-  const requestedTick = Number(opts.requestedTick);
-  if (Number.isFinite(requestedDay) && Number.isFinite(requestedTick)
-      && requestedDay !== day && requestedDay !== day + 1) {
-    return { ok: false, reason: 'Deliveries are for today or tomorrow.' };
-  }
-  const earliestAbs = earliest.day * 1440 + earliest.tick * 30;
+  const earliestAbs = getFoodEarliestArrival(gameState, restaurantId, seq);
   let arrivalAbs = earliestAbs;
-  if (Number.isFinite(requestedDay) && Number.isFinite(requestedTick)) {
-    arrivalAbs = Math.max(arrivalAbs, requestedDay * 1440 + requestedTick * 30);
+  const requestedAbs = Number(opts.requestedAbs);
+  if (Number.isFinite(requestedAbs)) {
+    const requestedDay = Math.floor(requestedAbs / 1440);
+    if (requestedDay !== day && requestedDay !== day + 1) {
+      return { ok: false, reason: 'Deliveries are for today or tomorrow.' };
+    }
+    arrivalAbs = Math.max(arrivalAbs, requestedAbs);
   }
   // Scheduled deliveries can't be pushed arbitrarily far out — the quote
-  // window is earliest..earliest+maxScheduleAheadTicks, the same bound the
-  // cart select offers. No 47 clamp: a late-night order legitimately lands
-  // on tomorrow's record (arrivalDay) when prep+travel crosses midnight.
-  arrivalAbs = Math.min(arrivalAbs, earliestAbs + FOOD_TUNING.maxScheduleAheadTicks * 30);
-  const arrival = foodArrivalFromAbs(arrivalAbs);
-  const arrivalDay = arrival.day;
-  const arrivalTick = arrival.tick;
+  // window is earliest..earliest+maxScheduleAheadMinutes, the same bound the
+  // cart select offers. A late-night order legitimately lands on tomorrow's
+  // absolute range; nothing clamps it back into the day it started on.
+  arrivalAbs = Math.min(arrivalAbs, earliestAbs + FOOD_TUNING.maxScheduleAheadMinutes);
 
   gameState.player.money -= totals.total;
   const driverNpcId = pickFoodDriver(gameState, seq);
@@ -2729,9 +2832,7 @@ function placeFoodOrder(gameState, opts = {}) {
     tipPct: totals.tipPct,
     total: totals.total,
     day,
-    arrivalDay,
-    orderedTick: nowTick,
-    arrivalTick,
+    arrivalAbs,
     driverNpcId,
     status: 'ordered',
   };
@@ -2741,12 +2842,14 @@ function placeFoodOrder(gameState, opts = {}) {
   // window at the entry: they're handing over a bag, not moving in. The
   // visit lands on the ARRIVAL day's record — tomorrow's when the kitchen
   // was slow enough to push past midnight (scheduleVisit keys on
-  // source+day, so an order's visit never collides with anything).
-  scheduleVisit(gameState, order.id, arrivalDay, {
+  // source+day, so an order's visit never collides with anything). The
+  // window is the order's own arrivalAbs, in the same absolute-minute
+  // shape every other visit window now carries.
+  scheduleVisit(gameState, order.id, Math.floor(arrivalAbs / 1440), {
     npcId: driverNpcId,
     purpose: 'delivery',
-    startTick: arrivalTick,
-    endTick: Math.min(48, arrivalTick + FOOD_TUNING.driverWindowTicks),
+    startAbs: arrivalAbs,
+    endAbs: arrivalAbs + FOOD_TUNING.driverWindowMinutes,
     roomId: 'entry',
   });
   app.cart = [];
@@ -2754,14 +2857,21 @@ function placeFoodOrder(gameState, opts = {}) {
   return { ok: true, order, restaurant: def, totals };
 }
 
-// Minutes until the food is at the door, for the live ETA. Negative once the
-// arrival tick has passed (the driver is here / has been). Cross-midnight
-// orders count against arrivalDay; orders saved before arrivalDay existed
-// (no kv migration) fall back to order.day, keeping the old same-day math.
-function getFoodOrderEtaMinutes(order, clock) {
+// The absolute minute the food reaches the door, from whichever shape the
+// order record carries: `arrivalAbs` on new orders; `arrivalDay`/`arrivalTick`
+// on orders saved before the conversion (migration waived) — the fallback
+// keeps the old same-day math, so an in-flight order on an old save still
+// arrives.
+function foodOrderArrivalAbs(order) {
+  if (order.arrivalAbs != null) return order.arrivalAbs;
   const arrivalDay = order.arrivalDay != null ? order.arrivalDay : order.day;
-  const dayDelta = (arrivalDay - clock.day) * 24 * 60;
-  return dayDelta + order.arrivalTick * 30 - clock.minutes;
+  return arrivalDay * 1440 + (order.arrivalTick || 0) * 30;
+}
+
+// Minutes until the food is at the door, for the live ETA. Negative once the
+// arrival has passed (the driver is here / has been).
+function getFoodOrderEtaMinutes(order, clock) {
+  return foodOrderArrivalAbs(order) - clockToAbsolute(clock);
 }
 
 function getActiveFoodOrders(gameState) {
@@ -2834,7 +2944,8 @@ function bookEscort(gameState, opts = {}) {
 
   // The visit spans the longest purchased service's window (one session,
   // not one service glued to another); clamped so it never crosses into a
-  // day-record the visit spine wouldn't see (getActiveVisits is same-day).
+  // day-record the visit spine wouldn't see — reproduced exactly as the
+  // absolute-minute window (an endTick of 48 means the end of the day).
   const duration = Math.max(ESCORT_TUNING.minVisitTicks, ...requested.map(sid => ESCORT_SERVICE_DEFS[sid]?.durationTicks || 0));
   const endTick = Math.min(48, startTick + duration);
 
@@ -2854,8 +2965,8 @@ function bookEscort(gameState, opts = {}) {
   scheduleVisit(gameState, booking.id, day, {
     npcId: entry.npcId,
     purpose: 'escort',
-    startTick,
-    endTick,
+    startAbs: day * 1440 + startTick * 30,
+    endAbs: day * 1440 + endTick * 30,
     roomId: gameState.player.location,
   });
   return { ok: true, booking, npc, cost };

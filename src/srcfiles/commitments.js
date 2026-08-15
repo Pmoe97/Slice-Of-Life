@@ -8,10 +8,18 @@
 // together).
 //
 // Record shape (see the plan's Data model):
-//   { id, kind, day, tickStart, tickEnd, roomId,
+//   { id, kind, startAbs, endAbs, roomId,
 //     invitedIds, acceptedIds, declinedIds, status }
 // status: 'scheduled' (invite out, meal not yet held) → 'held' (the meal
 // happened during its window) | 'missed' (the window passed with no meal).
+//
+// startAbs/endAbs are clockToAbsolute-space (day*1440 + minutes), the same
+// convention world.visits[] uses (external-world-retiming-plan D6) — a
+// commitment has no separate `day` field; commitmentDay() derives it, the
+// same way sim.js's visitDay() does. This closes a gap the continuous-
+// simulation roadmap's C1 left behind: this file and OVERTURE's proposeTerms
+// were never converted by any of the roadmap's five plans, despite being
+// squarely in the visit/initiative layers C1 says must not branch on ticks.
 //
 // `kind` is a COMMITMENT_KINDS key (config.js). Since the initiative plan's
 // Phase 4 there are two: 'meal', which the player books through
@@ -50,7 +58,7 @@ function respondToCommitment(npc, npcId, commitment, gameState) {
   // a synthetic clock for that day/window — deliberately WITHOUT gameState
   // so the probe can't see this very commitment (it isn't active yet anyway,
   // but the call must not depend on that).
-  const probeClock = { day: commitment.day, minutes: commitment.tickStart * CLOCK.tickMinutes };
+  const probeClock = absoluteToClock(commitment.startAbs);
   const { block } = resolveScheduleActivity(npc, probeClock);
   if (COMMITMENT_TUNING.busyBlocks.includes(block)) {
     return { accept: false, reason: 'busy', block };
@@ -60,6 +68,12 @@ function respondToCommitment(npc, npcId, commitment, gameState) {
   const noise = (rng() - 0.5) * 2 * COMMITMENT_TUNING.acceptNoiseRange;
   const accept = score + noise >= COMMITMENT_TUNING.acceptThreshold;
   return { accept, reason: accept ? 'accept' : 'cool', block };
+}
+
+// The day a commitment falls on, derived rather than stored — the same
+// pattern sim.js's visitDay() uses for world.visits[].
+function commitmentDay(c) {
+  return Math.floor(c.startAbs / 1440);
 }
 
 // Active commitment for a resident RIGHT NOW: one they accepted, still
@@ -73,14 +87,13 @@ function respondToCommitment(npc, npcId, commitment, gameState) {
 function activeCommitmentFor(npcId, gameState) {
   const clock = gameState?.meta?.clock;
   if (!clock || clock.day == null) return null;
-  const tick = getTickIndex(clock.minutes);
+  const nowAbs = clockToAbsolute(clock);
   const list = gameState?.world?.commitments;
   if (!Array.isArray(list)) return null;
   return list.find(c =>
     COMMITMENT_KINDS[c.kind] &&
     c.status === 'scheduled' &&
-    c.day === clock.day &&
-    tick >= c.tickStart && tick < c.tickEnd &&
+    nowAbs >= c.startAbs && nowAbs < c.endAbs &&
     (c.acceptedIds || []).includes(npcId)
   ) || null;
 }
@@ -91,13 +104,12 @@ function activeCommitmentFor(npcId, gameState) {
 function activeMealCommitmentsInRoom(gameState, roomId) {
   const clock = gameState?.meta?.clock;
   if (!clock || clock.day == null) return [];
-  const tick = getTickIndex(clock.minutes);
+  const nowAbs = clockToAbsolute(clock);
   return (gameState?.world?.commitments || []).filter(c =>
     c.kind === 'meal' &&
     c.roomId === roomId &&
     c.status === 'scheduled' &&
-    c.day === clock.day &&
-    tick >= c.tickStart && tick < c.tickEnd
+    nowAbs >= c.startAbs && nowAbs < c.endAbs
   );
 }
 
@@ -117,12 +129,12 @@ function activeMealCommitmentsInRoom(gameState, roomId) {
 // against their schedule by OVERTURE's proposeTerms, using this file's own
 // busyBlocks bar — so the one thing respondToCommitment would have caught has
 // been caught upstream, where it belongs.
-function createCommitment(gameState, { kind, day, tickStart, tickEnd, roomId, invitedIds, proposerId }) {
+function createCommitment(gameState, { kind, startAbs, endAbs, roomId, invitedIds, proposerId }) {
   const list = gameState.world.commitments || (gameState.world.commitments = []);
   kind = kind || 'meal';
   const existing = list.find(c =>
-    c.day === day && c.kind === kind &&
-    c.tickStart === tickStart && c.tickEnd === tickEnd &&
+    c.kind === kind &&
+    c.startAbs === startAbs && c.endAbs === endAbs &&
     ((c.invitedIds || []).some(i => (invitedIds || []).includes(i))
      || (proposerId && (c.acceptedIds || []).includes(proposerId)))
   );
@@ -154,9 +166,9 @@ function createCommitment(gameState, { kind, day, tickStart, tickEnd, roomId, in
     return { record: existing, responses };
   }
   const record = {
-    id: `commit_${day}_${tickStart}_${list.length}`,
+    id: `commit_${startAbs}_${list.length}`,
     kind,
-    day, tickStart, tickEnd, roomId,
+    startAbs, endAbs, roomId,
     invitedIds: [...(invitedIds || [])],
     acceptedIds: proposerId ? [proposerId] : [],
     declinedIds: [],
@@ -190,12 +202,12 @@ function processCommitmentsForDay(gameState, day) {
   const list = gameState?.world?.commitments;
   if (!Array.isArray(list)) return;
   for (const c of list) {
-    if (c.status === 'scheduled' && c.day < day) c.status = 'missed';
+    if (c.status === 'scheduled' && commitmentDay(c) < day) c.status = 'missed';
   }
   const cutoff = day - COMMITMENT_TUNING.retainedDays;
   for (let i = list.length - 1; i >= 0; i--) {
     const c = list[i];
-    if (c.day < cutoff && (c.status === 'held' || c.status === 'missed')) list.splice(i, 1);
+    if (commitmentDay(c) < cutoff && (c.status === 'held' || c.status === 'missed')) list.splice(i, 1);
   }
 }
 

@@ -38,13 +38,46 @@ const APP_DEFS = {
     devices: ['computer', 'phone'],
     entryScreen: 'browse',
     screens: {
-      browse: { label: 'Browse', renderer: 'nile', source: 'SHOP_CATALOG_LIST', rowAction: 'shop.add-to-cart', rowActionLabel: 'Add to Cart' },
+      // `catalog`/`cartPath`/`cartRowAction`/`checkoutAction` are read by the
+      // shared 'nile' renderer (RENDER.COMPUTER) — Nile and Home both run it,
+      // each pointing at its own defs table and cart (see the Home app below).
+      browse: { label: 'Browse', renderer: 'nile', source: 'SHOP_CATALOG_LIST', catalog: 'ITEM_DEFS', cartPath: 'apps.shop.cart',
+                rowAction: 'shop.add-to-cart', rowActionLabel: 'Add to Cart',
+                cartRowAction: 'shop.remove-from-cart', checkoutAction: 'shop.checkout' },
       cart: {
         label: 'Cart', renderer: 'list', source: 'state:apps.shop.cart', emptyText: 'Your cart is empty.',
-        labelFn: (row) => `${ITEM_DEFS[row.defId]?.label || row.defId} × ${row.units} — $${(ITEM_DEFS[row.defId]?.price || 0) * row.units}`,
+        labelFn: (row) => `${ITEM_DEFS[row.defId]?.label || row.defId} × ${row.units} — ${(ITEM_DEFS[row.defId]?.price || 0) * row.units}`,
         rowAction: 'shop.remove-from-cart', rowActionLabel: 'Remove',
         footerAction: 'shop.checkout', footerActionLabel: 'Checkout',
       },
+    },
+  },
+  // "Home" — the furniture app (decor-economy plan, D1). A second shop:
+  // same next-day doormat checkout/delivery shape as Nile (D2 — checkoutCart
+  // is the SAME function, just pointed at DECOR_CATALOG_DEFS and this app's
+  // own cart), but a different catalog — DECOR_CATALOG_DEFS entries are
+  // priced DESIGN_SHAPES placements, not ITEM_DEFS goods. The in-game
+  // placement screen (the `home-placement` renderer + the `place` screen
+  // def) shipped with Phase 2 (D9).
+  home: {
+    id: 'home', label: 'Home', category: 'shopping', requires: [],
+    devices: ['computer', 'phone'],
+    entryScreen: 'browse',
+    screens: {
+      browse: { label: 'Browse', renderer: 'nile', source: 'DECOR_CATALOG_LIST', catalog: 'DECOR_CATALOG_DEFS', cartPath: 'apps.home.cart',
+                rowAction: 'home.add-to-cart', rowActionLabel: 'Add to Cart',
+                cartRowAction: 'home.remove-from-cart', checkoutAction: 'home.checkout' },
+      cart: {
+        label: 'Cart', renderer: 'list', source: 'state:apps.home.cart', emptyText: 'Your cart is empty.',
+        labelFn: (row) => `${DECOR_CATALOG_DEFS[row.defId]?.label || row.defId} × ${row.units} — ${(DECOR_CATALOG_DEFS[row.defId]?.price || 0) * row.units}`,
+        rowAction: 'home.remove-from-cart', rowActionLabel: 'Remove',
+        footerAction: 'home.checkout', footerActionLabel: 'Checkout',
+      },
+      // D9 — shipped with its renderer (the `home-placement` renderer, in
+      // RENDER.COMPUTER): the in-game Studio screen. Same select/drag/resize/
+      // rotate interaction as dev/designer.html's Place tab, over the
+      // player's own placed decor objects instead of the dev-authored config.
+      place: { label: 'Place', renderer: 'home-placement' },
     },
   },
   browser: {
@@ -211,6 +244,45 @@ const APP_DEFS = {
   // .invest so invest-dashboard and the invest handlers work unmodified.
 };
 
+// --- Decor catalog: what the Home app sells (decor-economy plan) ---
+// A catalog entry is priced, buyable, and names which DESIGN_SHAPES entry
+// it places once delivered and placed. Distinct from DESIGN_SHAPES itself
+// (the catalog is what's for sale; DESIGN_SHAPES is how it's drawn) and
+// from ITEM_DEFS (deliberately NOT there — a price in ITEM_DEFS would
+// enrol a sofa into SHOP_CATALOG_LIST and onto Nile, which is exactly the
+// boundary D1 defends). `category` is the ROOM the piece furnishes, which
+// is what the anchor-availability work (continuous-behavior-engine plan
+// Phase 3) keys on. Launch breadth is enough to fully furnish the living
+// room (a sofa and a TV stand, at minimum — the plan's Phase 3 worked
+// example must be literally buyable); the rest is a curated first pass.
+const DECOR_CATALOG_DEFS = {
+  // --- living room ---
+  sofa_basic: { id: 'sofa_basic', label: 'Sofa', price: 340, buyQty: 1, shape: 'sofa', category: 'living_room' },
+  armchair: { id: 'armchair', label: 'Armchair', price: 150, buyQty: 1, shape: 'armchair', category: 'living_room' },
+  coffee_table: { id: 'coffee_table', label: 'Coffee Table', price: 110, buyQty: 1, shape: 'coffee_table', category: 'living_room' },
+  tv_basic: { id: 'tv_basic', label: 'TV', price: 280, buyQty: 1, shape: 'tv', category: 'living_room' },
+  tv_stand: { id: 'tv_stand', label: 'TV Stand', price: 130, buyQty: 1, shape: 'shelf', category: 'living_room' },
+  rug: { id: 'rug', label: 'Rug', price: 90, buyQty: 1, shape: 'rug', category: 'living_room' },
+  floor_lamp: { id: 'floor_lamp', label: 'Floor Lamp', price: 45, buyQty: 1, shape: 'lamp', category: 'living_room' },
+  plant: { id: 'plant', label: 'Plant', price: 35, buyQty: 1, shape: 'plant', category: 'living_room' },
+  // --- bedroom ---
+  bed_basic: { id: 'bed_basic', label: 'Bed', price: 420, buyQty: 1, shape: 'bed', category: 'bedroom' },
+  nightstand: { id: 'nightstand', label: 'Nightstand', price: 60, buyQty: 1, shape: 'nightstand', category: 'bedroom' },
+  wardrobe: { id: 'wardrobe', label: 'Wardrobe', price: 180, buyQty: 1, shape: 'wardrobe', category: 'bedroom' },
+  desk: { id: 'desk', label: 'Desk', price: 140, buyQty: 1, shape: 'desk', category: 'bedroom' },
+  desk_chair: { id: 'desk_chair', label: 'Desk Chair', price: 70, buyQty: 1, shape: 'desk_chair', category: 'bedroom' },
+  // --- dining / kitchen ---
+  dining_table: { id: 'dining_table', label: 'Dining Table', price: 200, buyQty: 1, shape: 'dining_table', category: 'dining' },
+  dining_chair: { id: 'dining_chair', label: 'Chair', price: 40, buyQty: 1, shape: 'chair', category: 'dining' },
+  // --- utility / decor ---
+  bookshelf: { id: 'bookshelf', label: 'Bookshelf', price: 130, buyQty: 1, shape: 'bookshelf', category: 'study' },
+  shelf: { id: 'shelf', label: 'Wall Shelf', price: 60, buyQty: 1, shape: 'shelf', category: 'study' },
+};
+// Mirrors SHOP_CATALOG_LIST's derivation (ITEMS) — the Home app's browse
+// screen reads this list, so every priced catalog entry is buyable and no
+// parallel hand-authored list can drift from the defs.
+const DECOR_CATALOG_LIST = Object.values(DECOR_CATALOG_DEFS).filter(d => d.id !== '_unknown' && d.price != null);
+
 // --- Jobs: what WorkHub's board offers, and what working a block pays.
 // `qualitySkill` (optional) is read through SKILLS' payMultiplier curve —
 // getting better at the relevant skill raises pay on top of the base
@@ -276,6 +348,12 @@ const GIG_REPUTATION_TIERS = [
 // Per-block energy cost of gig work. Smaller than the old per-job figure;
 // gigs pay lump sums on delivery, so each block is progress, not a wage.
 const GIG_ENERGY_PER_BLOCK = 6;
+// Wall-clock minutes one work-block click takes. A flat time-cost for a
+// single block, not a scheduling window — deliberately detached from
+// CLOCK.tickMinutes so a future change to (or retirement of) the tick grid
+// can't silently change how long a gig work session takes.
+// (external-world-retiming plan, D5.)
+const GIG_TUNING = { workBlockMinutes: 30 };
 // Max concurrent gigs — the deadline pressure does the limiting.
 const GIG_MAX_CONCURRENT = 3;
 // Reputation movement. Delivery on time scales up by how close to the
@@ -471,12 +549,14 @@ const SERVICE_DEFS_LIST = Object.values(SERVICE_DEFS);
 // place the plan's sketched `menu: [itemIds]` had to grow a field.
 //
 // `prepMinutes` is the kitchen's own turnaround, added to travel time
-// (FOOD_TUNING) to produce the ETA. `hours` is [openTick, closeTick] in the
-// same 0-47 half-hour ticks everything else uses — a closed kitchen refuses
-// the order rather than quietly delivering at 4am. A window with open > close
-// wraps across midnight ([0, 47] = 24 hours); see getRestaurantWindows /
-// formatRestaurantHours (COMPUTER). `service` is the meal-category the
-// DoorDrop browse filter groups by: breakfast | lunch | dinner | late | 24h.
+// (FOOD_TUNING) to produce the ETA. `hours` is [openMinute, closeMinute) in
+// minutes-from-midnight — a RECURRING daily rule, not a one-shot day-scoped
+// window — a closed kitchen refuses the order rather than quietly delivering
+// at 4am. A window with open > close wraps across midnight ([0, 1410] = the
+// all-day sentinel, the old tick sentinel [0, 47] × 30); see
+// getRestaurantWindows / formatRestaurantHours (COMPUTER). `service` is the
+// meal-category the DoorDrop browse filter groups by: breakfast | lunch |
+// dinner | late | 24h.
 const RESTAURANT_DEFS = {
   // --- The target roster (restaurant network overhaul Phase 3) ---
   // 12 places total, six new below. Every menu's prices are ~$0.30-0.35 per
@@ -486,7 +566,7 @@ const RESTAURANT_DEFS = {
   sunrise_cafe: {
     id: 'sunrise_cafe', label: 'Sunrise Cafe', cuisine: 'Café',
     blurb: 'Burn the first pancake of every shift, remember your order forever, close by lunch.',
-    service: 'breakfast', deliveryFeeBase: 2, prepMinutes: 10, hours: [12, 28],
+    service: 'breakfast', deliveryFeeBase: 2, prepMinutes: 10, hours: [360, 840],
     menu: [
       { itemId: 'dish_pancake_stack', price: 11 },
       { itemId: 'dish_belgian_waffle', price: 12 },
@@ -505,7 +585,7 @@ const RESTAURANT_DEFS = {
   corner_deli: {
     id: 'corner_deli', label: 'Corner Deli', cuisine: 'Soup & Deli',
     blurb: 'Steam on the window, a knife block older than the landlord, a lunch rush that moves like a riot.',
-    service: 'lunch', deliveryFeeBase: 2, prepMinutes: 12, hours: [20, 32],
+    service: 'lunch', deliveryFeeBase: 2, prepMinutes: 12, hours: [600, 960],
     menu: [
       { itemId: 'dish_pho_ga', price: 12 },
       { itemId: 'dish_tomato_soup_bowl', price: 8 },
@@ -522,7 +602,7 @@ const RESTAURANT_DEFS = {
   big_bite: {
     id: 'big_bite', label: 'Big Bite Burgers', cuisine: 'American',
     blurb: 'Fast, greasy, open 24 hours. The fries arrive lukewarm and nobody has ever complained.',
-    service: '24h', deliveryFeeBase: 3, prepMinutes: 15, hours: [0, 47],
+    service: '24h', deliveryFeeBase: 3, prepMinutes: 15, hours: [0, 1410],
     menu: [
       { itemId: 'dish_double_burger', price: 15 },
       { itemId: 'dish_fries', price: 6 },
@@ -542,7 +622,7 @@ const RESTAURANT_DEFS = {
   the_greasy_spoon: {
     id: 'the_greasy_spoon', label: 'The Greasy Spoon', cuisine: 'Diner',
     blurb: 'Fluorescent lights, sticky menus, and coffee that has been on the burner since 1979.',
-    service: '24h', deliveryFeeBase: 2, prepMinutes: 12, hours: [0, 47],
+    service: '24h', deliveryFeeBase: 2, prepMinutes: 12, hours: [0, 1410],
     menu: [
       { itemId: 'dish_diner_breakfast', price: 10 },
       { itemId: 'dish_club_sandwich', price: 12 },
@@ -561,7 +641,7 @@ const RESTAURANT_DEFS = {
   golden_wok: {
     id: 'golden_wok', label: 'Golden Wok', cuisine: 'Chinese',
     blurb: 'Takeout cartons, chili oil, and a wok that has never once been off the heat.',
-    service: 'dinner', deliveryFeeBase: 3, prepMinutes: 20, hours: [22, 46],
+    service: 'dinner', deliveryFeeBase: 3, prepMinutes: 20, hours: [660, 1380],
     menu: [
       { itemId: 'dish_kung_pao', price: 14 },
       { itemId: 'dish_chow_mein', price: 13 },
@@ -578,7 +658,7 @@ const RESTAURANT_DEFS = {
   sals_pizzeria: {
     id: 'sals_pizzeria', label: "Sal's Pizzeria", cuisine: 'Italian',
     blurb: 'A whole pie in a box that barely fits through the door. Sal does not do half-portions.',
-    service: 'late', deliveryFeeBase: 4, prepMinutes: 30, hours: [22, 47],
+    service: 'late', deliveryFeeBase: 4, prepMinutes: 30, hours: [660, 1410],
     menu: [
       { itemId: 'dish_pepperoni_pizza', price: 19 },
       { itemId: 'dish_calzone', price: 15 },
@@ -596,7 +676,7 @@ const RESTAURANT_DEFS = {
   el_camino: {
     id: 'el_camino', label: 'El Camino Taqueria', cuisine: 'Mexican',
     blurb: 'Foil-wrapped, cheap, and enormous. The salsa comes in a container that always leaks.',
-    service: 'late', deliveryFeeBase: 3, prepMinutes: 18, hours: [21, 46],
+    service: 'late', deliveryFeeBase: 3, prepMinutes: 18, hours: [630, 1380],
     menu: [
       { itemId: 'dish_al_pastor', price: 12 },
       { itemId: 'dish_burrito', price: 14 },
@@ -614,7 +694,7 @@ const RESTAURANT_DEFS = {
   bangkok_house: {
     id: 'bangkok_house', label: 'Bangkok House', cuisine: 'Thai',
     blurb: 'Asks how spicy you want it and then ignores the answer.',
-    service: 'dinner', deliveryFeeBase: 4, prepMinutes: 25, hours: [22, 44],
+    service: 'dinner', deliveryFeeBase: 4, prepMinutes: 25, hours: [660, 1320],
     menu: [
       { itemId: 'dish_pad_thai', price: 15 },
       { itemId: 'dish_green_curry', price: 16 },
@@ -632,7 +712,7 @@ const RESTAURANT_DEFS = {
   kaisen_sushi: {
     id: 'kaisen_sushi', label: 'Kaisen Sushi', cuisine: 'Japanese',
     blurb: 'The expensive one. Everything comes in a lacquered box and travels badly.',
-    service: 'dinner', deliveryFeeBase: 6, prepMinutes: 35, hours: [23, 43],
+    service: 'dinner', deliveryFeeBase: 6, prepMinutes: 35, hours: [690, 1290],
     menu: [
       { itemId: 'dish_salmon_roll', price: 24 },
       { itemId: 'dish_tempura_udon', price: 18 },
@@ -650,7 +730,7 @@ const RESTAURANT_DEFS = {
   emerald_kitchen: {
     id: 'emerald_kitchen', label: 'Emerald Kitchen', cuisine: 'Upscale',
     blurb: 'White tablecloths, a sommelier who raises one eyebrow, and prices that quietly exclude you.',
-    service: 'dinner', deliveryFeeBase: 8, prepMinutes: 30, hours: [34, 46],
+    service: 'dinner', deliveryFeeBase: 8, prepMinutes: 30, hours: [1020, 1380],
     menu: [
       { itemId: 'dish_ribeye', price: 38 },
       { itemId: 'dish_duck_breast', price: 34 },
@@ -666,7 +746,7 @@ const RESTAURANT_DEFS = {
   midnight_noodle: {
     id: 'midnight_noodle', label: 'Midnight Noodle', cuisine: 'Asian',
     blurb: 'Steam rolling off the broth at 2am. The last good decision you will make tonight.',
-    service: 'late', deliveryFeeBase: 4, prepMinutes: 18, hours: [34, 8],
+    service: 'late', deliveryFeeBase: 4, prepMinutes: 18, hours: [1020, 240],
     menu: [
       { itemId: 'dish_tonkotsu_ramen', price: 16 },
       { itemId: 'dish_dan_dan', price: 14 },
@@ -682,7 +762,7 @@ const RESTAURANT_DEFS = {
   latenight_munchies: {
     id: 'latenight_munchies', label: 'Latenight Munchies', cuisine: 'Street food',
     blurb: 'Anything battered and fried, served to people who smell like regret and victory.',
-    service: 'late', deliveryFeeBase: 3, prepMinutes: 12, hours: [36, 10],
+    service: 'late', deliveryFeeBase: 3, prepMinutes: 12, hours: [1080, 300],
     menu: [
       { itemId: 'dish_loaded_nachos', price: 11 },
       { itemId: 'dish_buffalo_wings', price: 13 },

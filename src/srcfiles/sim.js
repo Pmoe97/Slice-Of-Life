@@ -418,15 +418,27 @@ function getPresentNpcIds(npcs, roomId) {
 // consumers use — the tick loop, scene layer, and floor plan all ask this
 // one question rather than scanning individual sources (renovation jobs,
 // and later contracts/orders/bookings/invites).
+//
+// External-world retiming Phase 1 (D1/D6): windows are absolute-minute
+// pairs [startAbs, endAbs), computed once at schedule time (scheduleVisit)
+// from whatever unit the source thinks in — clockToAbsolute's day*1440+
+// minutes formula kept inline because time.js loads after sim.js. Reads
+// compare the clock's absolute minute against them directly; no day+tick
+// re-derivation, and the old day-scoping check falls out of the monotonic
+// comparison (a window scheduled for another day can't contain now).
+function visitDay(v) {
+  return v.startAbs != null ? Math.floor(v.startAbs / 1440) : v.day;
+}
+
 function getActiveVisits(gameState) {
   const visits = gameState.world?.visits;
   if (!visits || visits.length === 0) return [];
   const { day, minutes } = gameState.meta.clock;
-  const tick = getTickIndex(minutes);
+  const abs = day * 1440 + minutes;
   return visits.filter(v =>
-    v.day === day &&
     v.status !== 'done' && v.status !== 'deferred' &&
-    tick >= v.startTick && tick < v.endTick
+    Number.isFinite(v.startAbs) && Number.isFinite(v.endAbs) &&
+    abs >= v.startAbs && abs < v.endAbs
   );
 }
 
@@ -452,20 +464,23 @@ function getActiveNpcIds(gameState, activeVisits) {
 // this every rollover for their recurring shapes (a renovation job's crew
 // visits on every working day), so an existing record for the same
 // source+day must not be duplicated. Record shape matches the plan's Data
-// model; status is 'scheduled' on creation and flips to 'done' by
+// model (external-world retiming D1): the window is stored as an
+// absolute-minute pair [startAbs, endAbs), converted ONCE here at schedule
+// time from whatever unit the source passes — the record never re-derives
+// it, and day-scoping for idempotency/retirement goes through visitDay.
+// status is 'scheduled' on creation and flips to 'done' by
 // processVisitsForDay once the day passes.
 function scheduleVisit(gameState, sourceId, day, visit) {
   const visits = gameState.world.visits || (gameState.world.visits = []);
-  const existing = visits.find(v => v.sourceId === sourceId && v.day === day);
+  const existing = visits.find(v => v.sourceId === sourceId && visitDay(v) === day);
   if (existing) return existing;
   const record = {
     id: `visit_${day}_${visits.length}`,
     npcId: visit.npcId,
     purpose: visit.purpose,
     sourceId,
-    day,
-    startTick: visit.startTick,
-    endTick: visit.endTick,
+    startAbs: visit.startAbs,
+    endAbs: visit.endAbs,
     roomId: visit.roomId,
     status: 'scheduled',
     hostNpcId: visit.hostNpcId || null,
@@ -495,8 +510,8 @@ function scheduleContractorVisitsForJob(gameState, job) {
     scheduleVisit(gameState, job.id, d, {
       npcId: job.contractorId || CONTRACTOR_ID,
       purpose: 'contractor',
-      startTick: win.startTick,
-      endTick: win.endTick,
+      startAbs: d * 1440 + win.startMinute,
+      endAbs: d * 1440 + win.endMinute,
       roomId: job.roomId,
     });
   }
@@ -606,7 +621,7 @@ function friendHostChance(npc) {
 function countVisitorsForDay(gameState, day) {
   const ids = new Set();
   for (const v of gameState.world.visits || []) {
-    if (v.day !== day) continue;
+    if (visitDay(v) !== day) continue;
     if (v.status === 'done' || v.status === 'deferred') continue;
     ids.add(v.npcId);
   }
@@ -635,10 +650,10 @@ function planFriendVisitsForDay(gameState, day) {
     if (candidates.length === 0) continue;
     const stub = candidates[Math.floor(rng() * candidates.length)];
 
-    const startTick = FRIEND_TUNING.startTickMin
-      + Math.floor(rng() * (FRIEND_TUNING.startTickMax - FRIEND_TUNING.startTickMin + 1));
-    const duration = FRIEND_TUNING.durationTicksMin
-      + Math.floor(rng() * (FRIEND_TUNING.durationTicksMax - FRIEND_TUNING.durationTicksMin + 1));
+    const startMinute = FRIEND_TUNING.startMinuteMin
+      + Math.floor(rng() * (FRIEND_TUNING.startMinuteMax - FRIEND_TUNING.startMinuteMin + 1));
+    const duration = FRIEND_TUNING.durationMinutesMin
+      + Math.floor(rng() * (FRIEND_TUNING.durationMinutesMax - FRIEND_TUNING.durationMinutesMin + 1));
 
     // Soft cap: check BEFORE promoting, so a deferred visit costs nothing.
     const deferred = countVisitorsForDay(gameState, day) >= VISIT_TUNING.softCap;
@@ -648,8 +663,11 @@ function planFriendVisitsForDay(gameState, day) {
     const visit = scheduleVisit(gameState, `friend_${stub.stubId}_${day}`, day, {
       npcId: deferred ? null : promoted.npcId,
       purpose: 'social',
-      startTick,
-      endTick: Math.min(48, startTick + duration),
+      startAbs: day * 1440 + startMinute,
+      // The old endTick clamp (min 48) reproduced exactly as the minute
+      // clamp: a window that would cross midnight ends at it — inactive the
+      // instant the next day starts.
+      endAbs: day * 1440 + Math.min(1440, startMinute + duration),
       roomId: 'living_room',
       hostNpcId: hostId,
     });
@@ -667,7 +685,7 @@ function planFriendVisitsForDay(gameState, day) {
       npcId: promoted.npcId,
       guestName: gameState.npcs[promoted.npcId]?.bible?.name || stub.name,
       hostName: host.bible?.name || 'Someone',
-      startTick,
+      startMinute,
     });
   }
   return results;
@@ -723,7 +741,8 @@ function resolveVisitPresence(npcId, gameState, activeVisits, rng, resolved) {
     const contract = gameState.world.computer?.apps?.services?.hired
       ?.find(h => h.serviceId === MAID_SERVICE_ID);
     const scope = (contract?.addons || []).includes('bedrooms') ? ALL_ROOMS : COMMON_ROOMS;
-    const elapsed = Math.max(0, getTickIndex(gameState.meta.clock.minutes) - visit.startTick);
+    const clock = gameState.meta.clock;
+    const elapsed = Math.max(0, Math.floor((clock.day * 1440 + clock.minutes - visit.startAbs) / 30));
     return {
       block: 'leisure',
       location: scope[elapsed % scope.length],
@@ -1077,7 +1096,19 @@ function npcInitiativeGate(npc, contentFlags) {
 // Resolve all NPCs for a single tick (deterministic, zero LLM)
 function resolveTick(gameState) {
   const { meta, npcs } = gameState;
-  const rng = seededRng(meta.seed, `tick_${meta.clock.day}_${getTickIndex(meta.clock.minutes)}`);
+  // Continuous-behavior Phase 5 (D7): seeding moves from tick-index to
+  // absolute-minute. The ambient per-tick rolls below (room preferences,
+  // random events, evidence discovery) keep a per-tick stream but address
+  // it by the absolute minute of day — no tick index in any behavior-layer
+  // seed (C1). The actual DECISION streams are per-NPC at the decision's
+  // absolute minute — see the evaluateDrives call in pass 3.
+  const rng = seededRng(meta.seed, `tick_${meta.clock.day}_${meta.clock.minutes}`);
+  // Phase 4 (physical layer, D9 batch regime): snap any walk whose
+  // scheduled completion has passed BEFORE anything reads the NPCs, so the
+  // held records below see landed arrivals. In the live regime walks land
+  // per-frame; this is the deterministic path resolveBatch (sleep, `wait`)
+  // relies on — and it must stay synchronous, pure and rng-free (C6).
+  settleWalks(gameState);
   const newEvents = [];
   const npcUpdates = {};
 
@@ -1096,6 +1127,14 @@ function resolveTick(gameState) {
     activeVisits.map(v => v.npcId).filter(id => npcs[id] && npcs[id].residency.status !== 'resident')
   );
 
+  // Continuous-behavior-engine Phase 2 (D3): event-driven cadence. Only NPCs
+  // whose commitment has completed (or who hold none) are re-resolved this
+  // tick; a committed NPC is not re-decided until its own completion. The due
+  // set is derived from live commitment state each tick (cognition.js's
+  // DECISION QUEUE section), never stored — a stored copy would go stale the
+  // instant any writer released a commitment outside the queue.
+  const dueNpcIds = new Set(dueForDecision(gameState, activeNpcIds));
+
   // Pass 1: resolve where everyone ends up THIS tick first, so pass 2's
   // social-need restoration can check who's actually sharing a room this
   // tick rather than where they were last tick.
@@ -1107,11 +1146,43 @@ function resolveTick(gameState) {
     // location/activity, no schedule lookup. This is the windowed version
     // of the old unconditional 'visitor' skip: an external WITH an active
     // visit resolves; one without is simply absent from the active index.
+    // A visitor holding a commitment (a social drive opened one) is pinned
+    // to it like any committed NPC until their own completion.
     if (visitingIds.has(id)) {
-      resolved[id] = resolveVisitPresence(id, gameState, activeVisits, rng, resolved);
+      if (dueNpcIds.has(id)) {
+        resolved[id] = resolveVisitPresence(id, gameState, activeVisits, rng, resolved);
+      } else {
+        resolved[id] = deriveHeldRecord(id, npc, gameState, true);
+      }
       continue;
     }
     if (npc.residency.status !== 'resident') continue;
+
+    // Not due: a held commitment with time left to run. The record is
+    // derived from the commitment (cognition.js), never re-rolled from the
+    // schedule — a re-roll is exactly how the flat scan walked committed
+    // NPCs away from what they were doing (233 of 485 cancelled, measured).
+    if (!dueNpcIds.has(id)) {
+      resolved[id] = deriveHeldRecord(id, npc, gameState, false);
+      continue;
+    }
+
+    // Phase 5 (D5): a due resident holding a WORK commitment has just
+    // finished their shift — the commitment's single completion time has
+    // passed, so they are back at the front door, physically present again.
+    // Released here, ahead of the schedule branch, so the rest of the tick
+    // sees them as the person they now are rather than the worker they were.
+    if (npc.commitment && npc.commitment.kind === 'work') {
+      const scheduleResult = resolveScheduleActivity(npc, meta.clock, gameState, id);
+      returnHome(gameState, id);
+      resolved[id] = {
+        ...scheduleResult,
+        location: 'entry',
+        activity: 'home from work',
+        transit: null,
+      };
+      continue;
+    }
 
     const scheduleResult = resolveScheduleActivity(npc, meta.clock, gameState, id);
     const { block } = scheduleResult;
@@ -1222,92 +1293,6 @@ function resolveTick(gameState) {
       continue;
     }
 
-    // Decay needs
-    const needs = {
-      hunger: Math.max(0, npc.needs.hunger - NEEDS.npcHungerDecay),
-      hygiene: Math.max(0, npc.needs.hygiene - NEEDS.npcHygieneDecay),
-      energy: Math.max(0, npc.needs.energy - NEEDS.npcEnergyDecay),
-      social: Math.max(0, npc.needs.social - NEEDS.npcSocialDecay),
-      comfort: Math.max(0, (npc.needs.comfort || 50) - NEEDS.npcComfortDecay),               // NPC Overhaul Phase 6
-      stimulation: Math.max(0, (npc.needs.stimulation || 50) - NEEDS.npcStimulationDecay),   // NPC Overhaul Phase 6
-    };
-
-    // Restore needs by schedule block — keyed to the block rather than the
-    // (flavor-text) activity string, so needs actually trend back up
-    // instead of only ever decaying toward zero.
-    if (block === 'sleep') {
-      needs.energy = Math.min(NEEDS.energy.max, needs.energy + NEEDS.npcSleepRestore);
-    }
-    // Correctness plan Phase 4 (D10/D11): the passive hunger and hygiene
-    // restores that used to live here are GONE. Both needs are drive-serviced
-    // now — the `eat` drive really consumes food from the fridge and pantry,
-    // and the `shower` drive is what makes an NPC clean.
-    //
-    // The hygiene restore was the worse of the two: +8/tick across
-    // morning/wind_down/evening is +112/day against 48/day of decay, so
-    // hygiene never left 100 and the `shower` drive (gate: below 30) could
-    // not fire in any reachable game state. That silently killed the towel
-    // clothing state, NPC-sourced water/shower utility metering, and one of
-    // the peep system's target conditions — three features dead because of
-    // one restore rate.
-    //
-    // Phase 7 (D7)'s committed-dinner exception survives: a 'meal' block is
-    // an NPC actually sitting down to eat, which is a real act, not passive
-    // background topping-up.
-    if (block === 'meal') {
-      needs.hunger = Math.min(NEEDS.hunger.max, needs.hunger + NEEDS.npcMealRestore);
-    }
-    if (location) {
-      const shareCount = Object.values(resolved).filter(r => r.location === location).length;
-      if (shareCount > 1) needs.social = Math.min(NEEDS.npcSocialMax, needs.social + NEEDS.npcSocialRestore);
-    }
-    // NPC Overhaul Phase 6 — restore comfort in comfortable rooms. A room
-    // must carry a comfort facility: the living room is comfortable when its
-    // entertainment setup is at least functional; a bedroom only when its bed
-    // is UPGRADED (a habitable-but-plain room isn't comfortable). Post-overhaul
-    // each bedroom resolves its own habitability facility — the old shared
-    // single id is gone.
-    // Correctness plan Phase 4 (D14): a comfortable room now pays a small
-    // unconditional baseline, with the facility bonus stacking on top rather
-    // than being the only source. Previously comfort could ONLY rise in an
-    // upgraded room, so in a starting apartment it fell monotonically to zero
-    // and every NPC read as permanently uncomfortable. The upgrade incentive
-    // survives intact — the facility path is 3/tick against a baseline of 1.
-    // An NPC's own bedroom counts even unupgraded; someone else's does not.
-    const ownBedroom = ROOMS[location]?.type === 'bedroom' && npc.residency?.room === location;
-    if (location === 'living_room' || ownBedroom) {
-      const hasComfortFacility = location === 'living_room'
-        ? isFacilityFunctional(gameState, 'living_room_entertainment')
-        : (ROOM_FACILITIES[location] || []).some(fid => gameState.world.upgrades?.[fid]?.tier === 'upgraded');
-      const restore = hasComfortFacility ? NEEDS.npcComfortRestore : NEEDS.npcComfortBaselineRestore;
-      needs.comfort = Math.min(100, needs.comfort + restore);
-    }
-    // NPC Overhaul Phase 6 — extra comfort from trusted NPC proximity
-    if (location) {
-      const others = Object.entries(resolved).filter(([oid]) => oid !== id && resolved[oid].location === location);
-      for (const [oid] of others) {
-        const pair = gameState.world?.castWeb?.[[id, oid].sort().join('|')];
-        if (pair) {
-          const dirKey = `${id}→${oid}`;
-          const pairComfort = pair.axes?.[dirKey]?.comfort || 0;
-          if (pairComfort > 0.5) {
-            needs.comfort = Math.min(100, needs.comfort + NEEDS.npcComfortProximityBonus);
-            break;
-          }
-        }
-      }
-    }
-    // NPC Overhaul Phase 6 — restore stimulation during leisure.
-    // Correctness plan Phase 4 (D13): 'evening' and 'wind_down' count too.
-    // Gating on 'leisure' alone made this unreachable for most of the cast —
-    // NO weekday shift template (day_shift, morning_shift, evening_shift,
-    // night_shift) defines a leisure block at all, so anyone on a normal job
-    // could only ever restore stimulation at the weekend, and it sat pinned
-    // at zero the rest of the time.
-    if (block === 'leisure' || block === 'evening' || block === 'wind_down') {
-      needs.stimulation = Math.min(100, needs.stimulation + NEEDS.npcStimulationRestore);
-    }
-
     // Perception plan Phase 3: someone moving between rooms is audible.
     // Emitted here because this is the one place that holds BOTH the previous
     // location (npc.location — npcUpdates aren't applied until resolveBatch)
@@ -1384,7 +1369,6 @@ function resolveTick(gameState) {
     npcUpdates[id] = {
       location,
       activity,
-      needs,
       mood: Math.max(-1, Math.min(1, npc.mood + moodDelta)),
       clothing,
       schedule: { currentBlock: block, nextBlock: resolved[id].nextBlock || '', willReturnAt: resolved[id].willReturnAt || null }, // NPC Overhaul Phase 7.2
@@ -1407,13 +1391,14 @@ function resolveTick(gameState) {
     const isVisitor = visitingIds.has(id);
     if (!isVisitor && npc.residency.status !== 'resident') continue;
 
-    // Cognition plan Phase 2 (D4): age the held pursuit by one tick BEFORE
+    // Cognition plan Phase 2 (D4): age the held commitment by one tick BEFORE
     // anything is scored, so anything evaluateDrives still sees is one with
-    // ticks left to run. This runs ahead of the sleep skip below on purpose —
+    // time left to run. This runs ahead of the sleep skip below on purpose —
     // an NPC who falls asleep or leaves the flat mid-chore has stopped doing
-    // it, and agePursuit releases it. A pursuit that only aged on ticks where
-    // drives happened to be evaluated would outlive its reason.
-    const pursuit = agePursuit(gameState, id, resolved[id]);
+    // it, and ageCommitment releases it. A commitment that only aged on ticks
+    // where drives happened to be evaluated would outlive its reason.
+    const hadCommitment = !!npc.commitment;
+    const commitment = ageCommitment(gameState, id, resolved[id]);
 
     // Initiative plan Phase 3 (D19): the same one-tick ageing for the other
     // record an NPC can be holding, beside its sibling and ahead of the sleep
@@ -1431,22 +1416,61 @@ function resolveTick(gameState) {
     // answer is not also doing the laundry. Without this branch an NPC who
     // crossed the room on the previous tick was free to win an ordinary drive
     // on this one — measured over 12 households x 7 days, 95 npc-ticks where
-    // the same NPC held a pursuit and an overture at once, and 147 where a
+    // the same NPC held a commitment and an overture at once, and 147 where a
     // pending record belonged to someone who had already walked out of the
     // room. Selection guarantees only that ONE thing is chosen per tick; the
-    // record spans ticks, so the hold has to as well, exactly as a pursuit's
-    // does. They stay put, they keep the activity the def declares, and the
-    // record ages out (or the player answers) within utility.holdTicks.
+    // record spans ticks, so the hold has to as well, exactly as a
+    // commitment's does. They stay put, they keep the activity the def
+    // declares, and the record ages out (or the player answers) within
+    // utility.holdTicks.
     // Phase 4: WHERE they wait is the channel's business, not this loop's —
     // OVERTURE's overtureWaitRoom answers it. A knocker stays on their side of
     // the door; an approach follows the player's room. A null roomId means
     // "leave them where they are", which is the whole difference.
-    if (isOverturePending(npcs[id])) {
+    // An off-site worker cannot be waiting on an answer in the flat — the
+    // guard keeps the wait-room branch from overriding a work commitment's
+    // off-map record. (The open paths cannot produce this state today; this
+    // is the same defensive line commitmentInterruptTriggers draws.)
+    if (isOverturePending(npcs[id]) && !(npc.commitment && npc.commitment.kind === 'work')) {
       const { roomId: waitRoom, activity: waitActivity } = overtureWaitRoom(gameState, npcs[id]);
       npcUpdates[id].transit = null;
       if (waitRoom) npcUpdates[id].location = waitRoom;
       if (waitActivity) npcUpdates[id].activity = waitActivity;
       continue;
+    }
+
+    // Continuous-behavior-engine Phase 2 (D3): not due — holding a
+    // commitment with time left to run. The flat scan ends here: no
+    // re-scoring, no shouldBreakPursuit re-check, no re-roll until
+    // completesAtAbs arrives (or the age pass above released the commitment
+    // on sleep / missing location).
+    if (!dueNpcIds.has(id)) {
+      // Phase 5 (D6): interrupts by EVENT, not by per-tick re-scoring. A cheap
+      // trigger scan (a need crossing its urgency threshold since the
+      // commitment opened, a pending overture) runs for held NPCs; on a hit
+      // the commitment is released and the NPC falls through to re-decide
+      // THIS tick — the "fresh decision immediately" of the early-release
+      // path. Work commitments are exempt: an off-site worker cannot answer
+      // their needs from the office, exactly as the schedule keeps them at
+      // work regardless.
+      //
+      // Phase 5 (D6): the aged-away case. ageCommitment above released the
+      // commitment at its completion time THIS tick — a drive that ran into
+      // the commute window is the shape: at top of tick it was still held,
+      // so this NPC was not in dueNpcIds and pass 1 derived a held record,
+      // yet it no longer holds anything. hadCommitment && !commitment
+      // detects exactly that, and the NPC falls through to re-decide here
+      // instead of carrying a stale record (off-map, no work commitment)
+      // into the next tick. The fall-through lands on the work/commute
+      // branch below for a work-boundary block, so the same tick that
+      // swallows the old commitment opens the work one.
+      const interrupt = commitment && commitment.kind !== 'work' ? shouldInterruptCommitment(npc, commitment) : null;
+      const agedAway = hadCommitment && !commitment;
+      if (interrupt || agedAway) {
+        if (interrupt) releaseCommitment(gameState, id);
+      } else {
+        continue;
+      }
     }
 
     // NPCs in transit are walking, not doing activities: a drive's
@@ -1456,25 +1480,73 @@ function resolveTick(gameState) {
     // UNLESS they are in the middle of something (cognition plan Phase 2). Pass
     // 1 re-rolls a room preference EVERY tick from ACTIVITY_ROOM_PREFERENCES,
     // so an NPC who is not walking somewhere is usually about to be — measured,
-    // that cancelled 233 of 485 pursuits, nearly half, and almost always on the
-    // tick after one had moved the NPC to the room it needed. D2 says a pursuit
-    // OVERRIDES the schedule; this is where that has to be true, or a pursuit
-    // that relocates anyone can never survive its own first tick. The transit
-    // is cancelled outright rather than paused: it was never a journey the NPC
-    // chose, it was the schedule wandering, and they are busy.
+    // that cancelled 233 of 485 commitments, nearly half, and almost always on
+    // the tick after one had moved the NPC to the room it needed. D2 says a
+    // commitment OVERRIDES the schedule; this is where that has to be true, or
+    // a commitment that relocates anyone can never survive its own first tick.
+    // The transit is cancelled outright rather than paused: it was never a
+    // journey the NPC chose, it was the schedule wandering, and they are busy.
+    //
+    // Phase 6 (tuning pass): an UNCOMMITTED NPC in transit used to `continue`
+    // here — skip the decision until the wander reached its destination. The
+    // schedule transit steps one room per tick, so a long wander (the Gym is
+    // six rooms from Hallway B) locked the scorer out for the whole walk, and
+    // needs could not pull the NPC out of it: measured live, an 08:00
+    // "heading to the Gym" ran 6 ticks straight through the breakfast window
+    // with hunger at 30, and the household ate ~0.42 meals/day. The wander is
+    // the schedule's, not a commitment's — nothing should hold the scorer
+    // hostage to it. Fall through and let the decision run; if a drive wins,
+    // the merge below cancels the transit and the commitment's own walk takes
+    // over from where they stand, and if nothing clears the threshold the
+    // pass-2 transit record stands and the wander carries on.
     if (resolved[id].transit) {
-      if (!pursuit) continue;
-      const stay = pursuit.roomId || resolved[id].location;
-      resolved[id] = { ...resolved[id], transit: null, location: stay };
-      npcUpdates[id].transit = null;
-      npcUpdates[id].location = stay;
+      if (commitment) {
+        const stay = (commitment.anchor && commitment.anchor.roomId) || resolved[id].location;
+        resolved[id] = { ...resolved[id], transit: null, location: stay };
+        npcUpdates[id].transit = null;
+        npcUpdates[id].location = stay;
+      }
+    }
+
+    // Phase 5 (D5): work/commute is one long commitment, not the schedule's
+    // block sequence. A due resident whose block is a work-boundary block
+    // commits to the work commitment instead of scoring drives — the walk to
+    // the front door, the off-map shift, and the return placement are all one
+    // record with one completion time. Block 'commute_home' is deliberately
+    // not here: that window only arrives while a work commitment already
+    // holds, and a resident reading it without one is already home.
+    if (resolved[id].block === 'work' || resolved[id].block === 'commute') {
+      const workCommitted = openWorkCommitment(gameState, id);
+      if (workCommitted) {
+        const post = gameState.npcs[id];
+        if (post) {
+          npcUpdates[id].commitment = post.commitment;
+          npcUpdates[id].pos = post.pos;
+          npcUpdates[id].walk = post.walk;
+        }
+        npcUpdates[id].location = null;
+        npcUpdates[id].transit = null;
+        npcUpdates[id].activity = workCommitted.arrived ? 'at work' : 'heading to work';
+      }
+      continue;
     }
 
     // Visitors (external-world plan Phase 1) pass their status through so
     // DRIVES' evaluateDrives can enforce VISITOR_DRIVE_ALLOWLIST — only
     // react_to_player + the social drives may fire for them.
+    //
+    // Phase 5 (D7): the decision's randomness is addressed by WHO decided
+    // and WHEN — `npc_${npcId}_decision_${absoluteMinute}` — not by which
+    // tick-grid cell the decision happened to fall in. Each deciding NPC
+    // draws from its own stream, so a decision's outcome is a pure function
+    // of (npc, absolute minute) and no longer depends on the draw order of
+    // the other NPCs sharing this tick (C6). `day * 1440 + minutes` is
+    // clockToAbsolute's formula, kept inline because time.js loads after
+    // this file in both main.html and loadgame.js's ORDER.
     const driveResult = evaluateDrives(
-      npc, id, npcs, resolved[id], gameState, rng, currentTick, { isVisitor }
+      npc, id, npcs, resolved[id], gameState,
+      seededRng(meta.seed, `npc_${id}_decision_${meta.clock.day * 1440 + meta.clock.minutes}`),
+      currentTick, { isVisitor }
     );
 
     // Merge drive effects into npcUpdates
@@ -1508,15 +1580,24 @@ function resolveTick(gameState) {
       // gifted item would snap back every tick, exactly like the memory
       // replacement bug this block was written to fix.
       if (postDrive.inventory) npcUpdates[id].inventory = postDrive.inventory;
-      // Cognition plan Phase 2 (D12): npc.pursuit is written by COGNITION's
-      // openPursuit/releasePursuit/agePursuit directly on gameState.npcs[id],
-      // and applyEffects can REPLACE that object mid-drive — the same hazard
-      // this whole block exists for. Carried explicitly and unconditionally: a
-      // released pursuit must come back as undefined, or resolveBatch's
-      // `{ ...state.npcs[id], ...update }` merge would resurrect the one the
-      // NPC just finished. Absent means no pursuit, so undefined is the right
-      // value and JSON drops the key on save.
-      npcUpdates[id].pursuit = postDrive.pursuit;
+      // Cognition plan Phase 2 (D12), renamed in continuous-behavior-engine
+      // Phase 1: npc.commitment is written by COGNITION's
+      // openCommitment/releaseCommitment/ageCommitment directly on
+      // gameState.npcs[id], and applyEffects can REPLACE that object mid-drive
+      // — the same hazard this whole block exists for. Carried explicitly and
+      // unconditionally: a released commitment must come back as undefined, or
+      // resolveBatch's `{ ...state.npcs[id], ...update }` merge would resurrect
+      // the one the NPC just finished. Absent means no commitment, so
+      // undefined is the right value and JSON drops the key on save.
+      npcUpdates[id].commitment = postDrive.commitment;
+      // Phase 6 (tuning pass): an uncommitted NPC in schedule transit who
+      // just opened a commitment cancels the wander — the commitment's own
+      // planned walk takes over from where they stand, and a "heading to the
+      // Kitchen" label must not coexist with "cooking" (the clash the transit
+      // block above exists to prevent). See that block for the measured case.
+      if (postDrive.commitment && npcUpdates[id].transit) {
+        npcUpdates[id].transit = null;
+      }
       // Initiative plan Phase 3 (D19): the same carry for `npc.overture`, and
       // unconditional for the same reason — a record that lapsed or was opened
       // this tick must survive resolveBatch's `{ ...state.npcs[id], ...update }`
@@ -1527,7 +1608,7 @@ function resolveTick(gameState) {
     // Cooldowns (and any other flags set by setCooldown during drive
     // evaluation) live on driveResult.updatedNpc.flags — without this
     // merge they were discarded each tick, making every drive's
-    // cooldownTicks ineffective. Merged over any flags the effects wrote
+    // cooldownMinutes ineffective. Merged over any flags the effects wrote
     // rather than replacing, so ADD_FLAG and setCooldown can coexist.
     if (driveResult.updatedNpc.flags) {
       npcUpdates[id].flags = { ...(postDrive?.flags || {}), ...driveResult.updatedNpc.flags };
@@ -1646,6 +1727,18 @@ function resolveTick(gameState) {
 // itself; advancing here too ran the whole game at double speed.
 function resolveBatch(gameState, ticks, opts = {}) {
   const shouldAdvanceClock = opts.advanceClock !== false;
+  // needs-and-heartbeat Phase 3 (D4/D7): the DISCRETE path's needs move via
+  // the heartbeat's closed form (applyNeedsHeartbeat), applied once per tick
+  // AFTER that tick's updates are merged — so restore keys on the block and
+  // location the tick actually resolved to. An end-of-batch single call
+  // would key on only the FINAL block, which loses sleep restore entirely
+  // (an 8h sleep ending at 08:00 reads a 'morning' final block and restores
+  // nothing). The per-tick net-rate form is the closed form of per-minute
+  // interleaving (D7), exact against the old per-tick block in steady state.
+  // The CONTINUOUS path (suppressNeeds, threaded from TIME's runSimCheckpoint)
+  // skips this — clockFrame's heartbeat accumulator owns every one of those
+  // minutes at per-minute cadence already.
+  const shouldApplyNeeds = opts.suppressNeeds !== true;
   const allEvents = [];
   const allPeepResults = [];
   let state = gameState;
@@ -1659,11 +1752,146 @@ function resolveBatch(gameState, ticks, opts = {}) {
     // Apply NPC updates
     const newNpcs = { ...state.npcs };
     for (const [id, update] of Object.entries(result.npcUpdates)) {
-      newNpcs[id] = { ...newNpcs[id], ...update };
+      const merged = { ...newNpcs[id], ...update };
+      // Phase 4 (physical layer, D8): keep pos in step with the location the
+      // tick just applied — an NPC who teleported (schedule wander, off-map
+      // return, visitor) must stand in the room the record says they are in.
+      // A walk owns pos and is never touched here.
+      reconcileNpcPos(merged);
+      newNpcs[id] = merged;
     }
     state = { ...state, npcs: newNpcs };
+    // Player needs are deliberately NOT moved here — every discrete action's
+    // own decayPlayerNeeds call site (ui.js/ui.computer.js/ui.phone.js) owns
+    // the player on the discrete path, so this pass is NPCs only.
+    if (shouldApplyNeeds) state = applyNeedsHeartbeat(state, CLOCK.tickMinutes, { player: false });
   }
   return { state, events: allEvents, peepResults: allPeepResults };
+}
+
+// ===== SECTION: NEEDS HEARTBEAT (needs-and-heartbeat-plan.md, Phase 2) =====
+// The continuous clock's needs heartbeat. TIME's clockFrame accumulates
+// game-minutes and, every HEARTBEAT_MINUTES crossed, calls this ONCE with the
+// crossed minutes — closed form, never one call per minute (a 20-minute burst
+// frame is one multiplication per need, not twenty; C7). It owns ALL need
+// movement on the continuous path: per-minute decay + restore for every
+// active resident NPC and the player, at NEEDS's per-minute rates (Phase 1's
+// conversion). The player's minutes carry the idle multiplier (options.idle,
+// D6) — the clock loop only runs while the player is not mid-action, so every
+// heartbeat is an idle heartbeat. Since Phase 3, resolveTick has NO per-tick
+// needs pass of its own — the discrete funnels (resolveBatch, gated by the
+// same suppressNeeds flag threaded from runSimCheckpoint) call THIS function
+// once per resolved tick, so one closed-form shape moves needs on every path
+// and the two can never both move the same need.
+// Pure + synchronous (C6): plain arithmetic over state — no rng, no kv, no
+// model calls. Returns a NEW state (npcs/player replaced) like resolveBatch;
+// callers assign the result. Clock-driven in time.js, defined here because
+// sim.js loads before time.js in main.html and loadgame.js's ORDER.
+function applyNeedsHeartbeat(gameState, minutes, options = {}) {
+  if (!gameState || minutes <= 0 || !gameState.npcs) return gameState;
+
+  const npcs = gameState.npcs;
+  const activeVisits = getActiveVisits(gameState);
+  const activeNpcIds = getActiveNpcIds(gameState, activeVisits);
+  const visitingIds = new Set(
+    activeVisits.map(v => v.npcId).filter(id => npcs[id] && npcs[id].residency.status !== 'resident')
+  );
+
+  const npcUpdates = {};
+  for (const id of activeNpcIds) {
+    const npc = npcs[id];
+    // Visitors are dormant outside their visit (external-world plan Phase 1):
+    // no decay, no restore — the same skip resolveTick's pass 2 applies.
+    if (!npc || npc.residency.status !== 'resident' || visitingIds.has(id)) continue;
+
+    // The block is the last resolved one (npc.schedule.currentBlock,
+    // rewritten at every sim checkpoint); between checkpoints it is stable,
+    // so restore is at most simCheckpointMinutes stale on the continuous
+    // path — the population-level equivalence Phase 2's verification asks
+    // for, not byte-for-byte timing.
+    const block = npc.schedule?.currentBlock;
+    const location = npc.location;
+
+    // Net per-minute rate per need (D3/D4/D5): decay always applies; restore
+    // only in the blocks/rooms that restore. The net is applied ONCE for the
+    // whole span — value + netRate*minutes, clamped to [0, max] — which is
+    // the closed form of per-minute interleaving, not a decay-then-restore
+    // shortcut (decaying the whole span first, then restoring on the clamped
+    // zero, overcounts restore for any need that dips to its floor mid-span:
+    // a need at 25 with +1 net would land at 96 instead of 73).
+    let hunger = -NEEDS.npcHungerDecayPerMinute;
+    let energy = -NEEDS.npcEnergyDecayPerMinute;
+    let social = -NEEDS.npcSocialDecayPerMinute;
+    let comfort = -NEEDS.npcComfortDecayPerMinute;
+    let stimulation = -NEEDS.npcStimulationDecayPerMinute;
+
+    if (block === 'meal') hunger += NEEDS.npcMealRestorePerMinute;
+    if (block === 'sleep') energy += NEEDS.npcSleepRestorePerMinute;
+    if (location) {
+      const shareCount = activeNpcIds.filter(oid => npcs[oid] && npcs[oid].location === location).length;
+      if (shareCount > 1) social += NEEDS.npcSocialRestorePerMinute;
+    }
+    // Comfort restore mirrors the per-tick pass: living room with a
+    // functional entertainment setup, or an upgraded bedroom (an NPC's own
+    // bedroom counts even unupgraded); the D14 baseline floor otherwise.
+    const ownBedroom = ROOMS[location]?.type === 'bedroom' && npc.residency?.room === location;
+    if (location === 'living_room' || ownBedroom) {
+      const hasComfortFacility = location === 'living_room'
+        ? isFacilityFunctional(gameState, 'living_room_entertainment')
+        : (ROOM_FACILITIES[location] || []).some(fid => gameState.world.upgrades?.[fid]?.tier === 'upgraded');
+      comfort += hasComfortFacility ? NEEDS.npcComfortRestorePerMinute : NEEDS.npcComfortBaselineRestorePerMinute;
+    }
+    // Extra comfort from a trusted NPC sharing the room (castWeb pair).
+    if (location) {
+      for (const oid of activeNpcIds) {
+        if (oid === id || !npcs[oid] || npcs[oid].location !== location) continue;
+        const pair = gameState.world?.castWeb?.[[id, oid].sort().join('|')];
+        if (pair && (pair.axes?.[`${id}→${oid}`]?.comfort || 0) > 0.5) {
+          comfort += NEEDS.npcComfortProximityBonusPerMinute;
+          break;
+        }
+      }
+    }
+    if (block === 'leisure' || block === 'evening' || block === 'wind_down') {
+      stimulation += NEEDS.npcStimulationRestorePerMinute;
+    }
+
+    const clampNeed = (value, ratePerMinute, max) =>
+      Math.min(max, Math.max(0, value + ratePerMinute * minutes));
+    const needs = {
+      hunger: clampNeed(npc.needs.hunger, hunger, NEEDS.hunger.max),
+      // D10/D11: hygiene has NO passive restore — drive-serviced, exactly as
+      // the per-tick pass's comment explains.
+      hygiene: clampNeed(npc.needs.hygiene, -NEEDS.npcHygieneDecayPerMinute, NEEDS.hygiene.max),
+      energy: clampNeed(npc.needs.energy, energy, NEEDS.energy.max),
+      social: clampNeed(npc.needs.social, social, NEEDS.npcSocialMax),
+      comfort: clampNeed(npc.needs.comfort ?? 50, comfort, 100),
+      stimulation: clampNeed(npc.needs.stimulation ?? 50, stimulation, 100),
+    };
+
+    npcUpdates[id] = { needs };
+  }
+
+  if (Object.keys(npcUpdates).length > 0) {
+    const newNpcs = { ...npcs };
+    for (const [id, update] of Object.entries(npcUpdates)) {
+      newNpcs[id] = { ...newNpcs[id], ...update };
+    }
+    gameState = { ...gameState, npcs: newNpcs };
+  }
+
+  if (gameState.player && options.player !== false) {
+    // Player needs ride the same heartbeat. Phase 3 (D4) made
+    // decayPlayerNeeds take GAME-MINUTES directly, so the span passes
+    // through un-converted. options.player=false lets the DISCRETE funnel's
+    // per-tick calls move NPC needs while the per-action decayPlayerNeeds
+    // call sites keep owning the player there.
+    gameState = {
+      ...gameState,
+      player: decayPlayerNeeds(gameState.player, minutes, gameState, { idle: !!options.idle }),
+    };
+  }
+  return gameState;
 }
 
 // --- Player needs: the Phase 5 model (D1, D12) ---
@@ -1688,24 +1916,31 @@ function resolveBatch(gameState, ticks, opts = {}) {
 // sim checkpoint (real time passing while the player does nothing) — such
 // minutes count at NEEDS.idleDecayMultiplier. Every action path (the other
 // 12 call sites) leaves it false.
-function decayPlayerNeeds(player, ticks, gameState, options = {}) {
+function decayPlayerNeeds(player, minutes, gameState, options = {}) {
   const mult = options.idle ? NEEDS.idleDecayMultiplier : 1;
-  const minutes = ticks * CLOCK.tickMinutes * mult;
+  // Phase 3 (D4): `minutes` is GAME-minutes now, not ticks — the closed
+  // form's elapsed_minutes x rate multiplier, generalized from the old ticks
+  // param (every caller used to pass minutes/30 anyway). The idle multiplier
+  // applies to the span itself (D6/D12). Rates stay per-tick internally
+  // (decayPerTick x minutes/30), byte-exact with the old path for every
+  // whole-30-min span and free of per-minute float drift in saves.
+  const effectiveMinutes = minutes * mult;
+  const ticks = effectiveMinutes / CLOCK.tickMinutes;
 
-  const hoursSinceLastMeal = (player.hoursSinceLastMeal ?? 0) + minutes / 60;
+  const hoursSinceLastMeal = (player.hoursSinceLastMeal ?? 0) + effectiveMinutes / 60;
 
   const day = gameState?.meta?.clock?.day ?? 0;
   const { moodEvents, eventTerm } = advanceMoodEvents(player.moodEvents, day);
   const moodTarget = resolveMoodTarget(player, gameState, eventTerm, hoursSinceLastMeal);
-  const mood = clamp(player.mood + (moodTarget - player.mood) * MOOD_TARGET.easingPerTick * ticks * mult, -1, 1);
+  const mood = clamp(player.mood + (moodTarget - player.mood) * MOOD_TARGET.easingPerTick * ticks, -1, 1);
 
   return {
     ...player,
     hoursSinceLastMeal,
     mealsToday: player.mealsToday ?? 0,
     moodEvents,
-    energy: Math.max(0, player.energy - NEEDS.energy.decayPerTick * ticks * mult),
-    hygiene: Math.max(0, player.hygiene - NEEDS.hygiene.decayPerTick * ticks * mult),
+    energy: Math.max(0, player.energy - NEEDS.energy.decayPerTick * ticks),
+    hygiene: Math.max(0, player.hygiene - NEEDS.hygiene.decayPerTick * ticks),
     hunger: satietyFrom(hoursSinceLastMeal),
     mood,
   };
