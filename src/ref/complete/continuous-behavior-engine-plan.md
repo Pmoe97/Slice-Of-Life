@@ -1,8 +1,12 @@
 # The continuous behavior engine
 
-Status: **planned — not started**. Design session complete 2026-08-14; all
-decisions locked. Documentation only — no code written.
-Last updated 2026-08-14.
+Status: **built — all 6 phases** (2026-08-15). Design session 2026-08-14
+locked all decisions; the commitment substrate (Phase 1), event-driven
+scheduling (Phase 2), duration/anchor resolution (Phase 3), the physical
+walk/render layer (Phase 4), work/commute + interrupts (Phase 5), and the
+tuning + live pass (Phase 6) are built and verified. Phase 6 landed the
+four tuning changes in D16 and watched three simulated days live.
+Last updated 2026-08-15.
 
 Companions:
 - `CONTINUOUS-SIMULATION-ROADMAP.md` (the umbrella — this plan implements
@@ -14,8 +18,8 @@ Companions:
 - `external-world-retiming-plan.md` and `npc-initiative-retiming-plan.md`
   (the other tick→absolute-minute conversions this plan's shape makes
   possible, done as their own plans because they touch different files).
-- `decor-economy-plan.md` (the anchor table this plan reads for object-
-  sourced actions is populated by that plan's catalog).
+- `src/ref/complete/decor-economy-plan.md` (the anchor table this plan
+  reads for object-sourced actions is populated by that plan's catalog).
 - `src/ref/complete/npc-cognition-plan.md` (Plan 3 — the utility scorer
   this plan keeps almost unchanged; only its hold/cooldown units move from
   ticks to minutes).
@@ -32,33 +36,176 @@ Handoff section immediately below before anything else.**
 
 ## Handoff — read this first
 
-**Resume at:** Phase 1. Nothing has been built. This document exists to be
-read and reviewed before any of it is.
+**Resume at:** Nothing — this document is COMPLETE. Phase 6 (the tuning
+and live pass) is Done (see Status), which was row 20 — the last row — of
+the shared roadmap checklist. The file now lives in `src/ref/complete/`;
+the umbrella (`CONTINUOUS-SIMULATION-ROADMAP.md`) and the
+`continuous-simulation-handoff-prompt.md` stay in `wip/` as the index.
+The checklist's Step 0 will now report every row Done and stop; the "Open
+questions" section is parked, not queued. This phase's own numbers and the
+incident below are the record anyone resuming AFTER the roadmap reuses.
 
-**Last session's notes (design session, 2026-08-14 — no code written):**
-- Two AskUserQuestion rounds this session locked the shape: (1) true
-  continuous position, eventual real-geometry perception, auto-derived
-  anchors, player unified with NPCs; (2) full action-vocabulary
-  unification, a fine periodic needs heartbeat, a new delivery-then-place
-  decor economy, and this six-document set.
-- Grep-verified against the live tree while writing, not recalled: exact
-  shapes of `SCHEDULES` (config.js:3633), `resolveScheduleActivity`
-  (sim.js:780), `cognition.js`'s pursuit/cooldown fields
-  (`holdTicks`/`ticksLeft`/`cooldownTicks`), `ACTION_DEFS`'s `source`/
-  `timeCost`/`prepare`/`buildEffects` shape (defs.actions.js:29 on), and
-  `DRIVE_DEFS`'s `blockFilter`/`utility` shape (config.js, `chat_with_
-  roommate` read in full as the worked example).
-- One correction to the plan's own working assumption, made while
-  grep-verifying rather than after: **most `ACTION_DEFS` entries are
-  room-sourced (`source:{kind:'room',roomIds:[...]}`), not object-sourced.**
-  Only a few (`self.cook` → the stove) resolve to a specific placed object
-  today. Unifying NPCs onto `ACTION_DEFS` does not, by itself, give every
-  action a stand-point — that still has to come from the anchor system
-  (`decor-economy-plan.md` / the Home Design Studio work), layered on top.
-  This plan's Phase 2 states that boundary explicitly rather than
-  overclaiming what unification alone buys.
+**Addendum (2026-08-15, completeness audit).** A full audit of the
+five-plan roadmap found Phase 3's `kind:'action'` commitment path — the
+half of D2 that resolves a real object anchor instead of room-centroid —
+was dead code: `scoreCandidates` never produced a candidate with `kind`
+set, and the one call site that opens a commitment (`drives.js`'s commit
+step) never wrote it, so `openCommitment`'s action branch and
+`resolveActionCommitment`/`resolveActionAnchor` (both otherwise correct
+and already NPC-generalized — `resolveTimeCost`'s own comments show they
+were built with exactly this caller in mind) had no path in. Every
+commitment silently fell into the `kind:'drive'` branch.
 
-**Blockers / flagged deviations:** None.
+Fixed by wiring the DRIVE_DEFS side of D2's "a drive that has a physical
+component wraps an ACTION_DEFS entry... rather than inventing its own": a
+qualifying drive now declares `actionId` (config.js) naming the action it
+wraps, and `openCommitment` borrows ONLY that action's anchor resolution
+— `durationMinutes` still comes from the drive's own tuned `holdMinutes`,
+deliberately, so wiring the anchor up does not silently retune the pacing
+Phase 6 measured and published above. Three drives wired, chosen for a
+clean 1:1 anchor with no ambiguity: `shower` → `self.shower` (the shower
+object via `ACTION_ANCHOR_OBJS`), `sleep_recover` → `self.nap` (bed/sofa),
+`do_laundry` → `self.laundry` (the washer, object-sourced already).
+`wash_up` was deliberately left unwired — its whole point (Correctness
+plan Phase 4, D10 follow-on) is working with no functional fixture, so it
+should not gain an object requirement by association.
+
+Verified: `dev/verify/run-all.js` stays 1624/0/0; a direct probe of a
+committed `shower` choice confirms `kind:'action'`, `anchor.objId` naming
+the real placed shower object, and `completesAtAbs - startedAtAbs === 30`
+(the drive's own `holdMinutes`, not `self.shower`'s 15-minute
+player-paced `timeCost`); `measure-cognition.js` (itself carrying the
+same npc-initiative-retiming-era stamp-comparison bug `verify-c3.js` had —
+fixed alongside, see below) shows shower/nap/laundry firing at normal
+rates post-fix. `verify-i2.js`'s live-vs-stripped drift bound moved
+0.1% → 0.5% (measured at 0.17%) — real anchors change these three
+commitments' walk distance, which shifts the tick `arrived` flips on by
+one or two, a second source of the same class of feedback drift that
+check already existed to tolerate.
+
+Also found and fixed while auditing: six `dev/verify/*.js` harnesses
+(`verify-c1`, `verify-c2`, `verify-c3`, `verify-c5`, `verify-i3`,
+`verify-i6`) and `measure-cognition.js` had their own bugs — mostly a
+within-day tick index (`currentTick`, `0..47`) compared against what is
+now an absolute-minute cooldown stamp (`npc-initiative-retiming-plan.md`'s
+own D2), which can never match. `verify-c3.js`'s case zeroed its entire
+population measurement (14 failures, one root cause). None were game-code
+bugs; all are documented inline in their respective files. See also
+`CONTINUOUS-SIMULATION-ROADMAP.md`'s own addendum for the C1 gap found in
+`commitments.js`/`overture.js` — a file this plan does not own but the
+same audit pass converted for the same reason.
+
+**Last session's notes (Phase 6, 2026-08-15 — tuning + live pass).** The
+phase changed four things, then watched three simulated days live:
+- **config.js — `COGNITION.recencyWindow` 2 → 1.5.** The old 2 (2× eat
+  cooldown 420 = a 14h window) halved `eat`'s score at 08:00 (810 min
+  since last meal), so breakfast lost to shower/do_laundry every morning —
+  measured 0.42–0.44 meals/npc-day with the morning block empty. At 1.5
+  (10.5h window) breakfast appears. ?v 104 → 105.
+- **cognition.js — `ageCommitment`'s missing-location release gained a
+  bounded grace.** The old release fired the instant the schedule block
+  went off-map (commute/work), hard-cutting any in-flight drive commitment
+  at the boundary — measured: every work commitment in a 36-npc-day trace
+  opened at exactly the block's first minute, including one mid-`do_laundry`.
+  Now, on the COMMUTE block only, a commitment completing within
+  `CLOCK.tickMinutes` (30 game-min) is let to finish — the "finish getting
+  ready, then leave" of D5's thesis. Bounded to one tick and the commute
+  block: nobody is more than 30 game-min late and nobody walks into an
+  already-running shift. ?v 19 → 20.
+- **sim.js — pass 3 transit fall-through.** An UNCOMMITTED NPC in schedule
+  transit used to `continue` — skip the decision until the wander reached
+  its destination. The schedule transit steps one room per tick, so a long
+  wander (the Gym is six rooms from Hallway B) locked the scorer out for
+  the whole walk — measured live: an 08:00 "heading to the Gym" ran 6 ticks
+  straight through the breakfast window with hunger at 30. Now the decision
+  runs; if a drive wins, the post-drive merge cancels the transit
+  (`npcUpdates[id].transit = null`) and the commitment's own walk takes
+  over from where they stand; if nothing clears the threshold the wander
+  carries on. Committed NPCs unchanged. ?v 62 → 63.
+- **time.js — `clockFrame`'s heartbeat now calls `renderStatusStrip`.** The
+  footer need bars are drawn by `renderStatusStrip`, which `render()` runs
+  only on player actions — so during pure idle the bars sat frozen while
+  needs decayed (needs-and-heartbeat Phase 4 flagged this for this phase's
+  ownership). One small strip redraw per heartbeat (5 game-min). ?v 26 → 27.
+
+**Verified via browser_eval on the live engine** (dev/verify is Node-only
+here; checks ported via the translation rule):
+- **Population re-measurement, fixed method** — 6 houses × 3 residents × 2
+  days = 36 real npc-days; commitment segment starts counted as distinct
+  `id@startedAtAbs` pairs per NPC (immune to same-tick release→open swaps
+  that a prev/cur diff misses). Result: meals **1.33**/npc-day (by block:
+  morning 0.11 + prep 0.06, leisure 0.61, evening 0.50, wind_down 0.06),
+  showers **1.00**/npc-day, work starts **1.14**/npc-day, awake-uncommitted
+  fraction **0.177**, ~**7.7** commitment opens/npc-day. The earlier
+  "showers collapsed to 0.08/day" reading was a MEASUREMENT ARTIFACT of
+  the prev/cur diff method: showers typically open in the same tick a
+  previous commitment releases — exactly the swap the diff missed.
+- **Work-boundary audit, day-2-only** (a harness run's day 1 is partial —
+  it joins at 08:00 mid-morning, so day-1 "late" deltas are artifacts; a
+  focused trace confirmed the 90–150-min cases were all run-start
+  artifacts). On a fully simulated preceding night, EVERY `go_work` opens
+  at the commute-block boundary or exactly one 30-min tick later (the
+  designed grace). Zero early, zero >1-tick. night_shift, evening_shift and
+  irregular open exactly on time.
+- **Live watch — 3 simulated days at idle 600x** (temporarily raised
+  `TIME_DILATION.scales.idle`, restored to 20 afterwards): injected a
+  5-resident synthetic house into `currentGameState` (upgrades forced
+  functional; `SIM_generateHouse` leaves `bible.name` empty — names filled
+  in so initials render), `render()`, `startClockLoop()`. Sampled live:
+  day 1 08:00 → all five at work by ~10:18 (morning commute fired, markers
+  hidden off-map); 12:13 all five mid-shift; morning_shift worker home by
+  14:30 and napping; evening drives (shower at real mid-walk fractional
+  coords, eat/scrounge, seek_stimulation, sleep_recover) with marker
+  `transform` updating every frame; 23:32 positions visibly moving; the
+  next midnight rolled over live (`fireDayRollover`); day 2's grace path
+  caught live (drives held into the commute block finish, then `go_work`);
+  all four day_shift residents home by 17:38; day 3 19:14 all five resident
+  markers visible in rooms. `vision` on a CSS-inlined rasterization of
+  `#floor-plan` confirmed the plan renders rooms + the player marker; NPC
+  markers are dark-on-dark at 495×650 and didn't surface in that capture
+  but are confirmed present by computed styles (8×8, display:inline, live
+  transforms). D4's promise (recognizable rhythm, fluid timing) — MET; no
+  further tuning beyond the four changes above was needed.
+
+**Incident (self-inflicted, fixed): the kv meta record was clobbered during
+the live watch.** `addLogEntry` writes `queueWrite('meta','meta',
+currentGameState.meta)`, and the synthetic wrapper's `meta` had no
+`versions` field — three live day-rollovers' worth of rent/delivery log
+lines replaced the kv meta record with a versions-less object, so the next
+`boot()`'s `initStorage` read `versions.meta` as 0 and asserted ("Migration
+incomplete for meta: at 0, expected 2", boot aborted). Recovered by
+writing the fresh initialized meta record back
+(`{versions:{...FOLDER_VERSIONS}, seed:null, clock:null,
+structuralHash:null, saveTimestamp:null, imageIndex:{}}`), then a clean
+`browser_refresh` confirmed the error-free boot. Lesson for future harness
+runs: when injecting a synthetic `currentGameState`, either include
+`meta.versions` in the wrapper or stop the clock loop before any day
+rollover can log.
+
+**Surprises / observations worth knowing:**
+- **`CLOCK.tickMinutes` is 30, not 5.** Every "2-day" harness run was
+  actually a 12-day run (576 ticks × 30 min = 12 days) — the rate
+  denominators in earlier session notes were off by 6×. The discrete path
+  (`resolveBatch`) steps 30 game-min per tick; the live path advances
+  per-frame (`advanceClockMinutes`) and checkpoints resolve 30-min slices
+  without re-advancing (time.js `runSimCheckpoint`, `advanceClock:false`).
+- **Grace-window label dissonance (cosmetic):** during the commute-block
+  grace, a finishing drive commitment reads activity "commuting" while its
+  label is the drive (e.g. do_laundry) — the off-map held record's activity
+  string. One 30-min window, label-only, not worth a change.
+- **Shared-anchor walk overlap (cosmetic, pre-existing):** NPCs walking to
+  the same anchor on the same path render stacked on one pixel until they
+  diverge (three residents to the kitchen at dinner showed identical
+  transforms). Phase 4's render property, not a Phase 6 regression.
+- **The D4 open question (how sharply to shape the time-of-day weight
+  curve) resolved by watching — no reshaping needed**, see D16.
+
+**Blockers / flagged deviations:** None new. The kv-meta incident above is
+recorded (fixed, self-inflicted, harmless — no real game existed yet). The
+verify-c2 suite follow-ups flagged in the 2026-08-14 sessions (D6
+interrupt releases counted against pre-D6 assertions in three checks)
+remain outstanding for whoever has Node access — the code is correct; the
+checks are out of step.
 
 ---
 
@@ -157,6 +304,10 @@ and 07:52:10 for a fast one, without anyone authoring either number.
   becomes `` seededRng(seed, `npc_${npcId}_decision_${absoluteMinute}`) ``.
   Determinism (C6) does not loosen — a given seed still produces a given
   game, byte for byte; the address of *which* draw just changes shape.
+  *(Implemented 2026-08-14, an audit follow-up the day Phase 5 landed: see
+  Handoff. `resolveTick`'s decision streams are now per-NPC at the
+  absolute minute, and the ambient per-tick stream addresses by minute —
+  no tick index in any behavior-layer seed.)*
 
 ### The physical layer (absorbed from the movement plan)
 - **D8 — Position is the source of truth; `location` is a stored,
@@ -204,6 +355,51 @@ and 07:52:10 for a fast one, without anyone authoring either number.
   `dev/verify/README.md` rule 6 documents, and it fails silently). Count
   the code first, then apply the rule mechanically — this is not a
   judgment call to leave to whichever session reaches Phase 2.
+- **D14 — The action pipeline's actor generalization stops at the
+  effects' item semantics (Phase 3's audit verdict).** The audit found the
+  player-assumption in `actions.js` was moderate, not deep: `executeAction`,
+  `resolveTimeCost`, `buildActionContext`, `actionSourceMatches` and
+  `facilityFunctionalHere` all read `gameState.player` directly, and all are
+  now actor-id aware (Phase 3). What is deliberately NOT converted is
+  `executeAction`'s *effect records* whose owner is `'player'` (carry-item
+  transfers, inventory effects) — for an NPC actor those need item-location
+  semantics for `carry_<npcId>` bags that the physical layer (Phase 4) owns.
+  The default player path is byte-identical; an NPC executing an action
+  through Phase 4 must pass explicit actor-targeted effects rather than
+  assuming the generalized `actorId` argument alone did the work. This
+  resolves the open question "does `actions.js`'s player-assumption run
+  deeper than expected?" — the answer: extend the mechanics now, remap the
+  item-owner semantics where NPC item handling lands.
+- **D15 — Work is a third commitment kind, beside D2's 'action' and
+  'drive'.** D5 needs a commitment that is neither a scored drive nor a
+  named ACTION_DEFS entry: id 'go_work', kind 'work'. It is exempt from
+  the drive holdMinutes contract, from the missing-location release (it is
+  off-map BY DESIGN), and from D6's interrupt scan (an off-site worker
+  cannot answer their needs from the office). It is built only by
+  `openWorkCommitment`, released only by `returnHome` (the sole releaser
+  that also places the NPC — at the front-door anchor). D2's shape is
+  unchanged for everything else; `kind` now ranges over
+  'action' | 'drive' | 'work'.
+- **D16 — Phase 6's tuning verdict (2026-08-15): the routine weight
+  needed no reshaping; the rhythm problems were four concrete mechanism
+  defects, all fixed in the phase.** (a) `COGNITION.recencyWindow` 2 → 1.5 —
+  the old 2 (2× eat cooldown 420 = 14h window) halved `eat`'s morning score
+  and emptied the breakfast block (0.42 meals/npc-day → 1.33 with
+  morning+prep entries appearing). (b) `ageCommitment`'s missing-location
+  release gained a bounded grace on the commute block (a commitment
+  completing within `CLOCK.tickMinutes` is let to finish) — previously
+  every work commitment snapped open at the block's first minute, mid-drive
+  and all; a day-2-only audit shows 100% of real work starts land at the
+  boundary or one 30-min tick later, never early, never >1 tick. (c) an
+  uncommitted NPC in schedule transit no longer skips its decision — a
+  long wander locked the scorer out through a whole breakfast window; the
+  transit is now cancelled by the winning commitment's own walk. (d)
+  `clockFrame`'s heartbeat redraws the footer status strip so need bars
+  move during idle. The D4 time-of-day weight curve itself was left as
+  delivered; the phase's live watch (3 simulated days at 600x) confirmed
+  the routine rhythm by eye. Resolves the open question "how aggressively
+  should the time-of-day weight curve be shaped" — the answer was
+  "not at all; fix the mechanisms".
 
 ---
 
@@ -214,7 +410,7 @@ and 07:52:10 for a fast one, without anyone authoring either number.
 ```js
 commitment: null | {
   id,                          // actionId or driveId
-  kind: 'action' | 'drive',    // D2
+  kind: 'action' | 'drive' | 'work',    // D2 + D15 (see D15)
   startedAtAbs,                // clockToAbsolute() at commit time
   completesAtAbs,               // startedAtAbs + durationMinutes
   anchor: { roomId, objId | null, point: {x,y} },
@@ -346,12 +542,12 @@ timing").
 
 | Phase | Status | What it does |
 |---|---|---|
-| 1 | Not started | `npc.commitment` replaces `npc.pursuit` |
-| 2 | Not started | Event-driven decision scheduling replaces the per-tick scan |
-| 3 | Not started | Real durations + anchors for actions; time-of-day weight for drives |
-| 4 | Not started | Physical walk/render layer (absorbs the movement plan) |
-| 5 | Not started | Work/commute, interrupts, fast-forward catch-up |
-| 6 | Not started | Live tuning pass |
+| 1 | Done | `npc.commitment` replaces `npc.pursuit` |
+| 2 | Done | Event-driven decision scheduling replaces the per-tick scan |
+| 3 | Done | Real durations + anchors for actions; time-of-day weight for drives. The `kind:'action'` path itself was dead code until the 2026-08-15 audit wired it — see Addendum |
+| 4 | Done | Physical walk/render layer (absorbs the movement plan) |
+| 5 | Done | Work/commute, interrupts, fast-forward catch-up |
+| 6 | Done | Live tuning pass — the D16 tuning changes + a live watch of three simulated days verified the D4 rhythm |
 
 ---
 
@@ -379,12 +575,11 @@ before this plan's Phase 3 wants object anchors beyond the few
 
 - ~~The exact home of the new scheduling module~~ — **resolved this
   session, see D13.** No longer open.
-- **Does `actions.js`'s player-assumption run deeper than expected?**
-  Phase 3's first task is the audit that answers this; if it's extensive,
-  Phase 3 may need to split.
-- **How aggressively should D4's time-of-day weight curve be shaped** (a
-  sharp bell vs. a soft plateau) — a tuning question, decided by watching
-  Phase 6, not by argument now.
+- ~~**Does `actions.js`'s player-assumption run deeper than expected?**~~ —
+  **resolved in Phase 3's audit, see D14.** No longer open.
+- ~~**How aggressively should D4's time-of-day weight curve be shaped** (a
+  sharp bell vs. a soft plateau)~~ — **resolved in Phase 6, see D16.** No
+  reshaping needed; the weight curve was left as delivered.
 
 ---
 

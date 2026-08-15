@@ -83,7 +83,10 @@ api(`
       const before = (npc.flags || {})[DRIVE_COOLDOWN_KEY] || {};
       const res = orig(npc, npcId, npcs, resolved, gameState, rng, currentTick, o2);
       const after = (res.updatedNpc && res.updatedNpc.flags && res.updatedNpc.flags[DRIVE_COOLDOWN_KEY]) || {};
-      rows.push({ npcId, fired: Object.keys(after).filter(d => after[d] === currentTick && before[d] !== currentTick) });
+      // Stamps are absolute minutes (npc-initiative-retiming D2); the within-day
+      // currentTick can no longer identify one.
+      const nowAbs = clockToAbsolute(gameState.meta.clock);
+      rows.push({ npcId, fired: Object.keys(after).filter(d => after[d] === nowAbs && before[d] !== nowAbs) });
       return res;
     };
     let messHouseDays = 0, maxAtOnce = 0, capable = 0;
@@ -419,7 +422,7 @@ check('...but a real clearing does set it', api(`
                   needs: { hunger: 90, hygiene: 90, energy: 90, social: 90, comfort: 90, stimulation: 90 } };
     const r = evaluateDrives(npc, id, g.npcs, __res('leisure', 'kitchen'), g, () => 0.5, 0);
     const stamps = (r.updatedNpc.flags || {})[DRIVE_COOLDOWN_KEY] || {};
-    return stamps.investigate_smell === 0;
+    return stamps.investigate_smell === clockToAbsolute(g.meta.clock);
   })()
 `), 'the livelock guard stays for everything that is not progress');
 check('the two-step walk COMPLETES: walk one tick, clear the next', api(`

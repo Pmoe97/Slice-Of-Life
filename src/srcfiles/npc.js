@@ -8,6 +8,11 @@ const MEMORY_BUDGET = {
   maxEpisodes: 30,    // NPC Overhaul Phase 4.3 — increased from 15 for tiered system
   maxSummaryLen: 500,
   episodeDecayPerTick: 0.002,
+  // Heartbeat plan Phase 3: the per-MINUTE form (= per-tick / 30, a pure
+  // conversion). Round-trips exactly over whole-30-min spans, so a save's
+  // decay values survive the unit change byte-for-byte (verified 0.002/30*30
+  // === 0.002).
+  episodeDecayPerMinute: 0.002/30,
   // Correctness plan Phase 1 (D5). A single conversational turn writes one
   // player line plus up to three NPC dialogue lines, so the old cap of 10
   // held roughly two and a half exchanges — an NPC's working memory of a
@@ -138,6 +143,12 @@ function migrateNpcToV2(npc) {
   if (!npc.schedule || typeof npc.schedule !== 'object') {
     npc.schedule = { currentBlock: '', nextBlock: '', willReturnAt: null };
   }
+  // continuous-behavior-engine-plan Phase 1: the held-activity field is
+  // `commitment`, not `pursuit`. A stale pre-rename `pursuit` on an old save
+  // is inert data nothing reads; this is a clean field replacement, not a
+  // migration — the roadmap waived save-migration entirely, this line just
+  // stops the dead field from riding along in every future save.
+  if ('pursuit' in npc) delete npc.pursuit;
 
   npc.bible = b;
   // Phase 3 (D9): openQuestions default + stable factIds on any legacy facts.
@@ -993,15 +1004,37 @@ function factTopicPhrase(text) {
   return words.charAt(0).toLowerCase() + words.slice(1);
 }
 
-// Decay all episodes for an NPC
-function decayMemory(npc, ticks) {
+// Decay all episodes for an NPC. Heartbeat plan Phase 3: `minutes` is
+// game-minutes — the closed form "decay - episodeDecayPerMinute x minutes",
+// applied once, never a per-tick loop (an 8h sleep is one subtraction per
+// episode, not sixteen).
+function decayMemory(npc, minutes) {
   const episodes = (npc.memory.episodes || []).map(e => ({
     ...e,
-    decay: Math.max(0, e.decay - MEMORY_BUDGET.episodeDecayPerTick * ticks),
+    decay: Math.max(0, e.decay - MEMORY_BUDGET.episodeDecayPerMinute * minutes),
   }));
   // Remove fully decayed episodes (but keep those from day 0 = shared history)
   const filtered = episodes.filter(e => e.decay > 0 || e.day === 0);
   return { ...npc, memory: { ...npc.memory, episodes: filtered } };
+}
+
+// Batch helper over the whole cast (heartbeat plan Phase 3): decay every
+// active NPC's memories for `minutes`, closed form. The continuous path's
+// heartbeat (TIME clockFrame) and the discrete path's advanceAndResolve both
+// call THIS — one implementation so the two paths can't drift. Excludes
+// former/prospective NPCs exactly as the old inline loop in advanceAndResolve
+// did. Pure: returns a NEW state (npcs replaced); callers assign.
+function decayAllMemories(gameState, minutes) {
+  if (!gameState || !gameState.npcs || minutes <= 0) return gameState;
+  const newNpcs = { ...gameState.npcs };
+  let changed = false;
+  for (const [id, npc] of Object.entries(newNpcs)) {
+    if (npc.residency.status === 'former' || npc.residency.status === 'prospective') continue;
+    if (!npc.memory.episodes || npc.memory.episodes.length === 0) continue;
+    newNpcs[id] = decayMemory(npc, minutes);
+    changed = true;
+  }
+  return changed ? { ...gameState, npcs: newNpcs } : gameState;
 }
 
 // --- Relationship axis management ---

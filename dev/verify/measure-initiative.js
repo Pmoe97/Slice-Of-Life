@@ -22,8 +22,8 @@
 //      feed the thing that makes an NPC cross the room. Measured against a
 //      counterfactual player who does nothing.
 //   5. THE LEVERS — sweeps of `OVERTURE.motiveWeight`, the per-def
-//      `baseAppeal`, and `OVERTURE.textCooldownTicks`, so a retune has a curve
-//      under it rather than an argument.
+//      `baseAppeal`, and `OVERTURE.textCooldownMinutes`, so a retune has a
+//      curve under it rather than an argument.
 //   6. LONELINESS — Phase 4's parked open question. `text_player` lost
 //      `utility.need: { social, below: 55 }` to D5, so this prints where
 //      `needs.social` actually sits over a week: how much a loneliness motive
@@ -370,23 +370,22 @@ for (const [label, opts, days] of [
 
 // ---------------------------------------------------------------------------
 console.log(`\n=== 5. THE LEVERS — what each constant actually buys ===`);
-// The precondition isOnCooldown states in its own comment ("all cooldownTicks
-// are well under ticksPerDay, so a wrapped delta is exact") and what the table
-// actually holds. A stamp is a 0..47 index that wraps at midnight, so a
-// cooldown at or above ticksPerDay can never elapse: the wrapped delta is
-// always below it and the entry is on cooldown forever after its first firing.
-// This is D26's finding in the one place D26 did not reach.
-const TPD = J('CLOCK.ticksPerDay');
-console.log(`    Cooldowns against CLOCK.ticksPerDay = ${TPD}. A stamp is a 0..47 index that`);
-console.log(`    wraps, so a cooldown >= ${TPD} NEVER elapses — the entry fires once per game.\n`);
+// The cooldowns are absolute minutes now (npc-initiative-retiming D1/D2):
+// `setCooldown` stamps clockToAbsolute(clock) — day*1440 + minutes — and
+// `isOnCooldown` is one monotonic subtraction, nowAbs - stampedAbs < cd. There
+// is no wrap, and therefore no ceiling: the D34 class (a value at or above the
+// old 0..47 daily index wrapping forever) is structurally gone, so the old D26
+// table that surfaced "PERMANENT after the first firing" rows has nothing left
+// to find. What is left to print is the table itself, as minutes, including
+// the multi-day values the wrap once made impossible.
 const cds = J(`Object.fromEntries([...Object.entries(OVERTURE_DEFS), ...Object.entries(DRIVE_DEFS)]
-  .filter(([, d]) => (d.cooldownTicks || 0) > 0)
-  .map(([k, d]) => [k, d.cooldownTicks]))`);
+  .filter(([, d]) => (d.cooldownMinutes || 0) > 0)
+  .map(([k, d]) => [k, d.cooldownMinutes]))`);
+console.log(`    Cooldowns, in absolute minutes — any duration, no daily ceiling:\\n`);
 for (const [k, v] of Object.entries(cds).sort((a, b) => b[1] - a[1])) {
-  if (v >= TPD) console.log(`      ${pad(k, 24)} ${pad(v, 5)} PERMANENT after the first firing`);
+  console.log(`      ${pad(k, 24)} ${pad(v, 5)}   (${(v / 60).toFixed(1)} in-game hours)`);
 }
-console.log(`      (${Object.values(cds).filter(v => v < TPD).length} others are under the bound and elapse normally)\n`);
-console.log(`    Measured on the FOND arm (affection 0.9), 6 households x 7 days, because`);
+console.log(`\n    Measured on the FOND arm (affection 0.9), 6 households x 7 days, because`);
 console.log(`    the untouched arm has one live motive and moves too little to read.\n`);
 
 function sweep(label, setter, values, opts) {
@@ -409,10 +408,10 @@ sweep('OVERTURE.motiveWeight — how much a maxed motive adds to baseAppeal', {
   write: (v) => `Object.values(OVERTURE_DEFS).forEach((d, i) => d.utility.motive.weight = ${JSON.stringify(v)}${Array.isArray(v) ? '[i]' : ''})`,
 }, [0.25, 0.35, 0.50, 0.70, 0.90]);
 
-sweep('OVERTURE.textCooldownTicks — the lever the Phase 4 Handoff named', {
-  name: 'textCooldownTicks', read: 'OVERTURE_DEFS.text_player.cooldownTicks',
-  write: (v) => `OVERTURE_DEFS.text_player.cooldownTicks = ${JSON.stringify(v)}`,
-}, [6, 12, 24, 48, 96]);
+sweep('OVERTURE.textCooldownMinutes — the lever the Phase 4 Handoff named', {
+  name: 'text cooldown', read: 'OVERTURE_DEFS.text_player.cooldownMinutes',
+  write: (v) => `OVERTURE_DEFS.text_player.cooldownMinutes = ${JSON.stringify(v)}`,
+}, [180, 360, 720, 1440, 2880]);
 
 sweep('approach_player.utility.baseAppeal — what it has to beat a chore by', {
   name: 'approach baseAppeal', read: 'OVERTURE_DEFS.approach_player.utility.baseAppeal',
@@ -424,18 +423,20 @@ sweep('text_player.utility.baseAppeal — the cheap channel', {
   write: (v) => `OVERTURE_DEFS.text_player.utility.baseAppeal = ${JSON.stringify(v)}`,
 }, [0.10, 0.16, 0.22, 0.30]);
 
-// The two channels the wrap defect pinned at once-per-game. Swept on the arms
-// that can reach them at all: a proposal needs the player in the room, a knock
-// needs them behind a shut door.
-sweep('propose_player.cooldownTicks — how often a plan may be offered', {
-  name: 'propose cooldown', read: 'OVERTURE_DEFS.propose_player.cooldownTicks',
-  write: (v) => `OVERTURE_DEFS.propose_player.cooldownTicks = ${JSON.stringify(v)}`,
-}, [12, 24, 36, 47, 48]);
+// The two channels the wrap defect once pinned at once-per-game. Swept on the
+// arms that can reach them at all: a proposal needs the player in the room, a
+// knock needs them behind a shut door. The minute values are the old tick
+// values x CLOCK.tickMinutes, so each sweep spans the same real-time durations
+// the original tick-space sweep did.
+sweep('propose_player.cooldownMinutes — how often a plan may be offered', {
+  name: 'propose cooldown', read: 'OVERTURE_DEFS.propose_player.cooldownMinutes',
+  write: (v) => `OVERTURE_DEFS.propose_player.cooldownMinutes = ${JSON.stringify(v)}`,
+}, [360, 720, 1080, 1410, 1440]);
 
-sweep('knock_player.cooldownTicks — the most intrusive channel', {
-  name: 'knock cooldown', read: 'OVERTURE_DEFS.knock_player.cooldownTicks',
-  write: (v) => `OVERTURE_DEFS.knock_player.cooldownTicks = ${JSON.stringify(v)}`,
-}, [12, 24, 36, 47, 96], { rel: { affection: 0.9 }, playerRoom: 'bedroom_player', lock: true });
+sweep('knock_player.cooldownMinutes — the most intrusive channel', {
+  name: 'knock cooldown', read: 'OVERTURE_DEFS.knock_player.cooldownMinutes',
+  write: (v) => `OVERTURE_DEFS.knock_player.cooldownMinutes = ${JSON.stringify(v)}`,
+}, [360, 720, 1080, 1410, 2880], { rel: { affection: 0.9 }, playerRoom: 'bedroom_player', lock: true });
 
 // ---------------------------------------------------------------------------
 console.log(`\n=== 6. LONELINESS — the motive Phase 4 lost to D5, as a number ===`);

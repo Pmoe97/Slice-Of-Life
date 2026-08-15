@@ -118,13 +118,13 @@ check('cognition.js loaded', api(`typeof scoreCandidates === 'function' && typeo
 check('all sixteen drives declare a utility block', api(`
   Object.values(DRIVE_DEFS).every(d => d.utility && typeof d.utility === 'object')
 `), JSON.stringify(ALL.filter(d => !api(`!!DRIVE_DEFS['${d}'].utility`))));
-check('baseAppeal and holdTicks are present on every one', api(`
+check('baseAppeal and holdMinutes are present on every one', api(`
   Object.values(DRIVE_DEFS).every(d =>
     typeof d.utility.baseAppeal === 'number' && d.utility.baseAppeal > 0 &&
-    Number.isInteger(d.utility.holdTicks) && d.utility.holdTicks >= 1)
+    typeof d.utility.holdMinutes === 'number' && d.utility.holdMinutes >= 1)
 `), JSON.stringify(ALL.filter(d => {
   const u = JSON.parse(api(`JSON.stringify(DRIVE_DEFS['${d}'].utility)`));
-  return !(u.baseAppeal > 0 && Number.isInteger(u.holdTicks) && u.holdTicks >= 1);
+  return !(u.baseAppeal > 0 && typeof u.holdMinutes === 'number' && u.holdMinutes >= 1);
 })));
 check('every utility.need names a need the schema actually has', api(`
   Object.values(DRIVE_DEFS).every(d => !d.utility.need ||
@@ -158,15 +158,22 @@ const best = JSON.parse(api(`
   (() => {
     const perceived = __sigs(0.30);
     const out = {};
-    for (const id of Object.keys(DRIVE_DEFS)) out[id] = { score: null, block: null };
+    for (const id of Object.keys(DRIVE_DEFS)) out[id] = { score: null, minute: null };
     // hallway_a rather than living_room: it is adjacent to bathroom_a, which is
     // what peep_player needs, and it is a room like any other for everything else.
     const ROOM = 'hallway_a';
+    // D4 (continuous-behavior-engine Phase 3): the routine term is a function of
+    // the current MINUTE of day, not the schedule block, so reachability is swept
+    // across representative minutes — every window's midpoint (each window's
+    // interior) plus overnight fallbacks, so a drive whose windows cluster late
+    // still finds its reachable time of day.
+    const __mins = () => [0, 240, 1430, ...Object.values(BLOCK_TIME_OF_DAY).flat().map(([s, e]) => (s + e) / 2)];
     __arrangements().forEach((arrange, ai) => {
       const g = __mk();
       const npc = arrange(g, __needy(g, ${NEEDY}), ROOM);
-      for (const block of __blocks) {
-        const ranked = scoreCandidates(npc, __ids(g)[0], g, { block, location: ROOM }, perceived);
+      for (const m of __mins()) {
+        g.meta.clock.minutes = m;
+        const ranked = scoreCandidates(npc, __ids(g)[0], g, { block: null, location: ROOM }, perceived);
         for (const hit of ranked) {
           const top = out[hit.driveId];
           // Initiative plan Phase 3: scoreCandidates now ranks OVERTURE_DEFS in
@@ -178,7 +185,7 @@ const best = JSON.parse(api(`
           // (No backticks in this comment: it lives inside a template literal.)
           if (!top) continue;
           if (top.score === null || hit.score > top.score) {
-            out[hit.driveId] = { score: hit.score, block, arrangement: ai, terms: hit.terms };
+            out[hit.driveId] = { score: hit.score, minute: m, arrangement: ai, terms: hit.terms };
           }
         }
       }
@@ -191,8 +198,8 @@ for (const d of ALL) {
   check(`${d} reaches ${t.score === null ? 'nothing' : t.score.toFixed(3)} (> ${THRESHOLD})`,
         t.score !== null && t.score > THRESHOLD,
         t.score === null
-          ? 'never a candidate in any block, in either arrangement — check blockFilter, the hard gates and DRIVE_CANDIDACY'
-          : `best block '${t.block}' (arrangement ${t.arrangement}), terms ${JSON.stringify(t.terms)}`);
+          ? 'never a candidate at any minute of day, in either arrangement — check timeOfDay, the hard gates and DRIVE_CANDIDACY'
+          : `best minute-of-day ${t.minute} (arrangement ${t.arrangement}), terms ${JSON.stringify(t.terms)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +212,7 @@ check('sleep_recover scores above threshold at energy 28 (its observed floor)', 
     const hit = r.find(c => c.driveId === 'sleep_recover');
     return !!hit && hit.score > COGNITION.actionThreshold;
   })()
-`), api(`JSON.stringify(scoreDrive('sleep_recover', __needy(__mk(), { energy: 28 }), { perceived: [], block: 'leisure', currentTick: 0 }))`));
+`), api(`JSON.stringify(scoreDrive('sleep_recover', __needy(__mk(), { energy: 28 }), { perceived: [], block: 'leisure', nowAbs: 0 }))`));
 check('seek_comfort scores above threshold at comfort 40 (its observed floor, and its old gate exactly)', api(`
   (() => {
     const g = __mk();
@@ -214,7 +221,7 @@ check('seek_comfort scores above threshold at comfort 40 (its observed floor, an
     const hit = r.find(c => c.driveId === 'seek_comfort');
     return !!hit && hit.score > COGNITION.actionThreshold;
   })()
-`), api(`JSON.stringify(scoreDrive('seek_comfort', __needy(__mk(), { comfort: 40 }), { perceived: [], block: 'leisure', currentTick: 0 }))`));
+`), api(`JSON.stringify(scoreDrive('seek_comfort', __needy(__mk(), { comfort: 40 }), { perceived: [], block: 'leisure', nowAbs: 0 }))`));
 check('a need gate no longer excludes: sleep_recover is a candidate at energy 30, where its old gate rejected it', api(`
   (() => {
     const g = __mk();
@@ -264,7 +271,7 @@ check('scoreDrive does not mutate the npc either', api(`
     const g = __mk();
     const npc = g.npcs[__ids(g)[0]];
     const before = JSON.stringify(npc);
-    for (const id of Object.keys(DRIVE_DEFS)) scoreDrive(id, npc, { perceived: __sigs(0.4), block: 'leisure', currentTick: 5 });
+    for (const id of Object.keys(DRIVE_DEFS)) scoreDrive(id, npc, { perceived: __sigs(0.4), block: 'leisure', nowAbs: 5 });
     return JSON.stringify(npc) === before;
   })()
 `));
@@ -280,7 +287,7 @@ check('scoring never reaches root.generateText', api(`
     root.generateText = () => { called++; return Promise.resolve('{}'); };
     try {
       for (const block of __blocks) scoreCandidates(g.npcs[id], id, g, { block, location: 'living_room' }, __sigs(0.5));
-      for (const d of Object.keys(DRIVE_DEFS)) scoreDrive(d, g.npcs[id], { perceived: __sigs(0.5), block: 'leisure', currentTick: 3 });
+      for (const d of Object.keys(DRIVE_DEFS)) scoreDrive(d, g.npcs[id], { perceived: __sigs(0.5), block: 'leisure', nowAbs: 3 });
     } finally { root.generateText = orig; }
     return called === 0;
   })()
@@ -330,7 +337,7 @@ check('terms sum to the score when block and recency are neutral', api(`
     const g = __mk();
     const npc = __needy(g, { hunger: 20, hygiene: 20, energy: 35, social: 20, comfort: 45, stimulation: 20 });
     for (const d of Object.keys(DRIVE_DEFS)) {
-      const s = scoreDrive(d, npc, { perceived: __sigs(0.4), block: '__none__', currentTick: 0 });
+      const s = scoreDrive(d, npc, { perceived: __sigs(0.4), block: '__none__', nowAbs: 0 });
       const t = s.terms;
       if (t.block !== 1 || t.recency !== 1) return false;
       if (Math.abs((t.base + t.need + t.signal + t.temperament) - s.score) > 1e-9) return false;
@@ -347,7 +354,7 @@ check('(D7) two NPCs differing only in conscientiousness score clean_common diff
     const npc = __needy(g, { hunger: 60, hygiene: 60, energy: 60, social: 60, comfort: 60, stimulation: 60 });
     const tidy   = { ...npc, bible: { ...npc.bible, temperament: { ...npc.bible.temperament, conscientiousness:  0.9 } } };
     const untidy = { ...npc, bible: { ...npc.bible, temperament: { ...npc.bible.temperament, conscientiousness: -0.9 } } };
-    const ctx = { perceived: __sigs(0.5), block: 'leisure', currentTick: 0 };
+    const ctx = { perceived: __sigs(0.5), block: 'leisure', nowAbs: 0 };
     return scoreDrive('clean_common', tidy, ctx).score > scoreDrive('clean_common', untidy, ctx).score;
   })()
 `));
@@ -356,7 +363,7 @@ check('(D7) it uses the INTERRUPTION idiom exactly: 1 + Σ(axis × weight)', api
     const g = __mk();
     const npc = __needy(g, { hunger: 60, hygiene: 60, energy: 60, social: 60, comfort: 60, stimulation: 60 });
     const t = { ...npc, bible: { ...npc.bible, temperament: { ...npc.bible.temperament, conscientiousness: 0.5 } } };
-    const ctx = { perceived: __sigs(0.5), block: 'leisure', currentTick: 0 };
+    const ctx = { perceived: __sigs(0.5), block: 'leisure', nowAbs: 0 };
     const s = scoreDrive('clean_common', t, ctx);
     const appeal = s.terms.base + s.terms.need + s.terms.signal;
     const expected = appeal * (1 + 0.5 * DRIVE_DEFS.clean_common.utility.temperamentWeights.conscientiousness);
@@ -369,7 +376,7 @@ check('a drive with no temperamentWeights is unaffected by temperament', api(`
     const npc = __needy(g, { hunger: 20, hygiene: 60, energy: 60, social: 60, comfort: 60, stimulation: 60 });
     const hot  = { ...npc, bible: { ...npc.bible, temperament: { warmth: 1, volatility: 1, openness: 1, conscientiousness: 1, assertiveness: 1, selfAwareness: 1 } } };
     const cold = { ...npc, bible: { ...npc.bible, temperament: { warmth: -1, volatility: -1, openness: -1, conscientiousness: -1, assertiveness: -1, selfAwareness: -1 } } };
-    const ctx = { perceived: [], block: 'leisure', currentTick: 0 };
+    const ctx = { perceived: [], block: 'leisure', nowAbs: 0 };
     return scoreDrive('eat', hot, ctx).score === scoreDrive('eat', cold, ctx).score;
   })()
 `), 'a drive with no weights is one where personality genuinely should not matter');
@@ -377,8 +384,8 @@ check('(D8) a stronger perceived signal scores higher — at the PERCEIVING npc\
   (() => {
     const g = __mk();
     const npc = __needy(g, { hunger: 60, hygiene: 60, energy: 60, social: 60, comfort: 60, stimulation: 60 });
-    const near = scoreDrive('investigate_smell', npc, { perceived: [{ signalId: 'rot', intensity: 0.9 }], block: 'leisure', currentTick: 0 });
-    const far  = scoreDrive('investigate_smell', npc, { perceived: [{ signalId: 'rot', intensity: 0.3 }], block: 'leisure', currentTick: 0 });
+    const near = scoreDrive('investigate_smell', npc, { perceived: [{ signalId: 'rot', intensity: 0.9 }], block: 'leisure', nowAbs: 0 });
+    const far  = scoreDrive('investigate_smell', npc, { perceived: [{ signalId: 'rot', intensity: 0.3 }], block: 'leisure', nowAbs: 0 });
     return near.score > far.score && Math.abs(near.terms.signal - 0.9 * 0.9) < 1e-9;
   })()
 `), 'the record perceiveSignals returns is already attenuated for distance and doors — Plan 1 producing behaviour instead of a boolean');
@@ -386,14 +393,14 @@ check('a deeper need scores higher, and a satisfied one contributes nothing', ap
   (() => {
     const g = __mk();
     const mk = (h) => __needy(g, { hunger: h, hygiene: 60, energy: 60, social: 60, comfort: 60, stimulation: 60 });
-    const ctx = { perceived: [], block: 'leisure', currentTick: 0 };
+    const ctx = { perceived: [], block: 'leisure', nowAbs: 0 };
     const starving = scoreDrive('eat', mk(5), ctx);
     const peckish  = scoreDrive('eat', mk(40), ctx);
     const full     = scoreDrive('eat', mk(90), ctx);
     return starving.score > peckish.score && peckish.score > full.score && full.terms.need === 0;
   })()
 `));
-check('blockAppeal multiplies, and an unlisted block is 1', api(`
+check('blockAppeal multiplies inside its window, and the curve sits at routineOutOfBand outside', api(`
   (() => {
     const g = __mk();
     const npc = __needy(g, { hunger: 20, hygiene: 60, energy: 60, social: 60, comfort: 60, stimulation: 60 });
@@ -402,10 +409,12 @@ check('blockAppeal multiplies, and an unlisted block is 1', api(`
     // deliberate, measured config change rather than against a defect. README
     // rule 5: never hardcode a value another file owns.
     const mult = DRIVE_DEFS.eat.utility.blockAppeal.morning;
-    const morning = scoreDrive('eat', npc, { perceived: [], block: 'morning', currentTick: 0 });
-    const none    = scoreDrive('eat', npc, { perceived: [], block: '__none__', currentTick: 0 });
-    return mult !== 1 && morning.terms.block === mult && none.terms.block === 1 &&
-           Math.abs(morning.score - none.score * mult) < 1e-9;
+    const [ms, me] = BLOCK_TIME_OF_DAY.morning[0];
+    const inW  = scoreDrive('eat', npc, { perceived: [], block: 'morning', nowAbs: 0, minutesOfDay: (ms + me) / 2 });
+    const outW = scoreDrive('eat', npc, { perceived: [], block: '__none__', nowAbs: 0, minutesOfDay: 0 });
+    return mult !== 1 && inW.terms.block === mult &&
+           outW.terms.block === COGNITION.routineOutOfBand &&
+           Math.abs(inW.score - outW.score * (mult / COGNITION.routineOutOfBand)) < 1e-9;
   })()
 `), 'the invariant is that blockAppeal multiplies — not what eat\'s morning number currently is');
 
@@ -418,56 +427,117 @@ check('a drive still on cooldown is not a candidate at all', api(`
   (() => {
     const g = __mk();
     const id = __ids(g)[0];
-    const npc = { ...__needy(g, { hunger: 10 }), flags: { [DRIVE_COOLDOWN_KEY]: { eat: 20 } } };
-    g.meta.clock.minutes = 20 * 30;   // currentTick 20; eat's cooldown is 8
+    // Stamp and "now" both read through clockToAbsolute (day*1440 + minutes),
+    // so nowAbs - stamp = 0 regardless of what day __mk's generated house
+    // starts on — a bare tick literal (20*30) as the stamp only agrees with
+    // clockToAbsolute's nowAbs when day happens to be 0, which SIM_generateHouse
+    // does not guarantee, and eat's 420-minute cooldown reads a false "elapsed"
+    // the moment a day offset is in play.
+    g.meta.clock.minutes = 20 * 30;
+    const nowAbs = clockToAbsolute(g.meta.clock);
+    const npc = { ...__needy(g, { hunger: 10 }), flags: { [DRIVE_COOLDOWN_KEY]: { eat: nowAbs } } };
     return !scoreCandidates(npc, id, g, { block: 'leisure', location: 'kitchen' }, []).some(c => c.driveId === 'eat');
   })()
 `));
-// Both ticks below are DERIVED from the drive's own cooldown and
-// COGNITION.recencyWindow. They used to be the literals 30 and 40, written when
-// eat's cooldown was 8; Phase 5 retuned it to 14 and the second one silently
-// slid inside the penalty window it was asserting it was outside of. The window
-// is a relationship between two config values, so the test states the
-// relationship — the same failure mode as the hardcoded 1.2 above.
+// Both stamps below are DERIVED from the drive's own cooldown and
+// COGNITION.recencyWindow, in the absolute-minute space isOnCooldown and
+// recencyMultiplier now share (npc-initiative-retiming D2). They used to be
+// the literals 30 and 40, written when eat's cooldown was 8 ticks; Phase 5
+// retuned it to 14 and the second one silently slid inside the penalty window
+// it was asserting it was outside of. The window is a relationship between two
+// config values, so the test states the relationship — the same failure mode
+// as the hardcoded 1.2 above.
 check('a drive done between 1x and 2x its cooldown ago is penalised', api(`
   (() => {
     const g = __mk();
-    const cd = DRIVE_DEFS.eat.cooldownTicks, last = 20;
-    const npc = { ...__needy(g, { hunger: 10 }), flags: { [DRIVE_COOLDOWN_KEY]: { eat: last } } };
-    // One tick past the cooldown: the earliest moment this drive is scored at all.
-    const recent = scoreDrive('eat', npc, { perceived: [], block: 'leisure', currentTick: last + cd + 1 });
+    const cd = DRIVE_DEFS.eat.cooldownMinutes, lastAbs = 20 * 30;
+    const npc = { ...__needy(g, { hunger: 10 }), flags: { [DRIVE_COOLDOWN_KEY]: { eat: lastAbs } } };
+    // One minute past the cooldown: the earliest moment this drive is scored at all.
+    const recent = scoreDrive('eat', npc, { perceived: [], block: 'leisure', nowAbs: lastAbs + cd + 1 });
     return recent.terms.recency === COGNITION.recencyPenalty;
   })()
 `));
 check('a drive done longer ago than that is not', api(`
   (() => {
     const g = __mk();
-    const cd = DRIVE_DEFS.eat.cooldownTicks, last = 20;
-    const npc = { ...__needy(g, { hunger: 10 }), flags: { [DRIVE_COOLDOWN_KEY]: { eat: last } } };
+    const cd = DRIVE_DEFS.eat.cooldownMinutes, lastAbs = 20 * 30;
+    const npc = { ...__needy(g, { hunger: 10 }), flags: { [DRIVE_COOLDOWN_KEY]: { eat: lastAbs } } };
     // Exactly recencyWindow x the cooldown — the comparison is a strict <, so
-    // this is the first tick the penalty is gone. Testing the boundary rather
+    // this is the first minute the penalty is gone. Testing the boundary rather
     // than a value beyond it is what catches an off-by-one in the window.
     const out = scoreDrive('eat', npc, { perceived: [], block: 'leisure',
-                                         currentTick: last + cd * COGNITION.recencyWindow });
+                                         nowAbs: lastAbs + cd * COGNITION.recencyWindow });
     return out.terms.recency === 1;
   })()
 `), 'the penalty window is 1x..2x the drive\'s OWN cooldown after it last ran');
 check('a drive never done carries no penalty', api(`
-  scoreDrive('eat', __needy(__mk(), { hunger: 10 }), { perceived: [], block: 'leisure', currentTick: 40 }).terms.recency === 1
+  scoreDrive('eat', __needy(__mk(), { hunger: 10 }), { perceived: [], block: 'leisure', nowAbs: 40 }).terms.recency === 1
 `));
 
 // ---------------------------------------------------------------------------
 console.log('\ncandidacy mirrors evaluateDrives\' hard exclusions');
-check('blockFilter excludes', api(`
+check('D4: a drive outside its windows is still a candidate, weighted at routineOutOfBand', api(`
   (() => {
     const g = __mk();
     const id = __ids(g)[0];
     const npc = __needy(g, { hunger: 5 });
-    const inBlock  = scoreCandidates(npc, id, g, { block: 'morning', location: 'kitchen' }, []).some(c => c.driveId === 'eat');
-    const outBlock = scoreCandidates(npc, id, g, { block: 'work', location: 'kitchen' }, []).some(c => c.driveId === 'eat');
-    return inBlock && !outBlock;
+    const [ms, me] = BLOCK_TIME_OF_DAY.morning[0];
+    g.meta.clock.minutes = (ms + me) / 2;
+    const inW = scoreCandidates(npc, id, g, { block: 'morning', location: 'kitchen' }, []).find(c => c.driveId === 'eat');
+    g.meta.clock.minutes = 0;
+    const outW = scoreCandidates(npc, id, g, { block: null, location: 'kitchen' }, []).find(c => c.driveId === 'eat');
+    return !!inW && !!outW &&
+           inW.terms.block === DRIVE_DEFS.eat.utility.blockAppeal.morning &&
+           outW.terms.block === COGNITION.routineOutOfBand &&
+           inW.score > outW.score;
   })()
-`));
+`), 'the hard gate is gone — the time-of-day weight is a score term, not an exclusion (D4)');
+check('D4: every timeOfDay block name maps to a real window in BLOCK_TIME_OF_DAY', api(`
+  (() => {
+    const missing = Object.entries(DRIVE_DEFS)
+      .filter(([, d]) => Array.isArray(d.timeOfDay))
+      .flatMap(([id, d]) => d.timeOfDay.filter(b => !BLOCK_TIME_OF_DAY[b]).map(b => id + ':' + b));
+    return missing.length === 0;
+  })()
+`), 'a name that maps to nothing would make the drive score routineOutOfBand everywhere, silently');
+check('D4: every drive maps to a defined weight curve — in-window blockAppeal, out-of-window routineOutOfBand', api(`
+  (() => {
+    const R = COGNITION.routineRampMinutes;
+    const outD = (m, [s, e]) => m < s ? s - m : (m >= e ? m - e : 0);
+    const edge = (m, [s, e]) => m < s ? s - m : (m > e ? m - e : Math.min(m - s, e - m));
+    const bad = [];
+    for (const [id, d] of Object.entries(DRIVE_DEFS)) {
+      if (!d.timeOfDay) continue;
+      const windows = d.timeOfDay.map(b => BLOCK_TIME_OF_DAY[b]).flat().filter(Boolean);
+      for (const b of d.timeOfDay) {
+        for (const [s, e] of BLOCK_TIME_OF_DAY[b]) {
+          const want = (d.utility.blockAppeal && d.utility.blockAppeal[b]) ?? 1;
+          let mIn = null;
+          for (let m = s + R; m <= e - R; m += 5) {
+            if (edge(m, [s, e]) < R) continue;
+            let clean = true;
+            for (const [s2, e2] of windows) {
+              if (s2 === s && e2 === e) continue;
+              if (outD(m, [s2, e2]) < R) { clean = false; break; }
+            }
+            if (clean) { mIn = m; break; }
+          }
+          if (mIn !== null) {
+            const w = driveTimeOfDayWeight(d, mIn);
+            if (Math.abs(w - want) > 1e-9) bad.push(id + '/' + b + ' in=' + w);
+          } else {
+            // overlapping windows: the drive's own window still contributes
+            const w = driveTimeOfDayWeight(d, (s + e) / 2);
+            if (w < want - 1e-9) bad.push(id + '/' + b + ' mid=' + w);
+          }
+        }
+      }
+      const wOut = driveTimeOfDayWeight(d, 0);
+      if (wOut !== COGNITION.routineOutOfBand) bad.push(id + ' out=' + wOut);
+    }
+    return bad.length === 0;
+  })()
+`), 'the former gate\'s reachability is preserved as a strong preference, never an exclusion');
 check('the visitor allowlist excludes', api(`
   (() => {
     const g = __mk();
@@ -525,8 +595,8 @@ check('evaluateDrives no longer selects on a weight roll',
 check('evaluateDrives calls the scorer',
       /scoreCandidates\(/.test(srcOf('drives.js')));
 check('the writers exist and live beside the scorer',
-      /function openPursuit\(/.test(srcOf('cognition.js')) &&
-      /function releasePursuit\(/.test(srcOf('cognition.js')),
+      /function openCommitment\(/.test(srcOf('cognition.js')) &&
+      /function releaseCommitment\(/.test(srcOf('cognition.js')),
       'verify-c2 is where their behaviour is pinned; this is where they are required to be here');
 check('and the scorer itself still writes nothing',
       !/function scoreDrive[\s\S]*?\n\}/.test(srcOf('cognition.js')) ||

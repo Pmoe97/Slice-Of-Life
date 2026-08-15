@@ -499,22 +499,25 @@ function setPhoneLock(gameState, locked) {
   found.obj.state.lock = locked ? 'locked' : 'unlocked';
 }
 
-// Battery moves with the sim. Called once per resolved tick from UI's
-// advanceAndResolve (ui.js), which BOTH the continuous clock's sim
-// checkpoints and every discrete action (sleep, work blocks, gigs) flow
-// through — hooking only the checkpoint path would let an 8-hour sleep
+// Battery moves with the sim, in closed form over GAME-MINUTES (needs-and-
+// heartbeat Phase 3): one "battery +/- rate x minutes" per span, never a
+// loop. The continuous path calls this from clockFrame's heartbeat
+// accumulator (one call per HEARTBEAT_MINUTES crossed, with the crossed
+// minutes); every discrete action (sleep, work blocks, gigs) calls it from
+// UI's advanceAndResolve with the batch's whole span. Hooking both paths is
+// the point: hooking only the checkpoint path would let an 8-hour sleep
 // cost zero battery (decision C's "verify the discrete path" note).
-function advancePhoneBattery(gameState, ticks) {
+function advancePhoneBattery(gameState, minutes) {
   const found = findPhoneObject(gameState);
   if (!found) return;
   const phone = found.obj;
   phone.flags = phone.flags || {};
   const battery = phone.flags.battery == null ? PHONE.startingBattery : phone.flags.battery;
   if (isPhoneCharging(gameState, phone, found.bucket)) {
-    phone.flags.battery = clamp(battery + PHONE.batteryChargePerCheckpoint * ticks, 0, 100);
-    recordUtilityUsage(gameState, 'devices', PHONE.chargeMeterDevicesPerCheckpoint * ticks);
+    phone.flags.battery = clamp(battery + PHONE.batteryChargePerMinute * minutes, 0, 100);
+    recordUtilityUsage(gameState, 'devices', PHONE.chargeMeterDevicesPerMinute * minutes);
   } else {
-    phone.flags.battery = clamp(battery - PHONE.batteryDrainPerCheckpoint * ticks, 0, 100);
+    phone.flags.battery = clamp(battery - PHONE.batteryDrainPerMinute * minutes, 0, 100);
   }
 }
 

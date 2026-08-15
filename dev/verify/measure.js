@@ -66,11 +66,14 @@ function run(label, { repaired, days = 5, seed = 20260810 }) {
     for (let t = 0; t < 48 * ${days}; t++) {
       __gs.meta.clock = advanceClock(__gs.meta.clock, 1);
       if (__gs.meta.clock.minutes < 30) __restock();
-      const r = resolveTick(__gs);
-      for (const e of r.newEvents) __fired[e.type] = (__fired[e.type] || 0) + 1;
-      for (const [id, u] of Object.entries(r.npcUpdates)) {
-        if (!__log[id]) continue;
-        __gs.npcs[id] = { ...__gs.npcs[id], ...u };
+      // needs-and-heartbeat Phase 3: needs moved OUT of resolveTick into the
+      // discrete funnel's per-tick applyNeedsHeartbeat (resolveBatch) — a
+      // bare resolveTick call would freeze every need and this probe would
+      // report flat lines.
+      const rb = resolveBatch(__gs, 1, { advanceClock: false });
+      __gs = rb.state;
+      for (const e of rb.events) __fired[e.type] = (__fired[e.type] || 0) + 1;
+      for (const id of __res) {
         const n = __gs.npcs[id].needs;
         for (const k of Object.keys(__log[id])) __log[id][k].push(n[k]);
       }
@@ -117,11 +120,14 @@ function runRepaired(label, days = 5) {
     for (let t = 0; t < 48 * ${days}; t++) {
       __gs.meta.clock = advanceClock(__gs.meta.clock, 1);
       if (__gs.meta.clock.minutes < 30) __restock();
-      const r = resolveTick(__gs);
-      for (const e of r.newEvents) __fired[e.type] = (__fired[e.type] || 0) + 1;
-      for (const [id, u] of Object.entries(r.npcUpdates)) {
-        if (!__log[id]) continue;
-        __gs.npcs[id] = { ...__gs.npcs[id], ...u };
+      // needs-and-heartbeat Phase 3: needs moved OUT of resolveTick into the
+      // discrete funnel's per-tick applyNeedsHeartbeat (resolveBatch) — a
+      // bare resolveTick call would freeze every need and this probe would
+      // report flat lines.
+      const rb = resolveBatch(__gs, 1, { advanceClock: false });
+      __gs = rb.state;
+      for (const e of rb.events) __fired[e.type] = (__fired[e.type] || 0) + 1;
+      for (const id of __res) {
         const n = __gs.npcs[id].needs;
         for (const k of Object.keys(__log[id])) __log[id][k].push(n[k]);
       }

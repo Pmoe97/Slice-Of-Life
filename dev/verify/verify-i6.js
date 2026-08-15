@@ -9,12 +9,12 @@
 // they moved.
 //
 // Phase 6 found one thing while measuring, and it is the reason this file
-// exists rather than being a paragraph in the Handoff. A cooldown stamp is a
-// 0..47 tick index that WRAPS at midnight, and `isOnCooldown` compares a
-// wrapped delta — so `cooldownTicks` is not an elapsed duration. It is a fixed
+// exists rather than being a paragraph in the Handoff. A cooldown stamp was a
+// 0..47 tick index that WRAPS at midnight, and `isOnCooldown` compared a
+// wrapped delta — so a cooldown was not an elapsed duration. It was a fixed
 // daily clock window, `cooldownTicks` wide, anchored at whatever tick the
-// entry last fired on. At or above `CLOCK.ticksPerDay` that window covers the
-// whole day and the entry is on cooldown FOREVER after its first firing.
+// entry last fired on. At or above `CLOCK.ticksPerDay` that window covered the
+// whole day and the entry was on cooldown FOREVER after its first firing.
 // Three entries were above it — `knock_player` (96), `propose_player` (48) and
 // `gift_to_player` (96) — so all three fired exactly once per NPC per game
 // while their comments said "two game days", "a full day" and "~2 game days".
@@ -24,11 +24,20 @@
 // documented cooldown bug half-fixed: that fix removed the negative-delta case
 // and left the fixed-window semantics.
 //
-// So the assertions here are about the CLASS, not the three instances
-// (README rule 2). The bound is derived from CLOCK.ticksPerDay and the rates
-// are read from the tables that own them (README rule 5), because Phase 6's
-// whole job was to move those numbers and a harness that pins them reports the
-// next retune as a regression (README rule 4).
+// npc-initiative-retiming-plan Phase 2 removed the class rather than widening
+// the bound (D2): the stamp is now an ABSOLUTE minute (day*1440 + minutes, the
+// clockToAbsolute space the rest of the continuous-simulation roadmap already
+// lives in), and `isOnCooldown` is one monotonic subtraction. A cooldown of a
+// day and a cooldown of a week are the same kind of check, so the assertions
+// below that Phase 6 wrote about the WRAP are now written about its ABSENCE:
+// the wrap arithmetic is gone from the runtime, and a cooldown at or above a
+// day — the exact scenario D34 demonstrated as permanently blocked — elapses.
+//
+// The rates are still read from the tables that own them (README rule 5),
+// because Phase 6's whole job was to move those numbers and a harness that
+// pins them reports the next retune as a regression (README rule 4). This
+// phase preserved them exactly (oldTicks x CLOCK.tickMinutes), so nothing
+// below pins a rate.
 const path = require('path');
 const fs = require('fs');
 const { loadEngine, SRC } = require('./loadgame.js');
@@ -44,9 +53,11 @@ const codeOf = (f) => srcOf(f).replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/
 const J = (expr) => JSON.parse(api(`JSON.stringify(${expr})`));
 
 const TPD = J('CLOCK.ticksPerDay');
+const TICKMIN = J('CLOCK.tickMinutes');
 const OV = J('OVERTURE');
 const DEFS = J('OVERTURE_DEFS');
 const DRIVES = J('DRIVE_DEFS');
+const inst = fs.readFileSync(path.join(__dirname, 'measure-initiative.js'), 'utf8');
 
 api(`
   __mk = (seed) => {
@@ -63,74 +74,65 @@ api(`
 // ---------------------------------------------------------------------------
 console.log('\n(D34) a cooldown is a WRAPPED window, so every cooldown must fit inside a day');
 
-// The premise, stated as an assertion so that a future rewrite of isOnCooldown
-// to measure real elapsed time makes THIS fail rather than the bound below
-// silently becoming pointless. If this one fails, delete the bound — do not
-// widen it.
-check(`isOnCooldown still compares a WRAPPED 0..${TPD - 1} delta`,
-      /currentTick \+ CLOCK\.ticksPerDay - last/.test(codeOf('drives.js'))
-      && /since < cd/.test(codeOf('drives.js')),
-      'the bound below exists only because of this line; if the stamp starts carrying a day, this assertion is the one to remove first');
+// The premise, stated as an assertion so that a reintroduction of the wrap
+// (or a stamp that stops carrying the day) makes THIS fail rather than the
+// checks below silently becoming pointless. If this one fails, the conversion
+// has been reverted and D34's class is back.
+check(`isOnCooldown compares ABSOLUTE minutes — one subtraction, no wrap branch`,
+      /nowAbs - stampedAbs/.test(codeOf('drives.js'))
+      && /return \(nowAbs - stampedAbs\) < cd/.test(codeOf('drives.js'))
+      && !/currentTick \+ CLOCK\.ticksPerDay - last/.test(codeOf('drives.js')),
+      'the wrap arithmetic is gone; if it is back, D34 is back with it');
 
-// The defect itself, demonstrated rather than described: a cooldown at the
-// bound can never elapse, at ANY tick of the day.
-check(`a cooldown of exactly ticksPerDay (${TPD}) never elapses — at any tick of the day`,
+// The exact scenario D34's writeup used, now as a regression check for its
+// ABSENCE: a cooldown at or above what used to be CLOCK.ticksPerDay ticks was
+// structurally incapable of ever elapsing under the wrapped index. A cooldown
+// of a full day is a normal cooldown now.
+check(`a cooldown of a full day (${TPD * TICKMIN} min) now elapses — the D34 scenario, structurally`,
       api(`(() => {
         const npc = setCooldown({ flags: {} }, '__probe', 10);
-        DRIVE_DEFS.__probe = { cooldownTicks: CLOCK.ticksPerDay, utility: {} };
-        const everFree = Array.from({ length: CLOCK.ticksPerDay }, (_, t) => isOnCooldown(npc, '__probe', t))
-          .some(on => on === false);
+        DRIVE_DEFS.__probe = { cooldownMinutes: CLOCK.ticksPerDay * CLOCK.tickMinutes, utility: {} };
+        const onCd = isOnCooldown(npc, '__probe', 10 + CLOCK.ticksPerDay * CLOCK.tickMinutes - 1);
+        const free  = isOnCooldown(npc, '__probe', 10 + CLOCK.ticksPerDay * CLOCK.tickMinutes);
         delete DRIVE_DEFS.__probe;
-        return everFree === false;
+        return onCd === true && free === false;
       })()`),
-      'this is what "fires once per game" looks like from the inside');
-check('...while one comfortably under the bound elapses on most of the day',
+      'the scenario that fired once per NPC per game under the wrapped index now behaves like a cooldown');
+check('...and a two-day cooldown does too',
+      api(`(() => {
+        const npc = setCooldown({ flags: {} }, '__probe', 100);
+        DRIVE_DEFS.__probe = { cooldownMinutes: 2 * 1440, utility: {} };
+        const free = isOnCooldown(npc, '__probe', 100 + 2 * 1440);
+        delete DRIVE_DEFS.__probe;
+        return free === false;
+      })()`));
+check('...and a short one still elapses at exactly its duration',
       api(`(() => {
         const npc = setCooldown({ flags: {} }, '__probe', 10);
-        DRIVE_DEFS.__probe = { cooldownTicks: 12, utility: {} };
-        const free = Array.from({ length: CLOCK.ticksPerDay }, (_, t) => isOnCooldown(npc, '__probe', t))
-          .filter(on => on === false).length;
+        DRIVE_DEFS.__probe = { cooldownMinutes: 360, utility: {} };
+        const onCd = isOnCooldown(npc, '__probe', 10 + 359);
+        const free  = isOnCooldown(npc, '__probe', 10 + 360);
         delete DRIVE_DEFS.__probe;
-        return free === CLOCK.ticksPerDay - 12;
+        return onCd === true && free === false;
       })()`),
-      'the window is exactly ticksPerDay - cooldownTicks wide, which is the whole shape of the defect');
+      'the boundary is a strict <, so elapse happens at exactly duration');
 
-// THE class assertion. Both tables, because candidateDef resolves both and
-// isOnCooldown reads whichever it lands on — a bound that covered only the
-// overtures would have let gift_to_player stand.
+// THE class assertion, converted. Both tables, because candidateDef resolves
+// both and isOnCooldown reads whichever it lands on — the old bound had to
+// cover gift_to_player for the same reason. The day-sized ceiling is GONE: no
+// cooldownMinutes value has the cliff D34's wrapped window had, so the
+// assertion is that every value is a positive number of minutes and that the
+// old field names survive nowhere.
 const allCooldowns = Object.entries({ ...DRIVES, ...DEFS })
-  .filter(([, d]) => (d && d.cooldownTicks) > 0)
-  .map(([id, d]) => [id, d.cooldownTicks]);
-const overBound = allCooldowns.filter(([, cd]) => cd >= TPD);
-check(`EVERY cooldownTicks in both tables is under CLOCK.ticksPerDay (${allCooldowns.length} entries)`,
-      overBound.length === 0,
-      `${JSON.stringify(overBound)} can never elapse — they fire once per NPC per game`);
-
-// The tighter bound, and it is a MEASURED claim rather than a provable one, so
-// it is asserted only over the table this phase owns and merely reported over
-// the other. Above roughly half a day the surviving window gets narrow enough
-// to fall wholly inside hours the entry's own blockFilter excludes, which is
-// the same failure reached gradually instead of at once. Two independent
-// measurements put the knee at 24: `propose_player` left 4 of 24 residents
-// unable to ever propose at 24 against 1 of 24 at 20, and `do_laundry` fires
-// an identical 8 times at 24, 30 and 36 — a constant that has stopped
-// responding to its own value is the signature.
-const HALF = Math.floor(TPD / 2);
-check(`every OVERTURE cooldown is at or under half a day (${HALF}), the measured working ceiling`,
-      Object.values(DEFS).every(d => d.cooldownTicks <= HALF),
-      JSON.stringify(Object.entries(DEFS).map(([k, d]) => [k, d.cooldownTicks]).filter(([, cd]) => cd > HALF)));
-// Reported, not failed: these are other plans' drives and their rates are
-// theirs to set. Phase 6 fixed `gift_to_player` because it was over the HARD
-// bound and therefore provably fired once per game; `do_laundry` at 30 is over
-// the soft one only, and re-rating housekeeping is not this plan's call.
-const softOver = Object.entries(DRIVES).filter(([, d]) => (d && d.cooldownTicks) > HALF);
-if (softOver.length) {
-  console.log(`  NOTE  ${softOver.length} DRIVE_DEFS cooldown(s) over the soft ceiling: ` +
-    JSON.stringify(softOver.map(([k, d]) => [k, d.cooldownTicks])));
-  console.log(`        Measured for do_laundry: 23 firings at 12, 18 at 18, then 8 at each of`);
-  console.log(`        24 / 30 / 36 — flat, so the constant is no longer the thing deciding.`);
-  console.log(`        Flagged in the plan's Handoff for whoever owns housekeeping.`);
-}
+  .filter(([, d]) => d && typeof d.cooldownMinutes === 'number')
+  .map(([id, d]) => [id, d.cooldownMinutes]);
+check(`EVERY cooldown in both tables is a positive number of minutes (${allCooldowns.length} entries)`,
+      allCooldowns.length > 0 && allCooldowns.every(([, cd]) => cd > 0),
+      `${JSON.stringify(allCooldowns.filter(([, cd]) => cd <= 0))} — a non-positive cooldown is a candidate on every tick`);
+check('no cooldownTicks field survives in either table, in the code that reads them, or in the instrument',
+      !Object.values({ ...DRIVES, ...DEFS }).some(d => d && 'cooldownTicks' in d)
+      && !/cooldownTicks/.test(codeOf('drives.js') + codeOf('cognition.js') + inst),
+      'the converted mechanism reads cooldownMinutes only; a stray cooldownTicks reads as a silent 0');
 
 // ---------------------------------------------------------------------------
 console.log('\n(D21) the levers Phase 6 tuned are levers — each one moves the rate it claims');
@@ -139,13 +141,13 @@ console.log('\n(D21) the levers Phase 6 tuned are levers — each one moves the 
 // "how often does this cast reach for the player" stops being one decision made
 // in one place. The mapping is asserted by VALUE rather than by name so that
 // renaming either side breaks it.
-const cdConstants = Object.entries(OV).filter(([k]) => /CooldownTicks$|^cooldownTicks$/.test(k));
-check(`every OVERTURE.*cooldownTicks constant is read by a def (${cdConstants.length})`,
-      cdConstants.every(([, v]) => Object.values(DEFS).some(d => d.cooldownTicks === v)),
-      JSON.stringify(cdConstants) + ' vs ' + JSON.stringify(Object.values(DEFS).map(d => d.cooldownTicks)));
+const cdConstants = Object.entries(OV).filter(([k]) => /CooldownMinutes$|^cooldownMinutes$/.test(k));
+check(`every OVERTURE.*cooldownMinutes constant is read by a def (${cdConstants.length})`,
+      cdConstants.every(([, v]) => Object.values(DEFS).some(d => d.cooldownMinutes === v)),
+      JSON.stringify(cdConstants) + ' vs ' + JSON.stringify(Object.values(DEFS).map(d => d.cooldownMinutes)));
 check('every OVERTURE_DEFS entry declares a positive cooldown',
-      Object.values(DEFS).every(d => d.cooldownTicks > 0),
-      JSON.stringify(Object.entries(DEFS).map(([k, d]) => [k, d.cooldownTicks])));
+      Object.values(DEFS).every(d => d.cooldownMinutes > 0),
+      JSON.stringify(Object.entries(DEFS).map(([k, d]) => [k, d.cooldownMinutes])));
 
 // The trap that made the first draft of the motiveWeight sweep print five
 // identical rows: every entry COPIES OVERTURE.motiveWeight into its own
@@ -205,8 +207,8 @@ check('an unknown entry still fails CLOSED rather than passing vacuously',
 const textDef = Object.values(DEFS).find(d => d.channel === 'text');
 check('the text channel has an empty do-not-disturb list AND the tightest ration on it',
       (textDef.doNotDisturb || []).length === 0
-      && textDef.cooldownTicks >= Object.values(DEFS).find(d => d.channel === 'approach').cooldownTicks,
-      `text dnd ${JSON.stringify(textDef.doNotDisturb)} cooldown ${textDef.cooldownTicks} vs approach ${Object.values(DEFS).find(d => d.channel === 'approach').cooldownTicks}` +
+      && textDef.cooldownMinutes >= Object.values(DEFS).find(d => d.channel === 'approach').cooldownMinutes,
+      `text dnd ${JSON.stringify(textDef.doNotDisturb)} cooldown ${textDef.cooldownMinutes} vs approach ${Object.values(DEFS).find(d => d.channel === 'approach').cooldownMinutes}` +
       ' — a channel that never defers has to be rationed somewhere, and the cooldown is the only place left');
 
 // ---------------------------------------------------------------------------
@@ -275,15 +277,14 @@ check('npc.overture is STILL only ever built or deleted in overture.js',
 // ---------------------------------------------------------------------------
 console.log('\n(the instrument) measure-initiative.js exists and reads the tables it reports on');
 
-const inst = fs.readFileSync(path.join(__dirname, 'measure-initiative.js'), 'utf8');
 check('dev/verify/measure-initiative.js exists — Phase 6\'s deliverable',
       inst.length > 0);
 check('it sweeps the DEFS\' motive weight, not the source constant that is copied at load',
       /utility\.motive\.weight = /.test(inst) && !/^\s*OVERTURE\.motiveWeight = /m.test(inst),
       'writing OVERTURE.motiveWeight after load moves nothing — the first draft printed five identical rows');
-check('it derives the cooldown bound from CLOCK.ticksPerDay rather than hardcoding 48',
-      /CLOCK\.ticksPerDay/.test(inst) && !/>= 48/.test(inst),
-      'README rule 5 — a literal that has to agree with another file is a literal that will not');
+check('it reports cooldowns in absolute MINUTES with no daily bound',
+      /cooldownMinutes/.test(inst) && !/ticksPerDay/.test(inst) && !/>= 48/.test(inst),
+      'the wrap bound is gone with the wrap; the D26 "PERMANENT after the first firing" table has nothing left to find');
 check('it is an instrument: it prints and does not assert',
       !/\bcheck\(/.test(inst) && !/process\.exit\(1\)/.test(inst),
       'the four measure-* scripts are tuning instruments, not tests');

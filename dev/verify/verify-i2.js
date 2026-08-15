@@ -336,13 +336,23 @@ console.log(`        open questions ${sum(live.residents, r => r.openQuestions)}
 // is a candidate anywhere in the flat rather than only next to the player.
 //
 // So the claim becomes what it always MEANT: the counterfactual is the same
-// simulation with the two fields removed, not a different one. A divergence
-// under a tenth of a percent is the feedback the plan asked for. A large one
-// would mean the arms are not comparable and the 0-vs-233 result below is an
-// artifact of running two different worlds.
+// simulation with the two fields removed, not a different one. A small
+// divergence is the feedback the plan asked for. A large one would mean the
+// arms are not comparable and the 0-vs-233 result below is an artifact of
+// running two different worlds.
+//
+// The bound was 0.1% until continuous-behavior-engine Phase 3's own gap-fix
+// (this audit): shower/sleep_recover/do_laundry wiring a real object anchor
+// (D2) instead of room-centroid changes those three commitments' walk
+// distance, which shifts the tick `arrived` flips on by one or two — a
+// second, independent source of the same class of drift this comment
+// already documents, not a determinism break (two runs of the SAME arm are
+// still byte-identical; only episodes==episodes, the strong structural
+// invariant, is asserted exactly). Measured at 0.17% population-wide;
+// 0.5% leaves headroom without going numb to an actually-decoupled arm.
 const eventDrift = Math.abs(live.events - dead.events) / Math.max(live.events, 1);
 check(`the two runs are the same simulation, differing only in the fields (${live.events} vs ${dead.events} events, ${(eventDrift * 100).toFixed(2)}% apart)`,
-      eventDrift < 0.001 && sum(live.residents, r => r.episodes) === sum(dead.residents, r => r.episodes),
+      eventDrift < 0.005 && sum(live.residents, r => r.episodes) === sum(dead.residents, r => r.episodes),
       `${live.events} vs ${dead.events} events, ${sum(live.residents, r => r.episodes)} vs ${sum(dead.residents, r => r.episodes)} episodes`);
 check('the pre-Phase-2 writer yields 0 facts and 0 open questions across the whole population',
       sum(dead.residents, r => r.facts) === 0 && sum(dead.residents, r => r.openQuestions) === 0,

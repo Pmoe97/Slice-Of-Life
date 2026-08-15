@@ -50,7 +50,7 @@ api(`
   __ids = (g) => Object.keys(g.npcs).filter(id => g.npcs[id].residency.status === 'resident');
   __res = (block, loc) => ({ block: block || 'leisure', location: loc, activity: '', transit: null });
   __ctx = (g, id, loc) => ({ perceived: [], block: 'leisure', location: loc || 'living_room',
-                             npcId: id, currentTick: getTickIndex(g.meta.clock.minutes), isVisitor: false });
+                             npcId: id, nowAbs: clockToAbsolute(g.meta.clock), isVisitor: false });
   __open = (g, id, loc) => Object.keys(scoreOvertures(g.npcs[id], id, g, __ctx(g, id, loc)));
 
   // Lock the door on the player's CURRENT room, through the object the house
@@ -79,13 +79,13 @@ api(`
     g.player.location = 'bedroom_player';
     __lock(g, 'locked');
     g.npcs[id].relPlayer.affection = 1;
-    const tick = getTickIndex(g.meta.clock.minutes);
+    const nowAbs = clockToAbsolute(g.meta.clock);
     for (const ovId of Object.keys(OVERTURE_DEFS)) {
       if (ovId === __KNOCK_ID) continue;
-      g.npcs[id] = setCooldown(g.npcs[id], ovId, tick);
+      g.npcs[id] = setCooldown(g.npcs[id], ovId, nowAbs);
     }
     const hall = ROOM_ADJACENCY['bedroom_player'][0];
-    const r = evaluateDrives(g.npcs[id], id, g.npcs, __res('leisure', hall), g, () => 0.5, tick);
+    const r = evaluateDrives(g.npcs[id], id, g.npcs, __res('leisure', hall), g, () => 0.5, nowAbs);
     return { g, id, hall, r };
   };
 
@@ -138,7 +138,7 @@ api(`
         const n = g.npcs[id];
         const sent = ((g.world.computer.apps.im.threads[id] || {}).msgs || []).length - before[id];
         if (sent > 0) { texts += sent; byChannel.text = (byChannel.text || 0) + sent; }
-        if (n.overture && n.pursuit) bothAtOnce++;
+        if (n.overture && n.commitment) bothAtOnce++;
         if (!n.overture) continue;
         now.add(id);
         if (n.overture.channel === 'text') textHeld++;
@@ -369,8 +369,8 @@ check('a text leaves NO record — no pending overture, no hold, no cooldown on 
         g.npcs[id].relPlayer.affection = 1;
         const far = Object.keys(ROOM_ADJACENCY).find(r => r !== g.player.location && !isRoomAdjacent(g.player.location, r));
         const r = evaluateDrives(g.npcs[id], id, g.npcs, __res('leisure', far), g, () => 0.5, 0);
-        return !g.npcs[id].overture && !g.npcs[id].pursuit
-          && r.updatedNpc.flags[DRIVE_COOLDOWN_KEY].text_player === 0
+        return !g.npcs[id].overture && !g.npcs[id].commitment
+          && r.updatedNpc.flags[DRIVE_COOLDOWN_KEY].text_player === clockToAbsolute(g.meta.clock)
           && r.locationOverride === null && r.activityOverride === null;
       })()`), 'no location override either: a text does not move anybody');
 check('...and it still consumes the tick, so it cannot stack with a drive',
@@ -379,7 +379,7 @@ check('...and it still consumes the tick, so it cannot stack with a drive',
         g.npcs[id].relPlayer.affection = 1;
         const far = Object.keys(ROOM_ADJACENCY).find(r => r !== g.player.location && !isRoomAdjacent(g.player.location, r));
         const r = evaluateDrives(g.npcs[id], id, g.npcs, __res('leisure', far), g, () => 0.5, 0);
-        const stamped = Object.keys(r.updatedNpc.flags[DRIVE_COOLDOWN_KEY]).filter(k => r.updatedNpc.flags[DRIVE_COOLDOWN_KEY][k] === 0);
+        const stamped = Object.keys(r.updatedNpc.flags[DRIVE_COOLDOWN_KEY]).filter(k => r.updatedNpc.flags[DRIVE_COOLDOWN_KEY][k] === clockToAbsolute(g.meta.clock));
         return r.events.length === 0 && stamped.length === 1 && stamped[0] === 'text_player';
       })()`), 'one action per npc-tick — a channel that costs no tick would be an expression, and expressions are Phase 1\'s');
 
@@ -392,17 +392,18 @@ check('the proposal names a kind COMMITMENT_KINDS knows, a real room and a real 
         const t = proposeTerms(__probe(), OVERTURE_DEFS.propose_player, g);
         const kd = COMMITMENT_KINDS[t.kind];
         return !!kd && !!ROOMS[t.roomId] && t.roomId === kd.roomId
-          && t.tickEnd > t.tickStart && t.tickEnd <= CLOCK.ticksPerDay;
+          && t.endAbs > t.startAbs && t.endAbs - t.startAbs <= 1440;
       })()`));
 check('...and it is always in the FUTURE, never a window that has already opened',
       api(`(() => {
         const g = __mk();
         for (let tick = 0; tick < CLOCK.ticksPerDay; tick++) {
           g.meta.clock = { ...g.meta.clock, minutes: tick * CLOCK.tickMinutes };
+          const nowAbs = clockToAbsolute(g.meta.clock);
           const t = proposeTerms(__probe(), OVERTURE_DEFS.propose_player, g);
           if (!t) continue;
-          if (t.day === g.meta.clock.day && t.tickStart <= tick) return 'tick ' + tick + ' proposed ' + JSON.stringify(t);
-          if (t.day > g.meta.clock.day + COMMITMENT_KINDS[t.kind].maxAheadDays - 1) return 'too far ahead at tick ' + tick;
+          if (t.startAbs <= nowAbs) return 'tick ' + tick + ' proposed ' + JSON.stringify(t);
+          if (t.startAbs > nowAbs + COMMITMENT_KINDS[t.kind].maxAheadDays * 1440) return 'too far ahead at tick ' + tick;
         }
         return true;
       })() === true`), 'a proposal for a slot that started an hour ago is a bug the player would have to notice for you');
@@ -421,7 +422,7 @@ check('the proposer never proposes a slot their own schedule is busy for',
         const none = proposeTerms(always, OVERTURE_DEFS.propose_player, g);
         delete SCHEDULES.__allwork;
         const free = proposeTerms(__probe(), OVERTURE_DEFS.propose_player, g);
-        return none === null && !!free && !busy.includes(resolveScheduleActivity(__probe(), { day: free.day, minutes: free.tickStart * CLOCK.tickMinutes }).block);
+        return none === null && !!free && !busy.includes(resolveScheduleActivity(__probe(), absoluteToClock(free.startAbs)).block);
       })()`), 'the invitee bar and the proposer bar are one constant, read twice');
 check('an NPC with no free slot is not a CANDIDATE — it never wins a tick it cannot deliver',
       api(`(() => {
@@ -465,7 +466,8 @@ console.log('\n...and the commitment it books binds exactly as a meal does');
 check('createCommitment defaults to kind meal, so every caller that predates this reads unchanged',
       api(`(() => {
         const g = __mk();
-        const { record } = createCommitment(g, { day: g.meta.clock.day, tickStart: 38, tickEnd: 42, roomId: 'dining', invitedIds: [] });
+        const dayAbs = g.meta.clock.day * 1440;
+        const { record } = createCommitment(g, { startAbs: dayAbs + 1140, endAbs: dayAbs + 1260, roomId: 'dining', invitedIds: [] });
         return record.kind === 'meal';
       })()`));
 check('a proposer goes straight into acceptedIds and is never polled',
@@ -474,7 +476,8 @@ check('a proposer goes straight into acceptedIds and is never polled',
         // Relationship far below COMMITMENT_TUNING.acceptThreshold: respondToCommitment
         // would decline outright, and the proposer must not be asked.
         g.npcs[id].relPlayer.affection = -1;
-        const { record, responses } = createCommitment(g, { kind: 'hangout', day: g.meta.clock.day, tickStart: 38, tickEnd: 42, roomId: 'living_room', invitedIds: [], proposerId: id });
+        const dayAbs = g.meta.clock.day * 1440;
+        const { record, responses } = createCommitment(g, { kind: 'hangout', startAbs: dayAbs + 1140, endAbs: dayAbs + 1260, roomId: 'living_room', invitedIds: [], proposerId: id });
         return record.acceptedIds.length === 1 && record.acceptedIds[0] === id
           && record.declinedIds.length === 0 && Object.keys(responses).length === 0;
       })()`), 'nobody declines their own proposal, and a noise draw must not be able to');
@@ -483,7 +486,8 @@ check('the schedule override finds a hangout and reports the kind\'s block and r
         const g = __mk(); const id = __ids(g)[0];
         const tick = 38;
         g.meta.clock = { ...g.meta.clock, minutes: tick * CLOCK.tickMinutes };
-        createCommitment(g, { kind: 'hangout', day: g.meta.clock.day, tickStart: 38, tickEnd: 42, roomId: 'living_room', invitedIds: [], proposerId: id });
+        const dayAbs = g.meta.clock.day * 1440;
+        createCommitment(g, { kind: 'hangout', startAbs: dayAbs + 1140, endAbs: dayAbs + 1260, roomId: 'living_room', invitedIds: [], proposerId: id });
         const r = resolveScheduleActivity(g.npcs[id], g.meta.clock, g, id);
         return r.block === COMMITMENT_KINDS.hangout.block && r.commitmentRoomId === 'living_room' && r.commitmentKind === 'hangout';
       })()`));
@@ -495,7 +499,8 @@ check('...and the tick RELOCATES them there, keyed on the room rather than on th
         const g = __mk(); const id = __ids(g)[0];
         g.meta.clock = { ...g.meta.clock, minutes: 38 * CLOCK.tickMinutes };
         g.npcs[id].location = 'bedroom_2';
-        createCommitment(g, { kind: 'hangout', day: g.meta.clock.day, tickStart: 38, tickEnd: 42, roomId: 'living_room', invitedIds: [], proposerId: id });
+        const dayAbs = g.meta.clock.day * 1440;
+        createCommitment(g, { kind: 'hangout', startAbs: dayAbs + 1140, endAbs: dayAbs + 1260, roomId: 'living_room', invitedIds: [], proposerId: id });
         const out = resolveBatch(g, 1).state.npcs[id];
         return out.location === 'living_room' && out.activity === COMMITMENT_KINDS.hangout.boundActivity;
       })()`), 'the invitation binds, it does not hope — and a meal is the same code path');
@@ -505,7 +510,8 @@ check('a meal still binds the way it always did, from the same generalised path'
         g.meta.clock = { ...g.meta.clock, minutes: 38 * CLOCK.tickMinutes };
         g.npcs[id].location = 'bedroom_2';
         g.npcs[id].relPlayer.affection = 1;
-        const { record } = createCommitment(g, { day: g.meta.clock.day, tickStart: 38, tickEnd: 42, roomId: 'dining', invitedIds: [id] });
+        const dayAbs = g.meta.clock.day * 1440;
+        const { record } = createCommitment(g, { startAbs: dayAbs + 1140, endAbs: dayAbs + 1260, roomId: 'dining', invitedIds: [id] });
         if (!record.acceptedIds.includes(id)) return 'the invitee declined; the fixture is wrong, not the code';
         const out = resolveBatch(g, 1).state.npcs[id];
         return out.location === 'dining' && out.activity === COMMITMENT_KINDS.meal.boundActivity;
@@ -514,7 +520,8 @@ check('a commitment of an UNKNOWN kind is not found — it has no block to overr
       api(`(() => {
         const g = __mk(); const id = __ids(g)[0];
         g.meta.clock = { ...g.meta.clock, minutes: 38 * CLOCK.tickMinutes };
-        g.world.commitments = [{ id: 'x', kind: '__nonsense', day: g.meta.clock.day, tickStart: 38, tickEnd: 42,
+        const dayAbs = g.meta.clock.day * 1440;
+        g.world.commitments = [{ id: 'x', kind: '__nonsense', startAbs: dayAbs + 1140, endAbs: dayAbs + 1260,
                                  roomId: 'living_room', invitedIds: [], acceptedIds: [id], declinedIds: [], status: 'scheduled' }];
         return activeCommitmentFor(id, g) === null;
       })()`), 'falling through to the template is the only safe answer, and it used to be the only possible one');
@@ -671,7 +678,7 @@ check('every pending proposal carries its terms',
       anyArm(a => a.proposalsNoTerms) === 0, `${anyArm(a => a.proposalsNoTerms)} without`);
 // Design invariant 2, re-measured with four channels rather than argued. This
 // is what caught D27 in Phase 3.
-check('no NPC ever held a pursuit and an overture at once',
+check('no NPC ever held a commitment and an overture at once',
       anyArm(a => a.bothAtOnce) === 0, `${anyArm(a => a.bothAtOnce)} npc-ticks`);
 // The phase's own goal, as a number: the text channel has to actually reach a
 // player the other three cannot. The untouched arm is deliberately not the bar
@@ -703,14 +710,14 @@ check('the knock channel reaches a player behind a locked door, where the approa
 check('at equal temperament the approach outranks the text, which is what the base gradient is for',
       api(`(() => {
         const at = (t, id) => scoreDrive(id, __probe({ bible: { name: 'P', temperament: t } }),
-          { perceived: [], block: 'leisure', currentTick: 0, motives: { [id]: { strength: 1 } } }).score;
+          { perceived: [], block: 'leisure', nowAbs: 0, motives: { [id]: { strength: 1 } } }).score;
         const flat = Object.fromEntries(Object.keys(CHARACTER_SCHEMA.bible.temperament.fields).map(a => [a, 0]));
         return at(flat, 'approach_player') > at(flat, 'text_player');
       })()`));
 check('...and personality can invert it: warm and unassertive texts rather than crossing the room',
       api(`(() => {
         const at = (t, id) => scoreDrive(id, __probe({ bible: { name: 'P', temperament: t } }),
-          { perceived: [], block: 'leisure', currentTick: 0, motives: { [id]: { strength: 1 } } }).score;
+          { perceived: [], block: 'leisure', nowAbs: 0, motives: { [id]: { strength: 1 } } }).score;
         const flat = Object.fromEntries(Object.keys(CHARACTER_SCHEMA.bible.temperament.fields).map(a => [a, 0]));
         const shy = { ...flat, warmth: 0.9, assertiveness: -0.5 };
         const bold = { ...flat, warmth: 0.9, assertiveness: 0.9 };

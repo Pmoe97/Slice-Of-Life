@@ -17,7 +17,7 @@
 // live one reaches the player without help.
 //
 // The invariants, in the order they would hurt if they broke:
-//   - one committed intent per npc-tick. `npc.pursuit` and `npc.overture` can
+//   - one committed intent per npc-tick. `npc.commitment` and `npc.overture` can
 //     never both resolve, and that is a property of there being ONE ranked list
 //     and ONE chooser, not a rule somebody remembered.
 //   - `npc.overture` has exactly one writing file (D19).
@@ -63,7 +63,7 @@ api(`
   __ids = (g) => Object.keys(g.npcs).filter(id => g.npcs[id].residency.status === 'resident');
   __res = (block, loc) => ({ block: block || 'leisure', location: loc, activity: '', transit: null });
   __ctx = (g, id, loc) => ({ perceived: [], block: 'leisure', location: loc || 'living_room',
-                             npcId: id, currentTick: getTickIndex(g.meta.clock.minutes), isVisitor: false });
+                             npcId: id, nowAbs: clockToAbsolute(g.meta.clock), isVisitor: false });
 
   // The MEASUREMENT TRAP again (the plan's Evidence, and verify-i2's OCCUPANCY
   // section): resolveBatch does not write episodes, UI's advanceAndResolve
@@ -102,7 +102,7 @@ api(`
       const now = new Set();
       for (const id of __ids(g)) {
         const n = g.npcs[id];
-        if (n.overture && n.pursuit) bothAtOnce++;
+        if (n.overture && n.commitment) bothAtOnce++;
         if (!n.overture) continue;
         now.add(id);
         if (n.location !== g.player.location) offRoom++;
@@ -147,7 +147,7 @@ check('candidateDef resolves BOTH tables, and is what the scorer and the cooldow
            && candidateDef('nonsense') === undefined`)
       && /const def = candidateDef\(driveId\)/.test(codeOf('drives.js'))
       && /const drive = candidateDef\(driveId\)/.test(codeOf('cognition.js'))
-      && /candidateDef\(driveId\)\?\.cooldownTicks/.test(codeOf('cognition.js')),
+      && /candidateDef\(driveId\)\?\.cooldownMinutes/.test(codeOf('cognition.js')),
       'two tables, one lookup — neither may grow its own cooldown arithmetic');
 // D5, and the reason it is a hard assertion rather than a convention: a
 // need-scored overture would compete with self-care at exactly the moments
@@ -195,24 +195,24 @@ console.log('\n(D5) the motive term is the need term\'s opposite number, and it 
 
 check('scoreDrive scores an overture at bare baseAppeal when nothing motivates it',
       api(`(() => {
-        const s = scoreDrive('approach_player', __probe(), { perceived: [], block: 'leisure', currentTick: 0 });
+        const s = scoreDrive('approach_player', __probe(), { perceived: [], block: 'leisure', nowAbs: 0 });
         return !!s && s.terms.motive === 0 && Math.abs(s.terms.base - OVERTURE_DEFS.approach_player.utility.baseAppeal) < 1e-9;
       })()`), 'absent must mean zero, not "as if maximally motivated"');
 check('...and a maximally motivated one adds exactly utility.motive.weight',
       api(`(() => {
-        const ctx = { perceived: [], block: 'leisure', currentTick: 0, motives: { approach_player: { strength: 1 } } };
+        const ctx = { perceived: [], block: 'leisure', nowAbs: 0, motives: { approach_player: { strength: 1 } } };
         const s = scoreDrive('approach_player', __probe(), ctx);
         return Math.abs(s.terms.motive - OVERTURE_DEFS.approach_player.utility.motive.weight) < 1e-9;
       })()`));
 check('...and the strength is clamped, so a bad reader cannot buy an unbounded score',
       api(`(() => {
         const at = (v) => scoreDrive('approach_player', __probe(),
-          { perceived: [], block: 'leisure', currentTick: 0, motives: { approach_player: { strength: v } } }).terms.motive;
+          { perceived: [], block: 'leisure', nowAbs: 0, motives: { approach_player: { strength: v } } }).terms.motive;
         return at(5) === at(1) && at(-3) === 0;
       })()`));
 check('terms still sum to the score with the motive term in them',
       api(`(() => {
-        const ctx = { perceived: [], block: '__none__', currentTick: 0, motives: { approach_player: { strength: 0.6 } } };
+        const ctx = { perceived: [], block: '__none__', nowAbs: 0, motives: { approach_player: { strength: 0.6 } } };
         const s = scoreDrive('approach_player', __probe(), ctx);
         const t = s.terms;
         return t.block === 1 && t.recency === 1
@@ -395,10 +395,10 @@ check('the cooldown is the shared one, on the shared key',
         g.npcs[id].relPlayer.affection = 1; g.npcs[id].location = 'living_room';
         const c = __ctx(g, id);
         const before = ${APPROACHABLE}(g, id);
-        g.npcs[id] = setCooldown(g.npcs[id], 'approach_player', c.currentTick);
+        g.npcs[id] = setCooldown(g.npcs[id], 'approach_player', c.nowAbs);
         const after = ${APPROACHABLE}(g, id);
-        return before === true && after === false && isOnCooldown(g.npcs[id], 'approach_player', c.currentTick) === true;
-      })()`), 'without candidateDef this threw — isOnCooldown read DRIVE_DEFS[id].cooldownTicks off undefined');
+        return before === true && after === false && isOnCooldown(g.npcs[id], 'approach_player', c.nowAbs) === true;
+      })()`), 'without candidateDef this threw — isOnCooldown read DRIVE_DEFS[id].cooldownMinutes off undefined');
 check('a block the def does not list is not an opening',
       api(`(() => {
         const g = __mk(); const id = __ids(g)[0];
@@ -441,7 +441,11 @@ const SIM_OVERTURE_LINES = codeOf('sim.js').split('\n')
 const SIM_OVERTURE_ALLOWED = [
   /^ageOverture\(gameState, id, resolved\[id\]\);$/,
   /^npcUpdates\[id\]\.overture = postDrive\.overture;$/,
-  /^if \(isOverturePending\(npcs\[id\]\)\) \{$/,
+  // continuous-behavior-engine Phase 4/5: an off-site worker cannot be
+  // waiting on an answer in the flat, so the wait-room branch is guarded
+  // against a work commitment (the same defensive line commitmentInterruptTriggers
+  // draws) — the claim below is still that sim.js only ASKS here, never writes.
+  /^if \(isOverturePending\(npcs\[id\]\) && !\(npc\.commitment && npc\.commitment\.kind === 'work'\)\) \{$/,
   // Phase 4: WHERE a waiting NPC stands became channel-specific (a knocker
   // stays at the door), so the answer moved into OVERTURE beside the rest of
   // what a channel means. sim.js asks and writes; the claim above is unchanged.
@@ -501,9 +505,9 @@ check('...but NOT on the NPC\'s own room, which Pass 1 re-rolls every tick',
         const far = Object.keys(ROOM_ADJACENCY).find(r => !isRoomAdjacent(g.player.location, r));
         return ageOverture(g, id, __res('leisure', far)) !== null;
       })()`)
-      && /if \(isOverturePending\(npcs\[id\]\)\)/.test(codeOf('sim.js'))
+      && /if \(isOverturePending\(npcs\[id\]\) && !\(npc\.commitment/.test(codeOf('sim.js'))
       && /npcUpdates\[id\]\.location = waitRoom/.test(codeOf('sim.js')),
-      'the same mistake cancelled 233 of 485 pursuits before agePursuit stopped releasing on transit');
+      'the same mistake cancelled 233 of 485 pursuits before ageCommitment stopped releasing on transit');
 
 // ---------------------------------------------------------------------------
 console.log('\n(invariant 2) one committed intent per npc-tick, by construction');
@@ -515,9 +519,11 @@ check('there is ONE ranked list and ONE chooser — the overture rides on the wi
       'a second selection system is what D1 exists to prevent');
 check('the overture branch RETURNS before openPursuit can run',
       (() => {
+        // continuous-behavior-engine Phase 1 renamed pursuit to commitment
+        // (npc.pursuit -> npc.commitment); openPursuit is openCommitment now.
         const c = codeOf('drives.js');
         const branch = c.indexOf('chooseOverture(choice)');
-        const open = c.indexOf('openPursuit(gameState, npcId');
+        const open = c.indexOf('openCommitment(gameState, npcId');
         const ret = c.indexOf('return result();', branch);
         return branch > 0 && open > branch && ret > branch && ret < open;
       })(),
@@ -567,7 +573,7 @@ const away = run('player never home', DAYS, { playerRoom: null });
 const asleep = run('player asleep the whole week', DAYS, { playerFlags: { _vulnerableState: 'sleeping' } });
 
 // THE invariant, measured over 36 residents x 7 days rather than argued.
-check('no NPC ever held a pursuit and an overture at the same time',
+check('no NPC ever held a commitment and an overture at the same time',
       [untouched, fond, charged].every(r => r.bothAtOnce === 0),
       JSON.stringify([untouched.bothAtOnce, fond.bothAtOnce, charged.bothAtOnce]));
 check('every pending overture was in the player\'s room — they actually crossed it',

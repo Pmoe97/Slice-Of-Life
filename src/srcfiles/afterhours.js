@@ -1379,7 +1379,7 @@ function AH_renderHotSingle(body, gs, site) {
   // visit (`v.day >= nowDay`) meant a date in progress today locked you out
   // of booking the next one, which the handler would have allowed.
   const invited = !resident && (gs.world.visits || []).some(v =>
-    v.npcId === npcId && v.day === nowDay + 1 && v.status !== 'done' && v.status !== 'deferred');
+    v.npcId === npcId && visitDay(v) === nowDay + 1 && v.status !== 'done' && v.status !== 'deferred');
 
   const actions = document.createElement('div');
   actions.className = 'ah-watch-actions';
@@ -2762,7 +2762,7 @@ async function doAfterHoursInviteOver(npcId) {
   }
   const tomorrow = (gs.meta?.clock?.day ?? 1) + 1;
   const already = (gs.world.visits || []).some(v =>
-    v.npcId === npcId && v.day === tomorrow && v.status !== 'done' && v.status !== 'deferred');
+    v.npcId === npcId && visitDay(v) === tomorrow && v.status !== 'done' && v.status !== 'deferred');
   if (already) {
     AH_spawnToast(`${name} is already coming by tomorrow.`);
     return;

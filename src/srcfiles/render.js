@@ -168,6 +168,17 @@ function wallPieces(fixed, from, to, vertical, openings) {
 function renderFloorPlan(gs) {
   const container = document.getElementById('floor-plan');
   if (!container) return;
+  // D12: two loops, two costs. This entry is the STATIC pass — walls, fills,
+  // furniture, labels — rebuilt on real state changes (render() calls it on
+  // every action) and the one place the avatar markers are CREATED. The
+  // per-frame loop is renderFloorPlanLive, called from clockFrame: direct
+  // attribute mutation only, never innerHTML.
+  renderFloorPlanStatic(gs, container);
+  renderFloorPlanLive(gs);
+  hydrateFloorPlanAvatars(gs);
+}
+
+function renderFloorPlanStatic(gs, container) {
   const currentRoom = gs.player.location;
   const adjacent = ROOM_ADJACENCY[currentRoom] || [];
 
@@ -182,16 +193,21 @@ function renderFloorPlan(gs) {
   svg += '<defs><pattern id="fp-hazard" patternUnits="userSpaceOnUse" width="14" height="14" patternTransform="rotate(45)">'
        + '<rect width="14" height="14" fill="rgba(224,160,64,0.18)"/>'
        + '<line x1="0" y1="0" x2="0" y2="14" stroke="rgba(224,160,64,0.5)" stroke-width="5"/></pattern>';
-  // One clip per NPC avatar; declared up front so the circles below can use them.
-  const present = {};
-  for (const roomId of ALL_ROOMS) present[roomId] = getPresentNpcIds(gs.npcs, roomId);
-  for (const ids of Object.values(present)) {
-    for (const id of ids) svg += `<clipPath id="fp-clip-${id}"><circle cx="0" cy="0" r="9"/></clipPath>`;
+  // One clip per NPC avatar — every NPC, not just the ones present this tick,
+  // because the live layer owns who is visible and the markers must exist
+  // for it to show them at all.
+  for (const id of Object.keys(gs.npcs || {})) {
+    svg += `<clipPath id="fp-clip-${id}"><circle cx="0" cy="0" r="9"/></clipPath>`;
   }
   svg += '</defs>';
 
   const openings = floorPlanOpenings(gs);
   const signalMap = typeof signalsByRoom === 'function' ? signalsByRoom(gs) : {};
+  // Present-per-room is still read for the LABEL nudge (so a room name does
+  // not sit on top of the people below it) — the markers themselves are the
+  // live layer's job now, not this pass's.
+  const present = {};
+  for (const roomId of ALL_ROOMS) present[roomId] = getPresentNpcIds(gs.npcs, roomId);
 
   // --- Layer 1: room fills. Clickable; every room, not just adjacent ones,
   // because doMove auto-paths now and clicking somewhere far away is a walk
@@ -250,7 +266,8 @@ function renderFloorPlan(gs) {
     }
   }
 
-  // --- Layer 4: contents, labels, people.
+  // --- Layer 4: contents, labels, construction marks. (People moved to the
+  // live layer below — they are the one thing that changes per-frame.)
   for (const roomId of ALL_ROOMS) {
     const rects = ROOM_LAYOUT[roomId];
     if (!rects) continue;
@@ -272,15 +289,23 @@ function renderFloorPlan(gs) {
     if (getActiveJobForRoom(gs, roomId)) {
       svg += `<text class="fp-construction-label" x="${cx}" y="${cy + 10}">Under construction</text>`;
     }
-
-    svg += renderRoomOccupants(gs, roomId, cx, cy, present[roomId]);
   }
+
+  // --- Layer 5: the live avatar layer (D12). One marker per NPC plus the
+  // player, CREATED here, repositioned every frame by renderFloorPlanLive via
+  // transform/class attribute mutation only — never innerHTML, never a
+  // rebuild. Off-map NPCs (work, dormancy) start hidden; everyone else is
+  // placed by pos where one exists, else at their room's centre.
+  svg += '<g class="fp-people">';
+  for (const [id, npc] of Object.entries(gs.npcs || {})) {
+    if (!npc) continue;
+    svg += avatarMarkerHtml(id, false, npc);
+  }
+  svg += avatarMarkerHtml('player', true, gs.player);
+  svg += '</g>';
 
   svg += '</svg>';
   container.innerHTML = svg;
-  // Avatar art is filled in afterwards and only from cache — see
-  // hydrateFloorPlanAvatars.
-  hydrateFloorPlanAvatars(gs, present);
 }
 
 // --- Furniture, top down (floorplan plan Phase 5) ---
@@ -400,7 +425,29 @@ const FP_FURNITURE = {
   shoe_rack: { w: 12, h: 5, draw: (x, y, w, h) => shelfSymbol(x, y, w, h) },
   coat_rack: { w: 6, h: 6, draw: (x, y, w, h) =>
     `<circle class="fp-f" cx="${x + w / 2}" cy="${y + h / 2}" r="${w / 2 - 1}"/>` },
+  // Player-placed decor (decor-economy plan Phase 2). A delivered and placed
+  // item is an ordinary object in the room's bucket; for it to be "immediately
+  // visible ... exactly as any other object in that room's bucket already is",
+  // the shared symbol library has to know its defId. The catalog's defIds are
+  // distinct from the base furniture's, so each is aliased to the base symbol
+  // that draws the same piece — content, not a second render path. The rug is
+  // new (nothing base draws a rug); its own entry lives below.
+  rug: { w: 40, h: 26, draw: (x, y, w, h) =>
+    `<rect class="fp-f-soft" x="${x}" y="${y}" width="${w}" height="${h}" rx="2"/>`
+    + `<rect class="fp-f-detail" x="${x + 2}" y="${y + 2}" width="${w - 4}" height="${h - 4}" rx="2" fill="none"/>` },
 };
+const DECOR_SYMBOL_ALIASES = {
+  sofa_basic: 'sofa', armchair: 'armchair', coffee_table: 'coffee_table_lr',
+  tv_basic: 'tv', tv_stand: 'bookshelf', rug: 'rug', floor_lamp: 'lamp_lr',
+  plant: 'plant_lr', bed_basic: 'bed', nightstand: 'nightstand',
+  wardrobe: 'wardrobe', desk: 'desk', desk_chair: 'armchair',
+  dining_table: 'dining_table', dining_chair: 'armchair',
+  bookshelf: 'bookshelf', shelf: 'bookshelf',
+};
+for (const [defId, base] of Object.entries(DECOR_SYMBOL_ALIASES)) {
+  if (!FP_FURNITURE[base] || FP_FURNITURE[defId]) continue;
+  FP_FURNITURE[defId] = { ...FP_FURNITURE[base] };
+}
 
 // A room's name, sized and oriented to fit the room it names. Corridors are
 // the reason this is not one line: Hallway A is 32 units wide and 185 tall,
@@ -548,36 +595,64 @@ function renderAutoFurniture(gs, roomId) {
   return out + '</g>';
 }
 
-// Who is in the room. Circles carrying a portrait when one is already
-// cached, initials otherwise — see hydrateFloorPlanAvatars for why this
-// never triggers generation.
-function renderRoomOccupants(gs, roomId, cx, cy, presentIds) {
-  const bodies = [];
-  if (roomId === gs.player.location) bodies.push({ id: 'player', isPlayer: true });
-  for (const id of presentIds.slice(0, 5)) bodies.push({ id, npc: gs.npcs[id] });
-  if (bodies.length === 0) return '';
+// One avatar marker. Created by the static pass with NO meaningful position —
+// renderFloorPlanLive owns placement and mutates transform/class attributes
+// per frame (D12). `id === 'player'` is the player's marker; everyone else is
+// an NPC. The portrait image fills in later and only from cache — see
+// hydrateFloorPlanAvatars for why this never triggers generation.
+function avatarMarkerHtml(id, isPlayer, npc) {
+  const label = isPlayer ? 'You' : initialsFor(npc);
+  let cls = 'fp-avatar';
+  if (isPlayer) cls += ' is-player';
+  return `<g class="${cls}" data-avatar-id="${id}" transform="translate(0,0)">`
+    + `<circle class="fp-avatar-bg" cx="0" cy="0" r="9"/>`
+    + `<image class="fp-avatar-img" data-avatar-for="${id}" x="-9" y="-9" width="18" height="18" clip-path="url(#fp-clip-${id})" href="" hidden="hidden"/>`
+    + `<text class="fp-avatar-initials" data-initials-for="${id}" x="0" y="3">${escapeHtml(label)}</text>`
+    + `<circle class="fp-avatar-ring" cx="0" cy="0" r="9"/>`
+    + '</g>';
+}
 
-  const spacing = 21;
-  const startX = cx - (bodies.length - 1) * spacing / 2;
-  let out = '<g class="fp-people">';
-  bodies.forEach((b, i) => {
-    const x = startX + i * spacing, y = cy + 6;
-    const npc = b.npc;
-    const sleeping = npc?.activity === 'sleeping' || npc?.activity === 'sleep';
-    const transit = !!npc?.transit;
-    let cls = 'fp-avatar';
-    if (b.isPlayer) cls += ' is-player';
-    if (sleeping) cls += ' is-sleeping';
-    if (transit) cls += ' is-transit';
-    out += `<g class="${cls}" transform="translate(${x},${y})">`;
-    out += `<circle class="fp-avatar-bg" cx="0" cy="0" r="9"/>`;
-    out += `<image class="fp-avatar-img" data-avatar-for="${b.id}" x="-9" y="-9" width="18" height="18" clip-path="url(#fp-clip-${b.id})" href="" hidden="hidden"/>`;
-    const label = b.isPlayer ? 'You' : initialsFor(npc);
-    out += `<text class="fp-avatar-initials" data-initials-for="${b.id}" x="0" y="3">${escapeHtml(label)}</text>`;
-    out += `<circle class="fp-avatar-ring" cx="0" cy="0" r="9"/>`;
-    out += '</g>';
-  });
-  return out + '</g>';
+// Where a marker belongs right now: npc.pos when the NPC has one (the walk
+// integrator keeps it current, and reconcileNpcPos keeps it in step with
+// tick-teleports), else their room's centroid. Off-map NPCs are hidden. A
+// mid-walk NPC reads as in transit; a sleeper is dimmed.
+function floorPlanAvatarPlacement(gs, id, npc) {
+  const isPlayer = id === 'player';
+  const loc = isPlayer ? (gs.player?.location || null) : (npc?.location || null);
+  if (!loc || !ROOMS[loc]) return { x: 0, y: 0, offMap: true, sleeping: false, transit: false };
+  let x, y;
+  if (!isPlayer && npc?.pos && Number.isFinite(npc.pos.x) && Number.isFinite(npc.pos.y)) {
+    x = npc.pos.x; y = npc.pos.y;
+  } else {
+    const [cx, cy] = roomCentre(loc);
+    x = cx; y = cy;
+  }
+  return {
+    x, y, offMap: false,
+    sleeping: !isPlayer && (npc.activity === 'sleeping' || npc.activity === 'sleep'),
+    transit: !isPlayer && (!!npc.transit || !!npc.walk),
+  };
+}
+
+// The per-frame live loop (D12). Direct attribute mutation only — never
+// innerHTML — so it can run every rAF alongside the clock (clockFrame) at a
+// fixed small cost while the static layer sits untouched. This is the ONLY
+// per-frame touch of the floor plan.
+function renderFloorPlanLive(gs) {
+  const container = document.getElementById('floor-plan');
+  if (!container) return;
+  const markers = container.querySelectorAll('.fp-people [data-avatar-id]');
+  if (markers.length === 0) return;
+  for (const m of markers) {
+    const id = m.getAttribute('data-avatar-id');
+    const npc = id === 'player' ? null : (gs.npcs && gs.npcs[id]);
+    const p = floorPlanAvatarPlacement(gs, id, npc);
+    m.setAttribute('transform', `translate(${p.x},${p.y})`);
+    if (p.offMap) m.setAttribute('hidden', '');
+    else m.removeAttribute('hidden');
+    m.classList.toggle('is-sleeping', p.sleeping);
+    m.classList.toggle('is-transit', p.transit);
+  }
 }
 
 function initialsFor(npc) {
@@ -592,27 +667,23 @@ function initialsFor(npc) {
 // somebody walked into a room. Portraits reach the cache through the surfaces
 // that legitimately generate them (the character studio, NPC portraits); this
 // picks them up for free once they exist and shows initials until then.
-async function hydrateFloorPlanAvatars(gs, present) {
+// Phase 4: iterates every NPC (not just the present ones) because the live
+// layer keeps markers for the whole cast on the plan.
+async function hydrateFloorPlanAvatars(gs) {
   if (typeof getCachedImage !== 'function') return;
-  const seen = new Set();
-  for (const ids of Object.values(present)) {
-    for (const id of ids) {
-      if (seen.has(id)) continue;
-      seen.add(id);
-      const npc = gs.npcs[id];
-      if (!npc?.bible?.genSeed) continue;
-      const key = composeCharKey(npc, 'neutral', 'standing');
-      try {
-        const blob = await getCachedImage(key);
-        if (!blob) continue;
-        const url = createObjectUrl(key, blob);
-        for (const img of document.querySelectorAll(`[data-avatar-for="${id}"]`)) {
-          img.setAttribute('href', url);
-          img.removeAttribute('hidden');
-        }
-        for (const t of document.querySelectorAll(`[data-initials-for="${id}"]`)) t.setAttribute('hidden', 'hidden');
-      } catch (e) { /* cache miss is the normal case, not an error */ }
-    }
+  for (const [id, npc] of Object.entries(gs.npcs || {})) {
+    if (!npc?.bible?.genSeed) continue;
+    const key = composeCharKey(npc, 'neutral', 'standing');
+    try {
+      const blob = await getCachedImage(key);
+      if (!blob) continue;
+      const url = createObjectUrl(key, blob);
+      for (const img of document.querySelectorAll(`[data-avatar-for="${id}"]`)) {
+        img.setAttribute('href', url);
+        img.removeAttribute('hidden');
+      }
+      for (const t of document.querySelectorAll(`[data-initials-for="${id}"]`)) t.setAttribute('hidden', 'hidden');
+    } catch (e) { /* cache miss is the normal case, not an error */ }
   }
 }
 
@@ -1376,7 +1447,7 @@ function openSpreadPicker(options, { seats = 1, max = 6 } = {}) {
 // "When should we eat?" behind the Invite to Dinner actions (in-person
 // chip and the IM chat-header button). One button per day×meal-slot combo
 // (today's slots whose window already passed are omitted), resolving to
-// { day, tickStart, tickEnd, slotId } or null on Cancel.
+// { startAbs, endAbs, slotId } or null on Cancel.
 function openDinnerInvitePicker(npcName) {
   return new Promise((resolve) => {
     const overlay = document.getElementById('modal-overlay');
@@ -1391,11 +1462,13 @@ function openDinnerInvitePicker(npcName) {
     const list = document.createElement('div');
     list.className = 'recipe-pick-list';
     const day = currentGameState?.meta?.clock?.day ?? 1;
-    const tick = getTickIndex(currentGameState?.meta?.clock?.minutes ?? 0);
+    const nowAbs = clockToAbsolute(currentGameState?.meta?.clock || { day, minutes: 0 });
     for (let offset = 0; offset < COMMITMENT_TUNING.maxInviteAheadDays; offset++) {
       const d = day + offset;
       for (const slot of COMMITMENT_TUNING.mealSlots) {
-        if (offset === 0 && tick >= slot.endTick) continue; // today's window already passed
+        const startAbs = d * 1440 + slot.startMinute;
+        const endAbs = d * 1440 + slot.endMinute;
+        if (endAbs <= nowAbs) continue; // today's window already passed
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'btn btn-block recipe-pick-btn';
@@ -1404,9 +1477,9 @@ function openDinnerInvitePicker(npcName) {
         name.textContent = offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow' : formatDate(d);
         const meta = document.createElement('span');
         meta.className = 'recipe-pick-ings';
-        meta.textContent = `${slot.label} · ${formatTime(slot.startTick * 30)}`;
+        meta.textContent = `${slot.label} · ${formatTime(slot.startMinute)}`;
         btn.append(name, meta);
-        btn.addEventListener('click', () => finish({ day: d, tickStart: slot.startTick, tickEnd: slot.endTick, slotId: slot.id }));
+        btn.addEventListener('click', () => finish({ startAbs, endAbs, slotId: slot.id }));
         list.appendChild(btn);
       }
     }

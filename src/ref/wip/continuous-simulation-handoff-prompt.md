@@ -24,11 +24,11 @@ Five documents carry phases; a sixth (the roadmap) does not and is read
 differently — see the note at the end of this step.
 
 ```
-src/ref/wip/continuous-behavior-engine-plan.md
-src/ref/wip/needs-and-heartbeat-plan.md
-src/ref/wip/external-world-retiming-plan.md
-src/ref/wip/npc-initiative-retiming-plan.md
-src/ref/wip/decor-economy-plan.md
+src/ref/complete/continuous-behavior-engine-plan.md
+src/ref/complete/needs-and-heartbeat-plan.md
+src/ref/complete/external-world-retiming-plan.md
+src/ref/complete/npc-initiative-retiming-plan.md
+src/ref/complete/decor-economy-plan.md
 ```
 
 **The order is not "check each file top to bottom" — the five plans have
@@ -40,44 +40,49 @@ phase for this session:**
 | # | Document | Phase |
 |---|---|---|
 | 1 | `continuous-behavior-engine-plan.md` | Phase 1 — commitment substrate |
-| 2 | `decor-economy-plan.md` | Phase 1 — catalog and checkout |
-| 3 | `decor-economy-plan.md` | Phase 2 — placement screen |
+| 2 | `decor-economy-plan.md` | Phase 1 — catalog and checkout *(DONE — built, see `complete/`)* |
+| 3 | `decor-economy-plan.md` | Phase 2 — placement screen *(DONE — built, see `complete/`)* |
 | 4 | `continuous-behavior-engine-plan.md` | Phase 2 — event-driven scheduling |
 | 5 | `continuous-behavior-engine-plan.md` | Phase 3 — duration/anchor resolution |
-| 6 | `decor-economy-plan.md` | Phase 3 — anchor-availability proof |
+| 6 | `decor-economy-plan.md` | Phase 3 — anchor-availability proof *(DONE — built, see `complete/`)* |
 | 7 | `continuous-behavior-engine-plan.md` | Phase 4 — physical layer |
 | 8 | `continuous-behavior-engine-plan.md` | Phase 5 — work/commute, interrupts, catch-up |
 | 9 | `needs-and-heartbeat-plan.md` | Phase 1 — rate conversion |
 | 10 | `needs-and-heartbeat-plan.md` | Phase 2 — heartbeat accumulator |
 | 11 | `needs-and-heartbeat-plan.md` | Phase 3 — closed-form fast-forward + phone/memory |
 | 12 | `needs-and-heartbeat-plan.md` | Phase 4 — tuning |
-| 13 | `external-world-retiming-plan.md` | Phase 1 — visit spine |
-| 14 | `external-world-retiming-plan.md` | Phase 2 — restaurant hours |
-| 15 | `external-world-retiming-plan.md` | Phase 3 — delivery ETAs |
-| 16 | `external-world-retiming-plan.md` | Phase 4 — gig work blocks |
+| 13 | `external-world-retiming-plan.md` | Phase 1 — visit spine *(DONE — built, see `complete/`)* |
+| 14 | `external-world-retiming-plan.md` | Phase 2 — restaurant hours *(DONE — built, see `complete/`)* |
+| 15 | `external-world-retiming-plan.md` | Phase 3 — delivery ETAs *(DONE — built, see `complete/`)* |
+| 16 | `external-world-retiming-plan.md` | Phase 4 — gig work blocks *(DONE — built, see `complete/`)* |
 | 17 | `npc-initiative-retiming-plan.md` | Phase 1 — config field conversion |
 | 18 | `npc-initiative-retiming-plan.md` | Phase 2 — `isOnCooldown`/`setCooldown`/`recencyMultiplier` |
 | 19 | `npc-initiative-retiming-plan.md` | Phase 3 — population re-measurement |
 | 20 | `continuous-behavior-engine-plan.md` | Phase 6 — tuning and the live pass |
 
-**Why this exact order, and the one hard rule in it:** row 1 must go
-first — every other row except rows 2–3 needs `clockToAbsolute`-space
-timing to exist as the target shape. Rows 2–3 (`decor-economy`'s catalog
-and placement screen) have no dependency on anything and are placed early
-on purpose, so a real furnished room exists before row 5 (behavior-engine's
-anchor resolution) needs one to test against — row 5 still works without
-it (it falls back to room-centroid), but testing it against a real placed
-object is the better exercise. Row 20 is placed **last, deliberately** —
-it is a live "watch it and see if the routines feel right" pass, and
-watching it before rows 9–19 land would mean judging NPC behavior against
-needs decay, restaurant hours, and cooldowns that are still running on the
-stale tick grid, which would give a false read.
+**Why this exact order, and the one hard rule in it:** rows 2–3 and 6 are
+**already Done** — `decor-economy-plan.md` is fully built and has moved to
+`complete/` (its own Status table says so), so a session reading its Status
+table sees every row done and skips past it; the rows are kept so the row
+numbering stays stable. Their original rationale — "a real furnished room
+exists before behavior-engine's anchor resolution needs one to test
+against" — has already played out. Rows 13–16 are likewise **already Done** —
+`external-world-retiming-plan.md` is fully built and has moved to
+`complete/` (its own Status table says so), for the same reason the rows
+are kept: stable row numbering. Row 1 must go first — every other
+remaining row needs `clockToAbsolute`-space timing to exist as the target
+shape. Row 20 is placed **last, deliberately** — it is a live "watch it and
+see if the routines feel right" pass, and watching it before rows 9–19
+land would mean judging NPC behavior against needs decay, restaurant
+hours, and cooldowns that are still running on the stale tick grid, which
+would give a false read.
 
 **The one real exception:** rows 13–16 (`external-world-retiming-plan.md`'s
 four phases) are mutually independent — that document's own Dependency
 order section says so. Do them in any order among themselves if you have a
 reason to; don't reorder anything else in this table without flagging it
-(Step 1).
+(Step 1). *(Moot now — all four rows are Done; kept so the numbering stays
+stable, the same way rows 2–3 and 6 are.)*
 
 If every row above shows "Done," **stop** and report that completion to the
 user — do not invent further work, and do not start on `## Open questions`

@@ -135,7 +135,9 @@ async function doGigWorkBlock(gigId, device) {
     const result = workGigBlock(currentGameState, gigId, device);
     if (!result.ok) { addLogEntry('system', result.reason); return; }
     pushTimeContext('working');
-    await advanceAndResolveMinutes(CLOCK.tickMinutes);
+    // One block of gig work is a flat GIG_TUNING.workBlockMinutes time-cost,
+    // not a tick-grid quantity — see the D5 note on that constant.
+    await advanceAndResolveMinutes(GIG_TUNING.workBlockMinutes);
     popTimeContext();
     const pct = Math.round((result.gig.blocksDone / result.gig.blocks) * 100);
     addLogEntry('narration', `You work on "${result.gig.label}". Progress: ${pct}% (${result.gig.blocksDone.toFixed(2)}/${result.gig.blocks} blocks).`);
@@ -195,6 +197,223 @@ async function doShopCheckout() {
   await saveAtBoundary('shop-checkout', currentGameState);
 }
 
+// --- Home app (decor-economy plan Phase 1) ---
+// The same three handlers as Nile, pointed at the Home catalog and cart —
+// addToCart/removeFromCart/checkoutCart are the shared functions, and only
+// the catalog + cartPath differ. No chain-quest hook: a decor purchase is
+// not "buying from Nile."
+
+async function doHomeAddToCart(defId) {
+  if (!defId) return;
+  const result = addToCart(currentGameState, defId, { catalog: DECOR_CATALOG_DEFS, cartPath: 'apps.home.cart' });
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  renderComputerScreen(currentGameState);
+  await saveAtBoundary('home-add', currentGameState);
+}
+
+async function doHomeRemoveFromCart(defId) {
+  if (!defId) return;
+  removeFromCart(currentGameState, defId, { cartPath: 'apps.home.cart' });
+  renderComputerScreen(currentGameState);
+  await saveAtBoundary('home-remove', currentGameState);
+}
+
+async function doHomeCheckout() {
+  const result = checkoutCart(currentGameState, { cartPath: 'apps.home.cart', catalog: DECOR_CATALOG_DEFS });
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  addLogEntry('system', `Order placed on Home: ${result.total}. Arriving on the doormat tomorrow.`);
+  switchScreen(currentGameState, 'home', 'browse');
+  renderComputerScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('home-checkout', currentGameState);
+}
+
+// --- Home placement screen (decor-economy plan Phase 2) ---
+// Transient interaction state for the `home-placement` screen: which room is
+// being edited, what's selected, an in-progress placement draft, and the
+// live drag gesture. Deliberately NOT gameState — a half-done drag or a
+// picked-from-palette draft is interaction state, the same call as
+// dragGesture in UI.WINDOWMANAGER. RENDER.COMPUTER's renderHomePlacement
+// reads it (typeof-guarded) and gestures below mutate it; the drag itself
+// writes positions straight into gameState as it goes, so a background
+// render mid-drag (a sim checkpoint) rebuilds the canvas at exactly where
+// the piece already is rather than fighting the gesture.
+let homePlacementUI = null;
+
+function ensureHomePlacementUI(gs) {
+  if (!homePlacementUI) {
+    homePlacementUI = { roomId: gs.player.location, selectedId: null, draft: null, snap: true, drag: null };
+  }
+  return homePlacementUI;
+}
+
+// One SVG client-coordinate → room-units conversion, shared by every
+// gesture so move/resize/rotate agree about where the cursor is. Mirrors
+// dev/designer.html's pt().
+function homePlacementSvgPoint(svg, ev) {
+  const pt = svg.createSVGPoint();
+  pt.x = ev.clientX; pt.y = ev.clientY;
+  const q = pt.matrixTransform(svg.getScreenCTM().inverse());
+  return [q.x, q.y];
+}
+
+const homePlacementSnap = (v, snap) => (snap ? Math.round(v / 5) * 5 : Math.round(v));
+
+// Rebuilds only the canvas inside the current placement screen body — the
+// cheap mid-gesture redraw. The full screen rebuild is render()'s job.
+function redrawHomePlacementCanvas(bodyNode, gs, hp) {
+  const svg = bodyNode?.querySelector('.hp-canvas');
+  if (!svg) return;
+  buildHomePlacementCanvas(svg, gs, hp, hp.roomId);
+}
+
+function homePlacementTargetPos(hp, key) {
+  if (key === 'draft') return hp.draft ? hp.draft.pos : null;
+  return findObjectById(currentGameState, key)?.pos || null;
+}
+
+function homePlacementStartDrag(ev, key, mode, corner) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  const hp = ensureHomePlacementUI(currentGameState);
+  const isDraft = key === 'draft';
+  hp.selectedId = isDraft ? null : key;
+  const pos = homePlacementTargetPos(hp, key);
+  if (!pos) return;
+  const bodyNode = ev.target.closest('.win-body') || document.getElementById('phone-content');
+  const svg = bodyNode?.querySelector('.hp-canvas');
+  const [mx, my] = svg ? homePlacementSvgPoint(svg, ev) : [0, 0];
+  hp.drag = { mode, key, corner, draft: isDraft, pos, start: { ...pos }, ox: mx - pos.x, oy: my - pos.y, bodyNode };
+  redrawHomePlacementCanvas(bodyNode, currentGameState, hp);
+}
+
+function homePlacementStartMove(ev, key, isDraft) {
+  homePlacementStartDrag(ev, key, 'move');
+}
+function homePlacementStartResize(ev, key, corner) {
+  homePlacementStartDrag(ev, key, 'size', corner);
+}
+function homePlacementStartRotate(ev, key) {
+  homePlacementStartDrag(ev, key, 'rot');
+}
+
+function onHomePlacementMouseMove(ev) {
+  const hp = homePlacementUI;
+  if (!hp || !hp.drag) return;
+  const svg = hp.drag.bodyNode?.querySelector('.hp-canvas');
+  if (!svg) return;
+  const [mx, my] = homePlacementSvgPoint(svg, ev);
+  const pos = hp.drag.pos;
+  const d = hp.drag;
+  const snap = hp.snap;
+  if (d.mode === 'move') {
+    pos.x = homePlacementSnap(mx - d.ox, snap);
+    pos.y = homePlacementSnap(my - d.oy, snap);
+  } else if (d.mode === 'size') {
+    const s = d.start;
+    if (d.corner.includes('e')) pos.w = Math.max(3, homePlacementSnap(mx - s.x, snap));
+    if (d.corner.includes('s')) pos.h = Math.max(3, homePlacementSnap(my - s.y, snap));
+    if (d.corner.includes('w')) { const nx = homePlacementSnap(mx, snap); pos.w = Math.max(3, s.x + s.w - nx); pos.x = nx; }
+    if (d.corner.includes('n')) { const ny = homePlacementSnap(my, snap); pos.h = Math.max(3, s.y + s.h - ny); pos.y = ny; }
+  } else if (d.mode === 'rot') {
+    const a = Math.atan2(my - (pos.y + pos.h / 2), mx - (pos.x + pos.w / 2)) * 180 / Math.PI + 90;
+    pos.rot = Math.round(a / 15) * 15;
+  }
+  redrawHomePlacementCanvas(d.bodyNode, currentGameState, hp);
+}
+
+function onHomePlacementMouseUp() {
+  const hp = homePlacementUI;
+  if (!hp || !hp.drag) return;
+  const wasDraft = hp.drag.draft;
+  const bodyNode = hp.drag.bodyNode;
+  hp.drag = null;
+  redrawHomePlacementCanvas(bodyNode, currentGameState, hp);
+  if (!wasDraft) {
+    // The drag already wrote the final pos into gameState; this boundary
+    // persists it and refreshes the action bar (selection state unchanged).
+    render(currentGameState, currentSceneState);
+    saveAtBoundary('home-place-move', currentGameState);
+  }
+}
+
+async function doHomePlaceRoom(roomId) {
+  const hp = ensureHomePlacementUI(currentGameState);
+  hp.roomId = roomId;
+  hp.selectedId = null;
+  hp.draft = null;
+  renderComputerScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+}
+
+async function doHomePlaceItem(defId) {
+  const hp = ensureHomePlacementUI(currentGameState);
+  const def = DECOR_CATALOG_DEFS[defId];
+  if (!def || !DESIGN_SHAPES[def.shape]) return;
+  const shape = DESIGN_SHAPES[def.shape];
+  const [cx, cy] = typeof roomCentre === 'function' ? roomCentre(hp.roomId) : [50, 50];
+  hp.draft = {
+    defId,
+    pos: { x: Math.round(cx - shape.w / 2), y: Math.round(cy - shape.h / 2), w: shape.w, h: shape.h, rot: 0 },
+  };
+  hp.selectedId = null;
+  renderComputerScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+}
+
+async function doHomePlaceCommit() {
+  const hp = ensureHomePlacementUI(currentGameState);
+  if (!hp.draft) return;
+  const result = placeDecorItem(currentGameState, { defId: hp.draft.defId, roomId: hp.roomId, pos: hp.draft.pos });
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  const def = DECOR_CATALOG_DEFS[result.defId];
+  hp.draft = null;
+  addLogEntry('system', `${def.label} placed in ${ROOMS[hp.roomId].name}.`);
+  renderComputerScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('home-place', currentGameState);
+}
+
+async function doHomePlaceCancel() {
+  const hp = ensureHomePlacementUI(currentGameState);
+  hp.draft = null;
+  renderComputerScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+}
+
+async function doHomePlaceSelect(objId) {
+  const hp = ensureHomePlacementUI(currentGameState);
+  hp.selectedId = objId;
+  hp.draft = null;
+  renderComputerScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+}
+
+async function doHomePlacePickup(objId) {
+  const result = pickUpDecorObject(currentGameState, objId);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  const hp = ensureHomePlacementUI(currentGameState);
+  hp.selectedId = null;
+  const def = DECOR_CATALOG_DEFS[result.defId];
+  addLogEntry('system', `${def.label} picked up — back in your bag.`);
+  renderComputerScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('home-pickup', currentGameState);
+}
+
+async function doHomePlaceToggleSnap() {
+  const hp = ensureHomePlacementUI(currentGameState);
+  hp.snap = !hp.snap;
+  renderComputerScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+}
+
+(function initHomePlacementGestures() {
+  if (typeof document === 'undefined') return;
+  window.addEventListener('mousemove', onHomePlacementMouseMove);
+  window.addEventListener('mouseup', onHomePlacementMouseUp);
+})();
+
 async function doBrowserVisit(siteId, device) {
   if (!siteId) return;
   // Phase 5: device-aware connectivity gating (decision F) — power/internet
@@ -216,7 +435,7 @@ async function doBrowserVisit(siteId, device) {
       applyEffects(effects, effCtx);
     }
     await advanceAndResolve(1);
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1, currentGameState);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
 
     // Phase 5 device parity: the phone's Browser app uses the SAME
     // handlers, so the visit has to navigate whichever shell launched it —
@@ -275,7 +494,7 @@ async function doAttendLesson(courseId) {
     const result = attendLesson(currentGameState, courseId);
     if (!result.ok) { addLogEntry('system', result.reason); return; }
     await advanceAndResolve(result.ticks);
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, result.ticks, currentGameState);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, result.ticks * CLOCK.tickMinutes, currentGameState);
     if (result.completed) addLogEntry('narration', `You finish ${result.course.label}. Certificate unlocked, for whatever that's worth.`);
     else addLogEntry('narration', `You attend a lesson in ${result.course.label}. +${result.xpGain} ${result.course.skillId} XP.`);
     renderComputerScreen(currentGameState);
@@ -1000,7 +1219,7 @@ async function doImSend(npcId) {
     const result = await resolveImReply(currentGameState, npcId, text);
     if (!result.ok) { addLogEntry('system', result.reason); }
     await advanceAndResolve(1);
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, 1, currentGameState);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
     renderComputerScreen(currentGameState);
     render(currentGameState, currentSceneState);
     // Plan X-5 Phase 2 (D17): IM is a judged surface. A text exchange lands
@@ -1044,7 +1263,7 @@ async function doStreamWatch(showId, device) {
     applyEffects([{ type: 'ADJUST_NEED', params: { who: 'player', need: 'mood', delta: String(result.show.moodGain) } }], effCtx);
 
     await advanceAndResolve(result.show.episodeTicks);
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, result.show.episodeTicks, currentGameState);
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, result.show.episodeTicks * CLOCK.tickMinutes, currentGameState);
     addLogEntry('narration', `You watch episode ${result.episode} of ${result.show.label}.`);
     renderComputerScreen(currentGameState);
     render(currentGameState, currentSceneState);

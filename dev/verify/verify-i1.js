@@ -256,7 +256,7 @@ api(`
           events: JSON.stringify(r.events),
           activity: JSON.stringify(r.activityOverride),
           location: JSON.stringify(r.locationOverride),
-          pursuit: JSON.stringify(g.npcs[id].pursuit || null),
+          commitment: JSON.stringify(g.npcs[id].commitment || null),
           signals: JSON.stringify(g.world.signals),
         };
       } finally { for (const [k, e] of Object.entries(saved)) DRIVE_DEFS[k].expresses = e; }
@@ -275,8 +275,8 @@ check('...and the NPC comes out byte-identical (no cooldown of its own, no mood 
       PAIR_LOW.withExpr.npc === PAIR_LOW.without.npc);
 check('...and no event is produced', PAIR_LOW.withExpr.events === PAIR_LOW.without.events,
       'an expression is perceived, not narrated — the scene reader picks it up as a signal');
-check('...and the pursuit opened is the same',
-      PAIR_LOW.withExpr.pursuit === PAIR_LOW.without.pursuit,
+check('...and the commitment opened is the same',
+      PAIR_LOW.withExpr.commitment === PAIR_LOW.without.commitment,
       'Plan 3\'s one-action-per-tick guarantee: an NPC can sigh WHILE doing laundry');
 check('...and the activity and location overrides are the same',
       PAIR_LOW.withExpr.activity === PAIR_LOW.without.activity &&

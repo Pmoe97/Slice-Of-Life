@@ -3,7 +3,11 @@
 // clock.minutes based on the current context's timeScale (browsing=10x,
 // idle=20x, conversation≈0.017x, etc). The NPC simulation runs at fixed
 // checkpoints (every TIME_DILATION.simCheckpointMinutes of accumulated
-// game-time), not once per player action.
+// game-time), not once per player action. Need decay/restore does NOT ride
+// the checkpoints (needs-and-heartbeat plan Phase 2): a second accumulator,
+// clockHeartbeatMinutes, fires applyNeedsHeartbeat every
+// TIME_DILATION.HEARTBEAT_MINUTES instead — the checkpoints run decisions,
+// the heartbeat moves needs.
 //
 // Discrete actions (sleep, work blocks, cum, every ACTION_DEFS verb) call
 // advanceAndResolveMinutes() directly — it pauses the continuous loop,
@@ -34,6 +38,7 @@ let timeContextStack = ['idle'];
 let clockLoopRunning = false;
 let clockLastFrameMs = 0;
 let clockAccumulatedMinutes = 0;  // game-minutes since last checkpoint
+let clockHeartbeatMinutes = 0;    // game-minutes since last needs heartbeat (Phase 2)
 let clockRafId = null;
 // Generation counter: every pause/stop bumps it, so any rAF callback still
 // queued from an older generation recognises itself as stale and dies
@@ -168,6 +173,7 @@ async function clockFrame(gen) {
     // Game-minutes added this frame
     const gameMinutes = (cappedDeltaMs / 1000) * (scale / 60);
     clockAccumulatedMinutes += gameMinutes;
+    clockHeartbeatMinutes += gameMinutes;
 
     // The continuous loop is the sole owner of meta.clock while it runs.
     // Checkpoints below simulate NPC ticks but must NOT advance the clock
@@ -183,6 +189,50 @@ async function clockFrame(gen) {
     // or rent/deliveries/quests would never fire while idling.
     if (currentGameState.meta.clock.day !== prevDay) {
       fireDayRollover(prevDay, currentGameState.meta.clock.day);
+    }
+
+    // Phase 4 (continuous-behavior-engine): the physical layer runs every
+    // frame alongside the clock — in-flight NPC walks advance in GAME time
+    // (D9's live regime: gameSeconds = gameMinutes * 60 at
+    // WALK.unitsPerSecond, reusing this very function's gameMinutes), then
+    // the floor plan's live layer repositions the avatar markers. The
+    // STATIC layer is deliberately never rebuilt here (D12): that is
+    // render()'s job, on real state changes only.
+    if (gameMinutes > 0) advanceFrameWalks(currentGameState, gameMinutes);
+    if (typeof renderFloorPlanLive === 'function') renderFloorPlanLive(currentGameState);
+
+    // Phase 2 (needs-and-heartbeat): the needs heartbeat. One accumulator
+    // beside simCheckpointMinutes': every HEARTBEAT_MINUTES of accumulated
+    // game-time crossed, apply the needs pass for the crossed minutes IN
+    // CLOSED FORM (one call for however many minutes crossed — never one call
+    // per minute; D4/C7). The idle multiplier always applies here (D6): the
+    // clock loop only runs while the player is not executing an action, so
+    // every heartbeat is an idle heartbeat. Synchronous and pure — it only
+    // moves needs, so it can run while a checkpoint is still in flight.
+    if (clockHeartbeatMinutes >= TIME_DILATION.HEARTBEAT_MINUTES) {
+      const heartbeatMinutes = Math.floor(clockHeartbeatMinutes / TIME_DILATION.HEARTBEAT_MINUTES) * TIME_DILATION.HEARTBEAT_MINUTES;
+      clockHeartbeatMinutes -= heartbeatMinutes;
+      currentGameState = applyNeedsHeartbeat(currentGameState, heartbeatMinutes, { idle: true });
+      // Phase 3 (needs-and-heartbeat): the OTHER per-minute consumers ride
+      // the same accumulator, closed form over the crossed minutes — phone
+      // battery (advancePhoneBattery mutates phone.flags in place) and
+      // memory decay (decayAllMemories returns a fresh state, like
+      // applyNeedsHeartbeat). The DISCRETE path runs the same two, closed
+      // form per batch, in UI's advanceAndResolve — gated off by the same
+      // suppressNeeds flag — so both paths move each value exactly once.
+      advancePhoneBattery(currentGameState, heartbeatMinutes);
+      currentGameState = decayAllMemories(currentGameState, heartbeatMinutes);
+      // Phase 6 (continuous-behavior-engine tuning pass): the footer need
+      // bars are drawn by renderStatusStrip, which render() runs only on
+      // player actions — so during pure idle the bars sat frozen while the
+      // state's needs decayed at per-minute cadence (needs-and-heartbeat
+      // Phase 4 flagged this for this phase's ownership). A heartbeat IS a
+      // real state change (needs moved); redrawing the small status strip
+      // beside the live avatar layer here keeps the idled-to game visibly
+      // alive without touching D12's static-layer rule (the full render()
+      // still only runs on real state changes — this is the footer strip
+      // alone, ~a dozen attribute writes every 5 game-minutes).
+      if (typeof renderStatusStrip === 'function') renderStatusStrip(currentGameState);
     }
 
     // Check if we've crossed a sim checkpoint
@@ -267,8 +317,20 @@ async function advanceAndResolveMinutes(minutes) {
 
   if (ticks > 0) {
     // resolveBatch steps the clock one tick at a time so each tick's
-    // schedule resolution sees the right time of day.
-    await advanceAndResolve(ticks);
+    // schedule resolution sees the right time of day. needsMinutes tells
+    // advanceAndResolve the TRUE elapsed span for phone battery/memory
+    // decay — ticks*CLOCK.tickMinutes is a grid-boundary-crossing count,
+    // not a duration, and diverges from `minutes` whenever the span does
+    // not start on a tick boundary (this audit's gap-fix, D1).
+    await advanceAndResolve(ticks, { needsMinutes: minutes });
+  } else {
+    // No tick boundary crossed at all — advanceAndResolve never runs, so
+    // phone battery/memory decay have to be driven here directly, exactly
+    // as decayPlayerNeeds already is below. Without this, any action under
+    // CLOCK.tickMinutes that doesn't cross a boundary (a note read, a door
+    // lock, a short walk leg) silently skipped both for its whole span.
+    advancePhoneBattery(currentGameState, minutes);
+    currentGameState = decayAllMemories(currentGameState, minutes);
   }
 
   // Settle the clock on the exact target. resolveBatch lands on a tick
@@ -276,7 +338,10 @@ async function advanceAndResolveMinutes(minutes) {
   // to be, in either direction.
   currentGameState.meta.clock = absoluteToClock(targetAbs);
 
-  currentGameState.player = decayPlayerNeeds(currentGameState.player, minutes / CLOCK.tickMinutes, currentGameState);
+  // needs-and-heartbeat Phase 3 (D4): decayPlayerNeeds takes GAME-minutes
+  // directly now — this is the closed form `elapsed_minutes x rate` for the
+  // exact span, no tick round-trip.
+  currentGameState.player = decayPlayerNeeds(currentGameState.player, minutes, currentGameState);
   return ticks;
 }
 
@@ -289,14 +354,13 @@ async function runSimCheckpoint(minutes) {
   try {
     // advanceClock: false — the rAF loop already moved meta.clock through
     // these minutes. This path only runs the NPC simulation over them.
+    // suppressNeeds: true — need decay/restore no longer rides the sim
+    // checkpoints (needs-and-heartbeat Phase 2); clockFrame's heartbeat
+    // accumulator already owns every one of these minutes at per-minute
+    // cadence with the idle multiplier (D6), and running the per-tick pass
+    // here too would double every need's movement on the continuous path.
     const ticks = Math.max(1, Math.round(minutes / CLOCK.tickMinutes));
-    await advanceAndResolve(ticks, { advanceClock: false, fromClockLoop: true });
-    // Phase 5 (D12): this is the IDLE path — real wall-clock minutes passed
-    // while the player did nothing. Need decay runs at
-    // NEEDS.idleDecayMultiplier so reading the log isn't punished like
-    // taking actions is. advanceAndResolveMinutes (the acting path) leaves
-    // the option unset.
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, minutes / CLOCK.tickMinutes, currentGameState, { idle: true });
+    await advanceAndResolve(ticks, { advanceClock: false, fromClockLoop: true, suppressNeeds: true });
   } finally {
     checkpointInProgress = false;
     if (pendingCheckpointMinutes >= TIME_DILATION.simCheckpointMinutes) {
@@ -333,6 +397,7 @@ function startClockLoop() {
   clockLoopRunning = true;
   clockLastFrameMs = performance.now();
   clockAccumulatedMinutes = 0;
+  clockHeartbeatMinutes = 0;
   // Adopt the current day so a fresh session doesn't replay a rollover for
   // the day it loaded into.
   lastRolledOverDay = currentGameState?.meta?.clock?.day ?? null;

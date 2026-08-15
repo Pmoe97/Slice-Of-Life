@@ -10,7 +10,7 @@ const SRC = path.join(__dirname, '..', '..', 'src', 'srcfiles');
 const ORDER = [
   'config.js', 'icons.js', 'defs.world.js', 'defs.actions.js', 'defs.computer.js',
   'defs.menu.js', 'defs.intro.js', 'defs.design.js',
-  'orbital.js', 'state.js', 'sim.js', 'commitments.js', 'world.js',
+  'orbital.js', 'state.js', 'sim.js', 'commitments.js', 'world.js', 'movement.js',
   'signals.js', 'scene.js',
   'items.js', 'inventory.js', 'effects.js', 'drives.js', 'cognition.js', 'overture.js',
   'actions.js', 'intent.js',
