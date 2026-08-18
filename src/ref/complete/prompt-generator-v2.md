@@ -1,6 +1,7 @@
 # Prompt generator v2 — decision-vector architecture
 
-Status: **engine implemented (pass A) + authoring pass B + preferences UI (pass C) + gender-aware refinement (pass D)**.
+Status: **COMPLETE — engine (pass A) + authoring (pass B) + preferences UI
+(pass C) + gender-aware refinement (pass D), all shipped.**
 The decision-vector roll + guard repair + preference filters + `?prompt=` debug
 dump are live in `defs.menu.js` (v7) and `genTitlePrompt` is rewired. Pass B
 grew every pool past the §1 targets: intensity 13, gathering 3, setting 44,
@@ -16,8 +17,10 @@ mundane activity with everyone dressed. Pass C shipped the Options-menu
 cast-preferences toggles (3 gender pools + 3 orientation pairings, "keep at
 least one" guard, persisted via `menu`/`prefs`, honored by the engine live).
 Measured in-engine combo floors: sfw ~10¹², suggestive ~5×10¹³, explicit
-~10¹⁵. **Remaining (optional):** more community kinks, and any further
-per-activity `needs`/`p` refinement as the pools grow.
+~10¹⁵. **Nothing left required for v1.** Further community kinks and
+per-activity `needs`/`p` refinement remain a standing, open-ended lever —
+the pools can always grow — but that is future content work, not an
+unfinished pass of this plan.
 
 ## Goals
 

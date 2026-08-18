@@ -225,7 +225,9 @@ bedroom_habitability_3: { ...room: 'bedroom_3', ... },
   bedrooms) — how long the contracted job takes. Populate for all 12
   existing facilities plus the 4 new room facilities (see New facilities
   below). Starting values (tune later): bedroom repair 3d / upgrade 4d,
-  kitchen stove 5d / 6d, bathroom plumbing 4d / 5d, living room 3d / 4d,
+  kitchen stove 0d / 6d (0d since the 2026-08-18 D37 change — the stove now
+  STARTS 'functional' as a countertop burner; only the gas-range upgrade is
+  a job), bathroom plumbing 4d / 5d, living room 3d / 4d,
   gym 4d / 6d, pool 8d / 12d (flagship, matches the existing $12k/$34k cost
   gap), laundry 3d / 4d, game room 3d / 5d, study 2d / 4d, balcony 1d / 3d,
   kitchen appliances 2d / 3d.
