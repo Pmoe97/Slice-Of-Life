@@ -981,6 +981,12 @@ function receiveTransmittedFact(receiver, raised, opts) {
     provenance,
     confidence,
     emotionalTag: raised.emotionalTag || '',
+    // Intimacy & Voyeurism Phase 14: a `cheating` fact carries the structured
+    // { cheaterId, otherId, day } metadata the infidelity hook
+    // (maybeJealousUponFact, relationships.js) reads to recognize the wronged
+    // party when the fact reaches them through gossip. Copied verbatim —
+    // never regenerated, so a told_by hop can't corrupt who did what to whom.
+    ...(raised.cheating ? { cheating: raised.cheating } : {}),
   });
   return addMemoryFact(receiver, record);
 }
@@ -1130,6 +1136,215 @@ function applyMoodDelta(npc, delta, reason) {
   return updated;
 }
 
+// ===== SECTION: COLD SHOULDER (Intimacy & Voyeurism Phase 16, D2/D14) =====
+// The hurt-state an NPC carries toward the player after something severe:
+// npc.flags._coldShoulder = { day, severity, reason } — the plan's data
+// model shape, plus `repairs` (a day-stamp map per repair kind) and
+// `healDay` (the day the current severity started), both internal to the
+// recovery ratchet. Effects: talk refusal + room avoidance (severity-scaled
+// rolls, read by UI's checkRelConsequences), total overture + player-
+// directed-drive suppression (overture.js / cognition.js), and a willingness
+// HARD FLOOR (willingness.js) — a cold-shouldered NPC cannot be made to
+// participate in anything intimate (invariant 1: a new floor, fail-closed).
+// Recovery is active AND slow: noteColdShoulderRepair ratchets one severity
+// per successful reparation act (gift/apology, per-kind cooldowns) and
+// advanceColdShoulderForDay applies the time heal + the move-out risk
+// counter. The `note*` writers MUTATE npc (the noteIntimacy* convention);
+// the readers are PURE.
+
+// Read-only view: { active, severity, day, reason, daysSince }. `day` is the
+// current game day (for daysSince); pass nothing for the active/severity
+// read only. PURE.
+function coldShoulderState(npc, day) {
+  const rec = npc && npc.flags && npc.flags._coldShoulder;
+  if (!rec || typeof rec.severity !== 'number' || rec.severity <= 0) {
+    return { active: false, severity: 0, day: null, reason: null, daysSince: null };
+  }
+  const onset = typeof rec.day === 'number' ? rec.day : null;
+  return {
+    active: true,
+    severity: Math.min(COLD_SHOULDER.maxSeverity, rec.severity),
+    day: onset,
+    reason: rec.reason || null,
+    daysSince: (onset != null && typeof day === 'number') ? Math.max(0, day - onset) : null,
+  };
+}
+
+// The cheap active-check consumers (render chips, willingness floors) use.
+// PURE.
+function coldShoulderActive(npc) {
+  const rec = npc && npc.flags && npc.flags._coldShoulder;
+  return !!(rec && typeof rec.severity === 'number' && rec.severity > 0);
+}
+
+// The ONE cold-shoulder writer. severity clamped to [1, maxSeverity];
+// severity <= 0 removes the state (the full-clear path of the repair
+// ratchet). Returns the new flag record (or null when removed). MUTATES.
+function noteColdShoulder(npc, severity, day, reason) {
+  const prev = (npc.flags && npc.flags._coldShoulder) || {};
+  const next = severity <= 0 ? null : {
+    day: typeof day === 'number' ? day : (prev.day || 1),
+    severity: Math.min(COLD_SHOULDER.maxSeverity, Math.max(1, Math.round(severity))),
+    reason: reason || prev.reason || 'cold_shoulder',
+    repairs: prev.repairs || {},
+    healDay: typeof prev.healDay === 'number' ? prev.healDay : (typeof day === 'number' ? day : (prev.day || 1)),
+  };
+  npc.flags = { ...(npc.flags || {}), _coldShoulder: next };
+  return next;
+}
+
+// Suppression read: does this NPC's cold-shoulder block overtures + player-
+// directed drives entirely? PURE.
+function coldShoulderSuppressesOvertures(npc) {
+  return coldShoulderState(npc).severity >= COLD_SHOULDER.overtureSuppressedFrom;
+}
+
+// A successful reparation act ratchets severity down one. `kind` ∈ 'gift' |
+// 'apology' | 'time'. The minDaysBeforeRepair gate and per-kind cooldowns
+// live HERE — one place, so every repair surface (gift chip, apology chip,
+// the day-rollover time heal) agrees about what landed. Returns
+// { repaired, severity, reason } where reason ∈ 'not_active' | 'no_day' |
+// 'too_soon' | 'won_t_listen' | 'cooldown' | null. MUTATES.
+function noteColdShoulderRepair(npc, kind, day) {
+  const cs = coldShoulderState(npc, day);
+  if (!cs.active) return { repaired: false, severity: 0, reason: 'not_active' };
+  if (typeof day !== 'number') return { repaired: false, severity: cs.severity, reason: 'no_day' };
+  if (cs.daysSince < COLD_SHOULDER.minDaysBeforeRepair) {
+    return { repaired: false, severity: cs.severity, reason: 'too_soon' };
+  }
+  if (kind === 'apology' && cs.severity >= COLD_SHOULDER.apologyBlockedAboveSeverity) {
+    return { repaired: false, severity: cs.severity, reason: 'won_t_listen' };
+  }
+  const rec = npc.flags._coldShoulder;
+  const cooldownDays = kind === 'gift' ? COLD_SHOULDER.giftCooldownDays
+    : kind === 'apology' ? COLD_SHOULDER.apologyCooldownDays : 0;
+  if (kind !== 'time' && cooldownDays > 0) {
+    const last = rec.repairs && rec.repairs[kind];
+    if (last != null && day - last < cooldownDays) {
+      return { repaired: false, severity: cs.severity, reason: 'cooldown' };
+    }
+  }
+  const nextSeverity = cs.severity - 1;
+  npc.flags = {
+    ...(npc.flags || {}),
+    _coldShoulder: {
+      ...rec,
+      severity: nextSeverity,
+      // The time clock restarts from the repair — a fresh severity 1 starts
+      // its own countdown toward clearing, not the original onset's.
+      healDay: day,
+      repairs: { ...(rec.repairs || {}), [kind]: day },
+    },
+  };
+  if (nextSeverity <= 0) delete npc.flags._coldShoulder;
+  return { repaired: true, severity: Math.max(0, nextSeverity), reason: null };
+}
+
+// The day-rollover pass: time heals one severity per timeRecoveryDays at
+// full cold (no player action needed, but slow), and a max-severity cold-
+// shoulder carries a REAL move-out risk — a per-day seeded roll from
+// `moveOutEarliestDay` onward (extreme circumstances, D14; the extended
+// move-out trigger for boundary acts at low dynamic and public infidelity
+// fallout). Time heals the same severity 3 before the window runs out, so
+// the risk is a chance, never a certainty. Called by UI's
+// processRelConsequencesForDay with a seeded rng; `movedOut` is the VERDICT
+// — the caller narrates and runs the actual move-out (doAskToLeave), because
+// moving someone out is UI/kv work. MUTATES npc. Returns
+// { movedOut, severity, counter } where counter is the days spent at max
+// severity (informational — the decision is the roll).
+function advanceColdShoulderForDay(npc, day, rng) {
+  const cs = coldShoulderState(npc, day);
+  if (!cs.active) {
+    if (npc.flags && npc.flags._coldShoulderDays) {
+      npc.flags = { ...(npc.flags || {}), _coldShoulderDays: 0 };
+    }
+    return { movedOut: false, severity: 0, counter: 0 };
+  }
+  const rec = npc.flags._coldShoulder;
+  const healDay = typeof rec.healDay === 'number' ? rec.healDay : (typeof rec.day === 'number' ? rec.day : day);
+  let severity = cs.severity;
+  let repairedByTime = false;
+  if (day - healDay >= COLD_SHOULDER.timeRecoveryDays && severity > 0) {
+    severity -= 1;
+    repairedByTime = true;
+  }
+  // The move-out roll. Only max severity counts, and only once the earliest
+  // window has passed; the heal above runs first, so a severity-3 who just
+  // reaches timeRecoveryDays is healed out of danger that same pass.
+  let counter = npc.flags && npc.flags._coldShoulderDays ? npc.flags._coldShoulderDays : 0;
+  let movedOut = false;
+  if (severity >= COLD_SHOULDER.moveOutSeverity && typeof rec.day === 'number'
+      && day - rec.day >= COLD_SHOULDER.moveOutEarliestDay) {
+    counter += 1;
+    const roll = typeof rng === 'function' ? rng() : 0;   // no rng → never fires
+    if (roll < COLD_SHOULDER.moveOutChancePerDay) movedOut = true;
+  } else {
+    counter = 0;
+  }
+  npc.flags = {
+    ...(npc.flags || {}),
+    _coldShoulder: severity > 0 ? {
+      ...rec,
+      severity,
+      healDay: repairedByTime ? day : healDay,
+      ...(repairedByTime ? { repairs: { ...(rec.repairs || {}), time: day } } : {}),
+    } : null,
+    _coldShoulderDays: counter,
+  };
+  return { movedOut, severity, counter };
+}
+
+// ===== SECTION: SHAMING (Intimacy & Voyeurism Phase 16, D2) ================
+// Deterministic per-dynamic-tier reaction to uncalled-for perving (a caught
+// peek, a snooped room — Phase 17's boundary layer will call this too). The
+// tier is the SAME relationship read the peek caught-tables use: hostile
+// tension → hostile; warm (comfort or familiar/close/intimate phase) → warm;
+// a near-stranger (all relPlayer axes flat, no grievances) → cold; else
+// neutral. Deltas + prose are authored per tier (SHAMING, config.js);
+// nothing here judges the player (invariant 8). `coldShoulderSeverity` is
+// the cold-shoulder onset the caller applies: cold/hostile uncalled-for
+// perving is the D14 move-out-risk case; a close dynamic is not even cold-
+// shouldered (D2).
+
+// PURE — same stranger test willingness.js's floor uses, in the tier shape
+// PEEK_OUTCOMES' weight tables use.
+function resolveShamingTier(gameState, npc) {
+  const rel = (npc && npc.relPlayer) || {};
+  if ((rel.tension || 0) >= SHAMING.hostileTension) return 'hostile';
+  const warm = (rel.comfort || 0) >= SHAMING.warmComfort || SHAMING.warmPhases.includes(rel.conversationPhase);
+  if (warm) return 'warm';
+  const stranger = !(rel.trust || rel.affection || rel.tension || rel.respect || rel.desire)
+    && !(rel.comfort || 0)
+    && !(rel.grievances && rel.grievances.length > 0);
+  return stranger ? 'cold' : 'neutral';
+}
+
+// Deterministic pick of the reaction prose for a tier — seeded per
+// (tier, day, npc), the PEEK_PROSE pattern (D4 variety). PURE.
+function pickShamingProse(gameState, tier, npc, day) {
+  const pool = (SHAMING.prose && SHAMING.prose[tier]) || [];
+  if (pool.length === 0) return '';
+  const name = (npc && npc.bible && npc.bible.name) || 'They';
+  const seed = hashStr(`shame|${tier}|${day}`) + (gameState?.meta?.seed || 0);
+  const rng = mulberry32(seed);
+  const line = pool[Math.floor(rng() * pool.length)];
+  return line.replace('{name}', name);
+}
+
+// The full reaction: { tier, def, prose, coldShoulderSeverity }. PURE — the
+// caller applies the def's deltas and the cold-shoulder onset.
+function resolveShamingReaction(gameState, npc, ctx = {}) {
+  const tier = ctx.tier || resolveShamingTier(gameState, npc);
+  const def = (SHAMING.tiers && SHAMING.tiers[tier]) || SHAMING.tiers.neutral;
+  const day = (ctx.day != null) ? ctx.day : (gameState?.meta?.clock?.day ?? 1);
+  return {
+    tier,
+    def,
+    prose: pickShamingProse(gameState, tier, npc, day),
+    coldShoulderSeverity: def.coldShoulderSeverity || 0,
+  };
+}
+
 // --- Scene participation: active vs ambient ---
 // sceneState.engagement[npcId] tracks turns-since-addressed-or-spoke for
 // each currently active NPC (see advanceEngagement below) — this is what
@@ -1247,6 +1462,7 @@ function assembleContext(gameState, sceneState) {
       memoryV2: null, // NPC Overhaul Audit: removed — was redundant with memory, both built with null query
       castWebSlice: buildCastWebSlice(id, npcs, world.castWeb),
       clothing: npc.clothing,                   // NPC Overhaul — for clothingLabel
+      outfit: npc.outfit,                       // Intimacy & Voyeurism Phase 7 — clothingLabel reads the outfit
       moodReason: npc.moodReason || '',         // NPC Overhaul
       schedule: npc.schedule || null,           // NPC Overhaul Phase 7.2
       // Perception plan Phase 5: what THIS character can sense, which is not
@@ -1283,6 +1499,10 @@ function assembleContext(gameState, sceneState) {
 
   return {
     contentConfig: meta.contentConfig || null,
+    // Intimacy & Voyeurism Phase 18 (D16): the game state itself reaches the
+    // prompt builders, so a pregnancy/baby presence can be acknowledged in
+    // conversation (the scene prompt's [Pregnancy]/[Baby] block lines).
+    gameState,
     // Correctness plan Phase 1 (D6): which conversation surface this context
     // belongs to. applyProposal reads it to tag memory.recent entries, and the
     // prompt builders read it to filter that buffer back down to one channel.
@@ -1310,6 +1530,11 @@ function assembleContext(gameState, sceneState) {
       hunger: player.hunger,
       money: player.money,
       flags: player.flags,
+      // Intimacy & Voyeurism Phase 7 (D11): the player's clothing + outfit
+      // reach the scene prompt, so the model knows how the player is dressed
+      // — and can react to it. Same fields clothingLabel reads on an NPC.
+      clothing: player.clothing,
+      outfit: player.outfit,
     },
     activeNpcs: activeContext,
     ambientNpcs: ambientContext,
@@ -1343,6 +1568,7 @@ function assembleImContext(gameState, npcId) {
   const threadTail = (thread?.msgs || []).slice(-IM_PROMPT.threadDepth);
   return {
     contentConfig: gameState.meta.contentConfig || null,
+    gameState,
     channel: 'im',
     imThread: threadTail,
     // Knowledge-gossip Phase 1 (D2): the current in-game day, so the IM
@@ -1370,7 +1596,10 @@ function assembleImContext(gameState, npcId) {
 function buildCastWebSlice(npcId, npcs, castWeb) {
   const slice = [];
   for (const [pairKey, pair] of Object.entries(castWeb || {})) {
-    if (!pairKey.includes(npcId)) continue;
+    // Exact-split membership — `npc_10|outside_npc_1` must not read as
+    // belonging to `npc_1` (Phase 14's `outside_<residentId>` ids make the
+    // old substring test collide on `npc_1` vs `npc_10`).
+    if (!pairKey.split('|').includes(npcId)) continue;
     const otherId = pairKey.split('|').find(id => id !== npcId);
     const other = npcs[otherId];
     if (!other) continue;
@@ -1732,6 +1961,14 @@ async function applyProposal(proposal, context, gameState, playerAction, opts = 
           );
           for (const f of overheard) {
             gameState.npcs[listenerCtx.id] = receiveTransmittedFact(gameState.npcs[listenerCtx.id], f, { kind: 'overheard', provenance: 'overheard', day });
+            // Intimacy & Voyeurism Phase 14: overhearing a cheating fact IS
+            // the wronged party learning — the jealousy lands the same way a
+            // caught act does (maybeJealousUponFact dedupes per act, so a
+            // second telling of the same betrayal does not stack).
+            if (f.category === INFIDELITY.factCategory) {
+              const jealous = maybeJealousUponFact(gameState, listenerCtx.id, f);
+              if (jealous) gameState.npcs[listenerCtx.id] = jealous;
+            }
           }
         }
       }
@@ -1939,6 +2176,192 @@ function validateNestedObject(prefix, obj, fields, errors, normalized) {
   }
 }
 
+// ===== SECTION: NPC OUTFITS & NUDITY (Intimacy & Voyeurism Phase 6, D11) =====
+// NPCs dress for what they are doing. The block+activity pick an OUTFIT_TYPES
+// key (outfitTypeForContext), and the wardrobe composes the items through the
+// SAME pure pick the player's wardrobe panel uses (composeOutfit, ITEMS), so
+// an NPC and the player wearing the same kind of outfit share one algorithm.
+// Personality enters once, on the way in: a low-conscientiousness worker
+// skips the work outfit. The deviancy read — D11's "hidden trait", openness ×
+// assertiveness, derived and never stored — is the nudity gate for the pool.
+// All pure: same state in, same outfit out, every tick.
+
+// The deviancy read (NUDITY_TUNING.deviancyThreshold compares against it).
+// High on BOTH axes — a curious person who also pushes for what they want —
+// is what makes someone swim nude; a curious wallflower still doesn't.
+function npcDeviancy(npc) {
+  const t = npc?.bible?.temperament || {};
+  const open = ((typeof t.openness === 'number' ? t.openness : 0) + 1) / 2;
+  const assert = ((typeof t.assertiveness === 'number' ? t.assertiveness : 0) + 1) / 2;
+  return Math.max(0, Math.min(1, open * assert));
+}
+
+// The pool's nudity gate. The caller supplies a SEEDED rng (resolveTick
+// addresses its own stream: `nude_<npcId>_<absoluteMinute>`), so the decision
+// is deterministic per (seed, npc, minute) and never touches the shared tick
+// stream. The "already nude" guard lives in npcClothingForContext, so the
+// decision is made once per swim session, not re-rolled every tick.
+function npcSwimsNude(npc, rng) {
+  if (npcDeviancy(npc) < NUDITY_TUNING.deviancyThreshold) return false;
+  return rng() < NUDITY_TUNING.nudeSwimChance;
+}
+
+// What an NPC wears as a function of where the day put them. Activity wins
+// (a swimmer is in swim gear whatever the block), then work-boundary blocks
+// dress for the office (unless the worker is too slovenly to bother), then
+// home hours are loungewear, and everything else is the daily fit. Null
+// activity (the change_clothes drive's candidacy, which has no activity) just
+// skips the activity branch.
+function outfitTypeForContext(npc, block, activity) {
+  if (ACTIVITY_OUTFIT_TYPES[activity]) return ACTIVITY_OUTFIT_TYPES[activity];
+  if (WORK_BLOCKS.includes(block)) {
+    const consc = npc?.bible?.temperament?.conscientiousness ?? 0;
+    return consc < NUDITY_TUNING.workDressConscientiousnessFloor ? 'daily' : 'work';
+  }
+  if (block === 'evening' || block === 'wind_down' || block === 'leisure') return 'loungewear';
+  return 'daily';
+}
+
+// The clothing items an NPC can dress from: their bedroom wardrobe first
+// (the same capped container the player's panel edits), their own bag's
+// clothes as the fallback for a layout with no wardrobe.
+function npcWardrobeItems(gameState, npc) {
+  const room = npc?.residency?.room;
+  const bucket = room ? gameState?.objects?.[`room_${room}`] : null;
+  const wardrobe = bucket && Object.values(bucket).find(o => o?.defId === 'wardrobe');
+  if (wardrobe?.contents) {
+    return wardrobe.contents.map(s => s.defId).filter(id => CLOTHING_DEFS[id]);
+  }
+  return (npc?.inventory || []).map(s => s.defId).filter(id => CLOTHING_DEFS[id]);
+}
+
+// The outfit an NPC is wearing this tick: type from context, items composed
+// from their wardrobe. Deterministic, idempotent — resolveTick derives it
+// every tick, so it self-heals and can never contradict the block/activity.
+function npcOutfitForContext(npc, gameState, block, activity) {
+  return composeOutfit(outfitTypeForContext(npc, block, activity), npcWardrobeItems(gameState, npc));
+}
+
+// Does this outfit already count as this type? The cheap proxy the
+// change_clothes drive's candidacy reads — any garment carrying the type's
+// preferred trait means the NPC is dressed for the moment and the drive
+// should not fire. `type` may be a plain OUTFIT_TYPES key or null (skip).
+function outfitMatchesType(outfit, type) {
+  const preferred = new Set(OUTFIT_TYPES[type]?.traits || []);
+  if (preferred.size === 0) return true;
+  return Object.values(outfit || {}).some(id => (CLOTHING_DEFS[id]?.traits || []).some(t => preferred.has(t)));
+}
+
+// The pair acts an NPC can be IN — the activities whose participants are
+// 'undressed' while they last (Phase 13; mirror of PEEK_VIEW_ACT's bed acts).
+const INTIMACY_ACTIVITIES = ['having sex', 'making love', 'sex', 'quickie'];
+
+// The clothing STATE transition rule (resolveTick pass 2 applies it per tick).
+// sleep → sleepwear; a transient (sleepwear/towel/changing) settles to
+// 'dressed'; activity nudity applies while it lasts and only while it lasts —
+// a leftover 'nude' the tick the nude activity ends reverts. The shower is
+// nude because it is private (NUDITY_TUNING.nudeShower); the pool is nude
+// only through the deviancy gate, decided once per swim session (the
+// already-nude guard keeps the state stable across the session's ticks).
+//
+// Intimacy & Voyeurism Phase 13 (D3/D13): the NPC pair acts' clothing.
+// Masturbation is nude while it lasts exactly like the shower (the same
+// revert-on-activity-end), so a masturbating NPC reads as naked to a Phase
+// 10 peek for the whole act and re-dresses the moment it ends. A pair act
+// leaves BOTH participants 'undressed' — the Phase 11 target-NPC state, kept
+// because it is what the intimate gate (NAKED_CLOTHING_STATES) reads as
+// naked, and it persists until the NPC showers or changes clothes, exactly
+// as the player's own partner stays undressed after a Phase 11 act. One
+// rule for every partner, whichever side of the bed they were on.
+function npcClothingForContext(npc, block, activity, currentClothing, rng) {
+  let clothing = currentClothing || 'dressed';
+  if (block === 'sleep') return 'sleepwear';
+  if (TRANSIENT_CLOTHING.includes(clothing)) clothing = 'dressed';
+  if (activity === 'showering' && NUDITY_TUNING.nudeShower) return 'nude';
+  if (activity === 'masturbating' || activity === 'masturbating in bed') return 'nude';
+  if (INTIMACY_ACTIVITIES.includes(activity)) return 'undressed';
+  if (activity === 'swimming laps' || activity === 'swimming') {
+    if (clothing === 'nude') return 'nude';
+    return npcSwimsNude(npc, rng) ? 'nude' : 'dressed';
+  }
+  if (clothing === 'nude') return 'dressed';
+  return clothing;
+}
+
+// ===== SECTION: CLOTHING EFFECTS (Intimacy & Voyeurism Phase 7, D11) =====
+// Clothes matter. The two readers below are the ONLY consumers of
+// CLOTHING_EFFECTS (config.js) — every stat keeps exactly one meaning —
+// and they share the ITEMS aggregation (outfitStatSum / outfitHasTrait /
+// outfitEffectiveReveal), so a revealing outfit composes once and every
+// formula reads the same numbers. Both PURE: same state in, same response
+// out, every call.
+
+// `observer` reacts to `wearer`'s outfit. Returns { attraction, desire } —
+// two [0,1] bias terms:
+//   attraction — the outfit's "how good they look" term, observer-independent
+//                (a well-dressed person reads well-dressed to everyone). This
+//                is the ATTRACTION TERM: overture.js's affection motive adds
+//                it to the strength, and Phase 9's willingness reads the same
+//                shared value.
+//   desire     — the outfit's "how inviting they look" term — the DESIRE
+//                SOURCE — gated by the observer's own deviancy (the
+//                exhibition read of D11's hidden trait): a deviant observer
+//                reads skin as invitation, a prude reads nothing. Phase 8
+//                spends this as real desire gain; the overture desire motive
+//                adds it today.
+// Trait modulation (revealing/comfortable traits modulate NPC reactions to
+// the wearer) rides the attraction term through CLOTHING_EFFECTS.traitAttraction.
+function clothingResponseToWearer(observer, wearer) {
+  const outfit = wearer?.outfit || {};
+  const c = CLOTHING_EFFECTS;
+  const sum = (s) => outfitStatSum(outfit, s);
+
+  let attraction = Math.min(c.attraction.cap, sum('attraction') * c.attraction.weight);
+  let mult = 1;
+  for (const [trait, m] of Object.entries(c.traitAttraction)) {
+    if (outfitHasTrait(outfit, trait)) mult *= m;
+  }
+  attraction *= mult;
+
+  const observerDeviancy = npcDeviancy(observer);
+  const span = c.desireObserver.max - c.desireObserver.min;
+  const desire = Math.min(c.reveal.cap, outfitEffectiveReveal(outfit) * c.reveal.weight
+    * (c.desireObserver.min + observerDeviancy * span));
+
+  return { attraction: clamp01(attraction), desire: clamp01(desire) };
+}
+
+// The WILLINGNESS TERM this outfit contributes — a [0,1] "how much the
+// wearer's outfit tilts a consent check toward acceptance" value. Phase 9's
+// willingness() function is its consumer; it is declared now so the pure
+// wiring predates the function (the plan's "willingness term" deliverable).
+// It scales the SAME shared numbers clothingResponseToWearer produces —
+// one meaning per stat across the whole plan, never a second reading.
+// Observer-neutral: the wearer's outfit looks the same to whomever is asked.
+function clothingWillingnessBias(wearer) {
+  const outfit = wearer?.outfit || {};
+  const c = CLOTHING_EFFECTS.willingness;
+  const attraction = Math.min(c.attraction.cap, outfitStatSum(outfit, 'attraction') * c.attraction.weight);
+  const desire = Math.min(c.reveal.cap, outfitEffectiveReveal(outfit) * c.reveal.weight);
+  return clamp01(attraction + desire);
+}
+
+// One deterministic prose phrase for a NOTABLE outfit, or null when it has
+// nothing to say. Reads CLOTHING_EFFECTS.prose thresholds so the scene reader
+// (scene.js), the floor-plan caption and the LLM block (llm.js) share one
+// notion of when an outfit is worth describing — "wearing the nice top reads
+// differently than the stained tee" is this function. Phrase is framed for
+// "You're {phrase}." and "wearing {phrase}" alike. Pure.
+function outfitFlavorProse(outfit) {
+  const c = CLOTHING_EFFECTS.prose;
+  if (!outfit || Object.keys(outfit).length === 0) return null;
+  const bits = [];
+  if (outfitStatSum(outfit, 'attraction') >= c.attractive) bits.push('dressed to impress');
+  if (outfitEffectiveReveal(outfit) >= c.revealing) bits.push('showing a lot of skin');
+  if (outfitStatSum(outfit, 'comfort') >= c.comfy) bits.push('dressed for comfort');
+  return bits.length > 0 ? bits.join(', ') : null;
+}
+
 // NPC Overhaul Phase 1: Compose physical object into a descriptive paragraph
 // for LLM prompts and image generation. Reads npc.bible.physical and
 // composes a natural-language description. Falls back to bible.visual
@@ -2040,10 +2463,25 @@ function getPhysicalDescriptionForPrompt(npc, opts = {}) {
 
   // Clothing state (appended if not normal)
   const clothing = npc?.clothing;
+  // Intimacy & Voyeurism Phase 18 (D16): a visible pregnancy reads in the
+  // physical description when the caller can PROVE the state (opts.gameState
+  // — the same requirement the intimate gate already has). Guarded on typeof:
+  // npc.js loads before pregnancy.js. Fail-closed: without the state, no bump
+  // is claimed.
+  const selfId = opts?.isPlayer ? 'player' : (opts?.npcId || npc?.id);
+  if (opts.gameState && typeof pregnancyVisible === 'function'
+      && selfId && pregnancyVisible(opts.gameState, selfId)) {
+    parts.push('visibly pregnant, with a prominent baby bump');
+  }
   if (clothing && clothing !== 'dressed') {
     if (clothing === 'sleepwear') parts.push('currently in sleepwear');
     else if (clothing === 'towel') parts.push('wrapped in a towel');
     else if (clothing === 'undressed') parts.push('currently undressed');
+    // Intimacy & Voyeurism Phase 5 (D11): the state machine's two new values
+    // get their own prose — never silently described as dressed. `nude` is a
+    // naked-in-scene state and is read as naked by the gate below.
+    else if (clothing === 'nude') parts.push('completely naked');
+    else if (clothing === 'changing') parts.push('mid-change, between two outfits');
   }
 
   // The undressed layer. THE reader for physical.intimate — the field the
@@ -2054,9 +2492,13 @@ function getPhysicalDescriptionForPrompt(npc, opts = {}) {
   //      every pre-existing call site is byte-identical to before;
   //   2. the content flags allow it — the same activeContentFlags gate the
   //      browser's adult sites go through, not a second notion of "mature";
-  //   3. the subject is actually undressed — a clothed character has nothing
-  //      to describe here no matter who asked.
-  if (opts.intimate && intimateAllowed(opts.gameState) && clothing === 'undressed') {
+  //   3. the subject is actually naked — a clothed character has nothing
+  //      to describe here no matter who asked. Reads NAKED_CLOTHING_STATES
+  //      ('undressed' + Phase 5's 'nude') rather than a bare `=== 'undressed'`
+  //      so a genuinely naked nude subject is described the same way; the
+  //      other two conditions are untouched, so this can only ever make the
+  //      gate more accurate, never looser (invariant 4, fail-closed).
+  if (opts.intimate && intimateAllowed(opts.gameState) && NAKED_CLOTHING_STATES.includes(clothing)) {
     const intimateBits = composeIntimateDescription(p.intimate);
     if (intimateBits) parts.push(intimateBits);
   }

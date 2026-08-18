@@ -540,6 +540,137 @@ function ensureSocialCircles(gameState) {
   }
 }
 
+// --- Outside partners (Intimacy & Voyeurism Phase 14, D14) -----------------
+// The boyfriend/girlfriend who comes over and disappears to her room. Some
+// residents start in a committed/seeing relationship with someone who does
+// NOT live here: a full external NPC (the exact createExternalNpc path the
+// escorts and hot singles use, so they are full NPCs on every existing
+// external-world path — IM contacts once contactKnown, peekable, talkable,
+// move-in eligible) with a warm castWeb pair and a relationship record
+// seeded from OUTSIDE_PARTNER_TUNING.warmAxes. Idempotent like
+// ensureSocialCircles: called at new-game write and at day rollover, so a
+// roommate who moves in on day 40 grows a partner (or not) the same
+// deterministic way the founding cast did, and a save written before this
+// phase picks partners up without a migration.
+//
+// The `world.outsidePartners` map (residentId → { npcId, sinceDay,
+// lastVisitDay }) is the direct index the visit planner, the sext drive and
+// the infidelity writer read — the relationship store is the source of truth
+// (a record that contradicts a partner, e.g. an in-house couple forming,
+// still reads as a committed couple through getRelationship), this is just
+// the cheap lookup.
+function ensureOutsidePartners(gameState) {
+  const partners = gameState.world.outsidePartners || (gameState.world.outsidePartners = {});
+  const day = gameState.meta?.clock?.day ?? 1;
+  for (const [npcId, npc] of Object.entries(gameState.npcs)) {
+    if (!npc || npc.residency?.status !== 'resident') continue;
+    if (partners[npcId]) continue;
+    // A resident who already holds a seeing/committed record (an in-house
+    // couple forming on a later day, or another partner) never gains a second
+    // — one relationship record is the whole gate, exactly as the plan's
+    // "seeded from world.relationships" reads. Exact-split membership: a key
+    // `npc_10|outside_npc_1` must not read as containing `npc_1`.
+    const store = gameState.world.relationships || {};
+    let hasRel = false;
+    for (const [key, rec] of Object.entries(store)) {
+      if (rec.status !== 'committed' && rec.status !== 'seeing') continue;
+      if (key.split('|').includes(npcId)) { hasRel = true; break; }
+    }
+    if (hasRel) continue;
+    const rng = seededRng(gameState.meta?.seed ?? gameState.seed, `outside_${npcId}`);
+    if (rng() >= OUTSIDE_PARTNER_TUNING.partnerChance) continue;
+
+    const partnerId = `outside_${npcId}`;
+    const partner = createExternalNpc(gameState, partnerId, partnerId, 'Partner');
+    partner.contactKnown = true;
+    partner.needs = { ...(partner.needs || {}), desire: OUTSIDE_PARTNER_TUNING.desireSeed };
+    // Warm castWeb both ways — the willingness gate's attraction/phase terms
+    // read these, and the pair act's deltas move them on every act.
+    const axes = { ...OUTSIDE_PARTNER_TUNING.warmAxes };
+    const web = gameState.world.castWeb || (gameState.world.castWeb = {});
+    const key = pairKey(npcId, partnerId);
+    web[key] = web[key] || createBlankPair(npcId, partnerId);
+    web[key].axes[`${npcId}→${partnerId}`] = { ...axes };
+    web[key].axes[`${partnerId}→${npcId}`] = { ...axes };
+    // The relationship record — status committed, no history yet: their first
+    // act IN THE GAME writes first_sex. The player can read the couple on the
+    // Present cards immediately.
+    const rec = getRelationship(gameState, npcId, partnerId, true);
+    rec.status = 'committed';
+    rec.lastTransitionDay = day;
+    partners[npcId] = { npcId: partnerId, sinceDay: day, lastVisitDay: null };
+  }
+  return partners;
+}
+
+// The direct lookup the sext drive and visit planner use: the resident's
+// outside partner's id, or null. PURE.
+function outsidePartnerIdOf(gameState, npcId) {
+  return gameState?.world?.outsidePartners?.[npcId]?.npcId || null;
+}
+
+// Plan today's outside-partner visits: one deterministic roll per resident
+// who has a partner, gated by the visit cooldown, deferred by the soft cap
+// exactly like friend visits (organic visits stand down when the house is
+// busy — locked decision 6). The window is the evening
+// (OUTSIDE_PARTNER_TUNING.windowStart/EndMinute) and the visit lands in the
+// resident's BEDROOM: a partner who comes over heads for their person's
+// room, which is what makes the Phase 13 pair act reachable the moment both
+// are home ("they disappear to her room"). Pure planning — returns what
+// happened, narration is the UI's job, the same split planFriendVisitsForDay
+// uses.
+function planOutsidePartnerVisitsForDay(gameState, day) {
+  ensureOutsidePartners(gameState);
+  const partners = gameState.world.outsidePartners || {};
+  const results = [];
+  for (const [residentId, entry] of Object.entries(partners)) {
+    const resident = gameState.npcs[residentId];
+    const partner = gameState.npcs[entry.npcId];
+    if (!resident || !partner) continue;
+    if (entry.lastVisitDay != null && day - entry.lastVisitDay < OUTSIDE_PARTNER_TUNING.visitCooldownDays) continue;
+    const rng = seededRng(gameState.meta.seed, `partnervisit_${residentId}_${day}`);
+    if (rng() >= OUTSIDE_PARTNER_TUNING.visitChancePerDay) continue;
+
+    const startMinute = OUTSIDE_PARTNER_TUNING.windowStartMinute
+      + Math.floor(rng() * (OUTSIDE_PARTNER_TUNING.windowEndMinute - OUTSIDE_PARTNER_TUNING.windowStartMinute + 1));
+    const duration = OUTSIDE_PARTNER_TUNING.visitDurationMin
+      + Math.floor(rng() * (OUTSIDE_PARTNER_TUNING.visitDurationMax - OUTSIDE_PARTNER_TUNING.visitDurationMin + 1));
+
+    const deferred = countVisitorsForDay(gameState, day) >= VISIT_TUNING.softCap;
+    const roomId = resident.residency?.room || 'living_room';
+    const visit = scheduleVisit(gameState, `partner_${entry.npcId}_${day}`, day, {
+      npcId: deferred ? null : entry.npcId,
+      purpose: 'partner',
+      startAbs: day * 1440 + startMinute,
+      endAbs: day * 1440 + Math.min(1440, startMinute + duration),
+      roomId,
+      hostNpcId: residentId,
+    });
+    if (deferred) {
+      visit.status = 'deferred';
+      results.push({ deferred: true, residentId, day });
+      continue;
+    }
+    entry.lastVisitDay = day;
+    results.push({
+      deferred: false, residentId, day,
+      npcId: entry.npcId,
+      partnerName: partner.bible?.name || 'Someone',
+      residentName: resident.bible?.name || 'Someone',
+      startMinute,
+    });
+  }
+  return results;
+}
+
+// The active visit whose SOURCE is an outside-partner visit for a given
+// visitor — the same join getActiveEscortVisit does for escorts (the visit
+// was scheduled with sourceId === `partner_<npcId>_<day>`), so consumers ask
+// one question instead of scanning. Returns the visit record or null.
+function getActivePartnerVisit(gameState, npcId) {
+  return getActiveVisits(gameState).find(v => v.purpose === 'partner' && v.npcId === npcId) || null;
+}
+
 // --- Escorts (external-world plan Phase 7) ---
 // Pre-generate the persistent roster: a fixed set of full NPCs (via
 // createExternalNpc — the exact generator drivers and the maid use, so they
@@ -750,6 +881,26 @@ function resolveVisitPresence(npcId, gameState, activeVisits, rng, resolved) {
       transit: null,
     };
   }
+  // An outside partner (Intimacy & Voyeurism Phase 14, D14) is here for
+  // their RESIDENT, so they follow them through the shared space like any
+  // social guest — and, unlike a guest, into the resident's OWN private
+  // bedroom: a boyfriend who comes over disappears to her room, which is
+  // what makes the Phase 13 pair act reachable the moment they co-locate.
+  // Other residents' private rooms stay off-limits (the same line the escort
+  // branch draws), and if the host is off-screen (at work) the partner waits
+  // in the room the visit was booked into — their person's bedroom, which
+  // they have a key to.
+  if (visit && visit.purpose === 'partner' && visit.hostNpcId) {
+    const hostLoc = resolved?.[visit.hostNpcId]?.location ?? gameState.npcs[visit.hostNpcId]?.location;
+    const hostRoom = gameState.npcs[visit.hostNpcId]?.residency?.room;
+    const followable = hostLoc && (ROOMS[hostLoc]?.type === 'common' || hostLoc === hostRoom);
+    return {
+      block: 'leisure',
+      location: followable ? hostLoc : visit.roomId,
+      activity,
+      transit: null,
+    };
+  }
   // An escort (Phase 7) is here for the PLAYER, so they follow the player
   // around the shared space the way a guest follows their host — and, unlike
   // a social guest, into the player's own bedroom (that's the point of the
@@ -823,6 +974,32 @@ function resolveScheduleActivity(npc, clock, gameState, npcId) {
         currentWeight = weight;
         break;
       }
+    }
+  }
+
+  // Intimacy & Voyeurism Phase 14 (D14): a resident whose outside partner is
+  // over is bound to their OWN bedroom for the visit window — the boyfriend
+  // comes over and disappears to her room. Same shape as the commitment bind
+  // above: the invitation binds, it doesn't hope. This is the half of the
+  // co-location that the schedule controls: resolveVisitPresence already makes
+  // the PARTNER follow the host into the host's own bedroom, but the host
+  // alone wanders the common rooms all evening (wind_down routes to common
+  // rooms, and 'reading in bed' is a stay-put activity that never gets you
+  // there), so the pair never lands in a private room and the Phase 13
+  // intimate drive — which requires isPrivateRoom — never becomes candid.
+  // Binding the HOST here is what co-locates the couple. Work/commute blocks
+  // are exempt (a host mid-shift is not pulled home; the partner waits in the
+  // booked room, their person's bedroom), and a real commitment still wins
+  // because it returns before this check runs.
+  if (gameState && npcId && currentBlock !== 'work' && currentBlock !== 'commute' && currentBlock !== 'commute_home') {
+    const partnerVisit = getActiveVisits(gameState).find(v => v.purpose === 'partner' && v.hostNpcId === npcId);
+    if (partnerVisit) {
+      return {
+        block: 'leisure',
+        weight: 1.0,
+        commitmentRoomId: npc.residency?.room || 'living_room',
+        commitmentKind: 'partner_visit',
+      };
     }
   }
 
@@ -923,7 +1100,14 @@ function resolveRoomForActivity(block, npcId, npcs, rng) {
 // --- Off-screen event resolution (deterministic, zero LLM) ---
 
 function drawOffscreenEvent(rng, npcId, npc, otherNpcIds) {
-  const evt = weightedPick(rng, OFFSCREEN_EVENTS);
+  // Intimacy & Voyeurism Phase 18 (D16): a parent with a baby presence
+  // gets the "stayed in with the baby" event appended to their own draw
+  // pool — the schedule effect: they stay home instead of living their
+  // old evening. Reads the ONE birth-pass writer (npc.flags._baby).
+  const pool = npc?.flags?._baby
+    ? [...OFFSCREEN_EVENTS, { type: 'baby', weight: PREGNANCY.baby.offscreenEventWeight, text: '{name} stayed in with the baby all evening — tiny socks everywhere, half-eaten meals, zero complaints.', moodDelta: 0.08, dataFields: [] }]
+    : OFFSCREEN_EVENTS;
+  const evt = weightedPick(rng, pool);
   const data = {};
   if (evt.dataFields) {
     for (const field of evt.dataFields) {
@@ -1289,6 +1473,10 @@ function resolveTick(gameState) {
         schedule: { currentBlock: 'visit', nextBlock: '', willReturnAt: null },
         transit: null,
         clothing: npc.clothing || 'dressed',
+        // Intimacy & Voyeurism Phase 6 (D11): carry the visitor's outfit
+        // through so readers never hit an undefined value (visitors keep
+        // whatever they arrived in; their sim is dormant outside the visit).
+        outfit: npc.outfit || {},
       };
       continue;
     }
@@ -1329,6 +1517,43 @@ function resolveTick(gameState) {
       }
     }
 
+    // Intimacy & Voyeurism Phase 19 (sound): the apartment's music. A
+    // resident who can actually HEAR a music signal (perceiveSignals already
+    // applies attenuation, doors and - for a wearer - the headphones filter)
+    // gets a small mood lift scaled by how loud it arrives; very loud music
+    // occasionally provokes a 'keep it down' beat, a real event the player
+    // can read (music_too_loud: authored lines, seeded roll on the tick
+    // stream like the ambient event above). A sleeping NPC is skipped -
+    // asleep is not listening.
+    if (block !== 'sleep' && location && ROOMS[location]) {
+      let loudestMusic = 0;
+      for (const rec of perceiveSignals(gameState, id, location)) {
+        if (rec.signalId === 'music' && rec.intensity > loudestMusic) loudestMusic = rec.intensity;
+      }
+      if (loudestMusic > 0) {
+        moodDelta += Math.min(SOUND_DEVICE_DEFS.music.npcMoodCap, loudestMusic * SOUND_DEVICE_DEFS.music.npcMoodPerIntensity);
+        const kd = SOUND_DEVICE_DEFS.music.keepItDown;
+        if (loudestMusic >= kd.threshold && rng() < kd.chancePerTick) {
+          newEvents.push({
+            day: meta.clock.day, tick: getTickIndex(meta.clock.minutes), roomId: location, npcId: id,
+            type: 'music_too_loud', moodDelta: kd.npcMood,
+            template: kd.lines[Math.floor(rng() * kd.lines.length)],
+            data: {}, seenByPlayer: false,
+          });
+        }
+      }
+      // The wearer's own headphones/mp3 player are a small mood lift (their
+      // music, and none of the apartment's noise) - the NPC mirror of the
+      // player's wornMusicTerm. wearsSoundBlocking is a BOOLEAN predicate;
+      // the per-device gain is keyed by the accessory NAME (re-read from the
+      // outfit rather than trusting the predicate's return).
+      if (wearsSoundBlocking(gameState, id)) {
+        const acc = (gameState.npcs?.[id]?.outfit?.accessory) || '';
+        const gain = SOUND_DEVICE_DEFS[acc]?.npcMoodGainPerTick;
+        if (gain) moodDelta += gain;
+      }
+    }
+
     // Evidence discovery (STEALTH, P6): a resident who ends up back in
     // their own room has a chance to notice undiscovered evidence left by
     // an earlier sneak or a housekeeper's boundary-crossing visit. Decides
@@ -1359,18 +1584,30 @@ function resolveTick(gameState) {
     // every TRANSIENT_CLOTHING state, so a towel reverts the tick after the
     // shower that produced it. Pass 3 runs after this and may set a fresh
     // transient state for THIS tick; next tick's pass 2 clears it.
-    let clothing = npc.clothing || 'dressed';
-    if (block === 'sleep') {
-      clothing = 'sleepwear';
-    } else if (TRANSIENT_CLOTHING.includes(clothing)) {
-      clothing = 'dressed';
-    }
+    //
+    // Intimacy & Voyeurism Phase 6 (D11): the rest of the clothing STATE
+    // machine and the outfit derivation now live in NPC's pure rules, applied
+    // here. `changing` settles to 'dressed' the tick after the change_clothes
+    // drive set it (TRANSIENT above); a towel the same. Activity-driven nudity
+    // keeps an NPC 'nude' for exactly as long as the nude activity lasts —
+    // ungated in the private shower, deviancy-gated at the pool (the gate is
+    // decided once per swim session via the already-nude guard, on a stream
+    // addressed per NPC+minute so it never perturbs the shared tick roll).
+    // The outfit is derived deterministically each tick, so it can never
+    // disagree with what the NPC is doing — the change_clothes drive is the
+    // visible 'changing' beat, this derivation is the state behind it.
+    const clothing = npcClothingForContext(
+      npc, block, activity, npc.clothing || 'dressed',
+      seededRng(meta.seed, `nude_${id}_${meta.clock.day * 1440 + Math.floor(meta.clock.minutes)}`)
+    );
+    const outfit = npcOutfitForContext(npc, gameState, block, activity);
 
     npcUpdates[id] = {
       location,
       activity,
       mood: Math.max(-1, Math.min(1, npc.mood + moodDelta)),
       clothing,
+      outfit,
       schedule: { currentBlock: block, nextBlock: resolved[id].nextBlock || '', willReturnAt: resolved[id].willReturnAt || null }, // NPC Overhaul Phase 7.2
       transit: resolved[id].transit || null,
     };
@@ -1625,11 +1862,59 @@ function resolveTick(gameState) {
       npcUpdates[id].clothing = driveResult.clothingState;
     }
 
+    // Intimacy & Voyeurism Phase 13 (D3/D13): the intimate pair drive's
+    // PARTNER. The resolver wrote the partner's whole footprint directly on
+    // gameState.npcs[partnerId] (effects mutated it in place, setCooldown
+    // replaced it, openCommitment pinned it) — but if the partner was
+    // evaluated EARLIER this tick, its own merge block already ran against
+    // the pre-act snapshot, and resolveBatch's `{ ...state.npcs[id], ...u }`
+    // rebuild would throw every one of those writes away. This is the same
+    // post-drive carry the block above does for the ACTING npc, done for the
+    // partner: pull the replaced-object fields back so the merge is
+    // order-independent. `activity`/'having sex' also pins the partner's
+    // visible state on the tick the act opens, even when the partner was
+    // evaluated before the initiator and never saw its own held branch.
+    if (driveResult.pairState) {
+      const ps = driveResult.pairState;
+      const pn = ps.npc;
+      if (pn) {
+        const u = npcUpdates[ps.partnerId] || (npcUpdates[ps.partnerId] = {});
+        if (ps.clothing) u.clothing = ps.clothing;
+        if (ps.activity) u.activity = ps.activity;
+        u.transit = null;
+        u.needs = pn.needs;
+        if (typeof pn.mood === 'number') u.mood = pn.mood;
+        u.flags = { ...(u.flags || {}), ...(pn.flags || {}) };
+        u.commitment = pn.commitment;
+        if (pn.pos) u.pos = pn.pos;
+        if (pn.walk) u.walk = pn.walk;
+        if (pn.relPlayer) u.relPlayer = pn.relPlayer;
+        if (pn.memory) u.memory = pn.memory;
+        if (pn.suspicion) u.suspicion = pn.suspicion;
+        if (pn.inventory) u.inventory = pn.inventory;
+        if (pn.overture) u.overture = pn.overture;
+      }
+    }
+
     // Merge events, IM messages, and rel deltas
     newEvents.push(...driveResult.events);
     allImMessages.push(...driveResult.imMessages);
     allRelDeltas.push(...driveResult.relDeltas);
     if (driveResult.factTransfers) allFactTransfers.push(...driveResult.factTransfers);
+    // Intimacy & Voyeurism Phase 14: third-party npc writes from the
+    // infidelity footprint (the wronged party's memory/mood/flags/relPlayer).
+    // Collected here and merged AFTER the loop — resolveBatch rebuilds npcs
+    // from `{ ...npc, ...update }`, so a mid-loop write to an npc who is
+    // neither participant would be clobbered by its pre-tick snapshot.
+    if (driveResult.wrongedNpcs) {
+      for (const [wid, wnpc] of Object.entries(driveResult.wrongedNpcs)) {
+        const u = npcUpdates[wid] || (npcUpdates[wid] = {});
+        u.memory = wnpc.memory;
+        u.mood = wnpc.mood;
+        u.flags = wnpc.flags;
+        if (wnpc.relPlayer) u.relPlayer = wnpc.relPlayer;
+      }
+    }
 
     // Phase 6: collect peep results for async surfacing
     if (driveResult.peepResults) {
@@ -1657,10 +1942,22 @@ function resolveTick(gameState) {
       const recv = gameState.npcs[ft.receiverId];
       if (!recv) continue;
       gameState.npcs[ft.receiverId] = receiveTransmittedFact(recv, ft.fact, ft.opts);
+      // Intimacy & Voyeurism Phase 14: a `cheating` fact reaching the
+      // WRONGED party through gossip is learning — jealousy lands exactly as
+      // a caught act does (maybeJealousUponFact dedupes per act). The write
+      // is merged into npcUpdates below the same way the fact itself is, or
+      // resolveBatch's rebuild would clobber it.
+      const jealous = maybeJealousUponFact(gameState, ft.receiverId, ft.fact);
       const mem = gameState.npcs[ft.receiverId].memory;
+      const extra = {};
+      if (jealous) {
+        extra.mood = jealous.mood;
+        extra.flags = jealous.flags;
+        if (jealous.relPlayer) extra.relPlayer = jealous.relPlayer;
+      }
       npcUpdates[ft.receiverId] = npcUpdates[ft.receiverId]
-        ? { ...npcUpdates[ft.receiverId], memory: mem }
-        : { memory: mem };
+        ? { ...npcUpdates[ft.receiverId], memory: mem, ...extra }
+        : { memory: mem, ...extra };
     }
   }
 
@@ -1709,6 +2006,32 @@ function resolveTick(gameState) {
     if ((st !== 'visitor' && st !== 'prospective') || npc.location === null) continue;
     if (activeVisitNpcIds.has(id)) continue;
     npcUpdates[id] = { location: null, activity: '', transit: null };
+  }
+
+  // Intimacy & Voyeurism Phase 12 (D12): the proximity co-occurrence
+  // accumulator — who spent this tick in the same room, the raw material
+  // pair formation consumes each day. Reads the FINAL locations (post-drive
+  // npcUpdates, so a drive that pulled two residents together this tick
+  // counts) and skips off-map residents. One cheap pass, residents only;
+  // the write is a small in-place counter on world.relationships, exactly
+  // like the signal buffer, and survives resolveBatch's npc rebuild because
+  // resolveBatch never clones world.
+  const proximityByRoom = {};
+  for (const id of activeNpcIds) {
+    const u = npcUpdates[id];
+    if (!u || !u.location) continue;
+    const npc = npcs[id];
+    if (!npc || npc.residency.status !== 'resident') continue;
+    (proximityByRoom[u.location] = proximityByRoom[u.location] || []).push(id);
+  }
+  for (const [roomId, ids] of Object.entries(proximityByRoom)) {
+    if (ids.length < 2) continue;
+    const bedroomWeight = ROOMS[roomId] && ROOMS[roomId].type === 'bedroom' ? RELATIONSHIP.bedroomProximityBonus : 1;
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        notePairCoLocation(gameState, ids[i], ids[j], { weight: bedroomWeight });
+      }
+    }
   }
 
   // Initiative plan Phase 2 (D15): stamp who was present onto every event this
@@ -1856,6 +2179,18 @@ function applyNeedsHeartbeat(gameState, minutes, options = {}) {
       stimulation += NEEDS.npcStimulationRestorePerMinute;
     }
 
+    // Intimacy & Voyeurism Phase 8 (D9/D12): the NPC desire stat. Decay is a
+    // continuous per-minute rate like every other need; the STRONGEST live
+    // source (DESIRE.sources — signals perceived from where they stand, plus
+    // anyone in the same room dressed invitingly) is converted from per-tick
+    // to per-minute and added to the net rate, applied once for the whole
+    // span in the same closed form. On the discrete path the span is one
+    // tick, so this is exactly "strongest wins per tick" (D12); on the
+    // continuous path it is the heartbeat's per-span recompute — no per-tick
+    // loop anywhere, so the closed-form fast-forward rules hold.
+    let desire = -DESIRE.npc.decayPerMinute;
+    if (location) desire += desireSourceForSpan(gameState, id, location, minutes / CLOCK.tickMinutes) / minutes;
+
     const clampNeed = (value, ratePerMinute, max) =>
       Math.min(max, Math.max(0, value + ratePerMinute * minutes));
     const needs = {
@@ -1867,6 +2202,7 @@ function applyNeedsHeartbeat(gameState, minutes, options = {}) {
       social: clampNeed(npc.needs.social, social, NEEDS.npcSocialMax),
       comfort: clampNeed(npc.needs.comfort ?? 50, comfort, 100),
       stimulation: clampNeed(npc.needs.stimulation ?? 50, stimulation, 100),
+      desire: clampNeed(npc.needs.desire ?? DESIRE.npc.start, desire, DESIRE.npc.max),
     };
 
     npcUpdates[id] = { needs };
@@ -1927,23 +2263,206 @@ function decayPlayerNeeds(player, minutes, gameState, options = {}) {
   const effectiveMinutes = minutes * mult;
   const ticks = effectiveMinutes / CLOCK.tickMinutes;
 
-  const hoursSinceLastMeal = (player.hoursSinceLastMeal ?? 0) + effectiveMinutes / 60;
+  // 2026-08-17 audit (B3): while asleep (options.sleeping — set only by
+  // doSleep), the hunger clock runs at SLEEP.hungerMultiplier: sleep
+  // metabolism slows, so an 8-hour night costs ~4 hours of waking hunger.
+  // Only the hunger span is scaled — energy/hygiene/mood/desire decay at
+  // their normal rates overnight.
+  const hungerSpanHours = (effectiveMinutes / 60) * (options.sleeping ? SLEEP.hungerMultiplier : 1);
+
+  // food-overhaul Phase 2 (D2/D3): the D3 fullness window is the canonical
+  // hunger state, drained at the living D2 metabolic rate (activity +
+  // yesterday's energy balance). Pre-migration players (no fullness fields)
+  // read as a legacy 18h window started from hoursSinceLastMeal, which is
+  // byte-identical to the Phase 5 clock.
+  const rate = metabolicRate(player, gameState);
+  const hasFullness = typeof player.fullnessRemainingHours === 'number';
+  const prevWindow = typeof player.fullnessWindowHours === 'number' ? player.fullnessWindowHours : HUNGER_RHYTHM.starveHours;
+  const prevRemaining = hasFullness
+    ? Math.max(0, player.fullnessRemainingHours)
+    : Math.max(0, HUNGER_RHYTHM.starveHours - (player.hoursSinceLastMeal ?? 0));
+  const fullnessRemainingHours = Math.max(0, prevRemaining - hungerSpanHours * rate);
+  const hoursSinceLastMeal = (player.hoursSinceLastMeal ?? 0) + hungerSpanHours;
 
   const day = gameState?.meta?.clock?.day ?? 0;
   const { moodEvents, eventTerm } = advanceMoodEvents(player.moodEvents, day);
-  const moodTarget = resolveMoodTarget(player, gameState, eventTerm, hoursSinceLastMeal);
+
+  // food-overhaul Phase 2 (D4): the daily expenditure accumulator. Basal
+  // burn over the effective span, lifted by the same decaying activity term
+  // that raises the rate; the explicit per-action kcal were already credited
+  // by notePlayerActivity at the action site. Idle minutes count at the idle
+  // multiplier (the span above is already idle-scaled), so standing around
+  // is cheap on the ledger too.
+  const { activityEvents, activityTerm } = advanceActivityEvents(player.meta?.activityEvents, day);
+  const meta = {
+    ...(player.meta || {}),
+    activityEvents,
+    kcalBurnedToday: (player.meta?.kcalBurnedToday || 0)
+      + METABOLISM.basalKcalPerHour * hungerSpanHours * (1 + activityTerm),
+  };
+
+  const moodTarget = resolveMoodTarget(player, gameState, eventTerm, fullnessRemainingHours, prevWindow);
   const mood = clamp(player.mood + (moodTarget - player.mood) * MOOD_TARGET.easingPerTick * ticks, -1, 1);
 
+  // Intimacy & Voyeurism Phase 8 (D9/D12): the player's desire need, moved
+  // in the same closed form as every other bar. Decay is a continuous
+  // per-minute rate; sources are PER-TICK exposure amounts scaled by the
+  // fractional ticks in the span (strongest wins per tick — DESIRE.sources).
+  // A pending one-shot kind source ('flirted' set by a desire-motive
+  // overture landing, 'peeked_at_sex' by Phase 10) is consumed here once and
+  // cleared, because this function is the ONLY writer of player needs. The
+  // idle multiplier applies to source ticks too: passively idling next to a
+  // shower stirs you at a quarter of the rate actively standing there does.
+  const desireSource = desireSourceForSpan(gameState, 'player', player.location, effectiveMinutes / CLOCK.tickMinutes);
+  let desire = (typeof player.desire === 'number' ? player.desire : DESIRE.player.start)
+    - DESIRE.player.decayPerMinute * effectiveMinutes
+    + desireSource;
+  const pendingDesireKind = (player.flags && player.flags._desireSource) || null;
+  if (pendingDesireKind) desire += desireSourceAmount(pendingDesireKind);
+
+  // Intimacy & Voyeurism Phase 5 (D11): the player's clothing rides the same
+  // TRANSIENT_CLOTHING revert path an NPC's does (resolveTick's pass 2) — a
+  // transient state (towel after a shower, sleepwear in bed) reverts to
+  // 'dressed' on the next span that ticks the player. This is the player's
+  // equivalent of the NPC per-tick revert, and the single choke point that
+  // makes the state machine's \\\"one tick of towel\\\" contract hold for both.
+  const clothing = TRANSIENT_CLOTHING.includes(player.clothing) ? 'dressed' : (player.clothing || 'dressed');
+
+  const { _desireSource: _consumed, ...flags } = player.flags || {};
   return {
     ...player,
     hoursSinceLastMeal,
+    fullnessRemainingHours,
+    fullnessWindowHours: prevWindow,
     mealsToday: player.mealsToday ?? 0,
     moodEvents,
+    meta,
     energy: Math.max(0, player.energy - NEEDS.energy.decayPerTick * ticks),
     hygiene: Math.max(0, player.hygiene - NEEDS.hygiene.decayPerTick * ticks),
-    hunger: satietyFrom(hoursSinceLastMeal),
+    hunger: satietyFrom(fullnessRemainingHours, prevWindow),
     mood,
+    clothing,
+    desire: Math.max(0, Math.min(DESIRE.player.max, desire)),
+    flags,
   };
+}
+
+// ===== SECTION: DESIRE SOURCES (Intimacy & Voyeurism Phase 8, D9/D12) =====
+// The exposure half of the desire need. Everything here is PURE: same state
+// in, same number out, no rng, no writes (RI2/RI3) — the writers (decay /
+// notePlayerDesireSource) live beside their consumers. Sources are the
+// DESIRE.sources table; the helpers below are the two readers every consumer
+// shares so "strongest wins per tick" means one thing everywhere.
+
+// The amount a one-shot kind source is worth. Unknown kinds return 0 (fails
+// closed — a source nobody can price never fires). Pure.
+function desireSourceAmount(kind) {
+  const src = DESIRE.sources.find(s => s.kind === kind);
+  return src && typeof src.amount === 'number' ? src.amount : 0;
+}
+
+// The strongest live source a perceiver is exposed to right now, as
+// { amount, lifeTicks }: the per-tick (30 game-minute) delta of the single
+// strongest source, and how many more ticks it is good for. `observerId` is
+// 'player' or an npcId; `roomId` is where they are standing.
+//
+//   signal sources  — perceived through the SAME perceiveSignals query the
+//                     scene reader and the drive loop use, so attenuation,
+//                     doors and the observer's own attention are already
+//                     applied: you gain desire from exactly what you can
+//                     actually sense, no more. A TRANSIENT source's lifeTicks
+//                     is its remaining life at the perceiver's intensity
+//                     (arrived intensity → SIGNAL_TUNING.floor at its own
+//                     decayPerTick), so a long closed-form span never credits
+//                     a short-lived signal for the whole span — the closed
+//                     form stays exact, exactly like the needs heartbeat's.
+//                     Standing sources have no decay and are credited for any
+//                     span (their life IS the world state that produces them).
+//   clothing source — seeing someone in the SAME ROOM dressed invitingly,
+//                     read through the shared clothingResponseToWearer(...)
+//                     .desire number (npc.js, Phase 7) — the "desire gain from
+//                     seeing someone dressed invitingly" deliverable. Observer
+//                     deviancy already gates how much of a reveal reads as
+//                     invitation; a prude gains nothing from the same crop top
+//                     a deviant finds enticing. Standing: lifeTicks Infinity.
+// Strongest wins: only the single largest amount contributes, so stacked
+// exposure (five showering roommates, a crowd in crop tops) never compounds
+// into an instant maxed bar.
+function desireSource(gameState, observerId, roomId) {
+  if (!gameState || !roomId || !ROOMS[roomId]) return { amount: 0, lifeTicks: 0 };
+  let best = { amount: 0, lifeTicks: 0 };
+
+  for (const rec of perceiveSignals(gameState, observerId, roomId)) {
+    // Your own shower running is not exposure to someone else — the desire
+    // source is what ANOTHER person's signals do to you, so a showering
+    // roommate stirs you but your own shower (sourceId === observerId, the
+    // actor id for drives/actions) only relaxes you. Null sources (world
+    // conditions) pass through unchanged.
+    if (rec.sourceId === observerId) continue;
+    for (const s of DESIRE.sources) {
+      if (s.signal !== rec.signalId || !(s.amount > best.amount)) continue;
+      const def = SIGNAL_DEFS[rec.signalId];
+      const decay = def && def.decayPerTick;
+      const lifeTicks = decay
+        ? Math.max(0, (rec.intensity - SIGNAL_TUNING.floor) / decay)
+        : Infinity;
+      best = { amount: s.amount, lifeTicks };
+    }
+  }
+
+  const observer = observerId === 'player' ? gameState.player : gameState.npcs?.[observerId];
+  if (observer) {
+    const scale = DESIRE.clothingScale;
+    for (const [id, npc] of Object.entries(gameState.npcs || {})) {
+      if (id === observerId || npc.location !== roomId) continue;
+      const want = clothingResponseToWearer(observer, npc).desire * scale;
+      if (want > best.amount) best = { amount: want, lifeTicks: Infinity };
+    }
+    if (observerId !== 'player' && gameState.player && gameState.player.location === roomId) {
+      const want = clothingResponseToWearer(observer, gameState.player).desire * scale;
+      if (want > best.amount) best = { amount: want, lifeTicks: Infinity };
+    }
+  }
+  return best;
+}
+
+// The span contribution of a desire source — the shared closed form both
+// consumers use: per-tick amount × min(spanTicks, lifeTicks). Bounded by the
+// source's remaining life so a long span (a sleep, a workday) never credits a
+// short-lived signal for hours it did not sound. Pure.
+function desireSourceForSpan(gameState, observerId, roomId, spanTicks) {
+  const src = desireSource(gameState, observerId, roomId);
+  if (!(src.amount > 0) || !(spanTicks > 0)) return 0;
+  const life = Number.isFinite(src.lifeTicks) ? src.lifeTicks : spanTicks;
+  return src.amount * Math.min(spanTicks, life);
+}
+
+// The one-shot writer. A desire-motive overture landing ('flirted', Phase 8)
+// or a peek catching sex ('peeked_at_sex', Phase 10) marks the player's
+// flags; decayPlayerNeeds consumes and clears the mark on its next span, so
+// the strongest of any pending kinds wins (DESIRE's "strongest wins" rule)
+// and no separate cleanup path can be forgotten. Only the player has a
+// decayPlayerNeeds to consume from; NPC one-shots ride their own write paths
+// in the phases that produce them.
+function notePlayerDesireSource(gameState, kind) {
+  if (!gameState || !gameState.player) return;
+  const amount = desireSourceAmount(kind);
+  if (!(amount > 0)) return;
+  const prev = (gameState.player.flags && gameState.player.flags._desireSource) || null;
+  if (prev && desireSourceAmount(prev) >= amount) return;
+  gameState.player.flags = { ...(gameState.player.flags || {}), _desireSource: kind };
+}
+
+// Intimacy & Voyeurism Phase 5 (D11): persist what the player is wearing —
+// the OUTFIT shape ({ slot: itemId }, missing slot = nothing worn there)
+// from the wardrobe panel's draft. A pure player-state write: putting clothes
+// on has no need/suspicion/relationship math, so it doesn't belong in the
+// effects vocabulary. Getting dressed always lands the state machine on
+// 'dressed' — you walked out of the wardrobe wearing the outfit, not a towel.
+function applyPlayerOutfit(player, outfit) {
+  if (!player) return;
+  player.outfit = { ...(outfit || {}) };
+  player.clothing = 'dressed';
 }
 
 // Push a mood impulse. Every ADJUST_NEED player mood line (effects.js) and
@@ -1974,33 +2493,169 @@ function advanceMoodEvents(moodEvents, day) {
   return { moodEvents: kept, eventTerm: clamp(eventTerm, -1, 1) };
 }
 
-// The hunger band for a given hours-since-last-meal (HUNGER_RHYTHM.bands).
-function hungerBand(hoursSinceLastMeal) {
+// ===== SECTION: METABOLISM (food-overhaul Phase 2, D2/D3/D4) =====
+// The living hunger clock. The persisted state is the D3 fullness window
+// (player.fullnessRemainingHours / fullnessWindowHours, baseline game-hours)
+// plus the D4 ledger (player.meta.kcalToday / kcalBurnedToday) and the
+// activity meter (player.meta.activityEvents, moodEvents-shaped decaying
+// impulses). Everything here is PURE except notePlayerActivity (the writer,
+// same pattern as notePlayerDesireSource): same state in, same numbers out.
+
+// D3 — the fullness window a meal of `kcal` grants, in baseline game-hours.
+// Linear at ~1h per METABOLISM.kcalPerFullnessHour kcal, then diminishing
+// returns past fullnessTaperAt, hard-capped at fullnessCapHours. Zero kcal
+// feeds nothing (a 0-kcal drink is hydration, not a meal); every real bite
+// grants at least fullnessFloorWindow so a sip of milk isn't instant
+// starvation.
+function fullnessHoursFromKcal(kcal) {
+  const k = Math.max(0, Number(kcal) || 0);
+  if (k <= 0) return 0;
+  const linear = k / METABOLISM.kcalPerFullnessHour;
+  let hours = linear <= METABOLISM.fullnessTaperAt
+    ? linear
+    : METABOLISM.fullnessTaperAt + (linear - METABOLISM.fullnessTaperAt) * METABOLISM.fullnessTaperRate;
+  return Math.min(METABOLISM.fullnessCapHours, Math.max(METABOLISM.fullnessFloorWindow, hours));
+}
+
+// The window's current remainder in baseline game-hours. Pre-overhaul
+// players (no fullness fields) read as a legacy 18h window started from
+// hoursSinceLastMeal — byte-identical to the Phase 5 clock, and exactly what
+// the player 6->7 migration materialises into the real fields.
+function fullnessRemaining(player) {
+  if (typeof player?.fullnessRemainingHours === 'number') return Math.max(0, player.fullnessRemainingHours);
+  const h = player?.hoursSinceLastMeal ?? 0;
+  return Math.max(0, HUNGER_RHYTHM.starveHours - h);
+}
+
+// D2 — the ebbing multiplier on the hunger clock. Base 1.0, lifted by the
+// decaying activity term (exercise/gig impulses) and by yesterday's energy
+// balance (deficit runs hot — hungrier sooner; surplus runs a hair cool).
+// Pure: reads persisted inputs, never writes.
+function metabolicRate(player, gameState) {
+  const meta = player?.meta || {};
+  const day = gameState?.meta?.clock?.day ?? 0;
+  const { activityTerm } = advanceActivityEvents(meta.activityEvents, day);
+  const balance = meta.energyBalance;
+  const balanceAdjust = balance === 'deficit' ? METABOLISM.deficitRateAdjust
+    : balance === 'surplus' ? METABOLISM.surplusRateAdjust : 0;
+  return clamp(METABOLISM.baseRate + activityTerm + balanceAdjust, METABOLISM.minRate, METABOLISM.maxRate);
+}
+
+// The activity meter's decay — mirror of advanceMoodEvents, half-life
+// activityHalfLifeDays (a workout's boost is largely gone by tomorrow). The
+// term is capped at activityMaxTerm so stacked exercise can't multiply the
+// clock absurdly.
+function advanceActivityEvents(activityEvents, day) {
+  const events = Array.isArray(activityEvents) ? activityEvents : [];
+  if (events.length === 0) return { activityEvents: events, activityTerm: 0 };
+  const factor = Math.pow(0.5, 1 / METABOLISM.activityHalfLifeDays);
+  const kept = [];
+  let term = 0;
+  for (const e of events) {
+    const age = Math.max(0, (day ?? 0) - (e.day ?? day ?? 0));
+    const contrib = (e.amount || 0) * Math.pow(factor, age);
+    if (Math.abs(contrib) >= METABOLISM.activityPruneBelow) { kept.push(e); term += contrib; }
+  }
+  return { activityEvents: kept, activityTerm: clamp(term, 0, METABOLISM.activityMaxTerm) };
+}
+
+// The one-shot writer (actions.js/computer.js call sites): a real physical
+// act pushes a rate-elevating impulse into the meter AND credits its explicit
+// kcal to the ledger immediately (a workout is real burn, not just a rate
+// nudge for the next few hours). Mirrors notePlayerDesireSource's in-place
+// write pattern.
+function notePlayerActivity(gameState, amount, kcal, day) {
+  if (!gameState?.player) return;
+  const player = gameState.player;
+  const meta = player.meta || (player.meta = {});
+  if (!Array.isArray(meta.activityEvents)) meta.activityEvents = [];
+  meta.activityEvents.push({ day, amount });
+  meta.kcalBurnedToday = (meta.kcalBurnedToday || 0) + (Number(kcal) || 0);
+}
+
+// D4 — day rollover (called from UI's processDayRollover): the completed
+// day's ledger becomes a day-mode for the day ahead, then the ledger resets.
+// burn − intake ≥ deficitThresholdKcal → deficit; the mirror → surplus.
+function rollEnergyLedger(player) {
+  const meta = player.meta || (player.meta = {});
+  const delta = (meta.kcalBurnedToday || 0) - (meta.kcalToday || 0);
+  meta.energyBalance = delta >= METABOLISM.deficitThresholdKcal ? 'deficit'
+    : delta <= -METABOLISM.surplusThresholdKcal ? 'surplus'
+    : 'balanced';
+  meta.kcalToday = 0;
+  meta.kcalBurnedToday = 0;
+}
+
+// The hunger band for the current fullness position. Two-arg form (Phase 2):
+// a fraction of the meal's window remaining (HUNGER_RHYTHM.bands, minFrac).
+// One-arg form is the LEGACY hour-keyed ladder (HUNGER_RHYTHM.bandsHours)
+// for pre-overhaul readers, kept so old call shapes still mean the same
+// thing.
+function hungerBand(fullnessRemainingHours, fullnessWindowHours) {
+  if (fullnessWindowHours === undefined) {
+    const h = fullnessRemainingHours ?? 0;
+    for (const b of HUNGER_RHYTHM.bandsHours) {
+      if (h < b.maxHours) return b;
+    }
+    return HUNGER_RHYTHM.bandsHours[HUNGER_RHYTHM.bandsHours.length - 1];
+  }
+  const frac = Math.max(0, (fullnessRemainingHours ?? 0)) / Math.max(1, fullnessWindowHours);
   for (const b of HUNGER_RHYTHM.bands) {
-    if (hoursSinceLastMeal < b.maxHours) return b;
+    if (frac >= b.minFrac) return b;
   }
   return HUNGER_RHYTHM.bands[HUNGER_RHYTHM.bands.length - 1];
 }
 
-// Derived 0-100 hunger display. Purely a function of hoursSinceLastMeal (a
-// meal of any size resets the clock — food-size flavour lives in the mood
-// impulse and the consumable values, not the bar). Reaches 0 exactly at
-// HUNGER_RHYTHM.starveHours.
-function satietyFrom(hoursSinceLastMeal) {
-  return Math.max(0, HUNGER_RHYTHM.satietyStart - hoursSinceLastMeal * HUNGER_RHYTHM.satietyPerHour);
+// Derived 0-100 hunger display. Purely a function of the fullness window: 90
+// with a full window, linear to 0 exactly when the window is exhausted
+// (which fires the existing NEED_CONSEQUENCES.hunger path). The old clock is
+// the special case window=starveHours: 90×(remaining/18) ≡ 90 − 5×h. One-arg
+// form keeps the legacy hours-since-meal mapping (satiety 90 − 5h) for
+// pre-overhaul callers.
+function satietyFrom(fullnessRemainingHours, fullnessWindowHours) {
+  if (fullnessWindowHours === undefined) {
+    return Math.max(0, HUNGER_RHYTHM.satietyStart - (fullnessRemainingHours ?? 0) * HUNGER_RHYTHM.satietyPerHour);
+  }
+  const rem = Math.max(0, fullnessRemainingHours ?? 0);
+  const win = Math.max(1, fullnessWindowHours);
+  return HUNGER_RHYTHM.satietyStart * Math.min(1, rem / win);
+}
+
+// Player-facing fullness prose: the band label plus the D4 energy-bridge
+// hint (a deficit day means sleep restores less energy).
+function fullnessStatusText(player, gameState) {
+  const band = hungerBand(player?.fullnessRemainingHours ?? 0, player?.fullnessWindowHours ?? HUNGER_RHYTHM.starveHours);
+  const phrase = {
+    satisfied: 'that meal is still holding',
+    peckish: 'a snack would do',
+    hungry: 'time for a real meal',
+    very_hungry: 'you have gone too long without eating',
+    starving: 'eat something, now',
+  }[band.key] || band.label;
+  let text = `${band.label} — ${phrase}`;
+  if (player?.meta?.energyBalance === 'deficit') text += ' · low fuel: sleep restores less energy today';
+  else if (player?.meta?.energyBalance === 'surplus') text += ' · well fueled';
+  return text;
 }
 
 // The steady-state mood target: base + needs + social + comfort + stress +
 // eventTerm. See the MOOD_TARGET block in CONFIG for the terms and their
 // shapes. player.mood eases toward this in decayPlayerNeeds.
-function resolveMoodTarget(player, gameState, eventTerm, hoursSinceLastMeal) {
+// Phase 2: the hunger term reads the fullness window (remaining/window); a
+// call with only four args is the LEGACY hours-since-meal shape (migration
+// and old harnesses) and maps to the old hour-keyed ladder.
+function resolveMoodTarget(player, gameState, eventTerm, fullnessRemainingHours, fullnessWindowHours) {
   const cfg = MOOD_TARGET;
-  const h = hoursSinceLastMeal ?? player.hoursSinceLastMeal ?? 0;
+  const isLegacy = fullnessWindowHours === undefined;
+  const h = isLegacy ? (fullnessRemainingHours ?? player.hoursSinceLastMeal ?? 0) : 0;
   const mealsToday = player.mealsToday ?? 0;
   let target = cfg.base;
 
-  // needsTerm — hunger band + energy + hygiene + meal regularity.
-  target += hungerBand(h).moodPenalty;
+  // needsTerm — hunger band + energy + hygiene + meal regularity + the
+  // ledger's day-mode term (D4).
+  target += isLegacy
+    ? hungerBand(h, undefined).moodPenalty
+    : hungerBand(fullnessRemainingHours, fullnessWindowHours).moodPenalty;
   const energyMax = player.energyMax || NEEDS.energy.max;
   if (player.energy <= 0) target += cfg.needsTerm.energyEmptyPenalty;
   else if (player.energy <= energyMax * cfg.needsTerm.energyWarnFrac) target += cfg.needsTerm.energyWarnPenalty;
@@ -2010,6 +2665,9 @@ function resolveMoodTarget(player, gameState, eventTerm, hoursSinceLastMeal) {
   else if (mealsToday === 0 && ((gameState?.meta?.clock?.minutes ?? 0) / 60) % 24 >= cfg.needsTerm.mealsSkippedFromHour) {
     target += cfg.needsTerm.mealsSkippedPenalty;
   }
+  const balance = player.meta?.energyBalance;
+  if (balance === 'deficit') target += cfg.needsTerm.deficitMoodPenalty;
+  else if (balance === 'surplus') target += cfg.needsTerm.surplusMoodBonus;
 
   // socialTerm — average resident affection toward the player. The
   // interaction-based part of this term arrives as impulses (Phase 6's
@@ -2050,10 +2708,19 @@ function resolveMoodTarget(player, gameState, eventTerm, hoursSinceLastMeal) {
   // partial gameState (no objects bucket) — those simply get no smell term.
   if (typeof perceiveSignals === 'function' && gameState?.objects) {
     let worstSmell = 0;
+    let bestMusic = 0;
     for (const rec of perceiveSignals(gameState, 'player', player.location)) {
       if (rec.channel === 'smell' && rec.intensity > worstSmell) worstSmell = rec.intensity;
+      if (rec.signalId === 'music' && rec.intensity > bestMusic) bestMusic = rec.intensity;
     }
     if (worstSmell > 0) target += cfg.comfort.odorPenalty * worstSmell;
+    // Intimacy & Voyeurism Phase 19: music the player can actually hear is
+    // a small comfort term - scaled by arrived intensity, capped. Headphones
+    // silence the read (a wearer perceives none of the apartment's music),
+    // and instead the wearer's own music gives the flat term below.
+    if (bestMusic > 0) target += Math.min(cfg.comfort.musicCap, bestMusic * cfg.comfort.musicScale);
+    const worn = wearsSoundBlocking(gameState, 'player');
+    if (worn) target += cfg.comfort.wornMusicTerm;
   }
 
   // stressTerm — rent, burnout, unpaid bills.
@@ -2084,28 +2751,69 @@ function resolveMoodTarget(player, gameState, eventTerm, hoursSinceLastMeal) {
 // so "throwing it out" during the Rotten window prevents the mess. The
 // maid (cleanRoomObjects) and the player's throw-out button clear both the
 // container state alone. Synchronous by design — it's a
-// rollover hook like the others.
+// rollover hook like the others. Food-overhaul Phase 1 (D17): frozen and
+// thawing stacks are exempt entirely — they never age, so they can never
+// cross into Rotten-and-grace here.
 function processSpoilageForDay(gameState, day) {
   if (!gameState?.objects) return;
+  // Food-overhaul Phase 4 (D11): resolve any finished dishwasher cycles on
+  // the write path (the same hygiene as the thawed-stack normalization
+  // below) — a completed cycle empties the clean load and frees the machine.
+  // Compared against the CONTINUOUS clock (gameDaysNow scale) — the caller's
+  // whole-day `day` would miss a cycle that finished earlier this day. Null
+  // clock (a minimal-state caller like a dev harness, or mid-migration) →
+  // nothing resolves, which is safe.
+  const now = gameState?.meta?.clock ? gameDaysNow(gameState.meta.clock) : null;
+  for (const [bucket, objs] of Object.entries(gameState.objects || {})) {
+    for (const obj of Object.values(objs || {})) {
+      if (obj.defId === 'dishwasher' && obj.dishwasher?.cycleActiveUntilAbs > 0) {
+        resolveDishwasherCycle(obj, now);
+      }
+    }
+  }
   for (const [bucket, objs] of Object.entries(gameState.objects || {})) {
     for (const obj of Object.values(objs || {})) {
       const odef = OBJECT_DEFS[obj.defId];
       // Only containers that declare the state can rot; anything else is
       // skipped so cleanRoomObjects' dirtyWhen-driven reset stays sound.
       if (!odef?.states?.rotten_food || !Array.isArray(obj.contents)) continue;
-      const shelfMult = odef.container?.preservation ?? ROT.bagPreservation;
+      // Food-overhaul Phase 1 (D18): the multiplier resolves through the
+      // single owning table by the container's storageClass (preservationFor).
+      const shelfMult = preservationFor(odef);
       let anyMess = false;
       const kept = [];
-      for (const stack of obj.contents) {
+      for (let stack of obj.contents) {
         const def = ITEM_DEFS[stack.defId];
         if (!def?.perishable?.days) { kept.push(stack); continue; }
-        const anchor = stack?.meta?.cohort ?? stack?.meta?.acquiredDay;
-        if (anchor == null) { kept.push(stack); continue; } // age unknown — never instant rot
-        const shelfDays = def.perishable.days * shelfMult;
-        if (day > anchor + shelfDays + ROT.graceDays) { anyMess = true; continue; } // converts to a mess
+        // Food-overhaul Phase 1 (D17/D29): frozen and thawing stacks never
+        // age — no rot, no mess, nothing to sweep. They skip even the
+        // anchor check below, which would over-charge a frozen stack whose
+        // cohort still points at its pre-freeze life.
+        const prog = thawProgress(stack, day);
+        if (prog === 'frozen' || prog === 'thawing') { kept.push(stack); continue; }
+        let rotten;
+        if (prog === 'thawed') {
+          // Fully thawed but still carrying its frozen block (no transfer
+          // normalized it yet). Resolve through the frozen-aware
+          // freshnessOf so the frozen span is never charged, then normalize
+          // the anchor onto the normal clock so it reads like an ordinary
+          // stack from here on.
+          const fresh = freshnessOf(stack, odef, day);
+          if (fresh == null) { kept.push(stack); continue; }
+          rotten = fresh.pct > 1 + ROT.graceDays / fresh.shelfDays;
+          const meta = { ...stack.meta };
+          delete meta.frozen;
+          meta.cohort = day - fresh.pct * fresh.shelfDays;
+          stack = { ...stack, meta };
+        } else {
+          const anchor = stack?.meta?.cohort ?? stack?.meta?.acquiredDay;
+          if (anchor == null) { kept.push(stack); continue; } // age unknown — never instant rot
+          const shelfDays = def.perishable.days * shelfMult;
+          if (day > anchor + shelfDays + ROT.graceDays) { rotten = true; } // converts to a mess
+        }
+        if (rotten) { anyMess = true; continue; }
         kept.push(stack);
       }
-      if (kept.length !== obj.contents.length) obj.contents = kept;
       if (anyMess) {
         // Perception plan Phase 2 (D10): setting the container's state is now
         // the WHOLE job. The room-level `odor = 'smelly'` write that used to
@@ -2115,6 +2823,12 @@ function processSpoilageForDay(gameState, day) {
         obj.state = { ...obj.state, rotten_food: 'rotten' };
         refreshRoomCleanliness(gameState, bucket.replace(/^room_/, ''));
       }
+      // Always assign: `kept` may contain NORMALIZED stacks (a thawed stack
+      // whose frozen block was dropped and anchor rewritten above) even when
+      // nothing was removed — the length-only guard would silently discard
+      // that normalization and leave the stack stuck on the frozen-aware math
+      // until some future transfer happened to retime it.
+      obj.contents = kept;
     }
   }
 }
@@ -3126,6 +3840,18 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
     rooms[roomId] = { capacity: ROOMS[roomId].capacity, cleanliness: recomputeRoomCleanliness(bucket), lastEvent: null };
   }
 
+  // Intimacy & Voyeurism Phase 6 (D11): NPCs start dressed in their daily
+  // outfit, derived from their bedroom wardrobe the same way resolveTick will
+  // keep deriving it — so the first render (before any tick) already shows a
+  // real outfit, and a reload of an old save (no outfit fields) is covered by
+  // the same additive-default shape resolveTick writes.
+  for (const id of npcIds) {
+    const npc = npcs[id];
+    const block = npc.schedule?.currentBlock || 'morning';
+    npc.outfit = npcOutfitForContext(npc, { objects }, block, null);
+    if (!npc.clothing) npc.clothing = 'dressed';
+  }
+
   // Seed episode logs with backdated shared-history beats
   for (const [pairKey, pair] of Object.entries(castWeb)) {
     const [a, b] = pairKey.split('|');
@@ -3153,6 +3879,18 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
   const playerAppearance = generatePlayerAppearance(seed, cast.playerDraft);
   const playerName = rollPlayerName(seed, playerAppearance.gender, cast.playerDraft);
 
+  // Intimacy & Voyeurism Phase 5 (D11): the player starts DRESSED. The daily
+  // outfit is composed deterministically from their starter wardrobe (the
+  // same composeOutfit Phase 6's NPCs use), so the wardrobe panel opens on a
+  // real current outfit and the scene prompt has something to say. A missing
+  // wardrobe (unusual layout) leaves an empty outfit — 'dressed' reads fine
+  // either way, and the additive-default pattern means an OLD SAVE (no
+  // outfit/clothing fields) loads as dressed-with-no-outfit, no migration.
+  const playerWardrobe = Object.values(objects.room_bedroom_player || {}).find(o => o.defId === 'wardrobe');
+  const playerOutfit = playerWardrobe
+    ? composeOutfit('daily', (playerWardrobe.contents || []).map(s => s.defId))
+    : {};
+
   const player = {
     // What the player LOOKS like, in the same shape an NPC's bible carries
     // (age/gender/physical) so NPC's getPhysicalDescriptionForPrompt reads it
@@ -3169,6 +3907,14 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
     // player's rather than authored on its own.
     name: playerName.name,
     surname: playerName.surname,
+    // Intimacy & Voyeurism Phase 5 (D11): what the player is wearing right
+    // now — the OUTFIT shape ({ slot: itemId }, missing slot = nothing worn
+    // there) persisted on the player, and the clothing STATE MACHINE value
+    // (dressed|changing|nude|towel|sleepwear|undressed, same enum as NPCs).
+    // outfit is the data, clothing is the state; the describer and the scene
+    // read both. Old saves lack both fields and read as dressed, no outfit.
+    outfit: playerOutfit,
+    clothing: 'dressed',
     // The portrait the studio generated, stored the way takePhoto stores a
     // photo — the PROMPT and SEED that reproduce it, never the blob, because
     // the image cache is a shared LRU that can evict the pixels at any time.
@@ -3188,13 +3934,27 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
     // Phase 5: hunger is a derived rhythm value (see satietyFrom). Starting
     // hoursSinceLastMeal 2 keeps the familiar 80 display (satiety 90−2×5) —
     // you had something on the way in — and mealsToday/moodEvents seed the
-    // new real state.
+    // new real state. Food-overhaul Phase 2 (D3/D4): the fullness window
+    // becomes the real state (18h legacy window, 16h remaining = the same 80
+    // display), and the D4 ledger/meter start empty and balanced.
     hoursSinceLastMeal: 2,
+    fullnessWindowHours: HUNGER_RHYTHM.starveHours,
+    fullnessRemainingHours: HUNGER_RHYTHM.starveHours - 2,
     mealsToday: 0,
     moodEvents: [],
     hunger: 80,
+    meta: {
+      kcalToday: 0,
+      kcalBurnedToday: 0,
+      energyBalance: 'balanced',
+      activityEvents: [],
+    },
     hygiene: 100,
     mood: 0.2, // [-1, 1] scale — see NEEDS.mood config comment. 0.2 mirrors the old 60/100 starting mood at the same relative position.
+    // Intimacy & Voyeurism Phase 8 (D9/D12): desire as a real need. Decayed
+    // and sourced in decayPlayerNeeds like every other bar; old saves lack
+    // the field and read as DESIRE.player.start there, so no migration.
+    desire: DESIRE.player.start,
     skills: {},
     // Inventory overhaul Phase 1: the player starts with their personal
     // effects — keys, wallet, ID — as `keyItem` stacks that the inventory
@@ -3240,6 +4000,12 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
     world: {
       rooms,
       castWeb,
+      // Intimacy & Voyeurism Phase 12 (D12): the NPC↔NPC relationship store
+      // (see relationships.js). One record per pair, keyed by pairKey(a,b) —
+      // the same canonical form castWeb uses. Lazy: stays empty until a pair
+      // actually co-locates, and old saves read the WORLD_KEY_FALLBACKS
+      // default with no migration.
+      relationships: {},
       quests: { active: [], completed: [] },
       events: [],
       deliveries: [],
@@ -3265,6 +4031,10 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
       // when the driver's visit window opens. World state rather than app
       // state because the driver and the handover outlive the app session.
       foodOrders: [],
+      // Grocery delivery (QuickCart): placed orders, same shape/reasoning
+      // as foodOrders — the shopper and the handover outlive the app
+      // session.
+      groceryOrders: [],
       // Friends of roommates (external-world plan Phase 6): cheap
       // deterministic stubs for every resident's social circle, keyed by
       // stubId. A stub becomes a real NPC only when a visit is planned
@@ -3293,6 +4063,13 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
       // the admission ticket into RoomList's Offers screen and the assign
       // flow; it's cleared when the person moves in (acceptApplicant).
       moveInOffers: [],
+      // Intimacy & Voyeurism Phase 14 (D14): the outside-partner index —
+      // residentId → { npcId, sinceDay, lastVisitDay }. The partner NPCs
+      // themselves live in `npcs` (visitor status) and the relationship
+      // record in `relationships`; this is just the cheap lookup the visit
+      // planner, the sext drive and the infidelity writer read. See
+      // ensureOutsidePartners.
+      outsidePartners: {},
       // Perception plan Phase 3: the transient-signal ring buffer. Records are
       // { id, roomId, intensity, bornTick, sourceId } and fade at their def's
       // decayPerTick; SIGNALS' emitTransient prunes and caps it on every
@@ -3531,7 +4308,7 @@ function createNpcFromBible(bible, residencyStatus) {
     mood: 0,
     moodReason: '',                                   // NPC Overhaul
     schedule: { currentBlock: '', nextBlock: '', willReturnAt: null }, // NPC Overhaul
-    needs: { hunger: 50, hygiene: 50, energy: 50, social: 50, comfort: 50, stimulation: 50 }, // NPC Overhaul: +comfort, +stimulation
+    needs: { hunger: 50, hygiene: 50, energy: 50, social: 50, comfort: 50, stimulation: 50, desire: DESIRE.npc.start }, // NPC Overhaul: +comfort, +stimulation; Intimacy & Voyeurism Phase 8: +desire
     relPlayer: {
       trust: 0, affection: 0, tension: 0, respect: 0,
       comfort: 0, desire: 0,                          // NPC Overhaul

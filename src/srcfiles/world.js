@@ -184,6 +184,13 @@ function makeObjectInstance(placement, bucket, slot, seed, roomId, npcs, day) {
     ownerId: resolvePlacementOwner(placement, roomId, npcs),
     state: { ...def.defaultState }, condition: 100, contents: [],
     evidence: null, discovered: {}, flags: { ...(def.defaultFlags || {}) }, spawnedDay: day || 1,
+    // Food-overhaul Phase 4 (D9): dish-aware surfaces carry their dirty
+    // dishes as a { dishType: count } MAP (obj.dishes) plus the derived unit
+    // count (obj.dishUnits) — see ITEMS' dish helpers and DISH_DEFS.
+    // `dishwasher` is the appliance's load/cycle record ({ load,
+    // cycleActiveUntilAbs }) or null on everything else, same additive-default
+    // shape as `evidence`.
+    dishes: {}, dishUnits: 0, dishwasher: null,
     // Per-instance authored content (perception plan Phase 4). Null for every
     // object that doesn't need it — same additive-default shape as `evidence`
     // above. A note's text/author/addressee live here; nothing else uses it
@@ -261,6 +268,7 @@ function spawnObjectsForNewGame(seed, npcs) {
     });
   }
   seedStarterGroceries(objects);
+  seedStarterWardrobes(objects);
   objects['carry_player'] = {};
   for (const npcId of Object.keys(npcs)) objects[`carry_${npcId}`] = {};
   return objects;
@@ -270,13 +278,38 @@ function spawnObjectsForNewGame(seed, npcs) {
 // .contents, so a fresh house is cookable on day one — matches the
 // existing "the house has a past before the player's first turn"
 // convention (SIM backdates castWeb shared-history beats the same way).
+// Food-overhaul Phase 1 (D17): the freezer bucket's contents are stamped
+// frozen at seed — they skip the MOVE_ITEM path that freezes stacks in
+// transit, so without this a starter frozen pizza would sit in the freezer
+// unpinned, quietly aging at the freezer's slow rate and never showing the
+// Frozen badge. Frozen-at-move-in, agedFraction 0 (never aged).
 function seedStarterGroceries(objects) {
   const kitchen = objects['room_kitchen'];
   if (!kitchen) return;
   for (const [defId, groceries] of Object.entries(STARTER_GROCERIES)) {
     const obj = Object.values(kitchen).find(o => o.defId === defId);
     if (!obj) continue;
-    obj.contents = groceries.map(g => ({ defId: g.defId, qty: g.qty, ownerId: null, meta: { acquiredDay: 1 } }));
+    const inFreezer = OBJECT_DEFS[defId]?.container?.storageClass === 'freezer';
+    obj.contents = groceries.map(g => {
+      const meta = { acquiredDay: 1 };
+      if (inFreezer) meta.frozen = { frozenAtAbs: 1, thawStartAbs: null, agedFraction: 0 };
+      return { defId: g.defId, qty: g.qty, ownerId: null, meta };
+    });
+  }
+}
+
+// STARTER_WARDROBES (DEFS.WORLD) into each bedroom wardrobe instance's
+// .contents, so Phase 5's Change Outfit and Phase 6's NPC selection have
+// real clothes from day one. Same seed shape as seedStarterGroceries —
+// each wardrobe starts at tier 1 (flags.tier) and every starter set is
+// written to fit under its 12-item capacity.
+function seedStarterWardrobes(objects) {
+  for (const [roomId, wardrobeItems] of Object.entries(STARTER_WARDROBES)) {
+    const bucket = objects[`room_${roomId}`];
+    if (!bucket) continue;
+    const obj = Object.values(bucket).find(o => o.defId === 'wardrobe');
+    if (!obj) continue;
+    obj.contents = wardrobeItems.map(g => ({ defId: g.defId, qty: g.qty, ownerId: null, meta: { acquiredDay: 1 } }));
   }
 }
 
@@ -529,7 +562,11 @@ function computeObjectGriminess(def, obj) {
   if (!def || !def.dirtyWhen) return 0;
   let grime = 0;
   for (const [key, weights] of Object.entries(def.dirtyWhen)) {
-    const val = obj.state?.[key];
+    // Food-overhaul Phase 4 (D9): a 'dishes' dirtyWhen key reads the
+    // DERIVED ladder (ITEMS' dishLevelOf) against the object's dish MAP —
+    // the map is the world state, the ladder is never stored (same
+    // derive-don't-mirror rule the rot signal follows).
+    const val = key === 'dishes' && obj.dishes ? dishLevelOf(obj) : obj.state?.[key];
     if (val != null && weights[val] != null) grime = Math.max(grime, weights[val]);
   }
   return grime;

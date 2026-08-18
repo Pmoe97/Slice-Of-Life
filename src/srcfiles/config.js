@@ -371,10 +371,12 @@ const WALK = {
 // amenity working can command real money. This is what makes the upgrade
 // system an investment rather than a drain (src/ref/complete/apartment-upgrades-plan.md).
 //
-// The arc, at $1900/week with the entry freelance rate (~$22/block, and
-// energy capping a day at roughly 12 blocks):
-//   solo, any state    → owes $1900/wk ≈ $271/day vs ~$264/day earnable at
-//                        full grind. Not quite payable, on purpose.
+// The arc, at $1900/week with the entry freelance rate (~$28-48/block after
+// the 2026-08-17 audit's entry-pay bump, and energy capping a day at
+// roughly 14 blocks):
+//   solo, any state    → owes $1900/wk ≈ $271/day vs roughly $215-270/day
+//                        earnable by grinding (focus is never a clean 1.0).
+//                        Not quite payable, on purpose.
 //   1 roommate, wreck  → owes $1748/wk. Barely moves the needle.
 //   3 roommates, mid   → owes  $760/wk ≈ 5 blocks/day. Comfortable.
 //   4 roommates, restored → breaks even.
@@ -745,6 +747,10 @@ const MAINTENANCE = {
     // 'shower' drive (not 'self_care') decays both bathroom plumbings.
     'shower': ['bathroom_a_plumbing', 'bathroom_b_plumbing'],
     'do_laundry': ['laundry_machines'],
+    // Intimacy & Voyeurism Phase 6: the swim drive is gated on a working
+    // pool the same way shower is gated on plumbing, and using it wears it
+    // out — the pool is expensive to keep, which is the point.
+    'swim': ['pool_systems'],
     // NOTE: the old 'cook' drive (→ kitchen_stove) became Phase 8's 'eat'
     // drive, which deliberately does NOT map to a facility: a hungry NPC
     // raids the fridge/pantry/own bag, which needs no working stove, and
@@ -765,12 +771,15 @@ const MAINTENANCE = {
 // Food decays, and rot becomes a mess with consequences (D5/D6). One
 // tuning surface for the whole model. Freshness is DERIVED from elapsed
 // game time (invariant 5 — never a stored countdown): a stack's effective
-// shelf life is `def.perishable.days × container.preservation`, and the
-// container's preservation multiplier lives on its OBJECT_DEFS entry
-// (fridge 4.0 / pantry 2.0 / bag 1.0 / doormat 0.75 / floor 0.5 — see
-// DEFS.WORLD's container block). Moving a stack between containers
-// recomputes its remaining life (ITEMS' retimeStack) rather than resetting
-// it.
+// shelf life is `def.perishable.days × ROT.preservation[storageClass]`.
+// The preservation multipliers used to live scattered on each container's
+// own OBJECT_DEFS entry (fridge 4.0 / pantry 2.0 / bag 1.0 / doormat 0.75 /
+// floor 0.5) — since food-overhaul Phase 1 (D18) they are consolidated
+// into the one table below and containers reference a row by
+// `container.storageClass` (see DEFS.WORLD's container block), closing the
+// invariant-5 gap where two hand-maintained lists could drift. Moving a
+// stack between containers recomputes its remaining life (ITEMS'
+// retimeStack) rather than resetting it.
 //
 // Elapsed time is CONTINUOUS — `day + minutes/1440` (ITEMS' gameDaysNow),
 // not `clock.day` alone. That was the whole bug the overhaul fixed: at
@@ -791,6 +800,11 @@ const MAINTENANCE = {
 //             and energy hit (the food-poisoning beat, once per meal).
 //   Rotten    NOT edible. It is refuse, and `graceDays` later it is a mess.
 //
+// A stack under `meta.frozen` (food-overhaul Phase 1, D17/D29) does not
+// age at all while frozen — its freshness clock is pinned to the moment it
+// was frozen and resumes only once it has fully thawed (see THAW_TUNING
+// and ITEMS' thawProgress/freshnessOf).
+//
 // `def.perishable.days` is therefore the time from acquisition to ROTTEN at
 // the 1.0 (room-temperature) baseline, not the time until it first looks
 // iffy — the ingredient shelf lives in DEFS.WORLD were re-authored against
@@ -801,11 +815,40 @@ const MAINTENANCE = {
 // each container def's `rotten_food` state (DEFS.WORLD), so the maid's
 // cleanRoomObjects and the player's throw-out button clear it with no
 // parallel mess system.
+// A frozen stack thaws (leaves the frozen state) after this long at room
+// temperature — anywhere that isn't refrigeration/freezing: carried in the
+// bag, left on a counter, stored in the pantry (D29). Duration-based on
+// purpose: the freezer is a planning tool, not a teleport.
+const THAW_TUNING = { roomTempThawHours: 8 };
+
+// The freezer's preservation multiplier. A frozen stack doesn't age AT ALL
+// while under `meta.frozen` (D17) — the freshness clock is pinned — so this
+// number is a floor (what a def that ignores the frozen state would see),
+// not the real mechanism. The real mechanism lives in ITEMS' freshnessOf.
+const FROZEN_PRESERVATION = 25;
+
 const ROT = {
-  graceDays: 2,                  // days a Rotten (inedible) stack sits there before it becomes a mess
+  graceDays: 3,                  // days a Rotten (inedible) stack sits there before it becomes a mess
   bagPreservation: 1.0,          // the player's bag is the neutral baseline (1.0 row of the preservation table)
-  freshHours: 4,                 // absolute Fresh window at the 1.0 baseline — "just made", not a fraction of shelf life
-  stages: { good: 0.15, stale: 0.45, spoiled: 0.75 },  // fraction-of-life ladder: Fresh/— < .15 | Stale .45 | Spoiled .75 | Rotten ≥ 1
+  // The ONE owning preservation table (food-overhaul Phase 1, D18 —
+  // design invariant 5). Containers reference a row by storageClass
+  // (OBJECT_DEFS' container block); everything without one resolves to
+  // the bag baseline. The multipliers used to live scattered on each
+  // container's own OBJECT_DEFS entry and could drift from this table —
+  // they live HERE now, one place to tune.
+  preservation: {
+    floor: 0.5,      // dropped on the bare floor, uncovered
+    doormat: 0.8,    // covered indoor hallway — room temperature, merely uncovered
+    bag: 1.0,        // the neutral baseline
+    pantry: 2.5,     // a cool, dark cupboard
+    fridge: 5.0,     // 4.0 → 5.0 (D18 — the ladder is gentler, not stricter)
+    freezer: FROZEN_PRESERVATION,  // frozen stacks never age (D17); a floor, not the mechanism
+  },
+  freshHours: 6,                 // absolute Fresh window at the 1.0 baseline — "just made", not a fraction of shelf life
+  // Fraction-of-life ladder (D18 — gentler than the 0.15/0.45/0.75 the
+  // system shipped with: food spends more of its life plainly "good" and
+  // only looks iffy near the end, which is when it actually is).
+  stages: { good: 0.2, stale: 0.5, spoiled: 0.8 },  // Fresh/— < .2 | Stale .5 | Spoiled .8 | Rotten ≥ 1
   labels: { fresh: 'Fresh', good: '', stale: 'Stale', spoiled: 'Spoiled', rotten: 'Rotten' },
   // Two perishable stacks merge only when their freshness anchors are this
   // close. At whole-day resolution the test was anchor equality, which IS
@@ -1218,6 +1261,71 @@ const COMMITMENT_KINDS = {
   },
 };
 
+// --- Asks (asks-and-attachments-plan.md Phase 1) ---
+// The deterministic decision spine for the conversation Request menu. Every
+// ask draws seededRng(seed, 'ask_'+category+'_'+npcId+'_'+day+'_'+count) so
+// the same save always gives the same answer (D1/D6) — the same convention
+// COMMITMENT_TUNING/respondToCommitment uses. Each leaf picks its own
+// primary axis; the curve shape (score = axis − tension×tensionPenaltyWeight,
+// seeded noise in ±acceptNoiseRange, accept when the sum clears
+// acceptThreshold) is shared so a Phase-1 ask reads like a meal invite to
+// anyone who knows the codebase.
+const ASK_TUNING = {
+  acceptThreshold: 0.0,
+  acceptNoiseRange: 0.3,
+  tensionPenaltyWeight: 0.8,
+  // The repeat ladder (D7, Phase 3): consecutive same-category asks within a
+  // day escalate — the 2nd draws a small score penalty and NO relationship
+  // delta, the 3rd+ a larger penalty AND a negative REL_DELTA (axis below,
+  // capped by EFFECT_LIMITS.relDeltaCap). An accepted ask resets the counter.
+  // resolveAsk (asks.js) reads the streak and applies all of this; the day
+  // rollover sweep lives in sweepAskCounts.
+  ladder: {
+    secondAskPenalty: 0.05,
+    thirdAskPenalty: 0.15,
+    thirdAskRelDelta: -0.06,
+    relAxis: 'trust',
+    resetOnAccept: true,
+  },
+  loan: {
+    defaultAmount: 40,
+    amountFromFlavor: true,
+    maxByPhase: { early: 20, familiar: 100, close: 300, intimate: 500 },
+  },
+  chore: {
+    // Phase 6 — a tired NPC is less likely to do a favour right now.
+    // Energy is the NPC's 0..100 need; the term is (energy-50)/50 ×
+    // energyWeight, so a fully rested NPC gets +energyWeight and an
+    // exhausted one −energyWeight (affection-neutral at the 50 midpoint).
+    energyWeight: 0.2,
+  },
+  photo: {
+    threshold: 'photo', // willingness act — the photo ask's gate (Phase 8)
+  },
+  // Scheduled asks (Phase 4, D8/D9): the free-slot probe (asks.js
+  // freeSlotsFor) finds maximal contiguous runs of non-busy ticks
+  // (work/commute/commute_home/sleep are hard blocks, COMMITMENT_TUNING
+  // .busyBlocks), then splits each run into bookable windows of at most
+  // chunkMinutes — an all-day free run must not pin the NPC for fifteen
+  // hours. Anything shorter than minFreeWindowMinutes is a pop-in, not a
+  // plan, and is dropped.
+  schedule: {
+    chunkMinutes: 120,
+    minFreeWindowMinutes: 60,
+  },
+  // Phase 9 — a gift's relationship impact (asks.js ask_gift). The match is
+  // deterministic (bible.interests / want / wound vs the item's curated +
+  // lexical identity), and the delta follows the plan's rule exactly: a
+  // match moves the needle, a miss does not. interest is the strongest
+  // signal (they'll actually keep/use it); want/wound are close behind. A
+  // miss is deliberately zero — no line is even emitted, so nothing moves.
+  // relAxis is the plan's verification axis (relPlayer[affection]).
+  gift: {
+    relDeltas: { interest: 0.12, want: 0.10, wound: 0.10, miss: 0 },
+    relAxis: 'affection',
+  },
+};
+
 // Weekend rush (src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 4). Del's
 // crew works weekdays only, so a job's durationDays are WORKING days and a
 // booking made late in the week stretches across the weekend. Paying the
@@ -1287,6 +1395,31 @@ const FOOD_TUNING = {
   // How far ahead a scheduled order can be placed, in minutes past the
   // earliest possible arrival.
   maxScheduleAheadMinutes: 360,
+};
+
+// QuickCart (grocery delivery, an Instacart parody): same shape as
+// FOOD_TUNING, but a shopper works a whole list across a store rather than
+// one kitchen firing one dish, so shopping time is deliberately longer than
+// DoorDrop's prep — total shop+travel lands 50-100 min, inside "real
+// Instacart is often 30-90 minutes." One store, one flat delivery fee (no
+// per-restaurant deliveryFeeBase) — groceries are a necessity, priced
+// lighter than Nile's flat $8 and DoorDrop's fee stack. No
+// maxScheduleAheadMinutes/requestedAbs: a grocery run has no mealtime-style
+// urgency to schedule around — order now, watch the ETA count down.
+const GROCERY_TUNING = {
+  shopMinutesBase: 30,
+  shopMinutesVariance: 30,
+  travelMinutesBase: 20,
+  travelMinutesVariance: 20,
+  deliveryFee: 5,
+  serviceFeeRate: 0.10,
+  tipOptions: [0, 0.10, 0.15, 0.20],
+  defaultTipPct: 0.15,
+  tipRelThreshold: 0.15,
+  tipRelDelta: { trust: 0.04, affection: 0.04 },
+  stiffRelDelta: { trust: -0.02, affection: -0.03 },
+  shopperPoolSize: 5,
+  shopperWindowMinutes: 30,
 };
 
 // --- Friends of roommates (src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 6) ---
@@ -1372,7 +1505,65 @@ const MOVE_IN_TUNING = {
 // chore drives never run for a visitor: they have no needs to maintain (no
 // decay) and no chores to do. Enforced in DRIVES' evaluateDrives alongside
 // the renovation construction gate.
-const VISITOR_DRIVE_ALLOWLIST = ['react_to_player', 'seek_company', 'chat_with_roommate'];
+// Intimacy & Voyeurism Phase 14 (D3/D14): `intimate` joins the list so an
+// OUTSIDE PARTNER who is visiting their committed resident can initiate the
+// pair act themselves — symmetric initiation holds on the visit spine, not
+// just among residents. (A visitor's solo masturbate stays blocked: they
+// have no needs to service, and the pair act is the thing they came here
+// for.)
+const VISITOR_DRIVE_ALLOWLIST = ['react_to_player', 'seek_company', 'chat_with_roommate', 'intimate'];
+
+// --- Outside partners (Intimacy & Voyeurism Phase 14, D14) -----------------
+// The boyfriend/girlfriend who comes over and disappears to her room: some
+// residents start in a committed/seeing relationship with someone who does
+// NOT live in the apartment (ensureOutsidePartners, sim.js). The partner is
+// a full external NPC on the visit spine — they visit on a cadence, follow
+// their resident through the flat and into their bedroom, pair up through
+// the Phase 13 intimate drive (D3/D13), and sext from afar when apart (the
+// sext_partner drive). `partnerChance` is a per-resident probability
+// evaluated deterministically (seeded rng), so the same world seed always
+// ships the same couples; a resident who already holds a seeing/committed
+// record never gains one.
+const OUTSIDE_PARTNER_TUNING = {
+  partnerChance: 0.35,
+  // Visits.
+  visitChancePerDay: 0.4,        // per resident per day, rolled at rollover
+  visitCooldownDays: 3,          // min gap between visits
+  windowStartMinute: 1080,       // 18:00 — partners come by in the evening
+  windowEndMinute: 1290,         // 21:30 — latest arrival
+  visitDurationMin: 150,
+  visitDurationMax: 300,
+  // The partner NPC's arrival state. Visitors have no needs decay
+  // (external-world plan Phase 1), so their desire stat sits where it was
+  // seeded — seed it mid-bar so either side of the pair is a plausible
+  // initiator, not just the resident whose desire actually climbs.
+  desireSeed: 55,
+  // The castWeb axes a couple ships with (warm both ways, sated desire a
+  // little below max): what makes the willingness gate open for the pair act
+  // and the resident's `intimate` drive outrank solo masturbation the moment
+  // they co-locate.
+  warmAxes: { trust: 0.6, affection: 0.65, tension: -0.1, respect: 0.5, comfort: 0.7, desire: 0.6 },
+  // The long-distance thread (sext_partner drive). Lines are mild, committed-
+  // couple banter — deterministic content riding the existing IM thread, the
+  // same content tier as AfterHours text, never a prompt string (D15).
+  sext: {
+    desireFloor: 45,             // drive candidacy door (alongside the partner existing & being away)
+    desireGain: 6,               // texting makes it worse — appetite climbs toward the next visit
+    moodGain: 0.03,
+    cooldownMinutes: 600,
+    warmDelta: { affection: 0.02, desire: 0.04 },   // castWeb sender → partner
+    lines: [
+      'Thinking about you. How was your day?',
+      'Can\'t sleep. Wish you were here.',
+      'What are you wearing right now? Asking for a friend.',
+      'Come over soon. I have plans for you.',
+      'This place is too quiet without you in it.',
+      'Send me something to remember you by.',
+      'I miss the way you smell when you walk in the door.',
+      'I dreamed about you last night. The dream was not appropriate.',
+    ],
+  },
+};
 
 const FACILITY_DEFS = {
   // --- Bedroom: habitability (bed + door + light) ---
@@ -1440,13 +1631,21 @@ const FACILITY_DEFS = {
     id: 'kitchen_stove', label: 'Kitchen Stove', room: 'kitchen',
     qualityWeight: 4, gatesActions: ['self.cook'],
     appeal: { 'cooking': 2.0, 'crafting': 0.5, '*': 0.5 },
+    // D37 (2026-08-18, user decision): 'functional' is the DAY-ONE baseline
+    // — the apartment starts with a working (shabby) cooktop so cooking is
+    // playable immediately, flavored as a single countertop electric
+    // burner. 'broken' survives only as a migration backstop: facility
+    // decay floors at 'functional' (locked decision #5), so nothing in play
+    // can ever re-break it. 'upgraded' (the gas range) is the paid RenoFix
+    // goal, and the functional tier's zero cost/duration mark it as the
+    // baseline rather than a purchasable upgrade.
     tiers: [
-      { tier: 'broken', label: 'Broken Stove', qualityValue: 0, cost: 0, durationDays: 0,
-        desc: 'The stove doesn\'t light. No cooking until it\'s fixed.' },
-      { tier: 'functional', label: 'Working Stove', qualityValue: 0.5, cost: 1500, durationDays: 5,
-        desc: 'A functional gas stove. You can cook proper meals.' },
+      { tier: 'broken', label: 'No Cooktop', qualityValue: 0, cost: 0, durationDays: 0,
+        desc: 'No cooktop — the socket is dead and the coil is gone. No cooking until it\'s replaced.' },
+      { tier: 'functional', label: 'Countertop Burner', qualityValue: 0.5, cost: 0, durationDays: 0,
+        desc: 'A single countertop electric burner — one coil, slow to heat, quick to burn. Shabby, but it cooks.' },
       { tier: 'upgraded', label: 'Proper Range', qualityValue: 1.0, cost: 6000, durationDays: 6,
-        desc: 'A real range with oven, exhaust hood, and room for multiple pots.' },
+        desc: 'A real gas range with oven, exhaust hood, and room for multiple pots.' },
     ],
   },
   // --- Bathroom A: shower/plumbing ---
@@ -1609,6 +1808,25 @@ const FACILITY_DEFS = {
         desc: 'Stainless steel fridge, dishwasher, and a coffee bar.' },
     ],
   },
+  // --- Kitchen: freezer (food-overhaul Phase 1, D17) ---
+  // The freezer is a working feature from day one ('functional' starting
+  // tier, mirroring kitchen_appliances) — freezing and its thaw rules are
+  // gameplay, not a purchase. The upgraded tier is a bigger/better chest
+  // freezer; equipment tuning (capacity, burn rates) lands in Phase 6's
+  // EQUIPMENT_DEFS pass, not here.
+  kitchen_freezer: {
+    id: 'kitchen_freezer', label: 'Freezer', room: 'kitchen',
+    qualityWeight: 1, gatesActions: [],
+    appeal: { 'cooking': 1.2, 'crafting': 0.3, '*': 0.2 },
+    tiers: [
+      { tier: 'broken', label: 'No Freezer', qualityValue: 0, cost: 0, durationDays: 0,
+        desc: 'No freezer at all — nothing to keep frozen.' },
+      { tier: 'functional', label: 'Working Freezer', qualityValue: 0.5, cost: 0, durationDays: 0,
+        desc: 'An old chest freezer that hums along fine. Food keeps indefinitely in here.' },
+      { tier: 'upgraded', label: 'Big Chest Freezer', qualityValue: 1.0, cost: 1200, durationDays: 2,
+        desc: 'A roomy chest freezer with a separate quick-freeze drawer.' },
+    ],
+  },
   // --- Balcony (cosmetic, no action gate) ---
   balcony_setup: {
     id: 'balcony_setup', label: 'Balcony', room: 'balcony',
@@ -1692,7 +1910,7 @@ const ROOM_FACILITIES = {
   bedroom_1: ['bedroom_habitability_1'],
   bedroom_2: ['bedroom_habitability_2'],
   bedroom_3: ['bedroom_habitability_3'],
-  kitchen: ['kitchen_stove', 'kitchen_appliances'],
+  kitchen: ['kitchen_stove', 'kitchen_appliances', 'kitchen_freezer'],
   bathroom_a: ['bathroom_a_plumbing'],
   bathroom_b: ['bathroom_b_plumbing'],
   living_room: ['living_room_entertainment'],
@@ -1716,15 +1934,32 @@ const ROOM_FACILITIES = {
 // making one auxiliary bedroom habitable so a roommate can move in.
 // A few start 'functional' so the opening isn't completely paralyzed
 // (kitchen_appliances: the fridge works, just old).
+//
+// 2026-08-17 audit (D6): BOTH bathrooms now start 'functional' too — the
+// plumbing is a WORKING SHOWER (hot water, toilet, drains) at game start,
+// not something special. The 2026-08-17 pass set them 'broken', which left
+// the player with no way to wash for the entire early repair grind (and
+// 'broken' shower tiers describe exactly what a new player was stuck
+// with). 'functional' is deliberately NOT 'upgraded' (Modern Bath) — that
+// stays a paid RenoFix goal. See bug-fix-audit-2026-08-17.md, finding B4.
+//
+// 2026-08-18 (D37, food-overhaul user decision): the stove joins that
+// list — kitchen_stove now starts 'functional' as a single shabby
+// countertop electric burner, because cooking is the food overhaul's
+// day-one hook and a broken stove made it unreachable until the mid-game
+// repair grind (the D7 starting-groceries day-one-cookable design wants
+// the Cook chip live on day one). 'upgraded' (Proper Range) stays the paid
+// RenoFix goal; 'broken' survives only as a migration backstop.
 const FACILITY_STARTING_TIERS = {
   bedroom_habitability_player: 'functional',
   bedroom_habitability_1: 'broken',
   bedroom_habitability_2: 'broken',
   bedroom_habitability_3: 'broken',
-  kitchen_stove: 'broken',
+  kitchen_stove: 'functional',
   kitchen_appliances: 'functional',
-  bathroom_a_plumbing: 'broken',
-  bathroom_b_plumbing: 'broken',
+  kitchen_freezer: 'functional',
+  bathroom_a_plumbing: 'functional',
+  bathroom_b_plumbing: 'functional',
   living_room_entertainment: 'broken',
   gym_equipment: 'broken',
   pool_systems: 'broken',
@@ -1873,32 +2108,520 @@ const NEEDS = {
   npcStimulationRestorePerMinute: 2/30,
 };
 
-// --- Hunger rhythm (Phase 5, D1) ---
-// Hunger is a rhythm, not a treadmill: the real state is hoursSinceLastMeal
-// (advances with elapsed game time, scaled by NEEDS.idleDecayMultiplier) and
-// mealsToday (counts meals, reset at day rollover). player.hunger stays a
-// 0-100 DERIVED display value — recomputed by SIM's decayPlayerNeeds and
-// whenever the player eats — so every existing reader (NEED_CONSEQUENCES,
-// the LLM prompt's Hunger line, the header bars, NPC reactions) keeps
-// working with no migration. The satiety mapping bottoms out at 0 exactly at
-// starveHours, which is what fires the existing NEED_CONSEQUENCES.hunger
-// path. The band ladder carries the mechanical effects (mood penalty, work
-// penalty — see resolveMoodTarget and the work-output readers).
+// --- Hunger rhythm (Phase 5, D1; food-overhaul Phase 2, D2/D3/D4) ---
+// Hunger is a rhythm, not a treadmill. Phase 5's real state was
+// hoursSinceLastMeal (game-hours since the last meal, advanced by
+// decayPlayerNeeds and scaled by NEEDS.idleDecayMultiplier and
+// SLEEP.hungerMultiplier). The food overhaul (Phase 2) keeps the rhythm and
+// the 0-100 derived display but changes the inputs (D2/D3): the canonical
+// real state is now the D3 FULLNESS WINDOW — fullnessRemainingHours /
+// fullnessWindowHours, baseline game-hours — drained at a living metabolic
+// rate (see METABOLISM) instead of a flat 5/hr. mealsToday still counts
+// meals (reset at day rollover), now keyed to REAL meals (kcal ≥
+// METABOLISM.minKcalForMeal, D4) rather than any positive hunger delta.
+// player.hunger stays a DERIVED display value — recomputed by SIM's
+// decayPlayerNeeds and whenever the player eats — so every existing reader
+// (NEED_CONSEQUENCES, the LLM prompt's Hunger line, the header bars, NPC
+// reactions) keeps working with no migration. The satiety mapping bottoms
+// out at 0 exactly when the fullness window is exhausted (the old
+// starveHours for legacy saves), which is what fires the existing
+// NEED_CONSEQUENCES.hunger path. The band ladder carries the mechanical
+// effects (mood penalty — see resolveMoodTarget). bandsHours is the legacy
+// hour-keyed ladder, kept for the old single-arg satietyFrom/hungerBand
+// call shape (migration and pre-overhaul readers).
 const HUNGER_RHYTHM = {
-  satietyStart: 90,     // display satiety at hoursSinceLastMeal 0 ("just ate")
-  satietyPerHour: 5,    // satiety = satietyStart - hours×perHour, floored 0 (reaches 0 at starveHours)
-  starveHours: 18,      // hoursSinceLastMeal at which the NEED_CONSEQUENCES.hunger path fires
+  satietyStart: 90,     // display satiety with a full window ("just ate")
+  satietyPerHour: 5,    // legacy: satiety = satietyStart - hours×perHour (old clock)
+  starveHours: 18,      // legacy default window; the old hours-to-starve line
   mealsPerDayCap: 4,    // mealsToday saturates here (display/bonus hygiene)
+  // Fraction-of-window-remaining ladder (Phase 2): a band is where you are
+  // in your meal, not hours on an 18h clock. Remaining ≥ minFrac × window.
   bands: [
+    { minFrac: 0.5,  key: 'satisfied',   label: 'Satisfied',   moodPenalty: 0 },
+    { minFrac: 0.25, key: 'peckish',     label: 'Peckish',     moodPenalty: 0 },
+    { minFrac: 0.1,  key: 'hungry',      label: 'Hungry',      moodPenalty: -0.02 },
+    { minFrac: 0.001, key: 'very_hungry', label: 'Very hungry', moodPenalty: -0.05 },
+    // No workPenalty flag here — a hungry mood flows into work output
+    // transitively via the mood bar (COMPUTER's getWorkFocus reads
+    // player.mood). A separate flag would be a second, silent tuning surface.
+    { minFrac: 0, key: 'starving', label: 'Starving', moodPenalty: -0.08 },
+  ],
+  bandsHours: [
     { maxHours: 4, key: 'satisfied',   label: 'Satisfied',   moodPenalty: 0 },
     { maxHours: 8, key: 'peckish',     label: 'Peckish',     moodPenalty: 0 },
     { maxHours: 12, key: 'hungry',     label: 'Hungry',      moodPenalty: -0.02 },
     { maxHours: 18, key: 'very_hungry', label: 'Very hungry', moodPenalty: -0.05 },
-    // No workPenalty flag here — a hungry mood flows into work output
-    // transitively via the mood bar (COMPUTER's getWorkFocus reads
-    // player.mood). A separate flag would be a second, silent tuning surface.
     { maxHours: Infinity, key: 'starving', label: 'Starving', moodPenalty: -0.08 },
   ],
+};
+
+// --- Metabolism (food-overhaul Phase 2, D2/D3/D4) ---
+// The hunger clock's living rate. D2: the flat 5/hr drain becomes a
+// multiplier over the fullness window that ebbs with activity (exercise and
+// gig work push decaying impulses into player.meta.activityEvents) and the
+// PREVIOUS day's energy balance (deficit days run hot — hungrier sooner;
+// surplus days run a hair cool). D3: meal size sets the window — ~1h of
+// fullness per kcalPerFullnessHour kcal, with diminishing returns on feasts
+// (fullnessTaperAt/Rate) and a hard cap so a feast can't outlast a day.
+// D4: the daily ledger (kcalToday intake vs kcalBurnedToday expenditure,
+// accumulated in SIM's decayPlayerNeeds) rolls at day rollover into a
+// day-mode (energyBalance: deficit|balanced|surplus) that re-tunes the rate
+// below, sleep recovery (deficitEnergyRestoreMult — see UI's doSleep) and a
+// small persistent mood term (MOOD_TARGET.needsTerm). mealsToday is keyed to
+// real meals (minKcalForMeal) instead of any positive hunger delta.
+const METABOLISM = {
+  baseRate: 1.0,               // D2 — the multiplier when idle and balanced
+  minRate: 0.6,                // surplus + never below this floor
+  maxRate: 2.5,
+  kcalPerFullnessHour: 200,    // D3 — ~1h of fullness per 200 kcal (D3 says "approx 250"; 200 makes a 600-kcal home dinner a ~3h window and a 1000-kcal restaurant dinner the "fed for the evening" case)
+  fullnessFloorWindow: 0.75,   // even a real bite feeds you at least this long (baseline h)
+  fullnessTaperAt: 6,          // baseline h of window before diminishing returns kick in
+  fullnessTaperRate: 0.5,      // beyond taperAt, extra kcal count at this fraction
+  fullnessCapHours: 12,        // one meal's worth (plus carryover) can never exceed this
+  activityHalfLifeDays: 0.5,   // an exercise impulse halves every half day (~gone by tomorrow)
+  activityPruneBelow: 0.01,
+  activityMaxTerm: 0.8,
+  basalKcalPerHour: 75,        // D4 — basal expenditure (~1800 kcal/day)
+  // The "activity meter" (D2/D4): per-action impulse (raises the rate while
+  // it decays) and the explicit kcal credited to the ledger at the action.
+  activities: {
+    workout:   { impulse: 0.5,  kcal: 300 },
+    swim:      { impulse: 0.45, kcal: 280 },
+    workBlock: { impulse: 0.15, kcal: 60 },  // a gig block — active work, not a couch sit
+  },
+  deficitThresholdKcal: 300,   // burn − intake ≥ this → the NEXT day runs in deficit
+  surplusThresholdKcal: 300,   // intake − burn ≥ this → the NEXT day runs in surplus
+  deficitRateAdjust: 0.2,      // deficit day: hunger clock ×(1 + this)
+  surplusRateAdjust: -0.1,     // surplus day: hunger clock ×(1 − this), floored at minRate
+  deficitEnergyRestoreMult: 0.9,  // D4 — deficit slows sleep recovery
+  surplusEnergyRestoreMult: 1.05,
+  minKcalForMeal: 250,         // mealsToday counts only meals this big (D4)
+};
+
+// --- Plate instances (food-overhaul Phase 3, D5/D6/D25/D27/D28) ---
+// The home-cooked meal as an INSTANCE (stack.meta.plate) rather than a
+// fixed meal_* def: kcal and quality genuinely computed at cook time from
+// the ingredients consumed (D5), a batch with servings (D6/D25), leftovers
+// that rot on the normal ladder and reheat (D7), and the hot-vs-frozen
+// mood rules (D27/D28). Phase 3's meal bonus resolves the parked open
+// question: food-GROUP variety (starchy/protein/vegetable/...) — the
+// plan's default — because it rewards a balanced plate without pretending
+// to nutrition science (each ingredient def carries ONE `foodGroup`; the
+// builder reads it through ITEMS' foodGroupOf). Quality here is a
+// Phase-3-only approximation (base + ingredient quality + group variety);
+// Phase 5's cooking engine owns real quality from Phase 5 on, and its
+// computeGrade() replaces the placeholder ladder below. A plate is a
+// SNAPSHOT (design invariant 1): none of this is ever re-derived at eat
+// time — the numbers on the instance ARE the food.
+const PLATE_TUNING = {
+  groupBonusKcal: 100,        // D5 meal bonus per distinct food group beyond the first
+  baseQuality: 0.5,           // quality floor of a home-cooked plate
+  qualityFromFood: 0.8,       // contribution of the ingredients' shared foodQuality (DEFS.ACTIONS) reader
+  qualityFromVariety: 0.07,   // per distinct food group beyond the first
+  qualityMoodScale: 0.05,     // plate quality → per-serving mood impulse (0.05 × quality ≈ the meal_* 0.02–0.04 band)
+  frozenEatenPenalty: 0.04,   // D28 — eating ordinary food still frozen costs this much mood per serving
+  qualityCap: 0.95,
+  // Component stage word per cooking method — Phase 3 recipes declare a
+  // simple method (boil/fry/stir_fry/...); the stage on each plate
+  // component reads THIS table so the shape Phase 5's engine fills is the
+  // same shape Phase 3 already produces. (Phase 5: the engine overrides
+  // stages for 'none' methods with the prep verb's stage word.)
+  stagesByMethod: {
+    boil: 'boiled', simmer: 'simmered', fry: 'fried', saute: 'sautéed',
+    sear: 'seared', bake: 'baked', roast: 'roasted', stir_fry: 'stir-fried',
+    steam: 'steamed', none: 'prepared',
+  },
+};
+
+// --- Dishes & cookware (food-overhaul Phase 4, D9/D10/D11) ---
+// Dish dirt is now per-TYPE and capacity-modeled. A kitchen surface holds a
+// MAP of dirty counts (obj.dishes, e.g. { pot: 1, pan: 1, plate: 3 }), and
+// each type claims a number of DISH UNITS (obj.dishUnits = Σ count×unit) in
+// the sink/dishwasher — that unit count is what washing capacity is measured
+// against (D11). DISH_DEFS is the SINGLE owning table for dish types;
+// `sizeL` + `capabilities` are the D10 cookware-capability data declared
+// here so Phase 5's cooking engine reads ONE table when it gates methods on
+// what a pot can do (a recipe's `cookware` ids match these keys).
+const DISH_DEFS = {
+  plate:         { label: 'Plate',         unit: 1 },
+  bowl:          { label: 'Bowl',          unit: 1 },
+  cup:           { label: 'Cup',           unit: 1 },
+  glass:         { label: 'Glass',         unit: 1 },
+  fork:          { label: 'Fork',          unit: 1 },
+  knife:         { label: 'Knife',         unit: 1 },
+  cutting_board: { label: 'Cutting board', unit: 1 },
+  pot:           { label: 'Pot',           unit: 3, sizeL: 5, capabilities: ['boil', 'simmer', 'steam'] },
+  pan:           { label: 'Frying pan',    unit: 2, sizeL: 2, capabilities: ['fry', 'saute', 'sear'] },
+  wok:           { label: 'Wok',           unit: 2, sizeL: 4, capabilities: ['stir_fry'] },
+  baking_tray:   { label: 'Baking tray',   unit: 2, capabilities: ['bake', 'roast'] },
+};
+
+// Dish-producing rules (D9): what generates which dirty dishes, and when a
+// dish-carrying surface reads as dirty. `cookFootprint` is keyed by recipe
+// method; `prep` tools are added to EVERY cooked recipe (chopping/prep is
+// where the knife and board come from — a no-cook meal like a sandwich
+// dirties only those). `eatFootprint` is one solo eating event (self.eat),
+// `setMealFootprint` is what ONE served eater at a set_meal table leaves.
+// The 'clean'/'few'/'many' ladder is DERIVED from a surface's dish-unit
+// count (ITEMS' dishLevelOf, thresholds below) — the maps are the world
+// state, the ladder is never stored, so the dirty_dishes signal and room
+// cleanliness can't desync from what actually got dirtied (the same
+// derive-don't-mirror rule the rot signal follows).
+const DISH_TUNING = {
+  cookFootprint: {
+    boil:     { pot: 1, pan: 1 },   // the boil pot + a pan for the sauce
+    simmer:   { pot: 1 },
+    fry:      { pan: 1 },
+    stir_fry: { wok: 1 },
+    bake:     { baking_tray: 1 },
+    none:     {},                    // no cookware — prep tools only
+  },
+  prepFootprint: { knife: 1, cutting_board: 1 },
+  eatFootprint: { plate: 1, fork: 1 },             // self.eat, per serving
+  setMealFootprint: { plate: 1, cup: 1, fork: 1 }, // set_meal, per served eater
+  sinkDirtyAtFew: 2,       // dish units ≥ this → derived 'few'
+  sinkDirtyAtMany: 8,      // dish units ≥ this → derived 'many'
+};
+
+// Washing capacity (D11). Hand-wash clears a skill-scaled number of units
+// per self.dishes action (4 base → 10 at max cleaning skill); the
+// dishwasher clears capacityUnits per cycle and is busy for cycleMinutes —
+// lazily completed against the continuous clock (cycleActiveUntilAbs, the
+// same anchor pattern as THAW_TUNING — never a per-tick loop). The
+// machine's per-tier numbers are EQUIPMENT_DEFS.dishwasher.tiers (Phase 6
+// D12 — the single owning table, indexed by the kitchen_appliances
+// FACILITY_DEFS ladder); this block holds the hand-wash/sink constants
+// only. Sink capacity is deliberately PRESSURE-ONLY (D33): a full sink
+// never blocks cooking, it just escalates the dirty_dishes signal and the
+// room's cleanliness pressure.
+const DISHWASH_TUNING = {
+  sinkCapacityUnits: 14,
+  handWashBaseUnits: 4,
+  handWashMaxUnits: 10,       // at max cleaning skill
+  handWashMinutesPerUnit: 2,
+  dishwasherMinLoadUnits: 4,  // NPC cleaners only bother with the machine at this many units
+};
+
+// --- Equipment (food-overhaul Phase 6, D12/D13/D14) ---
+// The kitchen's equipment as a table of tiers, each riding an existing
+// FACILITY_DEFS (the RenoFix renovation pipeline) — EQUIPMENT_DEFS is the
+// SINGLE owning definition for what a tier of that facility does to the
+// cooking engine and the kitchen's throughput. cooking.js's
+// equipmentState() composes the rows the current world.upgrades tier picks
+// into one state object every engine reader already knows; nothing else in
+// the engine reads these tables directly.
+//   stove      (kitchen_stove ladder) — burners (parallel cooking / the
+//              display), burnRiskMult (D13: a good range burns less),
+//              tempPrecision (temperature control — a matched heat pays
+//              more and a missed heat hurts less), autocookSteps (D14: how
+//              many grade-steps an upgrade lowers the auto-cook threshold).
+//   oven       (kitchen_stove ladder) — PRESENT only on the upgraded
+//              Proper Range (D37: the day-one Countertop Burner has no
+//              oven). Not a hard gate: bake/roast without an oven read as
+//              a heat mismatch (improvising), so they stay possible but
+//              rougher — D37's "cooking is playable day one" holds for the
+//              starter kitchen.
+//   mixer      (kitchen_appliances ladder) — unlocks the mixing verbs
+//              (knead/whip/blend, D12) and processTimeMult scales mixing
+//              step minutes (a stand mixer is faster).
+//   dishwasher (kitchen_appliances ladder) — capacityUnits per cycle and
+//              cycleMinutes; read by ITEMS' dishwasherCapacityUnits/
+//              dishwasherCycleMinutes (the DISHWASH_TUNING.tiers of
+//              Phase 4 live here now — one table, invariant 5).
+//   microwave  (kitchen_appliances ladder) — present + reheatMinutes,
+//              read by self.microwave's prepare (Phase 3's stove reheat is
+//              the 10-min fallback; the microwave is 3/1 min by tier).
+//   freezer    (kitchen_freezer ladder) — tier LABELS only. The actual
+//              preservation number stays in ROT.preservation.freezer
+//              (Phase 1, D18/D30 — the storage-class row is the owner);
+//              this entry exists so equipment readers/renders can name the
+//              freezer's tiers without a second copy of the number.
+const EQUIPMENT_DEFS = {
+  stove: {
+    facility: 'kitchen_stove',
+    tiers: [
+      { tier: 'broken', burners: 0, burnRiskMult: 1.2, tempPrecision: 0, autocookSteps: 0 },
+      { tier: 'functional', label: 'Countertop Burner', burners: 1, burnRiskMult: 1.0, tempPrecision: 0, autocookSteps: 0 },
+      { tier: 'upgraded', label: 'Proper Range', burners: 4, burnRiskMult: 0.75, tempPrecision: 1, autocookSteps: 1 },
+    ],
+  },
+  oven: {
+    facility: 'kitchen_stove',
+    tiers: [
+      { tier: 'broken', present: false, tempPrecision: 0 },
+      { tier: 'functional', present: false, tempPrecision: 0 },
+      { tier: 'upgraded', present: true, tempPrecision: 1 },
+    ],
+  },
+  mixer: {
+    facility: 'kitchen_appliances',
+    tiers: [
+      { tier: 'broken', processTimeMult: 1.2, unlocks: [] },
+      { tier: 'functional', label: 'Hand Mixer', processTimeMult: 1.0, unlocks: ['whisk', 'knead', 'blend'] },
+      { tier: 'upgraded', label: 'Stand Mixer', processTimeMult: 0.8, unlocks: ['whisk', 'knead', 'blend'] },
+    ],
+  },
+  dishwasher: {
+    facility: 'kitchen_appliances',
+    tiers: [
+      { tier: 'broken', capacityUnits: 0, cycleMinutes: 0 },
+      { tier: 'functional', capacityUnits: 8, cycleMinutes: 45 },
+      { tier: 'upgraded', capacityUnits: 12, cycleMinutes: 40 },
+    ],
+  },
+  microwave: {
+    facility: 'kitchen_appliances',
+    tiers: [
+      { tier: 'broken', present: false, reheatMinutes: 0 },
+      { tier: 'functional', label: 'Countertop Microwave', present: true, reheatMinutes: 3 },
+      { tier: 'upgraded', label: 'Built-in Microwave', present: true, reheatMinutes: 1 },
+    ],
+  },
+  freezer: {
+    facility: 'kitchen_freezer',
+    tiers: [
+      { tier: 'broken', label: 'No Freezer' },
+      { tier: 'functional', label: 'Working Freezer' },
+      { tier: 'upgraded', label: 'Big Chest Freezer' },
+    ],
+  },
+};
+
+// --- Auto-cook (food-overhaul Phase 6, D14/D15) ---
+// Cooking a recipe to a grade at or above its auto-cook threshold unlocks
+// INSTANT cook for it forever (given ingredients on hand): ingredients are
+// consumed, quality is rolled automatically, and the plate comes out at or
+// above the threshold's quality floor — a mastered recipe is reliably
+// reproduced. Equipment lowers the threshold: the stove's autocookSteps
+// move it down the GRADES ladder (upgraded: A- → B, D14's worked example
+// — a recipe already cooked to B unlocks under a better stove). 'A-' as
+// the base is the deliberate bar: a tier-1 cook has to genuinely cook
+// well once before autopilot opens (D15 — auto-cook is first-class, not
+// the default).
+const AUTO_COOK_TUNING = {
+  baseGrade: 'A-',
+};
+
+// --- Cooking engine (food-overhaul Phase 5, D8/D14/D16) ---
+// The interactive manual loop: verbs × ingredient stages × methods, with
+// fats/seasonings as real reagents and an F–S+ grade at the end. COOK_TUNING
+// is the single owning definition for the engine's numbers; METHODS (the
+// D10 cookware-gated method table) and GRADES (the D14 ladder) are its
+// vocabulary tables, all below. cooking.js is the pure consumer — Phase 6
+// wires real EQUIPMENT_DEFS through its equipmentState() without touching
+// any of these shapes.
+const COOK_TUNING = {
+  // Processing verbs (D16). `qualityBonus` is the edge a WELL-CHOSEN verb
+  // gives (the ingredient's natural prep); a wrong verb earns only
+  // `wrongVerbFraction` of it. `stage` is the plate-component stage word.
+  // Mixing verbs (whisk/knead/blend) are gated on the kitchen's mixing
+  // capability — Phase 5's tier-1 equipmentState ships them all; Phase 6
+  // keys them off the mixer.
+  processVerbs: {
+    chop:  { label: 'Chop',  stage: 'chopped',  qualityBonus: 0.10 },
+    slice: { label: 'Slice', stage: 'sliced',   qualityBonus: 0.10 },
+    mince: { label: 'Mince', stage: 'minced',   qualityBonus: 0.10 },
+    whisk: { label: 'Whisk', stage: 'whisked',  qualityBonus: 0.12 },
+    knead: { label: 'Knead', stage: 'kneaded',  qualityBonus: 0.12 },
+    blend: { label: 'Blend', stage: 'blended',  qualityBonus: 0.10 },
+  },
+  wrongVerbFraction: 0.25,    // a wrong-but-possible verb still earns a quarter of the fit bonus
+  prepByGroup: { protein: 'chop', vegetable: 'chop', dairy: 'whisk', starchy: 'slice', sweet: 'blend', fat: 'slice' },
+  mixingVerbs: ['whisk', 'knead', 'blend'],
+  basicCookware: ['pot', 'pan', 'wok', 'baking_tray'],   // tier-1: the apartment owns its cookware
+  prepMinutes: 3,             // per processing step
+  mixMinutes: 4,              // per mixing step
+  seasoningMinutes: 1,        // the add-salt rescue
+  finishMinutesFrac: 0.5,     // the finish-cooking rescue takes half the method's time
+
+  // Reagents (D8): the tiny-quantity pantry consumables cooking draws on.
+  // `qtyPerUse` is what ONE cook consumes (a splash / a pinch), `kcalPerUse`
+  // feeds the plate's kcal so a fried dish really carries its fat. `kind`:
+  // 'fat' = richness (frying needs it, adds quality) or 'seasoning' =
+  // flavor (the D8 taste gate — no flavor on a cooked dish = bland; too
+  // much = overseasoned). Fats are CONSUMED, seasonings are TRANSFORMED
+  // INTO the dish (effects.js TRANSFORM_ITEM — you'd never eat salt raw).
+  reagents: {
+    oil:    { label: 'Oil',    qtyPerUse: 1, kcalPerUse: 40, kind: 'fat', hint: 'a splash of oil' },
+    butter: { label: 'Butter', qtyPerUse: 1, kcalPerUse: 50, kind: 'fat', hint: 'a knob of butter' },
+    salt:   { label: 'Salt',   qtyPerUse: 1, kcalPerUse: 0,  kind: 'seasoning', hint: 'a pinch of salt' },
+    spices: { label: 'Spices', qtyPerUse: 1, kcalPerUse: 4,  kind: 'seasoning', hint: 'a sprinkle of spices' },
+    sugar:  { label: 'Sugar',  qtyPerUse: 1, kcalPerUse: 12, kind: 'seasoning', hint: 'a spoon of sugar' },
+  },
+  defaultSeasoning: ['salt'],  // the generic cook's habit — the interactive screen pre-ticks it
+  fatQualityBonus: 0.04,       // a fat that fits the method (oil/butter) nudges quality
+
+  // Step quality math. Pure — the seeded roll is the only non-constant term.
+  stepBase: 0.55,              // a competent baseline processing step
+  methodBase: 0.5,             // a competent baseline cook step
+  skillQualityWeight: 0.5,     // (cookQuality − 0.5) × this — ±0.25 at the extremes
+  freshQualityWeight: 0.12,    // (freshness factor − 1) × this — a stale batch dents every step
+  rollSpread: 0.18,            // the seeded luck term, ±0.09
+  heatFitBonus: 0.06,          // matching the method's burner
+  heatMissPenalty: 0.05,       // wrong burner for the method
+  // Phase 6 (D12/D13): equipment aids the cook in the moment. tempPrecision
+  // (from EQUIPMENT_DEFS.stove/oven tiers) pays a small quality edge on a
+  // MATCHED heat and shrinks the miss penalty + miss burn risk below — a
+  // precision range forgives both directions. An oven-absent bake/roast
+  // reads as a heat miss (improvising on the countertop), not a door.
+  tempPrecisionBonus: 0.03,
+  tempPrecisionMissFraction: 0.5,   // × the heat-miss penalty when precision > 0
+  tempPrecisionBurnFraction: 0.6,   // × the heat-miss burn risk when precision > 0
+
+  // Failure risk (D13/D15). All rolled from the plan seed — same (state,
+  // seed) → same burnt chicken, forever. Tier-1 baselines; Phase 6's
+  // equipmentState multiplies burnRisk.
+  burnRiskBase: 0.16,
+  heatMissBurnRisk: 0.08,
+  timingBurn: { conservative: -0.05, standard: 0, bold: 0.12 },
+  rawRiskBase: 0.10,           // undercooked — any cooked method
+  timingRaw: { conservative: 0.12, standard: 0, bold: -0.06 },
+  mushyRiskBase: 0.10,         // overcooked-soft — simmer/boil/steam/bake pushed hard
+  skillFailureWeight: 0.25,    // (skill − 0.5) × this, subtracted from every risk
+  minFailureChance: 0.02,
+
+  // Failure consequences (D15). Every failure leaves the food EDIBLE — a
+  // quality dent (and a mood sting at eat time for burnt) instead of
+  // deletion. `qualityMult` multiplies the final plate quality; `flaw` is
+  // the snapshot tag the pickers/narration read; `line` is the outcome
+  // screen's flavor line. Rescue paths: bland → add salt/spice; raw →
+  // finish cooking; burnt/overseasoned/mushy stand as they are.
+  burnt:  { qualityMult: 0.55, kcalMult: 0.9, flaw: 'burnt', line: 'The edges came out charred.' },
+  raw:    { qualityMult: 0.70, kcalMult: 1,   flaw: 'raw',   line: 'The middle is still undercooked.' },
+  bland:  { qualityMult: 0.72, kcalMult: 1,   flaw: 'bland', line: 'It could use a pinch of salt.' },
+  overseasoned: { qualityMult: 0.75, kcalMult: 1, flaw: 'overseasoned', line: 'The seasoning overpowers everything else.' },
+  mushy:  { qualityMult: 0.82, kcalMult: 1,   flaw: 'mushy', line: 'It all went a little soft.' },
+  burntMoodSting: 0.02,        // extra mood penalty per serving at eat time (EFFECTS, items.js)
+
+  // The D8 taste gate: a cooked dish with NO flavor seasoning is bland;
+  // piling flavor past the need is overseasoned. Flavor = seasoning-kind
+  // reagents used. The base UI offers 0–2 (None/Salt/Spices/Both), so only
+  // a rescue can push to `overseasonedAt`.
+  seasoningNeedBase: 1,
+  overseasonedAt: 3,
+
+  // Final quality blend: the plate is HALF the recipe's ingredient story
+  // (makePlate's D5 formula) and HALF how the cook actually went. A great
+  // hand on a bland meal is still a bland meal.
+  ingredientQualityWeight: 0.45,
+  executionQualityWeight: 0.55,
+
+  // Reagent kcal into the plate's total, capped so a heroic seasoning stack
+  // can't double a plate's calories.
+  reagentKcalCap: 120,
+};
+
+// D16's method table — the D10 cookware gate's other side. Each method
+// names the cookware that can do it (a DISH_DEFS key), the burners/oven it
+// wants, whether it needs fat, and how long it takes. cooking.js's
+// planCook/resolveCookStep read THIS table; a recipe's `method` must name
+// one of these keys. `needSizeL` is the D10 size floor (declared for the
+// capacity model; tier-1 kitchens own the whole basic set).
+const METHODS = {
+  none:     { label: 'Assemble', cookware: null,        needSizeL: 0, oil: false, water: false, oven: false, burner: null,         timeMin: 8 },
+  boil:     { label: 'Boil',     cookware: 'pot',        needSizeL: 3, oil: false, water: true,  oven: false, burner: 'high',       timeMin: 15 },
+  simmer:   { label: 'Simmer',   cookware: 'pot',        needSizeL: 3, oil: false, water: true,  oven: false, burner: 'low',        timeMin: 30 },
+  steam:    { label: 'Steam',    cookware: 'pot',        needSizeL: 3, oil: false, water: true,  oven: false, burner: 'medium',     timeMin: 20 },
+  fry:      { label: 'Fry',      cookware: 'pan',        needSizeL: 2, oil: true,  water: false, oven: false, burner: 'medium-high', timeMin: 12 },
+  saute:    { label: 'Sauté',    cookware: 'pan',        needSizeL: 2, oil: true,  water: false, oven: false, burner: 'medium-high', timeMin: 10 },
+  sear:     { label: 'Sear',     cookware: 'pan',        needSizeL: 2, oil: true,  water: false, oven: false, burner: 'high',       timeMin: 8 },
+  stir_fry: { label: 'Stir-fry', cookware: 'wok',        needSizeL: 3, oil: true,  water: false, oven: false, burner: 'high',       timeMin: 10 },
+  bake:     { label: 'Bake',     cookware: 'baking_tray', needSizeL: 0, oil: false, water: false, oven: true,  burner: null,        timeMin: 35 },
+  roast:    { label: 'Roast',    cookware: 'baking_tray', needSizeL: 0, oil: false, water: false, oven: true,  burner: null,        timeMin: 40 },
+};
+
+// D14's grade ladder — F through S+, replacing the Phase-3 placeholder
+// gradeSteps. The B band deliberately still catches makePlate's ingredient-
+// driven quality for a plain pasta (0.70), so pre-engine plates and the
+// phase-3 regression battery keep their grades; computeGrade (cooking.js)
+// is the one reader, gradeFromQuality (ITEMS) delegates to it.
+const GRADES = [
+  { min: 0.97, grade: 'S+' },
+  { min: 0.92, grade: 'S' },
+  { min: 0.87, grade: 'S-' },
+  { min: 0.82, grade: 'A+' },
+  { min: 0.77, grade: 'A' },
+  { min: 0.72, grade: 'A-' },
+  { min: 0.58, grade: 'B' },
+  { min: 0.45, grade: 'C' },
+  { min: 0.28, grade: 'D' },
+  { min: 0,    grade: 'F' },
+];
+
+// --- NPC food culture (food-overhaul Phase 7, D23/D24) ------------------
+// Per-NPC taste preferences: which foods an NPC loves/likes vs tolerates/
+// dislikes. Tastes are a DERIVED-but-stable function of the character seed
+// plus a few personality-trait anchors — no stored field, so old saves need
+// no migration and the same save always reproduces the same tastes. They
+// move set_meal outcomes (D23: relationship and mood deltas scale by how
+// much the fed attendee actually likes what you cooked them), shape what an
+// NPC auto-cooks (D24: hungry + bare fridge + cookable larder → they cook
+// something they like), and break ties in the eat drive's food choice.
+// taste.js is the single consumer.
+const TASTE_TUNING = {
+  likesPerNpc: 3,
+  dislikesPerNpc: 2,
+  // Keeps the taste draws on a different stream from every other genSeed
+  // use (age, gender, the physical roll...), so tastes never correlate
+  // with a body or a birth year. Any constant works; this one is not 0.
+  seedSalt: 0x51AB0F,
+  // The pool of tasteable entries. A `defId` entry matches that exact
+  // ingredient; a `group` entry matches every def with that foodGroup.
+  // Every defId here is one that can actually land in a plate's components
+  // (makePlate) or sit on a reachable def-driven stack — a taste key that
+  // matches nothing in play would be a dead draw.
+  pool: [
+    { key: 'eggs',         defId: 'eggs',         label: 'eggs' },
+    { key: 'cheese',       defId: 'cheese',       label: 'cheese' },
+    { key: 'bread',        defId: 'bread',        label: 'bread' },
+    { key: 'pasta',        defId: 'pasta_dry',    label: 'pasta' },
+    { key: 'rice',         defId: 'rice',         label: 'rice' },
+    { key: 'chicken',      defId: 'chicken_raw',  label: 'chicken' },
+    { key: 'beef',         defId: 'ground_beef',  label: 'beef' },
+    { key: 'bacon',        defId: 'bacon',        label: 'bacon' },
+    { key: 'potatoes',     defId: 'potatoes',     label: 'potatoes' },
+    { key: 'tomato',       defId: 'tomato',       label: 'tomato' },
+    { key: 'lettuce',      defId: 'lettuce',      label: 'lettuce' },
+    { key: 'onion',        defId: 'onion',        label: 'onion' },
+    { key: 'garlic',       defId: 'garlic',       label: 'garlic' },
+    { key: 'tomato_sauce', defId: 'tomato_sauce', label: 'tomato sauce' },
+    { key: 'sweets',       defId: 'sugar',        label: 'sweets' },
+    { key: 'meat',         group: 'protein',      label: 'meat' },
+    { key: 'vegetables',   group: 'vegetable',    label: 'vegetables' },
+    { key: 'dairy',        group: 'dairy',        label: 'dairy' },
+    { key: 'starches',     group: 'starchy',      label: 'starches' },
+  ],
+  // Personality-trait anchors: a trait that says something about food adds
+  // (or forbids) a specific taste on top of the seed draw. Deliberately a
+  // small hand-picked set — the same tastefulness rule as the eat drive's
+  // no-temperamentWeights: hunger is hunger, personality belongs to what
+  // you eat rather than to whether you eat.
+  traitAnchors: {
+    adventurous:     { likes: ['garlic', 'chicken', 'tomato'] },
+    cautious:        { likes: ['bread', 'cheese', 'potatoes'] },
+    impulsive:       { likes: ['bacon', 'sweets'] },
+    lazy:            { likes: ['pasta', 'rice', 'bread'] },
+    cynical:         { dislikes: ['sweets', 'bread'] },
+    idealistic:      { likes: ['lettuce', 'tomato'] },
+    nurturing:       { likes: ['eggs', 'cheese'] },
+    materialistic:   { likes: ['beef', 'bacon'] },
+    'thick-skinned': { likes: ['garlic', 'onion'] },
+    competitive:     { likes: ['beef', 'eggs'] },
+  },
+  // The D23 outcome bands. `weight` orders a cook's recipe choices and the
+  // eat drive's tie-breaks; `relMult`/`moodMult` scale a fed attendee's
+  // set_meal relationship and mood deltas by what they actually got;
+  // `label` and `reaction` are the narration words ("loves it" / "X lights
+  // up — this is exactly their thing."). neutral's label/reaction are null:
+  // an ordinary meal gets no callout, so the ones that get one are the
+  // ones that matter.
+  bands: {
+    love:    { relMult: 1.5,  moodMult: 1.5,  weight: 3,   label: 'loves it', reaction: '{name} lights up — this is exactly their thing.' },
+    like:    { relMult: 1.25, moodMult: 1.2,  weight: 2,   label: 'likes it', reaction: '{name} digs in happily.' },
+    neutral: { relMult: 1.0,  moodMult: 1.0,  weight: 1,   label: null,       reaction: null },
+    dislike: { relMult: 0.5,  moodMult: 0.5,  weight: 0.4, label: 'picks at it', reaction: '{name} picks at it politely.' },
+    hate:    { relMult: 0.25, moodMult: 0.25, weight: 0.1, label: 'hates it',  reaction: '{name} soldiers through it with a brave face.' },
+  },
 };
 
 // --- Mood target (Phase 5, D1) ---
@@ -1931,8 +2654,12 @@ const MOOD_TARGET = {
     hygieneEmptyPenalty: -0.15,
     mealsWellFedCount: 2,       // mealsToday ≥ this → the well-fed bonus below
     mealsWellFedBonus: 0.03,
-    mealsSkippedPenalty: -0.04, // evening with zero meals all day
+    mealsSkippedPenalty: -0.04, // evening with zero real meals all day
     mealsSkippedFromHour: 18,   // clock hour at which zero meals starts to nag
+    // food-overhaul Phase 2 (D4): the ledger's day-mode is a small persistent
+    // target term — deficit days drag, surplus days give a hair back.
+    deficitMoodPenalty: -0.02,
+    surplusMoodBonus: 0.01,
   },
   social: {
     affectionScale: 0.2,        // average resident affection (capped 0..1) × this → target
@@ -1951,6 +2678,13 @@ const MOOD_TARGET = {
     cleanlinessMid: 50,         // cleanliness == mid → neutral
     cleanlinessScale: 0.004,    // per cleanliness point from mid (±0.2 for a 100 vs 0 room)
     odorPenalty: -0.15,         // standing in a smelly room drags the target (absorbed ROT.odorMoodPenaltyPerTick)
+    // Intimacy & Voyeurism Phase 19 (sound): a music signal the player can
+    // actually hear is a small comfort term - scaled by arrived intensity,
+    // capped. Headphones silence the read, and instead the wearer's own
+    // music gives the flat term below.
+    musicScale: 0.05,
+    musicCap: 0.04,
+    wornMusicTerm: 0.02,
   },
   stress: {
     rentPenalty: -0.25,         // while player.rentOwed > 0 (absorbed ECONOMY.rentLatePenaltyMood)
@@ -2046,6 +2780,177 @@ const REL_CONSEQUENCES = {
   affectionHigh: 0.6,         // combined with desire+comfort for initiation
 };
 
+// --- Cold-shoulder (Intimacy & Voyeurism Phase 16, D2/D14) ------------------
+// The cold-shoulder state: an NPC who is deeply hurt by something the player
+// did stops engaging — no talk (severity-scaled refusal + room avoidance),
+// no overtures and no player-directed drives (a cold NPC never crosses the
+// room to reach you), and NO intimacy: the willingness function gains a HARD
+// FLOOR (willingness.js), which is the fail-closed direction of invariant 1
+// (a new floor, never a relaxed door). Recovery is slow and active — the
+// player must pass reparation acts (gift + apology), each ratcheting one
+// severity down per successful act, and time alone heals one step every
+// `timeRecoveryDays` days. A max-severity cold-shoulder puts the resident at
+// real move-out risk (the extended move-out trigger, D14). Never a system
+// judgment: the flag is the hurt, and the prose is authored per severity (D2).
+// The flag's shape is the data model's exactly: npc.flags._coldShoulder =
+// { day, severity, reason } (+ a `repairs` day-stamp map + `healDay`).
+const COLD_SHOULDER = {
+  maxSeverity: 3,
+  // --- Behavioral suppression by severity (rolled per talk attempt / room
+  // entry, beside REL_CONSEQUENCES' own tension rolls). ---
+  talkRefuseChance: { 1: 0.25, 2: 0.60, 3: 0.95 },
+  avoidChance:      { 1: 0.10, 2: 0.35, 3: 0.70 },
+  // severity >= this: no overtures, no player-directed drives. One number,
+  // read by overture.js's scorer AND cognition.js's drive filter, so the two
+  // can never disagree about what "cold" means.
+  overtureSuppressedFrom: 1,
+  // Player-directed drives suppressed by the same bar (see above).
+  suppressedDrives: ['peep_player', 'snoop_phone', 'gift_to_player', 'react_to_player',
+    // Intimacy & Voyeurism Phase 17 (D16/D13): the cold-shoulder is the
+    // D13 line in its coldest form — an NPC who will not look at you does
+    // not sneak into your bed either. The boundary attempt is suppressed
+    // the same way every other player-directed drive is.
+    'sneak_into_bed'],
+  // --- Reparation (each successful act ratchets severity down one) ---
+  minDaysBeforeRepair: 1,       // the hurt is fresh — nothing lands same-day
+  giftCooldownDays: 2,          // one gift repair per window
+  apologyCooldownDays: 2,       // one apology repair per window
+  timeRecoveryDays: 4,          // time alone heals one severity per N days at full cold
+  // A max-severity NPC will not hear an apology until something (a gift or
+  // time) drops them to 2 — the coldest hurt needs a gesture first.
+  apologyBlockedAboveSeverity: 3,
+  // Per successful repair (gift/apology/time) — small, and the time path is
+  // the same shape (advanceColdShoulderForDay applies it via this read).
+  repairRelDeltas: { tension: -0.05, affection: 0.03 },
+  // --- Move-out (extreme circumstances, D14) ---
+  moveOutSeverity: 3,           // only max-severity cold puts the NPC at risk
+  moveOutEarliestDay: 2,        // first day (after onset) the risk rolls
+  moveOutChancePerDay: 0.35,    // per-day seeded roll while at max severity
+  // (timeRecoveryDays 4 heals a severity-3 on day 4, so the risk window is
+  // days 2-3: ~58% cumulative if the player does nothing, never a certainty,
+  // and a day-1 gift removes it entirely — "a real chance of move-out", D14)
+  // Severity assigned by cause (calibrated in Phase 16 — see the plan Handoff).
+  // The caught-peek case is NOT here: its severity comes from the SHAMING
+  // tier (cold/hostile perving is the D14 move-out-risk case, a close dynamic
+  // is not even cold-shouldered — D2).
+  causeSeverity: {
+    public_infidelity: 2,       // learned the player was the other in their partner's cheating
+  },
+  // The player's apology beats (narrated by ui.doApologizeNpc; {name} is the
+  // NPC, never the player — the narration is 2nd-person toward the player).
+  apologyLines: [
+    '{name} lets out a long breath. "Okay," they say. "I hear you."',
+    'You apologize properly. {name} listens, arms crossed, then nods once — grudging, but real.',
+    '"Thanks," {name} says quietly, not quite meeting your eyes. "I needed to hear that."',
+    '{name} considers your apology for a long moment. "We\'ll see," they say — but they stay in the room.',
+  ],
+};
+
+// --- Shaming (Intimacy & Voyeurism Phase 16, D2) ----------------------------
+// The per-dynamic-tier reaction pools for uncalled-for perving (a caught peek
+// at something sexual, a snooped room — and Phase 17's boundary layer will
+// call this too). NOT a system judgment (invariant 8): the reaction is
+// personality × relationship × context, resolved deterministically from the
+// same dynamic read the peek caught-tables use (hostile tension / warm
+// comfort-or-phase / near-stranger-cold) and narrated from authored pools. A
+// stranger is mortified; a close dynamic turns it into a joke (D2). Each
+// tier's `coldShoulderSeverity` is the cold-shoulder onset: uncalled-for
+// perving at a cold dynamic is the D14 move-out-risk case, at a warm dynamic
+// it is not even a cold shoulder.
+const SHAMING = {
+  hostileTension: 0.8,           // aligns with REL_CONSEQUENCES.tensionHigh
+  warmComfort: 0.6,
+  warmPhases: ['familiar', 'close', 'intimate'],
+  tiers: {
+    // Stranger/cold — mortified, harsh. The full "I have to live with you"
+    // weight: the strongest tension spike + trust/affection crater, and the
+    // cold-shoulder onset that puts a real move-out clock on the table.
+    cold: {
+      relDeltas: { tension: 0.25, affection: -0.2, trust: -0.15 },
+      npcMood: -0.2, playerMood: -0.15, suspicion: 0.3,
+      coldShoulderSeverity: 3,
+    },
+    // Familiar-but-not-close — angry, no room for jokes, but the hurt is not
+    // yet the cold-shoulder move-out case.
+    neutral: {
+      relDeltas: { tension: 0.18 },
+      npcMood: -0.1, playerMood: -0.08, suspicion: 0.25,
+      coldShoulderSeverity: 2,
+    },
+    // Close/intimate — D2's playful reaction: the same act reads as comedy,
+    // a little tension that reads as flirtation, no cold-shoulder at all.
+    warm: {
+      relDeltas: { tension: 0.06, affection: 0.05 },
+      npcMood: 0.05, playerMood: 0.08, suspicion: 0.05,
+      coldShoulderSeverity: 0,
+    },
+    // Hostile — cold rage on top of the existing tension.
+    hostile: {
+      relDeltas: { tension: 0.3, affection: -0.25, trust: -0.2 },
+      npcMood: -0.25, playerMood: -0.2, suspicion: 0.35,
+      coldShoulderSeverity: 3,
+    },
+  },
+  // Reaction prose pools — deterministic pick per (tier, day, npc) via
+  // seededRng in npc.js's pickShamingProse, mirroring PEEK_PROSE's pattern.
+  // {name} is the caught NPC. Authored reactions, never a system judgment.
+  prose: {
+    cold: [
+      '{name} stares at you, disgusted. "Get away from me. I mean it."',
+      '{name} goes very still, then speaks low. "I know what you were doing. Don\'t ever let me catch you again."',
+      '{name} shuts the door in your face. Through the wood: "I\'m telling the others what you are."',
+      '{name} looks at you like something stuck to the floor. "I have to live here. With you. Do you even think?"',
+    ],
+    neutral: [
+      '{name} shakes their head at you, jaw tight. "That\'s it. That\'s really it."',
+      '"You need help," {name} says flatly, and walks past you like you\'re not there.',
+      '{name} glares. "I\'m not telling you again. Keep away from my door."',
+      '{name} is quiet for a long moment. "I don\'t know who you are right now," they say, and the cold in it is worse than shouting.',
+    ],
+    warm: [
+      '{name} laughs, shaking their head. "Caught you. Should I charge admission?"',
+      '{name} waggles a finger at you. "You\'re lucky you\'re cute."',
+      '"Busted," {name} says, unbothered. "Just remember you saw nothing."',
+      '{name} grins at you. "Couldn\'t resist, huh? I\'ll let it slide — this once."',
+    ],
+    hostile: [
+      '{name} looks at you with real contempt. "Get out of my sight before I do something we both regret."',
+      '"You\'re worse than a cockroach," {name} says, cold as anything. "You just keep coming back."',
+      '{name} doesn\'t even raise their voice. "I will make your life here a living hell. That\'s a promise."',
+      '{name} smiles without warmth. "Keep it up. See what happens."',
+    ],
+  },
+};
+
+// --- Relationship formation (intimacy-voyeurism Phase 12, D12/D14) ---------
+// Read by relationships.js (the store + updateRelationshipsForDay + the
+// resolveTick proximity accumulator). Formation is a slow cadence: each day a
+// pair's accumulated co-location ticks (bedroom-weighted) are spent through
+// the pairCompatibility temperature into `progress`; crossing a threshold
+// with `progressionCooldownDays` elapsed advances status single → seeing →
+// committed. Tuning values were set by the Phase 12 live calibration (see the
+// plan Handoff); `pairCompatibility` weights are the formation temperature's
+// own mix (castWeb dynamic, interests, values, temperament).
+const RELATIONSHIP = {
+  progressionCooldownDays: 3,    // minimum days between status transitions
+  seeingThreshold: 0.5,          // progress at which single → seeing
+  committedThreshold: 1.0,       // progress at which seeing → committed
+  minCompatibilityForStart: 0.5, // pairs below this temperature never leave 'single'
+  basePerDay: 0.02,              // baseline progress from household proximity alone
+  decayPerDay: 0.015,            // progress lost each day while single (drift's pull-back)
+  proximityPerTick: 0.03,        // progress gained per weighted 30-min co-location tick × temperature
+  bedroomProximityBonus: 2,      // co-locating in a bedroom counts 2x (room-sharing is the strong signal)
+  pairCompatibility: {
+    base: 0.20,                  // everyone starts with some common ground
+    sharedInterests: 0.15,       // capped shared-tag term
+    sharedInterestPerTag: 0.05,  // ... one tag each
+    valuesAligned: 0.15,         // share of non-opposed value pairs
+    personality: 0.20,           // temperament similarity (computeCompatibility's normalisation)
+    dynamic: 0.30,               // live castWeb axes — affection/desire/comfort pull, tension pushes
+    dynamicTension: 0.5,         // tension subtraction coefficient within `dynamic`
+  },
+};
+
 // --- The initiative gate (initiative plan Phase 2, D12/D13/D14) ------------
 // Read by SIM's npcInitiativeGate(), which UI's checkRelConsequences calls.
 //
@@ -2097,7 +3002,11 @@ const QUEST_CHAINS = [
     id: 'bonding_night',
     title: 'Bonding Night with {name}',
     steps: [
-      { type: 'buy', desc: 'Buy snacks or drinks from Nile' },
+      // Not app-specific: checkChainQuestProgress doesn't check item
+      // category for 'buy' steps, so any purchase from any shop app
+      // satisfies this — QuickCart existing (drinks/food moved off Nile)
+      // just made "from Nile" a false claim, not a logic problem.
+      { type: 'buy', desc: 'Buy snacks or drinks' },
       { type: 'give_item', desc: 'Share with {name}', itemCategory: 'food' },
       { type: 'watch_tv', desc: 'Watch something together in the living room' },
       { type: 'talk', desc: 'Have a real conversation with {name}' },
@@ -2185,6 +3094,14 @@ const SLEEP = {
   // is woken early and recovers only hoursActuallySlept × restorePerHour.
   alarmMinHour: 4,       // can't set earlier than 04:00 (no point)
   alarmMaxHour: 12,      // can't set later than noon (just sleep naturally)
+  // 2026-08-17 audit (B3): the hunger clock runs at this fraction of its
+  // waking rate while the player is asleep. Sleep metabolism slows — an
+  // 8-hour night counts as ~4 hours of waking hunger, so a player who eats
+  // dinner wakes "peckish" (~60 satiety) instead of "starving" (0-7%), which
+  // is what every morning of the audit playthrough looked like. Skipping
+  // dinner still costs you (dinner at 13:00 → wake at ~15 satiety), so the
+  // rhythm's pressure survives; it just stops being a sleep tax.
+  hungerMultiplier: 0.5,
 };
 
 // --- Burnout (Phase 8) ---
@@ -2266,6 +3183,11 @@ const TIME_DILATION = {
     conversation: 1 / 60, // talking to an NPC — one game-second per real second
     working: 25,        // work blocks — time flies — 1 gm / 2.4 real-sec
     sleeping: 0,        // special: skip-to-morning, not continuous
+    // Intimacy & Voyeurism Phase 10 (D7): the peek/listen hold — one game-
+    // minute per real second (60x), the plan's PEEK.tickMinutes cadence. The
+    // session loop (peek.js) READS the clock this scale produces; it never
+    // advances it itself (single clock owner — TIME's file header).
+    peeking: 60,
   },
   // How often the NPC sim runs (in game-minutes of accumulated time).
   // 30 = same granularity as the old tick system. This is already the
@@ -2640,6 +3562,45 @@ const SIGNAL_DEFS = {
       strong: ['a knock at your door, and whoever it is is still there'],
     },
   },
+
+  // --- Intimacy (Intimacy & Voyeurism Phase 11, D9) ----------------------
+  // The sound of intimacy — the trace the player's paired acts leave for the
+  // ears of the household, and Phase 13's NPC drives will leave the same way.
+  // Decay is slow (0.05/tick against 30-min ticks) so a single emission
+  // carries through a 40-minute act: measured against the sound channel's
+  // 0.5-per-hop attenuation and the 0.45 closed-unlocked-door factor, a
+  // `moaningHigh` emission (0.9) arrives at ~0.20 in the adjacent room and
+  // stays above the notice floor for over an hour of game time — long enough
+  // for the door cue and the scene reader to say what is going on, short
+  // enough that it does not follow the act around the whole floor plan.
+  // `salience` sits just under SCENE_READER.calloutSalience (0.70) at full
+  // strength (0.75 × 0.9 = 0.675): the loudest sex in the flat is a prominent
+  // sensory line, never a scene-stopping callout.
+  moaning: {
+    channel: 'sound', salience: 0.75, decayPerTick: 0.05,
+    phrases: {
+      faint:  ['a soft, rhythmic sound from behind a door'],
+      clear:  ['muffled sounds carrying through the wall — someone is not alone'],
+      strong: ['sounds through the wall, unmistakable and unselfconscious'],
+    },
+  },
+
+  // --- Music (Intimacy & Voyeurism Phase 19) ----------------------------
+  // The apartment's soundscape: a STANDING signal derived from a sound
+  // device's state (SOUND_DEVICE_DEFS -> OBJECT_DEFS emits), so a stereo left
+  // on at volume 2 fills its room and carries to the neighbours all day.
+  // Music is a comfort signal - it lifts the mood of everyone who can hear
+  // it (through the same perceiveSignals query) - and very loud music
+  // occasionally provokes a 'keep it down' beat. It is also the first thing
+  // the headphones filter kills: a wearer hears none of it.
+  music: {
+    channel: 'sound', salience: 0.3,
+    phrases: {
+      faint:  ['a murmur of music somewhere, almost lost under everything'],
+      clear:  ['music playing, not far off'],
+      strong: ['music is playing, loud enough that you can feel the beat'],
+    },
+  },
 };
 
 // ===================== THE SCENE READER (Plan 2) =====================
@@ -2701,6 +3662,10 @@ const SIGNAL_ICONS = {
     sighing:         '😔',
     humming:         '🎵',
     cabinet_slam:    '💢',
+    // Intimacy & Voyeurism Phase 11: "someone in that room is not alone".
+    moaning:         '💕',
+    // Intimacy & Voyeurism Phase 19: the soundscape.
+    music:           '🎶',
   },
   bandOpacity: { faint: 0.35, clear: 0.7, strong: 1 },
   // Floor plan: at most this many glyphs per room, strongest first. A room
@@ -2730,6 +3695,15 @@ const PRESENCE_PHRASES = {
   'washing up at the sink': '{name} is washing up at the sink.',
   'chatting with a roommate': '{name} is deep in conversation.',
   'looking for something to do': '{name} is drifting around, visibly bored.',
+  // Intimacy & Voyeurism Phase 13: the pair acts' presence line must not
+  // state the explicit activity — PRESENCE_PHRASES only substitutes {name},
+  // and the scene layer reads it for anyone in the player's room.
+  'masturbating': '{name} is alone in bed.',
+  'masturbating in bed': '{name} is alone in bed.',
+  'having sex': '{name} is in bed with someone.',
+  'sex': '{name} is in bed with someone.',
+  'quickie': '{name} is in bed with someone.',
+  'making love': '{name} is in bed with someone.',
 };
 
 // --- Notes (perception plan Phase 4) ---
@@ -2834,6 +3808,20 @@ const SIGNALS_EMIT = {
   // 0.72, just above SCENE_READER.calloutSalience (0.70), which is the whole
   // point. A knock you can read past is a knock nobody answers.
   knocking:         0.85,
+
+  // --- Intimacy (Intimacy & Voyeurism Phase 11, D9) ----------------------
+  // How loud intimacy is. Placed by the propagation arithmetic like every
+  // other sound: against 0.5-per-hop attenuation, the 0.45 closed-unlocked-
+  // door factor and a 0.04 noticeFloor at ~0.3 attention, the bar to be
+  // heard THROUGH a door from the adjacent room is an arrival of ~0.133, i.e.
+  // an emission of ~0.59. So moaningLow is deliberately below that line — a
+  // masturbating roommate is a room-local sound, heard from inside the room
+  // but not through their door; moaningMed sits just above it (a quickie is
+  // a muffled maybe-outside); moaningHigh is clearly audible through a closed
+  // door, which is what makes sex a door cue and a desire source (D9).
+  moaningLow:  0.5,
+  moaningMed:  0.7,
+  moaningHigh: 0.9,
 };
 
 // The mood bands the expression layer fires in (initiative plan Phase 1).
@@ -2960,13 +3948,606 @@ const SIGNAL_TUNING = {
   bands: { faint: 0.33, clear: 0.66 },
 };
 
+// --- Music devices & headphones (Intimacy & Voyeurism Phase 19) -----------
+// The apartment's soundscape. A sound DEVICE (stereo/boombox/record player)
+// is an OBJECT_DEFS entry whose 'emits' derives a STANDING 'music' signal
+// from its 'volume' state while its 'power' is on - so a stereo left on
+// fills the flat all day and goes silent the moment it is ejected. The
+// mp3_player/headphones are WORN accessories (the wardrobe's accessory
+// slot): 'blocksSound: true' marks one as deafening its wearer to every
+// audio-channel signal (perceiveSignals filters them per perceiver - the
+// player's and an NPC's reads share the one filter), which is the whole
+// 'opt out of the apartment' lever: no music, no door cues, no moaning, no
+// gossip-overheard. 'affords' are the ACTION_DEFS ids the device's "X >"
+// submenu renders; 'musicByVolume' maps the volume STATE (a string enum,
+// per the OBJECT_DEFS rule) to the music signal's standing intensity.
+const SOUND_DEVICE_DEFS = {
+  stereo: {
+    label: 'Stereo', sourceObjDef: 'stereo',
+    musicByVolume: { '0': 0, '1': 0.25, '2': 0.5, '3': 0.75 },
+    affords: ['sound.play', 'sound.set_volume', 'sound.eject'],
+  },
+  boombox: {
+    label: 'Boombox', sourceObjDef: 'boombox', portable: true,
+    musicByVolume: { '0': 0, '1': 0.3, '2': 0.55, '3': 0.85 },
+    affords: ['sound.play', 'sound.set_volume', 'sound.eject'],
+  },
+  record_player: {
+    label: 'Record Player', sourceObjDef: 'hobby_record_player',
+    musicByVolume: { '0': 0, '1': 0.2, '2': 0.45, '3': 0.7 },
+    affords: ['sound.play', 'sound.set_volume', 'sound.eject'],
+  },
+  headphones: {
+    label: 'Headphones', sourceItemDef: 'headphones', carried: true, blocksSound: true,
+    npcMoodGainPerTick: 0.003,
+  },
+  mp3_player: {
+    label: 'MP3 Player', sourceItemDef: 'mp3_player', carried: true, blocksSound: true,
+    npcMoodGainPerTick: 0.004,
+  },
+  // Consumer tuning. All placed against the SOUND channel's 0.5-per-hop
+  // attenuation and 0.45 unlocked-door factor: a volume-2 stereo (0.5)
+  // reaches the adjacent room at ~0.11, one hop further at ~0.055.
+  music: {
+    // NPC per-tick (30 game-minute) mood lift from the LOUDEST perceived
+    // music signal, scaled by its arrived intensity - in-room at volume 2
+    // that is ~0.02/tick, through a closed door ~0.0045.
+    npcMoodPerIntensity: 0.04,
+    npcMoodCap: 0.03,
+    // The player's mood-target term from the same read, scaled far smaller
+    // (the target is an equilibrium, not a per-tick delta).
+    playerMoodScale: 0.05,
+    playerMoodCap: 0.04,
+    // The wearer's own music term - the one sound that survives the filter.
+    wornPlayerMoodTarget: 0.02,
+    keepItDown: {
+      threshold: 0.45,       // arrived intensity that starts provoking
+      chancePerTick: 0.05,   // per awake loud-music NPC-tick
+      npcMood: -0.04,        // the reaction's own mood swing
+      lines: [
+        '{name} bangs on the wall. "Keep it down in there!"',
+        '{name} yells from the next room: "Turn that down!"',
+        'A knock comes from the wall - {name}, signalling the volume knob to you.',
+        '{name} shouts over the music, "Some of us are trying to read!"',
+        '{name} pokes their head out and says "Music!" in a tone that is not a compliment.',
+      ],
+    },
+  },
+};
+
 // --- Transient clothing states (correctness plan Phase 4) ---
 // Clothing states that describe a passing moment rather than how someone is
 // dressed. They survive exactly the tick that caused them and revert to
 // 'dressed' on the next one, in resolveTick's pass 2 — 'sleepwear' was
 // already handled this way inline; 'towel' was supposed to be and wasn't.
 // A drive sets one via `setsClothing`; nothing needs to un-set it.
-const TRANSIENT_CLOTHING = ['sleepwear', 'towel'];
+// Intimacy & Voyeurism Phase 5 adds 'changing' (the mid-change moment the
+// caught-changing keyhole beat reads). The PLAYER's transient clothing
+// reverts through the same list, applied in SIM's decayPlayerNeeds.
+const TRANSIENT_CLOTHING = ['sleepwear', 'towel', 'changing'];
+
+// --- Clothing state machine (Intimacy & Voyeurism Phase 5, D11) ---
+// npc.clothing / player.clothing is a state machine, not a description:
+//   dressed    — wearing the current outfit (the default)
+//   changing   — mid-change; a vulnerable, catchable moment (Phase 6's
+//                change_clothes drive sets it; player change_outfit may too)
+//   nude       — fully naked and present (shower/pool/sex) — prompt-gated;
+//                the intimate gate reads it as naked (NAKED_CLOTHING_STATES)
+//   towel      — post-shower (transient; reverts via TRANSIENT_CLOTHING)
+//   sleepwear  — in bed (transient; reverts via TRANSIENT_CLOTHING)
+//   undressed  — the value that opens getPhysicalDescriptionForPrompt's
+//                intimate branch (npc.js). MUST keep its exact meaning
+//                (design invariant 4); 'nude' joins it at the gate rather
+//                than ever replacing it.
+const CLOTHING_STATES = ['dressed', 'changing', 'nude', 'towel', 'sleepwear', 'undressed'];
+
+// The states that mean "nothing between this person and the room". The
+// intimate-description gate (npc.js) reads THIS set rather than a bare
+// `=== 'undressed'`, so a genuinely naked `nude` subject is described the
+// same way as an `undressed` one. The gate's other two conditions (intimate
+// opt-in + activeContentFlags) are untouched, so this can only ever make the
+// gate MORE accurate about who is actually naked — the fail-closed direction.
+const NAKED_CLOTHING_STATES = ['undressed', 'nude'];
+
+// LLM-facing clothing prose — the strings clothingLabel (LLM) draws from.
+// The physical describer (NPC's getPhysicalDescriptionForPrompt) keeps its
+// own existing phrasings byte-identical and is extended inline.
+const CLOTHING_STATE_PROSE = {
+  dressed: 'dressed normally',
+  changing: 'mid-change, caught between two outfits',
+  nude: 'completely naked',
+  towel: 'wrapped in a towel (just showered)',
+  sleepwear: 'in sleepwear',
+  undressed: 'undressed',
+};
+
+// Player-facing clothing prose — the bare phrase the scene reader's self-line
+// and the floor-plan avatar caption show ("You're wrapped in a towel."), so
+// the scene and the plan can never disagree about what state reads as what.
+const CLOTHING_STATE_SCENE_TEXT = {
+  changing: 'changing',
+  nude: 'naked',
+  towel: 'wrapped in a towel',
+  sleepwear: 'in sleepwear',
+  undressed: 'undressed',
+};
+
+// --- NPC wardrobe AI (Intimacy & Voyeurism Phase 6, D11) ---
+// Two data tables the pure rules in NPC.js read; all numbers live here so the
+// phase's tuning is one place. ACTIVITY_OUTFIT_TYPES maps an NPC ACTIVITY
+// string to the OUTFIT_TYPES key it is dressed for — a swimmer in the pool
+// wears swim gear, someone on the treadmill wears workout gear. Everything
+// else dresses for the schedule block (NPC's outfitTypeForContext).
+const ACTIVITY_OUTFIT_TYPES = {
+  'exercising': 'workout',
+  'working out': 'workout',
+  'doing yoga': 'workout',
+  'stretching': 'workout',
+  'swimming laps': 'swim',
+};
+
+const NUDITY_TUNING = {
+  // The deviancy read (D11's "hidden trait") is derived, never stored:
+  // openness × assertiveness, each re-normalised to 0..1. A curious person
+  // who also pushes for what they want is what swims nude; a curious
+  // wallflower still doesn't. Derived means deterministic for a given cast
+  // and needs no save migration.
+  deviancyThreshold: 0.5,   // above this, an NPC is in the deviant pool
+  nudeSwimChance: 0.4,      // per swim session (first nude-eligible tick),
+                            // a deviant NPC swims nude
+  // Showers are private — nudity there is not a deviancy question.
+  nudeShower: true,
+  // A worker with conscientiousness below this skips the work outfit and
+  // goes to the office in whatever they had on.
+  workDressConscientiousnessFloor: -0.4,
+};
+
+// The schedule blocks an NPC dresses for work (or the day) around. 'morning'
+// only appears on workday templates (day_shift weekday), so treating it as
+// getting-ready is safe for every schedule in SCHEDULES.
+const WORK_BLOCKS = ['prep', 'commute', 'work', 'commute_home', 'morning'];
+
+// --- Clothing effects (Intimacy & Voyeurism Phase 7, D11) ---
+// Phase 4 defined the five stats (attraction/comfort/modesty/thermal/reveal);
+// this table is where they MEAN something. All weights live here — the pure
+// readers in NPC.js (clothingResponseToWearer / clothingWillingnessBias) and
+// the aggregation in ITEMS (outfitStatSum / outfitHasTrait /
+// outfitEffectiveReveal) are the ONLY consumers, so retuning is one number.
+//
+// Stat → formula (one reader per stat, never two competing readings):
+//   attraction — the "attraction term": how good the outfit makes its wearer
+//                look. Read as a [0,1] bias on observers' attraction response
+//                (overture.js's affection motive today; Phase 9's willingness
+//                reads the same shared value). Observer-independent: a well-
+//                dressed person reads well-dressed to everyone.
+//   reveal     — the "desire source": how much skin the outfit shows. Read as
+//                a [0,1] bias on observers' desire response, gated by the
+//                OBSERVER's own deviancy (the exhibition read — D11's hidden
+//                trait): a deviant observer reads skin as invitation, a prude
+//                reads nothing. Phase 8 spends this as real desire gain.
+//   modesty    — cancels reveal (a modest fit reads non-inviting), through
+//                the single modestyDampen number shared by every reader.
+//   comfort    — prose flavor only ("dressed for comfort"); never enters the
+//                attraction/desire/willingness math.
+//   thermal    — prose flavor only (reserved for Phase 19's seasonal reads);
+//                no reader today, by design.
+const CLOTHING_EFFECTS = {
+  // How strongly a modest outfit's sum cancels the reveal sum, everywhere.
+  modestyDampen: 0.7,
+  // The attraction term. weight scales the outfit's attraction-stat sum into
+  // a [0,1] bias; cap bounds that bias before trait multipliers.
+  attraction: { weight: 0.35, cap: 0.5 },
+  // The desire source. weight scales the effectiveReveal into a [0,1] bias;
+  // cap bounds it before the observer gate. min..max is the observer-deviancy
+  // span: at deviancy 0 (a total prude) none of the reveal reads as desire,
+  // at 1 the full weighted value does. Missing temperament → 0.25 (the
+  // npcDeviancy floor), so an unshaped NPC is mildly receptive.
+  reveal: { weight: 0.5, cap: 0.5 },
+  desireObserver: { min: 0, max: 1 },
+  // Trait multipliers on the attraction response — 'sexy'/'revealing' items
+  // land harder on an observer, comfort-first outfits read as casual rather
+  // than striking. Applied once per trait present anywhere in the outfit.
+  traitAttraction: { sexy: 1.25, revealing: 1.15, comfortable: 0.9 },
+  // The willingness term's wiring — Phase 9's willingness() function reads
+  // these weights through clothingWillingnessBias. Declared now so the pure
+  // reader exists before the function; nothing consumes it until Phase 9.
+  // Both weights scale the SAME shared numbers the attraction/desire readers
+  // produce, so a stat keeps exactly one meaning across every consumer.
+  willingness: {
+    attraction: { weight: 0.15, cap: 0.3 },
+    reveal: { weight: 0.1, cap: 0.2 },
+  },
+  // Scene-prompt flavor thresholds (scene.js / llm.js). An outfit above the
+  // bar gets prose ("dressed to impress"); below, silence — the "wearing the
+  // nice top reads differently than the stained tee" rule as a number.
+  // Calibrated (2026-08-16) against real composed outfits so the DEFAULT
+  // daily fit is silent: basic_tee+jeans+sneakers sums ~0.25 attraction /
+  // ~0.7 comfort, and must read as nothing; the work fit (button_up + dress
+  // pants + dress shoes) sums ~0.65 and reads "dressed to impress"; a full
+  // loungewear set sums ~1.6 comfort and reads "dressed for comfort".
+  prose: {
+    attractive: 0.4,    // outfitStatSum('attraction')
+    revealing: 0.35,    // outfitEffectiveReveal
+    comfy: 1.0,         // outfitStatSum('comfort')
+  },
+};
+
+// --- Desire (Intimacy & Voyeurism Phase 8, D9/D12) ---
+// Desire is a real need: the player carries it as a footer-bar need and every
+// NPC carries it as a 0..100 stat on npc.needs.desire — a sibling of
+// hunger/hygiene/energy, NOT the relPlayer.desire relationship AXIS (that is
+// "how much they want the player specifically"; this is general arousal, and
+// the two feed each other in later phases).
+//
+// Sources are exposure, with "strongest wins per tick": only the single
+// strongest live source contributes per tick, so five showering roommates do
+// not stack into an instant maxed bar. Release is intimacy (Phase 11). The
+// player's decay + sources ride SIM's decayPlayerNeeds closed form; an NPC's
+// ride the heartbeat (applyNeedsHeartbeat), so both respect the closed-form
+// fast-forward rules with no per-tick loops of their own.
+//
+// Amounts are per TICK (30 game-minutes) — matching "strongest wins per
+// tick" — and consumers scale by span/CLOCK.tickMinutes for partial spans.
+// scoreCandidates reads the NPC stat through `utility.desire` as a BIAS term
+// (never a gate — D12). It is a want, not a lack, which is exactly why
+// `utility.need` (a depletion curve) must never appear alongside it on an
+// entry: D5 stays intact (a depleted need never motivates an overture), and a
+// high desire is the one thing that SHOULD.
+const DESIRE = {
+  player: { start: 20, max: 100, decayPerMinute: 0.05, warnBelow: 15 },
+  npc:    { start: 10, max: 100, decayPerMinute: 0.04 },
+  sources: [
+    // Signal sources — perceived through the SAME perceiveSignals query the
+    // rest of the game reads (attenuation, doors and attention already
+    // applied), so desire only rises from what the perceiver can actually
+    // sense. `moaning`'s producer is Phase 11's intimacy acts (they emit it
+    // via `emitsSignal`), so it becomes live config the moment those land;
+    // `nudity_present` has NO producer yet and stays absent (a def with no
+    // emitter is dead config — RI1), arriving with whichever phase emits a
+    // nude-NPC signal. `desireSource` already reads any future `s.signal`
+    // generically.
+    { signal: 'running_water', amount: 1.5 },  // showering in earshot
+    { signal: 'moaning',       amount: 4 },    // intimacy in earshot (Phase 11's producer)
+    { kind: 'flirted',         amount: 6 },    // flirtation target — a desire-motive overture landing
+    { kind: 'peeked_at_sex',   amount: 8 },    // Phase 10's caught-in-the-act read
+  ],
+  // The clothing read (Phase 7's SHARED desire number): seeing someone in the
+  // same room dressed invitingly gains `clothingResponseToWearer(observer,
+  // wearer).desire × clothingScale` per tick — the handoff's "desire gain
+  // from seeing someone dressed invitingly reads clothingResponseToWearer".
+  // Observer deviancy already gates how much of a reveal reads as invitation.
+  // Calibrated in Phase 8 verification: a maxed reveal for a deviant observer
+  // (~0.5 desire) ≈ 1.5/tick — on par with hearing a shower, under hearing
+  // someone get off.
+  clothingScale: 3,
+  // Intimacy release — applied by Phase 11's acts; declared here as the
+  // tuning home now so the numbers have one owner. Positive AMOUNTS: the
+  // effect strings carry the '-' (the act SATES, desire falls by this much).
+  release: { masturbate: 40, sex: 100, quickie: 60 },
+  // The scoreDrive bias term's curve: a candidate declaring
+  // `utility.desire: DESIRE.scoring` gains
+  // `weight × (need − above)/(max − above)` appeal — 0 at and below `above`,
+  // `weight` at full desire. Declared on the desire-motive overtures today
+  // (Phase 8's live intimacy candidates) and by the Phase 13 drives tomorrow.
+  scoring: { above: 45, weight: 0.2 },
+};
+
+// --- Willingness (Intimacy & Voyeurism Phase 9, D13) ----------------------
+// The ONLY door into an intimacy act (design invariant 1). A pure
+// willingness() function in willingness.js reads this table; every act,
+// drive and effect that touches intimacy evaluates it before anything
+// happens. Returns [-1, 1]; `abortFloor` is the line between "soft no"
+// (below an act's threshold — refused with prose, no effects) and "cannot
+// fire at all" (below the floor — a HARD FLOOR returns exactly -1: asleep,
+// hostile/tension-high, actively refusing, or a stranger with zero prior
+// interaction). Phase 17's boundary acts are the sole exception, routed
+// through their own narrow gate in that phase, never through a relaxed
+// willingness.
+//
+// Term weights scale [0,1] contributions except mood, which is the raw
+// [-1,1] mood axis (a genuinely miserable NPC drags the number down). The
+// plan's proposed weights, tuned so the numbers do the plan's job: base
+// -0.3 means nobody starts out consenting — the terms have to earn it. A
+// neutral-but-acquainted NPC with middling desire in a private room sits
+// around 0.4, below every paired act's bar; a warm, intimate-phase NPC
+// clears even `sex`.
+const WILLINGNESS = {
+  // Any willingness below the abort floor is a hard no: the act may never
+  // fire (design invariant 1). HARD FLOORS return exactly -1.
+  abortFloor: 0,
+  terms: {
+    base: -0.3,
+    attraction: 0.5,   // castWeb/relPlayer desire toward the initiator + their outfit
+    desire: 0.4,       // npc.needs.desire / DESIRE.npc.max — general arousal
+    mood: 0.2,         // raw npc.mood axis, [-1,1]
+    phase: 0.35,       // conversationPhase ladder early→familiar→close→intimate
+    personality: 0.2,  // openness + deviancy (both [0,1])
+    context: 0.25,     // privacy: room class × door lock − people present
+    history: 0.1,      // recency of last intimacy (sated) + recent refusals (cold)
+  },
+  // Attraction composition: the relational "want them" axis — the desire
+  // axis toward the initiator (relPlayer.desire for the player, castWeb
+  // target→initiator for an NPC partner) — plus the initiator's outfit
+  // through the SHARED clothingWillingnessBias (Phase 7). One meaning per
+  // stat, observer-neutral on the outfit, exactly like every consumer.
+  attraction: { axisWeight: 0.75, clothingWeight: 0.25 },
+  personality: { opennessWeight: 0.5, deviancyWeight: 0.5 },
+  context: {
+    privateLocked: 1.0,       // bedroom/bathroom with the door locked
+    privateUnlocked: 0.75,    // bedroom/bathroom, door open or unlocked
+    shared: 0.4,              // a common room — anyone could walk in
+    peoplePresentPenalty: 0.2, // subtracted once when someone else is in the room
+  },
+  history: {
+    intimateRecencyDays: 1,      // intimacy within this many days is "recent"
+    intimateRecencyPenalty: 0.4, // a just-sated target's appetite is down
+    refusalWindowDays: 7,        // refusals inside this window still chill the target
+    refusalPerRefusal: 0.15,     // each recent refusal's chill
+    refusalLockoutDays: 1,       // the actively-refusing floor's default hold (days)
+  },
+  // Per-act consent bars: willingness >= threshold(act) means willing.
+  // masturbate is solo — the floor is its only door, so threshold 0. The
+  // letters the plan used (quickie q, sex s, share_shower t) are these.
+  // `photo` (asks plan Phase 8) is the photo ask's bar — a selfie of
+  // themselves is more intimate than a cuddle but far less than sex, so it
+  // sits between them (0.35 < 0.4 < 0.45 default).
+  thresholds: { default: 0.45, masturbate: 0, quickie: 0.5, sex: 0.6, share_shower: 0.45, cuddle: 0.35, photo: 0.4 },
+  // The utility.willingness scoring bias (Phase 9) — utility.desire's bias
+  // partner, declared on the SAME desire-motive overtures. `weight` scales
+  // willingness() into scoreDrive appeal when the desire motive is live,
+  // and a floored NPC is dropped from the candidate list entirely (design
+  // invariant 1 — an NPC who would refuse an advance never starts flirting
+  // one). `act` is the bar read for that "would they say yes at all" test.
+  scoring: { weight: 0.15, act: 'default' },
+};
+
+// --- Intimacy acts (Intimacy & Voyeurism Phase 11, D3/D13) ---------------
+// The tuning home for the player's intimacy verbs. The plan's
+// INTIMACY_ACT_DEFS gave shapes and durations; the magnitudes below are the
+// calibrated numbers its rows interpolate (defs.actions.js) — one owner, so
+// retuning an act is editing one table, never N effect strings.
+//
+// Splits are deliberately two-sided: the player's effects land through the
+// normal action pipeline (ADJUST_NEED player …), the partner's through the
+// paired block (ACTIONS.resolvePairedAct, {target} substituted). Player mood
+// gains are ADJUST_NEED player mood lines → day-scale mood impulses (the
+// standard player-mood path); NPC mood gains are direct writes (MOOD_DELTA).
+// Desire release reads DESIRE.release for the player and npcDesireRelease
+// for the partner — the same sated appetite on both sides of the same act.
+// Both are positive AMOUNTS; the effect strings apply them with a '-' prefix
+// (ADJUST_NEED … desire -60), never a sign-carrying interpolation — the DSL
+// parser splits on whitespace, so 'desire - -60' would read the '-' as the
+// whole delta and the release would silently land as NaN.
+const INTIMACY = {
+  durationMinutes: { masturbate: 15, quickie: 10, sex: 40, cuddle: 25, share_shower: 15 },
+
+  // Player side. share_shower's hygiene is a RESTORE (the shower washes); the
+  // paired table below mirrors it for the partner.
+  playerMoodGain:   { masturbate: 0.15, quickie: 0.25, sex: 0.35, cuddle: 0.3,  share_shower: 0.15 },
+  playerEnergyCost: { masturbate: 3,    quickie: 6,    sex: 12,   cuddle: 0,    share_shower: 4 },
+  playerHygieneCost:{ quickie: 5,       sex: 10,       cuddle: 0, masturbate: 0 },
+
+  // Partner side (the target NPC).
+  npcMoodGain:    { quickie: 0.15, sex: 0.2, cuddle: 0.2, share_shower: 0.1 },
+  npcEnergyCost:  { quickie: 6,    sex: 12,  cuddle: 0,   share_shower: 4 },
+  npcHygieneCost: { quickie: 5,    sex: 10,  cuddle: 0,   share_shower: 0 },
+  // share_shower restores hygiene like the solo shower (NEEDS.hygiene.
+  // washRestore) — kept here as the paired act's own home so the two showers
+  // can be retuned independently.
+  shareShowerRestore: 60,
+  // The target's npc.needs.desire release. sex/quickie get the same sated
+  // release the player gets (DESIRE.release); cuddle and share_shower are not
+  // releases (the plan's effects say so) and are absent here.
+  npcDesireRelease: { quickie: 60, sex: 100 },
+
+  // The relPlayer axes the TARGET gains toward the player on a completed act,
+  // applied via applyRelDelta (which re-derives intimacyLevel/conversationPhase).
+  // `desire` here is the relPlayer AXIS — sated, so it drops — and is a
+  // different store from npc.needs.desire above.
+  relDeltas: {
+    quickie:      { affection: 0.08, comfort: 0.06, trust: 0.04, desire: -0.25, tension: -0.05 },
+    sex:          { affection: 0.15, comfort: 0.12, trust: 0.08, desire: -0.5,  tension: -0.1 },
+    cuddle:       { affection: 0.12, comfort: 0.15, trust: 0.08, desire: -0.1,  tension: -0.1 },
+    share_shower: { affection: 0.06, comfort: 0.1,  trust: 0.04, desire: -0.1,  tension: -0.03 },
+  },
+
+  // Which acts unmake the bed in the room (invariant 7 — an act leaves a
+  // trace). Only the bed-act plan named; share_shower happens in the shower
+  // and cuddle is not a bed-tangling act.
+  leavesBedUnmade: ['quickie', 'sex'],
+};
+
+// --- NPC intimacy drives (Intimacy & Voyeurism Phase 13, D3/D13) ----------
+// The candidacy doors for the two Phase 13 DRIVE_DEFS entries (masturbate /
+// intimate, added below in DRIVE_DEFS). `masturbate` is SOLO — a private
+// room and real desire is the whole gate, and a solo act has no other party
+// for D13 to protect (the same assumption the player's own masturbate act
+// makes). `intimate` is a PAIR act: private room, real desire, AND a
+// co-located resident who clears the same resolveWillingnessGate the
+// player's Make-a-Move reads — the only door into an intimacy act (design
+// invariant 1), symmetric in both directions (D3). The per-act magnitudes
+// live on the DRIVE_DEFS entries themselves (effects/emitsSignal/leaves/
+// utility) exactly like every other drive; this table owns only the gates
+// and the act name the willingness gate reads.
+const NPC_INTIMACY = {
+  masturbate: { desireThreshold: 30 },
+  intimate:   { desireThreshold: 40, act: 'sex' },
+};
+
+// --- Boundary acts (Intimacy & Voyeurism Phase 17, D13/D14) ----------------
+// The tuning home for the Phase 17 boundary layer (BOUNDARY_ACT_DEFS + the
+// narrow context gate live in boundary.js; this table owns the numbers).
+// D13's line: these acts are RISK SYSTEMS, never a relaxed willingness. A
+// sleeping-room act is an ATTEMPT — the target is asleep (the willingness
+// function's own asleep floor returns -1, which is expected and recorded,
+// never bypassed) — and every wake-up resolves consequences deterministically
+// (Phase 16's shaming resolver at cold/neutral/hostile dynamics, the REAL
+// willingness gate for a warm dynamic's accept/reciprocate branch). A three-
+// way act (throuple / cuck) is NOT an exception at all: all three parties
+// must clear the same resolveWillingnessGate the player's Make-a-Move and the
+// Phase 13 pair drives read, and a single unwilling party refuses the whole
+// act with that party's own voice.
+const BOUNDARY = {
+  // Discrete action durations (game-minutes) the player's boundary verbs
+  // cost — the same chunked advance-and-resolve the discrete action pipeline
+  // uses, never a real-tick loop.
+  durationMinutes: { sleep_with: 30, sleep_watch: 10, throuple: INTIMACY.durationMinutes.sex },
+  // --- Sleeping-room wake/catch risk curve (D13/D14) ---
+  // Per-act × per-dynamic wake chance. The dynamic tiers are the shaming
+  // tiers (resolveShamingTier): a stranger/hostile sleeper is near-certain to
+  // wake ("at low dynamic a wake-up is near-certain", the plan's wording);
+  // a warm close dynamic wakes seldom and, when it does, routes to the
+  // accept/reciprocate branch. `stealthFactor` scales the player's
+  // stealthSuccess skill off the base; `perceptionWeight` scales the
+  // sleeper's own perception on. Pure data — the curve and the roll are
+  // boundary.js.
+  sleepRoom: {
+    wakeChanceByDynamic: { cold: 0.92, neutral: 0.65, warm: 0.30, hostile: 0.95 },  // sleep_with
+    watchWakeChance:     { cold: 0.75, neutral: 0.45, warm: 0.18, hostile: 0.85 },  // sleep_watch
+    stealthFactor: 0.06,
+    perceptionWeight: 0.15,
+    // The player's need effects on a completed (uncaught) act — modest: you
+    // settled in beside them or watched from the edge of the bed.
+    sleepWith: {
+      playerMood: 0.15, playerEnergy: 8,
+      // The warm accept/reciprocate branch is a completed paired act: it
+      // reuses INTIMACY's sex magnitudes so a reciprocated boundary act is
+      // costed exactly like the Make-a-Move act it turned into.
+      reciprocateDeltas: INTIMACY.relDeltas.sex,
+    },
+    watch: { playerMood: 0.08 },
+    // The warm dynamic's "awake but not game" outcome: playful, no
+    // cold-shoulder — the warm dynamic never shames. Applied by
+    // applyBoundarySleepRoom's warmRefuse branch.
+    warmRefuseDeltas: { tension: 0.05, affection: 0.02 },
+    // The target's relPlayer axes when a caught wake-up happens at a cold/
+    // neutral/hostile dynamic — the shaming resolver's own deltas carry the
+    // bulk; this small extra is the "you woke me by getting in my bed" spike
+    // that applies whatever the tier prose says.
+    caughtTensionSpike: 0.08,
+  },
+  // --- Three-way acts (throuple / cuck, D14) ---
+  // `cuck_dynamic` is the same all-three-willing act as a throuple, named by
+  // configuration: when two of the three hold a committed/seeing record, the
+  // couple's partner is "letting" the third in (the plan's consenting
+  // configuration), and the narration + relationship history differ; the
+  // GATE is identical — all three parties' willingness + desire.
+  throuple: {
+    desireFloor: 45,          // both NPC partners need real desire (the plan's "requires: two willing partners + desire")
+    // castWeb warmth between the two NPC partners of a completed three-way.
+    pairDeltas: { affection: 0.06, comfort: 0.05, trust: 0.03, desire: -0.25, tension: -0.05 },
+    // Both partners' relPlayer deltas toward the player (INTIMACY.relDeltas.sex
+    // is the paired-act number; the third participant earns a touch less).
+    relDeltas: { affection: 0.10, comfort: 0.08, trust: 0.05, desire: -0.3, tension: -0.08 },
+    // NPC-side needs/mood on a completed three-way — the INTIMACY.sex
+    // magnitudes, one line per effect the paired block already models.
+    npcEffects: [
+      `ADJUST_NEED {target} energy -${INTIMACY.npcEnergyCost.sex}`,
+      `ADJUST_NEED {target} hygiene -${INTIMACY.npcHygieneCost.sex}`,
+      `ADJUST_NEED {target} desire -${INTIMACY.npcDesireRelease.sex}`,
+      `MOOD_DELTA {target} +${INTIMACY.npcMoodGain.sex}`,
+    ],
+    playerEffects: [
+      `ADJUST_NEED player desire -${DESIRE.release.sex}`,
+      `ADJUST_NEED player mood +${INTIMACY.playerMoodGain.sex}`,
+      `ADJUST_NEED player energy -${INTIMACY.playerEnergyCost.sex}`,
+      `ADJUST_NEED player hygiene -${INTIMACY.playerHygieneCost.sex}`,
+    ],
+  },
+  // --- The NPC-equivalent drive (symmetric initiation, D3/D13) -------------
+  // "some NPCs attempt them back": a deviant, aroused NPC slips into the
+  // sleeping player's room. Candidacy is the mirror of the player's own
+  // sleep_with — deviancy + desire + a sleeping player behind an unlocked
+  // door. The catch roll is a sneaky-NPC/dozing-player contest: silence is
+  // the usual outcome (the player wakes to an unmade bed), being caught is a
+  // real but minority outcome with relPlayer consequences.
+  npcSneak: {
+    deviancyFloor: 0.6,       // openness×assertiveness — the deviancy gate Phase 6's nude swim reads
+    desireFloor: 50,
+    // NPC stealth = (conscientiousness+1)/2 scaled + jitter; player
+    // perception is its normal value × asleepFactor (they are asleep).
+    stealthBase: 0.25, stealthJitter: 0.5, asleepPerceptionFactor: 0.4,
+    // catchChance = clamp01(base + (playerPerception − npcStealth) × gapWeight)
+    baseCatchChance: 0.3, perceptionGapWeight: 0.6,
+    cooldownMinutes: 720,
+    // NPC-side effects on a silent success — desire release (sated), a warm
+    // blush of relPlayer affection/comfort toward the player.
+    desireRelease: -40,
+    moodGain: 0.05,
+    relDeltas: { affection: 0.03, comfort: 0.05, desire: -0.15 },
+    // The caught side: the NPC's own relPlayer axes toward the player take a
+    // hit — getting caught creeping costs them their standing with you.
+    caughtRelDeltas: { tension: 0.12, trust: -0.06, comfort: -0.08, affection: -0.03 },
+    caughtSuspicion: 0.2,     // the NPC's suspicion of the player (boundary_violation) — they now watch YOU
+    eventTemplateSilent: '{name} slipped into your bed while you were asleep.',
+    eventTemplateCaught: '{name} got caught sneaking into your room.',
+  },
+};
+
+// --- Pregnancy (Intimacy & Voyeurism Phase 18, D14/D16) --------------------
+// The lifecycle record is world.pregnancies — an array of
+// { parents: [ids], conceivedDay, dueDay, visibleFromDay, birthDay, announced }.
+// The ONLY door in is a COMPLETED qualifying act: the act's own willingness
+// gate has already proved both parties willing (invariant 1 sits upstream of
+// this whole system) and the outcome is deterministic (D15 — data decides,
+// prose narrates; no LLM call ever decides a conception). The D16 "trying"
+// flag — relationship.trying for an NPC couple, player.flags._tryingWith for
+// the player — buys the deliberate high chance per act; every other act is
+// an unprotected fling on the base chance (there is no protection item in
+// the game, so "unprotected" is simply the only mode). Term compresses to
+// game days. After birth the BABY PRESENCE is a separate stamp
+// (npc.flags._baby / player.flags._baby, written ONCE by the birth pass)
+// so the "who is pregnant right now" read stays a single derived query over
+// world.pregnancies while the post-birth presence lives where the mood/
+// schedule/conversation systems already look.
+const PREGNANCY = {
+  termDays: 14,                // conception → birth, in game days (D16: compressed, tunable)
+  visibleFromDay: 6,           // the bump reads from this day of the term (day 1 = conceivedDay)
+  // Per-act odds on a completed qualifying act (both parties willing by the
+  // act's own gate). Measured live in Phase 18: over 10 completed "trying"
+  // acts, 0.35 gives P(≥1 conception) ≈ 0.987; the 0.08 base gives a fling
+  // couple ~56% over the same 10 acts — real risk, not a guarantee.
+  tryingChancePerAct: 0.35,
+  baseChancePerAct: 0.08,
+  qualifyingActs: ['sex'],     // ledgerAct / relationship-history kinds that can conceive
+  // The "trying" flag's NPC side (D16's couple-level choice, emergent): a
+  // COMMITTED couple with recent intimacy may start trying — a seeded
+  // per-day roll at rollover, so pregnancy can happen without the player
+  // orchestrating (D14: everything on by default, no new gating menu).
+  trying: {
+    chancePerDay: 0.06,
+    recencyDays: 7,            // lastIntimateDay must sit within this window
+  },
+  // The baby presence (post-birth). No v1 parenting sim (D16) — presence
+  // only: a daily mood note on the parents, a sleep-deprived energy cost on
+  // the player, an offscreen "stayed in with the baby" event (drawn for
+  // parents by drawOffscreenEvent), and a pinned memory fact on both parents
+  // so conversation naturally acknowledges the new addition.
+  baby: {
+    offscreenEventWeight: 3,   // the "stayed in with the baby" OFFSCREEN_EVENTS row
+    dailyMoodBoost: 0.04,      // per-day NPC parent mood delta
+    playerMoodBoost: 0.06,     // per-day player mood impulse (new-baby joy)
+    playerEnergyCost: 6,       // per-day player energy cost (sleep-deprived)
+  },
+  factCategory: 'pregnancy',
+  factImportance: 0.8,         // = MEMORY_IMPORTANCE.significant — pinned, always in the prompt window
+  factEmotionalTag: 'romance',
+  // Birth narration pools — deterministic pick per (day, pair) via seededRng
+  // in pregnancy.js (the PEEK_PROSE pattern). {name}/{other} are the parents.
+  birthLines: [
+    '{name} and {other}\'s baby arrived today — a loud, perfect, brand-new person who has already declared war on sleep.',
+    'There was a small commotion in {name}\'s room before noon, and by evening the whole apartment had heard the news: {name} and {other} have a baby.',
+    '{name} came downstairs looking exhausted and radiant, a bundle in their arms. The baby had arrived overnight — {other} wasn\'t far behind, beaming.',
+    'A small, fierce cry cut through the morning. {name} and {other} are parents now.',
+  ],
+  // The "trying" emergence narration — logged the day a committed couple
+  // decides to start trying.
+  tryingLines: [
+    '{name} and {other} are trying for a baby.',
+    '{name} and {other} have decided to start a family — they\'re trying.',
+    'There\'s a new hopeful energy around {name} and {other}: they\'re trying for a baby.',
+  ],
+};
 
 // --- Memory importance (correctness plan Phase 3, D8) ---
 // Every episode used to land at a hardcoded 0.5 regardless of where it came
@@ -2997,11 +4578,27 @@ const EVENT_IMPORTANCE = {
   gift:                'significant',
   moveInOffer:         'significant',
   argument:            'significant',
+  // Intimacy & Voyeurism Phase 13: a completed pair act is a real
+  // relationship event — the first_sex/sex history entry, worth remembering.
+  intimate:            'significant',
+  // Intimacy & Voyeurism Phase 14: an infidelity the wronged party finds out
+  // about is a defining household event, on par with a confrontation.
+  cheating:            'significant',
+  // Intimacy & Voyeurism Phase 17: a caught boundary act (NPC sneaking into
+  // the sleeping player's room) is exactly the kind of thing that gets
+  // remembered — the caught half of the symmetric boundary system.
+  boundary:            'significant',
+  // Intimacy & Voyeurism Phase 18: a birth is the household's defining
+  // event for the season — on par with a couple committing.
+  birth:               'significant',
   // Social contact — real, but not defining.
   // investigate_smell (perception plan Phase 5) sits here rather than in
   // `ambient`: finding the thing that had gone off and binning it is a real
   // domestic act with a consequence, not background like doing the laundry.
   investigate_smell:   'social',
+  // Intimacy & Voyeurism Phase 19: a 'keep it down' beat is a real social
+  // moment between neighbours, worth remembering.
+  music_too_loud:      'social',
   npc_chat:            'social',
   eat:                 'social',
   guest:               'social',
@@ -3040,12 +4637,28 @@ const EVENT_EMOTION = {
   bad_day:             'failure',
   good_news:           'success',
   date:                'romance',
+  intimate:            'romance',   // Intimacy & Voyeurism Phase 13: a pair act is a romance beat
   guest:               'warmth',
   phone_call:          'warmth',
   npc_chat:            'warmth',
   gift:                'warmth',
   breakage:            'embarrassment',
   burnt_food:          'embarrassment',
+  // Intimacy & Voyeurism Phase 13: masturbation is a private moment that
+  // landed on the event log — tagged embarrassment so a witnessed one can
+  // form a theme, sitting in the same band as the other private beats.
+  masturbate:          'embarrassment',
+  // Intimacy & Voyeurism Phase 14: a caught infidelity is a fight-flavored
+  // beat (the wronged party's episode tags 'argument'), so rumination's
+  // repetition rule can group repeated betrayals into a theme.
+  cheating:            'argument',
+  // Intimacy & Voyeurism Phase 17: a boundary act surfaces as a secretive
+  // beat — embarrassment groups repeated sneaking into themes the same way
+  // caught masturbation does.
+  boundary:            'embarrassment',
+  // Intimacy & Voyeurism Phase 18: a birth is a warmth beat — the new-baby
+  // episodes group into a family theme like a gift does.
+  birth:               'warmth',
   // The chores. `domestic` is the lowest-weight tag in EMOTIONAL_WEIGHTS (0.3)
   // for exactly this reason — it is the most common theme in the flat and the
   // least worth repeating to anyone.
@@ -3055,6 +4668,145 @@ const EVENT_EMOTION = {
   shopping:            'domestic',
   repair:              'domestic',
   investigate_smell:   'domestic',
+  // Intimacy & Voyeurism Phase 19: music-too-loud beats group as argument
+  // themes, like the other noise-driven irritations.
+  music_too_loud:      'argument',
+};
+
+// --- Infidelity (Intimacy & Voyeurism Phase 14, D14) -----------------------
+// An intimacy act that contradicts a relationship record (a participant holds
+// a committed/seeing record with someone who is NOT the other participant).
+// Deterministic authority (D15): the act itself went through the willingness
+// gate exactly like any other; this is the CONSEQUENCE pass that runs after a
+// completed act and decides what the wronged party experiences. The wronged
+// party's jealousy is a reaction to LEARNING — deltas land when they witness
+// the act (same-room or a perceived moan) or when the gossip fact reaches
+// them (told_by/overheard through the transmission system) — never from thin
+// air. The relationship record always gains a `cheat` history entry (Phase
+// 16's breakup ladder reads it); the deltas/mood/grievance are the reaction.
+const INFIDELITY = {
+  // castWeb wronged→cheater axes on learning (the cheater's partner is
+  // furious — affection/trust/desire crater, tension spikes).
+  wrongedDeltas: { affection: -0.15, trust: -0.2, desire: -0.3, tension: 0.2 },
+  // relPlayer wronged→player axes when the player was the "other".
+  wrongedPlayerDeltas: { trust: -0.12, tension: 0.15 },
+  wrongedMoodDelta: -0.2,
+  // The gossip-transmissible fact: category + importance + emotionalTag drive
+  // how eagerly it is raised (factRaiseScore) and how firmly it is held.
+  factCategory: 'cheating',
+  factImportance: 0.8,           // = MEMORY_IMPORTANCE.significant — pinned
+  factEmotionalTag: 'argument',
+  // Grievance on the wronged NPC toward the player, when the player was the
+  // "other" — the Phase 16 confrontation/repair surface reads grievances.
+  grievanceSeverity: 0.5,
+  grievanceText: 'You slept with my partner. I heard about it.',
+};
+
+// --- Knowledge codex (Intimacy & Voyeurism Phase 15, D8) ------------------
+// The per-character ledger's spendable verbs. Confront / Spread / Matchmake
+// read player.ledger[npcId] (written by Phase 11's paired acts, Phase 14's
+// infidelity pass and Phase 15's 'witnessed' writes) and are the ONLY
+// consumers of the `spent` flag. Every outcome is DETERMINISTIC — codex.js
+// resolves the reaction from relationship dynamic + willingness state and
+// narrates it from authored pools; no LLM call decides anything (D15). None
+// of the three verbs is an intimacy act: they move relPlayer axes, gossip
+// facts and formation progress, never a consent gate (invariant 1's converse
+// — these doors go sideways, not in).
+const CONFRONT = {
+  // The willingness read modulates the reaction TIER, it is never a door:
+  // a floored NPC shifts DOWN a tier (hostile/stranger — they do not want
+  // this conversation), a willing one shifts UP (they can own what they
+  // did). `willingAct` is the bar the shift reads (the sex threshold).
+  willingAct: 'sex',
+  tierFloorShift: -1,
+  tierWillingShift: 1,
+  outcomes: {
+    // stranger/cold — the verification's "confronting a stranger ... tension
+    // spike + gossip": the accusation lands, the news leaks to whoever is
+    // in earshot (cheating entries only).
+    shame: {
+      relDeltas: { tension: 0.12 },
+      npcMood: -0.1,
+      playerMood: 0,
+      suspicion: 0.1,
+      gossip: true,
+    },
+    // familiar/close — playful brush-off; the confrontation itself reads as
+    // flirtation (a desire mark).
+    tease: {
+      relDeltas: { tension: 0.02, affection: 0.04 },
+      npcMood: 0.05,
+      playerMood: 0.02,
+      suspicion: 0,
+      gossip: false,
+      desireMark: 'flirted',
+    },
+    // intimate — they engage with what they did; the confrontation rekindles
+    // something (affection/desire/comfort up, tension down).
+    engage: {
+      relDeltas: { tension: -0.08, affection: 0.1, desire: 0.1, comfort: 0.05 },
+      npcMood: 0.1,
+      playerMood: 0.05,
+      suspicion: 0,
+      gossip: false,
+      desireMark: 'flirted',
+    },
+  },
+  // Reaction prose pools — deterministic pick per (outcome, day, npc) via
+  // seededRng in codex.js, mirroring PEEK_PROSE's pattern. {name} is the
+  // confronted NPC, {other} the act's third party when the entry names one.
+  lines: {
+    shame: [
+      '{name} goes pale. "That\'s none of your business," they say, too loud.',
+      '{name} flushes and stares at the floor. "You didn\'t see anything," they say, not looking at you.',
+      '{name} freezes. "I don\'t know what you think you saw," they mutter, already backing away.',
+      '{name} laughs, badly. "Oh, that? That\'s — that\'s not — " and the sentence dies in their throat.',
+    ],
+    tease: [
+      '{name} grins, unbothered. "And? You want an invitation or a replay?"',
+      '{name} rolls their eyes, but the corner of their mouth twitches. "Keep that up and people will talk."',
+      '{name} shrugs. "So you\'ve got good taste. I already knew that."',
+      '{name} laughs it off. "Between us, yeah? I\'d hate to have to make you swear on something."',
+    ],
+    engage: [
+      '{name} looks at you for a long moment, then nods slowly. "Yeah. That happened. And?" The question hangs there, waiting on you.',
+      '{name} doesn\'t flinch. "You saw that, huh." Their voice drops. "Good. I was starting to think you weren\'t paying attention."',
+      '{name} holds your gaze. "You\'ve got me. So — what are you going to do about it?"',
+      '{name} smiles, slow and deliberate. "Keep that between us and I\'ll owe you one. Better yet — keep it between us and I\'ll show you what you missed."',
+    ],
+  },
+  // The player's own confronting lines — {other} when the entry names one.
+  playerLines: {
+    withOther: [
+      'I saw you with {other}.',
+      'You and {other}? Don\'t bother denying it.',
+      'I know about {other}.',
+      'Don\'t act surprised — I saw everything with {other}.',
+    ],
+    alone: [
+      'I saw what you were up to.',
+      'We both know what you did.',
+      'I\'m not going to pretend I didn\'t see that.',
+    ],
+  },
+};
+
+const MATCHMAKE = {
+  // Progress gained on a matchmake (0..1 clamp) — the Phase 12 pass's exact
+  // fuel, injected ahead of the natural co-location drip. Tuned so one
+  // matchmake is roughly two to three days of shared-room proximity.
+  progressBoost: 0.25,
+  // The pair must already read as compatible enough to sustain a match
+  // (below the natural-start bar — a matchmake can nudge a pair from "almost"
+  // to formation, but it cannot manufacture a spark from nothing).
+  minCompatibilityForMatch: 0.35,
+  // castWeb pair deltas applied BOTH ways on a match — pairCompatibility's
+  // live `dynamic` term reads these, so the temperature rise is self-
+  // consistent (the match both adds progress AND makes the pair read hotter).
+  warmDeltas: { affection: 0.1, desire: 0.12, comfort: 0.05 },
+  // The player's own reward for playing matchmaker — a respect bump from
+  // both parties, applied via relPlayer.
+  playerRelDeltas: { respect: 0.04 },
 };
 
 // --- Belief record (knowledge-gossip-memory-plan Phase 1, D1/D2/D3/D15/D18) ---
@@ -3119,7 +4871,10 @@ const TRANSMISSION = {
   biasPractical: 0.4,                // D6 — conscientiousness → practical facts
   reWitnessBoost: 0.15,              // D2's up-route — hearing a held fact again
   practicalCategories: ['work', 'money', 'finance', 'home', 'apartment', 'house', 'rent', 'job', 'trades'],
-  socialCategories: ['relationship', 'romance', 'social', 'family', 'friendship', 'dating'],
+  // Intimacy & Voyeurism Phase 14: `cheating` joins the social categories so
+  // a scandal fact gets the warmth bias and is genuinely worth raising — the
+  // "the fact spreads by next day" path of the plan's Phase 14 verification.
+  socialCategories: ['relationship', 'romance', 'social', 'family', 'friendship', 'dating', 'cheating'],
 };
 
 // D7/D8/D9/D10 — rumination tuning (knowledge-gossip-memory-plan Phase 3).
@@ -3567,6 +5322,7 @@ const CHARACTER_SCHEMA = {
         social:   { type: 'number', range: [0, 100], default: 50 },
         comfort:  { type: 'number', range: [0, 100], default: 50 },     // NPC Overhaul
         stimulation: { type: 'number', range: [0, 100], default: 50 },  // NPC Overhaul
+        desire:  { type: 'number', range: [0, 100], default: 10 },      // Intimacy & Voyeurism Phase 8 (DESIRE.npc.start) — general arousal, distinct from relPlayer.desire (the axis)
       }
     },
     relPlayer: { type: 'object', required: true, default: {},
@@ -3877,6 +5633,12 @@ const OFFSCREEN_EVENTS = [
   { type: 'burnt_food', weight: 1, text: '{name} burnt something in the kitchen — the smoke alarm went off.', moodDelta: -0.05, dataFields: [] },
   { type: 'package', weight: 1, text: '{name} got a package delivered.', moodDelta: 0.05, dataFields: [] },
   { type: 'late_night_snack', weight: 2, text: '{name} had a late-night snack raid on the fridge.', moodDelta: 0.02, dataFields: [] },
+  // Intimacy & Voyeurism Phase 18 (D16): the baby-presence schedule note.
+  // Drawn ONLY for a resident parent (drawOffscreenEvent appends it to the
+  // pool when npc.flags._baby is set) — the parent stays home with the new
+  // addition instead of living their old evening. `baby` gets its own
+  // EVENT_EMOTION/EVENT_IMPORTANCE rows above.
+  { type: 'baby', weight: 3, text: '{name} stayed in with the baby all evening — tiny socks everywhere, half-eaten meals, zero complaints.', moodDelta: 0.08, dataFields: [] },
 ];
 
 const EVENT_FILL_DATA = {
@@ -4321,6 +6083,12 @@ const PEEP_CLOTHING_DESC = {
   undressed: 'through the crack — {name} is changing, clothes scattered on the floor',
   sleepwear: 'through the gap — {name} is in their sleepwear, relaxed and unguarded',
   towel: 'through the crack — {name} is standing with just a towel wrapped around them',
+  // Intimacy & Voyeurism Phase 6 (D11): the two states Phase 5's machine
+  // added, so the existing peep resolver reads them honestly — 'nude' is the
+  // naked-in-scene state (nude swim / shower), 'changing' is the caught-
+  // changing keyhole beat the change_clothes drive sets for exactly one tick.
+  nude: 'through the gap — {name} is completely naked, skin bare in the dim room',
+  changing: 'through the crack — {name} is mid-change, caught between two outfits, clothes half-on half-off',
   dressed: 'through the gap — {name} is just hanging out in their room',
 };
 
@@ -4337,6 +6105,239 @@ const PEEP_SUSPECTED_TEMPLATES = [
   '{name} pauses, looking toward the door as if they heard something, then shrugs it off.',
   '{name} glances at the door briefly, frowning, before going back to what they were doing.',
 ];
+
+// --- Peek & Listen (Intimacy & Voyeurism Phase 10, D6/D7) -----------------
+// The timed real-time hold at a door. D7's "game minutes tick while the
+// player watches": while a peek/listen session is active the continuous
+// clock runs at TIME_DILATION.scales.peeking (60x = one game-minute per
+// real second) — the SAME chunked closed-form semantics as every other
+// clock advance, never a per-real-tick sim loop (the fast-forward rule).
+// The session controller (peek.js) only READS the clock: each real second
+// it re-derives the door cue + occupant state, accrues the risk ramp and
+// rolls the catch. Deterministic throughout — seeded rng only, and no LLM
+// call decides any boundary outcome (D15).
+const PEEK = {
+  realTickMs: 1000,          // the session loop's real-time cadence
+  tickMinutes: 1,            // game-minutes per hold tick (1 gm per real second)
+  // The risk ramp (D7). Per-tick increment:
+  //   baseRisk + riskPerTick × ticksElapsed
+  //     − stealthSuccess(player) × stealthBonus  — the planted curve's first reader
+  //     − doorLocked × lockBonus                 — a locked door = a complacent occupant
+  //     + getNpcPerception(occupant) × perceptionWeight
+  baseRisk: 0.05,
+  riskPerTick: 0.012,
+  maxRisk: 1.0,
+  stealthBonus: 0.04,
+  lockBonus: 0.02,
+  perceptionWeight: 0.15,
+  // The caught roll each tick: maxCatchChance × riskAccum/(riskAccum + riskHalfway).
+  // Monotone-saturating — a long hold is eventually caught, never certain in one tick.
+  riskHalfway: 0.55,
+  maxCatchChance: 0.9,
+  // Safety cap: a hold nobody stops ends on its own (4 real minutes).
+  maxHoldTicks: 240,
+  // Player mood on a resolved watch (the thrill of the keyhole).
+  moodGain: 0.1,
+  // The one-shot desire mark (DESIRE.sources `peeked_at_sex` = 8) when the
+  // watched act is sexual — the plan's "Phase 10's caught-in-the-act read".
+  // Everything else (a shower, general nudity) rides the normal signal
+  // sources through the heartbeat. Marked once per session on a sexual act
+  // or an escalate/engage resolution.
+  desireSource: 'peeked_at_sex',
+  desireActs: ['masturbating', 'masturbating in bed', 'having sex', 'sex', 'quickie', 'making love'],
+  // Image budget (the plan's D7 open question, resolved here): fresh
+  // generations are capped per session and per day — the kv image cache is
+  // the primary gate, this is the secondary one. Past either cap the lens
+  // shows the last cached frame (or the shimmer + a shadows line) instead
+  // of spending quota.
+  imageBudget: { freshPerSession: 2, freshPerDay: 6 },
+  listen: {
+    // Same session, audio-only lines, and a shorter default hold — the
+    // player is expected to pull away sooner from a door they can't see
+    // through. The player can always hold longer; the cap is guidance.
+    defaultHoldTicks: 15,
+    maxAudibleSignals: 2,
+  },
+};
+
+// The caught resolution (D7/D15). Per-NPC PERSONALITY outcome, decided
+// deterministically and narrated from authored prose — some stop, some
+// ignore, some escalate or engage once they know they are watched, some
+// confront. The weight tables ARE the personality gate; the prose pools in
+// PEEK_PROSE are the narration. No LLM call decides which outcome happens.
+const PEEK_OUTCOMES = {
+  // Dynamic gates that steer the weighted pick. `warm` = comfort above the
+  // bar or a familiar/close/intimate phase; a near-stranger (all axes at
+  // default, no grievances) or hostile-tension target reads `cold`.
+  warmComfort: 0.6,
+  warmPhases: ['familiar', 'close', 'intimate'],
+  deviantThreshold: 0.55,     // npcDeviancy ≥ this opens the escalate/engage branch
+  hostileTension: 0.8,        // aligns with REL_CONSEQUENCES.tensionHigh
+  weightTables: {
+    // { stop, ignore, escalate, engage, confront }
+    warmDeviant: { stop: 1, ignore: 1, escalate: 3, engage: 2, confront: 0 },
+    warm:        { stop: 2, ignore: 2, escalate: 1, engage: 2, confront: 0 },
+    neutral:     { stop: 3, ignore: 3, escalate: 1, engage: 1, confront: 1 },
+    cold:        { stop: 2, ignore: 2, escalate: 0, engage: 0, confront: 4 },
+    hostile:     { stop: 1, ignore: 1, escalate: 0, engage: 0, confront: 6 },
+  },
+  // Per-outcome consequences, applied via the effects vocabulary (trusted
+  // producer path — the caught resolution is deterministic, D15). tension/
+  // affection are the occupant's relPlayer axes, suspicion is the boundary
+  // subject, mood is the player's impulse.
+  stop:     { tension: 0.10, suspicion: 0.10 },
+  ignore:   { tension: 0.05 },
+  escalate: { tension: 0.02, mood: 0.05 },
+  engage:   { tension: 0.06, affection: 0.04, mood: 0.10 },
+  confront: { tension: 0.20, suspicion: 0.25, affection: -0.15, mood: -0.05 },
+};
+
+// What a watched act is called in prose, and how explicit that can be. D15:
+// an activity whose phrase is itself explicit (masturbating, sex) has a
+// `safe` form used whenever the intimate gate is CLOSED — the same fail-
+// closed split as getPhysicalDescriptionForPrompt's own. `explicit` is only
+// reachable through the gate (mature flag + naked state) in image.js.
+const PEEK_VIEW_ACT = {
+  masturbating: { safe: 'lying in bed', explicit: 'masturbating' },
+  'masturbating in bed': { safe: 'lying in bed', explicit: 'masturbating' },
+  'having sex': { safe: 'in bed', explicit: 'having sex' },
+  sex: { safe: 'in bed', explicit: 'having sex' },
+  quickie: { safe: 'in bed', explicit: 'having a quickie' },
+  showering: { safe: 'in the shower', explicit: 'in the shower' },
+  changing: { safe: 'changing', explicit: 'changing' },
+  sleeping: { safe: 'asleep in bed', explicit: 'asleep in bed' },
+  napping: { safe: 'dozing', explicit: 'dozing' },
+  'watching TV': { safe: 'watching TV', explicit: 'watching TV' },
+  'reading in bed': { safe: 'reading in bed', explicit: 'reading in bed' },
+  'playing games': { safe: 'playing games', explicit: 'playing games' },
+  'doing yoga': { safe: 'doing yoga', explicit: 'doing yoga' },
+  exercising: { safe: 'working out', explicit: 'working out' },
+  _default: { safe: 'just in there', explicit: 'just in there' },
+};
+
+// The view line's clothing clause — what is worth saying about the state
+// machine over and above the act phrase. Empty strings stay silent.
+const PEEK_VIEW_CLOTHING = {
+  nude: ', completely bare',
+  undressed: ', undressed',
+  towel: ', wrapped in a towel',
+  sleepwear: ', in their sleepwear',
+  changing: ', caught mid-change',
+};
+
+// Authored narration pools — varied (D4), never one repeated string. Seeded
+// pick per (pool, room, day) exactly like the door-cue pools. {name} is the
+// occupant, {door} the door label.
+const PEEK_PROSE = {
+  openPeek: [
+    'You crouch to the keyhole of {door}.',
+    'You lean down and press your eye to the keyhole of {door}.',
+    'Kneeling at {door}, you put your eye to the keyhole.',
+    'You slip into a crouch by {door} and peer through the keyhole.',
+    'You bend low at {door}, one eye to the keyhole.',
+  ],
+  openListen: [
+    'You press your ear to {door}.',
+    'You lean in close to {door} and listen.',
+    'You rest your head against {door}, listening.',
+    'Quietly, you put your ear to {door}.',
+    'You lean against the frame of {door}, ear to the wood.',
+  ],
+  empty: [
+    'The light under {door} cuts out. Whoever was in there has gone.',
+    'A door clicks somewhere beyond {door}. The room falls silent and dark.',
+    'You hear footsteps retreat. The room behind {door} goes still.',
+    'The light in there snaps off. {door} is silent now.',
+    'Nothing moves behind {door} anymore. They must have slipped out.',
+  ],
+  dark: [
+    'The light behind {door} dies. Whoever is in there is in the dark now.',
+    'The keyhole goes black. You can hear them moving, but see nothing.',
+    'The glow under {door} fades. You keep watching a dark room.',
+    'Whoever is in there has turned out the light. The keyhole shows only black.',
+    '{door} falls dark, but you can still hear someone inside.',
+  ],
+  shadows: [
+    'The keyhole shows only shadows — the image is already burned into your memory, though.',
+    'The scene behind the lens stays as it was. You watch the shadows hold still.',
+    'The picture in the keyhole blurs to dark shapes. You hold your breath anyway.',
+    "You can't get a clearer look — but what you've seen is enough.",
+    'The lens has nothing new to show. You watch the shapes of it move.',
+  ],
+  viewFrames: [
+    'Through the keyhole, {name} is {act}{state}.',
+    'You watch {name}, {act}{state}.',
+    'Through the brass circle, {name} is {act}{state}.',
+    '{name} is {act}{state} — you can see them clearly through the keyhole.',
+    'The keyhole frames {name}, {act}{state}.',
+  ],
+  listenSilent: [
+    'Nothing but the hum of the building behind {door}.',
+    'The room behind {door} is quiet.',
+    'You hear nothing through {door} except the distant thrum of the apartment.',
+    'Silence behind {door}. Not even a floorboard creaks.',
+    'The walls are quiet. {door} gives up nothing.',
+  ],
+  stop_peek: [
+    '{name} crosses to {door} and it clicks shut. The light under it snaps off.',
+    'A shadow fills the keyhole, then {door} closes with a firm click.',
+    '{name} looks straight at the door — you pull back just as it shuts.',
+    "There's a soft thud against {door} from inside — they've pressed against it. The light goes out.",
+    '{name} pauses, then {door} swings shut. End of show.',
+  ],
+  stop_listen: [
+    'The room behind {door} goes quiet, then a door inside closes. They have noticed.',
+    '{name} stops what they were doing. A pause. Then {door} is locked from inside.',
+    'You hear footsteps approach {door} and stop. Then the lock clicks.',
+    'A weight settles against {door} on the other side. They are leaning there, waiting for you to go.',
+  ],
+  ignore_peek: [
+    '{name} glances at {door}, shrugs, and goes back to what they were doing.',
+    'Your movement catches their eye for a second. They do not seem to care.',
+    '{name} looks up at the door, frowns, and turns away.',
+    'They notice the door shift — then continue, unbothered.',
+  ],
+  ignore_listen: [
+    '{name} pauses mid-motion, tilts their head toward {door}, and carries on.',
+    'You hear them pause, then the sounds resume — they did not think twice.',
+    'A beat of stillness inside, then {name} continues what they were doing.',
+  ],
+  escalate_peek: [
+    '{name} meets your eye through the keyhole — and holds it. Then they keep going, deliberately.',
+    "They've noticed you. Their eyes find the door — and they continue, slower, on purpose.",
+    '{name} catches you looking and does not stop. If anything, they are putting on a show.',
+    'Your eyes meet. {name} gives you a look that says they know — and carries on.',
+  ],
+  escalate_listen: [
+    'The sounds behind {door} change — sharper, more deliberate. They know you are there and they are not stopping.',
+    '{name} makes sure you can hear it. The sounds continue, louder.',
+    'A pause behind {door}, then the noises resume — this time for your benefit.',
+  ],
+  engage_peek: [
+    '{door} swings open. {name} leans against the frame, looking at you. "You gonna stand there all night?"',
+    'The door opens a crack, then wide. {name} watches you with an unreadable look.',
+    '{name} opens {door} and leans out. "Enjoying the show?" There is no anger in their voice.',
+    'The lock clicks, and {door} opens. {name} is standing there, calm. "You could have just knocked."',
+  ],
+  engage_listen: [
+    '{door} swings open. {name} is standing there. "Were you listening?" They do not look mad.',
+    'The door opens. {name} leans against the frame. "Could not hear well enough from out here?"',
+    'A pause, then {door} opens. {name} looks at you, mildly amused.',
+  ],
+  confront_peek: [
+    '{door} wrenches open. "{name}: What the hell are you doing?"',
+    'The door flies open and {name} is right there, furious. "Are you spying on me?!"',
+    '{name} catches you through the keyhole — the door slams open and they are livid. "Get lost!"',
+    '"I knew it!" {name} yanks {door} open, face flushed with anger. "Out. Now."',
+    '{name} opens the door just enough to glare at you. "What is WRONG with you?"',
+  ],
+  confront_listen: [
+    '{door} rips open. "Were you LISTENING at my door?!" {name} is shaking with anger.',
+    '{name} yanks {door} open. "Get away from my door, you creep."',
+    'The door opens hard enough to shake the frame. {name} glares. "Haven\'t you got anything better to do?"',
+    '"I can hear you out there!" {name} throws {door} open, furious.',
+  ],
+};
 
 const EVIDENCE_KIND_TEXT = {
   browser_history: "{name} noticed the browser history on the computer looked off.",
@@ -4413,6 +6414,10 @@ const ACTION_TUNING = {
   studyMoodGain: 0.08,
   studyMinutes: 60,
   laundryMoodGain: 0.03,
+  // Intimacy & Voyeurism Phase 5 (D11): Change Outfit — a real action with a
+  // real (small) time cost, so the wardrobe can never become a free
+  // stat-swap machine; sized below a shower, above a door lock.
+  changeOutfitMinutes: 5,
   // Phase 6 (D13): free ambient actions — the ungated safety net that
   // guarantees the player always has a mood source on day one with no
   // renovation and no money spent. All cost zero money/items/facilities;
@@ -4434,6 +6439,11 @@ const ACTION_TUNING = {
   // stretch of clock — longer than a solo bite (INVENTORY_TUNING
   // useTimeMinutes meal: 25), shorter than cooking a dish from scratch.
   setMealMinutes: 40,
+  // Food-overhaul Phase 3 (D26/D27): the interim stove reheat — faster than
+  // waiting out THAW_TUNING for a frozen batch, and the whole kitchen touch
+  // that earns a betterHot plate its mood bonus at the table. Phase 6's
+  // microwave replaces this as the fast reheat.
+  reheatMinutes: 10,
 };
 
 // --- Shared activities (initiative plan Phase 5, D16/D17) ---
@@ -4829,8 +6839,15 @@ const INTERRUPTION = {
 // rested/content the player is — a bad night or a bad mood costs money,
 // not just narration. ---
 const WORK_TUNING = {
-  minEnergyFocus: 0.4, maxEnergyFocus: 1.0,
-  minMoodFocus: 0.5, maxMoodFocus: 1.0,
+  // 2026-08-17 audit (B5): floors raised — minEnergyFocus 0.4 → 0.55,
+  // minMoodFocus 0.5 → 0.7. The old floors let focus collapse to 0.2 (a
+  // 4-block gig ≈ 17 clicks) at low energy/mood, and even a NEUTRAL mood
+  // scored 0.5 before any decay — the gig economy read as steep. A tired
+  // player still works slower (progress ~0.385/click at the floor vs 1.0
+  // fresh), but a gig no longer takes 5× its block count. See
+  // bug-fix-audit-2026-08-17.md.
+  minEnergyFocus: 0.55, maxEnergyFocus: 1.0,
+  minMoodFocus: 0.7, maxMoodFocus: 1.0,
   // Phase 5 (decision F, 5.4): working from the phone is deliberately
   // worse — a config multiplier on top of focus, so phone gig progress is
   // slow and costs more energy per unit of progress (each block still
@@ -5018,8 +7035,12 @@ const DRIVE_DEFS = {
     // snack emits no cooking smell. The bin's fill is what gives an untouched
     // house a rot smell to investigate within a week (the fridge's own stock
     // rots on a month's timescale, preserved ×4).
+    // Food-overhaul Phase 4 (D9): the sink footprint is a REAL dish map now
+    // (plate + fork for the kitchen meal) — applyDriveLeaves adds the units
+    // to the object's obj.dishes map instead of stepping the old abstract
+    // clean→few→many ladder.
     leaves: {
-      sink_kitchen: { dishes: 1 },
+      sink_kitchen: { dishes: { plate: 1, fork: 1 } },
       stove: { burner: 1 },
       trash_kitchen: { fill: 1 },
     },
@@ -5600,6 +7621,221 @@ const DRIVE_DEFS = {
       holdMinutes: 30, // was holdTicks 1 — 1 × 30-min ticks
     },
   },
+  // --- NPC wardrobe AI (Intimacy & Voyeurism Phase 6, D11) ---
+  // The VISIBLE beat of the outfit system. The outfit itself is derived
+  // deterministically every tick (resolveTick pass 2, from NPC's pure
+  // npcOutfitForContext: block/activity + wardrobe → type → items), so it can
+  // never disagree with what the NPC is doing. This drive is where the
+  // *changing* moment comes from: 'changing' is a TRANSIENT_CLOTHING state,
+  // exactly one tick, which is the caught-changing keyhole beat Phase 10
+  // reads. Candidacy (COGNITION's DRIVE_CANDIDACY) compares the outfit they
+  // were wearing LAST tick (updates merge at batch end) against this tick's
+  // block target, so it fires at transitions — waking still in yesterday's
+  // daily fit, or landing home still dressed for the office — rather than on
+  // loop, and never mid-activity. No effects, no meters, no signal —
+  // changing clothes is quiet and leaves nothing behind.
+  change_clothes: {
+    gates: [], weight: 0.2,
+    timeOfDay: ['morning', 'prep', 'evening', 'wind_down'],
+    setsClothing: 'changing',
+    activityOverride: 'changing clothes',
+    eventTemplate: '{name} changed into something more comfortable.',
+    eventMood: 0.01,
+    cooldownMinutes: 240,
+    // Fastidious people change; slovenly ones stay in yesterday's clothes.
+    // baseAppeal × the morning/prep blockAppeal lands the fastidious half of
+    // the cast just over actionThreshold at the start of the day and the
+    // slovenly half below it — the same deliberate split do_laundry documents.
+    utility: {
+      baseAppeal: 0.30,
+      temperamentWeights: { conscientiousness: 0.20 },
+      blockAppeal: { morning: 1.4, prep: 1.5, evening: 1.3, wind_down: 1.3 },
+    },
+  },
+  // The swim drive (Phase 6's "nude_swim variant" premise): swimming is a
+  // deliberate, facility-gated behaviour rather than only a leisure-table
+  // roll. Wraps self.swim for the pool object's anchor, exactly as shower
+  // wraps self.shower. Nudity is decided SEPARATELY, in resolveTick pass 2,
+  // by NPC's npcClothingForContext: the deviancy gate (deviancyThreshold ×
+  // nudeSwimChance, NUDITY_TUNING) opens the naked swim for a high-deviancy
+  // NPC, and the same rule covers leisure-rolled swimming — one gate, not a
+  // second drive that could bypass it (design invariant 3).
+  swim: {
+    gates: [], weight: 0.15,
+    actionId: 'self.swim',
+    timeOfDay: ['leisure', 'midday', 'evening'],
+    utility: {
+      // Swimming is fun, not duty: openness pulls it up, conscientiousness
+      // down (the pool is a luxury, not a chore).
+      baseAppeal: 0.24,
+      temperamentWeights: { openness: 0.15, conscientiousness: -0.10 },
+      holdMinutes: 60, // was holdTicks 2 — 2 × 30-min ticks
+      blockAppeal: { leisure: 1.2, midday: 1.1, evening: 1.0 },
+    },
+    activityOverride: 'swimming laps',
+    eventTemplate: '{name} went for a swim.',
+    eventMood: 0.05,
+    cooldownMinutes: 900,
+    // Heating and filtration cost real money — the pool shows up on the
+    // bills exactly as the shower does. Gated through MAINTENANCE's
+    // npcDecayActions (the pool must be functional to swim, and using it
+    // wears it out).
+    meters: [['devices', 1.5], ['waterHeating', 1]],
+  },
+
+  // Intimacy & Voyeurism Phase 13 (D3/D13): the solo half of "NPCs do it
+  // too". Fires only in a private room (DRIVE_CANDIDACY reads isPrivateRoom)
+  // with npc.needs.desire at the floor — a solo act has no other party for
+  // D13 to protect, so the body's own urge is the whole gate (the same
+  // assumption the player's own masturbate act makes). A standard drive:
+  // effects on self (the desire release is DESIRE.release.masturbate — the
+  // sated number the Phase 8 economy already owns), nudity while the act
+  // lasts (setsClothing 'nude', kept 'nude' by pass-2's activity rule and
+  // reverted by the same pass the moment the activity ends), a moaning
+  // signal the neighbors can perceive (the Phase 8 desire source's first
+  // NPC producer — the loop that builds desire toward the NEXT act), a long
+  // cooldown so it reads as an occasional urge rather than a loop, and an
+  // ambiguous event line so the off-screen log never states it outright.
+  // Phase 10's peek already reads activity 'masturbating' + clothing 'nude'
+  // (PEEK_VIEW_ACT/PEEK_VIEW_CLOTHING), so a masturbating NPC is peekable
+  // and catchable exactly as the plan verifies.
+  masturbate: {
+    gates: [], weight: 0.25,
+    timeOfDay: ['leisure', 'evening', 'wind_down'],
+    effects: [
+      { type: 'ADJUST_NEED', params: { who: 'self', need: 'desire', delta: -DESIRE.release.masturbate } },
+      { type: 'MOOD_DELTA', params: { who: 'self', delta: 0.1 } },
+    ],
+    activityOverride: 'masturbating',
+    setsClothing: 'nude',
+    emitsSignal: { signal: 'moaning', intensity: SIGNALS_EMIT.moaningLow },
+    eventTemplate: '{name} closed the door behind them for a while.',
+    eventMood: 0.05,
+    cooldownMinutes: 720,
+    utility: {
+      baseAppeal: 0.34,
+      desire: DESIRE.scoring,
+      holdMinutes: INTIMACY.durationMinutes.masturbate,
+      blockAppeal: { leisure: 1.1, evening: 1.15, wind_down: 1.3 },
+    },
+  },
+
+  // Intimacy & Voyeurism Phase 13 (D3/D13): the pair-act half. Custom
+  // resolver (tryIntimatePair, drives.js), because a pair act touches TWO
+  // NPCs — its effects run on both, its deltas are castWeb both ways, both
+  // are pinned to the act by commitments, and both get the Phase 9 history
+  // writers. Candidacy requires a private room, real desire, AND a
+  // co-located resident who clears the willingness gate for `sex` — the
+  // same gate and act the player's Make-a-Move reads, so an NPC can never
+  // initiate what the player could not (symmetric initiation, D3; the only
+  // door, invariant 1). The resolver mirrors resolvePairedAct's idioms
+  // (partner effects, bed-unmade trace, noteIntimacy* writers) rather than
+  // the shared-activity path — see the plan Handoff. `actionId` wraps
+  // self.nap so the pair anchors on a real bed when one is in the room
+  // (falling back to room-centroid), the same anchor borrow shower makes;
+  // `leaves` unmakes that bed (invariant 7); `emitsSignal` is the loud moan
+  // the plan's verification says neighbors hear; the 18h cooldown plus the
+  // commitment pin make the couple's act a discrete event, not a loop.
+  intimate: {
+    gates: [], weight: 0.2,
+    isIntimateDrive: true,
+    actionId: 'self.nap',
+    timeOfDay: ['leisure', 'evening', 'wind_down'],
+    // Applied to BOTH participants (who: 'self' = each) by tryIntimatePair.
+    // energy/hygiene/mood reuse the Phase 11 target-NPC magnitudes so an
+    // NPC partner of another NPC's act is costed exactly like the player's
+    // partner; desire release is DESIRE.release.sex (the sated number).
+    effects: [
+      { type: 'ADJUST_NEED', params: { who: 'self', need: 'desire', delta: -DESIRE.release.sex } },
+      { type: 'ADJUST_NEED', params: { who: 'self', need: 'energy', delta: -INTIMACY.npcEnergyCost.sex } },
+      { type: 'ADJUST_NEED', params: { who: 'self', need: 'hygiene', delta: -INTIMACY.npcHygieneCost.sex } },
+      { type: 'MOOD_DELTA', params: { who: 'self', delta: INTIMACY.npcMoodGain.sex } },
+    ],
+    // castWeb axes applied in BOTH directions by tryIntimatePair (the same
+    // per-act magnitudes the plan's Phase 12 comment names — the couple
+    // warms toward each other, sated desire drops, tension eases).
+    pairDeltas: { affection: 0.10, comfort: 0.08, trust: 0.05, desire: -0.4, tension: -0.08 },
+    leaves: { bed: { made: 1 } },
+    activityOverride: 'having sex',
+    emitsSignal: { signal: 'moaning', intensity: SIGNALS_EMIT.moaningHigh },
+    eventTemplate: '{name} and {other} were alone together for a while.',
+    eventMood: 0.05,
+    cooldownMinutes: 1080,
+    utility: {
+      // Above masturbate's baseAppeal (0.34) so that when a WILLING partner
+      // is present the pair act outranks the solo one — masturbation stays
+      // the fallback for a high-desire NPC with nobody willing to join them.
+      baseAppeal: 0.36,
+      desire: DESIRE.scoring,
+      holdMinutes: INTIMACY.durationMinutes.sex,
+      blockAppeal: { leisure: 1.1, evening: 1.2, wind_down: 1.4 },
+    },
+  },
+
+  // Intimacy & Voyeurism Phase 14 (D14): the long-distance thread. An NPC in
+  // a committed/seeing relationship with an OUTSIDE partner (ensureOutside
+  // Partners, sim.js — someone who doesn't live here) texts them when they
+  // are apart: the flirty backchannel that keeps the couple warm and the
+  // sender's desire climbing until the next visit. Custom resolver
+  // (trySextPartner, drives.js) because the act reaches ANOTHER NPC's IM
+  // thread rather than the world: it queues an NPC↔NPC message (drained by
+  // SIM's processNpcImMessages into the partner's thread — the same thread
+  // the player reads), raises the sender's desire (texting makes it worse),
+  // warms the castWeb pair, and holds the sender for one tick. Candidacy
+  // (DRIVE_CANDIDACY.sext_partner) requires the outside partner to exist,
+  // real desire, and the partner to NOT be in the house right now — if
+  // they're here, go be with them, don't text them.
+  sext_partner: {
+    gates: [], weight: 0.18,
+    isSextDrive: true,
+    timeOfDay: ['leisure', 'evening', 'wind_down'],
+    effects: [
+      { type: 'ADJUST_NEED', params: { who: 'self', need: 'desire', delta: OUTSIDE_PARTNER_TUNING.sext.desireGain } },
+      { type: 'MOOD_DELTA', params: { who: 'self', delta: OUTSIDE_PARTNER_TUNING.sext.moodGain } },
+    ],
+    activityOverride: 'texting',
+    eventTemplate: '{name} was texting someone.',
+    eventMood: 0.02,
+    cooldownMinutes: OUTSIDE_PARTNER_TUNING.sext.cooldownMinutes,
+    utility: {
+      baseAppeal: 0.3,
+      desire: DESIRE.scoring,
+      holdMinutes: CLOCK.tickMinutes,
+      blockAppeal: { leisure: 1.05, evening: 1.15, wind_down: 1.2 },
+    },
+  },
+
+  // Intimacy & Voyeurism Phase 17 (D13/D14): the NPC-equivalent boundary act
+  // — \"some NPCs attempt them back\" (D13 symmetry). A deviant, aroused NPC
+  // slips into the sleeping player's room and into their bed, the exact
+  // mirror of the player's own sleep_with verb. Custom resolver
+  // (trySneakIntoBed, boundary.js — the phase's own file): the sneak is a
+  // stealth/perception contest (silence is the usual outcome; the player
+  // wakes to an unmade bed), a caught attempt is the real but minority
+  // outcome and lands relPlayer consequences + an event the player sees.
+  // Weight 0 — candidacy is entirely DRIVE_CANDIDACY's (deviancy + desire +
+  // a sleeping player behind an unlocked door), the peep_player pattern.
+  // The willingness gate is NOT consulted for the target here for the same
+  // reason it is not consulted in the player's own sleep_with: the player is
+  // ASLEEP (the gate's own asleep floor returns -1 — expected), the act is
+  // a risk attempt with consequences, never a completed intimacy act with a
+  // participating target, and the player's locked door makes it impossible
+  // (the one guard that always holds).
+  sneak_into_bed: {
+    gates: [], weight: 0.0,
+    isBoundarySneakDrive: true,
+    timeOfDay: ['evening', 'wind_down'],
+    cooldownMinutes: BOUNDARY.npcSneak.cooldownMinutes,
+    effects: [],
+    eventTemplate: BOUNDARY.npcSneak.eventTemplateSilent,
+    eventMood: 0.01,
+    utility: {
+      baseAppeal: 0.35,
+      desire: DESIRE.scoring,
+      holdMinutes: CLOCK.tickMinutes,
+      blockAppeal: { evening: 1.1, wind_down: 1.3 },
+    },
+  },
 };
 
 // --- NPC cognition: utility scoring (npc-cognition-plan.md, Phase 1) ---
@@ -5982,6 +8218,24 @@ const OVERTURE_DEFS = {
       // (rumination grows curiosity by it), so a second copy of either here
       // would be double-counting.
       temperamentWeights: { assertiveness: 0.25 },
+      // Intimacy & Voyeurism Phase 8 (D12): the DESIRE BIAS TERM — the one
+      // thing D5's "needs do not motivate overtures" deliberately excepts.
+      // `utility.need` stays absent (a depletion curve must never open a
+      // conversation); `utility.desire` is a want, and a genuinely horny NPC
+      // (high npc.needs.desire) is more likely to actually act on the desire
+      // motive that won this overture. D12's bias term, never a gate; only
+      // entries whose motives can carry 'desire' declare it.
+      desire: DESIRE.scoring,
+      // Intimacy & Voyeurism Phase 9 (D13): desire's bias PARTNER. Where
+      // `utility.desire` rewards how much an NPC wants, `utility.willingness`
+      // weights the same candidates by how game they actually are (their own
+      // willingness toward an advance from the player — same function the
+      // player's Make-a-Move and Phase 13's pair acts read). A floored NPC —
+      // asleep, hostile, actively refusing, or a stranger — is dropped from
+      // the candidate list entirely, so a desire-motive overture can never
+      // fire for someone who would refuse an advance (design invariant 1).
+      // Bias only, and only when the desire motive actually won.
+      willingness: WILLINGNESS.scoring,
     },
   },
 
@@ -6021,6 +8275,13 @@ const OVERTURE_DEFS = {
       // authored (warmth 0.25 / assertiveness 0.15 against the in-person
       // drives' assertiveness-first weighting); it survives the move.
       temperamentWeights: { warmth: 0.20, assertiveness: 0.10 },
+      // Intimacy & Voyeurism Phase 8 (D12): the desire bias term — see
+      // approach_player's note. A horny NPC is more likely to reach out by
+      // text than to leave it alone.
+      desire: DESIRE.scoring,
+      // Intimacy & Voyeurism Phase 9 (D13): desire's bias partner — see
+      // approach_player's note. A floored NPC never texts a desire motive.
+      willingness: WILLINGNESS.scoring,
     },
   },
 
@@ -6116,6 +8377,14 @@ const OVERTURE_DEFS = {
       // in-game hour of it going unanswered before it lapses.
       holdTicks: OVERTURE.lapseTicks + 1,
       temperamentWeights: { assertiveness: 0.30 },
+      // Intimacy & Voyeurism Phase 8 (D12): the desire bias term — see
+      // approach_player's note. A horny NPC shut outside your door is more
+      // likely to knock on it than to walk away.
+      desire: DESIRE.scoring,
+      // Intimacy & Voyeurism Phase 9 (D13): desire's bias partner — see
+      // approach_player's note. A floored NPC never knocks with a desire
+      // motive.
+      willingness: WILLINGNESS.scoring,
     },
   },
 };

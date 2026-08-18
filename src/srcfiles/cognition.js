@@ -91,6 +91,61 @@ const DRIVE_CANDIDACY = {
   react_to_player: (npc, npcId, gameState, ctx) => !!ctx.location && ctx.location === gameState.player?.location,
   chat_with_roommate: (npc, npcId, gameState, ctx) =>
     hasChatPartner(npc, npcId, ctx.location, gameState, 'chat_with_roommate', ctx.nowAbs),
+  // Intimacy & Voyeurism Phase 6 (D11): the VISIBLE changing beat. The outfit
+  // itself is derived every tick in resolveTick pass 2, so by construction it
+  // always matches the current moment — but those updates only merge at the
+  // end of the batch, so `npc.outfit` HERE is what they had on LAST tick.
+  // Comparing it to the current block's target therefore detects a genuine
+  // transition: waking into a workday morning still in yesterday's daily fit,
+  // or landing home still dressed for the office. It fires at that moment and
+  // then stops (once dressed for the block it matches, so no loop — the
+  // cooldown is belt-and-braces), and never mid-activity: someone in the pool
+  // or on the treadmill is already dressed for what they are doing whatever
+  // their wardrobe. The fastidious/slovenly split is the drive's utility
+  // temperamentWeights, not a second condition here.
+  change_clothes: (npc, npcId, gameState, ctx) => {
+    if (ACTIVITY_OUTFIT_TYPES[ctx.activity]) return false;
+    const target = outfitTypeForContext(npc, ctx.block, null);
+    if (outfitMatchesType(npc.outfit, target)) return false;
+    return npcWardrobeItems(gameState, npc).length > 0;
+  },
+  // Intimacy & Voyeurism Phase 13 (D3/D13): the two new drives' candidacy.
+  // `masturbate` is SOLO — a private room and a real desire level is the
+  // whole gate (no other party for D13 to protect, exactly as the player's
+  // own masturbate act). `intimate` is a PAIR act — the same private room +
+  // desire, AND a co-located resident who passes the willingness gate:
+  // findIntimatePartner is pure (it only READS willingness), so calling it
+  // here costs nothing and cannot drift from what the resolver re-checks.
+  masturbate: (npc, npcId, gameState, ctx) =>
+    isPrivateRoom(ctx.location) && (npc.needs?.desire || 0) >= NPC_INTIMACY.masturbate.desireThreshold,
+  intimate: (npc, npcId, gameState, ctx) =>
+    isPrivateRoom(ctx.location)
+      && (npc.needs?.desire || 0) >= NPC_INTIMACY.intimate.desireThreshold
+      && !!findIntimatePartner(npc, npcId, gameState, ctx.location, ctx.block),
+  // Intimacy & Voyeurism Phase 14 (D14): the long-distance thread's door.
+  // The drive is only a candidate when the NPC has an OUTSIDE partner (a
+  // visitor-status relationship record created by ensureOutsidePartners) who
+  // is NOT currently in the house — co-located means the pair drive is the
+  // right resolution, not a text. Real desire beyond the sext floor, same
+  // spirit as the Phase 13 desire floors. outsidePartnerIdOf is pure (a
+  // lookup, no writes), so calling it here cannot drift from the resolver.
+  sext_partner: (npc, npcId, gameState, ctx) => {
+    const partnerId = outsidePartnerIdOf(gameState, npcId);
+    if (!partnerId) return false;
+    if ((npc.needs?.desire || 0) < OUTSIDE_PARTNER_TUNING.sext.desireFloor) return false;
+    if (getActiveVisits(gameState).some(v => v.npcId === partnerId)) return false;
+    return true;
+  },
+  // Intimacy & Voyeurism Phase 17 (D13): the NPC's sleeping-room mirror of
+  // the player's own slide-into-bed — a deviant, aroused NPC, the player
+  // genuinely asleep, an unlocked door, and adjacency. The willingness gate
+  // is deliberately NOT consulted here for the same reason it is not in the
+  // player's own sleep_with: the player is ASLEEP (the gate's asleep floor
+  // returns -1 — expected), the act is a risk attempt with consequences,
+  // never a completed intimacy act with a participating target, and a locked
+  // door makes it impossible. boundarySneakCandidacy is pure (reads only).
+  sneak_into_bed: (npc, npcId, gameState, ctx) =>
+    boundarySneakCandidacy(npc, npcId, gameState, ctx),
 };
 
 // Everything that decides an NPC *may* do this drive at all, mirroring
@@ -107,6 +162,12 @@ function isDriveCandidate(driveId, drive, npc, gameState, ctx) {
   // COGNITION.actionThreshold, which is exactly "effectively exclusive
   // without a hard boundary" (D4).
   if (ctx.isVisitor && !VISITOR_DRIVE_ALLOWLIST.includes(driveId)) return false;
+  // Intimacy & Voyeurism Phase 16 (D2/D14): a cold-shouldering NPC never
+  // directs a drive at the player — no peeping you, no going through your
+  // phone, no gifts, no crossing the room to react. Overture suppression
+  // lives in overture.js's scorer; the drive half is this filter — one read
+  // (coldShoulderSuppressesOvertures), both gates, so they cannot drift.
+  if (coldShoulderSuppressesOvertures(npc) && COLD_SHOULDER.suppressedDrives.includes(driveId)) return false;
   const decayFacilities = MAINTENANCE.npcDecayActions[driveId];
   if (decayFacilities && decayFacilities.some(fid => !isFacilityFunctional(gameState, fid))) return false;
   if (!checkHardGates(drive, npc, ctx.perceived)) return false;
@@ -261,7 +322,50 @@ function scoreDrive(driveId, npc, ctx) {
     }
   }
 
-  const appeal = base + need + signal + motive;
+  // Intimacy & Voyeurism Phase 8 (D9/D12) — the desire bias term. The mirror
+  // of the need term: where `utility.need` rises as a need depletes, this
+  // rises as the NPC's DESIRE NEED (npc.needs.desire, 0..100) climbs past
+  // `above` toward DESIRE.npc.max — so a high-desire NPC's intimacy
+  // candidates (the ones that DECLARE `utility.desire`) score higher, and a
+  // low-desire NPC's identical candidate scores nothing extra. It is a bias
+  // term, never a gate (D12): a candidate that declares it can still lose to
+  // a starving NPC's eat, and no non-intimacy candidate ever carries it, so
+  // desire cannot gate a non-intimacy action. Entries declare the curve as
+  // `desire: DESIRE.scoring`; absent → 0, like every other term.
+  let desireBias = 0;
+  if (u.desire && (u.desire.weight ?? 0) > 0) {
+    const d = npc.needs?.desire;
+    if (typeof d === 'number') {
+      const above = u.desire.above ?? 0;
+      desireBias = u.desire.weight * cogClamp01((d - above) / (DESIRE.npc.max - above));
+    }
+  }
+
+  // Intimacy & Voyeurism Phase 9 (D13) — the willingness bias term, the
+  // desire term's partner. Where `utility.desire` rewards how much an NPC
+  // WANTS the intimacy, `utility.willingness` weights the same candidates by
+  // how game they actually are: a candidate that declares it gains
+  // `weight × willingness(...)` appeal — the very same function the player's
+  // Make-a-Move and Phase 13's pair acts read — so the overture path and the
+  // act path cannot disagree about what "game" means. It is scoped to the
+  // desire motive only (flirtation is not yet the act, and an NPC who merely
+  // wants a chat is unaffected), and a candidate whose willingness toward
+  // the player hits a HARD FLOOR (asleep, hostile, actively refusing,
+  // stranger — design invariant 1) is dropped from the candidate list
+  // entirely: a desire-motive overture from someone who would refuse an
+  // advance is the exact thing this phase exists to prevent. Entries declare
+  // it as `willingness: WILLINGNESS.scoring`; absent → 0.
+  let willingnessBias = 0;
+  if (u.willingness && (u.willingness.weight ?? 0) > 0 && ctx.motives?.[driveId]?.motive === 'desire') {
+    const gs = ctx.gameState;
+    if (gs && npc) {
+      const w = willingness(gs, npc, 'player', u.willingness.act || 'default', ctx);
+      if (w < WILLINGNESS.abortFloor) return null;
+      willingnessBias = u.willingness.weight * cogClamp01(w);
+    }
+  }
+
+  const appeal = base + need + signal + motive + desireBias + willingnessBias;
 
   // D7 — personality, as `1 + Σ(temperament[axis] × weight[axis])`. This is the
   // THIRD use of the idiom INTERRUPTION.personalityWeights established and
@@ -298,7 +402,7 @@ function scoreDrive(driveId, npc, ctx) {
   const recency = ctx.ignoreRecency ? 1 : recencyMultiplier(npc, driveId, ctx.nowAbs);
 
   const score = (appeal + temperament) * block * recency;
-  return { driveId, score, terms: { base, need, signal, motive, temperament, block, recency } };
+  return { driveId, score, terms: { base, need, signal, motive, desireBias, willingnessBias, temperament, block, recency } };
 }
 
 // --- Scoring everything this NPC could do -------------------------------
@@ -321,9 +425,14 @@ function scoreCandidates(npc, npcId, gameState, resolved, perceived, opts = {}) 
     // the consumers that still need it (overture.js's blockFilter gate).
     minutesOfDay: gameState.meta.clock.minutes,
     location: resolved?.location ?? null,   // D15's candidacy conditions need it
+    activity: resolved?.activity ?? null,   // Phase 6's change_clothes candidacy
     npcId,
     nowAbs: clockToAbsolute(gameState.meta.clock),
     isVisitor: !!opts.isVisitor,
+    // Intimacy & Voyeurism Phase 9 (D13): the willingness bias term reads the
+    // world (the player, castWeb, rooms, door states), so the scoring ctx
+    // carries gameState like every other scorer consumer does. Additive.
+    gameState,
   };
   const out = [];
   for (const [driveId, drive] of Object.entries(DRIVE_DEFS)) {

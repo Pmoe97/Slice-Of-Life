@@ -387,6 +387,7 @@ function updateClockDisplay() {
   // orders screen is open (no-op otherwise). Guarded because TIME loads
   // before RENDER.COMPUTER defines the function.
   if (typeof updateFoodOrderEtas === 'function') updateFoodOrderEtas(currentGameState);
+  if (typeof updateGroceryOrderEtas === 'function') updateGroceryOrderEtas(currentGameState);
 }
 
 // --- Start/stop the clock loop ---

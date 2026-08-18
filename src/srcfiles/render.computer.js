@@ -46,6 +46,11 @@ const COMPUTER_RENDERERS = {
   'doordrop-menu': renderDoorDropMenu,
   'doordrop-cart': renderDoorDropCart,
   'doordrop-orders': renderDoorDropOrders,
+  'grocery-cart': renderGroceryCart,
+  'grocery-orders': renderGroceryOrders,
+  'recipes-browse': renderRecipesBrowse,
+  'recipes-detail': renderRecipesDetail,
+  'recipes-planner': renderRecipesPlanner,
   'escorts-browse': renderEscortsBrowse,
   'escorts-profile': renderEscortsProfile,
   'escorts-bookings': renderEscortsBookings,
@@ -54,6 +59,9 @@ const COMPUTER_RENDERERS = {
   'bills-dashboard': renderBillsDashboard,
   'upgrades-dashboard': renderUpgradesDashboard,
   'invest-dashboard': renderInvestDashboard,
+  // Intimacy & Voyeurism Phase 15 (D8): the knowledge codex.
+  'codex-roster': renderCodexRoster,
+  'codex-detail': renderCodexDetail,
 };
 
 // Rows whose def declares `requiresContentFlag` are hidden from any
@@ -84,7 +92,7 @@ function makePanel(html) {
 // debugging time to find; see ARCHITECTURE.md's P4 notes.
 // NOTE: JOB_DEFS was removed in the Phase 2 gig rewrite — the board now
 // uses a bespoke renderer (renderGigBoard) over live state, not a catalog.
-const CATALOG_SOURCES = { SHOP_CATALOG_LIST, SITE_DEFS_LIST, COURSE_DEFS_LIST, SERVICE_DEFS_LIST, STREAM_DEFS_LIST, DECOR_CATALOG_LIST };
+const CATALOG_SOURCES = { SHOP_CATALOG_LIST, SITE_DEFS_LIST, COURSE_DEFS_LIST, SERVICE_DEFS_LIST, STREAM_DEFS_LIST, DECOR_CATALOG_LIST, GROCERY_CATALOG_LIST };
 // Defs tables keyed for the 'nile' renderer's price/label lookups — the
 // data half of a `screen.catalog` field ('ITEM_DEFS' | 'DECOR_CATALOG_DEFS').
 const CATALOG_DEFS = { ITEM_DEFS, DECOR_CATALOG_DEFS };
@@ -897,6 +905,19 @@ function renderGigAccepted(body, gs, app, screen) {
   boardLink.textContent = 'Gig Board';
   body.appendChild(boardLink);
 
+  // 2026-08-17 audit (B5): surface current work efficiency so the player
+  // can SEE why progress is slow. Focus (energy × mood) scales progress
+  // per work click; a low number reads as "rest or lift your mood first"
+  // rather than the mystery grind the old UI was.
+  const focus = computeFocusMultiplier(gs);
+  const effPct = Math.round(focus * 100);
+  const effNote = document.createElement('div');
+  effNote.className = 'dim tiny';
+  effNote.textContent = effPct >= 100
+    ? 'Work efficiency: 100% — full speed.'
+    : `Work efficiency: ${effPct}% — you work ${effPct}% of a block per click. Sleep and a better mood speed this up.`;
+  body.appendChild(effNote);
+
   const accepted = gigs.accepted || [];
   if (accepted.length === 0) {
     const empty = makePanel('<p class="dim">You have no active gigs. Browse the board to accept work.</p>');
@@ -1296,10 +1317,22 @@ function renderDoorDropMenu(body, gs, app, screen) {
     const row = document.createElement('div');
     row.className = 'dd-menu-row';
     const hunger = item.consumable?.hunger || 0;
+    // 2026-08-17 audit (B2): the restore shown must be the per-SERVING
+    // restore when the dish serves more than one — a 4-serving pizza says
+    // "restores 55 hunger" but eating one slice restores ~14, and since
+    // B2 the numbers are real. Matches openEatPicker's per-serving math.
+    const sv = itemServings(item);
+    const perServing = sv > 1;
+    // food-overhaul Phase 2 (D1/D3): the menu shows the kcal (per serving
+    // when the dish serves more than one), which is the fullness truth a
+    // player orders by now — same math as the eat picker.
+    const kcal = perServingKcal(item);
+    const shownKcal = Math.round(kcal);
+    const shownHunger = perServing ? Math.round(hunger / sv) : hunger;
     row.innerHTML = `
       <div>
         <div class="dd-dish">${item.label}${inCart ? ` <span class="dim tiny">×${inCart.qty} in cart</span>` : ''}</div>
-        <div class="dim tiny">$${entry.price} — restores ${hunger} hunger</div>
+        <div class="dim tiny">${entry.price} — ${shownKcal} kcal${perServing ? ` per serving (serves ${sv})` : ''}${hunger > 0 ? ` · restores ${shownHunger} hunger${perServing ? ' per serving' : ''}` : ''}</div>
       </div>
     `;
     const btn = document.createElement('button');
@@ -1520,6 +1553,277 @@ function updateFoodOrderEtas(gs) {
       pill.className = `cs-status-pill ${delivered ? 'done' : 'active'} dd-order-eta`;
     }
   }
+}
+
+// --- QuickCart: grocery delivery (an Instacart parody) ---
+// Bespoke cart/orders pair, mirroring DoorDrop's own four minus the
+// restaurant header and time picker (one store, no scheduling ahead) — the
+// browse screen itself needs no bespoke renderer at all, it's the shared
+// 'nile' renderer pointed at GROCERY_CATALOG_LIST/ITEM_DEFS/apps.grocery.cart.
+// Reuses the .dd-*/.cs-status-pill CSS verbatim (confirmed generic, not
+// DoorDrop-scoped) — zero new CSS.
+
+function renderGroceryCart(body, gs, app, screen) {
+  const groceryApp = gs.world.computer.apps.grocery;
+  const cart = groceryApp?.cart || [];
+  if (cart.length === 0) { body.innerHTML = '<p class="dim tiny">Your cart is empty.</p>'; return; }
+  const totals = getGroceryOrderTotals(gs);
+
+  for (const line of cart) {
+    const def = ITEM_DEFS[line.defId];
+    const row = document.createElement('div');
+    row.className = 'dd-menu-row';
+    row.innerHTML = `<div><div class="dd-dish">${def?.label || line.defId} × ${line.units}</div><div class="dim tiny">$${(def?.price || 0) * line.units}</div></div>`;
+    const minus = document.createElement('button');
+    minus.className = 'btn tiny btn-secondary';
+    minus.setAttribute('data-action', 'grocery.remove-from-cart');
+    minus.setAttribute('data-row-id', line.defId);
+    minus.textContent = '−';
+    row.appendChild(minus);
+    body.appendChild(row);
+  }
+
+  const tipWrap = document.createElement('div');
+  tipWrap.className = 'dd-tips';
+  tipWrap.innerHTML = '<span class="dim tiny">Tip</span>';
+  for (const pct of GROCERY_TUNING.tipOptions) {
+    const btn = document.createElement('button');
+    btn.className = `btn tiny${pct === totals.tipPct ? '' : ' btn-secondary'}`;
+    btn.setAttribute('data-action', 'grocery.set-tip');
+    btn.setAttribute('data-amount', String(Math.round(pct * 100)));
+    btn.textContent = pct === 0 ? 'None' : `${Math.round(pct * 100)}%`;
+    tipWrap.appendChild(btn);
+  }
+  body.appendChild(tipWrap);
+
+  const summary = document.createElement('div');
+  summary.className = 'dd-summary';
+  summary.innerHTML = `
+    <div><span>Subtotal</span><span>$${totals.subtotal}</span></div>
+    <div><span>Delivery</span><span>$${totals.deliveryFee}</span></div>
+    <div><span>Service fee</span><span>$${totals.serviceFee}</span></div>
+    <div><span>Tip</span><span>$${totals.tip}</span></div>
+    <div class="dd-total"><span>Total</span><span>$${totals.total}</span></div>
+  `;
+  body.appendChild(summary);
+
+  const actions = document.createElement('div');
+  actions.className = 'dd-actions';
+  const place = document.createElement('button');
+  place.className = 'btn tiny';
+  place.setAttribute('data-action', 'grocery.checkout');
+  place.textContent = `Place Order — $${totals.total}`;
+  actions.appendChild(place);
+  body.appendChild(actions);
+}
+
+// Distinct from DoorDrop's foodArrivalWhenLabel only in name — kept
+// separate rather than shared so the two order kinds' arrival-label logic
+// can drift independently if one delivery flavor ever needs its own rule.
+function groceryArrivalWhenLabel(order, gs) {
+  const abs = order.arrivalAbs;
+  const day = Math.floor(abs / 1440);
+  return day === gs.meta.clock.day
+    ? formatTime(abs % 1440)
+    : day === gs.meta.clock.day + 1
+      ? `Tomorrow ${formatTime(abs % 1440)}`
+      : `Day ${day}, ${formatTime(abs % 1440)}`;
+}
+
+function renderGroceryOrders(body, gs, app, screen) {
+  const orders = [...(gs.world.groceryOrders || [])].reverse();
+  if (orders.length === 0) { body.innerHTML = '<p class="dim tiny">No orders yet.</p>'; return; }
+  for (const order of orders.slice(0, 10)) {
+    const shopper = gs.npcs[order.shopperNpcId];
+    const eta = getGroceryOrderEtaMinutes(order, gs.meta.clock);
+    const lines = order.items.map(i => `${ITEM_DEFS[i.defId]?.label || i.defId}${i.qty > 1 ? ` ×${i.qty}` : ''}`).join(', ');
+    const card = document.createElement('div');
+    card.className = 'dd-order';
+    // data-grocery-order-id / .gc-order-eta, deliberately DISTINCT from
+    // DoorDrop's data-order-id/.dd-order-eta — a shared attribute name
+    // would let updateFoodOrderEtas/updateGroceryOrderEtas cross-match
+    // each other's cards (harmless — the Map lookup just misses — but
+    // wasteful and confusing to debug later).
+    card.dataset.groceryOrderId = order.id;
+    const arrivalWhen = groceryArrivalWhenLabel(order, gs);
+    const status = order.status === 'delivered'
+      ? `<span class="cs-status-pill done gc-order-eta">Delivered${order.handedTo === 'doormat' ? ' — left at the door' : ''}</span>`
+      : eta > 0
+        ? `<span class="cs-status-pill active gc-order-eta">${Math.ceil(eta)} min away — arriving ${arrivalWhen}</span>`
+        : '<span class="cs-status-pill active gc-order-eta">At your door</span>';
+    card.innerHTML = `
+      <div class="dd-card-head"><span class="hc-card-title">QuickCart order</span><span class="dim tiny">$${order.total}</span></div>
+      <div class="dim tiny">${lines}</div>
+      <div class="dim tiny">Shopper: ${shopper?.bible?.name || 'assigned'}${order.tip ? ` — $${order.tip} tip` : ' — no tip'}</div>
+      ${status}
+    `;
+    body.appendChild(card);
+  }
+}
+
+// Live ETA ticker for QuickCart, mirroring updateFoodOrderEtas exactly —
+// patches .gc-order-eta pills in place every clock frame, no DOM rebuild.
+function updateGroceryOrderEtas(gs) {
+  const cards = document.querySelectorAll('[data-grocery-order-id]');
+  if (!cards.length) return;
+  const orders = new Map((gs.world.groceryOrders || []).map(o => [o.id, o]));
+  for (const card of cards) {
+    const order = orders.get(card.dataset.groceryOrderId);
+    if (!order) continue;
+    const pill = card.querySelector('.gc-order-eta');
+    if (!pill) continue;
+    const delivered = order.status === 'delivered';
+    const text = delivered
+      ? `Delivered${order.handedTo === 'doormat' ? ' — left at the door' : ''}`
+      : getGroceryOrderEtaMinutes(order, gs.meta.clock) > 0
+        ? `${Math.ceil(getGroceryOrderEtaMinutes(order, gs.meta.clock))} min away — arriving ${groceryArrivalWhenLabel(order, gs)}`
+        : 'At your door';
+    if (pill.textContent !== text) {
+      pill.textContent = text;
+      pill.className = `cs-status-pill ${delivered ? 'done' : 'active'} gc-order-eta`;
+    }
+  }
+}
+
+// --- ChefBook: the recipe website (food-overhaul Phase 8, D21/D22) ---
+// Bespoke renderers, not the generic catalog/list ones — a recipe card
+// needs a detail drill-down and a shopping-list action neither generic
+// renderer models, same reasoning that gave DoorDrop its own four.
+
+function renderRecipesBrowse(body, gs, app, screen) {
+  const recApp = gs.world.computer.apps.recipes;
+  const unlocked = recApp.unlockedIds || [];
+
+  const nav = document.createElement('div');
+  nav.className = 'cs-actions';
+  const plannerBtn = document.createElement('button');
+  plannerBtn.className = 'btn tiny btn-secondary';
+  plannerBtn.setAttribute('data-action', 'computer.open-screen');
+  plannerBtn.setAttribute('data-app', 'recipes');
+  plannerBtn.setAttribute('data-screen', 'planner');
+  plannerBtn.textContent = 'Meal Planner';
+  nav.appendChild(plannerBtn);
+  body.appendChild(nav);
+
+  if (unlocked.length === 0) {
+    body.innerHTML += '<p class="dim tiny">Nothing here yet — taste a dish to unlock its recipe.</p>';
+    return;
+  }
+  const cards = recipeCardsFromEngine(gs, unlocked);
+  const list = document.createElement('div');
+  list.className = 'cs-catalog';
+  for (const id of unlocked) {
+    const card = cards[id];
+    if (!card) continue;
+    const row = document.createElement('div');
+    row.className = 'cs-catalog-row';
+    row.innerHTML = `<span class="cs-catalog-title">${card.label}</span><span class="dim tiny">${card.kcalPerServing} kcal${card.grade ? ` · sample grade ${card.grade}` : ''}</span>`;
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny';
+    btn.setAttribute('data-action', 'recipes.open-detail');
+    btn.setAttribute('data-row-id', id);
+    btn.textContent = 'View';
+    row.appendChild(btn);
+    list.appendChild(row);
+  }
+  body.appendChild(list);
+}
+
+function renderRecipesDetail(body, gs, app, screen) {
+  const recApp = gs.world.computer.apps.recipes;
+  const id = recApp.viewingRecipeId;
+  const card = id ? recipeCardFor(gs, id) : null;
+  if (!card) { body.innerHTML = '<p class="dim tiny">Pick a recipe first.</p>'; return; }
+
+  const panel = makePanel(`
+    <h3>${card.label}</h3>
+    <p class="dim tiny">${card.kcalPerServing} kcal per serving${card.grade ? ` · sample grade ${card.grade}` : ''}</p>
+    <p>${card.chefNotes}</p>
+    ${card.steps.length ? `<ol>${card.steps.map(s => `<li>${s}</li>`).join('')}</ol>` : ''}
+  `);
+  body.appendChild(panel);
+
+  if (card.ingredients.length) {
+    const ing = document.createElement('div');
+    ing.className = 'cs-list';
+    for (const i of card.ingredients) {
+      const row = document.createElement('div');
+      row.className = 'cs-list-row';
+      row.innerHTML = `<span>${ITEM_DEFS[i.defId]?.label || i.defId} × ${i.qty}</span>`;
+      ing.appendChild(row);
+    }
+    body.appendChild(ing);
+    const cartBtn = document.createElement('button');
+    cartBtn.className = 'btn tiny';
+    cartBtn.setAttribute('data-action', 'recipes.add-to-cart');
+    cartBtn.setAttribute('data-row-id', id);
+    cartBtn.textContent = 'Add All Ingredients to Cart';
+    body.appendChild(cartBtn);
+  }
+
+  const back = document.createElement('button');
+  back.className = 'btn btn-secondary tiny';
+  back.setAttribute('data-action', 'computer.open-screen');
+  back.setAttribute('data-app', 'recipes');
+  back.setAttribute('data-screen', 'browse');
+  back.textContent = 'Back';
+  body.appendChild(back);
+}
+
+// The planner's own add-row (recipe select + day number) — only unlocked
+// RECIPES entries are offerable (a restaurant dish has no ingredients to
+// plan a shop around). Reads happen at submit time off these ids
+// (`#planner-recipe`/`#planner-day`), the same "transient form state
+// stays in the DOM until it's committed" pattern DoorDrop's tip input and
+// the maid's grid both use.
+function renderRecipesPlanner(body, gs, app, screen) {
+  const recApp = gs.world.computer.apps.recipes;
+  const planner = recApp.planner || [];
+  const unlockedRecipes = (recApp.unlockedIds || []).filter(id => RECIPES[id]);
+
+  const addRow = document.createElement('div');
+  addRow.className = 'cs-actions';
+  const options = unlockedRecipes.map(id => `<option value="${id}">${RECIPES[id].label}</option>`).join('');
+  addRow.innerHTML = `
+    <select id="planner-recipe" ${unlockedRecipes.length === 0 ? 'disabled' : ''}>${options || '<option value="">No recipes unlocked yet</option>'}</select>
+    <input id="planner-day" type="number" min="${gs.meta.clock.day}" value="${gs.meta.clock.day}" style="width:4em">
+  `;
+  const addBtn = document.createElement('button');
+  addBtn.className = 'btn tiny';
+  addBtn.setAttribute('data-action', 'recipes.planner-add');
+  addBtn.textContent = 'Add to Plan';
+  addBtn.disabled = unlockedRecipes.length === 0;
+  addRow.appendChild(addBtn);
+  body.appendChild(addRow);
+
+  if (planner.length === 0) {
+    body.innerHTML += '<p class="dim tiny">No meals planned yet.</p>';
+    return;
+  }
+  const list = document.createElement('div');
+  list.className = 'cs-list';
+  planner
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => a.entry.day - b.entry.day)
+    .forEach(({ entry, index }) => {
+      const row = document.createElement('div');
+      row.className = 'cs-list-row';
+      row.innerHTML = `<span>Day ${entry.day} — ${RECIPES[entry.recipeId]?.label || entry.recipeId}</span>`;
+      const rm = document.createElement('button');
+      rm.className = 'btn tiny btn-secondary';
+      rm.setAttribute('data-action', 'recipes.planner-remove');
+      rm.setAttribute('data-row-id', String(index));
+      rm.textContent = 'Remove';
+      row.appendChild(rm);
+      list.appendChild(row);
+    });
+  body.appendChild(list);
+
+  const fillBtn = document.createElement('button');
+  fillBtn.className = 'btn tiny';
+  fillBtn.setAttribute('data-action', 'recipes.planner-fill-cart');
+  fillBtn.textContent = 'Fill Nile Cart With Missing Ingredients';
+  body.appendChild(fillBtn);
 }
 
 // --- Escorts (external-world plan Phase 7) ---
@@ -1782,7 +2086,7 @@ function renderRoomListPost(body, gs, app, screen) {
   const ceilingPct = Math.round(ceiling * 100);
   const minShare = Math.round(ECONOMY.rent.total * ECONOMY.rent.minRoommateShare);
   const maxShare = Math.round(ECONOMY.rent.total * ceiling);
-  rentInfo.textContent = `Rent: ${ECONOMY.rent.total}/mo total · Roommate share ${minShare}–${maxShare} (ceiling ${ceilingPct}% based on quality)`;
+  rentInfo.textContent = `Rent: ${ECONOMY.rent.total}/wk total · Roommate share ${minShare}–${maxShare} (ceiling ${ceilingPct}% based on quality)`;
   adCard.appendChild(rentInfo);
 
   body.appendChild(adCard);
@@ -3295,11 +3599,15 @@ function renderMessages(body, gs, app, screen) {
     // Enter sends (Shift+Enter inserts a newline-free newline — there's
     // no newline in a single-line input, so Enter is always send). The
     // guard inside doImSend handles the case where the user mashes Enter
-    // while a previous send is still in flight.
+    // while a previous send is still in flight. The device is resolved
+    // from the pane this renderer filled so a phone-sent message is
+    // scoped to the phone's input (2026-08-17 audit U2) — this handler
+    // bypasses the data-action dispatcher, which would have set it.
+    const device = body.closest('[data-device]')?.getAttribute('data-device') || 'computer';
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        handleAction('im.send', null, { rowId: im.viewingNpcId });
+        handleAction('im.send', null, { rowId: im.viewingNpcId, device });
       }
     });
     const sendBtn = document.createElement('button');
@@ -4003,6 +4311,190 @@ function renderInvestDashboard(body, gs, app, screen) {
   disc.className = 'invest-disclaimer dim tiny';
   disc.textContent = 'Investing involves risk. Fund values fluctuate daily. Past performance does not guarantee future results.';
   body.appendChild(disc);
+}
+
+// --- Codex (Intimacy & Voyeurism Phase 15, D8) -----------------------------
+// The per-character knowledge ledger: a roster of every NPC the player holds
+// entries for, then per-NPC detail pages with day-stamped entries and the
+// three spendable verbs (Confront / Spread / Matchmake). Pure state→DOM like
+// everything in this file — the verbs' domain logic lives in codex.js and the
+// click handlers in UI.js (codex.open-npc / codex.confront / codex.spread /
+// codex.matchmake). Rendered on both devices through the shared-app path
+// (render.phone.js's COMPUTER_RENDERERS dispatch).
+
+// The current screen's params for the codex app on whichever device is
+// showing it (phone navStack or computer window) — the detail screen's npcId.
+function codexScreenParams(gs) {
+  const phone = gs?.world?.phone;
+  if (phone?.openAppId === 'codex' && Array.isArray(phone.navStack)) {
+    const top = phone.navStack[phone.navStack.length - 1];
+    if (top && top.appId === 'codex' && top.screenId === 'detail') return top.params || {};
+  }
+  const win = gs?.world?.computer?.windows?.codex;
+  if (win && win.screenId === 'detail') return win.params || {};
+  return {};
+}
+
+function codexEmptyState(text) {
+  const div = document.createElement('div');
+  div.className = 'codex-empty';
+  div.textContent = text;
+  return div;
+}
+
+function renderCodexRoster(body, gs, app, screenDef) {
+  body.innerHTML = '';
+  const ids = codexKnownNpcIds(gs);
+  const known = ids.filter(id => gs.npcs[id]);
+  if (known.length === 0) {
+    body.appendChild(codexEmptyState('Your codex is empty — it fills as you witness and take part in things.'));
+    return;
+  }
+  const list = document.createElement('div');
+  list.className = 'codex-roster';
+  for (const id of known) {
+    const npc = gs.npcs[id];
+    const entries = codexEntries(gs, id);
+    const unspent = entries.filter(e => !e.spent).length;
+    const btn = document.createElement('button');
+    btn.className = 'codex-roster-row';
+    btn.setAttribute('data-action', 'codex.open-npc');
+    btn.setAttribute('data-npc', id);
+    const name = document.createElement('span');
+    name.className = 'codex-roster-name';
+    name.textContent = npc.bible?.name || id;
+    const meta = document.createElement('span');
+    meta.className = 'codex-roster-meta';
+    meta.textContent = `${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}`;
+    if (unspent > 0) meta.textContent += ` · ${unspent} ready to use`;
+    const chevron = document.createElement('span');
+    chevron.className = 'codex-roster-chevron';
+    chevron.textContent = '›';
+    btn.appendChild(name);
+    btn.appendChild(meta);
+    btn.appendChild(chevron);
+    list.appendChild(btn);
+  }
+  body.appendChild(list);
+}
+
+function renderCodexDetail(body, gs, app, screenDef) {
+  body.innerHTML = '';
+  const params = codexScreenParams(gs);
+  const npcId = params.npcId;
+  const npc = npcId && gs.npcs[npcId];
+  if (!npc) {
+    body.appendChild(codexEmptyState('Nobody selected.'));
+    return;
+  }
+
+  const entries = codexEntries(gs, npcId);
+  const nextIndex = codexNextUnspentIndex(gs, npcId);
+  const nextEntry = nextIndex != null ? (gs.player?.ledger?.[npcId] || [])[nextIndex] : null;
+  const rel = npc.relPlayer || {};
+  const relationship = relationshipSummaryForNpc(gs, npcId);
+  const phase = rel.conversationPhase || 'early';
+
+  // Header
+  const header = document.createElement('div');
+  header.className = 'codex-head';
+  const name = document.createElement('div');
+  name.className = 'codex-head-name';
+  name.textContent = npc.bible?.name || npcId;
+  const statusBits = [phase];
+  if (relationship) statusBits.push(`${relationship.status} with ${relationship.partnerName}`);
+  const status = document.createElement('div');
+  status.className = 'codex-head-status dim tiny';
+  status.textContent = statusBits.join(' · ');
+  header.appendChild(name);
+  header.appendChild(status);
+  body.appendChild(header);
+
+  // Verbs — each enabled when the page has an entry that verb can consume.
+  const verbs = document.createElement('div');
+  verbs.className = 'codex-verbs';
+
+  const confrontBtn = document.createElement('button');
+  confrontBtn.className = 'btn tiny codex-verb-btn';
+  confrontBtn.setAttribute('data-action', 'codex.confront');
+  confrontBtn.setAttribute('data-npc', npcId);
+  confrontBtn.setAttribute('data-index', nextIndex ?? '');
+  confrontBtn.textContent = 'Confront';
+  if (nextIndex == null) {
+    confrontBtn.disabled = true;
+    confrontBtn.title = 'Nothing unsaid yet.';
+  } else {
+    confrontBtn.title = nextEntry.otherNpcId
+      ? `I saw you with ${gs.npcs[nextEntry.otherNpcId]?.bible?.name || 'someone'}.`
+      : 'I saw what you were up to.';
+  }
+  verbs.appendChild(confrontBtn);
+
+  const spreadBtn = document.createElement('button');
+  spreadBtn.className = 'btn btn-secondary tiny codex-verb-btn';
+  spreadBtn.setAttribute('data-action', 'codex.spread');
+  spreadBtn.setAttribute('data-npc', npcId);
+  spreadBtn.setAttribute('data-index', nextIndex ?? '');
+  spreadBtn.textContent = 'Spread Secret';
+  if (nextIndex == null || !spreadEligible(nextEntry)) {
+    spreadBtn.disabled = true;
+    spreadBtn.title = nextIndex == null
+      ? 'Nothing unsaid yet.'
+      : 'This one is just between you two — there is no third party to tell.';
+  } else {
+    spreadBtn.title = 'Tell someone what you know.';
+  }
+  verbs.appendChild(spreadBtn);
+
+  const matchCandidates = matchmakeCandidates(gs, npcId);
+  const matchBtn = document.createElement('button');
+  matchBtn.className = 'btn btn-secondary tiny codex-verb-btn';
+  matchBtn.setAttribute('data-action', 'codex.matchmake');
+  matchBtn.setAttribute('data-npc', npcId);
+  matchBtn.setAttribute('data-index', nextIndex ?? '');
+  matchBtn.textContent = 'Matchmake';
+  if (matchCandidates.length === 0) {
+    matchBtn.disabled = true;
+    matchBtn.title = 'Needs knowledge of both people and a spark already forming between them.';
+  } else {
+    matchBtn.title = `You could introduce ${npc.bible?.name || 'them'} to someone.`;
+  }
+  verbs.appendChild(matchBtn);
+  body.appendChild(verbs);
+
+  // Entries — day-stamped, provenance-badged, newest first.
+  if (entries.length === 0) {
+    body.appendChild(codexEmptyState('Nothing recorded about them yet.'));
+    return;
+  }
+  const list = document.createElement('div');
+  list.className = 'codex-entries';
+  for (const entry of entries) {
+    const row = document.createElement('div');
+    row.className = 'codex-entry' + (entry.spent ? ' codex-entry-spent' : '');
+    const left = document.createElement('div');
+    left.className = 'codex-entry-main';
+    const act = document.createElement('div');
+    act.className = 'codex-entry-act';
+    const other = entry.otherNpcId && gs.npcs[entry.otherNpcId]
+      ? ` with ${gs.npcs[entry.otherNpcId].bible?.name || 'someone'}`
+      : '';
+    act.textContent = `${codexKindLabel(entry.kind)} ${codexActLabel(entry.act)}${other}`;
+    const detail = document.createElement('div');
+    detail.className = 'codex-entry-detail dim tiny';
+    const roomName = entry.roomId ? roomPhrase(entry.roomId) : 'somewhere';
+    detail.textContent = `Day ${entry.day} · ${roomName}${entry.outcome ? ` · ended ${entry.outcome}` : ''}`;
+    left.appendChild(act);
+    left.appendChild(detail);
+    row.appendChild(left);
+    const badge = document.createElement('span');
+    badge.className = 'codex-entry-badge tiny';
+    badge.textContent = entry.spent ? 'spent' : 'fresh';
+    if (!entry.spent) badge.setAttribute('data-fresh', '');
+    row.appendChild(badge);
+    list.appendChild(row);
+  }
+  body.appendChild(list);
 }
 
 // ===== /SECTION: RENDER.COMPUTER =====

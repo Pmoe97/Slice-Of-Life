@@ -125,12 +125,12 @@ function filterStacks(stacks, query) {
 // --- Freshness (Phase 1: display-grade → Phase 4: derived model) ---
 // These are thin delegates over ITEMS' freshnessOf — the one implementation
 // of the container-aware derived model (D5): effective shelf life =
-// def.perishable.days × container.preservation, derived from the stack's
-// meta.cohort anchor (see ITEMS), never a stored countdown, so it survives
-// saves, reloads, and multi-day time skips. `containerDef` is the
-// OBJECT_DEFS entry of the container the stack sits in (null = the bag,
-// the 1.0 baseline). Thresholds and preservation multipliers live in
-// CONFIG's ROT block.
+// def.perishable.days × ROT.preservation[storageClass] (preservationFor),
+// derived from the stack's meta.cohort anchor (see ITEMS), never a stored
+// countdown, so it survives saves, reloads, and multi-day time skips.
+// `containerDef` is the OBJECT_DEFS entry of the container the stack sits
+// in (null = the bag, the 1.0 baseline). Thresholds and preservation
+// multipliers live in CONFIG's ROT block.
 function stackFreshnessFraction(stack, day, containerDef) {
   const fresh = freshnessOf(stack, containerDef, day);
   return fresh?.pct ?? null;
@@ -164,7 +164,19 @@ function formatFreshnessSpan(days) {
 // EAT_ITEM applier) — so eating a whole item sums to exactly its
 // consumable values, and leftovers are a real recurring resource rather
 // than a flavour word.
-const EDIBLE_CATEGORIES = new Set(['food', 'meal', 'snack', 'drink']);
+// Categories that count as food for edibility (edibleDef). 2026-08-17
+// audit (B1): 'ingredient' joined the set. Ingredients ARE food — every
+// edible ingredient (bread, cheese, cereal, eggs, milk…) carries real
+// consumable values and was already eatable via the bag's Use verb, but
+// the Eat chip and picker excluded them because the category allowlist
+// didn't name 'ingredient', leaving a brand-new player with a fridge and
+// pantry full of food and no Eat chip (the stove was broken on day one at
+// the time, so cooking wasn't a bridge either — it now starts functional
+// per D37, but the Eat chip rule stands on its own). Non-food ingredients
+// (flour, sugar, garlic, butter) are still inedible: edibleDef ALSO
+// requires non-empty `consumable`, which those lack. The chip and the bag's
+// Use verb now read the same rule again.
+const EDIBLE_CATEGORIES = new Set(['food', 'meal', 'snack', 'drink', 'ingredient']);
 
 function itemServings(def) {
   return (def?.servings > 0) ? def.servings : 1;
@@ -172,13 +184,30 @@ function itemServings(def) {
 
 // Total servings currently held by one stack — (qty−1)×servings plus the
 // open item's remaining servings, or qty×servings for a wholly-untouched
-// stack. Always ≥ 0.
+// stack. Always ≥ 0. Food-overhaul Phase 3 (D25): a PLATE stack's serving
+// ledger lives on the instance (meta.plate.servings.left), so this reads
+// that for plate stacks and the def-driven encoding for everything else.
 function stackServingsLeft(stack) {
+  const plate = stack?.meta?.plate?.servings;
+  if (plate) return Math.max(0, plate.left || 0);
   const sv = itemServings(stackDef(stack));
   if (!(stack?.qty > 0)) return 0;
   const sl = stack?.meta?.servingsLeft;
   if (sl == null) return stack.qty * sv;
   return Math.max(0, (stack.qty - 1) * sv + sl);
+}
+
+// Total servings a stack ever held: the plate's batch size (servings.total)
+// for a plate stack, qty×servings for a def-driven stack. Used by the D25
+// Servings-bar denominator.
+function stackServingsTotal(stack) {
+  const plate = stack?.meta?.plate?.servings;
+  if (plate) return Math.max(0, plate.total || 0);
+  const sv = itemServings(stackDef(stack));
+  if (!(stack?.qty > 0)) return 0;
+  const sl = stack?.meta?.servingsLeft;
+  if (sl == null) return stack.qty * sv;
+  return Math.max(0, (stack.qty - 1) * sv + Math.min(sv, sl));
 }
 
 function edibleDef(def) {
@@ -196,16 +225,44 @@ function perServingConsumable(def) {
   return out;
 }
 
+// food-overhaul Phase 2 (D1): the item's total kcal. Edible defs carry it
+// INSIDE consumable ({ kcal }) so the serving math divides it uniformly with
+// every other consumable; the four raw-inedible ingredients (butter, flour,
+// sugar, garlic) carry it at the def top level (`kcal:`) so they still fail
+// edibleDef's non-empty-consumable test and stay OUT of the eat picker (the
+// 2026-08-17 B1 audit contract). One helper owns the read.
+function kcalOf(def) {
+  if (!def) return 0;
+  const c = def.consumable?.kcal;
+  if (typeof c === 'number' && isFinite(c)) return c;
+  const t = def.kcal;
+  return (typeof t === 'number' && isFinite(t)) ? t : 0;
+}
+
+// Per-serving kcal (kcalOf / servings) — what the pickers show and what
+// EAT_ITEM actually restores for one serving.
+function perServingKcal(def) {
+  return kcalOf(def) / itemServings(def);
+}
+
 // "Hunger +40, Mood +0.03" style summary of a consumable map (whole-item,
 // or per-serving when requested). Values rounded to 2dp for display only —
-// the restore itself is the exact fraction.
+// the restore itself is the exact fraction. food-overhaul Phase 2: the kcal
+// is the player's fullness truth (D3), so it leads the summary and the
+// hunger term yields to it when present (an item's hunger points still drive
+// NPC eating, but a player facing this text restores from kcal).
 function consumableSummary(def, { perServing = false } = {}) {
   const labels = { hunger: 'Hunger', energy: 'Energy', hygiene: 'Hygiene', mood: 'Mood' };
   const src = perServing ? perServingConsumable(def) : (def.consumable || {});
-  return Object.entries(src)
-    .filter(([, v]) => v !== 0)
-    .map(([need, v]) => `${labels[need] || need} ${v > 0 ? '+' : ''}${Math.round(v * 100) / 100}`)
-    .join(', ');
+  const kcal = perServing ? perServingKcal(def) : kcalOf(def);
+  const parts = [];
+  if (kcal > 0) parts.push(`≈${Math.round(kcal)} kcal`);
+  for (const [need, v] of Object.entries(src)) {
+    if (need === 'kcal' || v === 0) continue;
+    if (need === 'hunger' && kcal > 0) continue;
+    parts.push(`${labels[need] || need} ${v > 0 ? '+' : ''}${Math.round(v * 100) / 100}`);
+  }
+  return parts.join(', ');
 }
 
 // Everything edible right now for the player to pick from: the bag, plus
@@ -237,13 +294,40 @@ function edibleStacks(gs, ctx) {
 
 function nearbyFoodContainers(gs, ctx) {
   const inRoom = Object.values(ctx?.roomObjects || {})
-    .filter(o => o.defId === 'fridge' || o.defId === 'pantry');
+    .filter(o => o.defId === 'fridge' || o.defId === 'pantry' || o.defId === 'freezer');
   if (inRoom.length > 0) return inRoom;
   if (ctx?.roomId === 'dining') {
     const kitchen = gs?.objects?.['room_kitchen'] || {};
-    return Object.values(kitchen).filter(o => o.defId === 'fridge' || o.defId === 'pantry');
+    return Object.values(kitchen).filter(o => o.defId === 'fridge' || o.defId === 'pantry' || o.defId === 'freezer');
   }
   return [];
+}
+
+// Food-overhaul Phase 3 (D7/D26/D27): everything the Reheat action can
+// touch — every PLATE stack with servings left (home-cooked leftovers, hot
+// or frozen), reachable from the bag or the nearby fridge/pantry/freezer.
+// Def-driven food is deliberately NOT listed: restaurant dishes keep their
+// def's mood whether served hot or cold until a later phase decides they
+// carry D27's contract too, and a frozen raw ingredient wants a real cook
+// pass (Phase 5), not a reheat. Rotten plates are refused like edibleStacks
+// refuses rotten food — you don't reheat what's already gone off.
+function reheatableStacks(gs, ctx) {
+  const out = [];
+  const day = gameDaysNow(gs?.meta?.clock);
+  const collect = (list, from, sourceLabel, containerDef) => {
+    for (const stack of list || []) {
+      const def = stackDef(stack);
+      if (!isPlateStack(stack)) continue;
+      if (!(stackServingsLeft(stack) > 0)) continue;
+      if (freshnessOf(stack, containerDef, day)?.key === 'rotten') continue;
+      out.push({ stack, def, from, sourceLabel, containerDef, day });
+    }
+  };
+  collect(gs?.player?.inventory, 'player', 'Your bag', null);
+  for (const obj of nearbyFoodContainers(gs, ctx)) {
+    collect(obj?.contents, obj.id, containerDefOf(obj)?.label || 'Storage', containerDefOf(obj));
+  }
+  return out;
 }
 
 // --- Actions ---
@@ -277,6 +361,23 @@ function stackActions(stack, ctx = {}) {
   };
 }
 
+// --- Gifts (asks plan Phase 9) ---
+// What the player can hand to an NPC as a gift: every stack in the bag the
+// give verb would allow (stackActions.give's rule — not a key item), with a
+// quantity to spare. Key items are the player's own identity (keys, wallet,
+// phone); everything else is their call — a candle, a bottle of wine, a
+// half-used bottle of dish soap. The gift ask's picker (ui.js
+// openConvGiftPicker) and its availability gate both read this, so the menu
+// and the send can never disagree on what is giftable.
+function giftableStacks(gs) {
+  const inv = (gs && gs.player && gs.player.inventory) || [];
+  return inv.filter(s => {
+    const def = stackDef(s);
+    const keyItem = !!(s && s.meta && s.meta.keyItem) || !!(def && def.keyItem);
+    return !keyItem && (s && s.qty || 0) > 0;
+  });
+}
+
 // --- Description (for the panel's detail pane) ---
 // Returns { label, qty, sublabel, description, freshness, freshnessText,
 // tooltip }. Tolerates un-migrated legacy shapes (a bare string, or an
@@ -286,10 +387,27 @@ function describeStack(stack, ctx = {}) {
   const day = ctx.day;
   const containerDef = ctx.containerDef ?? null;
   const def = stackDef(stack);
+  const plate = stack?.meta?.plate;
   const label = typeof stack === 'string' ? stack
     : (stack?.name && !stack?.defId ? stack.name
-      : (def.id === '_unknown' ? (stack?.meta?.origName || def.label) : def.label));
+      : (plate?.label
+        ? plate.label
+        : (def.id === '_unknown' ? (stack?.meta?.origName || def.label) : def.label)));
   const freshness = freshnessState(stack, day, containerDef);
+  // Food-overhaul Phase 1 (D17/D29): the frozen/thawing states change what
+  // the freshness line should say — a frozen stack isn't "aging here", and
+  // a thawing one is on a visible countdown.
+  let freshnessText = null;
+  if (freshness) {
+    if (freshness.frozenState === 'frozen') {
+      freshnessText = 'Frozen — keeps indefinitely (doesn\u2019t spoil while frozen)';
+    } else if (freshness.frozenState === 'thawing' && stack?.meta?.frozen?.thawStartAbs != null && day != null) {
+      const remainingH = THAW_TUNING.roomTempThawHours - (day - stack.meta.frozen.thawStartAbs) * 24;
+      freshnessText = `Thawing — ready in ~${Math.max(1, Math.ceil(remainingH))}h`;
+    } else {
+      freshnessText = `${freshness.label || 'Good'} · ${formatFreshnessSpan(freshness.ageDays)} old · keeps ~${formatFreshnessSpan(freshness.shelfDays)} here`;
+    }
+  }
   return {
     label,
     qty: typeof stack === 'object' && stack?.qty != null ? stack.qty : 1,
@@ -299,9 +417,8 @@ function describeStack(stack, ctx = {}) {
     // Age and remaining life read in HOURS below a day, which is the whole
     // point of the continuous model — "day 0/1" told the player nothing
     // about a dish that had four good hours left in it.
-    freshnessText: freshness
-      ? `${freshness.label || 'Good'} · ${formatFreshnessSpan(freshness.ageDays)} old · keeps ~${formatFreshnessSpan(freshness.shelfDays)} here`
-      : null,
+    freshnessText,
+    plate: plate || null,
     tooltip: def.id === '_unknown'
       ? 'The game doesn\u2019t recognize this item — probably from before the item system. It won\u2019t spoil or do anything until you use or dispose of it.'
       : null,
@@ -313,6 +430,29 @@ function describeStack(stack, ctx = {}) {
 function buildItemDescription(stack, def) {
   if (def.desc) return def.desc;
   if (def.id === '_unknown') return stack?.meta?.origName || 'An unidentified item.';
+  // Food-overhaul Phase 3 (D5/D25/D27): a PLATE stack's description is its
+  // instance, not the carrier def — the Servings bar numbers, the quality
+  // and grade, and the reheat hint when the batch should be eaten hot.
+  const plate = stack?.meta?.plate;
+  if (plate) {
+    const parts = [];
+    const bar = plateServingsLeft(stack);
+    if (bar) parts.push(`${bar.left} of ${bar.total} servings left`);
+    parts.push(`${Math.round(plate.quality * 100)}% quality · grade ${plate.grade}`);
+    parts.push(`≈${plate.kcalPerServing} kcal per serving`);
+    if (plate.components?.length) {
+      parts.push(`Made with ${plate.components.map(c => `${ITEM_DEFS[c.defId]?.label || c.defId}${c.qty > 1 ? ` ×${c.qty}` : ''}`).join(', ')}.`);
+    }
+    // Food-overhaul Phase 5 (D15): the failure tags live on the snapshot —
+    // a bland or burnt batch says so, so the fridge doesn't pretend.
+    if (plate.flaws?.length) {
+      parts.push(plate.flaws.map(f => COOK_TUNING[f]?.line || f).join(' '));
+    }
+    if (RECIPES[plate.recipeKey]?.betterHot && !plate.wasReheated) {
+      parts.push('Better eaten reheated — reheating restores the mood bonus.');
+    }
+    return parts.join(' ');
+  }
   if (def.category === 'hobby' && OBJECT_DEFS[def.id]) {
     const objDef = OBJECT_DEFS[def.id];
     return `A ${objDef.label.toLowerCase()} in its shipping box. Place it in a room to set it up — then you can use it there.`;
@@ -329,7 +469,9 @@ function buildItemDescription(stack, def) {
     parts.push('Not consumable.');
   }
   if (def.perishable?.days) {
-    parts.push(`Perishable — about ${formatFreshnessSpan(def.perishable.days)} out in the open before it's inedible, ${OBJECT_DEFS.fridge?.container?.preservation ?? 4}× that in the fridge. It goes stale, then spoiled, then rotten.`);
+    // Food-overhaul Phase 1 (D18): the fridge multiplier reads the one
+    // owning table (preservationFor) rather than a hardcoded copy.
+    parts.push(`Perishable — about ${formatFreshnessSpan(def.perishable.days)} out in the open before it's inedible, ${preservationFor(OBJECT_DEFS.fridge)}× that in the fridge. It goes stale, then spoiled, then rotten.`);
   }
   if (stack?.meta?.keyItem || def.keyItem) {
     parts.push('A personal item — you can\u2019t drop, trash, or give it away.');

@@ -17,7 +17,9 @@ function render(gameState, sceneState) {
   renderDeliveries(gameState);
   renderActionChips(gameState, sceneState);
   renderSceneMoodles(gameState);
-  markCalloutsShouted(gameState, renderSceneReader(gameState, sceneState));
+  const composedScene = renderSceneReader(gameState, sceneState);
+  markCalloutsShouted(gameState, composedScene);
+  markDoorCuesShown(gameState, composedScene);
   renderFooter(gameState);
   // Harmless when #main-content isn't in computer mode (CSS keeps
   // #computer-screen hidden either way) — always redrawing it here means
@@ -193,6 +195,7 @@ function renderFloorPlanStatic(gs, container) {
   svg += '<defs><pattern id="fp-hazard" patternUnits="userSpaceOnUse" width="14" height="14" patternTransform="rotate(45)">'
        + '<rect width="14" height="14" fill="rgba(224,160,64,0.18)"/>'
        + '<line x1="0" y1="0" x2="0" y2="14" stroke="rgba(224,160,64,0.5)" stroke-width="5"/></pattern>';
+
   // One clip per NPC avatar — every NPC, not just the ones present this tick,
   // because the live layer owns who is visible and the markers must exist
   // for it to show them at all.
@@ -208,6 +211,15 @@ function renderFloorPlanStatic(gs, container) {
   // live layer's job now, not this pass's.
   const present = {};
   for (const roomId of ALL_ROOMS) present[roomId] = getPresentNpcIds(gs.npcs, roomId);
+  // Phase 3 (intimacy-voyeurism, D4): rooms whose light would show through
+  // their door right now, for the keyhole glow. The player's own room never
+  // glows — their own lamp is not a cue — and roomLightVisible is the SAME
+  // derivation deriveDoorCues uses, so the plan and the scene reader cannot
+  // disagree about which doors are lit.
+  const litRooms = new Set();
+  for (const roomId of ALL_ROOMS) {
+    if (roomId !== currentRoom && roomLightVisible(gs, roomId)) litRooms.add(roomId);
+  }
 
   // --- Layer 1: room fills. Clickable; every room, not just adjacent ones,
   // because doMove auto-paths now and clicking somewhere far away is a walk
@@ -221,6 +233,10 @@ function renderFloorPlanStatic(gs, container) {
     let attrs = `class="fp-room" data-room-id="${roomId}"`;
     if (isCurrent) attrs += ' data-current=""';
     else if (isAdjacent) attrs += ' data-adjacent=""';
+    // D10 (intimacy-voyeurism Phase 2): the plan is never omniscient. Every
+    // room you are not IN is fogged — still the same clickable rect, so
+    // navigation on a dimmed room is unchanged; the fog only lies on top.
+    if (!isCurrent) attrs += ' data-fog=""';
     if (construction) attrs += ' data-construction=""';
     for (const [x, y, w, h] of rects) {
       svg += `<rect ${attrs} x="${x}" y="${y}" width="${w}" height="${h}"/>`;
@@ -259,10 +275,28 @@ function renderFloorPlanStatic(gs, container) {
       svg += o.vertical
         ? `<line class="fp-glass" x1="${o.pos}" y1="${o.from}" x2="${o.pos}" y2="${o.to}"/>`
         : `<line class="fp-glass" x1="${o.from}" y1="${o.pos}" x2="${o.to}" y2="${o.pos}"/>`;
-    } else if (o.locked) {
+    }
+    if (o.type === 'door' && (litRooms.has(o.rooms[0]) || litRooms.has(o.rooms[1]))) {
+      const gx = o.vertical ? o.pos + 3 : (o.from + o.to) / 2;
+      const gy = o.vertical ? (o.from + o.to) / 2 : o.pos + 3;
+      const grx = o.vertical ? 4 : (o.to - o.from) / 2 + 1;
+      const gry = o.vertical ? (o.to - o.from) / 2 + 1 : 4;
+      svg += `<ellipse class="fp-door-glow" cx="${gx}" cy="${gy}" rx="${grx}" ry="${gry}"/>`;
+      svg += `<ellipse class="fp-door-glow-core" cx="${gx}" cy="${gy}" rx="${(grx * 0.45).toFixed(1)}" ry="${(gry * 0.45).toFixed(1)}"/>`;
+    }
+    if (o.locked) {
       svg += o.vertical
         ? `<line class="fp-locked" x1="${o.pos}" y1="${o.from}" x2="${o.pos}" y2="${o.to}"/>`
         : `<line class="fp-locked" x1="${o.from}" y1="${o.pos}" x2="${o.to}" y2="${o.pos}"/>`;
+      // D10 (intimacy-voyeurism Phase 2): a lock glyph on the sealed doorway
+      // itself, so "this room is locked" reads at a glance — the occupant's
+      // avatar inside stays visible, the padlock does not hide the person.
+      const gx = o.vertical ? o.pos + 3.5 : (o.from + o.to) / 2;
+      const gy = o.vertical ? (o.from + o.to) / 2 : o.pos + 3.5;
+      svg += `<g class="fp-lock-glyph" transform="translate(${gx},${gy})">`
+           + `<path class="fp-lock-shackle" d="M -2 0 V -2.4 a 2 2 0 0 1 4 0 V 0"/>`
+           + `<rect class="fp-lock-body" x="-2.6" y="-1.2" width="5.2" height="4.8" rx="1"/>`
+           + '</g>';
     }
   }
 
@@ -273,6 +307,14 @@ function renderFloorPlanStatic(gs, container) {
     if (!rects) continue;
     const [cx, cy] = roomCentre(roomId);
     const bodyCount = present[roomId].length + (roomId === currentRoom ? 1 : 0);
+
+    // D10 (intimacy-voyeurism Phase 2): everything INSIDE a non-current room
+    // rides in a .fp-fog group, so furniture, labels and signal glyphs dim
+    // together with the room's floor. pointer-events:none keeps the click
+    // on the room rect beneath; the AVATARS are layer 5, outside the fog,
+    // and stay visible everywhere — D10's positional awareness.
+    const fogged = roomId !== currentRoom;
+    if (fogged) svg += '<g class="fp-fog">';
 
     svg += renderRoomFurniture(gs, roomId);
 
@@ -289,6 +331,8 @@ function renderFloorPlanStatic(gs, container) {
     if (getActiveJobForRoom(gs, roomId)) {
       svg += `<text class="fp-construction-label" x="${cx}" y="${cy + 10}">Under construction</text>`;
     }
+
+    if (fogged) svg += '</g>';
   }
 
   // --- Layer 5: the live avatar layer (D12). One marker per NPC plus the
@@ -299,9 +343,15 @@ function renderFloorPlanStatic(gs, container) {
   svg += '<g class="fp-people">';
   for (const [id, npc] of Object.entries(gs.npcs || {})) {
     if (!npc) continue;
-    svg += avatarMarkerHtml(id, false, npc);
+    // D10 (intimacy-voyeurism Phase 2): the caption under each marker is
+    // what the player could plausibly know — full activity here, coarse or
+    // 'inside' elsewhere, nothing for a stranger behind a door. Computed in
+    // the STATIC pass (once per real state change, like everything else on
+    // this layer); the live layer never rebuilds it.
+    const plausible = derivePlausibleActivity(gs, id, currentRoom);
+    svg += avatarMarkerHtml(id, false, npc, plausible);
   }
-  svg += avatarMarkerHtml('player', true, gs.player);
+  svg += avatarMarkerHtml('player', true, gs.player, null);
   svg += '</g>';
 
   svg += '</svg>';
@@ -348,7 +398,7 @@ const FP_FURNITURE = {
   toilet: { w: 9, h: 12, draw: (x, y, w, h, s) =>
     `<rect class="fp-f${s?.clean === 'dirty' ? ' dirty' : ''}" x="${x}" y="${y}" width="${w}" height="${h}" rx="4"/>` },
   sink_bathroom: { w: 11, h: 8, draw: (x, y, w, h) => sinkSymbol(x, y, w, h) },
-  sink_kitchen: { w: 14, h: 10, draw: (x, y, w, h, s) => sinkSymbol(x, y, w, h, s?.dishes && s.dishes !== 'none') },
+  sink_kitchen: { w: 14, h: 10, draw: (x, y, w, h, s, o) => sinkSymbol(x, y, w, h, dishLevelOf(o) !== 'clean') },
   bathroom_mirror: { w: 12, h: 3, draw: (x, y, w, h) =>
     `<rect class="fp-f-detail" x="${x}" y="${y}" width="${w}" height="${h}"/>` },
   lockers: { w: 20, h: 8, draw: (x, y, w, h) =>
@@ -369,9 +419,25 @@ const FP_FURNITURE = {
   fridge: { w: 12, h: 12, draw: (x, y, w, h) =>
     `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>`
     + `<line class="fp-f-detail-l" x1="${x + w - 3}" y1="${y + 2}" x2="${x + w - 3}" y2="${y + h - 2}"/>` },
+  freezer: { w: 10, h: 12, draw: (x, y, w, h) =>
+    `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>`
+    + `<line class="fp-f-detail-l" x1="${x + 1.5}" y1="${y + h / 3}" x2="${x + w - 1.5}" y2="${y + h / 3}"/>`
+    + `<rect class="fp-f-detail" x="${x + 1.5}" y="${y + h / 3 + 1}" width="${w - 3}" height="${h - h / 3 - 2}" rx="0.5"/>` },
+  // Food-overhaul Phase 4 (D11): a dishwasher under the counter. The running
+  // state (derived from its cycle anchor) tints the face so a mid-cycle
+  // machine reads at a glance.
+  dishwasher: { w: 10, h: 10, draw: (x, y, w, h, s, o) =>
+    `<rect class="fp-f${s?.cycle === 'running' ? ' dirty' : ''}" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>`
+    + `<rect class="fp-f-detail" x="${x + w * 0.2}" y="${y + h * 0.35}" width="${w * 0.6}" height="${h * 0.3}" rx="0.5"/>` },
+  // Food-overhaul Phase 6 (D12): the microwave — a small countertop box
+  // with a door and a control strip.
+  microwave: { w: 8, h: 6, draw: (x, y, w, h) =>
+    `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>`
+    + `<rect class="fp-f-detail" x="${x + 0.6}" y="${y + 0.8}" width="${w * 0.55}" height="${h - 1.6}" rx="0.5"/>`
+    + `<rect class="fp-f-detail" x="${x + w * 0.68}" y="${y + 1}" width="${w * 0.26}" height="${h - 2}" rx="0.3"/>` },
   pantry: { w: 11, h: 10, draw: (x, y, w, h) => shelfSymbol(x, y, w, h) },
-  kitchen_table: { w: 20, h: 14, draw: (x, y, w, h, s) => tableSymbol(x, y, w, h, s) },
-  dining_table: { w: 34, h: 20, draw: (x, y, w, h, s) => tableSymbol(x, y, w, h, s) },
+  kitchen_table: { w: 20, h: 14, draw: (x, y, w, h, s, o) => tableSymbol(x, y, w, h, s, o) },
+  dining_table: { w: 34, h: 20, draw: (x, y, w, h, s, o) => tableSymbol(x, y, w, h, s, o) },
   coffee_table_lr: { w: 20, h: 11, draw: (x, y, w, h, s) => tableSymbol(x, y, w, h, s) },
   balcony_table: { w: 14, h: 14, draw: (x, y, w, h, s) => tableSymbol(x, y, w, h, s) },
   trash_kitchen: { w: 7, h: 7, draw: (x, y, w, h) =>
@@ -477,8 +543,8 @@ function sinkSymbol(x, y, w, h, dirty) {
   return `<rect class="fp-f${dirty ? ' dirty' : ''}" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>`
        + `<circle class="fp-f-detail" cx="${x + w / 2}" cy="${y + h / 2}" r="2"/>`;
 }
-function tableSymbol(x, y, w, h, s) {
-  const laid = s?.clutter === 'cluttered';
+function tableSymbol(x, y, w, h, s, o) {
+  const laid = s?.clutter === 'cluttered' || (o && dishLevelOf(o) !== 'clean');
   return `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="2"/>`
        + (laid ? `<circle class="fp-f-detail" cx="${x + w / 2}" cy="${y + h / 2}" r="${Math.min(w, h) / 4}"/>` : '');
 }
@@ -584,7 +650,7 @@ function renderAutoFurniture(gs, roomId) {
       const span = along ? fw : fh;
       if (wall.cursor + span <= wall.limit) {
         const [fx, fy] = wall.place(wall.cursor, fw, fh);
-        out += def.draw(fx, fy, fw, fh, obj.state || {});
+        out += def.draw(fx, fy, fw, fh, obj.state || {}, obj);
         wall.cursor += span + 2;
         placed = true;
       }
@@ -600,16 +666,68 @@ function renderAutoFurniture(gs, roomId) {
 // per frame (D12). `id === 'player'` is the player's marker; everyone else is
 // an NPC. The portrait image fills in later and only from cache — see
 // hydrateFloorPlanAvatars for why this never triggers generation.
-function avatarMarkerHtml(id, isPlayer, npc) {
+// `plausible` is derivePlausibleActivity's result (or null): the caption it
+// carries is what the player could plausibly know (Phase 2, D10). The PLAYER
+// marker's caption is the Phase 5 clothing line instead (what you have on is
+// the one thing you always know about yourself).
+function avatarMarkerHtml(id, isPlayer, npc, plausible) {
   const label = isPlayer ? 'You' : initialsFor(npc);
   let cls = 'fp-avatar';
   if (isPlayer) cls += ' is-player';
+  if (plausible) cls += ` plausible-${plausible.tier}`;
+  let caption = '';
+  if (plausible) {
+    caption = `<text class="fp-avatar-activity" x="0" y="17">${escapeHtml(plausibleCaption(plausible.label))}</text>`;
+  } else if (isPlayer) {
+    const pc = playerFloorCaption(npc);
+    if (pc) caption = `<text class="fp-avatar-activity" x="0" y="17">${escapeHtml(plausibleCaption(pc))}</text>`;
+  }
   return `<g class="${cls}" data-avatar-id="${id}" transform="translate(0,0)">`
     + `<circle class="fp-avatar-bg" cx="0" cy="0" r="9"/>`
     + `<image class="fp-avatar-img" data-avatar-for="${id}" x="-9" y="-9" width="18" height="18" clip-path="url(#fp-clip-${id})" href="" hidden="hidden"/>`
     + `<text class="fp-avatar-initials" data-initials-for="${id}" x="0" y="3">${escapeHtml(label)}</text>`
     + `<circle class="fp-avatar-ring" cx="0" cy="0" r="9"/>`
+    + caption
     + '</g>';
+}
+
+// The player's own clothing as a short floor-plan caption ("wrapped in a
+// towel", "in your swimsuit") — the positional-awareness layer shows what you
+// have on, the one thing it is always honest about. Only when notable.
+function playerFloorCaption(player) {
+  const c = player?.clothing;
+  if (c && c !== 'dressed') {
+    const phrase = CLOTHING_STATE_SCENE_TEXT[c];
+    if (phrase) return phrase;
+  }
+  if (player?.outfit?.swimwear && CLOTHING_DEFS[player.outfit.swimwear]) {
+    return 'in your swimsuit';
+  }
+  return null;
+}
+
+// The player panel's "Wearing" stat value — the same information as the
+// floor-plan caption, phrased for a stat row (a towel, the swimsuit, or a
+// short list of the notable pieces).
+function playerWearingLabel(player) {
+  const c = player?.clothing;
+  if (c && c !== 'dressed') {
+    const phrase = CLOTHING_STATE_SCENE_TEXT[c];
+    if (phrase) return phrase;
+  }
+  const worn = Object.values(player?.outfit || {})
+    .map(id => CLOTHING_DEFS[id]?.label)
+    .filter(Boolean);
+  if (worn.length === 0) return 'everyday clothes';
+  return worn.length <= 3 ? worn.join(', ') : `${worn.slice(0, 3).join(', ')}, …`;
+}
+
+// A caption short enough to sit under a 16-unit avatar without running across
+// the neighbour's circle — a full activity string can be long ("following a
+// bad smell"), and the plan is a map, not a dossier.
+function plausibleCaption(label) {
+  const MAX = 22;
+  return label.length <= MAX ? label : label.slice(0, MAX - 1).trim() + '…';
 }
 
 // Where a marker belongs right now: npc.pos when the NPC has one (the walk
@@ -707,8 +825,23 @@ function renderPlayerPanel(gs) {
     { label: 'Time', val: formatTime(gs.meta.clock.minutes) },
     { label: 'Money', val: `${player.money}` },
     { label: 'Energy', val: `${Math.round(player.energy)}%` },
+    // food-overhaul Phase 2 (D3/D4): the Hunger row keeps its familiar % and
+    // gains the fullness prose; the daily kcal ledger and the living
+    // metabolic rate get their own rows so the feature is visible at a
+    // glance, not hidden in a tooltip.
     { label: 'Hunger', val: `${Math.round(player.hunger)}%` },
+    { label: 'Fullness', val: fullnessStatusText(player, gs) },
+    { label: 'Kcal today', val: `${Math.round(player.meta?.kcalToday || 0)} in · ${Math.round(player.meta?.kcalBurnedToday || 0)} burned` },
+    { label: 'Metabolism', val: `×${Math.round(metabolicRate(player, gs) * 100) / 100}` },
     { label: 'Mood', val: moodLabel(player.mood) },
+    // Intimacy & Voyeurism Phase 5 (D11): what you have on — the wardrobe
+    // panel edits it, and this stat makes it visible at a glance (a towel
+    // after the shower, the swimsuit you changed into, your everyday fit).
+    { label: 'Wearing', val: playerWearingLabel(player) },
+    // Intimacy & Voyeurism Phase 8 (D9): desire is a real need — shown as a
+    // plain stat in the panel alongside the footer bar. Additive default for
+    // old saves, same as the strip.
+    { label: 'Desire', val: `${Math.round(typeof player.desire === 'number' ? player.desire : DESIRE.player.start)}%` },
   ];
   // Phase 8: show alarm and burnout status if active.
   if (player.alarm !== null && player.alarm !== undefined) {
@@ -774,7 +907,7 @@ function renderScene(gs, sceneState) {
   // every state change would be expensive), not an oversight. A laid table is
   // the one exception, because it is a thing the player did on purpose and
   // the scene is about it. `player` puts the player in their own scene.
-  getSceneImage(roomId, phase, activeNpcs, roomObjects, { player: gs.player }).then(result => {
+  getSceneImage(roomId, phase, activeNpcs, roomObjects, { player: gs.player, gameState: gs }).then(result => {
     if (img.getAttribute('data-scene-key') !== sceneKey) return; // scene moved on before this resolved
     if (result.url) {
       img.src = result.url;
@@ -788,11 +921,20 @@ function renderScene(gs, sceneState) {
 // --- Status strip: prominent need bars in the footer ---
 // Compact one-row status display: icon + bar + percentage per need.
 // Mood lives on [-1,1] natively but is remapped to 0-100% for display.
+// Intimacy & Voyeurism Phase 8: desire joins the row as a real need; old
+// saves lack the field and read as DESIRE.player.start until the first
+// decayPlayerNeeds span writes it (additive default, no migration).
 function renderStatusStrip(gs) {
   const row = document.getElementById('footer-status-row');
   if (!row) return;
   const { player } = gs;
-  const needMap = { energy: player.energy, hunger: player.hunger, hygiene: player.hygiene, mood: player.mood };
+  const needMap = {
+    energy: player.energy,
+    hunger: player.hunger,
+    hygiene: player.hygiene,
+    mood: player.mood,
+    desire: typeof player.desire === 'number' ? player.desire : DESIRE.player.start,
+  };
   for (const [need, val] of Object.entries(needMap)) {
     const item = row.querySelector(`.fsi[data-need="${need}"]`);
     if (!item) continue;
@@ -802,7 +944,14 @@ function renderStatusStrip(gs) {
     const bucket = Math.round(Math.max(0, Math.min(100, displayPct)) / 5) * 5;
     if (fill) fill.setAttribute('data-fill', bucket);
     if (pctEl) pctEl.textContent = Math.round(displayPct) + '%';
-    const warnBelow = NEEDS[need].warnBelow;
+    // food-overhaul Phase 2 (D3): the hunger bar's tooltip carries the
+    // fullness prose ("Satisfied — that meal is still holding") and the
+    // deficit-day energy hint, so the strip stays compact while the new
+    // meaning of the number is one hover away.
+    if (need === 'hunger') item.title = fullnessStatusText(player, gs);
+    // Desire's tuning lives in DESIRE (its own block), not NEEDS — the strip
+    // is the one reader that would otherwise need a second tuning home.
+    const warnBelow = need === 'desire' ? DESIRE.player.warnBelow : NEEDS[need].warnBelow;
     const criticalBelow = need === 'mood' ? -0.8 : 5;
     if (val < criticalBelow) { item.setAttribute('data-critical', ''); item.setAttribute('data-low', ''); }
     else if (val < warnBelow) { item.setAttribute('data-low', ''); item.removeAttribute('data-critical'); }
@@ -839,6 +988,17 @@ function renderPresentList(gs, sceneState) {
       const phase = npc.relPlayer?.conversationPhase || 'early';
       phaseEl.textContent = phase;
       phaseEl.setAttribute('data-phase', phase);
+    }
+    // Intimacy & Voyeurism Phase 12 (D12): couples report status on their
+    // cards. Reads the world.relationships store (NPC↔NPC, not relPlayer) —
+    // a present NPC who is seeing/committed to someone shows it here.
+    const rel = relationshipSummaryForNpc(gs, npcId);
+    if (rel) {
+      const relEl = card.querySelector('.npc-rel');
+      if (relEl) {
+        relEl.textContent = rel.status === 'committed' ? `♥ with ${rel.partnerName}` : `♥ seeing ${rel.partnerName}`;
+        relEl.setAttribute('data-status', rel.status);
+      }
     }
     card.querySelector('.npc-mood').textContent = `Mood: ${moodLabel(npc.mood)}`;
     card.querySelector('.npc-activity').textContent = npc.activity || '';
@@ -964,6 +1124,14 @@ function appendInventoryRow(container, tpl, stack, gs) {
   node.querySelector('.invp-row-name').textContent = d.label;
   node.querySelector('.invp-row-qty').textContent = `×${d.qty}`;
   node.querySelector('.invp-row-sublabel').textContent = d.sublabel;
+  // Food-overhaul Phase 3 (D25): a plate row carries its Servings bar —
+  // same visual as the pickers, so inventory and the eat picker agree.
+  const bar = d.plate ? plateServingsLeft(stack) : null;
+  const barEl = node.querySelector('.invp-row-servings');
+  if (bar && barEl) {
+    barEl.replaceChildren(buildServingsBar(bar.left, bar.total));
+    barEl.hidden = false;
+  }
   const tag = node.querySelector('.invp-freshness-tag');
   // The 'good' rung carries an EMPTY label on purpose — food that is simply
   // fine gets no tag at all, so a tag in the list always means something.
@@ -1057,6 +1225,212 @@ function closeInventoryPanel() {
 let ctrObjId = null;
 let ctrSelected = null; // { side: 'container' | 'bag', defId }
 
+// --- Wardrobe panel (Intimacy & Voyeurism Phase 5, D11) ---
+// The Change Outfit picker, in the same family as openRecipePicker /
+// openSpreadPicker: a full overlay panel (like the container panel) with a
+// promise-resolved outcome. Left column = the current outfit, one row per
+// CLOTHING_SLOT; clicking a row selects the slot and the right column shows
+// that slot's owned items as Wear buttons plus a Wear Nothing option. The
+// Apply button resolves the promise with the drafted OUTFIT ({ slot: itemId },
+// cleared slots absent) or null on Close/Escape. Rendered state is a working
+// draft, never written until Apply — cancelling is free.
+let _wardrobeObjId = null;
+let _wardrobeResolve = null;
+let _wardrobeDraft = {};
+let _wardrobeOriginal = {};
+let _wardrobeSlot = null;
+
+const WARDROBE_SLOT_LABELS = {
+  top: 'Top', bottom: 'Bottom', outerwear: 'Outerwear', shoes: 'Shoes',
+  socks: 'Socks', underwear: 'Underwear', swimwear: 'Swimwear', accessory: 'Accessory',
+};
+
+function currentWardrobeObject(gs) {
+  if (!_wardrobeObjId || !gs) return null;
+  return findObjectById(gs, _wardrobeObjId) || null;
+}
+
+function openWardrobePanel(gs, objId, currentOutfit) {
+  return new Promise((resolve) => {
+    const panel = document.getElementById('wardrobe-panel');
+    if (!panel || !gs) { resolve(null); return; }
+    _wardrobeObjId = objId;
+    _wardrobeDraft = { ...(currentOutfit || {}) };
+    _wardrobeOriginal = { ...(currentOutfit || {}) };
+    _wardrobeSlot = null;
+    _wardrobeResolve = resolve;
+    panel.hidden = false;
+    renderWardrobePanel(gs);
+  });
+}
+
+// Returns whether the panel was actually open — lets the Escape handler
+// fall through to the other overlays when it wasn't.
+function closeWardrobePanel() {
+  const panel = document.getElementById('wardrobe-panel');
+  const wasOpen = panel && !panel.hidden;
+  if (panel) panel.hidden = true;
+  if (_wardrobeResolve) { _wardrobeResolve(null); _wardrobeResolve = null; }
+  _wardrobeObjId = null;
+  _wardrobeDraft = {};
+  _wardrobeOriginal = {};
+  _wardrobeSlot = null;
+  return wasOpen;
+}
+
+function outfitEquals(a, b) {
+  const ka = Object.keys(a || {}).filter(k => a[k]);
+  const kb = Object.keys(b || {}).filter(k => b[k]);
+  if (ka.length !== kb.length) return false;
+  return ka.every(k => a[k] === b[k]);
+}
+
+function wardrobeSelectSlot(slot) {
+  _wardrobeSlot = _wardrobeSlot === slot ? null : slot;
+  if (typeof currentGameState !== 'undefined' && currentGameState) renderWardrobePanel(currentGameState);
+}
+
+function wardrobeWearSlot(defId) {
+  _wardrobeDraft[_wardrobeSlot] = defId;
+  renderWardrobePanel(currentGameState);
+}
+
+function wardrobeClearSlot() {
+  delete _wardrobeDraft[_wardrobeSlot];
+  renderWardrobePanel(currentGameState);
+}
+
+function wardrobeApply() {
+  const panel = document.getElementById('wardrobe-panel');
+  if (!panel || panel.hidden) return;
+  const resolve = _wardrobeResolve;
+  const outfit = {};
+  for (const slot of CLOTHING_SLOTS) {
+    if (_wardrobeDraft[slot]) outfit[slot] = _wardrobeDraft[slot];
+  }
+  panel.hidden = true;
+  _wardrobeObjId = null;
+  _wardrobeDraft = {};
+  _wardrobeOriginal = {};
+  _wardrobeSlot = null;
+  _wardrobeResolve = null;
+  if (resolve) resolve(outfit);
+}
+
+function renderWardrobePanel(gs) {
+  const panel = document.getElementById('wardrobe-panel');
+  if (!panel || panel.hidden) return;
+  const obj = currentWardrobeObject(gs);
+  if (!obj) { closeWardrobePanel(); return; }
+  const sub = document.getElementById('wdb-subtitle');
+  if (sub) {
+    const cap = containerCapacity(obj);
+    const capText = cap != null ? `${containerItemCount(obj)}/${cap} slots used` : `${containerItemCount(obj)} items`;
+    const tier = obj.flags?.tier ?? 1;
+    sub.textContent = `${capText} · Tier ${tier}`;
+  }
+  renderWardrobeOutfitColumn(gs, obj);
+  renderWardrobeItemsColumn(gs, obj);
+  const applyBtn = document.getElementById('wdb-apply-btn');
+  if (applyBtn) {
+    applyBtn.disabled = outfitEquals(_wardrobeDraft, _wardrobeOriginal);
+  }
+}
+
+function renderWardrobeOutfitColumn(gs, obj) {
+  const listEl = document.getElementById('wdb-outfit-list');
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  for (const slot of CLOTHING_SLOTS) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'wdb-slot-row';
+    row.setAttribute('data-slot', slot);
+    if (_wardrobeSlot === slot) row.setAttribute('data-selected', '');
+    const name = document.createElement('span');
+    name.className = 'wdb-slot-name';
+    name.textContent = WARDROBE_SLOT_LABELS[slot] || slot;
+    const val = document.createElement('span');
+    val.className = 'wdb-slot-val';
+    const defId = _wardrobeDraft[slot];
+    val.textContent = defId && CLOTHING_DEFS[defId]
+      ? CLOTHING_DEFS[defId].label
+      : (_wardrobeSlot === slot ? 'Wear nothing…' : '—');
+    if (!defId && _wardrobeSlot === slot) val.classList.add('dim');
+    row.append(name, val);
+    row.addEventListener('click', () => wardrobeSelectSlot(slot));
+    listEl.appendChild(row);
+  }
+}
+
+function renderWardrobeItemsColumn(gs, obj) {
+  const listEl = document.getElementById('wdb-items-list');
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  const owned = (obj.contents || [])
+    .filter(s => (s?.qty || 0) > 0 && CLOTHING_DEFS[s.defId]);
+  if (_wardrobeSlot) {
+    const slot = _wardrobeSlot;
+    const slotLabel = WARDROBE_SLOT_LABELS[slot] || slot;
+    const heading = document.createElement('div');
+    heading.className = 'wdb-col-title-inline';
+    heading.textContent = `Pick a ${slotLabel.toLowerCase()}:`;
+    listEl.appendChild(heading);
+    const candidates = owned.filter(s => CLOTHING_DEFS[s.defId].slot === slot);
+    for (const stack of candidates) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'wdb-wear-btn';
+      if (_wardrobeDraft[slot] === stack.defId) btn.setAttribute('data-worn', '');
+      btn.textContent = CLOTHING_DEFS[stack.defId].label;
+      btn.addEventListener('click', () => wardrobeWearSlot(stack.defId));
+      listEl.appendChild(btn);
+    }
+    if (candidates.length === 0) {
+      const empty = document.createElement('span');
+      empty.className = 'dim tiny wdb-empty';
+      empty.textContent = `No ${slotLabel.toLowerCase()} in the wardrobe yet.`;
+      listEl.appendChild(empty);
+    }
+    const none = document.createElement('button');
+    none.type = 'button';
+    none.className = 'btn btn-secondary tiny wdb-none-btn';
+    none.textContent = 'Wear nothing here';
+    none.addEventListener('click', wardrobeClearSlot);
+    listEl.appendChild(none);
+    return;
+  }
+  const heading = document.createElement('div');
+  heading.className = 'wdb-col-title-inline';
+  heading.textContent = 'Click a slot on the left, then pick an item here.';
+  listEl.appendChild(heading);
+  for (const slot of CLOTHING_SLOTS) {
+    const ownedForSlot = owned.filter(s => CLOTHING_DEFS[s.defId].slot === slot);
+    if (ownedForSlot.length === 0) continue;
+    const group = document.createElement('div');
+    group.className = 'wdb-item-group';
+    const label = document.createElement('div');
+    label.className = 'invp-group-header';
+    label.textContent = WARDROBE_SLOT_LABELS[slot] || slot;
+    group.appendChild(label);
+    for (const stack of ownedForSlot) {
+      const chip = document.createElement('span');
+      chip.className = 'wdb-item-chip';
+      if (_wardrobeDraft[slot] === stack.defId) chip.setAttribute('data-worn', '');
+      chip.textContent = CLOTHING_DEFS[stack.defId].label;
+      group.appendChild(chip);
+    }
+    listEl.appendChild(group);
+  }
+  if (owned.length === 0) {
+    const empty = document.createElement('span');
+    empty.className = 'dim tiny wdb-empty';
+    empty.textContent = 'The wardrobe is empty — shop on Nile and move clothes in here.';
+    listEl.appendChild(empty);
+  }
+}
+
+
 function currentContainerObject(gs) {
   if (!ctrObjId || !gs) return null;
   return findObjectById(gs, ctrObjId) || null;
@@ -1101,8 +1475,16 @@ function renderContainerPanel(gs) {
   if (title) title.textContent = cdef?.label || def.label || 'Container';
   const sub = document.getElementById('ctr-subtitle');
   if (sub) {
-    const n = containerStacks(obj).length;
-    sub.textContent = n === 0 ? 'Empty.' : `${n} stack${n === 1 ? '' : 's'} inside.`;
+    // Intimacy & Voyeurism Phase 4 (D11): a capacity-capped container (the
+    // wardrobe) shows its fill level instead of the stack count — the
+    // player needs to see how many slots are left before buying more.
+    const cap = containerCapacity(obj);
+    if (cap != null) {
+      sub.textContent = `${containerItemCount(obj)}/${cap} slots used.`;
+    } else {
+      const n = containerStacks(obj).length;
+      sub.textContent = n === 0 ? 'Empty.' : `${n} stack${n === 1 ? '' : 's'} inside.`;
+    }
   }
   // Phase 4: the throw-out button for a rot mess — visible only when this
   // container holds one (rotten_food: 'rotten'). Cleaning it resets the
@@ -1115,6 +1497,18 @@ function renderContainerPanel(gs) {
     if (messy) messBtn.setAttribute('data-obj-id', obj.id);
     else messBtn.removeAttribute('data-obj-id');
   }
+  // Food-overhaul Phase 1 (D19): the auto-transfer button lives on the
+  // doormat only — one click sorts the delivery into the kitchen by
+  // storage class instead of hand-carrying each stack.
+  const autoBtn = document.getElementById('ctr-auto-transfer-btn');
+  if (autoBtn) {
+    const isDoormat = obj.defId === 'doormat';
+    const hasStacks = (obj.contents || []).some(s => (s?.qty || 0) > 0);
+    autoBtn.hidden = !isDoormat;
+    autoBtn.disabled = !isDoormat || !hasStacks;
+    if (isDoormat) autoBtn.setAttribute('data-obj-id', obj.id);
+    else autoBtn.removeAttribute('data-obj-id');
+  }
   renderContainerColumn('ctr-container-list', 'container', containerStacks(obj), gs, def);
   renderContainerColumn('ctr-bag-list', 'bag', gs.player.inventory || [], gs, null);
   updateContainerVerbBar(gs, obj);
@@ -1126,6 +1520,11 @@ function renderContainerColumn(listId, side, stacks, gs, containerDef) {
   listEl.innerHTML = '';
   const rowTpl = document.getElementById('tpl-ctr-row');
   const ordered = sortStacks(stacks, 'category');
+  // Food-overhaul Phase 1 (D19): storage-class destination hints render on
+  // the container side when the open container is a sorting surface (the
+  // doormat) — "this delivery stack is headed for the fridge". Bag rows
+  // don't need them.
+  const showStorageTags = side === 'container' && containerDef?.id === 'doormat';
   for (const stack of ordered) {
     const node = rowTpl.content.cloneNode(true);
     const row = node.querySelector('.ctr-row');
@@ -1137,10 +1536,38 @@ function renderContainerColumn(listId, side, stacks, gs, containerDef) {
     const d = describeStack(stack, { day: gameDaysNow(gs.meta.clock), containerDef });
     node.querySelector('.ctr-row-name').textContent = d.label;
     node.querySelector('.ctr-row-qty').textContent = `×${d.qty}`;
+    // Food-overhaul Phase 3 (D25): the Servings bar on a plate's container
+    // row — same visual as the pickers and the inventory panel.
+    const bar = d.plate ? plateServingsLeft(stack) : null;
+    const barEl = node.querySelector('.ctr-servings');
+    if (bar && barEl) {
+      barEl.replaceChildren(buildServingsBar(bar.left, bar.total));
+      barEl.hidden = false;
+    }
     const tag = node.querySelector('.ctr-freshness-tag');
     if (d.freshness?.label) {
       tag.textContent = d.freshness.label;
       tag.setAttribute('data-state', d.freshness.key);
+    }
+    // Food-overhaul Phase 1 (D17/D29): the frozen/thawing badge reads off
+    // freshnessOf's frozenState, so it can never disagree with the spoilage
+    // math that displays beside it.
+    if (d.freshness?.frozenState === 'frozen') {
+      const b = node.querySelector('.ctr-frozen-badge');
+      b.textContent = 'Frozen';
+      b.hidden = false;
+    } else if (d.freshness?.frozenState === 'thawing') {
+      const b = node.querySelector('.ctr-thawing-badge');
+      b.textContent = 'Thawing';
+      b.hidden = false;
+    }
+    if (showStorageTags) {
+      const sTag = node.querySelector('.ctr-storage-tag');
+      const cls = storageClassOf(stackDef(stack));
+      if (cls) {
+        sTag.textContent = `→ ${cls}`;
+        sTag.hidden = false;
+      }
     }
     listEl.appendChild(node);
   }
@@ -1172,7 +1599,15 @@ function updateContainerVerbBar(gs, obj) {
   const ctrStacks = containerStacks(obj).filter(s => (s?.qty || 0) > 0);
   const bagStacks = (gs.player.inventory || []).filter(s => (s?.qty || 0) > 0 && stackActions(s, ctx).transfer);
   takeAll.disabled = !(canTake && ctrStacks.length > 0);
-  putAll.disabled = !(canPut && bagStacks.length > 0);
+  // Intimacy & Voyeurism Phase 4 (D11): Put All into a full/capped
+  // container is disabled up front — capacity reads come from ITEMS'
+  // wardrobePutCheck so the button and the transfer handler share one math.
+  let putAllEnabled = canPut && bagStacks.length > 0;
+  if (putAllEnabled) {
+    const cap = wardrobePutCheck(obj, null, 0);
+    putAllEnabled = cap.capacity == null || cap.remaining > 0;
+  }
+  putAll.disabled = !putAllEnabled;
 
   if (!ctrSelected) {
     verbBtn.textContent = 'Select an item';
@@ -1235,6 +1670,92 @@ function updateContainerVerbBar(gs, obj) {
 // chosen recipe id, or null on cancel. Hides the loading overlay first:
 // runRegisteredAction shows it while executeAction runs, and it would
 // cover the modal.
+// Food-overhaul Phase 3 (D25): the Servings bar — left/total with a fill
+// whose fraction is identical whatever the batch size (a bar 7/8 full reads
+// the same whether the batch held 8 or 2 servings). Shared by the eat/
+// spread/reheat pickers and the inventory and container rows.
+function buildServingsBar(left, total) {
+  const bar = document.createElement('span');
+  bar.className = 'servings-bar';
+  bar.setAttribute('role', 'img');
+  bar.setAttribute('aria-label', `${Math.max(0, left)} of ${total} servings left`);
+  const fill = document.createElement('span');
+  fill.className = 'servings-bar-fill';
+  fill.style.width = `${total > 0 ? Math.max(0, Math.min(1, left / total)) * 100 : 0}%`;
+  const label = document.createElement('span');
+  label.className = 'servings-bar-label';
+  label.textContent = `${Math.max(0, left)}/${total}`;
+  bar.append(fill, label);
+  return bar;
+}
+
+// D27/D28 eat-time warning lines for a PLATE option (empty for def-driven
+// food — those contracts don't apply to it yet). Mirrors applyEatItem's
+// cold/hotNow computation exactly, so the picker can never promise a mood
+// outcome the applier won't deliver.
+function plateEatWarnings(option) {
+  const stack = option.stack;
+  const plate = stack?.meta?.plate;
+  if (!plate) return [];
+  const fresh = freshnessOf(stack, option.containerDef ?? null, option.day);
+  const cold = fresh?.frozenState === 'frozen' || fresh?.frozenState === 'thawing';
+  const hotNow = !cold && ((plate.wasReheated || stack.meta?.wasReheated) || fresh?.key === 'fresh');
+  const out = [];
+  if (stackBetterHot(stack) && !hotNow) out.push('cold — loses its whole mood bonus; reheat it');
+  if (cold && !stackFrozenFood(stack)) out.push('frozen — eating this cold costs mood');
+  return out;
+}
+
+// Food-overhaul Phase 3 (D25/D27/D28): shared picker-row content for the
+// eat / spread / reheat pickers — ONE function owns what a row SAYS about a
+// food option, so the modals can never disagree about a plate's label,
+// servings bar, kcal, quality, grade or warnings. Returns { name, meta }.
+function buildPickRowContent(option) {
+  const name = document.createElement('span');
+  name.className = 'eat-pick-name';
+  name.textContent = stackLabel(option.stack);
+  const meta = document.createElement('span');
+  meta.className = 'eat-pick-meta';
+  const plate = option.stack?.meta?.plate;
+  if (plate) {
+    // Plate branch: the instance's own numbers (kcal per serving, quality,
+    // grade) and the D25 Servings bar; the carrier def is never read.
+    const bar = plateServingsLeft(option.stack);
+    if (bar) meta.appendChild(buildServingsBar(bar.left, bar.total));
+    const metaParts = [option.sourceLabel];
+    const kcal = plate.kcalPerServing;
+    if (kcal > 0) metaParts.push(`fed ~${Math.round(fullnessHoursFromKcal(kcal) * 10) / 10}h`);
+    metaParts.push(`${Math.round(plate.quality * 100)}% · grade ${plate.grade}`);
+    meta.appendChild(document.createTextNode(metaParts.join(' · ')));
+    for (const w of plateEatWarnings(option)) {
+      const tag = document.createElement('span');
+      tag.className = 'eat-pick-freshness eat-pick-warn';
+      tag.textContent = w;
+      meta.appendChild(document.createTextNode(' · '));
+      meta.appendChild(tag);
+    }
+  } else {
+    // Def-driven branch: the pre-Phase-3 per-serving summary + freshness.
+    const sv = itemServings(option.def);
+    const restore = consumableSummary(option.def, { perServing: sv > 1 });
+    const metaParts = [option.sourceLabel];
+    if (sv > 1) metaParts.push(`serves ${sv}`);
+    const kcal = perServingKcal(option.def);
+    if (kcal > 0) metaParts.push(`fed ~${Math.round(fullnessHoursFromKcal(kcal) * 10) / 10}h`);
+    if (restore) metaParts.push(`restores ${restore}`);
+    meta.textContent = metaParts.join(' · ');
+    const fresh = freshnessOf(option.stack, option.containerDef ?? null, option.day);
+    if (fresh?.label && fresh.key !== 'fresh') {
+      const tag = document.createElement('span');
+      tag.className = `eat-pick-freshness eat-pick-${fresh.key}`;
+      tag.textContent = fresh.label;
+      meta.appendChild(document.createTextNode(' · '));
+      meta.appendChild(tag);
+    }
+  }
+  return { name, meta };
+}
+
 function openRecipePicker(recipes) {
   return new Promise((resolve) => {
     const overlay = document.getElementById('modal-overlay');
@@ -1257,7 +1778,11 @@ function openRecipePicker(recipes) {
       name.textContent = recipe.label;
       const ings = document.createElement('span');
       ings.className = 'recipe-pick-ings';
-      ings.textContent = recipe.ingredients.map(ing => `${ITEM_DEFS[ing.defId]?.label || ing.defId} ×${ing.qty}`).join(', ');
+      // Food-overhaul Phase 3 (D25/D6): the batch yield is a real number
+      // now — cooking pasta is never a single plate, and the picker says
+      // how many servings you're making before you commit.
+      const servings = recipe.servings || 1;
+      ings.textContent = `serves ${servings} · ` + recipe.ingredients.map(ing => `${ITEM_DEFS[ing.defId]?.label || ing.defId} ×${ing.qty}`).join(', ');
       btn.append(name, ings);
       btn.addEventListener('click', () => finish(recipe.id));
       list.appendChild(btn);
@@ -1274,12 +1799,434 @@ function openRecipePicker(recipes) {
   });
 }
 
+// --- Cook screen (food-overhaul Phase 5, D8/D14/D15/D16) ---
+// The heart of self.cook: the interactive manual loop, in one modal with
+// two stages.
+//   Stage 1 — the plan: the method's cookware line, one row per ingredient
+//   to pick its processing verb (chopped/sliced/minced/…, natural verb
+//   pre-picked), any declared mixing step, the fat choice when the method
+//   needs one (oil/butter/none), the seasoning choice (salt/spices/both/
+//   none — D8's taste gate lives here: no flavor on a cooked dish = bland),
+//   and heat/timing for the cook. Reagents the kitchen doesn't have are
+//   disabled with a note — the taste gate then bites for real.
+//   Stage 2 — the outcome: per-step quality lines, the grade reveal
+//   (computeGrade), the D15 failure lines, and RESCUE buttons for the
+//   recoverable failures (add salt to a bland batch, finish cooking a raw
+//   one). "Serve it" resolves with the fully resolved prepared object;
+//   Cancel resolves null (the action then aborts before spending anything).
+// The engine (cooking.js) stays pure — this file only renders choices and
+// calls planCook/resolveCookPlan/applyCookRescue/buildPlate.
+function openCookScreen(recipe, gs, ctx) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (prepared) => { overlay.removeAttribute('data-open'); resolve(prepared); };
+    const roomId = ctx?.roomId || gs?.player?.location || 'kitchen';
+    const avail = reagentAvailability(gs, ctx);
+    const m = METHODS[recipe.method || 'none'] || METHODS.none;
+    const choices = {
+      verbs: {},
+      // The method needs fat → default to oil when the house has it (a
+      // pan with nothing in it is how things stick and burn).
+      fat: (m.oil && avail.oil) ? 'oil' : null,
+      // The generic cook's habit — salt — pre-ticked ONLY when the house
+      // actually has it; an empty seasoning rack means a bland dinner.
+      seasoning: COOK_TUNING.defaultSeasoning.filter(r => avail[r]),
+      heat: m.burner || 'medium',
+      timing: 'standard',
+    };
+    for (const ing of recipe.ingredients || []) {
+      choices.verbs[ing.defId] = naturalVerbFor(ITEM_DEFS[ing.defId]);
+    }
+    const seed = Math.floor(Math.random() * 2 ** 31);
+    const verbOptions = processingVerbOptions(gs);
+    const buildPlan = () => planCook(recipe, gs, { roomId, seed, choices });
+    const resolveNow = () => resolveCookPlan(buildPlan(), gs);
+
+    const small = (label, picked, onPick, disabled = false, title = '') => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `btn btn-secondary tiny cook-seg-btn${picked ? ' picked' : ''}`;
+      b.textContent = label;
+      if (disabled) b.disabled = true;
+      if (title) b.title = title;
+      if (!disabled) b.addEventListener('click', onPick);
+      return b;
+    };
+
+    function renderPlan() {
+      title.textContent = `Cook — ${recipe.label}`;
+      body.innerHTML = '';
+      actions.innerHTML = '';
+      const root = document.createElement('div');
+      root.className = 'cook-screen';
+      const plan = buildPlan();
+      const methodLabel = m.label || plan.method;
+      const cwLabel = plan.cookware ? (DISH_DEFS[plan.cookware]?.label || plan.cookware) : 'by hand';
+      const methodLine = document.createElement('div');
+      methodLine.className = 'cook-method-line';
+      methodLine.textContent = `${methodLabel} in a ${cwLabel} · serves ${recipe.servings || 1}`;
+      root.appendChild(methodLine);
+      // Food-overhaul Phase 6 (D12): what the kitchen actually owns, one
+      // line — burner count, mixer verbs, oven. Reads the same
+      // equipmentState the engine resolves against, so the display can't
+      // drift from the math.
+      const eq = equipmentState(gs);
+      const burnerWord = eq.burners === 1 ? '1 burner' : `${eq.burners} burners`;
+      const mixerWord = eq.mixingVerbs?.length
+        ? eq.mixingVerbs.map(v => COOK_TUNING.processVerbs[v]?.label || v).join('/')
+        : 'no mixer';
+      const ovenWord = eq.ovenPresent ? 'with oven' : 'no oven';
+      const kitchenLine = document.createElement('div');
+      kitchenLine.className = 'cook-kitchen-line';
+      kitchenLine.textContent = `Your kitchen: ${burnerWord} · ${mixerWord} · ${ovenWord}`;
+      root.appendChild(kitchenLine);
+      if (!plan.cookware || kitchenCookwareAvailable(gs, plan.cookware)) {
+        // fine — tier-1 kitchens own their cookware
+      } else {
+        const warn = document.createElement('div');
+        warn.className = 'cook-flaw';
+        warn.textContent = `No ${cwLabel.toLowerCase()} in the kitchen — this method isn't possible.`;
+        root.appendChild(warn);
+      }
+
+      // Processing section — one row per ingredient.
+      const prepSec = document.createElement('div');
+      prepSec.className = 'cook-section';
+      prepSec.appendChild(sectionTitle('Prep'));
+      for (const ing of recipe.ingredients || []) {
+        const row = document.createElement('div');
+        row.className = 'cook-row';
+        const label = document.createElement('span');
+        label.className = 'cook-row-label';
+        const def = ITEM_DEFS[ing.defId];
+        label.textContent = `${def?.label || ing.defId}${ing.qty > 1 ? ` ×${ing.qty}` : ''}`;
+        row.appendChild(label);
+        const seg = document.createElement('span');
+        seg.className = 'cook-seg';
+        for (const v of verbOptions) {
+          const vd = COOK_TUNING.processVerbs[v];
+          seg.appendChild(small(vd?.label || v, choices.verbs[ing.defId] === v, () => {
+            choices.verbs[ing.defId] = v;
+            renderPlan();
+          }, false, vd?.label));
+        }
+        row.appendChild(seg);
+        prepSec.appendChild(row);
+      }
+      root.appendChild(prepSec);
+
+      // Mixing steps (declared on the recipe — D16, gate-checked).
+      if ((recipe.mix || []).length > 0) {
+        const mixSec = document.createElement('div');
+        mixSec.className = 'cook-section';
+        mixSec.appendChild(sectionTitle('Mix'));
+        for (const mixVerb of recipe.mix) {
+          const can = canPerformVerb(mixVerb, gs, null);
+          const row = document.createElement('div');
+          row.className = 'cook-row';
+          const label = document.createElement('span');
+          label.className = 'cook-row-label';
+          label.textContent = `${COOK_TUNING.processVerbs[mixVerb]?.label || mixVerb} the mixture`;
+          row.appendChild(label);
+          if (!can) {
+            const note = document.createElement('span');
+            note.className = 'cook-flaw';
+            note.textContent = 'No mixer in the kitchen.';
+            row.appendChild(note);
+          } else {
+            const ok = document.createElement('span');
+            ok.className = 'cook-row-ok';
+            ok.textContent = 'needs the mixer';
+            row.appendChild(ok);
+          }
+          mixSec.appendChild(row);
+        }
+        root.appendChild(mixSec);
+      }
+
+      // Fat choice — only when the method needs one.
+      if (m.oil) {
+        const fatSec = document.createElement('div');
+        fatSec.className = 'cook-section';
+        fatSec.appendChild(sectionTitle('Fat'));
+        const row = document.createElement('div');
+        row.className = 'cook-row';
+        const seg = document.createElement('span');
+        seg.className = 'cook-seg';
+        seg.appendChild(small('None', !choices.fat, () => { choices.fat = null; renderPlan(); }));
+        for (const fid of ['oil', 'butter']) {
+          const r = COOK_TUNING.reagents[fid];
+          const has = avail[fid];
+          seg.appendChild(small(r.label, choices.fat === fid, () => { choices.fat = fid; renderPlan(); }, !has, has ? r.hint : `No ${r.label.toLowerCase()} in the house`));
+        }
+        row.appendChild(seg);
+        fatSec.appendChild(row);
+        root.appendChild(fatSec);
+      }
+
+      // Seasoning — the D8 taste gate's UI side.
+      const seaSec = document.createElement('div');
+      seaSec.className = 'cook-section';
+      seaSec.appendChild(sectionTitle('Seasoning'));
+      const seaRow = document.createElement('div');
+      seaRow.className = 'cook-row';
+      const seg = document.createElement('span');
+      seg.className = 'cook-seg';
+      const hasFlavor = (r) => choices.seasoning.includes(r);
+      const toggle = (rid) => {
+        const cur = hasFlavor(rid);
+        choices.seasoning = cur ? choices.seasoning.filter(x => x !== rid) : [...choices.seasoning, rid];
+        renderPlan();
+      };
+      seg.appendChild(small('Salt', hasFlavor('salt'), () => toggle('salt'), !avail.salt, avail.salt ? 'a pinch of salt' : 'No salt in the house'));
+      seg.appendChild(small('Spices', hasFlavor('spices'), () => toggle('spices'), !avail.spices, avail.spices ? 'a sprinkle of spices' : 'No spices in the house'));
+      seaRow.appendChild(seg);
+      if (!avail.salt && !avail.spices) {
+        const note = document.createElement('div');
+        note.className = 'cook-flaw';
+        note.textContent = 'No seasonings in the house — this will come out bland.';
+        seaSec.appendChild(note);
+      }
+      seaSec.appendChild(seaRow);
+      root.appendChild(seaSec);
+
+      // Heat / timing.
+      const heatSec = document.createElement('div');
+      heatSec.className = 'cook-section';
+      heatSec.appendChild(sectionTitle('Heat & timing'));
+      const heatRow = document.createElement('div');
+      heatRow.className = 'cook-row';
+      const heatSeg = document.createElement('span');
+      heatSeg.className = 'cook-seg';
+      if (m.burner) {
+        for (const h of ['low', 'medium', 'medium-high', 'high']) {
+          heatSeg.appendChild(small(h, choices.heat === h, () => { choices.heat = h; renderPlan(); }));
+        }
+      } else if (m.oven) {
+        for (const h of ['medium', 'high']) {
+          heatSeg.appendChild(small(h === 'medium' ? '350°' : '425°', choices.heat === h, () => { choices.heat = h; renderPlan(); }));
+        }
+      }
+      heatRow.appendChild(heatSeg);
+      heatSec.appendChild(heatRow);
+      const timingRow = document.createElement('div');
+      timingRow.className = 'cook-row';
+      const timingSeg = document.createElement('span');
+      timingSeg.className = 'cook-seg';
+      for (const [tk, tl] of [['conservative', 'Take it off early'], ['standard', 'Standard'], ['bold', 'Push it']]) {
+        timingSeg.appendChild(small(tl, choices.timing === tk, () => { choices.timing = tk; renderPlan(); }, false, tk === 'bold' ? 'hotter and faster — higher burn risk' : tk === 'conservative' ? 'safer but slower — higher undercook risk' : ''));
+      }
+      timingRow.appendChild(timingSeg);
+      heatSec.appendChild(timingRow);
+      root.appendChild(heatSec);
+
+      // Estimate.
+      const est = document.createElement('div');
+      est.className = 'cook-est';
+      est.textContent = `~${plan.minutes} min on the clock`;
+      root.appendChild(est);
+
+      body.appendChild(root);
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'btn btn-secondary';
+      cancel.textContent = 'Cancel';
+      cancel.addEventListener('click', () => finish(null));
+      actions.appendChild(cancel);
+      // Food-overhaul Phase 6 (D14): the auto-cook affordance. Once this
+      // recipe has been cooked to (or above) its equipment-adjusted
+      // threshold, "Instant Cook" skips the whole loop: one seeded
+      // autopilot roll, plate floored at the threshold's quality.
+      if (autoCookUnlocked(recipe, gs)) {
+        const instantBtn = document.createElement('button');
+        instantBtn.type = 'button';
+        instantBtn.className = 'btn btn-secondary';
+        instantBtn.textContent = '⚡ Instant Cook';
+        instantBtn.title = `You've made this to ${autocookThreshold(recipe, gs)}+ before — cook it on autopilot.`;
+        instantBtn.addEventListener('click', () => {
+          const autoSeed = Math.floor(Math.random() * 2 ** 31);
+          const plan = planCook(recipe, gs, { auto: true, seed: autoSeed });
+          const outcome = resolveCookPlan(plan, gs);
+          const plate = autoCookPlate(gs, recipe, autoSeed, plan, outcome);
+          finish({
+            recipe,
+            cookware: plan.cookware,
+            method: plan.method,
+            steps: plan.steps,
+            seasoning: plan.seasoning,
+            heat: plan.heat,
+            timing: plan.timing,
+            seed: autoSeed,
+            minutes: plan.minutes,
+            plan,
+            outcome,
+            plate,
+            auto: true,
+          });
+        });
+        actions.appendChild(instantBtn);
+      }
+      const cookBtn = document.createElement('button');
+      cookBtn.type = 'button';
+      cookBtn.className = 'btn';
+      cookBtn.textContent = 'Start cooking';
+      cookBtn.addEventListener('click', () => renderOutcome(buildPlan(), resolveNow()));
+      actions.appendChild(cookBtn);
+    }
+
+    function renderOutcome(plan, outcome) {
+      title.textContent = `Cook — ${recipe.label}`;
+      body.innerHTML = '';
+      actions.innerHTML = '';
+      const root = document.createElement('div');
+      root.className = 'cook-screen';
+
+      // Grade reveal + quality bar. The grade shown is the PLATE's final
+      // grade — buildPlate's ingredient×execution blend — because that is
+      // the dish that actually lands in the fridge (revealing the raw
+      // execution quality alone would mislead: a good ingredient story
+      // still makes a D plate out of a botched cook). Built with the same
+      // inputs Serve uses, so what's revealed is what's eaten.
+      const platePreview = buildPlate(gs, recipe, recipe.ingredients, recipe.method, recipe.cookware, { plan, outcome, seed });
+      const qualityPct = Math.round(platePreview.quality * 100);
+      const grade = platePreview.grade;
+      const gradeLine = document.createElement('div');
+      gradeLine.className = 'cook-grade';
+      gradeLine.textContent = `Grade ${grade}`;
+      root.appendChild(gradeLine);
+      const barWrap = document.createElement('div');
+      barWrap.className = 'cook-quality-bar';
+      const fill = document.createElement('div');
+      fill.className = 'cook-quality-fill';
+      fill.style.width = `${qualityPct}%`;
+      barWrap.appendChild(fill);
+      root.appendChild(barWrap);
+      const pct = document.createElement('div');
+      pct.className = 'cook-pct';
+      pct.textContent = `${qualityPct}% quality`;
+      root.appendChild(pct);
+
+      // Per-step lines — matched BY INDEX, because a rescue appends a step
+      // and two method passes share every other field.
+      const steps = document.createElement('div');
+      steps.className = 'cook-steps';
+      for (let i = 0; i < plan.steps.length; i++) {
+        const st = plan.steps[i];
+        const resolved = outcome.stepResults[i];
+        const line = cookStepLine(st, resolved);
+        const div = document.createElement('div');
+        div.className = 'cook-step-line';
+        const what = document.createElement('span');
+        what.textContent = line.what;
+        div.appendChild(what);
+        const q = document.createElement('span');
+        q.className = 'cook-step-q';
+        q.textContent = `${line.grade} (${line.quality}%)`;
+        div.appendChild(q);
+        steps.appendChild(div);
+      }
+      root.appendChild(steps);
+
+      // Flaw lines (D15) + rescue buttons. The seasoning rescues are the
+      // D8 taste-gate loop: a bland batch gets its pinch here, and a batch
+      // already seasoned can be pushed PAST the need (a rescue portion
+      // adds flavor even on top of a seasoned dish — that's the reachable
+      // overseasoned path, since the base screen only offers 0–2 flavor).
+      for (const f of cookFlawLines(outcome)) {
+        const div = document.createElement('div');
+        div.className = 'cook-flaw';
+        div.textContent = f;
+        root.appendChild(div);
+      }
+      const canRescue = [];
+      const cooked = recipe.method !== 'none';
+      if (cooked && !outcome.flaws.includes('overseasoned')) {
+        if (avail.salt && !plan.rescues?.includes('add_salt')) canRescue.push(['add_salt', 'Add salt']);
+        if (avail.spices && !plan.rescues?.includes('add_spice')) canRescue.push(['add_spice', 'Add spices']);
+      }
+      if (outcome.flaws.includes('raw') && !plan.steps.some(s => s.rescueSalt === 'finish')) {
+        canRescue.push(['finish', 'Finish cooking']);
+      }
+      if (canRescue.length > 0) {
+        const rescueSec = document.createElement('div');
+        rescueSec.className = 'cook-section';
+        rescueSec.appendChild(sectionTitle('Rescue it'));
+        const row = document.createElement('div');
+        row.className = 'cook-row';
+        const seg = document.createElement('span');
+        seg.className = 'cook-seg';
+        for (const [rid, rl] of canRescue) {
+          seg.appendChild(small(rl, false, () => {
+            const next = applyCookRescue(plan, rid, gs);
+            if (next) {
+              choices.fat = next.seasoning.find(r => COOK_TUNING.reagents[r]?.kind === 'fat') || choices.fat;
+              choices.seasoning = next.seasoning;
+              renderOutcome(next, resolveCookPlan(next, gs));
+            }
+          }));
+        }
+        row.appendChild(seg);
+        rescueSec.appendChild(row);
+        root.appendChild(rescueSec);
+      }
+
+      body.appendChild(root);
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'btn btn-secondary';
+      cancel.textContent = 'Cancel';
+      cancel.addEventListener('click', () => finish(null));
+      actions.appendChild(cancel);
+      const serveBtn = document.createElement('button');
+      serveBtn.type = 'button';
+      serveBtn.className = 'btn';
+      serveBtn.textContent = 'Serve it';
+      serveBtn.addEventListener('click', () => {
+        const finalOutcome = resolveCookPlan(plan, gs);
+        const plate = buildPlate(gs, recipe, recipe.ingredients, recipe.method, recipe.cookware, { plan, outcome: finalOutcome, seed });
+        finish({
+          recipe,
+          cookware: plan.cookware,
+          method: plan.method,
+          steps: plan.steps,
+          seasoning: plan.seasoning,
+          heat: plan.heat,
+          timing: plan.timing,
+          seed,
+          minutes: plan.minutes,
+          plan,
+          outcome: finalOutcome,
+          plate,
+        });
+      });
+      actions.appendChild(serveBtn);
+    }
+
+    function sectionTitle(text) {
+      const h = document.createElement('div');
+      h.className = 'cook-section-title';
+      h.textContent = text;
+      return h;
+    }
+
+    renderPlan();
+  });
+}
+
 // --- Eat picker (overhaul Phase 3) ---
 // The "What do you want to eat?" choice behind the Eat chip, mirroring
 // openRecipePicker: one row per edible option (INVENTORY's edibleStacks),
-// each showing what it is, where it is (bag / Fridge / Pantry), how many
-// servings it has, and the per-serving restore. Resolves to
-// { defId, from } or null on Cancel.
+// each showing what it is, where it is (bag / Fridge / Pantry / Freezer),
+// and the per-serving restore. Food-overhaul Phase 3: a PLATE option rows
+// its instance — Servings bar, per-serving kcal, quality and grade, and a
+// D27/D28 warning when eating it now costs mood. Resolves to the option's
+// INDEX (two plate batches of the same recipe can sit in the same
+// container — a defId+from key can't tell them apart) or null on Cancel.
 function openEatPicker(options) {
   return new Promise((resolve) => {
     const overlay = document.getElementById('modal-overlay');
@@ -1293,35 +2240,114 @@ function openEatPicker(options) {
     body.innerHTML = '';
     const list = document.createElement('div');
     list.className = 'eat-pick-list';
-    for (const option of options) {
+    options.forEach((option, i) => {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'btn btn-block eat-pick-btn';
-      const name = document.createElement('span');
-      name.className = 'eat-pick-name';
-      name.textContent = option.def.label || 'Something';
-      const meta = document.createElement('span');
-      meta.className = 'eat-pick-meta';
-      const sv = itemServings(option.def);
-      const restore = consumableSummary(option.def, { perServing: sv > 1 });
-      const metaParts = [];
-      if (sv > 1) metaParts.push(`serves ${sv}`);
-      if (restore) metaParts.push(`restores ${restore}`);
-      meta.textContent = `${option.sourceLabel} · ${metaParts.join(' · ')}`;
-      // Phase 4: flag options that have slipped down the ladder (the
-      // restore shown is the WHOLE item's — a Stale/Spoiled one restores
-      // less and a Spoiled one may sicken you, see applyEatItem). Fresh and
-      // plain-good both carry no tag: only a warning gets one.
-      const fresh = freshnessOf(option.stack, option.containerDef ?? null, option.day);
-      if (fresh?.label && fresh.key !== 'fresh') {
-        const tag = document.createElement('span');
-        tag.className = `eat-pick-freshness eat-pick-${fresh.key}`;
-        tag.textContent = fresh.label;
-        meta.appendChild(document.createTextNode(' · '));
-        meta.appendChild(tag);
-      }
+      const { name, meta } = buildPickRowContent(option);
       btn.append(name, meta);
-      btn.addEventListener('click', () => finish({ defId: option.stack.defId, from: option.from }));
+      btn.addEventListener('click', () => finish(i));
+      list.appendChild(btn);
+    });
+    body.appendChild(list);
+    actions.innerHTML = '';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    actions.appendChild(cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+
+// --- Reheat picker (food-overhaul Phase 3, D26/D27/D29) ---
+// "What do you want to reheat?" behind the Reheat chip — one row per
+// reheatable plate (INVENTORY's reheatableStacks): label, where it is, how
+// many servings, and what reheating it NOW actually does (thaw a frozen
+// batch / restore a stale one / nothing but the warm-up). Resolves to the
+// option's INDEX or null on Cancel — same index contract as openEatPicker.
+function openReheatPicker(options) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (choice) => { overlay.removeAttribute('data-open'); resolve(choice); };
+    title.textContent = 'What do you want to reheat?';
+    body.innerHTML = '';
+    const list = document.createElement('div');
+    list.className = 'eat-pick-list';
+    options.forEach((option, i) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-block eat-pick-btn';
+      const { name, meta } = buildPickRowContent(option);
+      // Say what this reheat will DO, beyond what the row already shows —
+      // the whole point of the step is the thaw/quality restore.
+      const fresh = freshnessOf(option.stack, option.containerDef ?? null, option.day);
+      const what = document.createElement('span');
+      what.className = 'eat-pick-meta';
+      const effects = [];
+      if (fresh?.frozenState === 'frozen' || fresh?.frozenState === 'thawing') effects.push('thaws the frozen batch');
+      if (fresh?.key === 'stale' || fresh?.key === 'spoiled') effects.push('restores quality');
+      if (effects.length === 0) effects.push('just warms it up');
+      what.textContent = effects.join(' + ');
+      btn.append(name, meta, what);
+      btn.addEventListener('click', () => finish(i));
+      list.appendChild(btn);
+    });
+    body.appendChild(list);
+    actions.innerHTML = '';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    actions.appendChild(cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+
+// --- Volume picker (Intimacy & Voyeurism Phase 19) ----------------------
+// The "Turn it to what?" choice behind a sound device's Set Volume verb —
+// four rows (Off / 1 / 2 / 3) with a one-line sense of each, resolving to
+// the volume STATE string ('0'..'3') or null on Cancel. Mirrors
+// openEatPicker's modal.
+function openVolumePicker(currentVolume, deviceLabel) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (choice) => { overlay.removeAttribute('data-open'); resolve(choice); };
+    title.textContent = `${deviceLabel} volume`;
+    body.innerHTML = '';
+    const list = document.createElement('div');
+    list.className = 'recipe-pick-list';
+    const rows = [
+      { v: '0', label: 'Off', sub: 'silent' },
+      { v: '1', label: 'Volume 1', sub: 'background' },
+      { v: '2', label: 'Volume 2', sub: 'fills the room' },
+      { v: '3', label: 'Volume 3', sub: 'loud — the neighbours will hear' },
+    ];
+    const current = currentVolume || '0';
+    for (const row of rows) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-block recipe-pick-btn';
+      const name = document.createElement('span');
+      name.className = 'recipe-pick-name';
+      name.textContent = row.label;
+      const meta = document.createElement('span');
+      meta.className = 'recipe-pick-ings';
+      meta.textContent = row.v === current ? `${row.sub} (current)` : row.sub;
+      btn.append(name, meta);
+      btn.addEventListener('click', () => finish(row.v));
       list.appendChild(btn);
     }
     body.appendChild(list);
@@ -1357,9 +2383,9 @@ function openSpreadPicker(options, { seats = 1, max = 6 } = {}) {
     title.textContent = seats > 1 ? `Lay out the table for ${seats}` : 'Lay out the table';
     body.innerHTML = '';
 
-    const picked = [];       // [{ defId, from }] in the order they were added
+    const picked = [];       // option INDICES, in the order they were added
     const rowFor = new Map(); // key -> row element
-    const keyOf = (o) => `${o.from}::${o.stack.defId}`;
+    const keyOf = (o, i) => String(i);
 
     const tally = document.createElement('div');
     tally.className = 'spread-tally';
@@ -1370,7 +2396,7 @@ function openSpreadPicker(options, { seats = 1, max = 6 } = {}) {
 
     const servingsOf = (o) => (typeof stackServingsLeft === 'function' ? stackServingsLeft(o.stack) : o.stack.qty || 1);
     const refresh = () => {
-      const chosen = picked.map(p => options.find(o => keyOf(o) === `${p.from}::${p.defId}`)).filter(Boolean);
+      const chosen = picked.map(i => options[i]).filter(Boolean);
       const total = chosen.reduce((sum, o) => sum + servingsOf(o), 0);
       if (chosen.length === 0) {
         tally.textContent = `Nothing on the table yet — ${seats} ${seats === 1 ? 'seat' : 'seats'} to fill.`;
@@ -1384,7 +2410,7 @@ function openSpreadPicker(options, { seats = 1, max = 6 } = {}) {
       }
       serveBtn.disabled = chosen.length === 0;
       for (const [key, row] of rowFor) {
-        const on = picked.some(p => `${p.from}::${p.defId}` === key);
+        const on = picked.includes(Number(key));
         row.toggleAttribute('data-picked', on);
         // At the cap, un-picked rows stop responding — the bound is visible
         // rather than a silent no-op on click.
@@ -1394,39 +2420,33 @@ function openSpreadPicker(options, { seats = 1, max = 6 } = {}) {
 
     const list = document.createElement('div');
     list.className = 'eat-pick-list';
-    for (const option of options) {
-      const key = keyOf(option);
+    options.forEach((option, i) => {
+      const key = keyOf(option, i);
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'btn btn-block eat-pick-btn spread-pick-btn';
-      const name = document.createElement('span');
-      name.className = 'eat-pick-name';
-      name.textContent = option.def.label || 'Something';
-      const meta = document.createElement('span');
-      meta.className = 'eat-pick-meta';
-      const sv = servingsOf(option);
-      const metaParts = [`${sv} ${sv === 1 ? 'serving' : 'servings'}`];
-      const restore = consumableSummary(option.def, { perServing: itemServings(option.def) > 1 });
-      if (restore) metaParts.push(`restores ${restore}`);
-      meta.textContent = `${option.sourceLabel} · ${metaParts.join(' · ')}`;
-      const fresh = freshnessOf(option.stack, option.containerDef ?? null, option.day);
-      if (fresh?.label && fresh.key !== 'fresh') {
-        const tag = document.createElement('span');
-        tag.className = `eat-pick-freshness eat-pick-${fresh.key}`;
-        tag.textContent = fresh.label;
-        meta.appendChild(document.createTextNode(' · '));
-        meta.appendChild(tag);
-      }
+      // Food-overhaul Phase 3 (D25): shared row content — a plate rows its
+      // own label, Servings bar and quality rather than the carrier def.
+      const { name, meta } = buildPickRowContent(option);
       btn.append(name, meta);
+      // Food-overhaul Phase 7 (D23): who at the table actually likes this
+      // dish ("Maya loves it · Sam hates it") — catering to known tastes is
+      // a visible decision on the same row as the servings.
+      if (option.tasteNotes?.length) {
+        const taste = document.createElement('span');
+        taste.className = 'eat-pick-meta spread-taste';
+        taste.textContent = option.tasteNotes.join(' · ');
+        btn.appendChild(taste);
+      }
       btn.addEventListener('click', () => {
-        const at = picked.findIndex(p => `${p.from}::${p.defId}` === key);
+        const at = picked.indexOf(i);
         if (at >= 0) picked.splice(at, 1);
-        else if (picked.length < max) picked.push({ defId: option.stack.defId, from: option.from });
+        else if (picked.length < max) picked.push(i);
         refresh();
       });
       rowFor.set(key, btn);
       list.appendChild(btn);
-    }
+    });
     body.appendChild(list);
     body.appendChild(tally);
 
@@ -1488,6 +2508,139 @@ function openDinnerInvitePicker(npcName) {
       none.className = 'dim';
       none.textContent = 'No meal windows left to schedule right now.';
       list.appendChild(none);
+    }
+    body.appendChild(list);
+    actions.innerHTML = '';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    actions.appendChild(cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+
+// --- Ask schedule modal (asks-and-attachments-plan.md Phase 4, D8) --------
+// The calendar step of a schedule:true ask. The NPC already accepted in
+// stage 1 (deterministically — see resolveAsk); here the player picks a
+// window. Days within COMMITMENT_TUNING.maxInviteAheadDays, a header per
+// day, one button per genuinely free window probed by asks.js's
+// freeSlotsFor (the same resolveScheduleActivity/busyBlocks read
+// respondToCommitment uses — work/commute/sleep windows never appear, so
+// the stage-2 recheck in doConvSend is belt-and-braces, not a second
+// negotiation). Resolves to { startAbs, endAbs } or null on Cancel. Reuses
+// #modal-overlay + the recipe-pick row chrome, mirroring
+// openDinnerInvitePicker. freeSlotsFor is a call-time dep (asks.js loads
+// after render.js), which is fine — this runs only when the player sends a
+// scheduled ask.
+//
+// Phase 5 (D10): with `mealLabels` set (the meal ask), a row whose window
+// overlaps a COMMITMENT_TUNING.mealSlots window is labeled with the inferred
+// meal ("Breakfast" / "Lunch" / "Dinner") instead of the phase — the player
+// can see what they're about to book; windows outside every meal window
+// keep the plain phase label. mealLabelForWindow is a call-time dep too.
+function openAskScheduleModal({ title, npcId, mealLabels }) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const titleEl = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !titleEl || !body || !actions) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (choice) => { overlay.removeAttribute('data-open'); resolve(choice); };
+    const gs = currentGameState;
+    const npc = gs && gs.npcs && gs.npcs[npcId];
+    const clock = gs && gs.meta && gs.meta.clock;
+    if (!gs || !npc || !clock) { resolve(null); return; }
+    titleEl.textContent = title;
+    body.innerHTML = '';
+    const list = document.createElement('div');
+    list.className = 'recipe-pick-list';
+    const nowAbs = clockToAbsolute(clock);
+    let any = false;
+    for (let offset = 0; offset < COMMITMENT_TUNING.maxInviteAheadDays; offset++) {
+      const dayAbs = clock.day + offset;
+      const slots = freeSlotsFor(npc, dayAbs, nowAbs);
+      if (slots.length === 0) continue;
+      const head = document.createElement('div');
+      head.className = 'ask-sched-day';
+      head.textContent = offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow' : formatDate(dayAbs);
+      list.appendChild(head);
+      for (const slot of slots) {
+        any = true;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-block recipe-pick-btn';
+        const name = document.createElement('span');
+        name.className = 'recipe-pick-name';
+        name.textContent = `${formatTime(slot.startAbs % 1440)}–${formatTime(slot.endAbs % 1440)}`;
+        const meta = document.createElement('span');
+        meta.className = 'recipe-pick-ings';
+        const meal = mealLabels ? mealLabelForWindow(slot.startAbs % 1440, slot.endAbs % 1440) : null;
+        if (meal) {
+          meta.textContent = meal.label;
+        } else {
+          const phase = getPhase(slot.startAbs % 1440);
+          meta.textContent = `${phase.charAt(0).toUpperCase() + phase.slice(1)} — free`;
+        }
+        btn.append(name, meta);
+        btn.addEventListener('click', () => finish(slot));
+        list.appendChild(btn);
+      }
+    }
+    if (!any) {
+      const none = document.createElement('p');
+      none.className = 'dim';
+      none.textContent = 'No free windows in the next few days.';
+      list.appendChild(none);
+    }
+    body.appendChild(list);
+    actions.innerHTML = '';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    actions.appendChild(cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+
+// --- Intimacy picker (Intimacy & Voyeurism Phase 11, D3) ------------------
+// The Make-a-Move flow's generic single-select picker (partner step, then act
+// step), mirroring openEatPicker. `rows` = [{ id, label, meta? }]; resolves
+// to the picked row's id, or null on Cancel. One picker, two steps — the
+// flow (UI.doMakeAMove) owns what each step is asking.
+function openIntimacyPicker({ title, rows }) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const titleEl = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !titleEl || !body || !actions) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (id) => { overlay.removeAttribute('data-open'); resolve(id); };
+    titleEl.textContent = title;
+    body.innerHTML = '';
+    const list = document.createElement('div');
+    list.className = 'recipe-pick-list';
+    for (const row of (rows || [])) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-block recipe-pick-btn';
+      const name = document.createElement('span');
+      name.className = 'recipe-pick-name';
+      name.textContent = row.label || row.id;
+      btn.appendChild(name);
+      if (row.meta) {
+        const meta = document.createElement('span');
+        meta.className = 'recipe-pick-ings';
+        meta.textContent = row.meta;
+        btn.appendChild(meta);
+      }
+      btn.addEventListener('click', () => finish(row.id));
+      list.appendChild(btn);
     }
     body.appendChild(list);
     actions.innerHTML = '';
@@ -1837,6 +2990,9 @@ function renderActionChipsOnly() {
 function _renderTabsAndChips(groups, energyDepleted) {
   const chipContainer = document.getElementById('action-chips');
   const tabContainer = document.getElementById('footer-tab-row');
+  // Phase 1 (D5): any re-render rebuilds the chips DOM, so an open popover
+  // (which floats over <body>, keyed to the old chip) must close with it.
+  closeSubmenuPopover();
 
   for (const group of groups) {
     const tab = document.createElement('button');
@@ -1866,11 +3022,59 @@ function _renderTabsAndChips(groups, energyDepleted) {
       if (chip.extra?.roomId) btn.setAttribute('data-room-id', chip.extra.roomId);
       if (chip.extra?.rowId) btn.setAttribute('data-row-id', chip.extra.rowId);
       if (chip.extra?.objId) btn.setAttribute('data-obj-id', chip.extra.objId);
+      // Phase 1 (D5): a chip carrying `submenu` is a parent — it toggles a
+      // one-level popover of its verbs (ui.js) instead of executing. The
+      // key lets the popover know which chip it belongs to across re-renders.
+      if (chip.submenu) {
+        btn.classList.add('chip-submenu');
+        btn.setAttribute('data-submenu-parent', '');
+        btn.setAttribute('data-submenu-key', `${chip.action}|${chip.extra?.roomId || ''}|${chip.npcId || ''}`);
+      }
       btn.textContent = chip.label;
       if (energyDepleted && !isActionExemptFromEnergyGate(chip.action)) btn.disabled = true;
       chipContainer.appendChild(btn);
     }
   }
+  maybeChipNudgeHint();
+}
+
+// Phase 2 (D3): chip-strip affordance. refreshChipScrollState keeps
+// #action-chips[data-scrollable] honest — set only while a chip is actually
+// cut off, dropped again once the strip is scrolled to its end, so the CSS
+// fade paints only in that state. maybeChipNudgeHint gives coarse-pointer
+// players one 80px nudge per session so they see the strip moves at all.
+let _chipsScrollListening = false;
+function refreshChipScrollState() {
+  const chips = document.getElementById('action-chips');
+  if (!chips) return;
+  const scrollable = chips.scrollWidth - chips.clientWidth > 1;
+  chips.toggleAttribute('data-scrollable', scrollable);
+  if (!_chipsScrollListening) {
+    _chipsScrollListening = true;
+    chips.addEventListener('scroll', () => {
+      chips.toggleAttribute('data-scrollable', chips.scrollWidth - chips.clientWidth > 1);
+    }, { passive: true });
+  }
+}
+
+function maybeChipNudgeHint() {
+  if (!window.matchMedia('(hover: none) and (pointer: coarse)').matches) return;
+  if (sessionStorage.getItem('chipsNudgeHinted')) return;
+  refreshChipScrollState();
+  const chips = document.getElementById('action-chips');
+  if (!chips || !chips.hasAttribute('data-scrollable')) return;
+  sessionStorage.setItem('chipsNudgeHinted', '1');
+  const from = chips.scrollLeft;
+  const to = Math.min(from + 80, chips.scrollWidth - chips.clientWidth);
+  if (to <= from) return;
+  const start = performance.now();
+  const dur = 550;
+  const step = (now) => {
+    const p = Math.min(1, (now - start) / dur);
+    chips.scrollLeft = from + (to - from) * (1 - Math.pow(1 - p, 3));
+    if (p < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 
 function buildActionGroups(gs, sceneState, phase, energyDepleted) {
@@ -1907,8 +3111,60 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
   for (const obj of Object.values(gs.objects?.[`room_${roomId}`] || {})) {
     const def = OBJECT_DEFS[obj.defId];
     if (!def?.affords?.includes('container.open')) continue;
+    // Intimacy & Voyeurism Phase 5 (D11): the wardrobe is a multi-verb object
+    // and renders as one "Wardrobe ▸" submenu chip (Change Outfit / Open) —
+    // the same Phase 1 (D5) pattern as the door — instead of a flat Open
+    // chip. The verb rows inherit the objId via the parent chip's context.
+    if (obj.defId === 'wardrobe') {
+      hereChips.push({
+        label: def.container?.label || def.label || 'Wardrobe',
+        action: 'wardrobe.interact',
+        submenu: ACTION_DEFS['wardrobe.interact'].submenu,
+        extra: { objId: obj.id },
+      });
+      continue;
+    }
     const label = def.container?.label || def.label || 'Container';
     hereChips.push({ label: `Open ${label}`, action: 'container.open', extra: { objId: obj.id } });
+  }
+  // Intimacy & Voyeurism Phase 19 (sound): sound devices render as "X >"
+  // submenu chips — Play / Set Volume / Eject (SOUND_DEVICE_DEFS.affords),
+  // the same Phase 1 (D5) pattern as the door/wardrobe/bed. The device's
+  // objId rides on the parent chip as data-obj-id so the verbs act on the
+  // exact device they were opened from.
+  for (const key of Object.keys(SOUND_DEVICE_DEFS)) {
+    const sdef = SOUND_DEVICE_DEFS[key];
+    if (!sdef.sourceObjDef) continue;
+    const obj = Object.values(gs.objects?.[`room_${roomId}`] || {}).find(o => o.defId === sdef.sourceObjDef);
+    if (!obj) continue;
+    hereChips.push({
+      label: OBJECT_DEFS[obj.defId]?.label || sdef.label,
+      action: 'sound.interact',
+      submenu: ACTION_DEFS['sound.interact'].submenu,
+      extra: { objId: obj.id },
+    });
+  }
+  // Intimacy & Voyeurism Phase 17 (D13): a bed with a resident asleep in
+  // this room offers the boundary submenu — Slide Into Bed / Watch Them
+  // Sleep. `sleepingOccupantInRoom` is the whole gate (someone genuinely
+  // asleep here); the sleeper rides on the parent chip as data-npc so the
+  // popover verbs know who they'd be getting into bed with. Mirrors the
+  // wardrobe's multi-verb-object pattern; `bed.interact` is grouping-only
+  // (never executes) and the verb rows are intercepted in ui.js before the
+  // registered-action bridge.
+  for (const obj of Object.values(gs.objects?.[`room_${roomId}`] || {})) {
+    if (obj.defId !== 'bed' && obj.defId !== 'bed_basic') continue;
+    const sleeperId = sleepingOccupantInRoom(gs, roomId);
+    if (sleeperId) {
+      hereChips.push({
+        label: 'Bed',
+        action: 'bed.interact',
+        submenu: ACTION_DEFS['bed.interact'].submenu,
+        extra: { objId: obj.id },
+        npcId: sleeperId,
+      });
+    }
+    break;
   }
   if ((player.rentOwed || 0) > 0) hereChips.push({ label: `Pay Rent (${player.rentOwed})`, action: 'pay-rent' });
   if (Object.values(gs.world.bills || {}).some(b => b && b.cutoffActive)) hereChips.push({ label: 'Pay Bills (service cut off)', action: 'pay-bills' });
@@ -1920,25 +3176,17 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
       if (!isBedroom && !isBathroom) continue;
       if (adjId === 'bedroom_player') continue;
       const roomName = ROOMS[adjId]?.name || 'Room';
-      const ownerId = roomOwnerId(adjId, gs.npcs);
-      hereChips.push({ label: `Open ${roomName} Door`, action: 'move', extra: { roomId: adjId } });
-      if (isBedroom && ownerId) hereChips.push({ label: 'Knock', action: 'knock', npcId: adjId });
-      let peepTarget = null;
-      if (ownerId) {
-        const owner = gs.npcs[ownerId];
-        if (owner && owner.location === adjId) {
-          const clothing = owner.clothing || 'dressed';
-          if (clothing !== 'dressed' || owner.activity === 'showering') peepTarget = adjId;
-        }
-      } else if (isBathroom) {
-        const present = getPresentNpcIds(gs.npcs, adjId);
-        if (present.length > 0) {
-          const npc = gs.npcs[present[0]];
-          const clothing = npc.clothing || 'dressed';
-          if (clothing !== 'dressed' || npc.activity === 'showering') peepTarget = adjId;
-        }
-      }
-      if (peepTarget) hereChips.push({ label: `Peek into ${roomName}`, action: 'peep', npcId: peepTarget });
+      // Intimacy & Voyeurism Phase 1 (D5): a multi-verb door renders as one
+      // "X Door ▸" chip expanding a one-level popover of its verbs. The
+      // verbs live in ACTION_DEFS' 'door.interact' submenu; the flat
+      // Open/Knock/Peek chips are gone and the adjacent room's id rides on
+      // the parent chip as room context for every sub-verb.
+      hereChips.push({
+        label: `${roomName} Door`,
+        action: 'door.interact',
+        submenu: ACTION_DEFS['door.interact'].submenu,
+        extra: { roomId: adjId },
+      });
     }
   }
   // Phase 8 (D8): searching a roommate's room surfaces their possessions
@@ -1993,6 +3241,24 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
     const npc = gs.npcs[npcId];
     socialChips.push({ label: `Talk to ${npc.bible.name || 'Someone'}`, action: 'talk', npcId });
   }
+  // Intimacy & Voyeurism Phase 11 (D3): Make a Move — one chip whenever
+  // someone is present; the flow picks the partner (when several are) and the
+  // act. The paired acts never render as flat chips (their ACTION_DEFS source
+  // kind is 'paired', which actionSourceMatches rejects), so this chip is
+  // their only door — D3's symmetric-initiation surface, gated by the same
+  // Phase 9 willingness function the NPC side uses.
+  if (presentNpcIds.length > 0) {
+    socialChips.push({ label: 'Make a Move', action: 'make_a_move' });
+  }
+  // Intimacy & Voyeurism Phase 17 (D14): the three-way act. Two residents
+  // present is the surface; the GATE (all three parties' willingness +
+  // desire) lives in boundary.js's resolveBoundaryThroupleGate and is read
+  // at execution time — the chip never pre-filters on it, exactly like
+  // Make-a-Move lets the gate say no with a person's voice. The flow picks
+  // the two partners, so the chip is one generic row.
+  if (presentNpcIds.length >= 2) {
+    socialChips.push({ label: 'Propose a Threesome', action: 'boundary.throuple' });
+  }
   // Meal commitments (overhaul Phase 7, D7): inviting a Housemate to a
   // shared dinner is an in-person ask — pick a day and a meal window, and
   // they answer on the spot (acceptance is deterministic; see
@@ -2029,21 +3295,48 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
     }
   }
   for (const npcId of presentNpcIds) {
+    const npc = gs.npcs[npcId];
     const quest = (gs.world.quests?.active || []).find(q =>
       q.type === 'chain' && q.npcId === npcId &&
       q.steps[q.currentStep]?.type === 'give_item' && !q.steps[q.currentStep]?.done
     );
-    if (quest) {
-      const step = quest.steps[quest.currentStep];
+    // Intimacy & Voyeurism Phase 16 (D2/D14): the Give Item chip also appears
+    // for a cold-shouldering NPC WITHOUT a quest — gifting is a reparation
+    // act (one severity per landed gift). Quest-gated gifting keeps its own
+    // itemCategory; the repair branch takes any gift-category item.
+    const wantCategory = quest && quest.steps[quest.currentStep]
+      ? quest.steps[quest.currentStep].itemCategory
+      : (coldShoulderActive(npc) ? 'gift' : null);
+    if (wantCategory || quest) {
       const hasItem = (gs.player.inventory || []).some(stack => {
         const def = ITEM_DEFS[stack.defId];
-        return def && (!step.itemCategory || def.category === step.itemCategory);
+        return def && (!wantCategory || def.category === wantCategory);
       });
       if (hasItem) {
-        const npc = gs.npcs[npcId];
         socialChips.push({ label: `Give Item to ${npc.bible.name || 'Someone'}`, action: 'give-item', npcId });
       }
     }
+    // Phase 16: the apology reparation chip — only while the NPC is cold-
+    // shouldering. Deterministic success per the hurt state (ui.doApologizeNpc).
+    if (coldShoulderActive(npc)) {
+      socialChips.push({ label: `Apologize to ${npc.bible.name || 'Them'}`, action: 'apologize', npcId });
+    }
+  }
+  // Intimacy & Voyeurism Phase 18 (D16): the player's side of the "trying"
+  // flag — a deliberate high-chance mode with a partner they've already
+  // been intimate with (npc.flags._intimacyHistory is the Phase 9 recency
+  // writer's record, partnerId 'player' on the target). Purely a flags
+  // toggle: the ACT still goes through the same willingness gate as ever —
+  // trying changes the odds of conception, never anyone's willingness
+  // (invariant 1 holds; the gate is upstream).
+  for (const npcId of presentNpcIds) {
+    const npc = gs.npcs[npcId];
+    const tryingWith = (gs.player.flags || {})._tryingWith;
+    const intimateBefore = npc?.flags?._intimacyHistory?.lastWith === 'player';
+    if (!intimateBefore && tryingWith !== npcId) continue;
+    socialChips.push(tryingWith === npcId
+      ? { label: `Stop Trying with ${npc.bible?.name || 'Them'}`, action: 'pregnancy.stop-trying', npcId }
+      : { label: `Try for a Baby with ${npc.bible?.name || 'Them'}`, action: 'pregnancy.start-trying', npcId });
   }
   groups.push({ id: 'social', label: 'Social', chips: socialChips });
 
@@ -2090,10 +3383,31 @@ function renderSceneReader(gs, sceneState) {
   const est = document.getElementById('scene-establishing');
   if (est) {
     est.innerHTML = '';
+    // Intimacy & Voyeurism Phase 5 (D11): your own state leads the
+    // establishing passage — what you're wearing (or not wearing) is the
+    // first thing the scene has to say about you. Only present when the
+    // composed scene has something worth saying (transient/naked state or a
+    // notable outfit like a swimsuit).
+    if (scene.self) {
+      const el = document.createElement('div');
+      el.className = 'sr-self';
+      el.textContent = scene.self;
+      est.appendChild(el);
+    }
     for (const p of scene.presence) {
       const el = document.createElement('div');
       el.className = 'sr-presence';
       el.textContent = p.line;
+      est.appendChild(el);
+    }
+    // Door cues (intimacy-voyeurism Phase 3, D4): what the doors in front of
+    // you are whispering. Rendered right after the people, before the louder
+    // sensory layer — a door you are standing at is the first thing you read.
+    for (const c of scene.doorCues || []) {
+      const el = document.createElement('div');
+      el.className = 'sr-door-cue';
+      el.setAttribute('data-kind', c.kind);
+      el.textContent = sentence(c.line);
       est.appendChild(el);
     }
     const calloutIds = new Set(scene.callouts.map(c => c.signalId));
@@ -2160,6 +3474,44 @@ function renderSceneReader(gs, sceneState) {
   }
 
   return scene;
+}
+
+// --- The peek/listen lens (intimacy-voyeurism Phase 10, D6/D7) ----------
+// Projects the PEEK session onto the #peek-overlay DOM. Holds NO logic of
+// its own (the same split as the scene reader): every decision was already
+// made in peek.js's pure layer. Called once per session tick — never on a
+// full page render — so the lens and its risk meter move while the rest of
+// the page stays still.
+function renderPeekOverlay(gs, session, view) {
+  const overlay = document.getElementById('peek-overlay');
+  if (!overlay || !session) return;
+  overlay.removeAttribute('hidden');
+  overlay.setAttribute('data-mode', session.mode);
+
+  const heading = document.getElementById('peek-heading');
+  if (heading) heading.textContent = session.mode === 'peek' ? 'Peeking' : 'Listening';
+
+  const caption = document.getElementById('peek-caption');
+  if (caption) {
+    const line = session._viewLine || (session.mode === 'peek'
+      ? 'You peer through the keyhole…' : 'You listen at the door…');
+    caption.textContent = sentence(line);
+  }
+
+  const meta = document.getElementById('peek-meta');
+  if (meta) {
+    const secs = Math.round(session.ticksElapsed * PEEK.realTickMs / 1000);
+    meta.textContent = `held for ${secs}s`;
+  }
+
+  const riskFill = document.getElementById('peek-risk-fill');
+  if (riskFill) {
+    const bucket = Math.round(Math.max(0, Math.min(1, session.riskAccum / PEEK.maxRisk)) * 100 / 5) * 5;
+    riskFill.setAttribute('data-fill', bucket);
+  }
+
+  const stopBtn = document.getElementById('peek-stop-btn');
+  if (stopBtn) stopBtn.textContent = session.mode === 'peek' ? 'Stop Watching' : 'Stop Listening';
 }
 
 // --- The moodle strip (scene-reader plan Phase 3, D8) ---

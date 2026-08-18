@@ -46,7 +46,11 @@ function deriveStandingSignals(gameState) {
       const emits = OBJECT_DEFS[obj.defId]?.emits;
       if (!emits) continue;
       for (const [stateKey, byValue] of Object.entries(emits)) {
-        const current = obj.state?.[stateKey];
+        // Food-overhaul Phase 4 (D9): a 'dishes' emit reads the DERIVED
+        // ladder (ITEMS' dishLevelOf) against the object's dish MAP, not
+        // the (vestigial) state field — the map is the world state, so the
+        // standing signal can't desync from what actually got dirtied.
+        const current = stateKey === 'dishes' && obj.dishes ? dishLevelOf(obj) : obj.state?.[stateKey];
         if (current === undefined) continue;
         const payload = byValue[current];
         if (!payload || !SIGNAL_DEFS[payload.signal]) continue;
@@ -257,6 +261,21 @@ function bandFor(intensity) {
   return 'faint';
 }
 
+// --- Headphones (Intimacy & Voyeurism Phase 19) --------------------------
+// A perceiver wearing a blocksSound accessory (the wardrobe's accessory
+// slot) hears NOTHING on the audio channel: music, moaning, door cues,
+// gossip — all filtered at the RECEIVER, so the signals still exist for the
+// world (a non-wearing roommate still perceives them) and only the wearer's
+// own read goes quiet. Player and NPCs share the one filter (D7 interplay:
+// you can't hear the moaning you're not listening for). PURE.
+function wearsSoundBlocking(gameState, perceiverId) {
+  const outfit = perceiverId === 'player'
+    ? (gameState?.player?.outfit || {})
+    : (gameState?.npcs?.[perceiverId]?.outfit || {});
+  const worn = outfit && outfit.accessory;
+  return !!worn && !!SOUND_DEVICE_DEFS[worn]?.blocksSound;
+}
+
 // --- The one perception query, shared by the player and every NPC (plan D7) ---
 // Returns the signals `perceiverId` can sense standing in `roomId`, strongest
 // first. `perceiverId` is 'player' or an npcId — any divergence between them
@@ -267,6 +286,11 @@ function perceiveSignals(gameState, perceiverId, roomId) {
   if (!roomId || !ROOMS[roomId]) return [];
   const attention = perceptionOf(gameState, perceiverId);
   if (attention <= 0) return [];
+  // Intimacy & Voyeurism Phase 19: a wearer of sound-blocking (headphones /
+  // mp3 player) perceives no audio-channel signal at all — the door-cue,
+  // listen and scene-reader surfaces all read through this one query, so
+  // one filter covers every one of them.
+  const blocking = wearsSoundBlocking(gameState, perceiverId);
 
   // Both kinds, one list. From here down nothing cares which is which — a
   // standing rot and a fading footstep propagate and attenuate identically,
@@ -281,6 +305,9 @@ function perceiveSignals(gameState, perceiverId, roomId) {
   for (const src of sources) {
     const def = SIGNAL_DEFS[src.signalId];
     if (!def) continue;
+    // Phase 19: the headphones filter — the wearer hears none of the audio
+    // channel, whatever is playing and wherever it originates.
+    if (def.channel === 'sound' && blocking) continue;
     const reach = reachByChannel[def.channel]
       || (reachByChannel[def.channel] = reachMultipliers(gameState, roomId, def.channel));
     const mult = reach[src.roomId];
@@ -318,6 +345,204 @@ function mergePerceived(records) {
   }
   return [...bySignal.values()].sort((a, b) => b.salience - a.salience);
 }
+
+// ===== SECTION: PLAUSIBLE ACTIVITY (fog-of-war floor plan, Phase 2) =====
+// What the player could realistically know about an NPC they are NOT in the
+// room with, for the floor plan's activity captions (D10 — the plan is never
+// omniscient). PURE (RI2/RI3): reads state, writes nothing, calls no model.
+//
+// The rule:
+//   same room          → the full activity string — you can see them
+//   other room, locked → 'inside' — never the granular act
+//   other room         → a coarser label: what the player can actually
+//                        perceive from where they stand (signal-strength
+//                        gated), or a routine-guess for someone they know
+//                        well (familiarity gated)
+//   otherwise          → null — the avatar alone says they are there
+//
+// Returns { label, tier: 'full' | 'coarse' | 'inside' } or null.
+const PLAUSIBLE_TUNING = {
+  // Signal → caption. Only signals that NAME an activity are here; a room
+  // condition (rot, clutter, an unmade bed) tells you nothing about the
+  // person in the room and is deliberately absent. A signal that reached
+  // perceiveSignals has already cleared the attention × propagation floor,
+  // so its presence IS the strength gate.
+  bySignal: {
+    running_water:   'showering',
+    cooking:         'cooking',
+    voices:          'with someone',
+    footsteps:       'moving around',
+    machine_running: 'running the washer',
+    humming:         'humming to themselves',
+    sighing:         'having a moment',
+    breakage:        'in there',
+    cabinet_slam:    'in there',
+    door_close:      'in there',
+  },
+  // Granular activity → coarse caption for the familiarity path. Routines
+  // the player knows an NPC well enough to guess at; everything else stays
+  // unknown behind a closed door.
+  byActivity: {
+    'showering': 'showering',
+    'sleeping': 'sleeping', 'napping': 'sleeping',
+    'cooking': 'cooking', 'making coffee': 'making coffee',
+    'eating cereal': 'eating', 'snacking': 'snacking',
+    'watching TV': 'watching TV', 'watching a show': 'watching TV',
+    'playing games': 'gaming', 'gaming': 'gaming',
+    'exercising': 'working out', 'working out': 'working out',
+    'doing yoga': 'doing yoga', 'stretching': 'stretching',
+    'doing laundry': 'doing laundry',
+    'listening to music': 'listening to music',
+    'on a phone call': 'on the phone', 'on a video call': 'on a call',
+    'reading in bed': 'reading in bed',
+    'getting ready': 'getting ready',
+    'skincare routine': 'doing a skincare routine',
+    'cleaning': 'cleaning',
+  },
+  // Crossing either relationship bar means the player knows the NPC's
+  // routines well enough to make the coarse guess above.
+  familiarity: { comfort: 0.25, affection: 0.2 },
+  familiarPhases: ['familiar', 'close', 'intimate'],
+};
+
+function plausibleActivityFor(npc) {
+  const rel = npc?.relPlayer || {};
+  if (rel.comfort >= PLAUSIBLE_TUNING.familiarity.comfort) return true;
+  if (rel.affection >= PLAUSIBLE_TUNING.familiarity.affection) return true;
+  return PLAUSIBLE_TUNING.familiarPhases.includes(rel.conversationPhase);
+}
+
+function derivePlausibleActivity(gameState, npcId, playerRoomId) {
+  const npc = gameState?.npcs?.[npcId];
+  const roomId = npc?.location;
+  if (!npc || !roomId || !ROOMS[roomId]) return null;    // off-map / dormant
+
+  if (roomId === playerRoomId) {
+    return { label: npc.activity || 'here', tier: 'full' };
+  }
+  if (getDoorState(gameState, roomId) === 'locked') {
+    return { label: 'inside', tier: 'inside' };
+  }
+
+  const perceived = perceiveSignals(gameState, 'player', playerRoomId)
+    .filter(r => r.sourceRoomId === roomId);
+  for (const rec of perceived) {
+    const label = PLAUSIBLE_TUNING.bySignal[rec.signalId];
+    if (label) return { label, tier: 'coarse' };
+  }
+  if (plausibleActivityFor(npc)) {
+    const label = PLAUSIBLE_TUNING.byActivity[npc.activity || ''];
+    if (label) return { label, tier: 'coarse' };
+  }
+  return null;
+}
+
+
+// ===== SECTION: DOOR CUES (intimacy-voyeurism Phase 3, D4) =====
+// A door the player is standing next to can whisper: light through the
+// keyhole, a door left ajar, sounds carrying through it. All three are
+// derived from real state — the door object's own state, who is in the far
+// room, and the SAME perceiveSignals query every other surface reads — and
+// nothing here is stored (RI3). PURE, like everything else in this file.
+//
+// Only rooms that actually carry a door OBJECT can whisper: an archway has
+// no keyhole to light up, and the interior doorways that exist only in
+// ROOM_THRESHOLDS (game room, gym, changing room, study, balcony,
+// kitchen-laundry) are not cues. That is the honest surface — the intimate
+// rooms are the ones with doors, which is exactly where a peek system wants
+// its cues.
+
+const DOOR_CUE_TUNING = {
+  // During these clock phases a room reads as lit whenever someone is in it
+  // — daylight floods it. At night the light has to be earned: being awake
+  // at all implies a lit room (nobody stands around in the dark), so "the
+  // activity implies light" from the plan is implemented as "awake implies
+  // light". The one honest exception is the asleep states — a sleeping
+  // roommate's door stays dark, which is exactly the cue the boundary acts
+  // care about. Nothing models lamps, so there is no finer surface to read.
+  daylitPhases: ['early_morning', 'morning', 'midday', 'afternoon', 'evening'],
+  darkActivities: ['sleeping', 'napping'],
+  // How many strongest sound signals one door reports as audible.
+  maxAudibleSignals: 2,
+  // What counts as "a sound behind the door". Smell travels under doors too,
+  // but the SENSORY layer already carries smells; the door cue is about what
+  // you HEAR at a threshold.
+  audibleChannels: ['sound'],
+  // Cap on cue LINES per scene — a hallway wallpapered in "light through the
+  // keyhole" reads as a bug, not as an apartment.
+  maxCueLines: 3,
+};
+
+// Is a room's light plausibly visible through its door right now? Shared by
+// deriveDoorCues (the far-room side) and the floor-plan glow (house-wide —
+// a lit occupied room is positional knowledge, not omniscience, exactly like
+// the avatar itself). Pure.
+function roomLightVisible(gameState, roomId) {
+  const occupants = getPresentNpcIds(gameState.npcs || {}, roomId);
+  if (occupants.length === 0) return false;
+  const clock = gameState?.meta?.clock;
+  if (clock && DOOR_CUE_TUNING.daylitPhases.includes(clock.phase)) return true;
+  return occupants.some(id => !DOOR_CUE_TUNING.darkActivities.includes(gameState.npcs[id]?.activity));
+}
+
+// The two rooms a door OBJECT joins, or null if its bucket room sits on no
+// door threshold (a door to nowhere). Every room that holds a door object is
+// a leaf room with exactly one door threshold in every layout, so the pair
+// is unambiguous.
+function doorPairRooms(gameState, doorObj) {
+  const ownRoom = doorObj?.bucket?.startsWith('room_') ? doorObj.bucket.slice(5) : null;
+  if (!ownRoom || !ROOMS[ownRoom]) return null;
+  for (const [key, type] of Object.entries(ROOM_THRESHOLDS)) {
+    if (type !== 'door') continue;
+    const [a, b] = key.split('|');
+    if (a === ownRoom || b === ownRoom) return [a, b];
+  }
+  return null;
+}
+
+// The door object between two rooms, if one exists — the same lookup
+// edgeLockState performs, kept here because a cue needs the OBJECT, not just
+// the lock. Rooms without a door object (interior doorways) return null.
+function doorObjectBetween(gameState, a, b) {
+  for (const roomId of [a, b]) {
+    const bucket = gameState.objects?.[`room_${roomId}`];
+    if (!bucket) continue;
+    const door = Object.values(bucket).find(o => o.defId === 'bedroom_door' || o.defId === 'bathroom_door');
+    if (door) return door;
+  }
+  return null;
+}
+
+// The pure door-cue derivation (Phase 3, D4). Given the door object the
+// player is standing at and the player's room, returns what that door could
+// plausibly tell them:
+//   { doorId, doorName, roomId, roomName, occupantIds,
+//     lightThroughKeyhole, ajar, audible }
+// or null when the object is not a door the player is actually at. `audible`
+// is the strongest sound signals originating in the far room as perceived
+// from the player's side — the door's attenuation is already inside the
+// reach multipliers, so this is exactly what they would hear through it.
+function deriveDoorCues(gameState, doorObj, playerRoomId) {
+  if (!doorObj || !playerRoomId || !ROOMS[playerRoomId]) return null;
+  const pair = doorPairRooms(gameState, doorObj);
+  if (!pair || !pair.includes(playerRoomId)) return null;
+  const roomId = pair[0] === playerRoomId ? pair[1] : pair[0];
+  const occupantIds = getPresentNpcIds(gameState.npcs || {}, roomId);
+  return {
+    doorId: doorObj.id,
+    doorName: roomPhrase(roomId) + ' door',
+    roomId,
+    roomName: ROOMS[roomId]?.name || roomId,
+    occupantIds,
+    lightThroughKeyhole: occupantIds.length > 0 && roomLightVisible(gameState, roomId),
+    ajar: doorObj.state?.ajar === 'ajar',
+    audible: perceiveSignals(gameState, 'player', playerRoomId)
+      .filter(r => r.sourceRoomId === roomId && DOOR_CUE_TUNING.audibleChannels.includes(r.channel))
+      .slice(0, DOOR_CUE_TUNING.maxAudibleSignals)
+      .map(r => r.signalId),
+  };
+}
+
 
 // --- Signals by their SOURCE room (scene-reader plan Phase 3, D9) ---
 // For the floor plan, which shows where a signal is coming FROM rather than

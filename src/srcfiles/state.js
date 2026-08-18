@@ -1,6 +1,8 @@
 // ===== SECTION: STATE =====
 // Save/load, kv access, migration (Apartment Expansion v2 — Mirrored H).
-// Sole kv access point. No other section calls root.kv directly.
+// Sole kv access point for SIM state. The title-gallery preference reads in
+// menu.js / defs.menu.js / image.js (the MENU_GALLERY_* keys) are the one
+// documented exception — UI persistence only, never sim state.
 // Per-folder versioning, snapshot-before-migrate, debounced coalesced writes,
 // pendingOp records for crash recovery, LRU image cache, assert() helper.
 
@@ -26,12 +28,12 @@ function assert(cond, msg, context) {
 // --- Folder versions (independent migration) ---
 const FOLDER_VERSIONS = {
   meta: 2,
-  player: 5,
-  world: 4,
+  player: 7,
+  world: 5,
   npcs: 7,
   images: 1,
   snapshots: 1,
-  objects: 2,
+  objects: 3,
 };
 
 // --- Persisted-key table (Phase 9: the invariant the save system rests on) ---
@@ -47,11 +49,13 @@ const SAVE_KEYS = [
   { folder: 'meta', keys: ['meta'] },
   { folder: 'player', keys: ['player'] },
   { folder: 'world', keys: [
-    'rooms', 'castWeb', 'events', 'deliveries', 'renovationJobs',
-    'visits', 'commitments', 'foodOrders', 'externalStubs', 'escortRoster',
+    'rooms', 'castWeb', 'relationships', 'events', 'deliveries', 'renovationJobs',
+    'visits', 'commitments', 'foodOrders', 'groceryOrders', 'externalStubs', 'escortRoster',
     'escortBookings', 'hotSinglesRoster', 'moveInOffers', 'flags', 'quests',
     'rent', 'computer', 'taxes', 'bills', 'upgrades', 'utilities',
-    'phone', 'afterHours', 'signals',
+    'phone', 'afterHours', 'signals', 'outsidePartners',
+    'pregnancies',
+    'autoCookCleared',
   ] },
   { folder: 'npcs', all: true },
   { folder: 'objects', all: true },
@@ -75,12 +79,30 @@ function folderSourceMap(gs, folder) {
 const WORLD_KEY_FALLBACKS = {
   rooms: () => ({}),
   castWeb: () => ({}),
+  // Intimacy & Voyeurism Phase 12: the relationship store. An empty object is
+  // exactly what a save from before this existed should read as — the same
+  // additive-default precedent as world.computer / signals.
+  relationships: () => ({}),
+  // Intimacy & Voyeurism Phase 14: the outside-partner index (residentId →
+  // { npcId, sinceDay, lastVisitDay }). Empty for saves written before this
+  // existed — ensureOutsidePartners backfills at the next day rollover / new
+  // game write, so no migration.
+  outsidePartners: () => ({}),
+  // Intimacy & Voyeurism Phase 18: the pregnancy lifecycle store. Empty for
+  // saves written before this existed — no migration, the same additive-default
+  // precedent as relationships/outsidePartners.
+  pregnancies: () => [],
+  // Food-overhaul Phase 6 (D14): the auto-cook mastery proofs (recipeId →
+  // best grade cooked). Empty for saves written before this existed — no
+  // migration, the same additive-default precedent as relationships.
+  autoCookCleared: () => ({}),
   events: () => [],
   deliveries: () => [],
   renovationJobs: () => [],
   visits: () => [],
   commitments: () => [],
   foodOrders: () => [],
+  groceryOrders: () => [],
   externalStubs: () => ({}),
   escortRoster: () => [],
   escortBookings: () => [],
@@ -191,6 +213,44 @@ const MIGRATIONS = {
       }
       return next;
     } },
+    // player 5->6 (Intimacy & Voyeurism Phase 11, D8/D15): backfill the
+    // knowledge ledger. player.ledger[npcId] is the per-character, day-stamped
+    // list of intimacy acts the player participated in or witnessed — Phase 11
+    // writes the 'participated' half, the Phase 15 codex reads it. Additive
+    // safe default; a save that predates the ledger starts with an empty one
+    // rather than a missing object every reader would have to guard against.
+    { from: 5, to: 6, fn: (player) => {
+      if (!player || typeof player !== 'object') return player;
+      return { ...player, ledger: player.ledger ?? {} };
+    } },
+    // player 6->7 (food-overhaul Phase 2, D2/D3/D4): the kcal metabolism.
+    // The Phase 5 hunger clock's real state was hoursSinceLastMeal; the
+    // overhaul replaces it with the D3 fullness window while PRESERVING the
+    // displayed satiety: old hunger H maps to a legacy 18h window with
+    // (90−H)/5 hours consumed, so a save mid-day keeps exactly the bar it
+    // showed (hunger 80 → 16h of 18h left → still 80). The D4 ledger and
+    // the activity meter start empty and balanced. All additive safe
+    // defaults; a save that never ran the overhaul reads identically to
+    // the old clock (window 18h, rate 1.0).
+    { from: 6, to: 7, fn: (player) => {
+      if (!player || typeof player !== 'object') return player;
+      const window = HUNGER_RHYTHM.starveHours;
+      const h = typeof player.hoursSinceLastMeal === 'number'
+        ? player.hoursSinceLastMeal
+        : Math.max(0, (HUNGER_RHYTHM.satietyStart - (player.hunger ?? 80)) / HUNGER_RHYTHM.satietyPerHour);
+      return {
+        ...player,
+        fullnessWindowHours: window,
+        fullnessRemainingHours: Math.max(0, Math.min(window, window - h)),
+        meta: {
+          ...(player.meta || {}),
+          kcalToday: player.meta?.kcalToday ?? 0,
+          kcalBurnedToday: player.meta?.kcalBurnedToday ?? 0,
+          energyBalance: player.meta?.energyBalance ?? 'balanced',
+          activityEvents: player.meta?.activityEvents ?? [],
+        },
+      };
+    } },
   ],
   world: [
     // world 1->2 (WORLD section): rooms[].objects was a spec'd field that
@@ -259,6 +319,34 @@ const MIGRATIONS = {
         migrated[roomId] = rest;
       }
       return migrated;
+    } },
+    // world 4->5 (food overhaul D37, 2026-08-18): the apartment STARTS with
+    // a working (shabby) cooktop — FACILITY_STARTING_TIERS made kitchen_stove
+    // 'functional' so cooking is possible day one, and this hands the same
+    // start to saves created under the old 'broken' default. Safe because
+    // facility decay floors at 'functional' (renovation locked decision #5)
+    // and renovation only ever moves tier UP, so a broken kitchen_stove on
+    // disk can only mean "old new-game default", never player-caused neglect
+    // — flipping it is the game state the player was supposed to have. Same
+    // per-key guard as the room migrations above (the world folder holds
+    // many differently-shaped keys under one pass; only the upgrades map has
+    // a kitchen_stove entry).
+    { from: 4, to: 5, fn: (data) => {
+      if (!data || typeof data !== 'object') return data;
+      const stove = data.kitchen_stove;
+      if (!stove || stove.tier !== 'broken') return data;
+      return {
+        ...data,
+        kitchen_stove: {
+          ...stove,
+          tier: 'functional',
+          // A functional facility starts at full condition (the same
+          // startingCondition initUpgradesState/normalizeUpgrades give a
+          // fresh game) — a broken-stove save flipping functional with
+          // condition 0 would immediately read as "needs repair".
+          condition: MAINTENANCE.startingCondition,
+        },
+      };
     } },
   ],
   npcs: [
@@ -369,6 +457,32 @@ const MIGRATIONS = {
         // ensureObjectsForBucket back-fills it instead of respawning from
         // scratch and duplicating whatever we just moved out.
         if (!next[target]) next[target] = {};
+      }
+      return next;
+    } },
+    // objects 2->3 (food-overhaul Phase 4, D9/D11): dish maps. A bucket is
+    // one kv key holding { objId: instance }; the per-key fn stamps every
+    // instance with the additive dish defaults (obj.dishes dish-map,
+    // obj.dishUnits, obj.dishwasher load/cycle record — null except on the
+    // dishwasher appliance). It also converts the OLD abstract
+    // sink.state.dishes enum ('few'/'many') into a real dish map so a
+    // pre-overhaul sink full of abstract dishes reads as a sink full of
+    // plates/pots — the map is the world state now, the ladder is derived
+    // (dishLevelOf), so the vestigial state field is reset to 'clean'.
+    { from: 2, to: 3, fn: (bucket) => {
+      if (!bucket || typeof bucket !== 'object') return bucket;
+      const next = {};
+      for (const [id, obj] of Object.entries(bucket)) {
+        if (!obj || typeof obj !== 'object') { next[id] = obj; continue; }
+        const mig = { ...obj };
+        const wasDirty = mig.state?.dishes === 'few' || mig.state?.dishes === 'many';
+        mig.dishes = mig.dishes ?? (wasDirty ? (mig.state.dishes === 'many'
+          ? { plate: 4, bowl: 2, pot: 1 }
+          : { plate: 2, fork: 1 }) : {});
+        mig.dishUnits = typeof mig.dishUnits === 'number' ? mig.dishUnits : dishUnitsOf(mig);
+        mig.dishwasher = mig.dishwasher ?? (mig.defId === 'dishwasher' ? { load: {}, cycleActiveUntilAbs: 0 } : null);
+        if (wasDirty && mig.state) mig.state = { ...mig.state, dishes: 'clean' };
+        next[id] = mig;
       }
       return next;
     } },
@@ -928,6 +1042,10 @@ async function loadGameState() {
   const npcs = await getAllNpcs();
   const rooms = await getWorld('rooms') || {};
   const castWeb = await getWorld('castWeb') || {};
+  // Intimacy & Voyeurism Phase 12: the relationship store. Empty for saves
+  // written before Phase 12 — records form live from co-location, so there
+  // is nothing to backfill (same additive-default pattern as moveInOffers).
+  const relationships = await getWorld('relationships') || {};
   const quests = await getWorld('quests') || { active: [], completed: [] };
   const events = await getWorld('events') || [];
   const deliveries = await getWorld('deliveries') || [];
@@ -987,6 +1105,7 @@ async function loadGameState() {
   // Empty for saves written before food existed; an order in flight survives
   // a reload because its driver's visit is in `visits` alongside it.
   const foodOrders = await getWorld('foodOrders') || [];
+  const groceryOrders = await getWorld('groceryOrders') || [];
   // Friends of roommates (external-world plan Phase 6): the friend-stub table.
   // Empty for saves written before Phase 6 — ensureSocialCircles refills it at
   // the next day rollover, so no migration is needed.
@@ -1000,6 +1119,19 @@ async function loadGameState() {
   // Empty for saves written before Phase 7 — ensureHotSinglesRoster
   // backfills on first browse/day rollover, so no migration.
   const hotSinglesRoster = await getWorld('hotSinglesRoster') || [];
+  // Outside partners (Intimacy & Voyeurism Phase 14): the residentId →
+  // { npcId, sinceDay, lastVisitDay } index. Empty for saves written before
+  // Phase 14 — ensureOutsidePartners backfills at the next day rollover, so
+  // no migration (the partner NPCs themselves persist in the npcs folder).
+  const outsidePartners = await getWorld('outsidePartners') || {};
+  // Intimacy & Voyeurism Phase 18: the pregnancy lifecycle store. Read via
+  // the SAME additive-default pattern as relationships/outsidePartners — an
+  // absent key on an old save loads as [], no migration.
+  const pregnancies = await getWorld('pregnancies') || [];
+  // Food-overhaul Phase 6 (D14): auto-cook mastery proofs (recipeId → best
+  // grade cooked). Same additive-default pattern as relationships — absent
+  // on an old save, and instant cook is gated behind the proof anyway.
+  const autoCookCleared = await getWorld('autoCookCleared') || {};
   // Move-in offers (external-world plan Phase 8): pending vouches for an
   // external NPC to move in. Empty for saves written before Phase 8 — an
   // offer is created live in conversation, so there is nothing to backfill.
@@ -1026,7 +1158,7 @@ async function loadGameState() {
     npcIds: Object.keys(npcs).filter(id => id.startsWith('npc_')),
     // droppedConstraints is persisted in meta by writeGeneratedGameState.
     droppedConstraints: meta.droppedConstraints || [],
-    world: { rooms, castWeb, quests, events, deliveries, renovationJobs, visits, commitments, foodOrders, externalStubs, escortRoster, escortBookings, moveInOffers, rent, computer, taxes, bills, upgrades, utilities, phone, afterHours, hotSinglesRoster, flags },
+    world: { rooms, castWeb, relationships, quests, events, deliveries, renovationJobs, visits, commitments, foodOrders, groceryOrders, externalStubs, escortRoster, escortBookings, moveInOffers, rent, computer, taxes, bills, upgrades, utilities, phone, afterHours, hotSinglesRoster, flags, outsidePartners, pregnancies, autoCookCleared },
   };
   // Rebuild the live room graph from base + whichever structural upgrades
   // this save has built (floorplan plan Phase 6). MUST run before anything
@@ -1052,6 +1184,21 @@ async function loadGameState() {
       lastEvent: null,
     };
     queueWrite('world', 'rooms', gameState.world.rooms);
+  }
+  // Intimacy & Voyeurism Phase 6 (D11): a save written before the wardrobe
+  // landed carries no outfit/clothing on its NPCs. Derive both from each
+  // resident's bedroom wardrobe exactly as resolveTick pass 2 keeps deriving
+  // them — additive default, never overwriting a value a Phase 6-era save
+  // actually persisted — so the first render after a reload already shows a
+  // real outfit and the intimate gate reads a real state instead of an
+  // undefined one. The wardrobe buckets are guaranteed present by
+  // ensureAllObjectBuckets above; visitors stay untouched (their sim is
+  // dormant, and they keep whatever they arrived in).
+  for (const npc of Object.values(gameState.npcs)) {
+    if (npc.residency?.status !== 'resident') continue;
+    const block = npc.schedule?.currentBlock || 'morning';
+    if (!npc.outfit) npc.outfit = npcOutfitForContext(npc, gameState, block, null);
+    if (!npc.clothing) npc.clothing = 'dressed';
   }
   return gameState;
 }
@@ -1090,6 +1237,11 @@ async function writeGeneratedGameState(gameState) {
   // with the site's six singles (the first-browse / rollover call stays, as
   // the backstop for old saves).
   ensureHotSinglesRoster(gameState);
+  // Outside partners (Intimacy & Voyeurism Phase 14): give eligible residents
+  // their long-distance partner before the first write, so a brand-new game
+  // ships with the couples already in place (the day-rollover call stays, as
+  // the backstop for later move-ins and old saves).
+  ensureOutsidePartners(gameState);
 
   await setMeta({
     versions: { ...FOLDER_VERSIONS },

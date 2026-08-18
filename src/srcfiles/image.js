@@ -39,7 +39,16 @@ function tableSpreadIds(roomObjects) {
 
 function sceneDetailSignature(roomObjects) {
   const spread = tableSpreadIds(roomObjects);
-  return spread.length > 0 ? `meal-${spread.slice().sort().join('-')}` : '';
+  const spreadPart = spread.length > 0 ? `meal-${spread.slice().sort().join('-')}` : '';
+  // Food-overhaul Phase 4 (D9): a sink that has disappeared under dishes is
+  // scene-worthy the same way a laid table is — 'mess' enters the scene key
+  // so the art actually shows the pile, and leaves it when the wash clears
+  // the sink (the derived dishLevelOf flips back to clean).
+  let messPart = '';
+  for (const obj of Object.values(roomObjects || {})) {
+    if (obj.defId === 'sink_kitchen' && dishLevelOf(obj) === 'many') { messPart = 'mess'; break; }
+  }
+  return [spreadPart, messPart].filter(Boolean).join('_');
 }
 
 function composeCharKey(npc, expression, pose) {
@@ -79,9 +88,14 @@ function buildImagePrompt(roomId, phase, activeNpcs, roomObjects, opts = {}) {
   const roomName = String(room?.name || roomId);
   const roomType = room?.type || 'common';
   const light = phaseLighting(phase);
-  const describe = (who, fallback) =>
-    (typeof getPhysicalDescriptionForPrompt === 'function' ? getPhysicalDescriptionForPrompt(who) : null)
-    || who?.bible?.visual || fallback;
+  const describe = (who, fallback, isPlayer) => {
+    if (typeof getPhysicalDescriptionForPrompt !== 'function') return who?.bible?.visual || fallback;
+    // Intimacy & Voyeurism Phase 18 (D16): thread gameState + the player flag
+    // through so a visible pregnancy reads in the scene image. Without the
+    // state, no bump is claimed (fail-closed, like the intimate gate).
+    const o = opts.gameState ? { gameState: opts.gameState, ...(isPlayer ? { isPlayer: true } : {}) } : undefined;
+    return getPhysicalDescriptionForPrompt(who, o) || who?.bible?.visual || fallback;
+  };
 
   let prompt = `Interior of a ${roomType === 'bedroom' ? 'cozy bedroom' : roomName.toLowerCase()} in a shared apartment, ${light}. `;
   prompt += roomObjectsPhrase(roomObjects) || fallbackRoomPhrase(roomId, roomType);
@@ -96,12 +110,21 @@ function buildImagePrompt(roomId, phase, activeNpcs, roomObjects, opts = {}) {
     const unique = [...new Set(dishes)];
     prompt += `The table is set for a shared meal: ${unique.join(', ')}, laid out on plates and serving dishes with cutlery and glasses. `;
   }
+  // Food-overhaul Phase 4 (D9): the scene-key 'mess' clause's phrase — a
+  // sink piled with dirty dishes is part of the picture when it's bad
+  // enough to repaint (mirrors the signature above; absent = plain cache).
+  for (const obj of Object.values(roomObjects || {})) {
+    if (obj.defId === 'sink_kitchen' && dishLevelOf(obj) === 'many') {
+      prompt += 'The kitchen sink is piled high with dirty dishes and cookware. ';
+      break;
+    }
+  }
 
   // Character layers. The player first — it is their apartment and their
   // scene — then the roommates who are present.
   const posture = seated ? ', seated at the table' : '';
   if (opts.player) {
-    prompt += `${describe(opts.player, 'a young adult')}${posture}. `;
+    prompt += `${describe(opts.player, 'a young adult', true)}${posture}. `;
   }
   if (activeNpcs && activeNpcs.length > 0) {
     for (const npc of activeNpcs) {
@@ -248,6 +271,60 @@ async function getCharacterImage(npc, expression, pose) {
   }
 }
 
+// --- Peek image (Intimacy & Voyeurism Phase 10, D6) -----------------------
+// The keyhole-lens image. The keyhole is NEVER baked into the art (D6) —
+// the prompt describes a plain room view and index.html's CSS mask crops it.
+// The prompt is deterministic and gate-governed (D15): the occupant is
+// described through getPhysicalDescriptionForPrompt with opts.intimate, so
+// the SAME three-condition gate (explicit request + mature flag + naked
+// state) decides how much of the scene the prompt may name. The explicit
+// activity phrase (PEEK_VIEW_ACT) is read only when that gate is open; with
+// the gate closed the scene degrades to a safe paraphrase. The cache key
+// carries the occupant's stable seed + phase + act, so revisiting the same
+// moment reuses the frame instead of spending quota.
+function composePeekKey(gs, roomId, npc, actKey) {
+  const phase = gs?.meta?.clock?.phase || 'day';
+  return `peek_${roomId}_${npc.bible.genSeed}_${phase}_${actKey || 'none'}`;
+}
+
+// PURE. Builds the peek prompt from live state — deterministic, no rng.
+function composePeekPrompt(gs, roomId, npc, actKey, npcId) {
+  const room = ROOMS[roomId];
+  const roomName = room?.name || roomId;
+  const light = phaseLighting(gs?.meta?.clock?.phase);
+  const clothing = npc?.clothing || 'dressed';
+  const gateOpen = intimateAllowed(gs) && NAKED_CLOTHING_STATES.includes(clothing);
+  const actDef = PEEK_VIEW_ACT[actKey || ''] || PEEK_VIEW_ACT._default;
+  const act = gateOpen && actDef.explicit ? actDef.explicit : actDef.safe;
+  const desc = getPhysicalDescriptionForPrompt(npc, { gameState: gs, intimate: true, npcId });
+  return `Interior of the ${roomName.toLowerCase()} in a shared apartment, ${light}, ` +
+    `viewed from the doorway, looking into the room from the threshold. ` +
+    `${desc} is ${act}, at ease in their own space. ` +
+    'Anime-inspired illustration style, warm tones, cinematic composition, slice-of-life atmosphere.';
+}
+
+// Cache-keyed peek frame. `cached` in the result lets peek.js spend its
+// image budget only on genuinely fresh generations.
+async function getPeekImage(gs, roomId, npc, npcId) {
+  const actKey = npc.activity || npc.clothing || 'hanging_out';
+  const key = composePeekKey(gs, roomId, npc, actKey);
+  const cached = await getCachedImage(key);
+  if (cached) return { url: createObjectUrl(key, cached), cached: true, key };
+  try {
+    const prompt = composePeekPrompt(gs, roomId, npc, actKey, npcId);
+    const result = await root.generateImage(prompt, {
+      resolution: IMAGE_CACHE.resolutions.char, // 512x768 portrait — fits the keyhole
+      negativePrompt: 'blurry, distorted, extra limbs, low quality, text, watermark, keyhole, door hardware',
+    });
+    const blob = await canvasToBlob(result.canvas);
+    await setCachedImage(key, blob);
+    return { url: createObjectUrl(key, blob), cached: false, key };
+  } catch (e) {
+    console.warn('Peek image generation failed:', e.message);
+    return { url: null, cached: false, key, error: e.message };
+  }
+}
+
 // --- Canvas to Blob ---
 function canvasToBlob(canvas) {
   return new Promise((resolve) => {
@@ -314,7 +391,7 @@ function takePhoto(gameState, tags) {
   const id = `photo_${hashStr(`${gameState.meta.seed}|camera|${day}|${tick}|${slot}`).toString(36)}`;
   const seed = hashStr(`${gameState.meta.seed}|photo_seed|${id}`);
 
-  const prompt = buildImagePrompt(roomId, phase, activeNpcs, roomObjects)
+  const prompt = buildImagePrompt(roomId, phase, activeNpcs, roomObjects, { gameState })
     + ' Candid smartphone photo, casual snapshot framing, slightly imperfect composition.';
 
   const photo = {
@@ -347,6 +424,35 @@ async function getPhotoImage(photo) {
     return { url: createObjectUrl(photoKey, blob), cached: false };
   } catch (e) {
     console.warn('Photo generation failed:', e.message);
+    return { url: null, cached: false, error: e.message };
+  }
+}
+
+// --- Ask photo (asks plan Phase 8) ---
+// An NPC "sent" photo for the photo ask's accepted flow. Same contract as
+// getPhotoImage (a prompt+seed record, cached under the photo namespace so
+// the shared LRU owns it), but a PORTRAIT selfie framing —
+// IMAGE_CACHE.resolutions.char — because the ask's subject is the NPC
+// themselves, not a room. buildAskPhotoRecord (asks.js) builds the record
+// deterministically from the save seed, so the cache key is deterministic
+// too: reloading the same save reuses the pixels instead of re-spending
+// quota, and the same flavor always yields the same photo (D1 — the flavor
+// shapes the image CONTENT, never the decision).
+async function getAskPhotoImage(record) {
+  const photoKey = `photo_${record.id}`;
+  const cached = await getCachedImage(photoKey);
+  if (cached) return { url: createObjectUrl(photoKey, cached), cached: true };
+  try {
+    const result = await root.generateImage(record.prompt, {
+      resolution: IMAGE_CACHE.resolutions.char,
+      seed: record.seed,
+      negativePrompt: 'blurry, distorted, extra limbs, low quality, text, watermark',
+    });
+    const blob = await canvasToBlob(result.canvas);
+    await setCachedImage(photoKey, blob);
+    return { url: createObjectUrl(photoKey, blob), cached: false };
+  } catch (e) {
+    console.warn('Ask photo generation failed:', e.message);
     return { url: null, cached: false, error: e.message };
   }
 }

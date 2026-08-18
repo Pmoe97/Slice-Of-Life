@@ -80,6 +80,29 @@ const APP_DEFS = {
       place: { label: 'Place', renderer: 'home-placement' },
     },
   },
+  // "QuickCart" — an Instacart parody, and Nile's grocery-carrying twin
+  // split apart into its own app: same-day, not next-day, and one store
+  // rather than "everything." `browse` reuses the exact same `nile`
+  // renderer Nile/Home already share (GROCERY_CATALOG_LIST/ITEM_DEFS,
+  // computer.js's generic addToCart/removeFromCart) — only checkout
+  // diverges from checkoutCart's next-day pipeline (COMPUTER's
+  // placeGroceryOrder + UI's processGroceryOrdersNow, modeled on DoorDrop's
+  // same-day driver-visit mechanism, minus the restaurant-picking step).
+  // `cart`/`orders` are bespoke renderers (not the generic `list`) so the
+  // fee breakdown, tip picker, and live ETA countdown all have somewhere
+  // to live — mirrors DoorDrop's own cart/orders pair.
+  grocery: {
+    id: 'grocery', label: 'QuickCart', category: 'shopping', requires: [],
+    devices: ['computer', 'phone'],
+    entryScreen: 'browse',
+    screens: {
+      browse: { label: 'Browse', renderer: 'nile', source: 'GROCERY_CATALOG_LIST', catalog: 'ITEM_DEFS', cartPath: 'apps.grocery.cart',
+                rowAction: 'grocery.add-to-cart', rowActionLabel: 'Add to Cart',
+                cartRowAction: 'grocery.remove-from-cart', checkoutAction: 'grocery.checkout' },
+      cart: { label: 'Cart', renderer: 'grocery-cart' },
+      orders: { label: 'Orders', renderer: 'grocery-orders' },
+    },
+  },
   browser: {
     id: 'browser', label: 'Browser', category: 'web', requires: [],
     devices: ['computer', 'phone'],
@@ -239,9 +262,46 @@ const APP_DEFS = {
       orders: { label: 'Orders', renderer: 'doordrop-orders' },
     },
   },
+  // ChefBook (food-overhaul Phase 8, D21/D22): the recipe website. Cards
+  // publish from RECIPES via the cooking engine (COMPUTER's
+  // recipeCardsFromEngine) plus every RESTAURANT_DISH_IDS dish, gated
+  // unlock-on-taste — a card exists on this app only once
+  // apps.recipes.unlockedIds contains its id (the EAT_ITEM hook in
+  // EFFECTS' applyEatItem registers it the moment the player tastes it).
+  // `detail` is a drill-down (hidden from sub-nav, like Classifieds'
+  // applicant profile); `planner` is the standalone Meal Planner screen
+  // (D22) with its own add-row UI and a "fill the missing ingredients into
+  // the Nile cart" action.
+  recipes: {
+    id: 'recipes', label: 'ChefBook', category: 'food', requires: [],
+    devices: ['computer', 'phone'],
+    entryScreen: 'browse',
+    screens: {
+      browse: { label: 'Recipes', renderer: 'recipes-browse' },
+      detail: { label: 'Recipe', renderer: 'recipes-detail', hideFromNav: true },
+      planner: { label: 'Meal Planner', renderer: 'recipes-planner' },
+    },
+  },
   // Phase 11 investing now lives inside Brine Bank as its Portfolia screen
   // (see the bank app above); the holdings data stayed in computer.apps
   // .invest so invest-dashboard and the invest handlers work unmodified.
+  // Intimacy & Voyeurism Phase 15 (D8): the CODEX — the per-character
+  // knowledge ledger. A roster of every NPC the player has ledger entries
+  // for, then per-NPC pages of day-stamped entries with the three spendable
+  // verbs (Confront / Spread / Matchmake). Reads player.ledger via
+  // codex.js; the 'codex-*' renderers live in RENDER.COMPUTER and render on
+  // both devices (the shared-app path). Detail is a drill-down, not a
+  // parallel view, so it is hidden from the sub-nav like the other
+  // drill-downs.
+  codex: {
+    id: 'codex', label: 'Codex', category: 'social', requires: [],
+    devices: ['computer', 'phone'],
+    entryScreen: 'roster',
+    screens: {
+      roster: { label: 'People', renderer: 'codex-roster' },
+      detail: { label: 'Profile', renderer: 'codex-detail', hideFromNav: true },
+    },
+  },
 };
 
 // --- Decor catalog: what the Home app sells (decor-economy plan) ---
@@ -299,19 +359,19 @@ const GIG_TEMPLATES = {
   data_entry: {
     id: 'data_entry', label: 'Data Entry Batch', category: 'admin',
     skill: 'tech', minSkill: 0,
-    blocksRange: [3, 8], deadlineRange: [3, 7], basePayoutPerBlock: 24,
+    blocksRange: [3, 8], deadlineRange: [3, 7], basePayoutPerBlock: 28,
     clientPool: ['Meridian Logistics', 'Crestline Retail', 'Harbor Data Co', 'Pinebrook Clinic'],
   },
   web_tweak: {
     id: 'web_tweak', label: 'Website Tweak', category: 'web',
     skill: 'tech', minSkill: 2,
-    blocksRange: [4, 10], deadlineRange: [3, 8], basePayoutPerBlock: 40,
+    blocksRange: [4, 10], deadlineRange: [3, 8], basePayoutPerBlock: 48,
     clientPool: ['Lumen Studio', 'Northgate Bakery', 'Field & Fern Co', 'Sablewood Designs'],
   },
   copy_edit: {
     id: 'copy_edit', label: 'Copy Edit Pass', category: 'writing',
     skill: 'tech', minSkill: 1,
-    blocksRange: [3, 9], deadlineRange: [3, 9], basePayoutPerBlock: 34,
+    blocksRange: [3, 9], deadlineRange: [3, 9], basePayoutPerBlock: 40,
     clientPool: ['Quill & Page', 'Lighthouse Press', 'Marlow Books', 'Saltmarsh Media'],
   },
   script_automation: {
@@ -347,7 +407,12 @@ const GIG_REPUTATION_TIERS = [
 
 // Per-block energy cost of gig work. Smaller than the old per-job figure;
 // gigs pay lump sums on delivery, so each block is progress, not a wage.
-const GIG_ENERGY_PER_BLOCK = 6;
+// 2026-08-17 audit (B5): 6 → 5. The gig economy was too steep — 70 energy
+// capped a day at ~11.6 clicks (≈ the whole day's rent at full grind), and
+// the focus collapse at low energy/mood made real progress a fraction of
+// that. 5/click widens the energy budget to ~14 blocks/day. See
+// bug-fix-audit-2026-08-17.md.
+const GIG_ENERGY_PER_BLOCK = 5;
 // Wall-clock minutes one work-block click takes. A flat time-cost for a
 // single block, not a scheduling window — deliberately detached from
 // CLOCK.tickMinutes so a future change to (or retirement of) the tick grid
@@ -777,6 +842,11 @@ const RESTAURANT_DEFS = {
   },
 };
 const RESTAURANT_DEFS_LIST = Object.values(RESTAURANT_DEFS);
+// Every itemId any restaurant sells, derived once (food-overhaul Phase 8,
+// D21) — the recipe website's unlock-on-taste hook and RECIPE_CARDS both
+// need "is this defId a dish someone could taste and discover" without
+// hand-maintaining a second list that could drift from the menus above.
+const RESTAURANT_DISH_IDS = new Set(RESTAURANT_DEFS_LIST.flatMap(r => r.menu.map(m => m.itemId)));
 
 // --- Escorts (external-world plan Phase 7) ---
 // The à la carte catalogue. Each service has its own rate (on top of the

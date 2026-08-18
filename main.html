@@ -25,6 +25,7 @@
   --color-cool: #6cc7f6;
   --color-positive: #6cf6a9;
   --color-negative: #f66c8c;
+  --color-desire: #e26ca6;
   --color-warning: #f6d76c;
   --color-shadow: rgba(0,0,0,0.4);
   --color-overlay: rgba(10,10,20,0.7);
@@ -150,6 +151,11 @@ body {
   background: var(--color-border);
 }
 
+/* Grid/flex children must be allowed to shrink below their content's
+   min-content width, or a single nowrap row (e.g. #action-chips in the
+   footer) will blow the whole grid out on narrow screens (D1). */
+#header, #main-content, #footer { min-width: 0; }
+
 /* Header */
 #header {
   grid-area: header;
@@ -245,6 +251,12 @@ body {
 .fp-room:hover { fill: var(--color-surface-hover); }
 .fp-room[data-current] { fill: var(--color-accent-dim); }
 .fp-room[data-adjacent] { fill: var(--color-surface-alt); }
+/* Fog of war (intimacy-voyeurism Phase 2, D10): the room you are NOT in is
+   dimmed to a floor barely distinguishable from the page background. Same
+   rect, same click target — navigation on a dimmed room is unchanged. A
+   construction fill is hazard, not scenery, and outranks the fog. */
+.fp-room[data-fog]:not([data-construction]) { fill: #15152a; }
+.fp-room[data-fog]:not([data-construction]):hover { fill: var(--color-surface-alt); }
 /* Walls. Thick, flat-capped and a touch lighter than the border colour so
    the plan reads as drawn rather than as a grid of outlined boxes. */
 .fp-wall {
@@ -262,6 +274,19 @@ body {
   stroke-linecap: butt;
   pointer-events: none;
 }
+/* The padlock on a sealed doorway (intimacy-voyeurism Phase 2, D10): the
+   occupant avatar inside stays visible — the lock marks the room, not the
+   person. */
+.fp-lock-glyph { pointer-events: none; }
+.fp-lock-body { fill: var(--color-warning); }
+.fp-lock-shackle { fill: none; stroke: var(--color-warning); stroke-width: 1.1; }
+/* The keyhole glow on a lit door (intimacy-voyeurism Phase 3, D4): two
+   translucent warm ellipses in the doorway, drawn outside the room fog so
+   the lit door reads through a dimmed room. Plain rgba rather than an SVG
+   paint server so it renders identically everywhere. Positional knowledge,
+   like the avatar — the plan shows a lit door, never what is behind it. */
+.fp-door-glow { fill: rgba(255, 205, 110, 0.28); pointer-events: none; }
+.fp-door-glow-core { fill: rgba(255, 222, 150, 0.65); pointer-events: none; }
 /* A glass threshold — sight passes, nothing else does. */
 .fp-glass {
   stroke: var(--color-cool);
@@ -333,6 +358,25 @@ body {
   text-anchor: middle;
   letter-spacing: 0.2px;
 }
+/* The plausibility caption under a marker (intimacy-voyeurism Phase 2, D10):
+   full activity in your own room, a coarser guess elsewhere, 'inside' behind
+   a locked door — styled by tier so granular knowledge reads more confident
+   than a guess. */
+.fp-avatar-activity {
+  fill: var(--color-text-dim);
+  font-size: 6.5px;
+  font-weight: 600;
+  text-anchor: middle;
+  letter-spacing: 0.2px;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: var(--color-bg);
+  stroke-width: 2px;
+  stroke-linejoin: round;
+}
+.fp-avatar.plausible-full .fp-avatar-activity { fill: var(--color-text); }
+.fp-avatar.plausible-coarse .fp-avatar-activity { fill: var(--color-text-dim); font-style: italic; }
+.fp-avatar.plausible-inside .fp-avatar-activity { fill: var(--color-text-faint); }
 .fp-avatar-img[hidden] { display: none; }
 .fp-avatar[hidden] { display: none; }
 .fp-door-icon {
@@ -348,6 +392,13 @@ body {
 .upg-structural-effects { display: flex; flex-direction: column; gap: 3px; margin-top: 5px; }
 .upg-effect { color: var(--color-cool); opacity: 0.85; }
 .upg-effect::before { content: '→ '; opacity: 0.6; }
+/* Fog of war (intimacy-voyeurism Phase 2, D10): everything INSIDE a room you
+   are not in — furniture, labels, signal glyphs — sits in this group and
+   dims together with the room floor. pointer-events:none keeps the click on
+   the room rect beneath; the avatars are drawn outside the fog and stay
+   visible everywhere, because positional awareness is the one thing the
+   plan is allowed to give you. */
+.fp-fog { opacity: 0.4; pointer-events: none; }
 /* Under-construction rooms (renovation overhaul Phase 3) — hazard-stripe
    fill via the #fp-hazard pattern the renderer emits, warning stroke. */
 .fp-room[data-construction] {
@@ -500,6 +551,10 @@ body {
 .sr-sensory { color: var(--color-text-dim); }
 .sr-sensory[data-here="false"] { font-style: italic; }
 .sr-empty { color: var(--color-text-faint); font-style: italic; }
+/* Your own clothing line (intimacy-voyeurism Phase 5): the scene's first
+   word about you — a towel, sleepwear, a swimsuit. Dim but not faint: it is
+   about the player, not about a door across the hall. */
+.sr-self { color: var(--color-text-dim); font-style: italic; }
 
 /* An attention callout (D11): in the prose, but set apart. Reads as part of
    the fiction rather than as a system notification. */
@@ -512,6 +567,15 @@ body {
   font-size: var(--fs-base);
   line-height: var(--lh-normal);
 }
+
+/* A door cue (intimacy-voyeurism Phase 3, D4): what a door the player is
+   standing at is whispering — light through the keyhole, a door ajar, a
+   sound behind it. Derived from real state, varied per render. Light cues
+   are warm (there IS a lamp in there), ajar cues are dim, sound cues plain. */
+.sr-door-cue { font-style: italic; }
+.sr-door-cue[data-kind="light"] { color: var(--color-warm); }
+.sr-door-cue[data-kind="ajar"] { color: var(--color-text-dim); }
+.sr-door-cue[data-kind="sound"] { color: var(--color-text); }
 
 /* Beats: what has happened since you walked in. This is the ONLY band that
    scrolls, which is what keeps the heading and establishing passage in
@@ -819,6 +883,12 @@ body {
 .npc-card .npc-phase[data-phase="familiar"] { background: rgba(100,180,255,0.15); color: #6ab4ff; }
 .npc-card .npc-phase[data-phase="close"] { background: rgba(255,180,100,0.15); color: #ffb464; }
 .npc-card .npc-phase[data-phase="intimate"] { background: rgba(255,100,150,0.15); color: #ff6496; }
+/* Intimacy & Voyeurism Phase 12: the relationship line on the Present card —
+   shown only when the NPC is seeing/committed to someone (single renders
+   nothing). The heart is the diegetic tell; the color keys the stage. */
+.npc-card .npc-rel { display: inline-block; font-size: var(--fs-xs); padding: 1px 6px; border-radius: 3px; margin-bottom: 2px; background: rgba(180,120,255,0.12); }
+.npc-card .npc-rel[data-status="seeing"] { color: #b89aff; }
+.npc-card .npc-rel[data-status="committed"] { color: #d49aff; }
 
 .quest-item { font-size: var(--fs-sm); padding: var(--space-2) 0; border-bottom: 1px solid var(--color-border); }
 .quest-item:last-child { border-bottom: none; }
@@ -853,6 +923,9 @@ body {
   border-bottom: 1px solid var(--color-border);
   flex-shrink: 0;
   align-items: center;
+  /* Phase 8 added a fifth bar (desire); on very narrow screens the row can
+     overflow instead of squishing the bars into illegibility — swipe it. */
+  overflow-x: auto;
 }
 .fsi {
   display: flex;
@@ -884,6 +957,8 @@ body {
 .fsi[data-need="hygiene"] .fsi-icon { color: var(--color-positive); }
 .fsi[data-need="mood"] .fsi-bar > .fill { background: var(--color-accent); }
 .fsi[data-need="mood"] .fsi-icon { color: var(--color-accent); }
+.fsi[data-need="desire"] .fsi-bar > .fill { background: var(--color-desire); }
+.fsi[data-need="desire"] .fsi-icon { color: var(--color-desire); }
 .fsi[data-low] .fsi-bar > .fill { background: var(--color-negative) !important; }
 .fsi[data-low] .fsi-icon { color: var(--color-negative) !important; }
 .fsi[data-low] .fsi-pct { color: var(--color-negative); }
@@ -983,6 +1058,181 @@ body {
 .chip[data-action="move"]:hover { background: var(--color-accent-dim); border-color: var(--color-accent); }
 .chip[data-action="sleep"] { border-color: var(--color-warm); }
 
+/* Intimacy & Voyeurism Phase 1 (D5): the expandable action submenu. A
+   parent chip is an ordinary .chip with a trailing ▸; its verbs live in a
+   one-level popover that ui.js positions fixed over <body> at open time,
+   so the chips row's overflow-x can never clip it. */
+.chip-submenu::after { content: " ▸"; }
+.submenu-popover {
+  position: fixed;
+  z-index: 60;
+  min-width: 200px;
+  max-width: min(90vw, 320px);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.25);
+  padding: var(--space-1);
+  display: flex;
+  flex-direction: column;
+}
+.submenu-verb {
+  background: none;
+  border: none;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--color-text);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+.submenu-verb:hover { background: var(--color-surface-hover); }
+.submenu-verb:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.submenu-verb:disabled { opacity: 0.35; cursor: default; }
+
+/* The peek/listen lens (intimacy-voyeurism Phase 10, D6/D7). A fixed
+   overlay at the modal tier with a dark stage. The keyhole itself is the
+   SVG mask on .peek-lens — the generated image is a plain room view, and
+   the mask + vignette + shimmer are what make it a keyhole. */
+.peek-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(ellipse at center, rgba(20,20,40,0.55) 0%, rgba(8,8,16,0.92) 70%, rgba(5,5,10,0.97) 100%);
+}
+.peek-overlay[hidden] { display: none !important; }
+.peek-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: min(92vw, 380px);
+}
+.peek-heading {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--color-warm);
+}
+.peek-keyhole {
+  position: relative;
+  width: min(46vh, 300px);
+  aspect-ratio: 200 / 270;
+  border-radius: 6px;
+  box-shadow: 0 0 0 1px rgba(255,205,110,0.25), 0 18px 48px rgb(0 0 0 / 0.6);
+}
+/* The keyhole silhouette: a circle joined by a flaring trapezoid — the
+   classic pin-hole shape. One path, two same-direction subpaths (non-zero
+   fill = union), so the mask never punches a hole where they overlap. */
+.peek-lens {
+  position: absolute;
+  inset: 0;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='270' viewBox='0 0 200 270'%3E%3Cpath d='M100 23 A72 72 0 1 1 100 167 A72 72 0 1 1 100 23 Z M60 252 L82 158 L118 158 L140 252 Q100 268 60 252 Z' fill='black'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='270' viewBox='0 0 200 270'%3E%3Cpath d='M100 23 A72 72 0 1 1 100 167 A72 72 0 1 1 100 23 Z M60 252 L82 158 L118 158 L140 252 Q100 268 60 252 Z' fill='black'/%3E%3C/svg%3E");
+  background: #0a0a14;
+  overflow: hidden;
+}
+.peek-lens img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.peek-lens img[data-loading] { opacity: 0.35; }
+/* The darkening at the keyhole's rim — what makes the view feel like a
+   peephole rather than a framed photo. */
+.peek-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 38%, transparent 52%, rgba(0,0,0,0.55) 78%, rgba(0,0,0,0.9) 100%);
+  pointer-events: none;
+}
+/* The loading shimmer — a soft light sweep down the lens while a frame is
+   generating (D6: "with a loading shimmer"). */
+.peek-shimmer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(115deg, transparent 20%, rgba(255,255,255,0.10) 42%, rgba(255,255,255,0.16) 50%, rgba(255,255,255,0.10) 58%, transparent 80%);
+  background-size: 240% 100%;
+  animation: peek-shimmer-sweep 1.4s ease-in-out infinite;
+}
+@keyframes peek-shimmer-sweep {
+  0% { background-position: 120% 0; }
+  100% { background-position: -120% 0; }
+}
+.peek-caption {
+  min-height: 1.5em;
+  font-size: var(--fs-base);
+  line-height: var(--lh-loose);
+  color: var(--color-text);
+  text-align: center;
+  max-width: 34ch;
+  font-style: italic;
+}
+.peek-meter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: min(70vw, 260px);
+}
+.peek-meter-label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-dim);
+  flex-shrink: 0;
+}
+.peek-meter-bar {
+  flex: 1;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--color-surface-alt);
+  overflow: hidden;
+}
+.peek-risk-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--color-warm);
+  transition: width var(--transition-med);
+}
+.peek-risk-fill[data-fill="0"] { width: 0%; }
+.peek-risk-fill[data-fill="5"] { width: 5%; }
+.peek-risk-fill[data-fill="10"] { width: 10%; }
+.peek-risk-fill[data-fill="15"] { width: 15%; }
+.peek-risk-fill[data-fill="20"] { width: 20%; }
+.peek-risk-fill[data-fill="25"] { width: 25%; }
+.peek-risk-fill[data-fill="30"] { width: 30%; }
+.peek-risk-fill[data-fill="35"] { width: 35%; }
+.peek-risk-fill[data-fill="40"] { width: 40%; }
+.peek-risk-fill[data-fill="45"] { width: 45%; }
+.peek-risk-fill[data-fill="50"] { width: 50%; }
+.peek-risk-fill[data-fill="55"] { width: 55%; }
+.peek-risk-fill[data-fill="60"] { width: 60%; }
+.peek-risk-fill[data-fill="65"] { width: 65%; }
+.peek-risk-fill[data-fill="70"] { width: 70%; }
+.peek-risk-fill[data-fill="75"] { width: 75%; }
+.peek-risk-fill[data-fill="80"] { width: 80%; }
+.peek-risk-fill[data-fill="85"] { width: 85%; }
+.peek-risk-fill[data-fill="90"] { width: 90%; }
+.peek-risk-fill[data-fill="95"] { width: 95%; }
+.peek-risk-fill[data-fill="100"] { width: 100%; }
+.peek-meta {
+  font-size: var(--fs-xs);
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+/* The listen twin hides the image lens and shows the audio line instead. */
+.peek-overlay[data-mode="listen"] .peek-keyhole { display: none; }
+.peek-overlay[data-mode="listen"] .peek-caption { font-size: var(--fs-md); }
+
 /* --- Input row --- */
 .footer-input-row {
   display: flex;
@@ -1040,10 +1290,12 @@ body {
 .menu-actions-row > .btn { flex: 1; }
 
 /* --- Inventory panel (overhaul Phase 1) --- */
-/* Full-overlay bag UI. Sits at the same z tier as #modal-overlay (they
-   never open together today) so it can float over the computer shell and
-   phone. `hidden` always wins (platform convention), so the display:flex
-   below only applies while visible. */
+/* Full-overlay bag UI. Sits at the overlay tier (200) — the modal tier
+   (300) is reserved for #modal-overlay, which must stack ABOVE this panel
+   when a confirm/picker dialog opens on top of it (2026-08-17 fix: the
+   save menu's Delete/Load/Overwrite confirms were opening invisibly
+   behind the panel). `hidden` always wins (platform convention), so the
+   display:flex below only applies while visible. */
 .inventory-panel {
   position: fixed;
   inset: 0;
@@ -1211,6 +1463,11 @@ body {
 .ctr-freshness-tag[data-state="stale"] { background: rgba(246, 215, 108, 0.15); color: var(--color-warning); }
 .ctr-freshness-tag[data-state="spoiled"] { background: rgba(246, 169, 108, 0.15); color: var(--color-warm); }
 .ctr-freshness-tag[data-state="rotten"] { background: rgba(246, 108, 140, 0.15); color: var(--color-negative); }
+/* Food-overhaul Phase 1 (D17/D29): the frozen/thawing badge next to the
+   freshness tag, and the storage-class destination hint on grocery rows. */
+.ctr-frozen-badge { font-size: var(--fs-xs); padding: 1px 6px; border-radius: 3px; flex-shrink: 0; background: rgba(140, 190, 246, 0.18); color: #9fc7ff; }
+.ctr-thawing-badge { font-size: var(--fs-xs); padding: 1px 6px; border-radius: 3px; flex-shrink: 0; background: rgba(140, 190, 246, 0.1); color: #7fa8d8; }
+.ctr-storage-tag { font-size: var(--fs-xs); padding: 1px 5px; border-radius: 3px; flex-shrink: 0; color: var(--color-text-dim); background: var(--color-surface-raised); border: 1px dashed var(--color-border); }
 .ctr-empty { padding: var(--space-4); }
 .ctr-actions {
   border-top: 1px solid var(--color-border);
@@ -1229,6 +1486,65 @@ body {
 .ctr-detail-fresh[data-state="spoiled"] { color: var(--color-warm); }
 .ctr-detail-fresh[data-state="rotten"] { color: var(--color-negative); }
 .ctr-action-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+
+/* Wardrobe panel (intimacy-voyeurism Phase 5): reuses the container panel's
+   two-column body; only the rows are its own. The outfit column reads like a
+   character sheet — slot rows with the worn piece named; the wardrobe column
+   filters to the selected slot while one is being picked. */
+.wdb-box { width: min(860px, 94vw); }
+.wdb-subtitle { flex: 1; text-align: left; }
+.wdb-slot-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.wdb-slot-row:hover { background: var(--color-surface-hover); }
+.wdb-slot-row[data-selected] { background: var(--color-accent-dim); border-color: var(--color-accent); }
+.wdb-slot-name { color: var(--color-text-dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.04em; flex-shrink: 0; min-width: 76px; }
+.wdb-slot-val { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.wdb-col-title-inline {
+  font-size: var(--fs-xs);
+  color: var(--color-text-dim);
+  padding: var(--space-1) 0 var(--space-2);
+}
+.wdb-wear-btn {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.wdb-wear-btn:hover { background: var(--color-surface-hover); border-color: var(--color-accent); }
+.wdb-wear-btn[data-worn] { background: var(--color-accent-dim); border-color: var(--color-accent); font-weight: 600; }
+.wdb-none-btn { align-self: flex-start; margin-top: var(--space-2); }
+.wdb-item-group { margin-bottom: var(--space-2); }
+.wdb-item-chip {
+  display: inline-block;
+  font-size: var(--fs-xs);
+  padding: 2px 8px;
+  margin: 0 var(--space-1) var(--space-1) 0;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-text-dim);
+  background: var(--color-surface-alt);
+}
+.wdb-item-chip[data-worn] { color: var(--color-accent); border-color: var(--color-accent); }
+.wdb-empty { padding: var(--space-2) 0; display: block; }
 
 /* Save menu (overhaul Phase 9): VN-style slot grid. */
 .svp-box { width: min(1100px, 96vw); height: min(80vh, 94dvh); }
@@ -1351,6 +1667,11 @@ body {
 }
 .recipe-pick-name { font-weight: 700; }
 .recipe-pick-ings { font-size: var(--fs-xs); color: var(--color-text-dim); }
+/* Ask schedule modal (asks-and-attachments-plan.md Phase 4) — the calendar
+   step of a schedule:true ask: a header per day, then that day's genuinely
+   free windows as rows (openAskScheduleModal, render.js). */
+.ask-sched-day { font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-dim); margin-top: var(--space-3); }
+.ask-sched-day:first-child { margin-top: 0; }
 
 /* Eat picker (overhaul Phase 3) — the "What do you want to eat?" choice,
    same chrome as the recipe picker with a source/serving meta line. */
@@ -1375,6 +1696,83 @@ body {
 .eat-pick-stale { background: rgba(246, 215, 108, 0.15); color: var(--color-warning); }
 .eat-pick-spoiled { background: rgba(246, 169, 108, 0.15); color: var(--color-warm); }
 
+/* Food-overhaul Phase 3 (D25/D27/D28): the Servings bar — left/total with
+   a fill whose fraction reads the same whatever the batch size (7/8 of an
+   8-serving batch and 1.75/2 of a 2-serving portion fill identically). */
+.servings-bar {
+  position: relative;
+  display: inline-block;
+  width: 5.5em;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+  vertical-align: middle;
+  margin-right: var(--space-2);
+}
+.servings-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-positive));
+}
+.servings-bar-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  line-height: 1;
+  font-weight: 700;
+  color: var(--color-text);
+  text-shadow: 0 0 3px var(--color-bg);
+}
+/* The D27/D28 "this costs mood" warning tag in the pickers. */
+.eat-pick-warn { background: rgba(246, 108, 140, 0.15); color: var(--color-negative); }
+
+/* Food-overhaul Phase 5 (D8/D14/D15/D16): the interactive cook screen
+   (openCookScreen, render.js) — the self.cook modal's plan and outcome
+   stages. Segmented-choice rows for processing verbs/fat/seasoning/heat,
+   the grade reveal with a quality bar, per-step lines, and rescue rows. */
+.cook-screen { display: flex; flex-direction: column; gap: var(--space-3); }
+.cook-method-line { font-size: var(--fs-sm); font-weight: 700; }
+/* Food-overhaul Phase 6 (D12): the one-line kitchen summary — what your
+   equipment actually is, straight from equipmentState. */
+.cook-kitchen-line { font-size: var(--fs-xs); color: var(--color-text-dim); }
+.cook-section { display: flex; flex-direction: column; gap: var(--space-1); }
+.cook-section-title {
+  font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--color-text-dim);
+}
+.cook-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.cook-row-label { font-size: var(--fs-sm); }
+.cook-row-ok { font-size: var(--fs-xs); color: var(--color-text-dim); }
+.cook-seg { display: inline-flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.cook-seg-btn.picked { background: var(--color-accent); }
+.cook-seg-btn.picked:hover { background: var(--color-accent-hover); }
+.cook-est { font-size: var(--fs-xs); color: var(--color-text-dim); }
+.cook-grade { font-size: var(--fs-lg); font-weight: 800; letter-spacing: 0.02em; }
+.cook-quality-bar {
+  position: relative; height: 10px; border-radius: 5px; overflow: hidden;
+  background: var(--color-surface-alt); border: 1px solid var(--color-border);
+}
+.cook-quality-fill {
+  position: absolute; inset: 0 auto 0 0; border-radius: 4px;
+  background: linear-gradient(90deg, var(--color-warning), var(--color-positive));
+}
+.cook-pct { font-size: var(--fs-xs); color: var(--color-text-dim); }
+.cook-steps { display: flex; flex-direction: column; gap: 2px; }
+.cook-step-line {
+  display: flex; justify-content: space-between; gap: var(--space-2);
+  font-size: var(--fs-sm);
+}
+.cook-step-q { font-size: var(--fs-xs); color: var(--color-text-dim); white-space: nowrap; }
+.cook-flaw { font-size: var(--fs-xs); color: var(--color-warning); }
+.invp-row-servings { flex-shrink: 0; display: inline-flex; align-items: center; }
+.ctr-servings { flex-shrink: 0; display: inline-flex; align-items: center; }
+
 /* Spread picker (set_meal): the eat picker's rows, multi-select, with the
    servings-vs-seats tally that makes catering a visible decision.
 
@@ -1393,6 +1791,7 @@ body {
 .spread-pick-btn[data-picked]:hover { background: var(--color-accent-hover); }
 .spread-pick-btn[data-picked] .eat-pick-name::before { content: '✓ '; }
 .spread-pick-btn[data-picked] .eat-pick-meta { color: rgba(255, 255, 255, 0.75); }
+.spread-pick-btn[data-picked] .spread-taste { color: rgba(255, 255, 255, 0.85); font-style: italic; }
 .spread-pick-btn[data-disabled] { opacity: 0.4; pointer-events: none; }
 .spread-tally {
   margin-top: var(--space-3);
@@ -1421,7 +1820,15 @@ body {
   position: fixed;
   inset: 0;
   background: var(--color-overlay);
-  z-index: var(--z-overlay);
+  /* 2026-08-17: raised from --z-overlay (200) to the modal tier (300).
+     .inventory-panel (which #save-panel uses) sits at 200 and comes LATER
+     in the DOM, so with equal z the save panel painted OVER any modal
+     opened from it — the Delete/Load/Overwrite confirm dialogs opened
+     invisibly behind the panel and their buttons were unclickable
+     (hit-test landed on the panel). Every modal — confirm dialogs, the
+     eat picker, the export dialog — must stack above the full-overlay
+     panels. */
+  z-index: var(--z-modal);
   display: none;
   align-items: center;
   justify-content: center;
@@ -1505,7 +1912,7 @@ body {
   position: fixed;
   top: var(--header-h);
   right: 0;
-  width: 480px;
+  width: min(480px, 100vw);
   height: calc(100vh - var(--header-h));
   background: var(--color-surface);
   border-left: 2px solid var(--color-accent);
@@ -2191,6 +2598,63 @@ body {
   .win-screennav-btn { padding: 12px var(--space-3); min-height: 44px; }
   .taskbar-btn, .taskbar-start-btn { height: 44px; }
   .desktop-icon { padding: var(--space-3); }
+  /* Phase 3 sweep find: compact screens force every window fullscreen
+     (width:100%), but .win's base min-width:var(--win-min-w) (360px)
+     overrides that on <360px viewports, so the window's right edge hung
+     off-screen and was clipped. D1 treatment: allow it to shrink. */
+  .win { min-width: 0; min-height: 0; }
+}
+
+/* --- Mobile play-shell polish (mobile-layout-overhaul plan Phase 2) ---
+   D4: coarse-pointer touch targets — padding/height, never font size.
+   The chips strip buttons get min-height:40px (it is the whole point of
+   the row that chips never wrap, so they stay one tappable row tall). */
+@media (hover: none) and (pointer: coarse) {
+  .chip {
+    display: flex;
+    align-items: center;
+    min-height: 40px;
+    padding-top: var(--space-2);
+    padding-bottom: var(--space-2);
+  }
+  .footer-tab { min-height: 40px; padding-top: var(--space-3); padding-bottom: var(--space-3); }
+  .footer-status-row .fsi { min-height: 40px; padding-top: var(--space-3); padding-bottom: var(--space-3); }
+  .drawer-toggle { min-width: 44px; min-height: 44px; align-items: center; justify-content: center; }
+  .phone-screennav-btn { min-height: 44px; padding-top: var(--space-3); padding-bottom: var(--space-3); }
+}
+
+/* D3: right-edge fade on the chip strip so a cut-off chip reads as "more".
+   Only painted while the strip actually overflows — the render hook in
+   render.js toggles #action-chips[data-scrollable] (and keeps it honest on
+   scroll). */
+#action-chips { position: relative; }
+@media (hover: none) and (pointer: coarse), (max-width: 520px) {
+  #action-chips[data-scrollable]::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 32px;
+    background: linear-gradient(to right, transparent, var(--color-surface));
+    pointer-events: none;
+  }
+}
+
+/* D5: ≤380px the header drops to its essentials. Save/Menu padding already
+   shrinks under 900px; tighten it further here for headroom when a long
+   room name hits its 38vw ellipsis cap. The fullscreen button is NOT
+   hidden: it was measured to fit at 320/340/360/380 (always ends 8px short
+   of the viewport edge), so hiding it would remove the one exit affordance
+   for nothing. */
+@media (max-width: 380px) {
+  #save-btn, #menu-btn { padding: var(--space-1); }
+}
+
+/* D8: on portrait phones the scene image takes less of the column so the
+   reader's beats have room. */
+@media (max-width: 600px) and (orientation: portrait) {
+  .scene-container { flex-basis: 26%; }
 }
 
 /* --- BrineOS Phase 3: phone shell --- */
@@ -2430,6 +2894,61 @@ body {
   font-size: var(--fs-sm);
   color: var(--color-text-dim);
 }
+
+/* --- Codex (Intimacy & Voyeurism Phase 15, D8) --- */
+/* The per-character knowledge ledger — shared by the phone (shared-app path)
+   and the computer window, so the same classes style both surfaces. The
+   roster is a list of person rows; the detail page is a header, the three
+   verb buttons and the day-stamped entry list. */
+.codex-roster { display: flex; flex-direction: column; gap: var(--space-2); }
+.codex-roster-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+.codex-roster-row:hover { border-color: var(--color-accent-dim); }
+.codex-roster-name { flex: 1; font-size: var(--fs-sm); font-weight: 600; color: var(--color-text); }
+.codex-roster-meta { font-size: var(--fs-xs); color: var(--color-text-dim); }
+.codex-roster-chevron { color: var(--color-text-faint); }
+.codex-empty { padding: var(--space-4); text-align: center; font-size: var(--fs-sm); color: var(--color-text-dim); }
+.codex-head { padding: var(--space-2) 0 var(--space-2); border-bottom: 1px solid var(--color-border); margin-bottom: var(--space-3); }
+.codex-head-name { font-size: var(--fs-lg); font-weight: 700; }
+.codex-head-status { margin-top: 2px; }
+.codex-verbs { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+.codex-verb-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.codex-entries { display: flex; flex-direction: column; gap: var(--space-2); }
+.codex-entry {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  text-align: left;
+}
+.codex-entry-spent { opacity: 0.55; }
+.codex-entry-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.codex-entry-act { font-size: var(--fs-sm); font-weight: 600; color: var(--color-text); }
+.codex-entry-detail { font-size: var(--fs-xs); color: var(--color-text-dim); line-height: var(--lh-tight); }
+.codex-entry-badge {
+  flex-shrink: 0;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-strong);
+  font-size: var(--fs-xs);
+  color: var(--color-text-faint);
+}
+.codex-entry-badge[data-fresh] { color: var(--color-accent); border-color: var(--color-accent-dim); }
 
 /* --- BrineOS Phase 6: Clock app --- */
 .phone-clock-face {
@@ -3315,6 +3834,33 @@ body {
 .conv-bubble[data-from="player"] { align-self: flex-end; background: var(--color-accent); color: var(--color-bg); }
 .conv-bubble[data-from="npc"] { align-self: flex-start; background: var(--color-surface-alt); border: 1px solid var(--color-border); }
 .conv-bubble[data-from="action"] { align-self: stretch; max-width: none; text-align: center; background: transparent; border: none; color: var(--color-text-dim); font-style: italic; font-size: var(--fs-sm); padding: var(--space-1) 0; }
+/* Asks plan Phase 1 (D4) — the header label above an ask bubble naming the
+   ask. Renders the ask's label ("Meal Invitation", "Loan Request") at the
+   top of the player's bubble; the bubble body below is the clean message
+   (never the raw `$RequestType` syntax). Player ask bubbles only; NPC
+   bubbles never carry one. On the player bubble's accent fill the tag is a
+   muted darker header; elsewhere (image bubbles) it stays dim. */
+.conv-tag { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--color-text-dim); opacity: 0.9; margin-bottom: 2px; }
+.conv-bubble[data-from="player"] .conv-tag { color: var(--color-bg); opacity: 0.7; }
+/* Asks plan Phase 8 — an image bubble and the camera-roll share picker.
+   .conv-photo is the image inside a bubble (bounded so a player bubble's
+   accent fill never swallows it); the picker grid reuses the phone gallery's
+   square-thumb look for the modal that asks which photo to send. */
+.conv-bubble-photo { max-width: 300px; }
+.conv-bubble-photo img.conv-photo { display: block; width: 100%; max-width: 220px; border-radius: var(--radius-md); margin-bottom: var(--space-1); }
+.conv-bubble-photo[data-from="player"] img.conv-photo { border: 2px solid rgba(255,255,255,0.25); }
+.conv-photo-picker { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-2); }
+.conv-photo-pick { display: flex; flex-direction: column; gap: 2px; padding: 0; border: 1px solid var(--color-border); border-radius: var(--radius-sm); overflow: hidden; background: var(--color-surface-alt); cursor: pointer; }
+.conv-photo-pick img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+.conv-photo-pick-cap { font-size: var(--fs-xs); color: var(--color-text-dim); text-align: center; padding: var(--space-1) var(--space-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Asks plan Phase 9 — the inventory gift picker. Same shared-modal grid as
+   the camera-roll picker, but text tiles (inventory items have no
+   thumbnail): the item name and a one-line meta (qty + sort group). */
+.conv-gift-picker { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-2); max-height: 40vh; overflow-y: auto; }
+.conv-gift-pick { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface-alt); cursor: pointer; text-align: left; }
+.conv-gift-pick:hover { background: var(--color-surface); }
+.conv-gift-pick-name { font-size: var(--fs-sm); color: var(--color-text); }
+.conv-gift-pick-meta { font-size: var(--fs-xs); color: var(--color-text-dim); }
 /* Scene reader Phase 5 (D14) — the recalled half. Everything above the
    separator carries [data-past]: dimmed, and the player bubble drops its
    accent fill for the neutral surface treatment, so "past" reads structurally
@@ -3330,11 +3876,29 @@ body {
 .conv-typing .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-text-dim); animation: im-typing-bounce 1.2s ease-in-out infinite; }
 .conv-typing .dot:nth-child(2) { animation-delay: 0.2s; }
 .conv-typing .dot:nth-child(3) { animation-delay: 0.4s; }
-.conv-input-row { display: flex; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--color-border); flex-shrink: 0; }
+.conv-input-row { display: flex; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--color-border); flex-shrink: 0; position: relative; }
 .conv-input-row input { flex: 1; background: var(--color-surface-alt); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); color: var(--color-text); font-size: var(--fs-base); font-family: var(--font-sans); outline: none; }
 .conv-input-row input:focus-visible { border-color: var(--color-accent); }
 .conv-input-row input::placeholder { color: var(--color-text-faint); }
 #conv-send-btn { flex-shrink: 0; }
+/* Asks plan Phase 2 — the + button and the Request-tree popover. The popover
+   anchors above the input row (inside the conv-box, so it shares the overlay's
+   z-layer) and overlays the log while open. `.conv-ask-row.is-disabled`/
+   `:disabled` is the greyed state for asks `available()` says can't happen
+   right now — the row stays visible (the player can see the ask exists) but
+   can't be picked. */
+.conv-attach-btn { flex-shrink: 0; width: 38px; }
+.conv-ask-menu { position: absolute; bottom: calc(100% + 10px); left: var(--space-3); right: var(--space-3); z-index: 1; background: var(--color-surface); border: 1px solid var(--color-border-strong); border-radius: var(--radius-lg); box-shadow: var(--win-shadow-focused); display: flex; flex-direction: column; overflow: hidden; max-height: 46vh; }
+.conv-ask-menu[hidden] { display: none !important; }
+.conv-ask-head { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
+.conv-ask-title { flex: 1; font-size: var(--fs-sm); font-weight: 600; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-ask-body { overflow-y: auto; padding: var(--space-2); display: flex; flex-direction: column; gap: 2px; }
+.conv-ask-cat, .conv-ask-row { display: block; width: 100%; text-align: left; background: none; border: none; border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); color: var(--color-text); font-family: var(--font-sans); font-size: var(--fs-sm); cursor: pointer; }
+.conv-ask-cat:hover, .conv-ask-row:hover:not(:disabled) { background: var(--color-surface-alt); }
+.conv-ask-cat.is-disabled, .conv-ask-row:disabled { color: var(--color-text-faint); cursor: default; opacity: 0.55; }
+.conv-ask-help { display: block; font-size: var(--fs-xs); color: var(--color-text-faint); margin-top: 1px; }
+.conv-ask-hint { padding: var(--space-1) var(--space-4); font-size: var(--fs-xs); color: var(--color-text-dim); border-top: 1px solid var(--color-border); text-align: left; }
+.conv-ask-hint[hidden] { display: none !important; }
 @media (max-width: 600px) {
   .conv-box { width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0; border: none; }
   .conv-header { padding: var(--space-2) var(--space-3); }
@@ -3631,6 +4195,7 @@ body {
       <div class="fsi" data-need="hunger"><span class="fsi-icon">🍔</span><div class="fsi-bar"><div class="fill" data-fill="100"></div></div><span class="fsi-pct">100%</span></div>
       <div class="fsi" data-need="hygiene"><span class="fsi-icon">🚿</span><div class="fsi-bar"><div class="fill" data-fill="100"></div></div><span class="fsi-pct">100%</span></div>
       <div class="fsi" data-need="mood"><span class="fsi-icon">😊</span><div class="fsi-bar"><div class="fill" data-fill="50"></div></div><span class="fsi-pct">50%</span></div>
+      <div class="fsi" data-need="desire"><span class="fsi-icon">🔥</span><div class="fsi-bar"><div class="fill" data-fill="20"></div></div><span class="fsi-pct">20%</span></div>
     </div>
     <div class="footer-tab-row" id="footer-tab-row"></div>
     <div class="footer-chips-row" id="action-chips"></div>
@@ -3906,11 +4471,75 @@ body {
         <button class="btn tiny" id="ctr-verb-btn" disabled>Select an item</button>
         <button class="btn btn-secondary tiny" id="ctr-take-all-btn" data-action="container.take-all" disabled>Take All</button>
         <button class="btn btn-secondary tiny" id="ctr-put-all-btn" data-action="container.put-all" disabled>Put All</button>
+        <!-- Food-overhaul Phase 1 (D19): shown by renderContainerPanel only
+             for the doormat — one click sorts the whole delivery into the
+             kitchen by storage class (fridge/freezer/pantry). -->
+        <button class="btn btn-secondary tiny" id="ctr-auto-transfer-btn" data-action="container.auto-transfer" hidden>Auto-Transfer to Storage</button>
         <!-- Phase 4: shown by renderContainerPanel only when the open
              container holds a rot mess (rotten_food: 'rotten'). -->
         <button class="btn btn-secondary tiny" id="ctr-mess-btn" data-action="container.clear-mess" hidden>Throw Out the Rotten Food</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- Wardrobe panel (Intimacy & Voyeurism Phase 5, D11): the Change Outfit
+     picker, opened from the wardrobe's submenu verb. Left column = current
+     outfit (one row per body slot); right column = owned clothing (filtered
+     to the selected slot while one is picked). Apply commits the drafted
+     outfit through the action pipeline; Close/Escape resolves null. -->
+<div id="wardrobe-panel" class="inventory-panel" hidden>
+  <div class="invp-box wdb-box">
+    <div class="invp-header">
+      <h2 id="wdb-title">Wardrobe</h2>
+      <span class="dim tiny wdb-subtitle" id="wdb-subtitle"></span>
+      <div class="invp-tools">
+        <button type="button" class="btn btn-secondary tiny" id="wdb-close-btn">Close</button>
+      </div>
+    </div>
+    <div class="wdb-body">
+      <div class="ctr-col">
+        <div class="ctr-col-title">Current Outfit</div>
+        <div class="ctr-list" id="wdb-outfit-list"></div>
+      </div>
+      <div class="ctr-col">
+        <div class="ctr-col-title">In the Wardrobe</div>
+        <div class="ctr-list" id="wdb-items-list"></div>
+      </div>
+    </div>
+    <div class="ctr-actions">
+      <div class="dim tiny" id="wdb-hint">Pick a slot on the left, then a piece on the right. Nothing is worn until you Apply.</div>
+      <div class="ctr-action-row">
+        <button type="button" class="btn tiny" id="wdb-apply-btn" disabled>Change</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- The peek/listen lens (intimacy-voyeurism Phase 10, D6/D7). A fixed
+     overlay holding a keyhole-shaped viewport: the CSS/SVG mask is the
+     keyhole (D6 — never baked into the generated image), the vignette and
+     shimmer are pure CSS, and a risk meter shows how long the occupant is
+     taking to notice. The caption under the lens is the composed "what you
+     see/hear" line; the Stop button ends the hold. The listen twin shows
+     the same chrome with an audio line instead of the lens image. -->
+<div id="peek-overlay" class="peek-overlay" hidden>
+  <div class="peek-stage">
+    <div class="peek-heading" id="peek-heading">Peeking</div>
+    <div class="peek-keyhole" id="peek-keyhole">
+      <div class="peek-lens">
+        <img id="peek-img" alt="">
+      </div>
+      <div class="peek-vignette"></div>
+      <div class="peek-shimmer" id="peek-shimmer" hidden></div>
+    </div>
+    <div class="peek-caption" id="peek-caption"></div>
+    <div class="peek-meter">
+      <span class="peek-meter-label">Being noticed</span>
+      <div class="peek-meter-bar"><div class="peek-risk-fill" id="peek-risk-fill" data-fill="0"></div></div>
+      <span class="peek-meta" id="peek-meta"></span>
+    </div>
+    <button id="peek-stop-btn" class="btn btn-secondary">Stop Watching</button>
   </div>
 </div>
 
@@ -3954,9 +4583,30 @@ body {
     </div>
     <div class="conv-log" id="conv-log"></div>
     <div class="conv-input-row">
+      <button class="btn btn-secondary conv-attach-btn" id="conv-attach-btn" title="Requests — pick a specific ask" aria-label="Open the request menu">+</button>
       <input type="text" id="conv-input" placeholder="Say or do something..." autocomplete="off">
       <button class="btn" id="conv-send-btn">Say</button>
+      <!-- Asks & attachments plan Phase 2 — the Request tree. A popover
+           anchored above the input row (its containing block — the row is
+           position:relative), same z-layer as the conversation (it lives
+           inside the overlay). Root shows the ASK_CATEGORIES tree; a
+           category row drills down to its leaves; leaves insert their
+           template into the input with the <Optional> span pre-selected.
+           Rows whose `available()` is false render greyed and can't be
+           clicked. -->
+      <div class="conv-ask-menu" id="conv-ask-menu" hidden>
+        <div class="conv-ask-head">
+          <button class="btn btn-secondary tiny" id="conv-ask-back-btn" hidden aria-label="Back">←</button>
+          <div class="conv-ask-title" id="conv-ask-title">Asks</div>
+          <button class="btn btn-secondary tiny" id="conv-ask-close-btn" aria-label="Close">✕</button>
+        </div>
+        <div class="conv-ask-body" id="conv-ask-body"></div>
+      </div>
     </div>
+    <!-- Asks plan Phase 2 — hint line under the input while a $AskId is
+         active in it. Shows the leaf's help text (or an unknown-tag warning);
+         hidden otherwise. textContent only — never player/LLM-derived HTML. -->
+    <div class="conv-ask-hint" id="conv-ask-hint" hidden></div>
   </div>
 </div>
 
@@ -4008,6 +4658,7 @@ body {
   <div class="npc-card" data-npc-id="" data-status="">
     <div class="npc-name"></div>
     <div class="npc-phase"></div>
+    <div class="npc-rel"></div>
     <div class="npc-mood"></div>
     <div class="npc-activity"></div>
   </div>
@@ -4029,6 +4680,7 @@ body {
 <template id="tpl-inv-row">
   <button type="button" class="invp-row" data-inv-row>
     <span class="invp-row-name"></span>
+    <span class="invp-row-servings" hidden></span>
     <span class="invp-row-qty"></span>
     <span class="invp-row-sublabel"></span>
     <span class="invp-freshness-tag"></span>
@@ -4054,6 +4706,10 @@ body {
 <template id="tpl-ctr-row">
   <button type="button" class="ctr-row" data-ctr-row>
     <span class="ctr-row-name"></span>
+    <span class="ctr-servings" hidden></span>
+    <span class="ctr-storage-tag" hidden></span>
+    <span class="ctr-frozen-badge" hidden></span>
+    <span class="ctr-thawing-badge" hidden></span>
     <span class="ctr-row-qty"></span>
     <span class="ctr-freshness-tag"></span>
   </button>
@@ -4235,19 +4891,19 @@ body {
      earlier script's data at load time — e.g. DEFS.ACTIONS reading NEEDS
      from CONFIG): CONFIG → ICONS → DEFS.WORLD → DEFS.ACTIONS →
      DEFS.COMPUTER → DEFS.MENU → ORBITAL → STATE → SIM → COMMITMENTS →
-     WORLD → ITEMS → INVENTORY → EFFECTS → ACTIONS → SKILLS → COMPUTER →
-     NPC → RUMINATION → PROMPT → LLM → IMAGE → RENDER → RENDER.COMPUTER →
-     RENDER.DESKTOP → UI → UI.COMPUTER → AFTERHOURS → UI.WINDOWMANAGER →
-     UI.PHONE → MENU → BOOT (the BOOT call moved from the bottom of ui.js
-     to the bottom of menu.js, the last script, so boot() can call into
-     MENU/IMAGE). Functions calling into a LATER script are fine either way
-     — those calls only happen at runtime, after every script below has
-     finished loading. -->
-<script src="src/srcfiles/config.js?v=105"></script>
-<script src="src/srcfiles/icons.js?v=25"></script>
-<script src="src/srcfiles/defs.world.js?v=32"></script>
-<script src="src/srcfiles/defs.actions.js?v=30"></script>
-<script src="src/srcfiles/defs.computer.js?v=28"></script>
+     WORLD → ITEMS → INVENTORY → EFFECTS → COOKING → ACTIONS → SKILLS → COMPUTER →
+     NPC → WILLINGNESS → RUMINATION → PROMPT → LLM → IMAGE → PEEK → RENDER →
+     RENDER.COMPUTER → RENDER.DESKTOP → ASKS → UI → UI.COMPUTER →
+     AFTERHOURS → UI.WINDOWMANAGER → UI.PHONE → MENU → BOOT (the BOOT call
+     moved from the bottom of ui.js to the bottom of menu.js, the last
+     script, so boot() can call into MENU/IMAGE). Functions calling into a
+     LATER script are fine either way — those calls only happen at runtime,
+     after every script below has finished loading. -->
+<script src="src/srcfiles/config.js?v=136"></script>
+<script src="src/srcfiles/icons.js?v=30"></script>
+<script src="src/srcfiles/defs.world.js?v=42"></script>
+<script src="src/srcfiles/defs.actions.js?v=43"></script>
+<script src="src/srcfiles/defs.computer.js?v=31"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
      at runtime; IMAGE's titleGallery consumes genTitlePrompt. -->
@@ -4262,36 +4918,41 @@ body {
 <!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/srcfiles/orbital.js?v=12"></script>
-<script src="src/srcfiles/state.js?v=46"></script>
-<script src="src/srcfiles/sim.js?v=63"></script>
+<script src="src/srcfiles/state.js?v=57"></script>
+<script src="src/srcfiles/sim.js?v=76"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
 <script src="src/srcfiles/commitments.js?v=13"></script>
-<script src="src/srcfiles/world.js?v=28"></script>
+<script src="src/srcfiles/world.js?v=30"></script>
 <script src="src/srcfiles/movement.js?v=2"></script>
-<script src="src/srcfiles/signals.js?v=15"></script>
-<script src="src/srcfiles/scene.js?v=13"></script>
-<script src="src/srcfiles/items.js?v=22"></script>
+<script src="src/srcfiles/signals.js?v=19"></script>
+<script src="src/srcfiles/scene.js?v=17"></script>
+<script src="src/srcfiles/items.js?v=29"></script>
 <!-- Inventory overhaul Phase 1: pure inventory query/sort/describe helpers
      (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
      time) and before render.js/ui.js, which call it at runtime. -->
-<script src="src/srcfiles/inventory.js?v=17"></script>
-<script src="src/srcfiles/effects.js?v=30"></script>
-<script src="src/srcfiles/drives.js?v=34"></script>
+<script src="src/srcfiles/inventory.js?v=22"></script>
+<script src="src/srcfiles/effects.js?v=36"></script>
+<!-- Food-overhaul Phase 5: the pure cooking engine (cooking.js) — after
+     effects.js (uses clamp) and items.js (makePlate/freshnessOf); its
+     functions are called at runtime by defs.actions.js and render.js. -->
+<script src="src/srcfiles/cooking.js?v=4"></script>
+<script src="src/srcfiles/taste.js?v=1"></script>
+<script src="src/srcfiles/drives.js?v=41"></script>
 <!-- NPC utility scoring (npc-cognition-plan.md). Loads after drives.js: it
      reuses driveGateValue / isOnCooldown / DRIVE_COOLDOWN_KEY from it. -->
-<script src="src/srcfiles/cognition.js?v=20"></script>
+<script src="src/srcfiles/cognition.js?v=28"></script>
 <!-- NPC initiative (npc-initiative-plan.md Phase 3). Loads after cognition.js:
      scoreCandidates calls scoreOvertures, and evaluateDrives calls the writers
      here for the tick it wins. -->
-<script src="src/srcfiles/overture.js?v=13"></script>
-<script src="src/srcfiles/actions.js?v=24"></script>
+<script src="src/srcfiles/overture.js?v=15"></script>
+<script src="src/srcfiles/actions.js?v=34"></script>
 <script src="src/srcfiles/intent.js?v=18"></script>
 <script src="src/srcfiles/skills.js?v=19"></script>
-<script src="src/srcfiles/stealth.js?v=18"></script>
-<script src="src/srcfiles/time.js?v=27"></script>
-<script src="src/srcfiles/computer.js?v=55"></script>
+<script src="src/srcfiles/stealth.js?v=19"></script>
+<script src="src/srcfiles/time.js?v=28"></script>
+<script src="src/srcfiles/computer.js?v=59"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -4299,29 +4960,91 @@ body {
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
 <script src="src/srcfiles/phone.js?v=20"></script>
-<script src="src/srcfiles/npc.js?v=39"></script>
+<script src="src/srcfiles/npc.js?v=46"></script>
+<!-- Intimacy & Voyeurism Phase 9 (D13): the willingness gate — the ONLY door
+     into any intimacy act. Pure function + tuning (willingness.js); reads
+     npc.js's shared clothing reads at call time, consumed by cognition.js's
+     scoring and defs.actions.js's requirement checker at runtime only. -->
+<script src="src/srcfiles/willingness.js?v=2"></script>
+<!-- Intimacy & Voyeurism Phase 12 (D12): the relationship store + formation
+     pass (relationships.js). After npc.js (reuses clamp01/clampAxis at
+     runtime) and after willingness.js for file grouping; reads sim.js's
+     moveToRoom/changeResidencyStatus/computeRent and config's ROOMS/
+     FACILITY_DEFS at call time only. The resolveTick proximity accumulator
+     (sim.js) calls notePairCoLocation at runtime, after load. -->
+<script src="src/srcfiles/relationships.js?v=5"></script>
+<!-- Intimacy & Voyeurism Phase 15 (D8): the knowledge codex — the ledger's
+     readers, the three spendable verbs (Confront/Spread/Matchmake) and the
+     witnessed-entry writer. After relationships.js (reuses getRelationship/
+     pairCompatibility/tryAdvanceRelationshipStatus/infidelityCheatingFact/
+     relationshipSummaryForNpc) and npc.js (receiveTransmittedFact); the UI
+     half lives in render.computer.js + ui.js, called at runtime only. -->
+<script src="src/srcfiles/codex.js?v=2"></script>
 <!-- Knowledge-gossip Phase 3: deterministic rumination (inference rules +
      open-question lifecycle) — after npc.js (reuses addMemoryFact/
      backfillFactRecordV2/factTopicPhrase/factInterestRelevance/factEmotionalWeight)
      and called by sim.js at runtime only. -->
 <script src="src/srcfiles/rumination.js?v=15"></script>
 <script src="src/srcfiles/prompt.js?v=19"></script>
-<script src="src/srcfiles/llm.js?v=32"></script>
+<script src="src/srcfiles/llm.js?v=37"></script>
 <!-- Plan X-5 Phase 1: the wire for conversation consequences — parsing,
      clamping, windowing and ingestion for the Assessor and the Chronicler.
      After llm.js because the two passes' calls live there and are fired from
      ui.js; x5.js itself is pure and calls no model. -->
 <script src="src/srcfiles/x5.js?v=15"></script>
 <script src="src/srcfiles/interruption.js?v=22"></script>
-<script src="src/srcfiles/image.js?v=25"></script>
-<script src="src/srcfiles/render.js?v=48"></script>
-<script src="src/srcfiles/render.computer.js?v=43"></script>
+<script src="src/srcfiles/image.js?v=28"></script>
+<!-- Intimacy & Voyeurism Phase 10 (D6/D7): the peek/listen hold — the timed
+     real-time session loop (risk ramp, per-NPC caught outcomes, image budget)
+     plus the pure derivations it re-reads every real second. After image.js
+     (calls composePeekKey/getPeekImage at runtime) and before render.js/ui.js,
+     which call renderPeekOverlay/startPeekSession at runtime only. Phase 15
+     writes the 'witnessed' ledger entries via codex.js at session end. -->
+<script src="src/srcfiles/peek.js?v=3"></script>
+<!-- Intimacy-Voyeurism Phase 17 (D13/D14): boundary acts — sleeping-room
+     (sleep_with/sleep_watch), three-way acts (throuple/cuck), and the NPC
+     sneak_into_bed drive. Depends on willingness.js (the gate), npc.js
+     (resolveShamingReaction/cold-shoulder), relationships.js (infidelity
+     writers) and codex.js (ledger), so it loads after all of them and after
+     peek.js (reuses its willingness/prose/undressed patterns), but before
+     render.js/ui.js which call its resolvers/applys at runtime only. -->
+<script src="src/srcfiles/boundary.js?v=1"></script>
+<script src="src/srcfiles/pregnancy.js?v=1"></script>
+<script src="src/srcfiles/render.js?v=70"></script>
+<script src="src/srcfiles/render.computer.js?v=47"></script>
 <script src="src/srcfiles/render.desktop.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
 <script src="src/srcfiles/render.phone.js?v=23"></script>
-<script src="src/srcfiles/ui.js?v=78"></script>
-<script src="src/srcfiles/ui.computer.js?v=45"></script>
+<!-- Asks & attachments (asks-and-attachments-plan.md Phase 1 + Phase 3 +
+     Phase 4 + Phase 5 + Phase 6 + Phase 7 + Phase 8 + Phase 9): the ask
+     spine — parse/decide/
+     strip/directive/apply — plus the D7 repeat ladder (sweepAskCounts is
+     called from ui.js's processDayRollover), the D8/D9 schedule machinery
+     (freeSlotsFor / hasFreeSlotsAhead probe the NPC's real schedule;
+     render.js's openAskScheduleModal calls freeSlotsFor at call time), the
+     Phase 5 meal ask (ask_meal + mealLabelForWindow — D10 meal inference
+     from the chosen window, consumed by the modal/confirm/memory), the
+     Phase 6 money/chore leaves (ask_loan's EARN_MONEY + _loanOwed flag,
+     ask_chore's NPC_ACTIVITY — trusted-producer effects), the Phase 7
+     intimacy leaf (ask_intimacy — resolveWillingnessGate IS the decision,
+     noteIntimacyRefusal/noteIntimacyOccurred the writes), the Phase 8
+     photo leaf (ask_photo — the 'photo' willingness act, buildAskPhotoRecord/
+     getAskPhotoImage for the accepted image bubble) plus the camera-roll
+     SHARE pseudo-leaf (ASK_SHARE_TYPES, never a $-tag), and the Phase 9
+     gift leaf (ask_gift — giftMatchKind over bible.interests/want/wound →
+     REL_DELTA + MOVE_ITEM + MEMORY_FACT; the item rides resolveAsk's
+     structured `extra`, never flavor). Phase 10: hardening — the pass-1
+     template fallback line (buildAskFallbackLine — doConvSend renders it
+     when the phrasing call fails, and the ask's own pipeline runs
+     regardless) and the _loanOwed repayment leaf (ask_repay). After llm.js
+     (calls buildAskDirective / buildSchedulingConfirmDirective at call
+     time), x5.js, and the renderers; before ui.js (doConvSend runs the
+     pipeline at runtime). Every dependency is a call-time one, so this slot
+     is flexible within that range. -->
+<script src="src/srcfiles/asks.js?v=11"></script>
+<script src="src/srcfiles/ui.js?v=105"></script>
+<script src="src/srcfiles/ui.computer.js?v=47"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
      site header with fake address bar + internal back/forward, footer, 404,

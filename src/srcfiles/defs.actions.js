@@ -73,7 +73,11 @@ const ACTION_DEFS = {
     source: { kind: 'object', objDef: 'stove' },
     group: 'kitchen', chipPriority: 40,
     requires: ['hasRecipeIngredients', 'gasNotCutoff', 'facilityFunctional:kitchen_stove'],
-    timeCost: { base: 30, perIngredient: 3, max: 50, skill: 'cooking', curve: 'timeReduction', min: 15 },
+    // Food-overhaul Phase 5 (D16): the interactive loop's minutes are the
+    // ENGINE's step plan total (prep + mixing + method + rescues) —
+    // fromPrepared makes that the base; the static values are the fallback
+    // for callers with no plan. The cooking skill still shrinks the total.
+    timeCost: { fromPrepared: true, base: 30, perIngredient: 3, max: 50, skill: 'cooking', curve: 'timeReduction', min: 15 },
     skill: { id: 'cooking', xp: 12 },
     meters: [['cooking', 1], ['devices', 0.5]],
     emitsSignal: { signal: 'cooking', intensity: SIGNALS_EMIT.cookingAction },
@@ -89,6 +93,40 @@ const ACTION_DEFS = {
     buildEffects: buildCookEffects,
     narration: { mode: 'dynamic', build: cookNarration },
   },
+  // Food-overhaul Phase 3 (D26/D27/D29): the interim reheat (no microwave
+  // until Phase 6 — a stove/oven reheat covers the meantime). Makes a
+  // frozen batch eatable without waiting out THAW_TUNING and restores a
+  // stale batch's quality; for a betterHot plate it's what earns the mood
+  // bonus at the table. Sourced from the stove like self.cook, so it only
+  // appears where the stove does.
+  'self.reheat': {
+    id: 'self.reheat', label: 'Reheat', verbs: ['reheat', 'warm up', 'heat up leftovers'],
+    source: { kind: 'object', objDef: 'stove' },
+    group: 'kitchen', chipPriority: 42,
+    requires: ['hasReheatableFood', 'gasNotCutoff', 'facilityFunctional:kitchen_stove'],
+    timeCost: { base: ACTION_TUNING.reheatMinutes },
+    prepare: prepareReheat,
+    buildEffects: buildReheatEffects,
+    narration: { mode: 'dynamic', build: reheatNarration },
+  },
+  // Food-overhaul Phase 6 (D12): the proper fast reheat — the microwave,
+  // upgrading Phase 3's interim stove touch. Same REHEAT_ITEM effect (and
+  // the same picker) as self.reheat, but sourced from the microwave object
+  // and clocked by the machine you own (EQUIPMENT_DEFS.microwave:
+  // reheatMinutes 3/1 by kitchen_appliances tier vs the stove's 10). A
+  // microwave runs on electricity, so a power cutoff takes it out while
+  // the gas stove's reheat keeps working — the two are genuinely different
+  // appliances with different failure modes.
+  'self.microwave': {
+    id: 'self.microwave', label: 'Microwave', verbs: ['microwave', 'nuke', 'heat up in the microwave', 'zap leftovers'],
+    source: { kind: 'object', objDef: 'microwave' },
+    group: 'kitchen', chipPriority: 43,
+    requires: ['hasReheatableFood', 'powerNotCutoff', 'facilityFunctional:kitchen_appliances'],
+    timeCost: { fromPrepared: true, base: ACTION_TUNING.reheatMinutes },
+    prepare: prepareMicrowave,
+    buildEffects: buildReheatEffects,
+    narration: { mode: 'dynamic', build: microwaveNarration },
+  },
   'self.shower': {
     id: 'self.shower', label: 'Shower', verbs: ['shower', 'wash up', 'bathe'],
     source: { kind: 'room', roomIds: ['bathroom_a', 'bathroom_b'] },
@@ -98,6 +136,15 @@ const ACTION_DEFS = {
     // Exposed for the duration of the action — see ACTIONS'
     // withVulnerableState and SIM's getPlayerVulnerableState.
     vulnerableState: 'showering',
+    // Intimacy & Voyeurism Phase 5 (D11): the shower is a naked-in-scene
+    // moment. 'nude' is live for the action's ticks (the scene/peek systems
+    // read it), then 'towel' is left behind — TRANSIENT_CLOTHING reverts it
+    // to 'dressed' on the next decayPlayerNeeds span. 'nude' is a member of
+    // NAKED_CLOTHING_STATES, so the intimate gate opens for a showering
+    // player exactly when its other two conditions (opt-in + content flags)
+    // allow — invariant 4 preserved, fail-closed.
+    transientClothing: 'nude',
+    afterClothing: 'towel',
     emitsSignal: { signal: 'running_water', intensity: SIGNALS_EMIT.shower },
     timeCost: { base: 15 },
     effects: [`ADJUST_NEED player hygiene +${NEEDS.hygiene.washRestore}`],
@@ -151,12 +198,35 @@ const ACTION_DEFS = {
     source: { kind: 'object', objDef: 'sink_kitchen' },
     group: 'kitchen', chipPriority: 25,
     requires: ['dishesDirty', 'waterNotCutoff'],
-    timeCost: { base: 10, perDirtyDish: 8, max: 30, skill: 'cleaning', curve: 'cleanEfficiency', min: 5 },
+    // Food-overhaul Phase 4 (D11): time scales with the dish UNITS this
+    // action actually clears (perDishUnit reads prepared.units — the wash
+    // capacity, skill-scaled via handWashUnitsFor), shrunk by the cleaning
+    // skill's cleanEfficiency curve.
+    timeCost: { base: 5, perDishUnit: 2, max: 40, skill: 'cleaning', curve: 'cleanEfficiency', min: 5 },
     skill: { id: 'cleaning', xp: 8 },
     meters: [['dishes', 1], ['waterHeating', 0.5]],
     prepare: prepareDishes,
     buildEffects: buildDishesEffects,
     narration: { mode: 'dynamic', build: dishesNarration },
+  },
+  // Food-overhaul Phase 4 (D11): the dishwasher — load it from the sink and
+  // tables and start a cycle. The machine clears DISHWASH_TUNING.tiers'
+  // capacityUnits per cycle (keyed to the kitchen_appliances facility tier)
+  // and is busy for cycleMinutes, lazily completed against the continuous
+  // clock (ITEMS' dishwasherCycleProgress — a finished cycle frees the
+  // machine on the next read). Sourced from the dishwasher object, so the
+  // chip only appears where the machine is.
+  'self.dishwasher': {
+    id: 'self.dishwasher', label: 'Load & Run Dishwasher', verbs: ['load the dishwasher', 'run the dishwasher', 'use the dishwasher'],
+    source: { kind: 'object', objDef: 'dishwasher' },
+    group: 'kitchen', chipPriority: 27,
+    requires: ['dishesDirty', 'waterNotCutoff', 'facilityFunctional:kitchen_appliances', 'dishwasherReady'],
+    timeCost: { base: 5 },
+    skill: { id: 'cleaning', xp: 6 },
+    meters: [['dishes', 1], ['waterHeating', 0.5]],
+    prepare: prepareDishwasher,
+    buildEffects: buildDishwasherEffects,
+    narration: { mode: 'dynamic', build: dishwasherNarration },
   },
   'self.lock_door': {
     id: 'self.lock_door', label: 'Lock Door', verbs: ['lock the door', 'lock door'],
@@ -178,6 +248,296 @@ const ACTION_DEFS = {
     prepare: prepareDoor,
     buildEffects: buildUnlockDoorEffects,
     narration: { mode: 'dynamic', build: unlockDoorNarration },
+  },
+  // --- Intimacy & Voyeurism Overhaul Phase 1 (D5): expandable submenus ---
+  // A multi-verb object renders as ONE "X ▸" chip that expands a one-level
+  // popover of its verbs. The parent (`door.interact`) is a grouping entry
+  // that never executes — render.js builds the chip from it and ui.js
+  // toggles the popover; `submenu` lists the verbs in declaration order.
+  // Each verb is a normal ACTION_DEFS entry (own requires/effects/
+  // narration) inheriting the parent's room context. Submenu verbs never
+  // surface as flat chips (resolveAvailableActions excludes them).
+  // `door.keyhole`/`door.listen` are stubs — Phase 3/10 slots real logic
+  // in; `door.open`/`door.knock` delegate to the existing move/knock
+  // handlers via `delegate` (ui.js routes them before the registered-
+  // action bridge).
+  'door.interact': {
+    id: 'door.interact', label: 'Door',
+    group: 'door', chipPriority: 45,
+    submenu: ['door.keyhole', 'door.listen', 'door.open', 'door.knock'],
+  },
+  'door.keyhole': {
+    id: 'door.keyhole', label: 'Peek Through the Keyhole',
+    source: { kind: 'room', roomIds: ['hallway_a', 'hallway_b'] },
+    group: 'door',
+    // Intimacy & Voyeurism Phase 10 (D6): the peek hold is NOT a discrete
+    // action — ui.js intercepts this verb (and door.listen) before the
+    // registered-action bridge and hands the adjacent room to peek.js's
+    // startPeekSession, which runs the timed loop against the continuous
+    // clock. No timeCost/narration here on purpose: nothing about this
+    // entry ever goes through executeAction.
+  },
+  'door.listen': {
+    id: 'door.listen', label: 'Listen at the Door',
+    source: { kind: 'room', roomIds: ['hallway_a', 'hallway_b'] },
+    group: 'door',
+    // The audio twin of door.keyhole — same intercepted hold, audio-only
+    // lines, same risk model (see peek.js).
+  },
+  'door.open': {
+    id: 'door.open', label: 'Open the Door',
+    source: { kind: 'room', roomIds: ['hallway_a', 'hallway_b'] },
+    group: 'door', chipPriority: 30,
+    delegate: 'move',
+  },
+  'door.knock': {
+    id: 'door.knock', label: 'Knock',
+    source: { kind: 'room', roomIds: ['hallway_a', 'hallway_b'] },
+    group: 'door', chipPriority: 25,
+    delegate: 'knock',
+  },
+  // --- Wardrobe (Intimacy & Voyeurism Phase 5, D11) ---
+  // The wardrobe object renders as ONE "Wardrobe ▸" chip expanding a one-level
+  // popover — the same Phase 1 (D5) submenu pattern as the door — replacing
+  // the flat "Open Wardrobe" chip (buildActionGroups special-cases the def).
+  // `wardrobe.open` is a thin wrapper over the existing container machinery
+  // (delegate → container.open); `wardrobe.change_outfit` is the real verb:
+  // object-sourced off the wardrobe, its prepare() opens the wardrobe panel
+  // (RENDER's openWardrobePanel, the picker family) and returns the chosen
+  // OUTFIT, which executeAction persists via def.writesOutfit (SIM's
+  // applyPlayerOutfit).
+  'wardrobe.interact': {
+    id: 'wardrobe.interact', label: 'Wardrobe',
+    group: 'wardrobe', chipPriority: 45,
+    submenu: ['wardrobe.change_outfit', 'wardrobe.open'],
+  },
+  'wardrobe.change_outfit': {
+    id: 'wardrobe.change_outfit', label: 'Change Outfit', verbs: ['change clothes', 'change outfit', 'get dressed', 'try on clothes'],
+    source: { kind: 'object', objDef: 'wardrobe' },
+    group: 'wardrobe', chipPriority: 50,
+    requires: ['hasWardrobeClothes'],
+    timeCost: { base: ACTION_TUNING.changeOutfitMinutes },
+    writesOutfit: true,
+    prepare: prepareChangeOutfit,
+    narration: { mode: 'dynamic', build: changeOutfitNarration },
+  },
+  'wardrobe.open': {
+    id: 'wardrobe.open', label: 'Open the Wardrobe',
+    source: { kind: 'object', objDef: 'wardrobe' },
+    group: 'wardrobe', chipPriority: 40,
+    delegate: 'container.open',
+  },
+  // --- Intimacy & Voyeurism Overhaul Phase 11 (D3/D13): the player's
+  // intimacy verbs. The plan's INTIMACY_ACT_DEFS as ACTION_DEFS rows; every
+  // act passes the Phase 9 willingness gate (design invariant 1) — the
+  // `willingness:<act>` requirement fails closed with refusal prose, and
+  // executeAction's `paired` path (ACTIONS.resolvePairedAct) applies both
+  // parties' effects/deltas. `source: { kind: 'paired' }` is deliberately a
+  // kind actionSourceMatches rejects, so the paired acts surface ONLY through
+  // the Make-a-Move flow (ui.js) — never as flat chips. Masturbate is solo
+  // and self-sourced, so it appears as an ordinary chip in private rooms.
+  //
+  // Clothing semantics (invariant 4): the paired acts hold 'undressed' for
+  // the whole act AND afterwards — undressed is NOT a transient state, so it
+  // persists until the wardrobe (or a shower) resets it, which is exactly the
+  // meaning the intimate-description gate expects. masturbate is naked-in-
+  // scene during ('nude') and dressed after; share_shower is nude during and
+  // towel after (TRANSIENT_CLOTHING reverts towel on the next span).
+  'intimacy.masturbate': {
+    id: 'intimacy.masturbate', label: 'Masturbate', verbs: ['masturbate'],
+    source: { kind: 'self' },
+    group: 'intimacy', chipPriority: 40,
+    requires: ['privateRoom'],
+    // The apartment act rides the discrete action pipeline (executeAction →
+    // advanceAndResolveMinutes), so it is independent of the AfterHours
+    // session's continuous 'masturbating' time context (TIME_DILATION.scales.
+    // masturbating) — Phase 10's hold interplay note, resolved: no context is
+    // pushed here because none applies to a discrete batch.
+    vulnerableState: 'masturbating',   // the peep_player drive reads this mid-act
+    transientClothing: 'nude',
+    afterClothing: 'dressed',
+    emitsSignal: { signal: 'moaning', intensity: SIGNALS_EMIT.moaningLow },
+    timeCost: { base: INTIMACY.durationMinutes.masturbate },
+    effects: [
+      `ADJUST_NEED player desire -${DESIRE.release.masturbate}`,
+      `ADJUST_NEED player mood +${INTIMACY.playerMoodGain.masturbate}`,
+      `ADJUST_NEED player energy -${INTIMACY.playerEnergyCost.masturbate}`,
+    ],
+    narration: { mode: 'template', templates: [
+      'You take a little time for yourself, alone.',
+      'You give in to the feeling and take care of it yourself.',
+    ] },
+  },
+  'intimacy.quickie': {
+    id: 'intimacy.quickie', label: 'Quickie',
+    source: { kind: 'paired' },
+    group: 'intimacy', chipPriority: 20,
+    requires: ['willingness:quickie', 'privateRoom'],
+    paired: {
+      npcEffects: [
+        `ADJUST_NEED {target} energy -${INTIMACY.npcEnergyCost.quickie}`,
+        `ADJUST_NEED {target} hygiene -${INTIMACY.npcHygieneCost.quickie}`,
+        `ADJUST_NEED {target} desire -${INTIMACY.npcDesireRelease.quickie}`,
+        `MOOD_DELTA {target} +${INTIMACY.npcMoodGain.quickie}`,
+      ],
+      relDeltas: INTIMACY.relDeltas.quickie,
+      npcClothing: 'undressed',
+      npcClothingAfter: 'undressed',
+      ledgerAct: 'quickie',
+    },
+    vulnerableState: 'intimacy',
+    transientClothing: 'undressed',
+    afterClothing: 'undressed',
+    emitsSignal: { signal: 'moaning', intensity: SIGNALS_EMIT.moaningMed },
+    timeCost: { base: INTIMACY.durationMinutes.quickie },
+    effects: [
+      `ADJUST_NEED player desire -${DESIRE.release.quickie}`,
+      `ADJUST_NEED player mood +${INTIMACY.playerMoodGain.quickie}`,
+      `ADJUST_NEED player energy -${INTIMACY.playerEnergyCost.quickie}`,
+      `ADJUST_NEED player hygiene -${INTIMACY.playerHygieneCost.quickie}`,
+    ],
+    narration: { mode: 'template', templates: [
+      'You and {name} find a quick moment together.',
+      'It is fast and frantic and leaves you both breathless.',
+    ] },
+  },
+  'intimacy.sex': {
+    id: 'intimacy.sex', label: 'Sex',
+    source: { kind: 'paired' },
+    group: 'intimacy', chipPriority: 20,
+    requires: ['willingness:sex', 'privateRoom', 'privacy'],
+    paired: {
+      npcEffects: [
+        `ADJUST_NEED {target} energy -${INTIMACY.npcEnergyCost.sex}`,
+        `ADJUST_NEED {target} hygiene -${INTIMACY.npcHygieneCost.sex}`,
+        `ADJUST_NEED {target} desire -${INTIMACY.npcDesireRelease.sex}`,
+        `MOOD_DELTA {target} +${INTIMACY.npcMoodGain.sex}`,
+      ],
+      relDeltas: INTIMACY.relDeltas.sex,
+      npcClothing: 'undressed',
+      npcClothingAfter: 'undressed',
+      ledgerAct: 'sex',
+    },
+    vulnerableState: 'intimacy',
+    transientClothing: 'undressed',
+    afterClothing: 'undressed',
+    emitsSignal: { signal: 'moaning', intensity: SIGNALS_EMIT.moaningHigh },
+    timeCost: { base: INTIMACY.durationMinutes.sex },
+    effects: [
+      `ADJUST_NEED player desire -${DESIRE.release.sex}`,
+      `ADJUST_NEED player mood +${INTIMACY.playerMoodGain.sex}`,
+      `ADJUST_NEED player energy -${INTIMACY.playerEnergyCost.sex}`,
+      `ADJUST_NEED player hygiene -${INTIMACY.playerHygieneCost.sex}`,
+    ],
+    narration: { mode: 'template', templates: [
+      'You and {name} close the door and give in to each other.',
+      'There is a long, unselfconscious while before either of you says anything.',
+      'The room is warm and messy by the time you are done.',
+    ] },
+  },
+  'intimacy.cuddle': {
+    id: 'intimacy.cuddle', label: 'Cuddle',
+    source: { kind: 'paired' },
+    group: 'intimacy', chipPriority: 20,
+    requires: ['willingness:cuddle', 'afterSexOrClose'],
+    paired: {
+      npcEffects: [
+        `MOOD_DELTA {target} +${INTIMACY.npcMoodGain.cuddle}`,
+      ],
+      relDeltas: INTIMACY.relDeltas.cuddle,
+      ledgerAct: 'cuddle',
+    },
+    // Cuddle is deliberately NOT a vulnerable state: it is the one intimacy
+    // act that can happen out in the open (a couch in the living room), so it
+    // sets no _vulnerableState and no clothing. Its pairing exists for the
+    // relationship/ledger/history halves, not for exposure.
+    timeCost: { base: INTIMACY.durationMinutes.cuddle },
+    effects: [
+      `ADJUST_NEED player mood +${INTIMACY.playerMoodGain.cuddle}`,
+    ],
+    narration: { mode: 'template', templates: [
+      'You and {name} settle against each other and stay there.',
+      'No words for a while — just holding on.',
+    ] },
+  },
+  'intimacy.share_shower': {
+    id: 'intimacy.share_shower', label: 'Share a Shower',
+    source: { kind: 'paired' },
+    group: 'intimacy', chipPriority: 20,
+    requires: ['willingness:share_shower', 'facilityFunctionalHere:self.shower'],
+    paired: {
+      npcEffects: [
+        `ADJUST_NEED {target} hygiene +${INTIMACY.shareShowerRestore}`,
+        `ADJUST_NEED {target} energy -${INTIMACY.npcEnergyCost.share_shower}`,
+        `MOOD_DELTA {target} +${INTIMACY.npcMoodGain.share_shower}`,
+      ],
+      relDeltas: INTIMACY.relDeltas.share_shower,
+      // 'undressed', not 'nude': the tick's clothing pass derives an NPC's
+      // state from context each tick and would revert 'nude' → 'dressed' the
+      // moment the partner's activity is anything other than showering/
+      // swimming. 'undressed' survives the window; the towel after still
+      // applies once the act closes.
+      npcClothing: 'undressed',
+      npcClothingAfter: 'towel',   // TRANSIENT_CLOTHING reverts towel → dressed
+      ledgerAct: 'shared_shower',
+    },
+    vulnerableState: 'intimacy',
+    transientClothing: 'nude',
+    afterClothing: 'towel',
+    emitsSignal: { signal: 'running_water', intensity: SIGNALS_EMIT.shower },
+    timeCost: { base: INTIMACY.durationMinutes.share_shower },
+    effects: [
+      `ADJUST_NEED player hygiene +${INTIMACY.shareShowerRestore}`,
+      `ADJUST_NEED player mood +${INTIMACY.playerMoodGain.share_shower}`,
+      `ADJUST_NEED player energy -${INTIMACY.playerEnergyCost.share_shower}`,
+    ],
+    meters: [['showers', 1], ['waterHeating', 1]],
+    narration: { mode: 'template', templates: [
+      'You and {name} share the shower, taking turns under the water.',
+      'Soapy hands and warm water — the shower is a lot smaller than usual.',
+    ] },
+  },
+  // --- Intimacy & Voyeurism Overhaul Phase 17 (D13/D14): boundary acts ---
+  // The sleeping-room verbs surface ONLY through the bed's "Bed ▸" submenu
+  // (render.js builds the parent chip when a resident is asleep in the
+  // room). Like the door/wardrobe submenu parents, `bed.interact` is a
+  // grouping entry that never executes. Each verb's `source` is the
+  // 'paired' kind actionSourceMatches rejects, so they can never resolve as
+  // flat chips either. ui.js intercepts both verbs BEFORE the registered-
+  // action bridge (the door.keyhole pattern) and hands the sleeping
+  // resident to boundary.js's applyBoundarySleepRoom — the narrow gate, the
+  // wake/catch roll, and the shaming/reciprocate routing are domain logic,
+  // not action-pipeline rows. The labels carry {name} for the sleeper;
+  // ui.js substitutes it when rendering the popover rows.
+  'bed.interact': {
+    id: 'bed.interact', label: 'Bed',
+    group: 'boundary', chipPriority: 45,
+    submenu: ['boundary.sleep_with', 'boundary.sleep_watch'],
+  },
+  'boundary.sleep_with': {
+    id: 'boundary.sleep_with', label: 'Slide Into Bed With {name}',
+    source: { kind: 'paired' },   // rejected by actionSourceMatches — never a flat chip
+    group: 'boundary',
+    // Intercepted by ui.js before the registered-action bridge (the
+    // door.keyhole pattern). Nothing here ever goes through executeAction.
+  },
+  'boundary.sleep_watch': {
+    id: 'boundary.sleep_watch', label: 'Watch {name} Sleep',
+    source: { kind: 'paired' },
+    group: 'boundary',
+    // Same interception as boundary.sleep_with.
+  },
+  // The three-way act — the SAME gate as every paired act (Phase 9
+  // willingness for all three parties), named by configuration as 'cuck'
+  // when two of the three are a committed/seeing couple (consenting, D14).
+  // Its only door is the 'Propose a Threesome' chip render.js builds when
+  // two residents are present; `source: { kind: 'paired' }` keeps it from
+  // ever resolving as a flat chip, and ui.js intercepts it before the
+  // registered-action bridge.
+  'boundary.throuple': {
+    id: 'boundary.throuple', label: 'Propose a Threesome',
+    source: { kind: 'paired' },
+    group: 'boundary', chipPriority: 0,
   },
   // --- Notes (perception plan Phase 4) ---
   // Reading is the mechanism, not a formality: flipping `read` to 'read'
@@ -451,6 +811,51 @@ const ACTION_DEFS = {
     buildEffects: buildPhoneUnplugEffects,
     narration: { mode: 'dynamic', build: phoneUnplugNarration },
   },
+  // --- Music devices (Intimacy & Voyeurism Phase 19) ---------------------
+  // The soundscape verbs behind a device's "X >" submenu (SOUND_DEVICE_DEFS.
+  // affords). Grouping-only parent like the door/wardrobe/bed ones (no
+  // source, never executes); the three verbs are intercepted by nothing —
+  // they are normal registered actions whose prepare/buildEffects write the
+  // DEVICE OBJECT's state (SET_OBJECT_STATE), which is what flips the
+  // standing `music` signal on and off. The parent chip carries the device's
+  // objId as data-obj-id; executeAction threads it into ctx.actObjId (see
+  // soundDeviceObj). play turns the device on at an audible volume,
+  // set_volume picks 0-3, eject stops it.
+  'sound.interact': {
+    id: 'sound.interact', label: 'Device',
+    group: 'sound', chipPriority: 45,
+    submenu: ['sound.play', 'sound.set_volume', 'sound.eject'],
+  },
+  'sound.play': {
+    id: 'sound.play', label: 'Play Music', verbs: ['play music', 'turn on the music', 'start some music'],
+    source: { kind: 'object', objDefs: ['stereo', 'boombox', 'hobby_record_player'] },
+    group: 'sound', chipPriority: 45,
+    requires: [],
+    timeCost: { base: 1 },
+    prepare: prepareSoundDevice,
+    buildEffects: buildSoundPlayEffects,
+    narration: { mode: 'dynamic', build: soundPlayNarration },
+  },
+  'sound.set_volume': {
+    id: 'sound.set_volume', label: 'Set Volume', verbs: ['set the volume', 'adjust the volume', 'volume'],
+    source: { kind: 'object', objDefs: ['stereo', 'boombox', 'hobby_record_player'] },
+    group: 'sound', chipPriority: 40,
+    requires: [],
+    timeCost: { base: 1 },
+    prepare: prepareSoundVolume,
+    buildEffects: buildSoundVolumeEffects,
+    narration: { mode: 'dynamic', build: soundVolumeNarration },
+  },
+  'sound.eject': {
+    id: 'sound.eject', label: 'Eject / Stop', verbs: ['stop the music', 'eject the record', 'turn it off'],
+    source: { kind: 'object', objDefs: ['stereo', 'boombox', 'hobby_record_player'] },
+    group: 'sound', chipPriority: 35,
+    requires: [],
+    timeCost: { base: 1 },
+    prepare: prepareSoundDevice,
+    buildEffects: buildSoundEjectEffects,
+    narration: { mode: 'dynamic', build: soundEjectNarration },
+  },
 };
 
 // --- Anchor preference table (continuous-behavior-engine Phase 3, D2/C3) ---
@@ -476,6 +881,7 @@ const ACTION_ANCHOR_OBJS = {
   'self.relax': ['sofa', 'sofa_basic', 'armchair'],
   'self.nap': ['sofa', 'sofa_basic', 'bed', 'bed_basic'],
   'self.dishes': ['sink_kitchen'],
+  'self.dishwasher': ['dishwasher'],
   'self.lock_door': ['bedroom_door', 'bathroom_door'],
   'self.unlock_door': ['bedroom_door', 'bathroom_door'],
   'self.read_note': ['note'],
@@ -495,6 +901,20 @@ const ACTION_ANCHOR_OBJS = {
 // name). Each checker takes (ctx, ...args) and returns true, or a string
 // reason the action is currently unavailable. `requires` entries on an
 // ACTION_DEFS record are 'name' or 'name:arg:arg'.
+// --- Intimacy & Voyeurism Phase 11 (D3/D13) ------------------------------
+// What counts as a private room for the intimacy acts. Mirrors the
+// willingness function's own private-room read (willingness.js keeps its
+// inline copy — Phase 9's purity is tested byte-identical, so the one place
+// that function runs is not touched; this is the UI/requirement-side twin).
+// A bedroom is private; the bathrooms are private (their ROOMS.type says
+// 'common', but a single-person bathroom behind a locking door is the most
+// private room in the flat); every open room is not.
+function isPrivateRoom(roomId) {
+  const def = roomId ? ROOMS[roomId] : null;
+  if (!def) return false;
+  return def.type === 'bedroom' || roomId.startsWith('bathroom');
+}
+
 const ACTION_REQUIREMENT_CHECKERS = {
   needAbove: (ctx, need, min) => (ctx.gameState.player[need] ?? 100) >= Number(min) || `Not enough ${need}.`,
   needBelow: (ctx, need, max) => (ctx.gameState.player[need] ?? 0) <= Number(max) || `${need} is too high right now.`,
@@ -505,10 +925,19 @@ const ACTION_REQUIREMENT_CHECKERS = {
   skillAtLeast: (ctx, skillId, lvl) => skillLevelSafe(ctx.gameState.player, skillId) >= Number(lvl) || `Requires ${skillId} level ${lvl}.`,
   hasFlag: (ctx, who, key) => !!resolveFlagBagSafe(ctx, who)[key] || 'Conditions not met.',
   hasRecipeIngredients: (ctx) => {
-    const fridge = findObjectInRoom(ctx, 'fridge');
-    const pantry = findObjectInRoom(ctx, 'pantry');
-    const pool = [...(fridge?.contents || []), ...(pantry?.contents || [])];
-    return availableRecipes(pool).length > 0 || 'Nothing to cook — the kitchen is out of ingredients.';
+    // Food-overhaul Phase 3 (D20): cooking draws from the whole kitchen —
+    // bag + fridge + pantry + freezer — so the gate reads the same pool the
+    // action itself will cook from (they can't disagree about whether
+    // there's something to make).
+    return availableRecipes(kitchenIngredientPool(ctx.gameState, ctx)).length > 0
+      || 'Nothing to cook — the kitchen is out of ingredients.';
+  },
+  // Food-overhaul Phase 3 (D26/D27/D29): the Reheat chip only lights up when
+  // a cookable leftover actually exists — REHEAT_ITEM's own source list
+  // (INVENTORY's reheatableStacks), the same list the action picks from.
+  hasReheatableFood: (ctx) => {
+    return reheatableStacks(ctx.gameState, ctx).length > 0
+      || 'Nothing to reheat — no cooked leftovers around.';
   },
   // Inventory overhaul Phase 3: the Eat chip only lights up when there's
   // actually something edible to eat — bag, or the fridge/pantry (in the
@@ -519,10 +948,31 @@ const ACTION_REQUIREMENT_CHECKERS = {
   hasEdibleFood: (ctx) => {
     return edibleStacks(ctx.gameState, ctx).length > 0 || 'Nothing to eat around here — check your bag, the fridge, or the pantry.';
   },
+  // Intimacy & Voyeurism Phase 5 (D11): Change Outfit only lights up when the
+  // wardrobe in this room actually holds something to wear — an empty closet
+  // is a real early-game state (bought clothing hasn't been delivered yet).
+  hasWardrobeClothes: (ctx) => {
+    const wardrobe = findObjectInRoom(ctx, 'wardrobe');
+    if (!wardrobe) return 'No wardrobe here.';
+    const hasClothes = (wardrobe.contents || []).some(s => (s?.qty || 0) > 0 && CLOTHING_DEFS[s.defId]);
+    return hasClothes || 'The wardrobe is empty — nothing to change into yet.';
+  },
   dishesDirty: (ctx) => {
-    const sink = findObjectInRoom(ctx, 'sink_kitchen');
-    const state = sink?.state?.dishes;
-    return (state === 'few' || state === 'many') || 'No dirty dishes to wash.';
+    // Food-overhaul Phase 4 (D9): "dirty" means dish units in the wash
+    // scope — the kitchen sink plus the kitchen/dining tables (eating
+    // leaves dishes on the table; "do the dishes" clears them all). Reads
+    // the same scope the wash/dishwasher actions clear, so the chip and the
+    // action can't disagree about whether there's something to do.
+    return dirtyDishScope(ctx.gameState, ctx.roomId).units > 0 || 'No dirty dishes to wash.';
+  },
+  // Food-overhaul Phase 4 (D11): the dishwasher chip only lights when a
+  // machine is here AND it's not mid-cycle (a running machine can't be
+  // re-loaded; a finished cycle is resolved on the action's prepare).
+  dishwasherReady: (ctx) => {
+    const dw = findObjectInRoom(ctx, 'dishwasher');
+    if (!dw) return 'No dishwasher here.';
+    if (dishwasherCycleProgress(dw, gameDaysNow(ctx.gameState.meta.clock)) === 'running') return 'The dishwasher is mid-cycle.';
+    return true;
   },
   doorUnlocked: (ctx) => {
     const door = findObjectInRoom(ctx, 'bedroom_door') || findObjectInRoom(ctx, 'bathroom_door');
@@ -641,75 +1091,393 @@ const ACTION_REQUIREMENT_CHECKERS = {
     const booking = getActiveEscortVisit(ctx.gameState, npcId);
     return isEscortServiceBooked(booking, serviceId) || `That wasn't part of what you booked.`;
   },
+  // Intimacy & Voyeurism Phase 9 (D13): the willingness gate as an action
+  // requirement — the first call site of willingness.js wired to the action
+  // pipeline. Phase 11's intimacy acts declare it as e.g.
+  // `requires: ['willingness:sex:0.6']` and set `ctx.actTargetNpcId` in
+  // their partner selection; the gate FAILS CLOSED on the hard floors
+  // (design invariant 1 — a floored target can never be made to
+  // participate, whatever the chip says) and returns refusal prose for a
+  // soft no. The optional third arg overrides the act's authored bar.
+  willingness: (ctx, act, threshold) => {
+    const targetId = ctx.actTargetNpcId || ctx.actTargetId || null;
+    if (!targetId) return 'You need to be with someone for that.';
+    const gate = resolveWillingnessGate(ctx.gameState, targetId, 'player', act || 'default', {
+      block: null,
+      location: ctx.roomId,
+      npcId: targetId,
+    });
+    if (gate.reason === 'no_target') return 'They are not here.';
+    if (gate.reason === 'floor') {
+      // Phase 11 (D9/D13): the marker tells executeAction whether a failed
+      // check is an actual REFUSAL (write noteIntimacyRefusal — a no means no
+      // for a while) or a hard-floor state (asleep/hostile/stranger/refusing
+      // already) that writes nothing. Only 'below_threshold' is a conscious
+      // soft no from an awake, non-hostile target.
+      if (!gate.reasons || !gate.reasons.includes('actively_refusing')) ctx._willingnessRefused = gate.reason;
+      return willingnessRefusalProse(ctx.gameState.npcs[targetId], gate);
+    }
+    if (gate.reason === 'below_threshold') {
+      ctx._willingnessRefused = 'below_threshold';
+      return willingnessRefusalProse(ctx.gameState.npcs[targetId], gate);
+    }
+    if (threshold !== undefined && gate.willingness < Number(threshold)) {
+      ctx._willingnessRefused = 'below_threshold';
+      return willingnessRefusalProse(ctx.gameState.npcs[targetId], gate);
+    }
+    return true;
+  },
+  // Intimacy & Voyeurism Phase 11 (D3/D13): the paired acts' room gates.
+  // privateRoom — the plan's `private_room` requirement (bedroom or bathroom);
+  // privacy — the plan's `privacy` requirement for sex: a locked door, or a
+  // room with nobody present but the chosen partner (a third person in the
+  // room is not privacy however locked the door is). Both pure reads.
+  privateRoom: (ctx) => isPrivateRoom(ctx.roomId) || 'You need a private room for that.',
+  privacy: (ctx) => {
+    const roomId = ctx.roomId;
+    if (!roomId || !ROOMS[roomId]) return 'Not a real room.';
+    if (getDoorState(ctx.gameState, roomId) === 'locked') return true;
+    const onlookers = (ctx.presentNpcIds || []).filter(id => id !== ctx.actTargetNpcId);
+    return onlookers.length === 0 || 'Someone else is here — not private enough.';
+  },
+  // The plan's `after_sex_or_close` for cuddle: the target is at close phase
+  // (or better) toward the player, or the two were intimate earlier TODAY —
+  // cuddling is a closeness act, not an icebreaker.
+  afterSexOrClose: (ctx) => {
+    const targetId = ctx.actTargetNpcId;
+    if (!targetId) return 'You need to be with someone for that.';
+    const npc = ctx.gameState.npcs?.[targetId];
+    if (!npc) return 'They are not here.';
+    const phase = npc.relPlayer?.conversationPhase || 'early';
+    if (PHASE_ORDER.indexOf(phase) >= PHASE_ORDER.indexOf('close')) return true;
+    const hist = npc.flags?._intimacyHistory;
+    if (hist && typeof hist.lastIntimateDay === 'number'
+        && ctx.gameState.meta?.clock && hist.lastIntimateDay === ctx.gameState.meta.clock.day) return true;
+    return 'They are not close enough to you for that yet.';
+  },
 };
 
-// --- self.cook's runtime logic (ITEMS-backed: ITEM_DEFS/RECIPES) ---
-// prepare() picks the recipe once; buildEffects/cookNarration both read
-// that same pick, so what happened and what got said about it can't
-// disagree (see ACTIONS' executeAction for why this two-step exists).
-// Since Phase 2 prepare is async: with one satisfiable recipe it cooks
-// straight through; with several it asks the player which to make via
-// RENDER's openRecipePicker (a modal, resolved by clicking a row). A
-// cancel resolves null and marks the action cancelled so executeAction
+// --- self.cook's runtime logic (food-overhaul Phase 5: the interactive
+// cooking engine — D8/D14/D16) ---
+// prepare() drives the whole manual loop: pick the recipe once, then
+// RENDER's openCookScreen runs cookware → processing → mixing → fat →
+// seasoning → heat/timing → grade reveal → rescues, and returns the fully
+// resolved plan (steps, seasoning, seed, minutes, the engine's outcome and
+// the plate INSTANCE it produces). buildEffects/cookNarration both read
+// that same prepared object, so what happened and what got said about it
+// can't disagree (see ACTIONS' executeAction for why this two-step exists).
+// A cancel resolves null and marks the action cancelled so executeAction
 // bails before spending time or eating ingredients.
 async function prepareCook(ctx) {
-  const fridge = findObjectInRoom(ctx, 'fridge');
-  const pantry = findObjectInRoom(ctx, 'pantry');
-  const pool = [...(fridge?.contents || []), ...(pantry?.contents || [])];
+  const pool = kitchenIngredientPool(ctx.gameState, ctx);
   const recipes = availableRecipes(pool);
-  if (recipes.length === 0) return { recipes, fridge, pantry, recipe: null };
-  if (recipes.length === 1) return { recipes, fridge, pantry, recipe: recipes[0] };
-  const choiceId = await openRecipePicker(recipes);
-  if (!choiceId) return { recipes, fridge, pantry, recipe: null, cancelled: true };
-  return { recipes, fridge, pantry, recipe: recipes.find(r => r.id === choiceId) || null };
+  if (recipes.length === 0) return { recipes, recipe: null };
+  let recipe;
+  if (recipes.length === 1) {
+    recipe = recipes[0];
+  } else {
+    const choiceId = await openRecipePicker(recipes);
+    if (!choiceId) return { recipes, recipe: null, cancelled: true };
+    recipe = recipes.find(r => r.id === choiceId);
+    if (!recipe) return { recipes, recipe: null, cancelled: true };
+  }
+  // The interactive cook screen. openCookScreen needs the real current
+  // gameState for its availability checks — ctx.gameState is the action
+  // start snapshot, which is exactly what prepare() may always use (the
+  // live-state hazard is handled below prepare, in buildEffects).
+  const prepared = await openCookScreen(recipe, ctx.gameState, ctx);
+  if (!prepared) return { recipes, recipe: null, cancelled: true };
+  return { recipes, recipe, ...prepared };
 }
 
-// Ingredients may be split across fridge and pantry (an omelette's eggs
-// come from the fridge, a sandwich's bread from the pantry and cheese
-// from the fridge) — checks fridge stock first, pantry for the remainder,
-// matching pickAvailableRecipe's combined-pool availability check.
+// Food-overhaul Phase 3 (D20): the whole kitchen as one ingredient pool —
+// the player's bag plus every nearby fridge/pantry/freezer (the dining-room
+// fallback the same way INVENTORY's nearbyFoodContainers does it, so a meal
+// cooked from the kitchen can also be planned from the table). read by the
+// hasRecipeIngredients gate and prepareCook; buildCookEffects re-derives
+// its own copy from the LIVE state (see kitchenSources).
+function kitchenIngredientPool(gs, ctx) {
+  const pool = [...(gs?.player?.inventory || [])];
+  for (const obj of kitchenContainers(gs, ctx)) pool.push(...(obj?.contents || []));
+  return pool;
+}
+
+// The container objects cooking/eating/reheating can draw from, resolved
+// against the given gameState (live or snapshot — caller's choice). Mirrors
+// nearbyFoodContainers' in-room-then-dining-fallback shape without reading
+// ctx.roomObjects, which is captured at action START and can be stale once
+// a picker await has let a heartbeat replace currentGameState.
+function kitchenContainers(gs, ctx) {
+  const isKitchen = (o) => o?.defId === 'fridge' || o?.defId === 'pantry' || o?.defId === 'freezer';
+  const inRoom = Object.values(gs?.objects?.[`room_${ctx?.roomId}`] || {}).filter(isKitchen);
+  if (inRoom.length > 0) return inRoom;
+  if (ctx?.roomId === 'dining') {
+    return Object.values(gs?.objects?.['room_kitchen'] || {}).filter(isKitchen);
+  }
+  return [];
+}
+
+// buildEffects' DESTROY_ITEM sources, in draw order: bag first (bag food
+// spoils 4× faster than fridge food, so it's the stack to burn), then
+// fridge, pantry, freezer. Each source carries the location ref its
+// DESTROY_ITEM line will name.
+function kitchenSources(gs, ctx) {
+  const sources = [{ id: 'player', contents: gs?.player?.inventory }];
+  for (const obj of kitchenContainers(gs, ctx)) sources.push({ id: obj.id, contents: obj.contents });
+  return sources;
+}
+
+// Live-state object lookup for buildEffects (same rule as executeAction's
+// `live`): findObjectInRoom reads ctx.roomObjects, which was captured when
+// the action started — but the picker await let the continuous clock replace
+// currentGameState, so effects must resolve the stove/fridge/sink against
+// the LIVE state or they'd write through the detached snapshot. Scans every
+// bucket like EFFECTS' findObjectById (object ids are stable, so what this
+// finds is the same instance, freshly read).
+function findObjectByDefIdLive(gs, defId) {
+  for (const bucket of Object.values(gs?.objects || {})) {
+    const o = Object.values(bucket).find(o => o?.defId === defId);
+    if (o) return o;
+  }
+  return null;
+}
+
+// --- wardrobe.change_outfit's runtime logic (Intimacy & Voyeurism Phase 5,
+// D11) ---
+// prepare() opens the wardrobe panel (RENDER's openWardrobePanel — the same
+// picker family as openRecipePicker/openSpreadPicker) and returns the
+// player's chosen OUTFIT ({ slot: itemId }, missing slot = nothing worn
+// there) alongside the outfit they were wearing BEFORE, so the narration can
+// say what actually changed. A cancel (Close / Escape) resolves null and
+// marks the action cancelled, so executeAction bails before spending any
+// time — the wardrobe is never a free instant outfit-swap either.
+async function prepareChangeOutfit(ctx) {
+  const wardrobe = findObjectInRoom(ctx, 'wardrobe');
+  if (!wardrobe) return { cancelled: true };
+  const player = ctx.gameState.player;
+  const previousOutfit = player?.outfit || {};
+  const outfit = await openWardrobePanel(ctx.gameState, wardrobe.id, previousOutfit);
+  if (!outfit) return { cancelled: true };
+  return { outfit, previousOutfit };
+}
+
+// Names what actually changed, slot by slot — never a canned "you changed
+// clothes" line (D4's spirit: the wardrobe is a system, so the prose is
+// specific). Reads the prepared pick against the previous outfit, so the
+// narration and the applied state cannot disagree.
+function changeOutfitNarration(ctx, prepared) {
+  if (!prepared?.outfit) return 'You change clothes.';
+  const added = [];
+  for (const slot of CLOTHING_SLOTS) {
+    const now = prepared.outfit[slot];
+    if (!now || now === prepared.previousOutfit?.[slot]) continue;
+    const def = CLOTHING_DEFS[now];
+    if (def) added.push(def.label.toLowerCase());
+  }
+  if (added.length === 0) return 'You straighten your clothes and call it an outfit.';
+  const named = added.length === 1 ? added[0] : `${added.slice(0, -1).join(', ')} and ${added[added.length - 1]}`;
+  return `You change into your ${named}.`;
+}
+
+// Ingredients may be split across bag, fridge, pantry and freezer (an
+// omelette's eggs come from the fridge, a sandwich's bread from the pantry
+// and cheese from the fridge) — draws each ingredient down the kitchenSources
+// order, emitting one DESTROY_ITEM per source that actually supplies any.
+// The pool the recipe was checked against (kitchenIngredientPool) is exactly
+// the sum of these sources, so what looked available IS what gets destroyed.
 // Phase 3 decision (resolves the cooking double-count): ingredients are
 // DESTROYED without restoring hunger — they're transformed into the meal,
 // not eaten raw, so a cooked dish restores exactly the meal's own
 // consumable values and nothing is granted from nothing. (The maid's
 // performMaidVisit never went through buildCookEffects, so this change
 // does not touch it.)
-function ingredientDestroyLines(ing, fridge, pantry) {
-  const fridgeQty = stackQty(fridge?.contents, ing.defId);
-  const fromFridge = Math.min(ing.qty, fridgeQty);
-  const fromPantry = ing.qty - fromFridge;
+function ingredientDestroyLines(ing, sources) {
   const lines = [];
-  if (fromFridge > 0 && fridge) lines.push(`DESTROY_ITEM ${ing.defId} ${fromFridge} ${fridge.id}`);
-  if (fromPantry > 0 && pantry) lines.push(`DESTROY_ITEM ${ing.defId} ${fromPantry} ${pantry.id}`);
+  let remaining = ing.qty;
+  for (const src of sources || []) {
+    if (remaining <= 0) break;
+    const take = Math.min(remaining, stackQty(src?.contents, ing.defId));
+    if (take > 0) {
+      lines.push(`DESTROY_ITEM ${ing.defId} ${take} ${src.id}`);
+      remaining -= take;
+    }
+  }
   return lines;
 }
 
 // RECIPES' `leaves` lines use {stove}/{sink} placeholders (declared once,
 // resolved here against whichever actual instance is in this kitchen —
 // the same recipe text works regardless of the room's seeded object ids).
+// Resolves against the LIVE state (same rule as buildCookEffects): object
+// ids are stable, but reading them through the pre-await ctx would violate
+// the live-state contract for nothing.
 function expandCookLeaveLine(line, ctx) {
-  const stove = findObjectInRoom(ctx, 'stove');
-  const sink = findObjectInRoom(ctx, 'sink_kitchen');
+  const gs = (typeof currentGameState !== 'undefined' && currentGameState) || ctx.gameState;
+  const stove = findObjectByDefIdLive(gs, 'stove');
+  const sink = findObjectByDefIdLive(gs, 'sink_kitchen');
   return line.replace('{stove}', stove?.id || '').replace('{sink}', sink?.id || '');
 }
 
-// Produces the full recipe batch into inventory, then eats one portion
-// immediately (matching the old self.cook's "click once, hunger restored"
-// feel) — leftovers stay in inventory when a recipe produces more than 1.
+// Produces the recipe's full batch as a PLATE INSTANCE (COOKING's
+// buildPlate — the engine's snapshot: quality/grade/kcal/flaws derived once
+// and never re-derived), spawns it into the fridge (bag fallback for the
+// pre-fridge early game), then auto-eats one serving immediately (matching
+// the old self.cook's "click once, hunger restored" feel — the rest is
+// leftovers). Fats/seasonings drawn by the plan are consumed on the side
+// (fats via CONSUME_ITEM, seasonings via TRANSFORM_ITEM — both trusted
+// pipeline verbs). Re-derives the LIVE gameState after prepare()'s modal
+// await (a heartbeat/checkpoint can have replaced currentGameState while
+// it was open) — the live-state hazard this whole pipeline guards: effects
+// written through the stale ctx capture would silently vanish from the save.
 function buildCookEffects(ctx, prepared) {
   if (!prepared?.recipe) return [];
-  const { recipe, fridge, pantry } = prepared;
-  const lines = recipe.ingredients.flatMap(ing => ingredientDestroyLines(ing, fridge, pantry));
-  lines.push(`SPAWN_ITEM ${recipe.produces.defId} ${recipe.produces.qty} player`);
-  lines.push(`CONSUME_ITEM ${recipe.produces.defId} 1 player`);
+  const { recipe } = prepared;
+  const gs = (typeof currentGameState !== 'undefined' && currentGameState) || ctx.gameState;
+  const now = gameDaysNow(gs?.meta?.clock);
+  const sources = kitchenSources(gs, ctx);
+  const lines = recipe.ingredients.flatMap(ing => ingredientDestroyLines(ing, sources));
+  // The engine's plate — precomputed by the interactive screen when there
+  // was one (prepared.plate), or derived here for bare/legacy callers.
+  const plate = prepared.plate || buildPlate(gs, recipe, recipe.ingredients, recipe.method, recipe.cookware, prepared);
+  for (const reagentId of prepared.seasoning || []) {
+    const r = COOK_TUNING.reagents[reagentId];
+    if (!r) continue;
+    const verb = r.kind === 'fat' ? 'CONSUME_ITEM' : 'TRANSFORM_ITEM';
+    lines.push(...reagentConsumeLines(verb, reagentId, r.qtyPerUse, sources));
+  }
+  // The batch lives where it keeps best and where the leftovers stay
+  // reachable: the fridge. No fridge yet (early game) → the player's bag.
+  const fridge = findObjectByDefIdLive(gs, 'fridge');
+  const into = fridge ? fridge.id : 'player';
+  const metaJson = JSON.stringify({ plate, cohort: now, acquiredDay: now });
+  lines.push(`COOK_STEP cooked_meal 1 ${into} ${metaJson}`);
+  lines.push(`EAT_ITEM cooked_meal 1 ${into}`);
+  // Food-overhaul Phase 6 (D14): a plate that clears the CURRENT auto-cook
+  // threshold records its mastery proof — instant cook for this recipe
+  // unlocks forever (world.autoCookCleared, via the AUTO_COOK_UNLOCK verb).
+  // Equipment upgrades LOWER the threshold, so a cook that missed the bar
+  // today can unlock the same recipe later under a better stove.
+  const threshold = autocookThreshold(recipe, gs);
+  if (plate.grade && gradeAtOrAbove(plate.grade, threshold)) {
+    lines.push(`AUTO_COOK_UNLOCK ${recipe.id} ${plate.grade}`);
+  }
+  // Food-overhaul Phase 4 (D9): the cook's dish footprint — the recipe
+  // method's cookware (DISH_TUNING.cookFootprint) plus the universal prep
+  // tools — lands in the sink as REAL dish units. The production rules live
+  // once in DISH_TUNING; the recipes' old SET_OBJECT_STATE sink lines are
+  // gone. `{sink}` resolves live via expandCookLeaveLine below; no sink in
+  // the kitchen (early game) → no dish mess to leave.
+  const sinkId = findObjectByDefIdLive(gs, 'sink_kitchen')?.id;
+  if (sinkId) {
+    const footprint = { ...(DISH_TUNING.cookFootprint[recipe.method] || {}), ...DISH_TUNING.prepFootprint };
+    for (const [dishType, qty] of Object.entries(footprint)) {
+      lines.push(`ADD_DISHES ${sinkId} ${dishType} ${qty}`);
+    }
+  }
   for (const leave of recipe.leaves || []) lines.push(expandCookLeaveLine(leave, ctx));
+  return lines;
+}
+
+// Draws qty of a reagent down the kitchenSources order (bag → fridge →
+// pantry → freezer), emitting one verb line per source that supplies any —
+// the mirror of ingredientDestroyLines, for the engine's fat/seasoning
+// consumption. `verb` is CONSUME_ITEM (fats) or TRANSFORM_ITEM (seasonings).
+function reagentConsumeLines(verb, reagentId, qty, sources) {
+  const lines = [];
+  let remaining = qty;
+  for (const src of sources || []) {
+    if (remaining <= 0) break;
+    const take = Math.min(remaining, stackQty(src?.contents, reagentId));
+    if (take > 0) {
+      lines.push(`${verb} ${reagentId} ${take} ${src.id}`);
+      remaining -= take;
+    }
+  }
   return lines;
 }
 
 function cookNarration(ctx, prepared) {
   if (!prepared?.recipe) return 'You rummage through the kitchen but come up empty-handed.';
-  const leftover = prepared.recipe.produces.qty > 1;
-  return `You cook ${prepared.recipe.label.toLowerCase()}. It smells good` + (leftover ? " — there's enough for leftovers." : '.');
+  const recipe = prepared.recipe;
+  const leftover = (recipe.servings || 1) > 1;
+  let tail = 'It smells good.';
+  const grade = prepared.plate?.grade;
+  const flawLines = (prepared.plate?.flaws || []).map(f => cookFlawTail(f));
+  if (grade) {
+    tail = `It comes out ${grade}${flawLines.length ? ` — ${flawLines[0]}.` : '.'}`;
+  }
+  // Food-overhaul Phase 6 (D14): the auto-cook path has its own voice — it
+  // is NOT a fresh cook, it's a recipe you've proven you know, on autopilot.
+  if (prepared.auto) {
+    return `You put together ${recipe.label.toLowerCase()} on autopilot — you've made it enough times that it barely needs you${flawLines.length ? ` (${flawLines[0]})` : '.'}`;
+  }
+  return `You cook ${recipe.label.toLowerCase()}. ${tail}` + (leftover ? " There's enough for leftovers." : '');
+}
+
+// --- self.reheat's runtime logic (food-overhaul Phase 3, D26/D27/D29) ---
+// prepare() picks the leftover once; buildEffects/reheatNarration read that
+// same pick (the ACTIONS two-step contract). Options come from INVENTORY's
+// reheatableStacks (plate batches with servings left, bag + nearby fridge/
+// pantry/freezer); one option reheats straight through, several ask via
+// RENDER's openReheatPicker. A cancel resolves null and marks the action
+// cancelled so executeAction bails before spending time or touching food.
+async function prepareReheat(ctx) {
+  const options = reheatableStacks(ctx.gameState, ctx);
+  if (options.length === 0) return { options, option: null, cancelled: true };
+  if (options.length === 1) return { options, option: options[0] };
+  const choice = await openReheatPicker(options);
+  // Index-based (== null, not falsy — index 0 is a valid pick).
+  if (choice == null) return { options, option: null, cancelled: true };
+  return { options, option: options[choice] || null };
+}
+
+function buildReheatEffects(ctx, prepared) {
+  const option = prepared?.option;
+  if (!option) return [];
+  // REHEAT_ITEM reheats the whole stack where it sits (the fridge/freezer
+  // batch stays put — no move needed for the kitchen touch to land).
+  return [`REHEAT_ITEM ${option.stack.defId} ${option.from}`];
+}
+
+function reheatNarration(ctx, prepared) {
+  const option = prepared?.option;
+  if (!option) return 'You stand at the stove with nothing to warm up.';
+  const label = stackLabel(option.stack).toLowerCase();
+  const fresh = freshnessOf(option.stack, option.containerDef ?? null, option.day ?? gameDaysNow(ctx?.gameState?.meta?.clock));
+  const frozen = fresh?.frozenState === 'frozen' || fresh?.frozenState === 'thawing';
+  const stale = fresh?.key === 'stale' || fresh?.key === 'spoiled';
+  const tail = frozen
+    ? ' — the frozen batch thaws and warms through.'
+    : stale
+      ? ' — it comes back to life.'
+      : '.';
+  return `You reheat the ${label} on the stove${tail}`;
+}
+
+// Food-overhaul Phase 6 (D12): the microwave's prepare — the same reheat
+// picker as the stove, plus the machine's reheatMinutes (EQUIPMENT_DEFS,
+// keyed to kitchen_appliances) so resolveTimeCost clocks the action at the
+// machine you actually own. Falls through the shared cancel/no-options
+// shapes unchanged.
+async function prepareMicrowave(ctx) {
+  const base = await prepareReheat(ctx);
+  if (!base.option) return base;
+  return { ...base, minutes: microwaveReheatMinutes(ctx.gameState) || ACTION_TUNING.reheatMinutes };
+}
+
+function microwaveNarration(ctx, prepared) {
+  const option = prepared?.option;
+  if (!option) return 'You stand at the microwave with nothing to warm up.';
+  const label = stackLabel(option.stack).toLowerCase();
+  const fresh = freshnessOf(option.stack, option.containerDef ?? null, option.day ?? gameDaysNow(ctx?.gameState?.meta?.clock));
+  const frozen = fresh?.frozenState === 'frozen' || fresh?.frozenState === 'thawing';
+  const stale = fresh?.key === 'stale' || fresh?.key === 'spoiled';
+  const tail = frozen
+    ? ' — the frozen batch thaws and steams through.'
+    : stale
+      ? ' — it comes back to life.'
+      : '.';
+  return `You nuke the ${label}${tail}`;
 }
 
 // --- Social time (inventory overhaul Phase 6, D13) ---
@@ -795,6 +1563,17 @@ function buildHobbyEffects(ctx, prepared) {
     const bonus = Math.round(affection * MOOD_TARGET.social.activityScale * 100) / 100;
     if (bonus > 0) lines.push(`ADJUST_NEED player mood +${bonus}`);
   }
+  // Intimacy & Voyeurism Phase 19: playing the records IS the music — the
+  // record player's standing music signal comes from its own state, so the
+  // hobby spins it up (on, audible). The sound submenu verbs control it
+  // from there.
+  if (key === 'hobby_record_player') {
+    const rec = findObjectInRoom(ctx, 'hobby_record_player');
+    if (rec) {
+      lines.push(`SET_OBJECT_STATE ${rec.id} power on`);
+      if (!rec.state?.volume || rec.state.volume === '0') lines.push(`SET_OBJECT_STATE ${rec.id} volume 2`);
+    }
+  }
   return lines;
 }
 
@@ -814,6 +1593,78 @@ function hobbyNarration(ctx, prepared) {
   return 'You lose yourself in the hobby for a while. Good for the head.';
 }
 
+// The device object behind a sound verb, resolved from the parent chip's
+// objId (ctx.actObjId, threaded by executeAction) so a submenu row acts on
+// the EXACT device it was opened from; falls back to the first sound device
+// in the room (a submenu row without the objId context, e.g. a re-dispatched
+// action). Null when no device is reachable — the caller cancels.
+function soundDeviceObj(ctx) {
+  if (ctx.actObjId) {
+    const byId = findObjectById(ctx.gameState, ctx.actObjId);
+    if (byId && SOUND_DEVICE_DEFS[byId.defId]) return byId;
+  }
+  for (const key of Object.keys(SOUND_DEVICE_DEFS)) {
+    const sdef = SOUND_DEVICE_DEFS[key];
+    if (!sdef.sourceObjDef) continue;
+    const obj = findObjectInRoom(ctx, sdef.sourceObjDef);
+    if (obj) return obj;
+  }
+  return null;
+}
+
+function prepareSoundDevice(ctx) {
+  const obj = soundDeviceObj(ctx);
+  if (!obj) return { cancelled: true };
+  return { objId: obj.id, defId: obj.defId, volume: obj.state?.volume || '0', power: obj.state?.power || 'off' };
+}
+
+// The volume picker's prepare: presents the 0-3 choices (RENDER's
+// openVolumePicker) and resolves to the chosen STATE string or cancelled.
+async function prepareSoundVolume(ctx) {
+  const obj = soundDeviceObj(ctx);
+  if (!obj) return { cancelled: true };
+  const label = OBJECT_DEFS[obj.defId]?.label || 'Device';
+  const chosen = await openVolumePicker(obj.state?.volume || '0', label);
+  if (!chosen) return { cancelled: true };
+  return { objId: obj.id, defId: obj.defId, volume: chosen };
+}
+
+function buildSoundPlayEffects(ctx, prepared) {
+  if (!prepared?.objId) return [];
+  const lines = [`SET_OBJECT_STATE ${prepared.objId} power on`];
+  if (!prepared.volume || prepared.volume === '0') lines.push(`SET_OBJECT_STATE ${prepared.objId} volume 2`);
+  return lines;
+}
+
+function buildSoundVolumeEffects(ctx, prepared) {
+  if (!prepared?.objId) return [];
+  return [`SET_OBJECT_STATE ${prepared.objId} volume ${prepared.volume}`];
+}
+
+function buildSoundEjectEffects(ctx, prepared) {
+  if (!prepared?.objId) return [];
+  return [`SET_OBJECT_STATE ${prepared.objId} power off`];
+}
+
+function soundDeviceName(prepared) {
+  const label = prepared?.defId ? (OBJECT_DEFS[prepared.defId]?.label || 'device') : 'device';
+  return label.toLowerCase();
+}
+
+function soundPlayNarration(ctx, prepared) {
+  return `You switch on the ${soundDeviceName(prepared)}. The room fills with music.`;
+}
+
+function soundVolumeNarration(ctx, prepared) {
+  const name = soundDeviceName(prepared);
+  if (prepared?.volume === '0') return `You turn the ${name} down to nothing.`;
+  return `You set the ${name} to volume ${prepared?.volume}.`;
+}
+
+function soundEjectNarration(ctx, prepared) {
+  return `You stop the ${soundDeviceName(prepared)}. The room goes quiet.`;
+}
+
 // --- self.eat's runtime logic (inventory overhaul Phase 3) ---
 // prepare() picks the food once; buildEffects/eatNarration both read that
 // same pick (the ACTIONS two-step contract, same as self.cook). Options
@@ -829,8 +1680,11 @@ async function prepareEat(ctx) {
   if (options.length === 0) return { options, option: null, cancelled: true, affection };
   if (options.length === 1) return { options, option: options[0], affection };
   const choice = await openEatPicker(options);
-  if (!choice) return { options, option: null, cancelled: true, affection };
-  return { options, option: options.find(o => o.from === choice.from && o.stack.defId === choice.defId) || null, affection };
+  // Index-based resolution (== null, not falsy: index 0 is a valid pick) —
+  // two plate batches of the same recipe can share a container, and only
+  // the option's position in THIS list tells them apart.
+  if (choice == null) return { options, option: null, cancelled: true, affection };
+  return { options, option: options[choice] || null, affection };
 }
 
 function buildEatEffects(ctx, prepared) {
@@ -840,6 +1694,20 @@ function buildEatEffects(ctx, prepared) {
   // bag would spoil them 4× faster) and restores the def's consumable
   // scaled to one serving.
   const lines = [`EAT_ITEM ${option.stack.defId} 1 ${option.from}`];
+  // Food-overhaul Phase 4 (D9): eating dirties a plate + fork onto the
+  // table in the room you ate in (DISH_TUNING.eatFootprint — a solo bite
+  // leaves a one-plate mess the next wash pass clears). Resolved against
+  // the LIVE state (same rule as buildCookEffects): the picker await can
+  // let a heartbeat replace currentGameState, so the table id must come
+  // from the live gameState, not the pre-await ctx capture.
+  const gs = (typeof currentGameState !== 'undefined' && currentGameState) || ctx.gameState;
+  const table = Object.values(gs.objects?.[`room_${ctx.roomId}`] || {})
+    .find(o => o.defId === 'kitchen_table' || o.defId === 'dining_table');
+  if (table) {
+    for (const [dishType, qty] of Object.entries(DISH_TUNING.eatFootprint)) {
+      lines.push(`ADD_DISHES ${table.id} ${dishType} ${qty}`);
+    }
+  }
   // Phase 6 (D13): eating together pays — a liked resident at the table
   // adds a small affection-scaled mood impulse on top of the food's own
   // values. Hostile or alone contributes 0.
@@ -855,21 +1723,34 @@ function eatNarration(ctx, prepared) {
   const option = prepared?.option;
   if (!option) return 'You rummage through your food but come up empty.';
   const def = option.def;
-  const label = def.label || 'something';
+  // Food-overhaul Phase 3 (D25): a plate's label is its own snapshot, not
+  // the cooked_meal carrier def's — a fridge of plates narrates as "pasta"
+  // / "stir-fry", never as "cooked meal".
+  const label = stackLabel(option.stack).toLowerCase();
   // Phase 4: surface the eaten item's freshness — the picker shows the
   // same freshness tags, and the Stale/Spoiled lines match the restore
   // penalties applyEatItem applies. There is no Rotten line: rotten food
   // never reaches the picker (INVENTORY's edibleStacks) and applyEatItem
   // would refuse it anyway.
   const fresh = freshnessOf(option.stack, option.containerDef ?? null, gameDaysNow(ctx?.gameState?.meta?.clock));
-  if (fresh?.key === 'spoiled') return `You eat some ${label.toLowerCase()}. It tastes off, and you know it the whole way down.`;
-  if (fresh?.key === 'stale') return `You eat some ${label.toLowerCase()}. It has been sitting a while — it does the job.`;
+  if (fresh?.key === 'spoiled') return `You eat some ${label}. It tastes off, and you know it the whole way down.`;
+  if (fresh?.key === 'stale') return `You eat some ${label}. It has been sitting a while — it does the job.`;
+  // Food-overhaul Phase 3 (D27/D28): a plate eaten in a way that costs mood
+  // gets its own line — the cold betterHot plate forfeiting its bonus, and
+  // the frozen-ordinary-plate penalty bite — mirroring what applyEatItem
+  // actually does to the player's mood bar.
+  if (option.stack?.meta?.plate) {
+    const cold = fresh?.frozenState === 'frozen' || fresh?.frozenState === 'thawing';
+    const hotNow = !cold && ((option.stack.meta.plate.wasReheated || option.stack.meta.wasReheated) || fresh?.key === 'fresh');
+    if (stackBetterHot(option.stack) && !hotNow) return `You eat the ${label} cold. It still fills you up, but the magic is gone.`;
+    if (cold && !stackFrozenFood(option.stack)) return `You eat the ${label} straight from the freezer. It's a miserable mouthful, but it's food.`;
+  }
   // Phase 6: eating with a liked resident is its own line — the social
   // bonus buildEatEffects added deserves narration.
-  if ((prepared?.affection ?? 0) > 0) return `You share a meal with someone who actually likes you. The ${label.toLowerCase()} never tasted better.`;
-  if (def.category === 'drink') return `You drink some ${label.toLowerCase()}.`;
+  if ((prepared?.affection ?? 0) > 0) return `You share a meal with someone who actually likes you. The ${label} never tasted better.`;
+  if (def.category === 'drink') return `You drink some ${label}.`;
   const amount = itemServings(def) > 1 ? 'some of the' : 'a';
-  return `You eat ${amount} ${label.toLowerCase()}.`;
+  return `You eat ${amount} ${label}.`;
 }
 
 // --- set_meal's runtime logic (inventory overhaul Phase 7, D7) ---
@@ -898,20 +1779,29 @@ async function prepareSetMeal(ctx) {
   const options = edibleStacks(ctx.gameState, ctx);
   if (options.length === 0) return { options, spread: [], cancelled: true, affection };
   const attendees = mealAttendees(ctx.gameState, ctx.roomId);
+  // Food-overhaul Phase 7 (D23): each dish rows who at the table actually
+  // likes it — the spread picker shows "Maya loves it · Sam hates it" so
+  // catering to known tastes is a visible decision, not a guess. The notes
+  // are computed once here (taste is a pure function of each NPC) and read
+  // by RENDER's openSpreadPicker.
+  for (const o of options) {
+    o.tasteNotes = tasteNoteList(o.stack, attendees)
+      .map(n => `${n.name} ${TASTE_TUNING.bands[n.band].label}`);
+  }
   const seats = 1 + attendees.length; // the player plus everyone at the table
   const chosen = await openSpreadPicker(options, { seats, max: COMMITMENT_TUNING.maxSpreadDishes });
   if (!chosen || chosen.length === 0) return { options, spread: [], cancelled: true, affection };
-  const spread = chosen
-    .map(c => options.find(o => o.from === c.from && o.stack.defId === c.defId))
-    .filter(Boolean);
+  // Index-based (two plates of the same recipe can share a container; the
+  // position in THIS options list is the only unambiguous key).
+  const spread = chosen.map(i => options[i]).filter(Boolean);
   if (spread.length === 0) return { options, spread: [], cancelled: true, affection };
 
   const hasCommitment = activeMealCommitmentsInRoom(ctx.gameState, ctx.roomId).length > 0;
-  // The dining table is the household's table even when the player cooks in
-  // the kitchen — but the mess only lands on it if the meal actually
-  // happened there (the player.location === 'dining' guard in buildEffects).
-  const diningTable = Object.values(ctx.gameState.objects?.['room_dining'] || {})
-    .find(o => o.defId === 'dining_table') || null;
+  // The table the mess lands on is resolved LIVE in buildSetMealEffects
+  // against the room the meal actually happened in (dining table in the
+  // dining room, kitchen table in the kitchen) — buildEffects must never
+  // write through a pre-await object capture, and the room is known only at
+  // apply time.
 
   // Seat order is the player first, then present NPCs in presence order —
   // the host serves themselves, then the table.
@@ -919,7 +1809,7 @@ async function prepareSetMeal(ctx) {
   const servings = allocateSpread(spread, eaters);
   const fedNpcIds = servings.filter(s => s.who !== 'player').map(s => s.who);
   return {
-    options, spread, servings, affection, attendees, hasCommitment, diningTable, fedNpcIds,
+    options, spread, servings, affection, attendees, hasCommitment, fedNpcIds,
     seats, totalServings: spreadServings(spread),
   };
 }
@@ -952,7 +1842,10 @@ function allocateSpread(spread, eaters) {
     }
     if (left[dish] <= 0) break; // the whole spread is gone — the rest go unfed
     left[dish] -= 1;
-    out.push({ who, defId: spread[dish].stack.defId, from: spread[dish].from, def: spread[dish].def });
+    // The stack rides along so per-dish consumers (the mood math in
+    // buildSetMealEffects) can read a PLATE's instance values — a def id is
+    // not enough to tell a plate from the carrier def's placeholder.
+    out.push({ who, defId: spread[dish].stack.defId, from: spread[dish].from, def: spread[dish].def, stack: spread[dish].stack });
     dish = (dish + 1) % spread.length;
   }
   return out;
@@ -965,6 +1858,17 @@ function foodQuality(def) {
   const c = def.consumable || {};
   const raw = (c.hunger || 0) + (c.mood || 0) * 40 + (c.energy || 0) * 0.4;
   return clamp(raw / 60, 0, 1);
+}
+
+// How good a single dish on the table is, 0..1. Food-overhaul Phase 3: a
+// PLATE's quality is its instance snapshot (plate.quality, set once at cook
+// time — design invariant 1) — the cooked_meal carrier def only carries a
+// placeholder consumable, so reading it would call every home-cooked plate
+// a dry sandwich.
+function dishQuality(o) {
+  const plate = o?.stack?.meta?.plate;
+  if (plate) return plate.quality;
+  return foodQuality(o?.def);
 }
 
 // How good the WHOLE TABLE is: its BEST dish, plus
@@ -981,8 +1885,14 @@ function foodQuality(def) {
 // banquet tops out rather than running away.
 function spreadQuality(spread) {
   if (!spread || spread.length === 0) return 0;
-  const best = Math.max(...spread.map(o => foodQuality(o.def)));
-  const variety = (new Set(spread.map(o => o.def.id)).size - 1) * COMMITMENT_TUNING.spreadVarietyBonus;
+  const best = Math.max(...spread.map(o => dishQuality(o)));
+  // Distinct dishes by what they actually ARE: a plate counts by its recipe,
+  // a def-driven dish by its def id — two cooked plates are not variety.
+  const kinds = new Set(spread.map(o => {
+    const plate = o?.stack?.meta?.plate;
+    return plate ? plate.recipeKey : o?.def?.id;
+  }));
+  const variety = (kinds.size - 1) * COMMITMENT_TUNING.spreadVarietyBonus;
   return clamp(best + variety, 0, 1);
 }
 
@@ -1021,15 +1931,33 @@ function buildSetMealEffects(ctx, prepared) {
   const quality = spreadQuality(spread);
   // What each fed attendee's own serving does for their mood, from the dish
   // they actually got rather than an average of dishes they didn't.
-  const moodByEater = new Map(servings.map(s => [s.who, perServingConsumable(s.def).mood || 0]));
+  // Food-overhaul Phase 3: a plate's serving mood is its instance's
+  // plateMoodPerServing (quality-scaled), not the carrier def's placeholder.
+  const moodByEater = new Map(servings.map(s => {
+    const plate = s.stack?.meta?.plate;
+    const mood = plate ? (plateMoodPerServing(s.stack) ?? 0) : (perServingConsumable(s.def).mood || 0);
+    return [s.who, mood];
+  }));
+  // Food-overhaul Phase 7 (D23): each fed attendee's own serving is rated
+  // against their taste (love/like/neutral/dislike/hate), and the deltas
+  // scale by the band — feeding a roommate the thing they love bonds you
+  // ~6× more than feeding them the thing they hate, and the mood from the
+  // meal scales the same way. A serving's band is a pure function of (the
+  // plate instance, the NPC), so it is computed once here and reused by the
+  // narration.
+  const bandByEater = new Map(servings.map(s => [s.who, tasteBandForStack(s.stack, npcTaste(aOf(s.who)))]));
+  function aOf(who) { return attendees.find(x => x.npcId === who)?.npc || ctx.gameState.npcs[who]; }
   for (const a of attendees) {
     const isFed = fedNpcIds.includes(a.npcId);
-    const moodBoost = COMMITMENT_TUNING.attendeeMoodBonus + (isFed ? (moodByEater.get(a.npcId) || 0) : 0);
+    const band = isFed ? (bandByEater.get(a.npcId) || 'neutral') : 'neutral';
+    const bandRow = tasteBandRow(band);
+    const moodBoost = (COMMITMENT_TUNING.attendeeMoodBonus + (isFed ? (moodByEater.get(a.npcId) || 0) : 0)) * bandRow.moodMult;
     if (moodBoost > 0) lines.push(`MOOD_DELTA ${a.npcId} +${Math.round(moodBoost * 100) / 100}`);
     // A properly set meal restores comfort for everyone who sat down.
     lines.push(`ADJUST_NEED ${a.npcId} comfort +${COMMITMENT_TUNING.attendeeComfortRestore}`);
-    // Relationship: scaled by the spread's quality, attendance, existing rel.
-    const delta = mealRelDelta(quality, a.npc, isFed);
+    // Relationship: scaled by the spread's quality, attendance, existing rel,
+    // and — for the fed — how much they actually liked what they got.
+    const delta = Math.round(mealRelDelta(quality, a.npc, isFed) * bandRow.relMult * 1000) / 1000;
     if (delta > 0) lines.push(`REL_DELTA ${a.npcId} affection +${delta}`);
     if (isFed && COMMITMENT_TUNING.relationshipTensionRelief > 0) {
       lines.push(`REL_DELTA ${a.npcId} tension -${COMMITMENT_TUNING.relationshipTensionRelief}`);
@@ -1052,9 +1980,22 @@ function buildSetMealEffects(ctx, prepared) {
   // actually on the table (IMAGE's tableSpreadPhrase); it is READ only while
   // clutter is 'cluttered', so clearing the table clears the spread with no
   // second cleanup path to forget.
-  if (prepared?.diningTable && ctx.gameState.player.location === 'dining') {
-    lines.push(`SET_OBJECT_STATE ${prepared.diningTable.id} clutter cluttered`);
-    lines.push(`SET_TABLE_SPREAD ${prepared.diningTable.id} ${spread.map(o => o.stack.defId).join(' ')}`);
+  // Food-overhaul Phase 4 (D9): on top of the clutter/spread, each SERVED
+  // eater (the player included) leaves their plate/cup/fork — real dish
+  // units in a dish map on the table the meal happened at (dining table in
+  // the dining room, kitchen table in the kitchen). Resolved against the
+  // LIVE state so the effect writes the meal's actual room.
+  const gs = (typeof currentGameState !== 'undefined' && currentGameState) || ctx.gameState;
+  const mealRoom = gs.player.location;
+  const table = Object.values(gs.objects?.[`room_${mealRoom}`] || {})
+    .find(o => o.defId === 'dining_table' || o.defId === 'kitchen_table') || null;
+  if (table) {
+    const eaters = servings.length;
+    for (const [dishType, qty] of Object.entries(DISH_TUNING.setMealFootprint)) {
+      lines.push(`ADD_DISHES ${table.id} ${dishType} ${qty * eaters}`);
+    }
+    lines.push(`SET_OBJECT_STATE ${table.id} clutter cluttered`);
+    lines.push(`SET_TABLE_SPREAD ${table.id} ${spread.map(o => o.stack.defId).join(' ')}`);
   }
   return lines;
 }
@@ -1065,14 +2006,40 @@ function joinList(items) {
   return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
 
+// Food-overhaul Phase 7 (D23): the non-neutral taste reactions at a set
+// meal — "Maya lights up — this is exactly their thing. Sam soldiers
+// through it with a brave face." Computed from the SAME per-eater band
+// buildSetMealEffects scales its deltas by (tasteBandForStack on the actual
+// serving), so the prose and the relationship change cannot disagree about
+// what each attendee got.
+function setMealTasteLines(ctx, prepared) {
+  const reactions = [];
+  for (const s of prepared?.servings || []) {
+    if (s.who === 'player') continue;
+    const npc = ctx.gameState.npcs[s.who];
+    if (!npc) continue;
+    const row = tasteBandRow(tasteBandForStack(s.stack, npcTaste(npc)));
+    if (!row?.reaction) continue;
+    reactions.push(row.reaction.replace('{name}', npc.bible?.name || 'They'));
+  }
+  return reactions;
+}
+
 function setMealNarration(ctx, prepared) {
   const spread = prepared?.spread || [];
   if (spread.length === 0) return 'You sit down to eat, but there is nothing to put on the table.';
   const attendees = prepared?.attendees || [];
   const servings = prepared?.servings || [];
   const names = attendees.map(a => ctx.gameState.npcs[a.npcId]?.bible?.name || 'a roommate');
-  const dishes = joinList(spread.map(o => o.def.label.toLowerCase()));
+  // Food-overhaul Phase 3 (D25): a plate dishes its own label ("pasta"),
+  // not the cooked_meal carrier def's ("cooked meal").
+  const dishes = joinList(spread.map(o => stackLabel(o.stack).toLowerCase()));
   const setting = prepared?.hasCommitment ? ' The table is properly set.' : '';
+  // Food-overhaul Phase 7 (D23): the taste reactions ride along on whatever
+  // the meal was — a dinner Maya loves reads differently from one she picks
+  // at, and the narration says so where the deltas already did.
+  const tasteLines = setMealTasteLines(ctx, prepared);
+  const tasteTail = tasteLines.length > 0 ? ' ' + tasteLines.join(' ') : '';
 
   // Anything on the table that has turned gets its own line — it's the most
   // important thing about the meal, and it applies to the SPREAD now, so a
@@ -1080,11 +2047,11 @@ function setMealNarration(ctx, prepared) {
   const now = gameDaysNow(ctx.gameState.meta.clock);
   const off = spread.filter(o => freshnessOf(o.stack, o.containerDef ?? null, now)?.key === 'spoiled');
   if (off.length > 0) {
-    const offLabels = joinList(off.map(o => o.def.label.toLowerCase()));
+    const offLabels = joinList(off.map(o => stackLabel(o.stack).toLowerCase()));
     const reaction = names.length
       ? `${joinList(names)} ${names.length > 1 ? 'make' : 'makes'} a face but eats anyway.`
       : 'You grimace and eat it anyway.';
-    return `You lay out ${dishes}. The ${offLabels} is past its best and everyone can tell. ${reaction}`;
+    return `You lay out ${dishes}. The ${offLabels} is past its best and everyone can tell. ${reaction}${tasteTail}`;
   }
 
   // Under-catering is now something the player chose, so it gets said out
@@ -1092,13 +2059,13 @@ function setMealNarration(ctx, prepared) {
   const unfed = attendees.length - (prepared?.fedNpcIds?.length || 0);
   if (unfed > 0) {
     const shortNames = joinList(names.slice(-unfed));
-    return `You lay out ${dishes} and sit down with ${joinList(names)}.${setting} There isn't enough to go round — ${shortNames} ${unfed > 1 ? 'end up' : 'ends up'} picking at an empty plate.`;
+    return `You lay out ${dishes} and sit down with ${joinList(names)}.${setting} There isn't enough to go round — ${shortNames} ${unfed > 1 ? 'end up' : 'ends up'} picking at an empty plate.${tasteTail}`;
   }
 
   const leftover = Math.max(0, spreadServings(spread) - servings.length) > 0
     ? ' — there are leftovers for later' : '';
   if (names.length > 0) {
-    return `You lay out ${dishes} and share dinner with ${joinList(names)}.${setting} It all tastes better for the company${leftover}.`;
+    return `You lay out ${dishes} and share dinner with ${joinList(names)}.${setting} It all tastes better for the company${leftover}.${tasteTail}`;
   }
   if (prepared?.hasCommitment) {
     return `You lay out ${dishes} and set the table properly. Nobody showed${leftover}.`;
@@ -1106,28 +2073,111 @@ function setMealNarration(ctx, prepared) {
   return `You set the table with ${dishes} and eat${leftover}.`;
 }
 
-// --- self.dishes' runtime logic ---
-// Reads the sink's dishes state ('clean'/'few'/'many') to determine time
-// cost (via perDirtyDish in resolveTimeCost) and effects. Cleaning skill
-// speeds it up via the cleanEfficiency curve.
+// --- self.dishes' runtime logic (food-overhaul Phase 4, D9/D11) ---
+// Dish dirt is a per-type MAP now, so "how dirty" means dish UNITS in the
+// wash scope (the sink + the kitchen/dining tables) rather than the old
+// sink-state enum ladder. prepare() measures the scope and the action's
+// skill-scaled hand-wash capacity; buildEffects clears up to that capacity
+// (CLEAN_DISHES per scope object, sink first); time cost scales per unit
+// (perDishUnit in resolveTimeCost) and shrinks with cleaning skill.
+//
+// The wash scope spans the kitchen AND dining rooms on purpose: eating
+// leaves dishes on the table, and "do the dishes" is the single chore that
+// clears them all — the same kitchen+dining reach the cook/eat pipelines
+// already use (kitchenContainers' dining fallback).
+function dirtyDishObjs(gs) {
+  const ids = new Set();
+  for (const r of ['kitchen', 'dining']) {
+    for (const o of Object.values(gs?.objects?.[`room_${r}`] || {})) {
+      if (o.defId === 'sink_kitchen' || o.defId === 'kitchen_table' || o.defId === 'dining_table') ids.add(o.id);
+    }
+  }
+  const objs = [];
+  for (const bucket of Object.values(gs?.objects || {})) {
+    for (const o of Object.values(bucket || {})) if (ids.has(o.id)) objs.push(o);
+  }
+  return objs;
+}
+function dirtyDishScope(gs, roomId) {
+  const objs = dirtyDishObjs(gs);
+  const units = objs.reduce((sum, o) => sum + dishUnitsOf(o), 0);
+  return { objs, units, map: dishMapAcross(objs) };
+}
+
 function prepareDishes(ctx) {
-  const sink = findObjectInRoom(ctx, 'sink_kitchen');
-  const dishLevel = sink?.state?.dishes;
-  return { sink, dishLevel, dirty: dishLevel === 'many' ? 2 : dishLevel === 'few' ? 1 : 0 };
+  const gs = (typeof currentGameState !== 'undefined' && currentGameState) || ctx.gameState;
+  const scope = dirtyDishScope(gs, ctx.roomId);
+  const capacity = handWashUnitsFor(gs?.player);
+  const units = Math.min(capacity, scope.units);
+  // scopeUnits is the scope's TOTAL dirty units (prepared.units is the
+  // action's washed capacity, which collides with the spread scope.units) —
+  // dishesNarration compares them to say whether every dish got washed.
+  return { ...scope, scopeUnits: scope.units, capacity, units, dirty: scope.units > 0 ? (scope.units >= DISH_TUNING.sinkDirtyAtMany ? 2 : 1) : 0 };
 }
 
 function buildDishesEffects(ctx, prepared) {
-  if (!prepared?.sink || prepared.dirty === 0) return [];
-  return [
-    `SET_OBJECT_STATE ${prepared.sink.id} dishes clean`,
-    `ADJUST_NEED player mood +${ACTION_TUNING.dishesMoodGain}`,
-  ];
+  if (!prepared?.units || prepared.units <= 0) return [];
+  // Allocate the action's capacity across the scope objects, sink first
+  // (the pot blocks the basin), so each CLEAN_DISHES clears exactly what
+  // this action can reach and the rest waits for the next wash.
+  const lines = [];
+  let remaining = prepared.units;
+  const ordered = (prepared.objs || []).slice()
+    .sort((a, b) => ((a.defId === 'sink_kitchen' ? 0 : 1) - (b.defId === 'sink_kitchen' ? 0 : 1)));
+  for (const obj of ordered) {
+    if (remaining <= 0) break;
+    const have = dishUnitsOf(obj);
+    if (have <= 0) continue;
+    const take = Math.min(have, remaining);
+    lines.push(`CLEAN_DISHES ${obj.id} ${take}`);
+    remaining -= take;
+  }
+  lines.push(`ADJUST_NEED player mood +${ACTION_TUNING.dishesMoodGain}`);
+  return lines;
 }
 
 function dishesNarration(ctx, prepared) {
-  if (!prepared?.sink || prepared.dirty === 0) return 'The dishes are already clean.';
-  if (prepared.dirty >= 2) return 'You scrub a mountain of dishes. The sink is spotless now.';
-  return 'You wash the few dishes in the sink. Satisfying.';
+  if (!prepared?.units || prepared.units <= 0) return 'The dishes are already clean.';
+  const summary = dishSummary(prepared.map);
+  if (prepared.units >= prepared.scopeUnits) return `You wash every last ${summary} until the sink is spotless. Satisfying.`;
+  return `You work through the ${summary}. The pile is smaller now.`;
+}
+
+// --- self.dishwasher's runtime logic (food-overhaul Phase 4, D11) ---
+// prepare() resolves a completed cycle (a finished machine frees up), reads
+// the tier-scaled capacity vs the sink/table load, and computes how many
+// units this load will move; buildEffects loads and starts the cycle. The
+// cycle itself completes lazily against the continuous clock (ITEMS'
+// dishwasherCycleProgress) — no per-tick bookkeeping.
+function prepareDishwasher(ctx) {
+  const gs = (typeof currentGameState !== 'undefined' && currentGameState) || ctx.gameState;
+  const dw = findObjectInRoom(ctx, 'dishwasher');
+  if (!dw) return { cancelled: true, reason: 'no-dishwasher' };
+  const now = gameDaysNow(gs?.meta?.clock);
+  resolveDishwasherCycle(dw, now); // a finished cycle frees the machine (write path)
+  if (dishwasherCycleProgress(dw, now) === 'running') return { cancelled: true, reason: 'mid-cycle' };
+  const scope = dirtyDishScope(gs, ctx.roomId);
+  const capacity = dishwasherCapacityUnits(gs);
+  const loaded = dishwasherLoadUnits(dw);
+  const free = Math.max(0, capacity - loaded);
+  const units = Math.min(free, scope.units);
+  if (units <= 0) return { cancelled: true, reason: 'nothing-to-load' };
+  return { dishwasher: dw, units, capacity, loaded, scopeUnits: scope.units, map: scope.map };
+}
+
+function buildDishwasherEffects(ctx, prepared) {
+  if (!prepared?.units || !prepared.dishwasher) return [];
+  return [
+    `LOAD_DISHWASHER ${prepared.dishwasher.id} ${prepared.units}`,
+    `RUN_DISHWASHER ${prepared.dishwasher.id}`,
+  ];
+}
+
+function dishwasherNarration(ctx, prepared) {
+  if (!prepared?.units || !prepared.dishwasher) return 'The dishwasher is empty of dishes to load.';
+  const summary = dishSummary(prepared.map);
+  const done = prepared.units >= (prepared.scopeUnits || 0) ? ' everything' : '';
+  return `You stack${done} the ${summary} into the dishwasher and start it. It hums to life.`;
 }
 
 // --- Notes runtime logic (perception plan Phase 4) ---

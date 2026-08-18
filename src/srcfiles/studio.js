@@ -294,14 +294,21 @@ function renderPlayerStudio() {
     for (const section of tab.sections) bodyEl.appendChild(buildStudioSection(section));
   }
 
+  updateStudioNameNote();
+}
+
+// Refreshes only the "who you are" summary line under the studio header.
+// Called on every name/surname keystroke — deliberately NOT renderPlayerStudio,
+// which rebuilds the whole form and would destroy the focused input, closing
+// the mobile keyboard on every typed character.
+function updateStudioNameNote() {
   const nameNote = document.getElementById('ps-name-note');
-  if (nameNote) {
-    const n = (playerStudioDraft.name || '').trim();
-    const s = (playerStudioDraft.surname || '').trim();
-    nameNote.textContent = n || s
-      ? `${n || '(rolled)'} ${s || '(rolled)'}`
-      : 'Everything unset will be rolled for you.';
-  }
+  if (!nameNote) return;
+  const n = (playerStudioDraft.name || '').trim();
+  const s = (playerStudioDraft.surname || '').trim();
+  nameNote.textContent = n || s
+    ? `${n || '(rolled)'} ${s || '(rolled)'}`
+    : 'Everything unset will be rolled for you.';
 }
 
 function buildStudioSection(section) {
@@ -805,7 +812,7 @@ function wirePlayerStudioInputs() {
     // a machine-built one. A hand-edited one is never touched (D6).
     if (!playerStudioDraft.portrait.promptDirty) playerStudioDraft.portrait.prompt = '';
     const note = document.getElementById('ps-name-note');
-    if (note && (path === 'name' || path === 'surname')) renderPlayerStudio();
+    if (note && (path === 'name' || path === 'surname')) updateStudioNameNote();
   };
 
   root.addEventListener('change', handle);

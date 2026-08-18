@@ -220,22 +220,39 @@ const OVERTURE_MOTIVES = {
   // fondness" bar — the one gating gift_to_player — rather than a second
   // number meaning the same thing. Rescaled so the floor is strength 0 and a
   // maxed axis is strength 1, or every fond NPC would start at 0.3.
-  affection: (npc) => {
+  //
+  // Intimacy & Voyeurism Phase 7 (D11): the ATTRACTION TERM — how the player
+  // is dressed biases the response. The floor stays the relationship's; the
+  // outfit only modulates the strength ONCE there is real fondness (a hot
+  // outfit does not manufacture fondness out of nothing). Reads the same
+  // shared clothingResponseToWearer the Phase 9 willingness function reads,
+  // so "how attractive her outfit makes you find her" means one thing across
+  // every consumer. A player in an ordinary fit contributes ~0 and this is
+  // byte-identical to Phase 6.
+  affection: (npc, gameState) => {
     const floor = REL_CONSEQUENCES.affectionGiftThreshold;
     const a = (npc && npc.relPlayer && npc.relPlayer.affection) || 0;
     if (a < floor) return null;
-    return { strength: ovClamp01((a - floor) / (1 - floor)), ref: {} };
+    const outfit = clothingResponseToWearer(npc, gameState && gameState.player);
+    const total = Math.min(1, a + outfit.attraction);
+    return { strength: ovClamp01((total - floor) / (1 - floor)), ref: {} };
   },
 
   // D12/D14, whole. The gate is SIM's npcInitiativeGate — personality-scaled,
   // content-gated, and the declared consumer of `mayInitiate` that D20 has been
   // waiting for since Phase 2. `tone` comes back with it, which is the only
   // place a 'charged' overture can come from.
+  //
+  // Intimacy & Voyeurism Phase 7 (D11): the DESIRE SOURCE — seeing the player
+  // dressed invitingly adds to the desire motive strength. Phase 8 spends the
+  // same shared number as real desire gain. Observer-gated by deviancy, so a
+  // prude reads nothing from the same outfit a deviant finds enticing.
   desire: (npc, gameState) => {
     const gate = npcInitiativeGate(npc, activeContentFlags(gameState));
     if (!gate.mayInitiate) return null;
     const d = (npc.relPlayer && npc.relPlayer.desire) || 0;
-    return { strength: ovClamp01(d), ref: {}, tone: gate.tone };
+    const outfit = clothingResponseToWearer(npc, gameState && gameState.player);
+    return { strength: ovClamp01(d + outfit.desire), ref: {}, tone: gate.tone };
   },
 };
 
@@ -282,6 +299,12 @@ function scoreOvertures(npc, npcId, gameState, ctx) {
   if (!npc || !gameState) return out;
   const day = gameState.meta && gameState.meta.clock ? gameState.meta.clock.day : 0;
   const playerRoom = gameState.player && gameState.player.location;
+
+  // Intimacy & Voyeurism Phase 16 (D2/D14): the cold-shoulder. A cold-
+  // shouldering NPC initiates NOTHING at the player — no approach, no text,
+  // no proposal, no knock. Same read cognition.js's drive filter uses, so
+  // the two gates can never disagree about what "cold" means.
+  if (coldShoulderSuppressesOvertures(npc)) return out;
 
   for (const [overtureId, def] of Object.entries(OVERTURE_DEFS)) {
     // One committed intent: an NPC already holding an overture is not shopping

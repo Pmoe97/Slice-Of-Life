@@ -17,9 +17,17 @@ const ICONS = {
     <path d="M8 8V6a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
     <line x1="3" y1="13" x2="21" y2="13"/>
   `),
+  // Redesigned (icon round 2, user-directed): an isometric shipping box —
+  // a hexagon outline (the box's silhouette at a 3/4 angle), a chevron
+  // where the three visible faces meet, a vertical seam down the front,
+  // and one more line on the right face standing in for a strip of tape.
+  // Replaces the drawstring bag, which read as generic "shopping" rather
+  // than "a package arrives at your door."
   shop: () => svgWrap(`
-    <path d="M6 8h12l-1 12a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 8Z"/>
-    <path d="M9 8V6a3 3 0 0 1 6 0v2"/>
+    <path d="M12 4 20 8 20 16 12 20 4 16 4 8Z"/>
+    <path d="M4 8 12 12 20 8"/>
+    <line x1="12" y1="12" x2="12" y2="20"/>
+    <line x1="16" y1="10" x2="16" y2="18"/>
   `),
   browser: () => svgWrap(`
     <circle cx="12" cy="12" r="9"/>
@@ -63,6 +71,55 @@ const ICONS = {
     <line x1="9" y1="10" x2="9" y2="18"/>
     <line x1="15" y1="10" x2="15" y2="18"/>
     <path d="M4 21h16"/>
+  `),
+  // Codex (Intimacy & Voyeurism Phase 15, D8): a closed notebook — the
+  // per-character knowledge ledger. Distinct from HomeCare's wrench and the
+  // Messages bubble at a glance.
+  codex: () => svgWrap(`
+    <path d="M6 3h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/>
+    <line x1="8" y1="8" x2="15" y2="8"/>
+    <line x1="8" y1="12" x2="15" y2="12"/>
+    <line x1="8" y1="16" x2="12" y2="16"/>
+  `),
+  // ChefBook (food-overhaul Phase 8): an open book — a desktop icon /
+  // taskbar entry that calls svgIcon() for an id ICONS has no key for
+  // silently renders a blank tile (the documented `upgrades` landmine
+  // above), so every new APP_DEFS entry gets one here in the same pass.
+  // Two pages meeting at a spine, distinct from Codex's closed notebook.
+  recipes: () => svgWrap(`
+    <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H12v18H6.5A2.5 2.5 0 0 1 4 18.5v-13Z"/>
+    <path d="M20 5.5A2.5 2.5 0 0 0 17.5 3H12v18h5.5a2.5 2.5 0 0 0 2.5-2.5v-13Z"/>
+    <line x1="7.5" y1="8" x2="10" y2="8"/>
+    <line x1="7.5" y1="11.5" x2="10" y2="11.5"/>
+  `),
+  // DoorDrop (external-world plan Phase 5): this app has been calling
+  // svgIcon('food') since it shipped and silently rendering a blank desktop
+  // tile the whole time — the exact `upgrades` landmine documented above,
+  // just never caught for this one. Redesigned (icon round 2, user-directed)
+  // as a burger stacked on its takeout box rather than a bare container: a
+  // bun dome, three sesame-seed dots, a wavy lettuce fringe, then a flat
+  // box with a lid seam. Stacked (bun over box) rather than split
+  // left/right so the burger doesn't get cut in half by the seam — checked
+  // at real 22px/32px tile size, not just blown up.
+  food: () => svgWrap(`
+    <path d="M5 13c0-4.4 3.1-8 7-8s7 3.6 7 8"/>
+    <path d="M5 13c1.1 1.3 2.1 1.3 3.1 0 1-1.3 2-1.3 3 0 1 1.3 2 1.3 3 0 1-1.3 2-1.3 3 0 1 1.3 1.9 1.3 2.9 0"/>
+    <circle cx="9" cy="8.3" r="0.55" fill="currentColor" stroke="none"/>
+    <circle cx="12.2" cy="6.8" r="0.55" fill="currentColor" stroke="none"/>
+    <circle cx="15.2" cy="8.3" r="0.55" fill="currentColor" stroke="none"/>
+    <rect x="5" y="14" width="14" height="6" rx="1"/>
+    <line x1="5" y1="17" x2="19" y2="17"/>
+  `),
+  // QuickCart (grocery delivery): a wheeled shopping cart — handle, basket
+  // outline, two wheels as small filled dots (the same small-filled-accent
+  // move `food`'s seed dots and `start`'s tiles already use). Deliberately
+  // NOT a bag or a box: an outline-plus-wheels silhouette reads instantly
+  // as "cart," distinct from Nile's isometric box and DoorDrop's
+  // burger-on-box even at 22px — checked at 22/32/180px before shipping.
+  grocery: () => svgWrap(`
+    <path d="M3 4h2.5l2.4 12.2a2 2 0 0 0 2 1.6h8.2a2 2 0 0 0 2-1.6L21.5 8H6.5"/>
+    <circle cx="9.5" cy="20.5" r="1.1" fill="currentColor" stroke="none"/>
+    <circle cx="17.5" cy="20.5" r="1.1" fill="currentColor" stroke="none"/>
   `),
 
   // --- OS chrome ---

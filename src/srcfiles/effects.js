@@ -47,10 +47,12 @@ function validateActiveNpc(npcId, ctx) {
   return ctx.activeNpcIds.includes(npcId) || `${npcId} is not an active participant.`;
 }
 // `hunger` is deliberately NOT in the player's list. Phase 5 made hunger a
-// rhythm: applyAdjustNeed treats ANY positive player-hunger delta as a whole
-// meal (resets hoursSinceLastMeal, +1 mealsToday), so magnitude is discarded
-// and +1 would feed you exactly as much as +40. Since ADJUST_NEED is
-// llm:true, leaving hunger reachable let the narration path hand out free
+// rhythm: applyAdjustNeed treats a positive player-hunger delta as a meal —
+// it raises satiety by the delta (capped at satietyStart) and counts toward
+// mealsToday. 2026-08-17 audit (B2): the magnitude is now REAL (a snack
+// tops you up, only a meal refills you); before that it was discarded and
+// +1 fed you exactly as much as +40. Since ADJUST_NEED is
+// llm:true, leaving hunger reachable lets the narration path hand out free
 // meals and quietly bypass the food economy Phases 1-4 exist to create —
 // design invariant 3 ("no action restores a need from nothing"). Every
 // legitimate player-hunger path now goes through EAT_ITEM (trusted-only,
@@ -134,6 +136,19 @@ function validateQtyRange(qtyStr) {
   const q = Number(qtyStr);
   return (q > 0 && q <= EFFECT_LIMITS.itemQtyCap) || `Quantity out of range (max ${EFFECT_LIMITS.itemQtyCap}).`;
 }
+// Food-overhaul Phase 4: SET_DISHES' payload — a JSON { dishType: count }
+// map. Keys must be real DISH_DEFS types (the single owning table, invariant
+// 5), counts non-negative integers, so it can't become an arbitrary write.
+function validateDishMapJson(p) {
+  let parsed;
+  try { parsed = JSON.parse(p.map); } catch { return 'Malformed dish map.'; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'Dish map must be an object.';
+  for (const [type, count] of Object.entries(parsed)) {
+    if (!DISH_DEFS[type]) return `Unknown dish type: ${type}`;
+    if (!Number.isInteger(count) || count < 0) return `Bad count for ${type}.`;
+  }
+  return true;
+}
 function validateLocationRef(ref, ctx) {
   return ref === 'player' || !!ctx.roomObjects[ref] || `Not reachable: ${ref}`;
 }
@@ -202,16 +217,26 @@ function applyAdjustNeed(p, ctx) {
       // day unless the target terms support it.
       pushMoodImpulse(ctx.gameState.player, delta, ctx.gameState.meta.clock.day);
     } else if (p.need === 'hunger') {
-      // Phase 5 (D1): hunger is a rhythm, not a bar. A positive hunger delta
-      // is a MEAL — it resets the since-last-meal clock and counts toward
-      // mealsToday; the 0-100 display value is derived (satietyFrom) and
-      // recomputed immediately so the very next render is correct. Negative
-      // deltas are inert for the player: hunger only advances with time.
-      if (delta > 0) {
-        const player = ctx.gameState.player;
-        player.hoursSinceLastMeal = 0;
-        player.mealsToday = Math.min(HUNGER_RHYTHM.mealsPerDayCap, (player.mealsToday || 0) + 1);
-        player.hunger = satietyFrom(0);
+      // Phase 5 (D1): hunger is a rhythm, not a bar. The 0-100 display value
+      // is derived from the fullness window via satietyFrom.
+      //
+      // 2026-08-17 audit (B2): a positive hunger delta is still a MEAL, but
+      // the size now MATTERS. It used to be discarded entirely — any positive
+      // delta reset hoursSinceLastMeal to 0 (satiety 90), so a cracker fed
+      // you exactly as much as a feast and every food label ("restores 50
+      // hunger" vs "8") was a lie.
+      //
+      // food-overhaul Phase 2 (D3/D4): the meal is now KCAL-driven. EAT_ITEM
+      // sums the kcal it actually consumed (freshness-scaled) and passes it
+      // here; applyPlayerMeal sets the D3 fullness window from it, feeds the
+      // D4 ledger, and counts real meals toward mealsToday. A producer still
+      // writing raw hunger points rides the legacy fallback inside
+      // applyPlayerMeal (satiety points → window via satietyPerHour), so the
+      // B2 magnitude semantics survive for the one path that predates kcal.
+      // Negative deltas are inert for the player: hunger only advances with
+      // time. EAT_ITEM is the only producer that reaches this branch.
+      if (Number(p.delta) > 0 || Number(p.kcal || 0) > 0) {
+        applyPlayerMeal(ctx.gameState, Number(p.kcal) || 0, { fallbackSatiety: Number(p.delta) || 0 });
       }
     } else {
       ctx.gameState.player[p.need] = clamp((ctx.gameState.player[p.need] || 0) + delta, 0, 100);
@@ -220,6 +245,41 @@ function applyAdjustNeed(p, ctx) {
     const npc = ctx.gameState.npcs[p.who];
     if (npc) npc.needs[p.need] = clamp((npc.needs[p.need] || 0) + delta, 0, 100);
   }
+}
+
+// food-overhaul Phase 2 (D3/D4): the player's meal writer. The eaten kcal
+// sets the D3 fullness window (added to what remains — a big meal eaten on a
+// full stomach wastes its size, the B2 cap preserved) and feeds the D4 daily
+// ledger. player.hunger is recomputed through satietyFrom here — one of the
+// ONLY two player-hunger writers, the other being SIM's decayPlayerNeeds
+// (design invariant 2). mealsToday counts only real meals (kcal ≥
+// METABOLISM.minKcalForMeal), reconciling the well-fed/skipped terms to
+// actual meals per D4. NPCs never reach this function (invariant 3).
+function applyPlayerMeal(gameState, kcal, opts = {}) {
+  const player = gameState?.player;
+  if (!player) return;
+  const meta = player.meta || (player.meta = {});
+  const fallback = Number(opts.fallbackSatiety) || 0;
+  const window = fullnessHoursFromKcal(kcal);
+  if (window > 0) {
+    const prev = fullnessRemaining(player);
+    player.fullnessWindowHours = window;
+    player.fullnessRemainingHours = Math.min(METABOLISM.fullnessCapHours, prev + window);
+    if (kcal >= METABOLISM.minKcalForMeal) {
+      player.mealsToday = Math.min(HUNGER_RHYTHM.mealsPerDayCap, (player.mealsToday || 0) + 1);
+    }
+  } else if (fallback > 0) {
+    // Legacy fallback: hunger POINTS with no kcal. The B2 magnitude
+    // semantics survive here — a snack tops you up (short window), a meal
+    // refills you (long window); the window is points/satietyPerHour.
+    const win = fallback / HUNGER_RHYTHM.satietyPerHour;
+    const prev = fullnessRemaining(player);
+    player.fullnessWindowHours = win;
+    player.fullnessRemainingHours = Math.min(METABOLISM.fullnessCapHours, prev + win);
+    player.mealsToday = Math.min(HUNGER_RHYTHM.mealsPerDayCap, (player.mealsToday || 0) + 1);
+  }
+  if (kcal > 0) meta.kcalToday = (meta.kcalToday || 0) + kcal;
+  player.hunger = satietyFrom(player.fullnessRemainingHours, player.fullnessWindowHours || HUNGER_RHYTHM.starveHours);
 }
 function applyMoodDeltaEffect(p, ctx) {
   const delta = Number(p.delta);
@@ -388,9 +448,39 @@ function applyConsumeItem(p, ctx) {
   const def = ITEM_DEFS[p.defId];
   for (const [need, amt] of Object.entries(def?.consumable || {})) {
     if (who !== 'player' && need === 'mood') continue;
+    // food-overhaul Phase 2 (D1/D4): kcal never flows through CONSUME_ITEM.
+    // It is the narrator's incidental-consumption verb (and the NPC drive's
+    // raid verb); only EAT_ITEM — a real meal — feeds the player's kcal
+    // ledger, and the NPC side converts calories at consume time into their
+    // plain hunger bar (design invariant 3), so there is no kcal ledger on
+    // this path at all.
+    if (need === 'kcal') continue;
     applyAdjustNeed({ who, need, delta: String(amt * removed) }, ctx);
   }
 }
+// D27/D28 read helpers (food-overhaul Phase 3). The betterHot/frozenFood
+// contracts are STATIC per-dish declarations — on the RECIPES entry for a
+// plate (via meta.plate.recipeKey), on the ITEM_DEFS entry for def-driven
+// food — read at eat time against how the food is being eaten NOW. They
+// are deliberately not plate-instance fields: the dish's nature (hot food,
+// frozen treat) never changes per instance, so baking it into the snapshot
+// would be redundant AND would freeze the flag against a later recipe
+// correction. What IS on the instance is wasReheated — the one thing that
+// genuinely is per-batch.
+function stackBetterHot(stack) {
+  const plate = stack?.meta?.plate;
+  if (plate) return !!(RECIPES[plate.recipeKey]?.betterHot);
+  return !!ITEM_DEFS[stack?.defId]?.betterHot;
+}
+function stackFrozenFood(stack) {
+  const plate = stack?.meta?.plate;
+  if (plate) {
+    if (plate.frozenFood) return true;
+    return !!(RECIPES[plate.recipeKey]?.frozenFood);
+  }
+  return !!ITEM_DEFS[stack?.defId]?.frozenFood;
+}
+
 // EAT_ITEM (inventory overhaul Phase 3): the eating verb.
 // Consumes `qty` SERVINGS of defId from the given location (bag or a
 // reachable container), restores the eater's consumable scaled by
@@ -419,6 +509,14 @@ function applyConsumeItem(p, ctx) {
 // Freshness is derived (freshnessOf), so a stack left in a fridge stays
 // edible far longer than the same stack in a bag, and eating either late is
 // punished the moment it actually is late.
+//
+// Food-overhaul Phase 3 (D5/D25/D27/D28): a PLATE stack (meta.plate) is
+// eaten by the same serving ledger but from the instance — kcal from
+// plate.kcalPerServing (player), hunger for an NPC converted from that same
+// kcal to their one number (invariant 3), mood from plate quality via
+// plateMoodPerServing — and the D27/D28 mood gates apply: a betterHot dish
+// eaten cold forfeits its whole mood bonus, and food eaten still frozen
+// costs a flat mood penalty unless the dish is frozenFood.
 // Trusted-only (llm:false): eating is the player's own verb; the narrator
 // still uses CONSUME_ITEM for incidental consumption.
 function applyEatItem(p, ctx) {
@@ -428,10 +526,12 @@ function applyEatItem(p, ctx) {
   if (!def) return;
   const who = p.who || 'player';
   const sv = itemServings(def);
+  const kcalPerSv = kcalOf(def) / sv;
   const fromDef = containerDefForRef(p.from, ctx.gameState);
   const now = gameDaysNow(ctx.gameState.meta.clock);
   let remaining = Math.max(0, Math.floor(Number(p.qty) || 0));
   let ateSpoiled = false;
+  let kcalEaten = 0;
   const out = [];
   for (const s of fromList) {
     if (remaining <= 0 || s.defId !== p.defId) { out.push(s); continue; }
@@ -446,23 +546,86 @@ function applyEatItem(p, ctx) {
     const mult = fresh?.key === 'spoiled' ? ROT.spoiledRestoreMultiplier
       : fresh?.key === 'stale' ? ROT.staleRestoreMultiplier : 1;
     if (fresh?.key === 'spoiled') ateSpoiled = true;
-    for (const [need, amt] of Object.entries(def.consumable || {})) {
-      // NPCs have no mood NEED — their mood is the direct bar, which
-      // ADJUST_NEED doesn't touch; the caller (set_meal) adds MOOD_DELTA.
-      if (who !== 'player' && need === 'mood') continue;
-      applyAdjustNeed({ who, need, delta: String(amt * eat / sv * mult) }, ctx);
+    const plate = s.meta?.plate;
+    // Food-overhaul Phase 8 (D21): tasting a dish is what unlocks its
+    // ChefBook card — a cooked plate by its recipe, a ready-made item
+    // (restaurant delivery) by its own defId. COMPUTER's
+    // maybeUnlockRecipeCard no-ops on anything that isn't card-eligible
+    // (a raw ingredient, a freeform experiment), so this is safe to call
+    // unconditionally for every stack the player's bite draws from.
+    if (who === 'player') maybeUnlockRecipeCard(ctx.gameState, plate ? plate.recipeKey : s.defId);
+    // food-overhaul Phase 2 (D3): the player's kcal is the meal — scaled by
+    // the same freshness multiplier as every restore (a stale plate fills
+    // you less across the board), summed over the stacks this bite drew
+    // from, and applied once as a single meal event after the loop. Phase 3:
+    // a plate's kcal is the instance's kcalPerServing, not the carrier def's.
+    if (who === 'player') kcalEaten += (plate ? plate.kcalPerServing : kcalPerSv) * eat * mult;
+    // Phase 3 (D27/D28): the mood rules that make the reheat step matter.
+    //   D27 — a betterHot dish eaten NOT hot (never reheated and past the
+    //   just-made window, or still frozen) forfeits its ENTIRE mood bonus;
+    //   D28 — food eaten still frozen costs a flat mood penalty unless the
+    //   dish is frozenFood (ice cream, popsicles: meant to be eaten frozen).
+    //   The mood stays a PLAYER restore here — an NPC's plate mood is Phase
+    //   7's rewire (set_meal feeds NPCs through its own MOOD_DELTA path).
+    const cold = fresh?.frozenState === 'frozen' || fresh?.frozenState === 'thawing';
+    const hotNow = !cold && ((plate?.wasReheated || s.meta?.wasReheated) || fresh?.key === 'fresh');
+    let moodPerSv = plate ? (plateMoodPerServing(s, fresh) ?? 0) : ((def.consumable?.mood || 0) / sv);
+    if (stackBetterHot(s) && !hotNow) moodPerSv = 0;
+    if (who === 'player' && moodPerSv !== 0) {
+      applyAdjustNeed({ who, need: 'mood', delta: String(moodPerSv * eat) }, ctx);
+    }
+    if (who === 'player' && cold && !stackFrozenFood(s) && PLATE_TUNING.frozenEatenPenalty > 0) {
+      applyAdjustNeed({ who, need: 'mood', delta: String(-PLATE_TUNING.frozenEatenPenalty * eat) }, ctx);
+    }
+    // Food-overhaul Phase 5 (D15): a BURNT plate's snapshot carries its
+    // flaw, and eating it stings a little on top of the quality dent —
+    // burnt food is still food (never deleted), just a worse meal.
+    if (who === 'player' && plate?.flaws?.includes('burnt') && (COOK_TUNING.burntMoodSting || 0) > 0) {
+      applyAdjustNeed({ who, need: 'mood', delta: String(-COOK_TUNING.burntMoodSting * eat) }, ctx);
+    }
+    if (plate) {
+      // Plate restore: kcal (player) handled above; hunger for an NPC
+      // converts the plate's per-serving kcal into their ONE number
+      // (design invariant 3 — calories become hunger at consume time and
+      // the plate never touches the player's meta). The carrier def's
+      // placeholder consumable is never read.
+      if (who !== 'player') {
+        applyAdjustNeed({ who, need: 'hunger', delta: String(plateHungerPerServing(s) * eat * mult) }, ctx);
+      }
+    } else {
+      for (const [need, amt] of Object.entries(def.consumable || {})) {
+        // NPCs have no mood NEED — their mood is the direct bar, which
+        // ADJUST_NEED doesn't touch; the caller (set_meal) adds MOOD_DELTA.
+        if (who !== 'player' && need === 'mood') continue;
+        // kcal isn't a need (there's no ADJUST_NEED kcal bar) and the
+        // PLAYER's hunger restore comes from the eaten kcal, not the def's
+        // hunger points — both handled by the single applyAdjustNeed below.
+        // NPC hunger still restores by the def's hunger value (calories
+        // convert to their one number at consume time, invariant 3).
+        if (need === 'kcal') continue;
+        if (who === 'player' && need === 'hunger') continue;
+        applyAdjustNeed({ who, need, delta: String(amt * eat / sv * mult) }, ctx);
+      }
     }
     const left = have - eat;
     if (left <= 0) continue; // stack fully eaten — drop it
-    const qty = Math.ceil(left / sv);
-    const openLeft = left - (qty - 1) * sv;
-    const meta = { ...(s.meta || {}) };
-    if (openLeft >= sv) {
-      delete meta.servingsLeft; // back to a whole-stack representation
-      out.push({ ...s, qty, meta });
+    if (plate) {
+      // The plate's serving ledger lives on the instance — eating a serving
+      // drains it there and leaves the batch (and its snapshot) intact.
+      const meta = { ...(s.meta || {}) };
+      meta.plate = { ...plate, servings: { ...plate.servings, left } };
+      out.push({ ...s, meta });
     } else {
-      meta.servingsLeft = openLeft;
-      out.push({ ...s, qty, meta });
+      const qty = Math.ceil(left / sv);
+      const openLeft = left - (qty - 1) * sv;
+      const meta = { ...(s.meta || {}) };
+      if (openLeft >= sv) {
+        delete meta.servingsLeft; // back to a whole-stack representation
+        out.push({ ...s, qty, meta });
+      } else {
+        meta.servingsLeft = openLeft;
+        out.push({ ...s, qty, meta });
+      }
     }
   }
   if (ateSpoiled) {
@@ -476,19 +639,245 @@ function applyEatItem(p, ctx) {
     }
     applyAdjustNeed({ who, need: 'energy', delta: String(-ROT.spoiledEnergyPenalty) }, ctx);
   }
+  if (who === 'player' && kcalEaten > 0) {
+    applyAdjustNeed({ who: 'player', need: 'hunger', delta: '0', kcal: kcalEaten }, ctx);
+  }
   writeLocationStackList(p.from, ctx.gameState, out);
 }
+// Food-overhaul Phase 3 (D25): DESTROY_ITEM on a PLATE stack destroys
+// SERVINGS off the instance's ledger, not whole qty — binning one leftover
+// serving of a 4-serving batch leaves the other three. (The DSL quantity is
+// interpreted as servings for a plate stack, whole items otherwise.)
 function applyDestroyItem(p, ctx) {
   const fromList = locationStackListMutable(p.from, ctx.gameState);
   if (!fromList) return;
-  writeLocationStackList(p.from, ctx.gameState, removeStack(fromList, p.defId, Number(p.qty)).stacks);
+  let remaining = Math.max(0, Math.floor(Number(p.qty) || 0));
+  const out = [];
+  for (const s of fromList) {
+    if (remaining <= 0 || s.defId !== p.defId) { out.push(s); continue; }
+    const plate = s.meta?.plate;
+    if (plate) {
+      const left = stackServingsLeft(s);
+      if (left <= 0) { out.push(s); continue; }
+      const nleft = left - Math.min(remaining, left);
+      remaining -= Math.min(remaining, left);
+      if (nleft <= 0) continue; // batch fully binned — drop the stack
+      const meta = { ...s.meta, plate: { ...plate, servings: { ...plate.servings, left: nleft } } };
+      out.push({ ...s, meta });
+    } else {
+      if (s.qty <= remaining) { remaining -= s.qty; continue; }
+      out.push({ ...s, qty: s.qty - remaining });
+      remaining = 0;
+    }
+  }
+  writeLocationStackList(p.from, ctx.gameState, out);
 }
+// Food-overhaul Phase 3: SPAWN_ITEM takes an optional trailing JSON meta
+// (the ...metaJson param — the whole meta object, e.g. the { plate, cohort,
+// acquiredDay } a cooked plate spawns with). JSON.stringify never emits
+// whitespace, so the JSON arrives as a single token; a malformed/absent
+// meta degrades to the plain spawn (addStack without meta).
 function applySpawnItem(p, ctx) {
   const toList = locationStackListMutable(p.to, ctx.gameState) || [];
-  writeLocationStackList(p.to, ctx.gameState, addStack(toList, p.defId, Number(p.qty), p.to === 'player' ? 'player' : null, undefined, gameDaysNow(ctx.gameState.meta.clock)));
+  let meta;
+  if (p.metaJson) {
+    try { meta = JSON.parse(p.metaJson); } catch { meta = undefined; }
+  }
+  writeLocationStackList(p.to, ctx.gameState, addStack(toList, p.defId, Number(p.qty), p.to === 'player' ? 'player' : null, meta, gameDaysNow(ctx.gameState.meta.clock)));
 }
-// SPAWN_OBJECT (inventory overhaul Phase 6): place a buyable hobby OBJECT_DEFS
-// instance into a room bucket — the second half of the Place verb (the first
+
+// Food-overhaul Phase 5 (D8): an ingredient TRANSFORMED INTO a cooked dish
+// — the engine's seasoning consumption (salt/spice/sugar become part of
+// the plate; you'd never eat them raw). Mechanically a qty-decrement like
+// DESTROY_ITEM, deliberately its own verb: it is engine-only (llm:false)
+// and says "this went somewhere", so the narrator can't nibble groceries
+// through a name that implies consumption.
+function applyTransformItem(p, ctx) {
+  const fromList = locationStackListMutable(p.from, ctx.gameState);
+  if (!fromList) return;
+  const { stacks } = removeStack(fromList, p.defId, Number(p.qty));
+  writeLocationStackList(p.from, ctx.gameState, stacks);
+}
+
+// COOK_STEP's validator: the trailing metaJson must parse to an object
+// carrying a real `plate` snapshot — the only thing the effect exists to
+// spawn (invariant 1: a cooked plate is its instance or it isn't a plate).
+function validateCookPlateJson(p) {
+  let meta;
+  try { meta = JSON.parse(p.metaJson); } catch { return 'Invalid plate meta.'; }
+  if (!meta?.plate || typeof meta.plate.kcalPerServing !== 'number' || !meta.plate.servings) {
+    return 'COOK_STEP requires a plate snapshot.';
+  }
+  return true;
+}
+
+// Food-overhaul Phase 6 (D14): AUTO_COOK_UNLOCK's validator — the trusted
+// producer's declaration that a recipe was cooked to a grade at or above
+// its auto-cook threshold, recorded on world.autoCookCleared so instant
+// cook stays unlocked forever. The narrator's gate is the effect's own
+// llm:false flag (the validate() signature gets no tier), so this only
+// checks the payload names a real recipe and a real grade.
+function validateAutoCookUnlock(p) {
+  if (!p || typeof p.recipeId !== 'string' || !RECIPES[p.recipeId]) return 'AUTO_COOK_UNLOCK names an unknown recipe.';
+  if (!GRADES.some(g => g.grade === p.grade)) return 'AUTO_COOK_UNLOCK requires a real grade.';
+  return true;
+}
+
+// Food-overhaul Phase 6 (D14): the mastery proof. Writes (or raises) the
+// best grade a recipe has been cooked to, onto world.autoCookCleared. The
+// write mutates ctx.gameState.world, which the save pipeline persists like
+// any world key (state.js SAVE_KEYS); keeping the BEST grade matters
+// because an equipment upgrade can lower the threshold again, and a better
+// past proof should never be regressed by a later mediocre cook.
+function applyAutoCookUnlock(p, ctx) {
+  const gs = ctx.gameState;
+  const cleared = { ...(gs.world?.autoCookCleared || {}) };
+  const cur = cleared[p.recipeId];
+  const curIdx = GRADES.findIndex(g => g.grade === cur);
+  const newIdx = GRADES.findIndex(g => g.grade === p.grade);
+  if (!cur || curIdx < 0 || (newIdx >= 0 && newIdx < curIdx)) cleared[p.recipeId] = p.grade;
+  gs.world = gs.world || {};
+  gs.world.autoCookCleared = cleared;
+}
+
+// Food-overhaul Phase 3 (D26/D27/D29): the reheat verb — the kitchen touch
+// that makes frozen batches eatable and stale leftovers good again. Since
+// Phase 6 there are TWO kitchen touches: this effect backs both the stove
+// reheat (self.reheat, the 10-min Phase-3 fallback) and the microwave
+// (self.microwave, the 3/1-min fast path) — they share the effect, only
+// the action's time differs.
+//   PLATE stacks: sets meta.plate.wasReheated (the D27 hot-now flag),
+//   resolves a thaw in one step (reheating from frozen skips waiting out
+//   THAW_TUNING — D26), and when the batch has already gone stale/spoiled
+//   resets the freshness anchor to now (D7's "reheat restores quality to a
+//   stale portion"). A fresh plate keeps its anchor — reheating never
+//   extends a just-cooked batch's life.
+//   def-driven stacks (restaurant leftovers): sets meta.wasReheated and
+//   resolves a thaw, but never resets the freshness anchor — def-driven
+//   food has no plate quality to restore, and nothing to exploit.
+// Reheats the WHOLE stack (one batch = one kitchen touch); a plate's
+// wasReheated is per-instance by design.
+function applyReheatItem(p, ctx) {
+  const fromList = locationStackListMutable(p.from, ctx.gameState);
+  if (!fromList) return;
+  const now = gameDaysNow(ctx.gameState.meta.clock);
+  const fromDef = containerDefForRef(p.from, ctx.gameState);
+  const out = [];
+  let done = false;
+  for (const s of fromList) {
+    if (!done && s.defId === p.defId && stackServingsLeft(s) > 0) {
+      const plate = s.meta?.plate;
+      const meta = { ...(s.meta || {}) };
+      if (plate) {
+        const fresh = freshnessOf(s, fromDef, now);
+        const needsReset = s.meta?.frozen || (fresh && (fresh.key === 'stale' || fresh.key === 'spoiled'));
+        meta.plate = { ...plate, wasReheated: true };
+        if (needsReset) {
+          delete meta.frozen;
+          meta.cohort = now;
+        }
+      } else {
+        meta.wasReheated = true;
+        if (s.meta?.frozen) delete meta.frozen;
+      }
+      out.push({ ...s, meta });
+      done = true;
+    } else {
+      out.push(s);
+    }
+  }
+  writeLocationStackList(p.from, ctx.gameState, out);
+}
+// --- Dish effects (food-overhaul Phase 4, D9/D11) ---
+// Dish dirt is a per-type MAP on an object (obj.dishes — DISH_DEFS the
+// single owning definition, invariant 5), so dirtying and washing are their
+// own verbs rather than SET_OBJECT_STATE ladder writes. Trusted-only
+// (llm:false): what gets dirtied and washed is a consequence of the
+// cook/eat/wash actions actually running, never something the narrator
+// asserts. Room cleanliness refreshes here (the same D7 hook ACTIONS applies
+// after a SET_OBJECT_STATE), because the room's grime derives from the maps.
+function applyAddDishes(p, ctx) {
+  const obj = findObjectById(ctx.gameState, p.objId);
+  if (!obj) return;
+  addDishUnits(obj, { [p.dishType]: Number(p.qty) });
+  if (obj.bucket?.startsWith('room_') && typeof refreshRoomCleanliness === 'function') {
+    refreshRoomCleanliness(ctx.gameState, obj.bucket.slice('room_'.length));
+  }
+}
+function applySetDishes(p, ctx) {
+  const obj = findObjectById(ctx.gameState, p.objId);
+  if (!obj) return;
+  try { obj.dishes = JSON.parse(p.map) || {}; } catch { return; }
+  obj.dishUnits = dishUnitsOf(obj);
+  if (obj.bucket?.startsWith('room_') && typeof refreshRoomCleanliness === 'function') {
+    refreshRoomCleanliness(ctx.gameState, obj.bucket.slice('room_'.length));
+  }
+}
+function applyCleanDishes(p, ctx) {
+  const obj = findObjectById(ctx.gameState, p.objId);
+  if (!obj) return;
+  clearDishUnits(obj, p.units == null ? null : Number(p.units));
+  if (obj.bucket?.startsWith('room_') && typeof refreshRoomCleanliness === 'function') {
+    refreshRoomCleanliness(ctx.gameState, obj.bucket.slice('room_'.length));
+  }
+}
+// Loads the dishwasher from the kitchen sink + the kitchen/dining tables
+// (the same scope self.dishes washes) up to the given dish units. The load
+// lives on the instance (obj.dishwasher.load) — capacity is enforced by the
+// action (dishwasherCapacityUnits); the effect just moves what it can.
+function applyLoadDishwasher(p, ctx) {
+  const dw = findObjectById(ctx.gameState, p.objId);
+  if (!dw) return;
+  const rec = dw.dishwasher || (dw.dishwasher = { load: {}, cycleActiveUntilAbs: 0 });
+  if (rec.cycleActiveUntilAbs > 0) return; // mid-cycle — can't load a running machine
+  let remaining = Math.max(0, Math.floor(Number(p.units) || 0));
+  if (remaining <= 0) return;
+  const load = { ...(rec.load || {}) };
+  const gs = ctx.gameState;
+  for (const roomId of ['kitchen', 'dining']) {
+    const sources = Object.values(gs.objects?.[`room_${roomId}`] || {})
+      .filter(o => o.defId === 'sink_kitchen' || o.defId === 'kitchen_table' || o.defId === 'dining_table');
+    for (const src of sources) {
+      if (remaining <= 0) break;
+      const types = Object.keys(src.dishes || {})
+        .sort((a, b) => (DISH_DEFS[b]?.unit || 1) - (DISH_DEFS[a]?.unit || 1));
+      for (const type of types) {
+        const count = src.dishes[type];
+        if (!(count > 0)) continue;
+        const unit = DISH_DEFS[type]?.unit || 1;
+        const removable = Math.min(count, Math.floor(remaining / unit));
+        if (removable <= 0) continue;
+        src.dishes[type] = count - removable;
+        load[type] = (load[type] || 0) + removable;
+        remaining -= removable * unit;
+      }
+      const kept = Object.fromEntries(Object.entries(src.dishes).filter(([, n]) => n > 0));
+      src.dishes = kept;
+      src.dishUnits = dishUnitsOf(src);
+      if (src.bucket?.startsWith('room_') && typeof refreshRoomCleanliness === 'function') {
+        refreshRoomCleanliness(ctx.gameState, src.bucket.slice('room_'.length));
+      }
+    }
+  }
+  rec.load = load;
+}
+// Starts a dishwasher cycle. cycleActiveUntilAbs is an absolute-clock anchor
+// on the gameDaysNow scale (same pattern as preparedAbs/frozenAtAbs) —
+// completion is a lazy reader (ITEMS' dishwasherCycleProgress), never a
+// per-tick loop. RUN_DISHWASHER also flips the derived `cycle` state so the
+// floorplan reads it; the lazy resolver flips it back on write paths.
+function applyRunDishwasher(p, ctx) {
+  const dw = findObjectById(ctx.gameState, p.objId);
+  if (!dw) return;
+  const rec = dw.dishwasher || (dw.dishwasher = { load: {}, cycleActiveUntilAbs: 0 });
+  if (rec.cycleActiveUntilAbs > 0) return; // already cycling
+  const now = gameDaysNow(ctx.gameState.meta.clock);
+  if (now == null) return;
+  const minutes = dishwasherCycleMinutes(ctx.gameState) / (CLOCK.ticksPerDay * 30);
+  rec.cycleActiveUntilAbs = now + minutes;
+  if (dw.state) dw.state = { ...dw.state, cycle: 'running' };
+}
+// SPAWN_OBJECT (inventory overhaul Phase 6): place a buyable hobby OBJECT_DEFS// instance into a room bucket — the second half of the Place verb (the first
 // is DESTROY_ITEM removing the shipped ITEM_DEFS stack from the bag). The
 // object is created with makeObjectInstance (WORLD) so it carries the exact
 // instance shape every other object has (seeded id, ownerId 'player', state,
@@ -679,9 +1068,92 @@ const EFFECT_DEFS = {
     apply: applyDestroyItem,
   },
   SPAWN_ITEM: {
-    paramShape: ['defId', 'qty', 'to'], llm: false, implemented: true,
+    // Food-overhaul Phase 3: optional trailing `...metaJson` — the stack's
+    // meta as a compact JSON object (SPAWN_ITEM cooked_meal 1 obj_x
+    // {"plate":{...}}). Trusted producers (self.cook's plate spawn) use it;
+    // every existing call is 3 tokens and parses unchanged.
+    paramShape: ['defId', 'qty', 'to', '...metaJson'], llm: false, implemented: true,
     validate: (p, ctx) => firstFailure(validateItemDefId(p.defId), () => validateQtyRange(p.qty), () => validateLocationRef(p.to, ctx)),
     apply: applySpawnItem,
+  },
+  // Food-overhaul Phase 3 (D26/D27/D29): the reheat verb behind self.reheat
+  // — marks a batch reheated (wasReheated), resolves a thaw, and restores a
+  // stale plate's freshness anchor. Trusted-only: reheating is the player's
+  // own kitchen action, not something the narrator asserts.
+  REHEAT_ITEM: {
+    paramShape: ['defId', 'from'], llm: false, implemented: true,
+    validate: (p, ctx) => firstFailure(validateItemDefId(p.defId), () => validateLocationRef(p.from, ctx)),
+    apply: applyReheatItem,
+  },
+  // Food-overhaul Phase 5 (D8): the cooking engine's seasoning verb — an
+  // ingredient TRANSFORMED INTO a dish (salt/spice/sugar). Trusted-only
+  // (llm:false), mechanically a qty-decrement: the narrator gets
+  // DESTROY_ITEM, not a verb that implies the food went somewhere.
+  TRANSFORM_ITEM: {
+    paramShape: ['defId', 'qty', 'from'], llm: false, implemented: true,
+    validate: (p, ctx) => firstFailure(validateItemDefId(p.defId), () => validateQtyRange(p.qty), () => validateLocationRef(p.from, ctx), () => validateHasEnough(p.defId, p.qty, p.from, ctx)),
+    apply: applyTransformItem,
+  },
+  // Food-overhaul Phase 5 (D5/invariant 1): the plate-spawn verb — the ONLY
+  // way a cooked plate INSTANCE enters the world. Same applier as
+  // SPAWN_ITEM's meta path, but validated to carry a real plate snapshot so
+  // the engine's output can't arrive without its instance data. Trusted-only.
+  COOK_STEP: {
+    paramShape: ['defId', 'qty', 'to', '...metaJson'], llm: false, implemented: true,
+    validate: (p, ctx) => firstFailure(validateItemDefId(p.defId), () => validateQtyRange(p.qty), () => validateLocationRef(p.to, ctx), () => validateCookPlateJson(p)),
+    apply: applySpawnItem,
+  },
+  // Food-overhaul Phase 6 (D14): the mastery proof — records that a recipe
+  // was cooked to a grade at or above its auto-cook threshold, unlocking
+  // instant cook forever. Trusted-only: buildCookEffects emits it when the
+  // plate it just served clears the bar; the narrator can't grant it.
+  AUTO_COOK_UNLOCK: {
+    paramShape: ['recipeId', 'grade'], llm: false, implemented: true,
+    validate: (p) => validateAutoCookUnlock(p),
+    apply: applyAutoCookUnlock,
+  },
+  // Food-overhaul Phase 4 (D9): the dish verbs. ADD_DISHES/SET_DISHES/
+  // CLEAN_DISHES address a surface's dish MAP (the sink, the tables) —
+  // they replace the old `SET_OBJECT_STATE ... dishes few/many` recipe
+  // leaves and the wash action's state write. LOAD_DISHWASHER moves sink/
+  // table units into the appliance's load; RUN_DISHWASHER starts the cycle.
+  // All trusted-only: what gets dirtied and washed is a consequence of the
+  // cook/eat/wash actions actually running.
+  ADD_DISHES: {
+    paramShape: ['objId', 'dishType', 'qty'], llm: false, implemented: true,
+    validate: (p, ctx) => firstFailure(validateReachableObject(p.objId, ctx),
+      () => !!DISH_DEFS[p.dishType] || `Unknown dish type: ${p.dishType}`,
+      () => validateQtyRange(p.qty)),
+    apply: applyAddDishes,
+  },
+  SET_DISHES: {
+    // `...mapJson` takes the rest of the line as one JSON { dishType: count }
+    // map (same single-token convention as SPAWN_ITEM's metaJson).
+    paramShape: ['objId', '...mapJson'], llm: false, implemented: true,
+    validate: (p, ctx) => firstFailure(validateReachableObject(p.objId, ctx), () => validateDishMapJson(p)),
+    apply: applySetDishes,
+  },
+  CLEAN_DISHES: {
+    // Optional trailing `units` — absent clears the whole map (the wash
+    // action hands its skill-scaled capacity; the dishwasher's unload
+    // clears the load).
+    paramShape: ['objId', 'units?'], llm: false, implemented: true,
+    validate: (p, ctx) => firstFailure(validateReachableObject(p.objId, ctx),
+      () => (p.units == null ? true : validateQtyRange(p.units))),
+    apply: applyCleanDishes,
+  },
+  LOAD_DISHWASHER: {
+    paramShape: ['objId', 'units'], llm: false, implemented: true,
+    validate: (p, ctx) => firstFailure(validateReachableObject(p.objId, ctx),
+      () => findObjectById(ctx.gameState, p.objId)?.defId === 'dishwasher' || 'Not the dishwasher.',
+      () => validateQtyRange(p.units)),
+    apply: applyLoadDishwasher,
+  },
+  RUN_DISHWASHER: {
+    paramShape: ['objId'], llm: false, implemented: true,
+    validate: (p, ctx) => firstFailure(validateReachableObject(p.objId, ctx),
+      () => findObjectById(ctx.gameState, p.objId)?.defId === 'dishwasher' || 'Not the dishwasher.'),
+    apply: applyRunDishwasher,
   },
   SPAWN_OBJECT: {
     // Phase 6 hobby placement — see applySpawnObject. Trusted-only: the

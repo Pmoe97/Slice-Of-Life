@@ -26,9 +26,28 @@ function buildSensoryLine(scene) {
   return `- What you can sense: ${parts.join('; ')}.`;
 }
 
-function buildScenePrompt(context, playerAction) {
-  const { scene, player, activeNpcs, ambientNpcs, worldEvents } = context;
+// The fullness/ledger clause appended to the player's status line. Pure and
+// defensive (old/partial contexts may lack the fields) — the narrator only
+// ever sees what this hands it.
+function fullnessLine(player, gameState) {
+  const meta = player?.meta || {};
+  const win = typeof player?.fullnessWindowHours === 'number' ? player.fullnessWindowHours : HUNGER_RHYTHM.starveHours;
+  const rem = fullnessRemaining(player);
+  const leftH = Math.round(rem / Math.max(1e-9, metabolicRate(player, gameState)) * 10) / 10;
+  const parts = [`fullness ${win > 0 ? Math.round((rem / win) * 100) : 0}% (~${leftH}h left)`];
+  parts.push(`kcal today ${Math.round(meta.kcalToday || 0)} in / ${Math.round(meta.kcalBurnedToday || 0)} burned`);
+  if (meta.energyBalance === 'deficit') parts.push('running a deficit');
+  else if (meta.energyBalance === 'surplus') parts.push('well fueled');
+  return ` (${parts.join(', ')})`;
+}
 
+function buildScenePrompt(context, playerAction) {
+  const { scene, player, activeNpcs, ambientNpcs, worldEvents, gameState } = context;
+
+  // food-overhaul Phase 2 (D2/D4): the Hunger number now means fullness —
+  // the line also carries the remaining window and the day's kcal ledger so
+  // the narrator can write meals/activity into the scene without
+  // hallucinating numbers it was never given.
   let prompt = `You are the narrator for a slice-of-life apartment simulation. A player is controlling their character. You must respond to the player's action with in-character narration and dialogue for the NPCs.
 
 ${buildStyleSection(context.contentConfig)}
@@ -42,7 +61,8 @@ ${buildSensoryLine(scene)}
 
 PLAYER:
 - Current mood: ${moodLabel(player.mood)}
-- Energy: ${Math.round(player.energy)}%, Hunger: ${Math.round(player.hunger)}%
+- Energy: ${Math.round(player.energy)}%, Hunger: ${Math.round(player.hunger)}%${fullnessLine(player, gameState)}
+- Dressed: ${clothingLabel(player)}
 - Player's action: "${playerAction}"
 
 CHARACTERS PRESENT (these are the ONLY people who can speak):
@@ -54,7 +74,7 @@ CHARACTERS PRESENT (these are the ONLY people who can speak):
     // this prompt never shows text messages back as spoken dialogue.
     // Knowledge-gossip Phase 1 (D2): pass the current day so retrieval's
     // salience decay is read-time, not stale.
-    prompt += buildNpcBlockV2(npc, playerAction, 'scene', scene.day);
+    prompt += buildNpcBlockV2(npc, playerAction, 'scene', scene.day, context.gameState);
   }
 
   if (ambientNpcs.length > 0) {
@@ -111,7 +131,79 @@ CRITICAL RULES:
 - Keep it SHORT. One narration paragraph, 1-3 dialogue lines max.
 - Do not break the fourth wall. Do not describe the format. Just tell the story.`;
 
+  // Asks plan Phase 1 (asks-and-attachments-plan.md): on an ask turn the
+  // ask-directive block lands LAST — the writer reads the decision
+  // immediately before composing. The outcome was decided deterministically
+  // by asks.js's resolveAsk before any LLM call (invariant 1); this section
+  // only constrains how the NPC phrases it (D1/D2). context.askDirective is
+  // set in doConvSend on ask turns and nowhere else.
+  if (context.askDirective) prompt += `\n${context.askDirective}\n`;
+
   return prompt;
+}
+
+// --- The ask-directive block (asks plan Phase 1) ---
+// Compiled from src/ref/wip/asks-llm-prompt.md — that file is the source of
+// truth for this wording; keep the two in sync whenever one changes. The
+// writer receives the semantic reason/stance words, never the numbers behind
+// the decision (placeholder fill rules in the prompt doc). The `---`-fenced
+// block is the whole injected section.
+function buildAskDirective({ askLabel, askId, flavorText, accept, reasonPhrase, stance, ladderLine, npcName, leafNote }) {
+  const lines = [
+    '',
+    '---',
+    '',
+    '[ASK CONTEXT — the player used the Request menu. You are NOT deciding the outcome of this request; it has already been decided. You are only writing the in-character response.]',
+    '',
+    `- The request: ${askLabel} (${askId})`,
+    `- The player's words: "${flavorText || '—'}"`,
+    `- Your character's decision: ${accept ? 'ACCEPTED' : 'DECLINED'}`,
+    `- Why, in one plain line: ${reasonPhrase}`,
+    `- Your attitude toward the player right now: ${stance}`,
+  ];
+  if (ladderLine) lines.push(ladderLine);
+  lines.push(
+    '- Everything that happens *because* of this decision (money, schedules, items, memories) is handled by the game automatically. Do not describe those mechanics happening. You only speak and act.',
+    '',
+    'Rules:',
+    `- Reply ONLY as ${npcName}, in their own voice, exactly as they would talk in this situation. Use their established speech style — do not change register for this one message.`,
+    '- The decision above is final. Do not renegotiate, do not add conditions, do not reverse it, do not ask the player to sweeten the offer.',
+    accept
+      ? '- If ACCEPTED: respond in character, warmly or however this NPC would, acknowledging exactly what was asked.'
+      : `- If DECLINED: decline in character, matching the stance (${stance}) and the reason above. Do not be ruder or kinder than the stance says.`,
+  );
+  if (leafNote) lines.push(leafNote);
+  lines.push(
+    '- 1-3 short sentences. One optional brief action in *asterisks*.',
+    "- Emit no effects, no state changes, no summary of the game's mechanics.",
+    '',
+    '---',
+  );
+  return lines.join('\n');
+}
+
+// --- The scheduling-confirm directive (asks plan Phase 4, D9) ---
+// The SECOND LLM pass of a schedule:true ask: after the calendar modal
+// confirmed a window and the commitment already exists, this tells the
+// writer to phrase the sign-off ("see you then!"). Compiled verbatim from
+// src/ref/wip/asks-llm-prompt.md's scheduling-confirm variant — that file
+// is the source of truth; keep the two in sync. Shares the `---`-fenced
+// shape of the ask-directive block so the scene-prompt prefix before it
+// stays as cache-friendly as the first pass.
+function buildSchedulingConfirmDirective({ askLabel, npcName, dayLabel, timeLabel, slotLabel }) {
+  return [
+    '',
+    '---',
+    '',
+    `[SCHEDULING CONFIRMATION — ${askLabel}]`,
+    '',
+    `- ${npcName} already accepted the player's ${askLabel} request in the previous exchange.`,
+    `- It is now set: ${dayLabel}, ${timeLabel} (${slotLabel}).`,
+    `- Reply in character, briefly, confirming the plan — e.g. "See you then!"`,
+    `- 1-2 short sentences, ${npcName}'s own voice. No mechanics, no renegotiation.`,
+    '',
+    '---',
+  ].join('\n');
 }
 
 // --- Build the IM prompt for a single-npc text exchange (COMPUTER's im
@@ -136,7 +228,7 @@ function buildImPrompt(context, message) {
 
 ${buildStyleSection(context.contentConfig)}
 ${buildContentSection(context.contentConfig)}
-${buildNpcBlockV2(npc, message, 'im', context.day)}
+${buildNpcBlockV2(npc, message, 'im', context.day, context.gameState)}
 Texting style: ${npc.bible.speech.textingStyle}.
 ${transcript ? `\nTHE CONVERSATION SO FAR (oldest first — "You" is ${npc.name}, "Them" is the player):\n${transcript}\n` : ''}
 THE PLAYER JUST TEXTED: "${message}"
@@ -207,11 +299,18 @@ function grievancesLine(npc) {
 // Clothing label for prompt
 function clothingLabel(npc) {
   const c = npc.clothing;
-  if (!c || c === 'dressed') return 'dressed normally';
-  if (c === 'sleepwear') return 'in sleepwear';
-  if (c === 'towel') return 'wrapped in a towel (just showered)';
-  if (c === 'undressed') return 'undressed';
-  return c;
+  if (!c || c === 'dressed') {
+    // Intimacy & Voyeurism Phase 7 (D11): a notable outfit reads differently
+    // from the plain daily fit — "dressed to impress" vs "dressed normally".
+    // Same outfitFlavorProse the scene reader uses, so the model's picture of
+    // what someone is wearing can never drift from what the scene shows.
+    const flavor = (typeof outfitFlavorProse === 'function') ? outfitFlavorProse(npc.outfit) : null;
+    return flavor || 'dressed normally';
+  }
+  // Intimacy & Voyeurism Phase 5 (D11): draw the full state machine from the
+  // shared CLOTHING_STATE_PROSE table so the model's picture of the new
+  // states (changing/nude) can never drift from what the scene describes.
+  return CLOTHING_STATE_PROSE[c] || c;
 }
 
 // Phase 8 (D8): the NPC's possessions as a comma-separated label list for
@@ -247,7 +346,7 @@ function possessionsLine(npc) {
 // conversation surface's history the [Memories — recent] line draws from.
 // Knowledge-gossip Phase 1 (D2): `day` (the current in-game day, optional)
 // feeds read-time salience decay in the retrieval rank.
-function buildNpcBlockV2(npc, query, channel, day) {
+function buildNpcBlockV2(npc, query, channel, day, gameState) {
   const b = npc.bible;
   const memV2 = buildMemorySliceV2(npc, query, channel || 'scene', day);  // retrieval fires with real query
   const rel = npc.relPlayer;
@@ -255,8 +354,21 @@ function buildNpcBlockV2(npc, query, channel, day) {
   let block = `\n=== ${npc.name} (ID: ${npc.id}) ===\n`;
 
   // [Physical]
-  const physDesc = (typeof getPhysicalDescriptionForPrompt === 'function' ? getPhysicalDescriptionForPrompt(npc) : null) || b.visual || '';
+  const physDesc = (typeof getPhysicalDescriptionForPrompt === 'function'
+    ? getPhysicalDescriptionForPrompt(npc, gameState ? { gameState } : undefined)
+    : null) || b.visual || '';
   if (physDesc) block += `[Physical]: ${physDesc}\n`;
+  // Intimacy & Voyeurism Phase 18 (D16): a pregnancy or baby presence is
+  // a defining fact of this person's life right now — the model should
+  // know and naturally acknowledge it (the pinned significant fact below
+  // is the memory fuel; this block line makes it structural). Guarded on
+  // typeof (llm.js loads before pregnancy.js); without gameState nothing
+  // is claimed.
+  if (gameState && typeof pregnancyVisible === 'function' && pregnancyVisible(gameState, npc.id)) {
+    block += `[Pregnancy]: ${npc.name} is visibly pregnant. Conversation should acknowledge the bump naturally.\n`;
+  } else if (gameState && typeof hasBabyPresence === 'function' && hasBabyPresence(gameState, npc.id)) {
+    block += `[Baby]: ${npc.name} has a new baby at home — tired, delighted, and liable to mention it.\n`;
+  }
   // Phase 0: explicit age + gender for the LLM
   if (typeof b.age === 'number') block += `[Identity]: ${b.age}-year-old ${b.gender || 'female'}\n`;
 
@@ -537,29 +649,44 @@ RULES:
 // proposal fragment ready for validateProposal/applyProposal (D4).
 //
 // D14 — a failed pass is a NO-OP, and this function is where "failed" is
-// decided. It never throws and never retries: a doubled delta is worse than a
-// missing one, and there is nothing to fall back TO now that the writer has
-// stopped scoring (D5). `ok: false` and `ok: true` with empty deltas are
+// decided. It never throws: a doubled delta is worse than a missing one,
+// and there is nothing to fall back TO now that the writer has stopped
+// scoring (D5). `ok: false` and `ok: true` with empty deltas are
 // deliberately different things — the second is the judge saying nothing
 // changed (D8) — but the caller marks the window judged either way.
+// (The "never retries" half of D14 was amended 2026-08-17 — see below.)
 //
 // LLM never writes state (this file's contract): the deltas are returned, and
 // UI's runAssessorPass hands them to NPC's applyProposal.
+// D14 as amended by the 2026-08-17 audit (U3): a definitive PARSE FAILURE
+// gets exactly one retry. D14's "never retries" exists to prevent a
+// DOUBLED delta when application is uncertain — but a failed parse applied
+// nothing, so one re-roll cannot double anything, and the audit measured
+// the unparseable rate at ~4 Assessor + ~2 Chronicler passes in 5 days,
+// silently stalling relationship/knowledge progression. Empty-window
+// no-ops (the `npcIds.length === 0` guard above) still never retry.
 async function callAssessor(gameState, win) {
   const npcIds = (win?.npcIds || []).filter(id => gameState?.npcs?.[id]);
   if (npcIds.length === 0) return { ok: false, deltas: {}, reason: 'empty window' };
   try {
-    const response = await root.generateText({
-      instruction: buildAssessorPrompt(gameState, win),
-      startWith: '{',
-    });
-    // soleNpcId recovers the flat { "trust": 2 } shape a one-person window
-    // invites. With two people in the room there is nobody to attribute a
-    // flat answer to, and guessing whose relationship moved is worse than
-    // not moving one — parseAssessorReply returns null and this is a no-op.
-    const parsed = parseAssessorReply(response, { soleNpcId: npcIds.length === 1 ? npcIds[0] : null });
+    const run = async () => {
+      const response = await root.generateText({
+        instruction: buildAssessorPrompt(gameState, win),
+        startWith: '{',
+      });
+      // soleNpcId recovers the flat { "trust": 2 } shape a one-person window
+      // invites. With two people in the room there is nobody to attribute a
+      // flat answer to, and guessing whose relationship moved is worse than
+      // not moving one — parseAssessorReply returns null and this is a no-op.
+      return parseAssessorReply(response, { soleNpcId: npcIds.length === 1 ? npcIds[0] : null });
+    };
+    let parsed = await run();
     if (parsed === null) {
-      console.warn('Assessor reply unparseable; window judged as no-op');
+      console.warn('Assessor reply unparseable; retrying once');
+      parsed = await run();
+    }
+    if (parsed === null) {
+      console.warn('Assessor reply unparseable on retry; window judged as no-op');
       return { ok: false, deltas: {}, reason: 'unparseable' };
     }
     return { ok: true, deltas: toProposalDeltas(parsed, npcIds) };
@@ -689,10 +816,12 @@ RULES:
 // is no second ingestion path to get wrong.
 //
 // D14 — a failed pass is a NO-OP and this is where "failed" is decided. It
-// never throws and never retries. As with the Assessor, `ok: false` and
-// `ok: true` with nothing to write are different things: the second is the
-// extractor correctly saying the conversation taught nobody anything (D8).
-// The caller marks the window processed either way.
+// never throws. As with the Assessor, `ok: false` and `ok: true` with
+// nothing to write are different things: the second is the extractor
+// correctly saying the conversation taught nobody anything (D8). The caller
+// marks the window processed either way. (The "never retries" half of D14
+// was amended 2026-08-17 — one retry on a definitive parse failure, which
+// cannot double anything because nothing was applied.)
 //
 // LLM never writes state: the fragment is returned, and UI's
 // runChroniclerPass hands it to NPC's applyProposal.
@@ -701,13 +830,24 @@ async function callChronicler(gameState, npcId, win) {
   if (!npc) return { ok: false, additions: {}, reason: 'no such npc' };
   if (!win || !(win.entries || []).length) return { ok: false, additions: {}, reason: 'empty window' };
   try {
-    const response = await root.generateText({
-      instruction: buildChroniclerPrompt(npc, npcId, win),
-      startWith: '{',
-    });
-    const parsed = parseChroniclerReply(response);
+    // Same one-retry-on-parse-failure amendment as callAssessor
+    // (2026-08-17 audit U3) — a definitive failure applied nothing, so a
+    // single re-roll cannot double anything, and the unparseable rate was
+    // silently eating knowledge windows.
+    const run = async () => {
+      const response = await root.generateText({
+        instruction: buildChroniclerPrompt(npc, npcId, win),
+        startWith: '{',
+      });
+      return parseChroniclerReply(response);
+    };
+    let parsed = await run();
     if (parsed === null) {
-      console.warn('Chronicler reply unparseable; window marked processed as a no-op');
+      console.warn('Chronicler reply unparseable; retrying once');
+      parsed = await run();
+    }
+    if (parsed === null) {
+      console.warn('Chronicler reply unparseable on retry; window marked processed as a no-op');
       return { ok: false, additions: {}, reason: 'unparseable' };
     }
     // `npc` is passed so ingestion can drop anything this character already

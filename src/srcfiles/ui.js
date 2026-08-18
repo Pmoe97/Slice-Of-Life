@@ -156,6 +156,9 @@ async function advanceAndResolve(ticks, opts = {}) {
   // not at day rollover, so the handover is checked on every clock advance —
   // discrete actions and the continuous loop's sim checkpoints both land here.
   processFoodOrdersNow();
+  // QuickCart (grocery delivery): same tick-driven reasoning as food orders
+  // above — a shopper arrives at a tick, not at day rollover.
+  processGroceryOrdersNow();
 
   // Day-rollover economy: rent due/overdue, delivery arrivals, quest
   // generation/expiry. Runs once per calendar day crossed (a single
@@ -191,6 +194,15 @@ async function processDayRollover(day) {
   // session — a fresh day is a fresh slate for "how many meals have I had
   // today".
   if (currentGameState.player) currentGameState.player.mealsToday = 0;
+  // food-overhaul Phase 2 (D4): yesterday's kcal ledger resolves into the
+  // day-mode that tunes today (hunger rate, sleep recovery, a small mood
+  // term), then the ledger resets for the new day.
+  if (currentGameState.player) rollEnergyLedger(currentGameState.player);
+  // Asks plan Phase 3 (D7): the per-category repeat-ask streak is same-day
+  // only — a fresh day resets the ladder. Stale entries are swept (lastDay
+  // already guards reads, so this is hygiene); sweepAskCounts lives in
+  // asks.js.
+  sweepAskCounts(currentGameState, day);
   await processRentForDay(day);
   processBillsForDayUi(day);
   // BrineOS Phase 7 (plan 7.2): after, not before — autopay must see this
@@ -233,6 +245,44 @@ async function processDayRollover(day) {
   // organic visits are the ones that stand down when the place is busy, never
   // the other way round (locked decision 6).
   processFriendVisitsForDay(day);
+  // Outside partners (Intimacy & Voyeurism Phase 14, D14): the boyfriend/girl
+  // friend who comes over and disappears to her room. Placed directly after
+  // friends because partner visits use the same organic soft cap and the same
+  // plan-then-narrate split — the partner stands down alongside the friends
+  // when the house is already busy, never before them.
+  processOutsidePartnerVisitsForDay(day);
+  // Intimacy & Voyeurism Phase 12 (D12): the relationship formation pass.
+  // Slow cadence — once per day, consuming the pair co-location the tick
+  // loop accumulated. Deterministic; returns narration events for any pair
+  // that started seeing each other, committed, or moved in together.
+  // Before the escorts' announce-ahead so a same-day couple beat reads
+  // before the evening's bookings are narrated.
+  const relEvents = updateRelationshipsForDay(currentGameState, day);
+  for (const ev of relEvents) {
+    const name = (id) => currentGameState.npcs[id]?.bible?.name || 'Someone';
+    if (ev.kind === 'seeing') {
+      addLogEntry('narration', `${name(ev.a)} and ${name(ev.b)} have started seeing each other.`);
+    } else if (ev.kind === 'committed') {
+      addLogEntry('narration', ev.moved
+        ? `${name(ev.a)} and ${name(ev.b)} are officially a couple — ${name(ev.moverId)} has moved into ${ROOMS[ev.targetRoom]?.name || 'their partner\'s'} room.`
+        : `${name(ev.a)} and ${name(ev.b)} are officially a couple.`);
+    } else if (ev.kind === 'moved_in') {
+      addLogEntry('narration', `${name(ev.a)} and ${name(ev.b)} moved in together — ${name(ev.moverId)} now shares ${ROOMS[ev.targetRoom]?.name || 'their partner\'s'} room.`);
+    }
+  }
+
+
+  // Intimacy & Voyeurism Phase 18 (D14/D16): the pregnancy lifecycle pass —
+  // emergent "trying", the visible-bump reveal, the birth event, and the
+  // baby presence's daily mood/energy cost. Placed directly after the
+  // relationship pass (a committed couple's emergence reads the same store);
+  // returns narration lines for the same logging pattern the relEvents loop
+  // above uses. Deterministic and idempotent per pregnancy record.
+  if (typeof processPregnanciesForDay === 'function') {
+    for (const line of processPregnanciesForDay(currentGameState, day)) {
+      addLogEntry('narration', line);
+    }
+  }
   // Escorts (external-world plan Phase 7): retire yesterday's bookings and
   // narrate tonight's advance bookings, the same announce-ahead pattern as
   // friends. The visit itself is already scheduled (bookEscort); this is
@@ -277,10 +327,11 @@ function processNeedConsequences() {
   p.flags = p.flags || {};
 
   // Energy at 0 → no forced sleep. The player is gated from taking
-  // further energy-costing actions (see canPerformAction), but can
-  // always travel to their bedroom to sleep. This replaces the old
-  // collapse/forced_sleep which teleported the player and skipped hours
-  // — the user explicitly didn't want the player passing out.
+  // further energy-costing actions (see isActionExemptFromEnergyGate /
+  // ENERGY_GATE_EXEMPT below), but can always travel to their bedroom to
+  // sleep. This replaces the old collapse/forced_sleep which teleported
+  // the player and skipped hours — the user explicitly didn't want the
+  // player passing out.
   // We still log a one-time warning so the player knows they're spent.
   if (p.energy <= 0 && !p.flags._energyDepleted) {
     p.flags._energyDepleted = true;
@@ -355,6 +406,21 @@ function checkRelConsequences(npcId) {
   const comfort = rel.comfort || 0;
   const desire = rel.desire || 0;
   const affection = rel.affection || 0;
+
+  // Intimacy & Voyeurism Phase 16 (D2/D14): the cold-shoulder talk gate.
+  // Severity-scaled refusal + room avoidance, read from the hurt state's own
+  // machine (npc.js). Deliberately FIRST — a cold-shouldering NPC's hurt
+  // overrides even the desire override below: this is distance, not tension,
+  // and nothing talks them out of it tonight.
+  const cs = coldShoulderState(npc, currentGameState.meta.clock.day);
+  if (cs.active) {
+    if (orbitalRandom() < COLD_SHOULDER.talkRefuseChance[cs.severity]) {
+      return { canTalk: false, avoided: false, reason: `${npc.bible.name} gives you the cold shoulder. They don't meet your eyes.` };
+    }
+    if (orbitalRandom() < COLD_SHOULDER.avoidChance[cs.severity]) {
+      return { canTalk: false, avoided: true, reason: `${npc.bible.name} leaves the room the moment you walk in.` };
+    }
+  }
 
   // Initiative plan Phase 2 (D12/D13/D14). The gate itself is SIM's
   // npcInitiativeGate — pure, personality-scaled, and reachable by the Node
@@ -656,8 +722,360 @@ function refuseOverturesInRoom(roomId) {
   }
 }
 
+// --- Intimacy & Voyeurism Phase 11 (D3/D13): Make a Move ------------------
+// The player's mirror of the NPC intimacy overture, and the ONLY surface for
+// the paired acts. The flow: pick a partner (when several are present) → pick
+// an act → run it through the registered-action pipeline with
+// ctx.actTargetNpcId set. The act's `willingness:<act>` requirement is the
+// SAME Phase 9 gate an NPC-initiated intimacy act passes (invariant 2 —
+// symmetric initiation), with the same thresholds and the same refusal prose.
+// An unwilling target refuses with prose and no effects; a conscious soft no
+// additionally puts the target on the actively-refusing lockout (the refusal
+// writer inside executeAction), so a no means no for a while.
+async function doMakeAMove(npcId) {
+  if (!currentGameState) return;
+  const roomId = currentGameState.player.location;
+  const present = getPresentNpcIds(currentGameState.npcs, roomId);
+  if (present.length === 0) {
+    addLogEntry('system', 'There is nobody here to make a move on.');
+    return;
+  }
+
+  // Partner selection — explicit only when the player has a choice.
+  let partnerId = (npcId && present.includes(npcId)) ? npcId : null;
+  if (!partnerId && present.length === 1) partnerId = present[0];
+  if (!partnerId) {
+    partnerId = await openIntimacyPicker({
+      title: 'Who are you making a move on?',
+      rows: present.map(id => {
+        const npc = currentGameState.npcs[id];
+        return {
+          id,
+          label: npc.bible?.name || 'Them',
+          meta: (npc.relPlayer?.conversationPhase && npc.relPlayer.conversationPhase !== 'early')
+            ? `You two are ${npc.relPlayer.conversationPhase}`
+            : 'You barely know them',
+        };
+      }),
+    });
+    if (!partnerId) return;
+  }
+
+  // Act selection — only acts that are otherwise possible here (willingness
+  // deliberately excluded: the gate gets to say no with a person's voice).
+  const acts = intimacyActsAvailable(partnerId);
+  if (acts.length === 0) {
+    addLogEntry('system', "There's no way to take this further in here.");
+    return;
+  }
+  const actId = await openIntimacyPicker({
+    title: 'How do you want to make a move?',
+    rows: acts.map(id => ({ id, label: ACTION_DEFS[id].label })),
+  });
+  if (!actId) return;
+
+  await runRegisteredAction(actId, { targetNpcId: partnerId });
+}
+
+// --- Boundary acts (Intimacy & Voyeurism Phase 17, D13/D14) ---------------
+// The sleeping-room verbs (slide into bed / watch sleep) and the three-way
+// act. All domain logic is in boundary.js (resolveBoundaryGate /
+// resolveBoundaryThroupleGate / applyBoundarySleepRoom / applyBoundaryThrouple
+// — deterministic, harness-testable); these handlers are the thin UI shell:
+// gate, narrate the open beat, advance the clock in the same chunked/minutes
+// semantics the heartbeat uses, apply, narrate the outcome, render, save-at-
+// boundary. The bed verbs are intercepted in handleAction before the
+// registered-action bridge (the door.keyhole pattern); the threesome chip is
+// intercepted in the switch (it is not a registered action).
+
+async function doBoundarySleepRoom(actId, npcId) {
+  if (!currentGameState || !npcId) return;
+  const roomId = currentGameState.player.location;
+  const target = currentGameState.npcs[npcId];
+  if (!target || target.location !== roomId) {
+    addLogEntry('system', 'They are not here anymore.');
+    render(currentGameState, currentSceneState);
+    return;
+  }
+  const day = currentGameState.meta.clock.day;
+  // The narrow gate (boundary.js). The willingness function is ALWAYS
+  // consulted and recorded — a sleeping target's floor (-1, reason 'asleep')
+  // is EXPECTED and is exactly why this is an attempt, never a completed
+  // act; a cold-shouldering target closes the gate entirely (Phase 16's
+  // floor leaves no boundary door to open toward them).
+  const gate = resolveBoundaryGate(currentGameState, actId, npcId, {
+    location: roomId, initiatorId: 'player',
+  });
+  if (!gate.allowed) {
+    if (gate.reason === 'cold_shoulder') {
+      addLogEntry('narration', `${target.bible?.name || 'They'} will not even look at you, let alone share a bed with you.`);
+    } else if (gate.reason === 'not_asleep') {
+      addLogEntry('system', 'They are not asleep.');
+    } else {
+      addLogEntry('system', "You can't do that right now.");
+    }
+    render(currentGameState, currentSceneState);
+    return;
+  }
+  const openLine = pickBoundaryProse(currentGameState,
+    actId === 'sleep_with' ? 'sleepWithOpen' : 'sleepWatchOpen',
+    npcId, roomId, day);
+  addLogEntry('narration', openLine);
+  await advanceAndResolveMinutes(BOUNDARY.durationMinutes[actId] || 10);
+  const result = applyBoundarySleepRoom(currentGameState, actId, npcId, {
+    location: currentGameState.player.location, initiatorId: 'player',
+  });
+  if (result && result.ok && result.prose) {
+    if (result.outcome === 'caught') addLogEntry('system', 'They woke up.');
+    addLogEntry('narration', result.prose);
+  }
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary(`boundary-${actId}`, currentGameState);
+}
+
+async function doBoundaryThrouple() {
+  if (!currentGameState) return;
+  const roomId = currentGameState.player.location;
+  const present = getPresentNpcIds(currentGameState.npcs, roomId);
+  if (present.length < 2) {
+    addLogEntry('system', 'You need two people here for that.');
+    return;
+  }
+  const nameFor = (id) => currentGameState.npcs[id]?.bible?.name || 'Them';
+  const partnerA = await openIntimacyPicker({
+    title: 'Propose a threesome with…',
+    rows: present.map(id => ({ id, label: nameFor(id) })),
+  });
+  if (!partnerA) return;
+  const partnerB = await openIntimacyPicker({
+    title: '…and?',
+    rows: present.filter(id => id !== partnerA).map(id => ({ id, label: nameFor(id) })),
+  });
+  if (!partnerB) return;
+
+  // The gate: all THREE parties' willingness (the same Phase 9 function the
+  // player's Make-a-Move and the NPC pair drives read) + desire. One
+  // unwilling party refuses the whole act with their own voice; a soft no
+  // (below_threshold) writes their lockout — a no means no for a while. Hard
+  // floors are states and write nothing.
+  const gate = resolveBoundaryThroupleGate(currentGameState, partnerA, partnerB, {
+    location: roomId,
+  });
+  if (!gate.allowed) {
+    const refuser = gate.partner === 'a' ? partnerA : partnerB;
+    const refuserNpc = currentGameState.npcs[refuser];
+    const rName = refuserNpc?.bible?.name || 'They';
+    if (gate.reason === 'not_into_it') {
+      addLogEntry('narration', `${rName} doesn't seem into that at all.`);
+    } else if (gate.reason === 'below_threshold') {
+      addLogEntry('narration', `${rName} shakes their head. ${willingnessRefusalProse(refuserNpc, gate.gate)}`);
+      if (refuserNpc) noteIntimacyRefusal(refuserNpc, currentGameState.meta.clock.day);
+      render(currentGameState, currentSceneState);
+      await saveAtBoundary('intimacy-refusal', currentGameState);
+      return;
+    } else {
+      addLogEntry('narration', `${rName} says no. ${willingnessRefusalProse(refuserNpc, gate.gate)}`);
+    }
+    render(currentGameState, currentSceneState);
+    return;
+  }
+  const day = currentGameState.meta.clock.day;
+  const config = boundaryThreeWayConfig(currentGameState, partnerA, partnerB);
+  const aName = nameFor(partnerA);
+  const bName = nameFor(partnerB);
+  const openKey = config === 'cuck' ? 'cuckOpen' : 'throupleOpen';
+  addLogEntry('narration',
+    pickBoundaryProse(currentGameState, openKey, partnerA, roomId, day)
+      .replace('{a}', aName).replace('{b}', bName));
+  await advanceAndResolveMinutes(BOUNDARY.durationMinutes.throuple || 40);
+  const result = applyBoundaryThrouple(currentGameState, partnerA, partnerB, {
+    location: currentGameState.player.location,
+  });
+  if (result && result.ok) {
+    const doneKey = config === 'cuck' ? 'cuckDone' : 'throupleDone';
+    addLogEntry('narration',
+      pickBoundaryProse(currentGameState, doneKey, partnerA, roomId, day)
+        .replace('{a}', aName).replace('{b}', bName));
+  }
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('boundary-throuple', currentGameState);
+}
+
+// The paired acts available with `partnerId` in the player's current room —
+// every `paired` ACTION_DEFS row whose non-willingness requirements pass.
+// Used by the Make-a-Move act picker; the willingness rule is skipped so the
+// target's refusal stays a spoken no rather than a vanished option.
+// Intimacy & Voyeurism Phase 18 (D16): the player's "trying" toggle.
+// A couple-level choice, not an act: it flips player.flags._tryingWith
+// (mirroring relationship.trying on the NPC side) so completed sex acts
+// with that partner roll the deliberate conception chance instead of the
+// unprotected base chance. The willingness gate is untouched — trying
+// changes odds, never consent (invariant 1 is upstream of pregnancy).
+async function doPregnancySetTrying(npcId, trying) {
+  if (!currentGameState || !npcId) return;
+  const npc = currentGameState.npcs[npcId];
+  if (!npc) return;
+  const player = currentGameState.player;
+  player.flags = player.flags || {};
+  if (trying) {
+    if (player.flags._tryingWith === npcId) return;
+    player.flags._tryingWith = npcId;
+    addLogEntry('narration', `You and ${npc.bible?.name || 'them'} have decided to try for a baby.`);
+  } else {
+    if (player.flags._tryingWith !== npcId) return;
+    delete player.flags._tryingWith;
+    addLogEntry('narration', `You've stopped trying for a baby with ${npc.bible?.name || 'them'} — for now.`);
+  }
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('pregnancy-trying', currentGameState);
+}
+
+function intimacyActsAvailable(partnerId) {
+  const ctx = buildActionContext(currentGameState, 'player');
+  ctx.actTargetNpcId = partnerId;
+  const out = [];
+  for (const def of Object.values(ACTION_DEFS)) {
+    if (!def.paired) continue;
+    if (checkRequirements(def, ctx, { skipWillingness: true }).ok) out.push(def.id);
+  }
+  return out;
+}
+
+// --- Codex verbs (Intimacy & Voyeurism Phase 15, D8) -----------------------
+// The three spendable-knowledge handlers. All domain logic is in codex.js
+// (applyConfrontNpc / applySpreadSecret / applyMatchmakeNpc — deterministic,
+// harness-testable); these handlers are the thin UI shell: navigate, call,
+// narrate from the authored pools, render, save-at-boundary. Each verb
+// spends exactly one ledger entry (`spent` flips, the entry stays in
+// history).
+
+function doCodexOpenNpc(npcId, device) {
+  if (!currentGameState || !npcId) return;
+  switchScreen(currentGameState, 'codex', 'detail', { npcId }, device === 'phone' ? 'phone' : 'computer');
+  if (device === 'phone') renderPhoneScreen(currentGameState);
+  else renderComputerScreen(currentGameState);
+}
+
+async function doConfrontNpc(npcId, index) {
+  if (!currentGameState || !npcId || typeof index !== 'number') return;
+  const npc = currentGameState.npcs[npcId];
+  const arr = currentGameState.player?.ledger?.[npcId];
+  const entry = Array.isArray(arr) ? arr[index] : null;
+  if (!npc || !entry || entry.spent) {
+    addLogEntry('system', 'There is nothing to confront them about.');
+    render(currentGameState, currentSceneState);
+    return;
+  }
+  const result = applyConfrontNpc(currentGameState, npcId, index, {
+    location: currentGameState.player?.location || null,
+  });
+  if (!result.ok) return;
+  const name = npc.bible?.name || 'They';
+  const otherName = result.otherName || 'someone';
+  const rng = seededRng(currentGameState.meta.seed, `confront_${npcId}_${entry.day}_${result.outcome}`);
+  const playerPool = entry.otherNpcId ? CONFRONT.playerLines.withOther : CONFRONT.playerLines.alone;
+  const playerLine = playerPool[Math.floor(rng() * playerPool.length)].replace('{other}', otherName);
+  addLogEntry('narration', `You corner ${name}. "${playerLine}"`);
+  const replyPool = CONFRONT.lines[result.outcome] || [];
+  if (replyPool.length > 0) {
+    const reply = replyPool[Math.floor(rng() * replyPool.length)].replace('{name}', name).replace('{other}', otherName);
+    addLogEntry('narration', reply);
+  }
+  if (result.gossipIds.length > 0) {
+    addLogEntry('narration', 'The confrontation does not stay private. Someone in the room heard.');
+  }
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('confront', currentGameState);
+}
+
+async function doSpreadSecret(npcId, index) {
+  if (!currentGameState || !npcId || typeof index !== 'number') return;
+  const arr = currentGameState.player?.ledger?.[npcId];
+  const entry = Array.isArray(arr) ? arr[index] : null;
+  if (!entry || entry.spent || !entry.otherNpcId) {
+    addLogEntry('system', 'There is no third-party secret to tell.');
+    return;
+  }
+  const npc = currentGameState.npcs[npcId];
+  const otherNpc = currentGameState.npcs[entry.otherNpcId];
+  const name = npc?.bible?.name || 'They';
+  const otherName = otherNpc?.bible?.name || 'someone';
+
+  // Who can you tell? Anyone you can talk to — residents, active visitors,
+  // contacts — minus the two people the secret is about.
+  const candidateIds = Object.keys(currentGameState.npcs).filter(id => {
+    const n = currentGameState.npcs[id];
+    if (!n) return false;
+    if (id === npcId || id === entry.otherNpcId) return false;
+    const status = n.residency?.status;
+    return status === 'resident' || status === 'visitor' || n.contactKnown === true;
+  });
+  if (candidateIds.length === 0) {
+    addLogEntry('system', 'There is nobody here you could tell.');
+    return;
+  }
+  const receiverId = await openIntimacyPicker({
+    title: 'Who do you tell?',
+    rows: candidateIds.map(id => {
+      const n = currentGameState.npcs[id];
+      return { id, label: n.bible?.name || 'Them', meta: 'They\'ll hear it from you first.' };
+    }),
+  });
+  if (!receiverId) return;
+
+  const result = applySpreadSecret(currentGameState, npcId, index, receiverId);
+  if (!result.ok) {
+    addLogEntry('system', 'That did not go anywhere.');
+    return;
+  }
+  addLogEntry('narration', `You lean in and tell ${result.receiverName} about ${name} and ${otherName}. They listen closely.`);
+  addLogEntry('narration', `"${result.fact.text}," you say. The words are out there now.`);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('spread-secret', currentGameState);
+}
+
+async function doMatchmakeNpc(npcId, index) {
+  if (!currentGameState || !npcId) return;
+  const npc = currentGameState.npcs[npcId];
+  if (!npc) return;
+  const candidates = matchmakeCandidates(currentGameState, npcId);
+  if (candidates.length === 0) {
+    addLogEntry('system', 'You do not know two people well enough to push them together yet — and they need a spark already forming.');
+    return;
+  }
+  const targetId = await openIntimacyPicker({
+    title: `Who should ${npc.bible?.name || 'they'} meet?`,
+    rows: candidates.map(c => ({
+      id: c.npcId,
+      label: c.name,
+      meta: `Compatibility ${Math.round(c.compat * 100)}% — you know both of them`,
+    })),
+  });
+  if (!targetId) return;
+
+  const result = applyMatchmakeNpc(currentGameState, npcId, targetId);
+  if (!result.ok) {
+    addLogEntry('system', result.reason === 'incompatible'
+      ? 'They would never work — you know them well enough to see it.'
+      : 'That match is not ready to be pushed.');
+    return;
+  }
+  const target = currentGameState.npcs[targetId];
+  addLogEntry('narration', `You make a point of getting ${npc.bible?.name || 'them'} and ${target?.bible?.name || 'them'} in the same room. "You two should talk," you say, and leave them to it.`);
+  for (const evt of result.events) {
+    if (evt.kind === 'seeing') addLogEntry('narration', `Something clicks — ${npc.bible?.name || 'They'} and ${target?.bible?.name || 'they'} are seeing each other now.`);
+    if (evt.kind === 'committed') addLogEntry('narration', `It went further than you expected — ${npc.bible?.name || 'They'} and ${target?.bible?.name || 'they'} are together.`);
+  }
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('matchmake', currentGameState);
+}
+
 // Track how long an NPC has been at high tension — if it persists, they
-// move out. Checked at day rollover.
+// move out. Checked at day rollover. Intimacy & Voyeurism Phase 16 (D2/D14)
+// extends the same rollover with the cold-shoulder pass: time heals slowly
+// (no player action needed, but slow) and a max-severity cold-shoulder puts
+// the resident at real move-out risk — the extended move-out trigger for
+// boundary acts at low dynamic and public infidelity fallout.
 async function processRelConsequencesForDay(day) {
   for (const [id, npc] of Object.entries(currentGameState.npcs)) {
     if (npc.residency.status !== 'resident') continue;
@@ -671,6 +1089,16 @@ async function processRelConsequencesForDay(day) {
       }
     } else {
       if (npc.flags?._highTensionDays) npc.flags._highTensionDays = 0;
+    }
+    // The cold-shoulder pass. advanceColdShoulderForDay mutates npc (time
+    // heal + the per-day move-out roll) and returns the verdict; the actual
+    // move-out is doAskToLeave (kv + narration), same as the tension path.
+    // Seeded per (seed, npc, day) so a replayed day rolls identically.
+    const csRng = seededRng(currentGameState.meta.seed, `cold_out_${id}_${day}`);
+    const csOut = advanceColdShoulderForDay(npc, day, csRng);
+    if (csOut.movedOut) {
+      addLogEntry('system', `${npc.bible.name} has gone quiet and distant — it's too much. They're moving out.`);
+      await doAskToLeave(id);
     }
   }
 }
@@ -1155,6 +1583,26 @@ function processFriendVisitsForDay(day) {
   }
 }
 
+// Outside partners (Intimacy & Voyeurism Phase 14, D14): the day-rollover
+// half of the long-distance relationship. SIM's planOutsidePartnerVisitsForDay
+// does the deciding (ensure partners exist, roll each resident's visit chance,
+// respect the cooldown and the soft cap) and returns records; this narrates
+// them with the same plan-then-narrate split as friends. The partner is an
+// ordinary visit after this — presence, pair acts, peek and gossip all flow
+// through the visit spine.
+function processOutsidePartnerVisitsForDay(day) {
+  if (!currentGameState) return;
+  ensureOutsidePartners(currentGameState);
+  const planned = planOutsidePartnerVisitsForDay(currentGameState, day);
+  for (const p of planned) {
+    if (p.deferred) {
+      addLogEntry('narration', `${p.residentName || 'Someone'} wanted their partner over tonight, but the place is already full of people and they left it.`);
+      continue;
+    }
+    addLogEntry('narration', `${p.residentName || 'Someone'} mentions that ${p.partnerName} is coming by around ${formatTime(p.startMinute)}.`);
+  }
+}
+
 // Escorts (external-world plan Phase 7): the day-rollover half of booking
 // lifecycle. Retire yesterday's bookings (status → 'done', mirroring how
 // processVisitsForDay retires the visits themselves) and narrate tonight's
@@ -1298,6 +1746,58 @@ function handOverFoodOrder(order, day) {
   addLogEntry('narration', toPlayer
     ? `${name} hands over the ${def?.label || 'delivery'} order at the door — ${lines}.`
     : `${name} dropped off the ${def?.label || 'delivery'} order — ${lines}, left on the doormat.`);
+}
+
+// QuickCart's tick-driven arrival check, mirroring processFoodOrdersNow
+// exactly (a shopper arrives at a TICK, not at day rollover).
+function processGroceryOrdersNow() {
+  if (!currentGameState?.world) return;
+  const orders = currentGameState.world.groceryOrders || [];
+  if (orders.length === 0) return;
+  const { day } = currentGameState.meta.clock;
+  for (const order of orders) {
+    if (order.status !== 'ordered') continue;
+    if (clockToAbsolute(currentGameState.meta.clock) < groceryOrderArrivalAbs(order)) continue;
+    handOverGroceryOrder(order, day);
+  }
+}
+
+// Mirrors handOverFoodOrder exactly — same player-in-entry vs. doormat
+// fallback (the SAME doormat object Nile/DoorDrop already drop onto, so
+// the food-overhaul Phase 1 auto-transfer sort picks this up for free),
+// same tip-to-relationship nudge on the shopper, same narration shape. The
+// one real difference: grocery order lines carry `defId` (Nile/Home's
+// cart shape), not DoorDrop's `itemId`.
+function handOverGroceryOrder(order, day) {
+  order.status = 'delivered';
+  order.deliveredDay = day;
+  const shopper = currentGameState.npcs[order.shopperNpcId];
+  const name = shopper?.bible?.name || 'Your shopper';
+  const toPlayer = currentGameState.player.location === 'entry';
+  order.handedTo = toPlayer ? 'player' : 'doormat';
+
+  const doormat = Object.values(currentGameState.objects?.room_entry || {}).find(o => o.defId === 'doormat');
+  const now = gameDaysNow(currentGameState.meta.clock);
+  for (const line of order.items) {
+    if (!ITEM_DEFS[line.defId]) continue;
+    if (toPlayer) {
+      currentGameState.player.inventory = addStack(currentGameState.player.inventory, line.defId, line.qty, 'player', {}, now);
+    } else if (doormat) {
+      doormat.contents = addStack(doormat.contents, line.defId, line.qty, null, {}, now);
+    }
+  }
+
+  if (shopper) {
+    const delta = (order.tipPct || 0) >= GROCERY_TUNING.tipRelThreshold
+      ? GROCERY_TUNING.tipRelDelta
+      : (order.tipPct || 0) === 0 ? GROCERY_TUNING.stiffRelDelta : null;
+    if (delta) currentGameState.npcs[order.shopperNpcId] = applyRelDelta(shopper, delta, day);
+  }
+
+  const lines = order.items.map(i => `${ITEM_DEFS[i.defId]?.label || i.defId}${i.qty > 1 ? ` ×${i.qty}` : ''}`).join(', ');
+  addLogEntry('narration', toPlayer
+    ? `${name} hands over your QuickCart order at the door — ${lines}.`
+    : `${name} left your QuickCart order at the door — ${lines}, on the doormat.`);
 }
 
 function doFoodOpenRestaurant(restaurantId, device) {
@@ -1971,7 +2471,11 @@ async function doTakeFromRoom(ownerId, defId, qty) {
 
 // Give item: gives a meal/food/gift item from inventory to an NPC.
 // Used to complete chain quest 'give_item' steps. The first matching
-// item in the player's inventory is consumed.
+// item in the player's inventory is consumed. Intimacy & Voyeurism Phase 16
+// (D2/D14): gifting a COLD-SHOULDERING NPC is a reparation act even without
+// a quest — the render chip offers it whenever the NPC is cold (render.js)
+// — and a landed gift ratchets their severity down one (the plan's gift
+// reparation, one per giftCooldownDays window).
 async function doGiveItem(npcId) {
   if (!currentGameState) return;
   const npc = currentGameState.npcs[npcId];
@@ -1986,16 +2490,22 @@ async function doGiveItem(npcId) {
     q.type === 'chain' && q.npcId === npcId &&
     q.steps[q.currentStep]?.type === 'give_item' && !q.steps[q.currentStep]?.done
   );
-  if (!quest) return;
-  const step = quest.steps[quest.currentStep];
+  // Cold-shoulder repair branch (Phase 16): a cold NPC accepts any
+  // gift-category item as reparation. The quest branch keeps its own
+  // itemCategory (meal/food/gift); absent a quest AND a cold-shoulder, the
+  // chip does not exist and this handler has nothing to do.
+  const cs = coldShoulderState(npc, currentGameState.meta.clock.day);
+  const step = quest && quest.steps[quest.currentStep];
+  const wantCategory = quest ? (step.itemCategory || null) : (cs.active ? 'gift' : null);
+  if (!quest && !wantCategory) return;
   // Find matching item in inventory
   const inv = currentGameState.player.inventory || [];
   const idx = inv.findIndex(stack => {
     const def = ITEM_DEFS[stack.defId];
-    return def && (!step.itemCategory || def.category === step.itemCategory);
+    return def && (!wantCategory || def.category === wantCategory);
   });
   if (idx < 0) {
-    addLogEntry('system', `You don't have a ${step.itemCategory || 'suitable item'} to give.`);
+    addLogEntry('system', `You don't have a ${wantCategory || 'suitable item'} to give.`);
     return;
   }
   const stack = inv[idx];
@@ -2003,13 +2513,76 @@ async function doGiveItem(npcId) {
   // Consume one from the stack
   inv[idx] = { ...stack, qty: stack.qty - 1 };
   if (inv[idx].qty <= 0) inv.splice(idx, 1);
-  addLogEntry('narration', `You give ${itemLabel} to ${npc.bible.name || 'them'}. They seem touched.`);
+  addLogEntry('narration', `You give ${itemLabel} to ${npc.bible.name || 'them'}.`);
   // Complete the step
-  checkChainQuestProgress('give_item', npcId, step.itemCategory);
-  // Small affection bump for giving a gift
-  currentGameState.npcs[npcId] = applyRelDelta(npc, { affection: 0.05 }, currentGameState.meta.clock.day);
+  if (quest) checkChainQuestProgress('give_item', npcId, step.itemCategory);
+  let npcOut = npc;
+  if (cs.active) {
+    // The reparation ratchet — one severity per landed gift (cooldown +
+    // minDaysBeforeRepair enforced inside noteColdShoulderRepair).
+    const res = noteColdShoulderRepair(npc, 'gift', currentGameState.meta.clock.day);
+    if (res.repaired) {
+      npcOut = applyRelDelta(npc, COLD_SHOULDER.repairRelDeltas, currentGameState.meta.clock.day);
+      if (res.severity <= 0) {
+        addLogEntry('narration', `${npc.bible.name || 'They'} looks at you properly for the first time in days. The cold is gone.`);
+      } else {
+        addLogEntry('narration', `${npc.bible.name || 'They'} takes the ${itemLabel}, looking at it for a long moment. "Thank you," they say, quietly.`);
+      }
+    } else {
+      addLogEntry('narration', `${npc.bible.name || 'They'} leaves the ${itemLabel} where it is. Not yet.`);
+    }
+  } else {
+    npcOut = applyRelDelta(npc, { affection: 0.05 }, currentGameState.meta.clock.day);
+    addLogEntry('narration', 'They seem touched.');
+  }
+  currentGameState.npcs[npcId] = npcOut;
   render(currentGameState, currentSceneState);
   await saveAtBoundary('give-item', currentGameState);
+}
+
+// Intimacy & Voyeurism Phase 16 (D2/D14): the apology reparation act. A
+// cold-shouldering NPC who is ready to hear it ratchets one severity down
+// (COLD_SHOULDER.apologyCooldownDays window). Deterministic — no LLM call
+// decides whether the apology lands; the hurt state (severity, elapsed
+// days, per-kind cooldown) does. Severity 3 will not even hear it until a
+// gift or time drops them to 2 (apologyBlockedAboveSeverity).
+async function doApologizeNpc(npcId) {
+  if (!currentGameState) return;
+  const npc = currentGameState.npcs[npcId];
+  if (!npc) return;
+  const day = currentGameState.meta.clock.day;
+  const cs = coldShoulderState(npc, day);
+  if (!cs.active) {
+    addLogEntry('narration', `${npc.bible.name || 'They'} looks at you blankly. "What for?"`);
+    render(currentGameState, currentSceneState);
+    await saveAtBoundary('apologize', currentGameState);
+    return;
+  }
+  const res = noteColdShoulderRepair(npc, 'apology', day);
+  if (!res.repaired) {
+    if (res.reason === 'won_t_listen') {
+      addLogEntry('narration', `${npc.bible.name || 'They'} turns away without a word. It's too soon.`);
+    } else if (res.reason === 'too_soon') {
+      addLogEntry('narration', `"Not now," ${npc.bible.name || 'they'} says flatly. "Just give me space."`);
+    } else if (res.reason === 'cooldown') {
+      addLogEntry('narration', `${npc.bible.name || 'They'} sighs. "You already said that."`);
+    } else {
+      addLogEntry('narration', `${npc.bible.name || 'They'} is still cold to you.`);
+    }
+    render(currentGameState, currentSceneState);
+    await saveAtBoundary('apologize', currentGameState);
+    return;
+  }
+  currentGameState.npcs[npcId] = applyRelDelta(npc, COLD_SHOULDER.repairRelDeltas, day);
+  const them = currentGameState.npcs[npcId].bible?.name || 'They';
+  addLogEntry('narration', COLD_SHOULDER.apologyLines[Math.floor(orbitalRandom() * COLD_SHOULDER.apologyLines.length)].replace('{name}', them));
+  if (res.severity <= 0) {
+    addLogEntry('narration', `${them} looks at you for the first time in days. "Fine. I hear you."`);
+  } else if (res.severity === 1) {
+    addLogEntry('narration', `${them} is still wary — but the ice is cracking.`);
+  }
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('apologize', currentGameState);
 }
 
 // --- Inventory panel verbs (overhaul Phase 1) ---
@@ -2190,6 +2763,21 @@ async function doContainerTransfer(objId, defId, direction) {
   const qty = containerTransferQty(stack);
   const label = containerStackLabel(stack);
   const name = containerLabel(obj);
+  // Intimacy & Voyeurism Phase 4 (D11): a capacity-capped container (the
+  // wardrobe) refuses a Put that would overflow it. One check, shared by
+  // the single Put and Put All — wardrobePutCheck (ITEMS) is the pure
+  // source of truth so the node harness can test the same math.
+  if (direction === 'put') {
+    const cap = wardrobePutCheck(obj, defId, qty);
+    if (cap.capacity != null && !cap.ok) {
+      if (cap.remaining <= 0) {
+        addLogEntry('system', `The ${name} is full (${cap.used}/${cap.capacity}).`);
+      } else {
+        addLogEntry('system', `The ${name} only has ${cap.remaining} slot${cap.remaining === 1 ? '' : 's'} left (${cap.used}/${cap.capacity}).`);
+      }
+      return;
+    }
+  }
   await applyContainerVerb(
     transferPlan(from, to, defId, qty),
     INVENTORY_TUNING.containerVerbMinutes,
@@ -2211,25 +2799,96 @@ async function doContainerTransferAll(objId, direction) {
   const srcList = direction === 'take' ? containerStacks(obj) : (currentGameState.player.inventory || []);
   const lines = [];
   const moved = [];
+  let blocked = 0;
+  // Intimacy & Voyeurism Phase 4 (D11): Put All respects the wardrobe's
+  // capacity — it moves what fits, in stack order, and leaves the rest.
+  let capacity = null;
+  let used = 0;
+  let cap = null;
+  if (direction === 'put') {
+    cap = wardrobePutCheck(obj, null, 0);
+    capacity = cap.capacity;
+    used = cap.used;
+  }
   for (const stack of srcList) {
     if (!(stack?.qty > 0)) continue;
     if (direction === 'put' && !stackActions(stack, ctx).transfer) continue;
+    if (direction === 'put' && capacity != null) {
+      const room = Math.max(0, capacity - used);
+      if (room <= 0) { blocked += stack.qty; continue; }
+      const take = Math.min(stack.qty, room);
+      used += take;
+      if (take < stack.qty) blocked += stack.qty - take;
+      lines.push(...transferPlan(from, to, stack.defId, take));
+      moved.push(`${containerStackLabel(stack)}${take > 1 ? ` ×${take}` : ''}`);
+      continue;
+    }
     lines.push(...transferPlan(from, to, stack.defId, stack.qty));
     moved.push(`${containerStackLabel(stack)}${stack.qty > 1 ? ` ×${stack.qty}` : ''}`);
   }
   if (lines.length === 0) {
-    addLogEntry('system', direction === 'take' ? 'There is nothing to take.' : 'Nothing in your bag can be put away.');
+    const name = containerLabel(obj);
+    if (blocked > 0) {
+      addLogEntry('system', `The ${name} is full (${cap.used}/${cap.capacity}) — nothing in your bag fits.`);
+    } else {
+      addLogEntry('system', direction === 'take' ? 'There is nothing to take.' : 'Nothing in your bag can be put away.');
+    }
     return;
   }
   const name = containerLabel(obj);
+  let narration = direction === 'take'
+    ? `You clear everything out of the ${name}: ${moved.join(', ')}.`
+    : `You empty your bag into the ${name}: ${moved.join(', ')}.`;
+  if (blocked > 0) narration += ` ${blocked} item${blocked === 1 ? '' : 's'} didn't fit and stayed in your bag.`;
   await applyContainerVerb(
     lines,
     INVENTORY_TUNING.containerVerbMinutes,
-    direction === 'take'
-      ? `You clear everything out of the ${name}: ${moved.join(', ')}.`
-      : `You empty your bag into the ${name}: ${moved.join(', ')}.`,
+    narration,
     `container-${direction}-all`
   );
+}
+
+// --- Grocery auto-transfer (food-overhaul Phase 1, D19) ---
+// The doormat's "Auto-Transfer to Storage" verb: one click sorts the whole
+// delivery into the kitchen by storage class — short-shelf perishables and
+// drinks → fridge, freezer items → freezer, long-shelf dry/canned →
+// pantry — instead of hand-carrying each stack one at a time. The plan is
+// ITEMS' sortIntoStorage (pure, deterministic); this handler just turns the
+// plan into MOVE_ITEM effect-DSL lines and pays the usual one
+// containerVerbMinutes batch, so the mutation still rides applyEffects and
+// the clock like every other transfer. Stacks with no storage class (the
+// non-food part of an order) stay on the doormat and are called out.
+async function doAutoTransferFromDoormat(objId) {
+  if (!currentGameState) return;
+  const obj = openContainerObject(objId);
+  if (!obj || obj.defId !== 'doormat') return;
+  const ctx = containerCtxForUi();
+  if (!ctx.roomObjects[objId]) { addLogEntry('system', "You can't reach that from here."); return; }
+  const plan = sortIntoStorage(currentGameState, obj.contents);
+  const lines = [];
+  const byTarget = new Map();
+  for (const p of plan.placed) {
+    lines.push(...transferPlan(objId, p.objId, p.defId, p.qty));
+    const label = containerStackLabel(p);
+    const arr = byTarget.get(p.objId) || [];
+    arr.push(`${label}${p.qty > 1 ? ` ×${p.qty}` : ''}`);
+    byTarget.set(p.objId, arr);
+  }
+  if (lines.length === 0) {
+    addLogEntry('system', 'Nothing on the doormat can be sorted into the kitchen.');
+    return;
+  }
+  const destNames = [];
+  for (const [destId, labels] of byTarget) {
+    const dest = openContainerObject(destId);
+    destNames.push(`${containerLabel(dest)}: ${labels.join(', ')}`);
+  }
+  let narration = `You sort the delivery straight into the kitchen — ${destNames.join('; ')}.`;
+  if (plan.unplaced.length > 0) {
+    narration += ` ${plan.unplaced.map(u => containerStackLabel(u)).join(', ')} stayed on the doormat.`;
+  }
+  await applyContainerVerb(lines, INVENTORY_TUNING.containerVerbMinutes, narration, 'container-auto-transfer');
+  renderContainerPanel(currentGameState);
 }
 
 // --- Rot-mess cleanup (inventory overhaul Phase 4) ---
@@ -2494,6 +3153,10 @@ const ENERGY_GATE_EXEMPT = new Set([
   'new-game-solo', 'new-game-random', 'new-game-guided', 'new-game-manual', 'new-game-seed',
   'generate-cast', 'reroll-char', 'approve-cast', 'back-to-form', 'continue',
   'computer.close',
+  // 2026-08-17 audit (B6): delivering a finished gig is a ZERO-cost collect
+  // (deliverGig spends no energy), so it must not be energy-gated — the
+  // old gate let you complete the work but not cash it in at 0 energy.
+  'gig.deliver',
   // Inventory overhaul Phase 1: opening/closing the bag is free browsing
   // (zero game time), so it must not be energy-gated; the verbs inside it
   // (inventory.use/drop/trash) are NOT exempt and stay gated like any
@@ -2538,6 +3201,83 @@ function isActionExemptFromEnergyGate(action) {
   return false;
 }
 
+// --- Intimacy & Voyeurism Overhaul Phase 1 (D5): the expandable action
+// submenu popover. One level, ever: a parent chip ("X ▸") opens a popover
+// of its verbs; clicking the parent again, another chip, or anywhere else
+// closes it. The popover floats over <body> and is positioned fixed from
+// the chip's rect at open time, so the chips row's overflow-x can never
+// clip it. Verb rows are plain [data-action] buttons that inherit the
+// parent's context (data-room-id/data-npc/data-obj-id) — they flow through
+// the normal delegation chain unchanged, and being ACTION_DEFS entries the
+// verbs stay clickable exactly as any flat chip would be. ---
+let _openSubmenuKey = null;
+
+function closeSubmenuPopover() {
+  _openSubmenuKey = null;
+  const popover = document.getElementById('submenu-popover');
+  if (!popover) return;
+  popover.setAttribute('hidden', '');
+}
+
+function toggleSubmenuPopover(parentChip) {
+  const actionId = parentChip.getAttribute('data-action');
+  const key = parentChip.getAttribute('data-submenu-key') || actionId;
+  const verbs = ACTION_DEFS[actionId]?.submenu || [];
+  if (verbs.length === 0) return;
+
+  if (_openSubmenuKey === key) { closeSubmenuPopover(); return; }
+
+  let popover = document.getElementById('submenu-popover');
+  if (!popover) {
+    popover = document.createElement('div');
+    popover.id = 'submenu-popover';
+    popover.className = 'submenu-popover';
+    popover.setAttribute('hidden', '');
+    document.body.appendChild(popover);
+  }
+  popover.innerHTML = '';
+  const energyDepleted = currentGameState?.player?.energy <= 0;
+  for (const verbId of verbs) {
+    const vdef = ACTION_DEFS[verbId];
+    if (!vdef) continue;
+    const row = document.createElement('button');
+    row.className = 'submenu-verb';
+    row.setAttribute('data-action', verbId);
+    for (const attr of ['data-room-id', 'data-npc', 'data-obj-id']) {
+      if (parentChip.hasAttribute(attr)) row.setAttribute(attr, parentChip.getAttribute(attr));
+    }
+    // Phase 17 (D13): the bed verbs' labels carry {name} for the sleeping
+    // resident the parent chip points at (data-npc) — substituted here so
+    // the popover says "Slide Into Bed With Maya" instead of a template
+    // placeholder. Other verbs have no {name} and are unaffected.
+    let label = vdef.label;
+    if (label.includes('{name}')) {
+      const npcId = parentChip.getAttribute('data-npc');
+      label = label.replace('{name}', currentGameState?.npcs?.[npcId]?.bible?.name || 'Them');
+    }
+    row.textContent = label;
+    if (energyDepleted && !isActionExemptFromEnergyGate(verbId)) row.disabled = true;
+    popover.appendChild(row);
+  }
+
+  popover.removeAttribute('hidden');
+  _openSubmenuKey = key;
+
+  // Position above the chip, flipping below when it would overflow the top
+  // of the viewport; clamped to the viewport either way.
+  const rect = parentChip.getBoundingClientRect();
+  const popRect = popover.getBoundingClientRect();
+  const gap = 6;
+  let top = rect.top - popRect.height - gap;
+  if (top < 8) top = rect.bottom + gap;
+  // Clamp into the viewport. A popover taller than the viewport (degenerate
+  // short iframes) can't fit — floor the clamp at 8 so it stays on-screen
+  // instead of getting pushed off the top.
+  top = Math.min(Math.max(8, top), Math.max(8, window.innerHeight - popRect.height - 8));
+  popover.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - popRect.width - 8))}px`;
+  popover.style.top = `${top}px`;
+}
+
 async function handleAction(action, npcId, extra) {
   if (!currentGameState && !MENU_ACTIONS.includes(action)) return;
 
@@ -2555,8 +3295,65 @@ async function handleAction(action, npcId, extra) {
   // ported (eat/cook/shower/watch_tv/relax; see DEFS.ACTIONS for why the
   // rest aren't yet). Checked before the switch so a ported verb's id never
   // needs a case here at all.
+  // Intimacy & Voyeurism Phase 10 (D6/D7): the door's peek/listen verbs are
+  // holds, not discrete actions — intercepted here, before the registered-
+  // action bridge, and handed to the PEEK session controller (peek.js),
+  // which runs the timed loop against the continuous clock. The door
+  // submenu row carries the adjacent room as data-room-id, which arrives
+  // here as `npcId` by the chips' existing convention.
+  if (action === 'door.keyhole' || action === 'door.listen') {
+    const roomId = npcId || extra?.roomId;
+    if (!roomId) return;
+    // Intimacy & Voyeurism Phase 19 (sound): headphones suppress the listen
+    // hold entirely — a wearer hears nothing through the door, so the hold
+    // has nothing to report (the door-cue/listen system reads through
+    // perceiveSignals, which already filters the wearer's audio channel).
+    // Peeking is sight, so the keyhole still works.
+    if (action === 'door.listen' && wearsSoundBlocking(currentGameState, 'player')) {
+      addLogEntry('narration', 'Your headphones are on. Through the door you hear precisely nothing.');
+      return;
+    }
+    await startPeekSession(roomId, action === 'door.listen' ? 'listen' : 'peek');
+    return;
+  }
+  // Intimacy & Voyeurism Phase 17 (D13): the sleeping-room verbs — same
+  // interception pattern as the door's peek/listen. The bed submenu row
+  // carries the sleeping resident as data-npc, which arrives here as
+  // `npcId`; the flow is gate → advance (chunked minutes, same as the
+  // heartbeat) → apply → narrate → save. The handler reads the SHORT actId
+  // (BOUNDARY_ACT_DEFS keys are 'sleep_with'/'sleep_watch'), so the
+  // 'boundary.' prefix is stripped here.
+  if (action === 'boundary.sleep_with' || action === 'boundary.sleep_watch') {
+    await doBoundarySleepRoom(action.split('.').pop(), npcId);
+    return;
+  }
+  // Intimacy & Voyeurism Phase 17 (D14): the three-way act. It IS an
+  // ACTION_DEFS row (source kind 'paired', which actionSourceMatches rejects
+  // so it never surfaces as a flat chip), so the registered-action bridge
+  // BELOW would swallow it — but no part of it is meant to go through
+  // executeAction (there is no timeCost/effects/narration on the row, only
+  // the gate + apply flow). Intercepted here, before the bridge, exactly
+  // like the sleeping-room verbs above.
+  if (action === 'boundary.throuple') {
+    await doBoundaryThrouple();
+    return;
+  }
+  // Phase 1 (D5): a submenu verb that is a thin wrapper over an existing
+  // hand-written handler (`delegate`) routes through the same bridge — e.g.
+  // door.open → move, door.knock → knock. The popover row carries the
+  // parent's room context in extra.roomId; knock/peep take the roomId as
+  // their npcId argument by the chips' existing convention.
+  const delegated = ACTION_DEFS[action]?.delegate;
+  if (delegated) {
+    await handleAction(delegated, npcId || extra?.roomId || null, extra);
+    return;
+  }
   if (ACTION_DEFS[action]) {
-    await runRegisteredAction(action);
+    // `extra` rides through as opts — the Phase 11 Make-a-Move flow sets
+    // extra.targetNpcId so the act's `paired` block knows who is in it with
+    // the player (executeAction reads opts.targetNpcId into ctx.actTargetNpcId
+    // before any requirement runs).
+    await runRegisteredAction(action, extra);
     return;
   }
 
@@ -2645,6 +3442,23 @@ async function handleAction(action, npcId, extra) {
     case 'phone.camera-share':
       await doPhoneCameraShare(extra?.rowId, npcId);
       break;
+    // Intimacy & Voyeurism Phase 15 (D8): the codex app's verbs — open a
+    // per-NPC page, and spend knowledge via Confront / Spread / Matchmake.
+    // All four are phone/computer-shared (the same renderer + handler path
+    // the other apps use); the screen navigation is device-parameterised
+    // exactly like computer.open-screen.
+    case 'codex.open-npc':
+      doCodexOpenNpc(npcId, extra?.device);
+      break;
+    case 'codex.confront':
+      await doConfrontNpc(npcId, extra?.index);
+      break;
+    case 'codex.spread':
+      await doSpreadSecret(npcId, extra?.index);
+      break;
+    case 'codex.matchmake':
+      await doMatchmakeNpc(npcId, extra?.index);
+      break;
     case 'gig.accept':
       await doGigAccept(extra?.rowId);
       break;
@@ -2692,6 +3506,33 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'home.place-snap':
       await doHomePlaceToggleSnap();
+      break;
+    case 'grocery.add-to-cart':
+      await doGroceryAddToCart(extra?.rowId);
+      break;
+    case 'grocery.remove-from-cart':
+      await doGroceryRemoveFromCart(extra?.rowId);
+      break;
+    case 'grocery.set-tip':
+      await doGrocerySetTip(extra?.amount);
+      break;
+    case 'grocery.checkout':
+      await doGroceryCheckout(extra?.device);
+      break;
+    case 'recipes.open-detail':
+      doRecipesOpenDetail(extra?.rowId, extra?.device);
+      break;
+    case 'recipes.add-to-cart':
+      await doRecipesAddToCart(extra?.rowId);
+      break;
+    case 'recipes.planner-add':
+      await doRecipesPlannerAdd(extra?.device);
+      break;
+    case 'recipes.planner-remove':
+      await doRecipesPlannerRemove(extra?.rowId);
+      break;
+    case 'recipes.planner-fill-cart':
+      await doRecipesPlannerFillCart();
       break;
     case 'browser.visit':
       await doBrowserVisit(extra?.rowId, extra?.device);
@@ -2853,7 +3694,7 @@ async function handleAction(action, npcId, extra) {
       doImOpenThread(extra?.rowId);
       break;
     case 'im.send':
-      await doImSend(extra?.rowId);
+      await doImSend(extra?.rowId, extra?.device);
       break;
     case 'stream.watch':
       await doStreamWatch(extra?.rowId, extra?.device);
@@ -2899,6 +3740,22 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'talk':
       if (npcId) await doTalk(npcId);
+      break;
+    // Intimacy & Voyeurism Phase 11 (D3): Make a Move — the player's mirror
+    // of the NPC intimacy overture. The chip is offered once when someone is
+    // present; doMakeAMove picks a partner (when several are present) and an
+    // act, then runs the chosen act through the registered-action pipeline
+    // with ctx.actTargetNpcId set — the willingness gate (same threshold,
+    // same refusal prose as the NPC side) is that act's requirement.
+    case 'make_a_move':
+      await doMakeAMove(npcId);
+      break;
+    // Intimacy & Voyeurism Phase 18 (D16): the player's "trying" toggle.
+    case 'pregnancy.start-trying':
+      if (npcId) await doPregnancySetTrying(npcId, true);
+      break;
+    case 'pregnancy.stop-trying':
+      if (npcId) await doPregnancySetTrying(npcId, false);
       break;
     case 'ask-contact':
       if (npcId) await doAskContact(npcId);
@@ -2950,6 +3807,13 @@ async function handleAction(action, npcId, extra) {
     case 'give-item':
       if (npcId) await doGiveItem(npcId);
       break;
+    // Intimacy & Voyeurism Phase 16 (D2/D14): the apology reparation act —
+    // a cold-shouldering NPC's hurt state decides whether it lands (see
+    // doApologizeNpc). Never a door into intimacy: it only ratchets the
+    // cold-shoulder severity down, and the intimacy floor stays a floor.
+    case 'apologize':
+      if (npcId) await doApologizeNpc(npcId);
+      break;
     case 'inventory.open':
       openInventoryPanel();
       break;
@@ -2983,6 +3847,9 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'container.put-all':
       if (extra.objId) await doContainerTransferAll(extra.objId, 'put');
+      break;
+    case 'container.auto-transfer':
+      if (extra.objId) await doAutoTransferFromDoormat(extra.objId);
       break;
     case 'container.clear-mess':
       if (extra.objId) await doClearContainerMess(extra.objId);
@@ -3265,6 +4132,21 @@ function surfaceRoomEvidence(roomId, maxItems) {
   for (const evt of toShow) {
     addLogEntry('narration', formatEventText(evt, currentGameState.npcs));
     evt.seenByPlayer = true;
+    // Intimacy & Voyeurism Phase 15 (D8): an 'intimate' event the player
+    // walked in on is witnessed knowledge — one ledger entry per participant
+    // (the other party named), so the codex's Confront verb can say "I saw
+    // you with X". seenByPlayer marks it once, so the write happens exactly
+    // once per event.
+    if (evt.type === 'intimate' && currentGameState.npcs[evt.npcId]) {
+      const other = evt.data && evt.data.other;
+      const day = typeof evt.day === 'number' ? evt.day : currentGameState.meta.clock.day;
+      notePlayerWitnessedEntry(currentGameState, evt.npcId, 'saw_with_X', day, roomId, {
+        otherNpcId: other && currentGameState.npcs[other] ? other : null,
+      });
+      if (other && currentGameState.npcs[other]) {
+        notePlayerWitnessedEntry(currentGameState, other, 'saw_with_X', day, roomId, { otherNpcId: evt.npcId });
+      }
+    }
   }
 }
 
@@ -3350,15 +4232,22 @@ async function doSleep() {
     const sleepEvents = await withVulnerableState(currentGameState, 'sleeping', () => advanceAndResolve(sleepTicks));
     // Decay player needs for the time spent sleeping (hunger, hygiene,
     // mood — energy is restored separately below). advanceAndResolve
-    // only decays NPC needs, not the player's.
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, sleepTicks * CLOCK.tickMinutes, currentGameState);
+    // only decays NPC needs, not the player's. `sleeping: true` slows the
+    // hunger clock (SLEEP.hungerMultiplier) so a good night doesn't
+    // dump you from "dinner" to "starving" by morning (2026-08-17 audit
+    // B3); nothing else in the decay is scaled.
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, sleepTicks * CLOCK.tickMinutes, currentGameState, { sleeping: true });
     // Energy back is proportional to hours actually slept, so a night cut
     // short (by the alarm) genuinely leaves you short.
     // Phase 8: energy is capped at player.energyMax (which starts at 70
     // and grows), not NEEDS.energy.max (the absolute cap of 100).
+    // food-overhaul Phase 2 (D4): a deficit day slows sleep recovery and a
+    // surplus day nudges it up — the ledger's energy bridge.
+    const balanceMult = currentGameState.player.meta?.energyBalance === 'deficit' ? METABOLISM.deficitEnergyRestoreMult
+      : currentGameState.player.meta?.energyBalance === 'surplus' ? METABOLISM.surplusEnergyRestoreMult : 1;
     currentGameState.player.energy = Math.min(
       energyMax,
-      currentGameState.player.energy + sleepHours * SLEEP.restorePerHour
+      currentGameState.player.energy + sleepHours * SLEEP.restorePerHour * balanceMult
     );
     // Phase 8: sleeping near the natural bedtime grows the energy
     // ceiling. A "good sleep" is within ENERGY.goodSleepWindowHours of
@@ -3453,16 +4342,78 @@ function convAddBeat(text) {
   convScrollToBottom();
 }
 
-function convAddBubble(from, text) {
+function convAddBubble(from, text, tag) {
   const log = document.getElementById('conv-log');
   if (!log) return;
   const el = document.createElement('div');
-  el.className = from === 'action' ? 'conv-bubble' : 'conv-bubble';
-  if (from === 'action') el.setAttribute('data-from', 'action');
-  else el.setAttribute('data-from', from);
-  el.textContent = text;
+  el.className = 'conv-bubble';
+  el.setAttribute('data-from', from);
+  if (tag) {
+    // Asks plan (D4) — an ask bubble carries a header label naming the ask
+    // ("Meal Invitation", "Loan Request") above the message text. The body
+    // is the CLEAN player message (the flavor after `$AskId`); the raw
+    // `$RequestType` line is input syntax, never a rendered message — a
+    // bare ask has no body, just the header. textContent, not innerHTML:
+    // the tag is a known leaf label, but the body is player input.
+    const tagEl = document.createElement('div');
+    tagEl.className = 'conv-tag';
+    tagEl.textContent = tag;
+    el.appendChild(tagEl);
+    if (text) {
+      const bodyEl = document.createElement('div');
+      bodyEl.className = 'conv-bubble-text';
+      bodyEl.textContent = text;
+      el.appendChild(bodyEl);
+    }
+  } else {
+    el.textContent = text;
+  }
   log.appendChild(el);
   convScrollToBottom();
+}
+
+// Asks plan Phase 8 — an image bubble: a dim tag (same styling as the ask
+// chip), the photo, and optional caption text. Returns the <img> so an async
+// photo fill can swap the placeholder for the real URL — the IM photo-thumb
+// pattern from render.computer.js (a resolved promise writing to a since-
+// removed <img> is a harmless no-op). textContent, never innerHTML, for
+// anything that can carry player/LLM-derived text.
+function convAddImageBubble(from, url, text, tag) {
+  const log = document.getElementById('conv-log');
+  if (!log) return null;
+  const el = document.createElement('div');
+  el.className = 'conv-bubble conv-bubble-photo';
+  el.setAttribute('data-from', from);
+  if (tag) {
+    const tagEl = document.createElement('div');
+    tagEl.className = 'conv-tag';
+    tagEl.textContent = tag;
+    el.appendChild(tagEl);
+  }
+  const img = document.createElement('img');
+  img.className = 'conv-photo';
+  img.alt = '';
+  img.src = url || getPlaceholder();
+  el.appendChild(img);
+  if (text) {
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'conv-bubble-text';
+    bodyEl.textContent = text;
+    el.appendChild(bodyEl);
+  }
+  log.appendChild(el);
+  convScrollToBottom();
+  return img;
+}
+// Both LLM passes of an ask turn paint through this (asks plan Phase 4): the
+// player's own bubble is added by the caller, this only draws the NPC side.
+function convRenderProposal(applied) {
+  for (const entry of applied.logEntries || []) {
+    if (entry.type === 'narration') convAddBeat(entry.text);
+    else if (entry.type === 'action') convAddBubble('action', `*${entry.text}*`);
+    else if (entry.type === 'internal') convAddBeat(`(${entry.text})`);
+    else if (entry.type === 'dialogue') convAddBubble('npc', entry.text);
+  }
 }
 
 // Scene reader plan Phase 5 (D13/D14) — draw the recalled half of the pane,
@@ -3473,6 +4424,26 @@ function convAddBubble(from, text) {
 // Returns how many rows it drew. Zero means this is someone the player has
 // never spoken to face to face — no history AND no separator, because a
 // separator with nothing above it announces an absence.
+// Asks plan — the clean display form of a PLAYER bubble read back from
+// memory.recent. Ask turns store the raw `$AskId <flavor>` line in memory
+// (the durable record); the bubble instead shows the ask's label as a header
+// and the flavor as the body, mirroring doConvSend's live render. Returns
+// null for anything that isn't a KNOWN ask — ordinary lines render
+// verbatim, and an unknown `$Tag` (D3) stays a plain message. Call-time
+// only; ui.js loads after asks.js.
+function askBubbleDisplay(text) {
+  if (typeof parseAskInput !== 'function' || !text) return null;
+  const parsed = parseAskInput(text);
+  if (!parsed) return null;
+  const leaf = ASK_TYPES[parsed.askId];
+  // D4 — a bare ask (or an untouched `<Optional>`, stripped to '' by
+  // parseAskInput) renders the leaf's canned defaultFlavor as the body so
+  // the bubble is never header-only. Same fallback doConvSend uses live, so
+  // recalled and live bubbles always match. Display-only: the flavor fed to
+  // decide()/the directive stays empty (D1).
+  return leaf ? { label: leaf.label, body: parsed.flavor || leaf.defaultFlavor || '' } : null;
+}
+
 function convRenderRecalled(npc) {
   const log = document.getElementById('conv-log');
   if (!log) return 0;
@@ -3490,7 +4461,21 @@ function convRenderRecalled(npc) {
     } else {
       el.className = 'conv-bubble';
       el.setAttribute('data-from', row.from);
-      el.textContent = row.text;
+      const askDisp = row.from === 'player' ? askBubbleDisplay(row.text) : null;
+      if (askDisp) {
+        const tagEl = document.createElement('div');
+        tagEl.className = 'conv-tag';
+        tagEl.textContent = askDisp.label;
+        el.appendChild(tagEl);
+        if (askDisp.body) {
+          const bodyEl = document.createElement('div');
+          bodyEl.className = 'conv-bubble-text';
+          bodyEl.textContent = askDisp.body;
+          el.appendChild(bodyEl);
+        }
+      } else {
+        el.textContent = row.text;
+      }
     }
     el.setAttribute('data-past', '');
     log.appendChild(el);
@@ -3559,18 +4544,176 @@ function openConversationOverlay(npcId) {
   // Focus input
   const input = document.getElementById('conv-input');
   if (input) { input.value = ''; setTimeout(() => input.focus(), 50); }
+  // Asks plan Phase 2 — a fresh conversation opens with the Request menu
+  // closed and the ask hint cleared.
+  closeAskMenu();
+  updateAskHint();
 }
 
 function closeConversationOverlay() {
   const overlay = document.getElementById('conversation-overlay');
   if (overlay) overlay.removeAttribute('data-open');
   convState = null;
+  // Asks plan Phase 2 — a closed conversation must not leave the Request
+  // menu or its hint behind.
+  closeAskMenu();
+  updateAskHint();
   // Initiative plan Phase 3 (D9): the durable half of "in conversation". The
   // tick decides whether to open an overture and cannot see TIME's context
   // stack, so the flag lives on gameState. Cleared here rather than beside
   // every close path for the same reason getPlayerVulnerableState prefers a
   // flag over an inference — one writer on, one writer off.
   if (currentGameState?.player?.flags) delete currentGameState.player.flags._inConversation;
+}
+
+// --- Asks plan Phase 2: the Request-tree menu. The tree renders from the
+// ASK_CATEGORIES/ASK_TYPES registry (asks.js) — categories at root, leaves
+// one drill-down deep. Availability is evaluated live at open/navigate time
+// against the conversation NPC (D5's first half; decide() re-checks it on
+// send). Unavailable leaves stay visible but greyed; a category with no live
+// leaf is greyed and not navigable. Clicking a leaf inserts its template
+// into the input with the <Optional> span selected for easy replace.
+
+let askMenuPath = []; // stack of category ids; empty = root
+
+function askMenuIsOpen() {
+  const m = document.getElementById('conv-ask-menu');
+  return !!m && !m.hidden;
+}
+
+function openAskMenu() {
+  if (!convState || convState.sending || !currentGameState) return;
+  askMenuPath = [];
+  askMenuRender();
+  const m = document.getElementById('conv-ask-menu');
+  if (m) m.hidden = false;
+}
+
+function closeAskMenu() {
+  askMenuPath = [];
+  const m = document.getElementById('conv-ask-menu');
+  if (m) m.hidden = true;
+}
+
+function askMenuGoCategory(catId) {
+  askMenuPath.push(catId);
+  askMenuRender();
+}
+
+function askMenuGoBack() {
+  askMenuPath.pop();
+  askMenuRender();
+}
+
+function askMenuRender() {
+  const gs = currentGameState;
+  const body = document.getElementById('conv-ask-body');
+  const title = document.getElementById('conv-ask-title');
+  const backBtn = document.getElementById('conv-ask-back-btn');
+  if (!gs || !body || !convState) return;
+  const npc = gs.npcs?.[convState.npcId];
+  if (!npc) return;
+  const ctx = assembleContext(gs, currentSceneState);
+  const catId = askMenuPath[askMenuPath.length - 1];
+  const cat = catId ? ASK_CATEGORIES.find(c => c.id === catId) || null : null;
+  if (title) title.textContent = cat ? `Asks ▸ ${cat.label}` : 'Asks';
+  if (backBtn) backBtn.hidden = !cat;
+  body.textContent = '';
+  const items = cat ? cat.children : ASK_CATEGORIES;
+  for (const item of items) {
+    if (item.children) {
+      // Category row — disabled (greyed, not navigable) when none of its
+      // leaves are available right now.
+      const row = document.createElement('button');
+      row.className = 'conv-ask-cat';
+      row.setAttribute('data-ask-cat', item.id);
+      row.textContent = item.label;
+      const hasLive = item.children.some(ch => !ch.available || ch.available(gs, npc, ctx));
+      if (!hasLive) { row.disabled = true; row.classList.add('is-disabled'); }
+      body.appendChild(row);
+    } else {
+      // Leaf row — greyed and unclickable when `available()` is false.
+      const row = document.createElement('button');
+      row.className = 'conv-ask-row';
+      row.setAttribute('data-ask-id', item.id);
+      const label = document.createElement('span');
+      label.className = 'conv-ask-label';
+      label.textContent = item.label;
+      row.appendChild(label);
+      if (item.help) {
+        const help = document.createElement('span');
+        help.className = 'conv-ask-help';
+        help.textContent = item.help;
+        row.appendChild(help);
+      }
+      const avail = !item.available || item.available(gs, npc, ctx);
+      if (!avail) { row.disabled = true; row.classList.add('is-disabled'); }
+      body.appendChild(row);
+    }
+  }
+}
+
+function askMenuInsertLeaf(askId) {
+  // Phase 8 — a share pseudo-leaf (camera-roll photos) is not an ask: it
+  // opens the picker instead of inserting a template. Belt and braces on
+  // availability (D5's first half applies to attachments too — the roll can
+  // empty out between the render and the click).
+  const shareLeaf = ASK_SHARE_TYPES[askId];
+  if (shareLeaf) {
+    if (shareLeaf.available && !shareLeaf.available(currentGameState)) return;
+    closeAskMenu();
+    openConvPhotoPicker().then(photo => { if (photo) doConvSharePhoto(photo.id); });
+    return;
+  }
+  const leaf = ASK_TYPES[askId];
+  const npc = currentGameState?.npcs?.[convState?.npcId];
+  if (!leaf || !npc) return;
+  // Belt and braces (D5): never insert an ask `available()` has closed —
+  // state can move between the menu render and the click.
+  const ctx = assembleContext(currentGameState, currentSceneState);
+  if (leaf.available && !leaf.available(currentGameState, npc, ctx)) return;
+  // Phase 9 — a gift leaf has no template: the item is chosen from the
+  // inventory picker, then the turn runs as an ask through doConvGiveGift.
+  // Same picker-first shape as the camera-roll share flow, but the result
+  // IS an ask (decision, strip, deterministic match).
+  if (leaf.gift) {
+    closeAskMenu();
+    openConvGiftPicker().then(pick => { if (pick) doConvGiveGift(pick.defId); });
+    return;
+  }
+  const input = document.getElementById('conv-input');
+  if (!input) return;
+  input.value = leaf.template;
+  input.focus();
+  const marker = '<Optional>';
+  const idx = leaf.template.indexOf(marker);
+  if (idx >= 0) input.setSelectionRange(idx, idx + marker.length);
+  else input.setSelectionRange(leaf.template.length, leaf.template.length);
+  closeAskMenu();
+  updateAskHint();
+}
+
+// Asks plan Phase 2 — the hint line under the input. While the input carries
+// a $AskId the hint shows the leaf's help text; a $Tag that isn't a known
+// ask warns it will be sent as plain text (D3 fallthrough); otherwise it
+// stays hidden. textContent only — nothing player-derived is ever injected
+// as markup.
+function updateAskHint() {
+  const hint = document.getElementById('conv-ask-hint');
+  if (!hint) return;
+  const input = document.getElementById('conv-input');
+  const text = input?.value || '';
+  let msg = '';
+  if (text.startsWith('$')) {
+    const parsed = parseAskInput(text);
+    if (parsed) {
+      const leaf = ASK_TYPES[parsed.askId];
+      if (leaf) msg = `${leaf.label} — ${leaf.help || 'replace <Optional> with your own words'}`;
+      else msg = `No request named “${parsed.askId}” — it will be sent as a normal message.`;
+    }
+  }
+  hint.textContent = msg;
+  hint.hidden = !msg;
 }
 
 async function doTalk(npcId) {
@@ -3667,21 +4810,55 @@ async function doTalk(npcId) {
   await checkQuestCompletion(npcId);
 }
 
-async function doConvSend(forcedText) {
+// Phase 9 — `giftDefId` turns the send into a gift turn: the picker chose an
+// inventory item, the player bubble narrates handing it over, and the turn
+// runs as the $RequestGift ask (decision first, effects stripped, the
+// deterministic match → MOVE_ITEM/REL_DELTA/MEMORY_FACT through the ask
+// pipeline). The item is a STRUCTURED input — like the calendar slot, it
+// decides the match; flavor text never does (D1/invariant 2).
+async function doConvSend(forcedText, giftDefId) {
   if (!convState || convState.sending) return;
   const input = document.getElementById('conv-input');
-  const text = forcedText || input?.value.trim();
-  if (!text) return;
-  if (input && !forcedText) input.value = '';
+  let text = forcedText;
+  if (giftDefId) {
+    const stack = (currentGameState?.player?.inventory || []).find(s => s.defId === giftDefId && (s.qty || 0) > 0);
+    if (!stack) return; // item vanished between the picker and the send
+    const def = ITEM_DEFS[giftDefId] || ITEM_DEFS._unknown;
+    const name = currentGameState?.npcs?.[convState?.npcId]?.bible?.name || 'them';
+    text = `You hand ${name} the ${def.label || 'gift'}.`;
+    if (input) input.value = '';
+  } else {
+    text = forcedText || input?.value.trim();
+    if (!text) return;
+    if (input && !forcedText) input.value = '';
+  }
   convState.sending = true;
   const sendBtn = document.getElementById('conv-send-btn');
   if (sendBtn) sendBtn.disabled = true;
+
+  // Asks plan Phase 1 (D3): `$AskId <flavor>` parses once here. An unknown
+  // $Tag falls through to the plain free-text path — it gets no chip and no
+  // decision, just a normal turn. A gift turn carries no $-text at all.
+  const parsedAsk = (forcedText || giftDefId) ? null : parseAskInput(text);
+  const askLeaf = giftDefId ? ASK_TYPES.RequestGift : (parsedAsk ? ASK_TYPES[parsedAsk.askId] || null : null);
 
   // Player's message appears instantly in the conversation log. Forced
   // opening text (e.g. "You approach Hana to talk") is shown as a scene
   // beat rather than a player bubble, since it's narration, not dialogue.
   if (forcedText) convAddBeat(text);
-  else convAddBubble('player', text);
+  else if (askLeaf) {
+    // Asks plan — the sent bubble shows the ask's header label and the
+    // player's CLEAN words only; the `$RequestType` prefix is input syntax
+    // and never renders in the message. A gift turn has no $-tag — its body
+    // is the "You hand X the Y." narration line (structured input).
+    // D4 — a bare ask (untouched `<Optional>`) renders the leaf's canned
+    // defaultFlavor as the body instead of an empty one. Display-only: the
+    // flavor handed to resolveAsk below stays exactly what was parsed (D1).
+    const body = parsedAsk ? (parsedAsk.flavor || askLeaf.defaultFlavor || '') : text;
+    convAddBubble('player', body, askLeaf.label);
+  } else {
+    convAddBubble('player', text);
+  }
 
   // Typing indicator while the NPC generates a response.
   const removeTyping = convShowTyping();
@@ -3690,28 +4867,99 @@ async function doConvSend(forcedText) {
   try {
     await advanceAndResolve(1);
     const context = assembleContext(currentGameState, currentSceneState);
-    const result = await callLLM(context, text);
+
+    // Ask turns decide BEFORE the LLM runs (invariant 1): resolveAsk is
+    // pure — decision + stance + directive + effect lines, no model call,
+    // no state writes. Called after advanceAndResolve so the seed reads the
+    // exact state this turn will save, which is what reload-reproducibility
+    // (D1/D6) requires. A gift turn passes the chosen item as the structured
+    // `extra` payload — never through the flavor (D1/invariant 2).
+    const askTurn = askLeaf
+      ? resolveAsk(currentGameState, convState.npcId, askLeaf.id,
+          giftDefId ? text : parsedAsk.flavor, context,
+          giftDefId ? { giftDefId } : undefined)
+      : null;
+
+    const result = await callLLM(
+      askTurn ? { ...context, askDirective: askTurn.directive } : context,
+      text
+    );
 
     removeTyping();
 
+    // Ask turns (invariant 1): the outcome was decided BEFORE the LLM ran —
+    // a phrasing failure degrades to the asks-llm-prompt.md template
+    // fallback line (the decision stands), and the ask's OWN pipeline
+    // (schedule modal, photo flow, effects) runs regardless of how the
+    // writer did. This is Phase 10's reconciliation of the two pre-existing
+    // drifts: the pass-1 fallback is wired, and the schedule branch no
+    // longer sits inside the valid-proposal if.
+    let applied = null;
     if (result.valid && result.proposal) {
-      const applied = await applyProposal(result.proposal, context, currentGameState, text);
-      // Render results into the conversation overlay's log.
-      for (const entry of applied.logEntries) {
-        if (entry.type === 'narration') convAddBeat(entry.text);
-        else if (entry.type === 'action') convAddBubble('action', `*${entry.text}*`);
-        else if (entry.type === 'internal') convAddBeat(`(${entry.text})`);
-        else if (entry.type === 'dialogue') convAddBubble('npc', entry.text);
+      if (askTurn) {
+        // D2 / invariant 3 — on ask turns the writer phrases but never
+        // decides AND never writes. Effects are stripped HERE, in
+        // doConvSend, not inside callLLM: the regex fallback tier there can
+        // smuggle parseEffectDSL lines back in. The ask's own effects are
+        // applied below, at the point applyProposal would have applied the
+        // writer's.
+        if (result.proposal.effects) result.proposal.effects = [];
+        delete result.proposal.moodDeltas;
+      }
+      applied = await applyProposal(result.proposal, context, currentGameState, text);
+    } else if (askTurn) {
+      // Template fallback (asks-llm-prompt.md): the fallback line rides the
+      // normal applyProposal path, so a degraded turn still lands in
+      // memory.recent, the session log and the Assessor's window exactly
+      // like a phrased one (Phase 10 audit). The speaker is the ACTIVE
+      // context's name — the exact value applyProposal matches dialogue
+      // against — so a name-less NPC (bible.name '') still records the line.
+      const npcName = (context.activeNpcs.find(n => n.id === convState.npcId)?.name)
+        || currentGameState.npcs[convState.npcId]?.bible?.name || 'they';
+      applied = await applyProposal(
+        { dialogue: [{ speaker: npcName, text: buildAskFallbackLine(askTurn, npcName) }] },
+        context, currentGameState, text
+      );
+    } else {
+      convAddBeat(`They seem distracted and don't respond.`);
+    }
+
+    if (applied) {
+      // Render pass-1 results before any schedule modal (asks plan Phase 4)
+      // opens, so the player reads the NPC's answer to the ask first.
+      convRenderProposal(applied);
+      // The ask's own pipeline runs whenever this is an ask turn, valid
+      // proposal or not: the decision already happened, so the calendar
+      // modal, the photo flow and the ask's effects must not be hostage to
+      // the writer's parse tier (Phase 10 — the schedule branch is no longer
+      // gated on a valid proposal).
+      let pass2 = null;
+      if (askTurn) {
+        if (askTurn.ask.schedule && askTurn.decision.accept) {
+          pass2 = await runAskScheduleFlow(askTurn, context, text);
+        }
+        // Phase 8 — a photo ask that was accepted generates the NPC's photo
+        // and paints it into the log (runAskPhotoFlow). The photo is decided,
+        // not negotiated: it renders after the pass-1 phrasing, which already
+        // said yes in voice, and its effects apply in the same single moment
+        // as every other ask's.
+        if (askTurn.ask.photo && askTurn.decision.accept) {
+          await runAskPhotoFlow(askTurn, context);
+        }
+        askTurn.applyEffects();
+        applied.updatedNpcIds.push(convState.npcId);
       }
       // Also persist key beats to the main session log so the scene
       // viewer retains context after the conversation closes.
-      if (applied.logEntries.length > 0) {
-        addLogEntry('narration', `[Talking to ${currentGameState.npcs[convState.npcId]?.bible?.name || 'them'}] ${applied.logEntries.filter(e => e.type === 'dialogue').map(e => `${e.speaker}: "${e.text}"`).join(' ')}`);
+      const allLogs = [...applied.logEntries, ...((pass2 && pass2.logEntries) || [])];
+      if (allLogs.length > 0) {
+        addLogEntry('narration', `[Talking to ${currentGameState.npcs[convState.npcId]?.bible?.name || 'them'}] ${allLogs.filter(e => e.type === 'dialogue').map(e => `${e.speaker}: "${e.text}"`).join(' ')}`);
       }
       await compactMemoryIfNeeded([...applied.updatedNpcIds, ...(applied.effectNpcIds || [])]);
-      currentSceneState = advanceEngagement(currentSceneState, resolveSpeakerIds(result.proposal.dialogue, context.activeNpcs));
-    } else {
-      convAddBeat(`They seem distracted and don't respond.`);
+      const speakerIds = (result.valid && result.proposal)
+        ? resolveSpeakerIds(result.proposal.dialogue, context.activeNpcs)
+        : [convState.npcId];
+      currentSceneState = advanceEngagement(currentSceneState, speakerIds);
     }
 
     currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
@@ -3724,6 +4972,301 @@ async function doConvSend(forcedText) {
     await saveAtBoundary('conv-send', currentGameState);
   } catch (e) {
     console.warn('Conversation send failed:', e);
+    removeTyping();
+    convAddBeat('Something went wrong. Try again.');
+    convSetStatus('In conversation');
+  } finally {
+    convState.sending = false;
+    if (sendBtn) sendBtn.disabled = false;
+    const freshInput = document.getElementById('conv-input');
+    if (freshInput) freshInput.focus();
+  }
+}
+
+// Asks plan Phase 4 (D8/D9) — stage 2 of a schedule:true ask. Stage 1
+// (decide + pass-1 phrasing) already ran and said yes; here the player
+// picks a genuinely free window from the calendar modal, the hard-block
+// recheck runs (a safety net only — the modal only offers free windows),
+// a real commitment is created so the NPC actually shows up for the window,
+// and a second LLM pass phrases the sign-off through
+// buildSchedulingConfirmDirective (template fallback if the call fails).
+// Returns { logEntries } — the pass-2 entries for the session log — or
+// null when the player cancels.
+async function runAskScheduleFlow(askTurn, context, playerAction) {
+  const npc = currentGameState.npcs?.[convState.npcId];
+  if (!npc) return null;
+  const name = npc.bible?.name || 'they';
+  // Loop so a recheck failure (state moved since the probe) reopens the
+  // modal instead of silently committing to a hard-blocked window.
+  let slot = null;
+  for (let tries = 0; tries < 5; tries++) {
+    slot = await openAskScheduleModal({
+      title: `${askTurn.ask.label} — when works for ${name}?`,
+      npcId: convState.npcId,
+      mealLabels: askTurn.ask.kind === 'meal', // Phase 5 (D10): label rows that land in a meal slot
+    });
+    if (!slot) return null;
+    const nowAbs = clockToAbsolute(currentGameState.meta.clock);
+    const { block } = resolveScheduleActivity(npc, absoluteToClock(slot.startAbs));
+    if (slot.endAbs > nowAbs && !COMMITMENT_TUNING.busyBlocks.includes(block)) break;
+    slot = null;
+    convAddBeat(`${name}'s plans just shifted — that window won't work anymore. Pick another?`);
+  }
+  if (!slot) { convAddBeat('You leave the plans open.'); return null; }
+
+  // The NPC pre-accepted deterministically in stage 1, so they are passed
+  // as proposerId: createCommitment honors that by putting them straight
+  // into acceptedIds instead of re-rolling them through respondToCommitment
+  // (whose noise draw could flip the answer — same-save-same-answer, D1).
+  createCommitment(currentGameState, {
+    kind: askTurn.ask.kind || 'hangout',
+    startAbs: slot.startAbs, endAbs: slot.endAbs,
+    roomId: askTurn.ask.roomId || 'living_room',
+    invitedIds: [],
+    proposerId: convState.npcId,
+  });
+  askTurn.setSlot(slot);
+  const when = askWhenPhrase(slot, currentGameState.meta.clock.day);
+  // Phase 5 (D10): a meal ask's sign-off names the inferred meal instead of
+  // a bare time ("Breakfast, tomorrow at 08:30"). The label rides on
+  // dayLabel so the template fallback line reads the same way; a window
+  // outside every meal slot keeps the plain day/time phrase.
+  const meal = askTurn.ask.kind === 'meal'
+    ? mealLabelForWindow(slot.startAbs % 1440, slot.endAbs % 1440) : null;
+  const dayLabel = meal ? `${meal.label}, ${when.dayLabel}` : when.dayLabel;
+
+  const removeTyping = convShowTyping();
+  convSetStatus('typing…');
+  let logEntries = [];
+  const fresh = assembleContext(currentGameState, currentSceneState);
+  try {
+    const result2 = await callLLM(
+      { ...fresh, askDirective: buildSchedulingConfirmDirective({
+          askLabel: askTurn.ask.label,
+          npcName: name,
+          dayLabel,
+          timeLabel: when.timeLabel,
+          slotLabel: when.slotLabel,
+        }) },
+      playerAction
+    );
+    removeTyping();
+    if (result2.valid && result2.proposal) {
+      // Invariant 3 applies to the sign-off pass too — it only speaks.
+      if (result2.proposal.effects) result2.proposal.effects = [];
+      delete result2.proposal.moodDeltas;
+      const applied2 = await applyProposal(result2.proposal, fresh, currentGameState, null);
+      logEntries = applied2.logEntries;
+    }
+  } catch (e) {
+    console.warn('Ask scheduling pass 2 failed:', e);
+    removeTyping();
+  }
+  if (logEntries.length === 0) {
+    // Template fallback (asks-llm-prompt.md): the plan is still real even
+    // if the model hiccuped. Rendered through the normal applyProposal path
+    // (Phase 10 audit) so the sign-off lands in memory.recent exactly like a
+    // phrased confirm, not just in the DOM. Speaker uses the active
+    // context's name — the value applyProposal matches dialogue against.
+    const confirmName = (fresh.activeNpcs.find(n => n.id === convState.npcId)?.name) || name;
+    const appliedF = await applyProposal(
+      { dialogue: [{ speaker: confirmName, text: `${confirmName} confirms — ${dayLabel} at ${when.timeLabel}.` }] },
+      fresh, currentGameState, null
+    );
+    logEntries = appliedF.logEntries;
+  }
+  convRenderProposal({ logEntries });
+  return { logEntries };
+}
+
+// Asks plan Phase 8 — the accepted photo ask's second half. Stage 1
+// (decide + pass-1 phrasing) already said yes in voice; here the NPC's
+// photo is generated from their appearance + flavor (buildAskPhotoRecord →
+// getAskPhotoImage — deterministic prompt+seed, so the same save reproduces
+// the same photo through the shared cache) and painted into the conversation
+// as an NPC image bubble. Failure degrades to a text beat: the decision
+// already happened, so the ask is settled either way.
+async function runAskPhotoFlow(askTurn, context) {
+  const npc = currentGameState.npcs?.[convState.npcId];
+  if (!npc) return;
+  const day = askDay(currentGameState);
+  const record = buildAskPhotoRecord(currentGameState, npc, convState.npcId, askTurn.flavor, day, askTurn.ladder.count);
+  convSetStatus('sending photo…');
+  let url = null;
+  try {
+    const img = await getAskPhotoImage(record);
+    url = img.url;
+  } catch (e) {
+    console.warn('Ask photo flow failed:', e);
+  }
+  convSetStatus('In conversation');
+  if (url) {
+    // record.caption rides as the bubble's text (F2): "Selfie from <name> —
+    // <flavor>". It is player-sourced, so convAddImageBubble renders it via
+    // textContent (invariant: textContent, not innerHTML).
+    convAddImageBubble('npc', url, record.caption, '📷 Photo');
+  } else {
+    convAddBeat(`${npc.bible?.name || 'They'} tried to send you a photo, but it didn't come through.`);
+  }
+}
+
+// Asks plan Phase 8 — the camera-roll picker for sharing a photo into the
+// conversation. Opens the standard modal (z-tier 300, above the conversation
+// overlay's 200) and resolves with the picked photo record or null on
+// cancel; doConvSharePhoto owns the send. Reuses the phone gallery's
+// thumbnail pattern — placeholder first, getPhotoImage fills the real
+// pixels when they land.
+function openConvPhotoPicker() {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const titleEl = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !titleEl || !body || !actions) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (photo) => { overlay.removeAttribute('data-open'); resolve(photo); };
+    const roll = currentGameState?.world?.phone?.camera?.roll || [];
+    if (roll.length === 0) { resolve(null); return; }
+    titleEl.textContent = 'Share a Photo';
+    body.textContent = '';
+    const grid = document.createElement('div');
+    grid.className = 'conv-photo-picker';
+    for (const photo of roll) {
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'conv-photo-pick';
+      tile.setAttribute('aria-label', `Share ${photo.caption}`);
+      const img = document.createElement('img');
+      img.src = getPlaceholder();
+      img.alt = photo.caption;
+      tile.appendChild(img);
+      const cap = document.createElement('span');
+      cap.className = 'conv-photo-pick-cap';
+      cap.textContent = photo.caption;
+      tile.appendChild(cap);
+      tile.addEventListener('click', () => finish(photo));
+      grid.appendChild(tile);
+      getPhotoImage(photo).then(result => { if (result.url) img.src = result.url; });
+    }
+    body.appendChild(grid);
+    actions.textContent = '';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    actions.appendChild(cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+
+// Asks plan Phase 9 — the inventory picker for gifting into the
+// conversation. Same shared-modal + grid shape as the camera-roll picker
+// above; the tiles are the bag's giftable stacks (inventory.js
+// giftableStacks — the same rule the availability gate uses), text-only
+// (inventory items have no thumbnail). Resolves { defId } or null on
+// cancel; doConvGiveGift owns the send.
+function openConvGiftPicker() {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const titleEl = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !titleEl || !body || !actions) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (pick) => { overlay.removeAttribute('data-open'); resolve(pick); };
+    const stacks = giftableStacks(currentGameState);
+    if (stacks.length === 0) { resolve(null); return; }
+    titleEl.textContent = 'Give a Gift';
+    body.textContent = '';
+    const grid = document.createElement('div');
+    grid.className = 'conv-gift-picker';
+    for (const stack of stacks) {
+      const def = stackDef(stack);
+      const label = def.id === '_unknown' ? (stack?.meta?.origName || def.label) : def.label;
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'conv-gift-pick';
+      tile.setAttribute('aria-label', `Give ${label}`);
+      const nameEl = document.createElement('span');
+      nameEl.className = 'conv-gift-pick-name';
+      nameEl.textContent = label;
+      tile.appendChild(nameEl);
+      const metaEl = document.createElement('span');
+      metaEl.className = 'conv-gift-pick-meta';
+      const group = (SORT_GROUPS[def.sortGroup] || {}).label || def.category || 'Item';
+      metaEl.textContent = (stack.qty > 1 ? `×${stack.qty} · ` : '') + group;
+      tile.appendChild(metaEl);
+      tile.addEventListener('click', () => finish({ defId: stack.defId }));
+      grid.appendChild(tile);
+    }
+    body.appendChild(grid);
+    actions.textContent = '';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    actions.appendChild(cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+
+// Asks plan Phase 9 — give an inventory item as a gift. The picker chose
+// the def; the send runs as a normal ASK turn through doConvSend (decision
+// first, writer effects stripped, deterministic match → MOVE_ITEM /
+// REL_DELTA / MEMORY_FACT through the ask pipeline), reusing the exact
+// pipeline instead of a parallel path.
+function doConvGiveGift(defId) {
+  return doConvSend(null, defId);
+}
+
+// Asks plan Phase 8 — share one of the player's camera-roll photos into the
+// conversation. Same shape as doConvSend's plain-text path (advance →
+// callLLM → applyProposal → session log → assess → save), with the photo
+// bubble rendered before the NPC's reply. This is NOT an ask turn — no
+// $AskId, no decision, no effect-strip: the NPC merely reacts to what the
+// player showed them, and the writer's normal effects stand exactly as they
+// do on any free-text turn. The photo is described to the model as text (its
+// caption), the same convention sharePhotoToImThread uses — no vision
+// capability needed for a plausible in-fiction reaction.
+async function doConvSharePhoto(photoId) {
+  if (!convState || convState.sending) return;
+  const gs = currentGameState;
+  const photo = gs?.world?.phone?.camera?.roll?.find(p => p.id === photoId);
+  if (!photo || !gs.npcs?.[convState.npcId]) return;
+  convState.sending = true;
+  const sendBtn = document.getElementById('conv-send-btn');
+  if (sendBtn) sendBtn.disabled = true;
+  const text = `[shared a photo: ${photo.caption}]`;
+  const img = convAddImageBubble('player', getPlaceholder(), `📷 ${photo.caption}`, 'Shared Photo');
+  getPhotoImage(photo).then(result => { if (result.url && img) img.src = result.url; });
+  const removeTyping = convShowTyping();
+  convSetStatus('typing…');
+  try {
+    await advanceAndResolve(1);
+    const context = assembleContext(currentGameState, currentSceneState);
+    const result = await callLLM(context, text);
+    removeTyping();
+    if (result.valid && result.proposal) {
+      const applied = await applyProposal(result.proposal, context, currentGameState, text);
+      convRenderProposal(applied);
+      if (applied.logEntries.length > 0) {
+        addLogEntry('narration', `[Talking to ${currentGameState.npcs[convState.npcId]?.bible?.name || 'them'}] ${applied.logEntries.filter(e => e.type === 'dialogue').map(e => `${e.speaker}: "${e.text}"`).join(' ')}`);
+      }
+      await compactMemoryIfNeeded([...applied.updatedNpcIds, ...(applied.effectNpcIds || [])]);
+      currentSceneState = advanceEngagement(currentSceneState, resolveSpeakerIds(result.proposal.dialogue, context.activeNpcs));
+    } else {
+      convAddBeat(`They seem distracted and don't respond.`);
+    }
+    currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
+    convSetStatus('In conversation');
+    render(currentGameState, currentSceneState);
+    if (await assessSceneIfFull()) render(currentGameState, currentSceneState);
+    await chronicleIfFull();
+    await saveAtBoundary('conv-share-photo', currentGameState);
+  } catch (e) {
+    console.warn('Conversation photo share failed:', e);
     removeTyping();
     convAddBeat('Something went wrong. Try again.');
     convSetStatus('In conversation');
@@ -4799,7 +6342,9 @@ function addLogEntry(type, text, speaker) {
   // for the same reason render() does — otherwise a beat arriving while a
   // callout is up would redraw it and leave it unmarked, and it would shout
   // again on the next render.
-  markCalloutsShouted(currentGameState, renderSceneReader(currentGameState, currentSceneState));
+  const composedScene = renderSceneReader(currentGameState, currentSceneState);
+  markCalloutsShouted(currentGameState, composedScene);
+  markDoorCuesShown(currentGameState, composedScene);
   renderSceneMoodles(currentGameState);
 }
 
@@ -4942,6 +6487,14 @@ async function boot() {
 function attachEventHandlers() {
   // Global click delegation
   document.addEventListener('click', (e) => {
+    // Phase 1 (D5): the submenu popover. A parent chip toggles its popover
+    // and consumes the click (the parent never executes an action); a click
+    // anywhere else closes any open popover. Verb rows inside the popover
+    // fall through to the normal [data-action] dispatch below.
+    const parentChip = e.target.closest('[data-submenu-parent]');
+    if (parentChip) { toggleSubmenuPopover(parentChip); return; }
+    closeSubmenuPopover();
+
     const target = e.target.closest('[data-action]');
     if (!target) {
       // Check for floor plan room click (SVG rect with data-room-id)
@@ -4982,6 +6535,9 @@ function attachEventHandlers() {
     if (target.hasAttribute('data-key')) extra.key = target.getAttribute('data-key');
     if (target.hasAttribute('data-days')) extra.days = Number(target.getAttribute('data-days'));
     if (target.hasAttribute('data-service')) extra.service = target.getAttribute('data-service');
+    // Intimacy & Voyeurism Phase 15: codex verbs carry which ledger entry
+    // they consume (the STORED index, per spendCodexEntry's contract).
+    if (target.hasAttribute('data-index')) extra.index = Number(target.getAttribute('data-index'));
     // Inventory overhaul Phase 1: inventory verbs carry which stack the
     // button was drawn for (the detail pane rebuilds on selection, so a
     // stale click could otherwise act on a different item).
@@ -5000,6 +6556,11 @@ function attachEventHandlers() {
     const deviceNode = target.closest('[data-device]');
     if (deviceNode) extra.device = deviceNode.getAttribute('data-device');
     handleAction(action, npcId || null, extra);
+  });
+
+  // Phase 1 (D5): Escape closes an open submenu popover.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && _openSubmenuKey) closeSubmenuPopover();
   });
 
   // Free-text input
@@ -5027,6 +6588,37 @@ function attachEventHandlers() {
   if (convSendBtn) {
     convSendBtn.addEventListener('click', () => handleAction('conv.send'));
   }
+  // Asks plan Phase 2 — the Request-tree menu controls. The + toggles the
+  // popover; back/close and the rows handle their own nav/insert; the
+  // input's `input` event keeps the hint under it in sync. Escape closes the
+  // menu (ahead of the other overlays' Escape handlers — it is the least
+  // destructive thing on screen).
+  const convAttachBtn = document.getElementById('conv-attach-btn');
+  if (convAttachBtn) {
+    convAttachBtn.addEventListener('click', () => {
+      if (askMenuIsOpen()) closeAskMenu();
+      else openAskMenu();
+    });
+  }
+  const convAskCloseBtn = document.getElementById('conv-ask-close-btn');
+  if (convAskCloseBtn) convAskCloseBtn.addEventListener('click', closeAskMenu);
+  const convAskBackBtn = document.getElementById('conv-ask-back-btn');
+  if (convAskBackBtn) convAskBackBtn.addEventListener('click', askMenuGoBack);
+  const convAskBody = document.getElementById('conv-ask-body');
+  if (convAskBody) {
+    convAskBody.addEventListener('click', (e) => {
+      const catRow = e.target.closest('[data-ask-cat]');
+      if (catRow) { askMenuGoCategory(catRow.getAttribute('data-ask-cat')); return; }
+      const leafRow = e.target.closest('[data-ask-id]');
+      if (leafRow) askMenuInsertLeaf(leafRow.getAttribute('data-ask-id'));
+    });
+  }
+  if (convInput) {
+    convInput.addEventListener('input', updateAskHint);
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && askMenuIsOpen()) closeAskMenu();
+  });
 
   // Drawer toggles (mobile) — the two drawers slide in from opposite
   // edges and are wide enough to overlap each other and the content
@@ -5097,9 +6689,26 @@ function attachEventHandlers() {
       if (currentGameState && typeof renderContainerPanel === 'function') renderContainerPanel(currentGameState);
     });
   }
+  // Wardrobe panel (intimacy-voyeurism Phase 5): the two STATIC buttons. The
+  // slot/wear/none rows rebuild with every render, so they attach their own
+  // listeners inside renderWardrobePanel; these exist once at boot.
+  const wdbClose = document.getElementById('wdb-close-btn');
+  if (wdbClose) wdbClose.addEventListener('click', () => closeWardrobePanel());
+  const wdbApply = document.getElementById('wdb-apply-btn');
+  if (wdbApply) wdbApply.addEventListener('click', () => wardrobeApply());
+  // Peek/listen lens (intimacy-voyeurism Phase 10): the Stop button ends the
+  // hold; Escape does too, ahead of the other overlays (a hold is the most
+  // time-sensitive thing on screen).
+  const peekStop = document.getElementById('peek-stop-btn');
+  if (peekStop) peekStop.addEventListener('click', () => stopPeekSession());
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    if (typeof closeContainerPanel === 'function' && closeContainerPanel());
+    if (typeof stopPeekSession === 'function' && peekSessionActive()) { stopPeekSession(); return; }
+    // Intimacy & Voyeurism Phase 5 (D11): the wardrobe panel (Change Outfit)
+    // closes on Escape like any other overlay, and resolves its promise null
+    // so the action cancels cleanly.
+    if (typeof closeWardrobePanel === 'function' && closeWardrobePanel());
+    else if (typeof closeContainerPanel === 'function' && closeContainerPanel());
     else if (typeof closeInventoryPanel === 'function') closeInventoryPanel();
   });
 }

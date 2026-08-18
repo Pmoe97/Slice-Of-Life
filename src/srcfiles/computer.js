@@ -157,6 +157,11 @@ function defaultComputerState() {
       // here: they're world.foodOrders, because a driver's visit and the
       // handover are world events that outlive the app session.
       food: { cart: [], openRestaurantId: null, tipPct: FOOD_TUNING.defaultTipPct },
+      // QuickCart (grocery delivery). Cart reuses the Nile/Home
+      // { defId, units } shape (one store, no restaurantId dimension to
+      // carry) — placed orders live in world.groceryOrders, same reasoning
+      // as food's openRestaurantId comment above.
+      grocery: { cart: [], tipPct: GROCERY_TUNING.defaultTipPct },
       // Escorts (external-world plan Phase 7): which profile is open.
       // Bookings themselves live in world.escortBookings (they outlive the
       // app session — the visit does too).
@@ -168,6 +173,14 @@ function defaultComputerState() {
       // the original purchase for P&L display. `realizedGains` tracks
       // profit/loss from sells (for tax purposes).
       invest: { holdings: {}, realizedGains: 0, totalInvested: 0 },
+      // ChefBook (food-overhaul Phase 8, D21/D22). `unlockedIds` is every
+      // RECIPES/RESTAURANT_DISH_IDS id the player has tasted (EFFECTS'
+      // EAT_ITEM hook appends, forever — same one-way-unlock shape as
+      // autoCookCleared). `planner` is `[{ recipeId, day }]`, one row per
+      // planned meal. `viewingRecipeId` is which card the detail screen
+      // shows — app state, not DOM state, same as classifieds'
+      // viewingApplicantId.
+      recipes: { unlockedIds: [], planner: [], viewingRecipeId: null },
     },
   };
 }
@@ -541,6 +554,12 @@ function workGigBlock(gameState, gigId, device) {
   // of computer time at $0.04/kWh — small but itemised, so the player
   // sees "Computer — $X" next to "Heat — $206" on the electric bill.
   recordUtilityUsage(gameState, 'devices', 0.5);
+  // food-overhaul Phase 2 (D2/D4): a worked gig block is active work, not
+  // a couch sit — a small activity impulse lifts the metabolic rate and a
+  // modest kcal lands on the ledger (the block itself already cost energy
+  // above; this is the burn side of the daily equation).
+  const act = METABOLISM.activities.workBlock;
+  notePlayerActivity(gameState, act.impulse, act.kcal, gameState.meta.clock.day);
   return { ok: true, gig, progress };
 }
 
@@ -926,14 +945,69 @@ function cancelService(gameState, serviceId) {
 // OBJECT_DEFS entry lists the clean value first: 'clean' before 'crusty'
 // before 'filthy', 'empty' before 'full', etc.), so cleaning needs no
 // second parallel "what does clean look like" table.
+//
+// Food-overhaul Phase 4 (D9/D11): dish dirt is a MAP now, not a state enum
+// — a 'dishes' dirtyWhen key clears the object's dish map (and its derived
+// ladder) instead of a single state write. And an idle, functional
+// DISHWASHER in a kitchen makes the cleaner RUN IT for sink/table loads at
+// or above DISHWASH_TUNING.dishwasherMinLoadUnits — the machine does the
+// work (the load clears when its lazy cycle completes), whatever spills
+// past its capacity gets hand-washed. This is the "NPC washing drive can
+// run the dishwasher" path: the clean_common drive, the maid and the
+// cleaning service all route through here.
 function cleanRoomObjects(gameState, roomId) {
   const bucket = gameState.objects[`room_${roomId}`];
   if (!bucket) return 0;
   let cleanedCount = 0;
+
+  // Preferred dishwasher for this room (only exists in the kitchen). Must
+  // be functional, not mid-cycle, and have at least a real load to take —
+  // a cleaner doesn't run a cycle for one stray fork.
+  const dishwasher = Object.values(bucket).find(o => o.defId === 'dishwasher');
+  let dwReady = false;
+  if (dishwasher) {
+    const now = gameDaysNow(gameState.meta.clock);
+    resolveDishwasherCycle(dishwasher, now);
+    const scopeUnits = Object.values(bucket)
+      .filter(o => o.defId === 'sink_kitchen' || o.defId === 'kitchen_table' || o.defId === 'dining_table')
+      .reduce((sum, o) => sum + dishUnitsOf(o), 0);
+    dwReady = dishwasherCycleProgress(dishwasher, now) === 'idle'
+      && isFacilityFunctional(gameState, 'kitchen_appliances')
+      && scopeUnits >= DISHWASH_TUNING.dishwasherMinLoadUnits;
+  }
+
+  // Sink + tables in this room, so a machine can be offered their dishes.
+  const dishSurfaces = Object.values(bucket).filter(o =>
+    o.defId === 'sink_kitchen' || o.defId === 'kitchen_table' || o.defId === 'dining_table');
+
   for (const obj of Object.values(bucket)) {
     const def = OBJECT_DEFS[obj.defId];
     if (!def?.dirtyWhen) continue;
     for (const key of Object.keys(def.dirtyWhen)) {
+      if (key === 'dishes') {
+        if (obj.dishes && dishUnitsOf(obj) > 0) {
+          if (dwReady) {
+            // Route through the machine: load up to its remaining capacity,
+            // start the cycle, count what's loaded as cleaned (the lazy
+            // cycle resolver empties it). Whatever won't fit is hand-washed.
+            const capacity = dishwasherCapacityUnits(gameState) - dishwasherLoadUnits(dishwasher);
+            const { moved } = moveDishUnitsToLoad(dishwasher, obj, Math.min(dishUnitsOf(obj), Math.max(0, capacity)));
+            if (moved > 0) {
+              cleanedCount += moved;
+              const now = gameDaysNow(gameState.meta.clock);
+              const minutes = dishwasherCycleMinutes(gameState) / (CLOCK.ticksPerDay * 30);
+              dishwasher.dishwasher = { ...dishwasher.dishwasher, cycleActiveUntilAbs: now + minutes };
+              dishwasher.state = { ...(dishwasher.state || {}), cycle: 'running' };
+              if (dishUnitsOf(obj) === 0) { obj.dishes = {}; obj.dishUnits = 0; }
+              continue;
+            }
+          }
+          obj.dishes = {};
+          obj.dishUnits = 0;
+          cleanedCount++;
+        }
+        continue;
+      }
       const cleanValue = def.states[key][0];
       if (obj.state[key] !== cleanValue) { obj.state[key] = cleanValue; cleanedCount++; }
     }
@@ -2876,6 +2950,307 @@ function getFoodOrderEtaMinutes(order, clock) {
 
 function getActiveFoodOrders(gameState) {
   return (gameState.world.foodOrders || []).filter(o => o.status === 'ordered');
+}
+
+// --- Grocery delivery: QuickCart ---
+// Same same-day pipeline shape as DoorDrop (own order array, own tuning,
+// own NPC pool, tick-driven handover with a live ETA) but with no
+// restaurant dimension — one store, always open, no schedule-ahead picker.
+// The CART side, though, reuses Nile/Home's generic resolveCart/addToCart/
+// removeFromCart/cartSubtotal completely unmodified (GROCERY_CATALOG_LIST
+// items.js) — only checkout differs from Nile: same-day, a named shopper,
+// a live countdown instead of "tomorrow."
+
+function getGroceryApp(gameState) {
+  return gameState.world.computer?.apps?.grocery || null;
+}
+
+function getGroceryOrderTotals(gameState, tipPctOverride) {
+  const app = getGroceryApp(gameState);
+  const cart = app?.cart || [];
+  const subtotal = cartSubtotal(cart, ITEM_DEFS);
+  const deliveryFee = cart.length > 0 ? GROCERY_TUNING.deliveryFee : 0;
+  const serviceFee = Math.round(subtotal * GROCERY_TUNING.serviceFeeRate);
+  const tipPct = tipPctOverride != null ? tipPctOverride : (app?.tipPct ?? GROCERY_TUNING.defaultTipPct);
+  const tip = Math.round(subtotal * tipPct);
+  return { subtotal, deliveryFee, serviceFee, tip, tipPct, total: subtotal + deliveryFee + serviceFee + tip };
+}
+
+// A shopper works a whole list across a store, not one kitchen firing one
+// dish — this is deliberately its own seeded roll (not FOOD_TUNING's
+// travel), so retuning restaurant delivery speed can never accidentally
+// retune grocery speed.
+function getGroceryShopMinutes(gameState, seq) {
+  const rng = seededRng(gameState.meta.seed, `groceryshop_${gameState.meta.clock.day}_${seq}`);
+  return GROCERY_TUNING.shopMinutesBase + Math.floor(rng() * GROCERY_TUNING.shopMinutesVariance);
+}
+function getGroceryTravelMinutes(gameState, seq) {
+  const rng = seededRng(gameState.meta.seed, `grocerytravel_${gameState.meta.clock.day}_${seq}`);
+  return GROCERY_TUNING.travelMinutesBase + Math.floor(rng() * GROCERY_TUNING.travelMinutesVariance);
+}
+// The soonest the order could physically arrive, as an absolute minute —
+// same construction as DoorDrop's getFoodEarliestArrival, minus the
+// per-restaurant prepMinutes lookup (one store, so shop+travel is the
+// whole trip).
+function getGroceryEarliestArrival(gameState, seq) {
+  return clockToAbsolute(gameState.meta.clock) + getGroceryShopMinutes(gameState, seq) + getGroceryTravelMinutes(gameState, seq);
+}
+
+// Shoppers are a small persistent pool, not one throwaway NPC per order —
+// same "everyone persists forever" reasoning as DoorDrop's driver pool,
+// just a separate id namespace/role so the two delivery flavors don't
+// share a roster.
+function pickGroceryShopper(gameState, seq) {
+  const rng = seededRng(gameState.meta.seed, `groceryshopper_${gameState.meta.clock.day}_${seq}`);
+  const n = 1 + Math.floor(rng() * GROCERY_TUNING.shopperPoolSize);
+  const npcId = `shopper_${n}`;
+  createExternalNpc(gameState, npcId, npcId, 'Grocery Shopper');
+  return npcId;
+}
+
+// Place the order: charge, pick the shopper, schedule their visit at the
+// entry, record the order. Nothing enters inventory here — the handover is
+// UI's processGroceryOrdersNow's job when the shopper actually turns up
+// (mirrors placeFoodOrder exactly, minus restaurant lookup/hours).
+function placeGroceryOrder(gameState, opts = {}) {
+  const app = getGroceryApp(gameState);
+  if (!app) return { ok: false, reason: 'QuickCart is unavailable.' };
+  if (!app.cart || app.cart.length === 0) return { ok: false, reason: 'Your cart is empty.' };
+
+  const { day } = gameState.meta.clock;
+  const orders = gameState.world.groceryOrders || (gameState.world.groceryOrders = []);
+  const seq = orders.length;
+  const totals = getGroceryOrderTotals(gameState, opts.tipPct);
+  if (gameState.player.money < totals.total) {
+    return { ok: false, reason: `Can't afford $${totals.total} (you have $${Math.round(gameState.player.money)}).` };
+  }
+
+  const arrivalAbs = getGroceryEarliestArrival(gameState, seq);
+  gameState.player.money -= totals.total;
+  const shopperNpcId = pickGroceryShopper(gameState, seq);
+  const order = {
+    id: `grocery_${day}_${seq}`,
+    items: app.cart.map(c => ({ defId: c.defId, qty: (ITEM_DEFS[c.defId]?.buyQty || 1) * c.units })),
+    subtotal: totals.subtotal, deliveryFee: totals.deliveryFee, serviceFee: totals.serviceFee,
+    tip: totals.tip, tipPct: totals.tipPct, total: totals.total,
+    day, arrivalAbs, shopperNpcId, status: 'ordered',
+  };
+  orders.push(order);
+  scheduleVisit(gameState, order.id, Math.floor(arrivalAbs / 1440), {
+    npcId: shopperNpcId, purpose: 'delivery', startAbs: arrivalAbs,
+    endAbs: arrivalAbs + GROCERY_TUNING.shopperWindowMinutes, roomId: 'entry',
+  });
+  app.cart = [];
+  return { ok: true, order, totals };
+}
+
+// No legacy-shape fallback needed (unlike DoorDrop's foodOrderArrivalAbs) —
+// world.groceryOrders is a brand-new array; every entry it will ever hold
+// already carries arrivalAbs.
+function groceryOrderArrivalAbs(order) { return order.arrivalAbs; }
+function getGroceryOrderEtaMinutes(order, clock) { return groceryOrderArrivalAbs(order) - clockToAbsolute(clock); }
+function getActiveGroceryOrders(gameState) { return (gameState.world.groceryOrders || []).filter(o => o.status === 'ordered'); }
+
+// --- ChefBook: the recipe website (food-overhaul Phase 8, D21/D22) ---
+// RECIPE_CARDS-shaped objects are built on demand, never cached — the app
+// only ever asks for a handful (the unlocked set), and reading a card is
+// cheap: a fixed per-recipe seed through COOKING's real engine (invariant
+// 4 — same (state, seed) always gives the same steps/kcal/grade), or a
+// flat read off a restaurant dish's own ITEM_DEFS entry.
+
+// Whether `key` names something the website can ever have a card for — a
+// cooked RECIPES template or a dish some restaurant sells. Anything else
+// (a raw ingredient, a snack with no menu presence) never gets a card.
+function isRecipeCardId(key) {
+  return !!(key && (RECIPES[key] || RESTAURANT_DISH_IDS.has(key)));
+}
+
+// The EAT_ITEM choke point (EFFECTS' applyEatItem) calls this for every
+// bite the PLAYER takes — cooked plate or ready-made dish alike — so
+// tasting anything card-worthy unlocks it forever, exactly once (D21).
+// NPCs eating never reaches this: only the player's own palate discovers
+// recipes, same as only the player's cart can shop for them.
+function maybeUnlockRecipeCard(gameState, key) {
+  if (!isRecipeCardId(key)) return;
+  const app = gameState?.world?.computer?.apps?.recipes;
+  if (!app || app.unlockedIds.includes(key)) return;
+  app.unlockedIds.push(key);
+}
+
+// A short, static tip built from the recipe's own data — never the
+// engine's seeded RNG outcome, which would read as "this always burns"
+// off a single unlucky roll rather than general cooking advice.
+function chefNotesFor(recipe) {
+  const parts = [];
+  if (recipe.cookware) parts.push(`Needs a ${DISH_DEFS[recipe.cookware]?.label?.toLowerCase() || recipe.cookware}.`);
+  if (recipe.mix?.length) parts.push('Needs the mixer for a step.');
+  if (recipe.method && recipe.method !== 'none') parts.push('Season it — an unseasoned batch comes out bland.');
+  if (recipe.betterHot) parts.push('Best served hot; reheat leftovers before eating them.');
+  return parts.join(' ') || 'A simple no-cook dish.';
+}
+
+// One RECIPES entry, run through the real cooking engine (COOKING) at a
+// fixed per-recipe seed (auto/natural-verb choices) so the card is stable
+// across renders while still reflecting the player's current skill and
+// equipment — the same invariant-4 purity autoCookPlate relies on, just
+// never stamped anywhere.
+function recipeCardFromEngine(gameState, recipe) {
+  const seed = hashStr(recipe.id);
+  const plan = planCook(recipe, gameState, { auto: true, seed });
+  const outcome = resolveCookPlan(plan, gameState);
+  const plate = buildPlate(gameState, recipe, recipe.ingredients, recipe.method, recipe.cookware, { plan, outcome, seed });
+  const steps = plan.steps.map((step, i) => cookStepLine(step, outcome.stepResults[i]).what);
+  return {
+    id: recipe.id, label: recipe.label,
+    ingredients: (recipe.ingredients || []).map(i => ({ defId: i.defId, qty: i.qty || 1 })),
+    steps, kcalPerServing: plate.kcalPerServing, grade: plate.grade,
+    chefNotes: chefNotesFor(recipe),
+  };
+}
+
+// A restaurant dish's card: no ingredients/steps (it's delivered whole,
+// never cooked from a shopping list), just what a menu already tells you.
+function recipeCardFromDish(itemId) {
+  const def = ITEM_DEFS[itemId];
+  if (!def) return null;
+  return {
+    id: itemId, label: def.label,
+    ingredients: [], steps: [],
+    kcalPerServing: Math.round(perServingKcal(def)), grade: null,
+    chefNotes: 'Delivered — order it again through DoorDrop.',
+  };
+}
+
+// Single-card lookup, source-routed by which table `id` belongs to.
+function recipeCardFor(gameState, id) {
+  if (RECIPES[id]) return recipeCardFromEngine(gameState, RECIPES[id]);
+  if (RESTAURANT_DISH_IDS.has(id)) return recipeCardFromDish(id);
+  return null;
+}
+
+// Publishes cards for `ids` (default: every card-eligible id — RECIPES
+// plus every restaurant dish). The browse screen calls this with only
+// unlockedIds, so it's never asked to build the whole catalog on a normal
+// render.
+function recipeCardsFromEngine(gameState, ids) {
+  const list = ids || [...Object.keys(RECIPES), ...RESTAURANT_DISH_IDS];
+  const cards = {};
+  for (const id of list) {
+    const card = recipeCardFor(gameState, id);
+    if (card) cards[id] = card;
+  }
+  return cards;
+}
+
+// Every stack currently sitting in a fridge/pantry/freezer ANYWHERE in the
+// apartment, regardless of which room the player is standing in — the
+// shopping list is checked from the computer, not the kitchen, so this
+// can't reuse DEFS.ACTIONS' kitchenContainers (that one is deliberately
+// scoped to ctx.roomId). Mirrors the whole-house object scan
+// containerDefForSource/findObjectByDefIdLive already use elsewhere.
+function allFoodStorageStacks(gameState) {
+  const out = [];
+  for (const bucket of Object.values(gameState?.objects || {})) {
+    for (const obj of Object.values(bucket || {})) {
+      if (obj?.defId === 'fridge' || obj?.defId === 'pantry' || obj?.defId === 'freezer') {
+        out.push(...(obj.contents || []));
+      }
+    }
+  }
+  return out;
+}
+
+// D20's whole-kitchen pool (bag + every storage container) as flat stacks,
+// for a shopping-list diff — not the cook path's kitchenIngredientPool
+// (that one needs ctx.roomId and is scoped to the current room).
+function kitchenShoppingPool(gameState) {
+  return [...(gameState?.player?.inventory || []), ...allFoodStorageStacks(gameState)];
+}
+
+// Adds however many Nile cart clicks it takes to cover the recipe's
+// ingredients the kitchen doesn't already have — diffed against the whole
+// kitchen (D20) AND whatever's already queued in the cart, so clicking
+// this twice in a row without checking out never doubles the order.
+// Ingredients with no Nile price (nothing so far) are silently skipped —
+// there's no cart line to add them to.
+function addRecipeIngredientsToCart(gameState, recipeId) {
+  const recipe = RECIPES[recipeId];
+  if (!recipe) return { ok: false, reason: 'Not a recipe.' };
+  const have = kitchenShoppingPool(gameState);
+  const cart = resolveCart(gameState, 'apps.shop.cart').cart;
+  let added = 0;
+  for (const ing of recipe.ingredients || []) {
+    const def = ITEM_DEFS[ing.defId];
+    if (!def || def.price == null) continue;
+    const buyQty = def.buyQty || 1;
+    const haveQty = stackQty(have, ing.defId);
+    const queuedQty = (cart.find(c => c.defId === ing.defId)?.units || 0) * buyQty;
+    const missing = (ing.qty || 1) - haveQty - queuedQty;
+    if (missing <= 0) continue;
+    const clicks = Math.ceil(missing / buyQty);
+    for (let i = 0; i < clicks; i++) addToCart(gameState, ing.defId);
+    added++;
+  }
+  return { ok: true, added };
+}
+
+// --- Meal planner (D22) ---
+function getRecipesApp(gameState) {
+  return gameState?.world?.computer?.apps?.recipes || null;
+}
+
+function addToPlanner(gameState, recipeId, day) {
+  if (!RECIPES[recipeId]) return { ok: false, reason: 'Not a recipe.' };
+  if (!Number.isFinite(day)) return { ok: false, reason: 'Pick a day.' };
+  const app = getRecipesApp(gameState);
+  if (!app) return { ok: false, reason: 'The planner is unavailable.' };
+  app.planner.push({ recipeId, day: Math.floor(day) });
+  return { ok: true };
+}
+
+function removeFromPlanner(gameState, index) {
+  const app = getRecipesApp(gameState);
+  if (!app || index == null || index < 0 || index >= app.planner.length) return;
+  app.planner.splice(index, 1);
+}
+
+// The whole plan's ingredient needs, summed across every planned recipe —
+// the same defId from two different days' dinners collapses into one
+// line, which is what "dedupes shared ingredients" means (D22).
+function shoppingListForPlanner(gameState) {
+  const app = getRecipesApp(gameState);
+  const need = {};
+  for (const entry of app?.planner || []) {
+    const recipe = RECIPES[entry.recipeId];
+    if (!recipe) continue;
+    for (const ing of recipe.ingredients || []) {
+      need[ing.defId] = (need[ing.defId] || 0) + (ing.qty || 1);
+    }
+  }
+  return need;
+}
+
+// One click, the whole week: fills the Nile cart with exactly what the
+// full plan needs beyond what the kitchen (and the cart already) has.
+// Same diff shape as addRecipeIngredientsToCart, over the summed list.
+function addPlannerIngredientsToCart(gameState) {
+  const need = shoppingListForPlanner(gameState);
+  const have = kitchenShoppingPool(gameState);
+  const cart = resolveCart(gameState, 'apps.shop.cart').cart;
+  let added = 0;
+  for (const [defId, qty] of Object.entries(need)) {
+    const def = ITEM_DEFS[defId];
+    if (!def || def.price == null) continue;
+    const buyQty = def.buyQty || 1;
+    const haveQty = stackQty(have, defId);
+    const queuedQty = (cart.find(c => c.defId === defId)?.units || 0) * buyQty;
+    const missing = qty - haveQty - queuedQty;
+    if (missing <= 0) continue;
+    const clicks = Math.ceil(missing / buyQty);
+    for (let i = 0; i < clicks; i++) addToCart(gameState, defId);
+    added++;
+  }
+  return { ok: true, added };
 }
 
 // --- Escorts (external-world plan Phase 7) ---

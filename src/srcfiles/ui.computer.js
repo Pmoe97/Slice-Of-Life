@@ -228,6 +228,127 @@ async function doHomeCheckout() {
   await saveAtBoundary('home-checkout', currentGameState);
 }
 
+// --- QuickCart (grocery delivery) ---
+// Cart handlers mirror Home's exactly (addToCart/removeFromCart pointed
+// at apps.grocery.cart — catalog omitted, defaults to ITEM_DEFS, which is
+// right since groceries stay ITEM_DEFS entries unlike Home's separate
+// DECOR_CATALOG_DEFS). Checkout diverges: placeGroceryOrder (not
+// checkoutCart) for the same-day pipeline, the same chain-quest 'buy' hook
+// Nile's checkout fires, and landing on the live-ETA Orders screen instead
+// of back on Browse.
+
+async function doGroceryAddToCart(defId) {
+  if (!defId) return;
+  const result = addToCart(currentGameState, defId, { cartPath: 'apps.grocery.cart' });
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('grocery-add', currentGameState);
+}
+
+async function doGroceryRemoveFromCart(defId) {
+  if (!defId) return;
+  removeFromCart(currentGameState, defId, { cartPath: 'apps.grocery.cart' });
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('grocery-remove', currentGameState);
+}
+
+async function doGrocerySetTip(pctWhole) {
+  if (!currentGameState) return;
+  const app = currentGameState.world.computer?.apps?.grocery;
+  if (!app || !Number.isFinite(pctWhole)) return;
+  app.tipPct = pctWhole / 100;
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('grocery-tip', currentGameState);
+}
+
+async function doGroceryCheckout(device) {
+  const result = placeGroceryOrder(currentGameState);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  // Chain quest progress: buying from any shop app satisfies a 'buy' step
+  // (checkChainQuestProgress doesn't check item category for 'buy') — the
+  // same hook Nile's checkout fires.
+  for (const npcId of Object.keys(currentGameState.npcs)) {
+    checkChainQuestProgress('buy', npcId);
+  }
+  const shopper = currentGameState.npcs[result.order.shopperNpcId];
+  const eta = getGroceryOrderEtaMinutes(result.order, currentGameState.meta.clock);
+  addLogEntry('system', `Order placed on QuickCart — $${result.totals.total}. ${shopper?.bible?.name || 'A shopper'} is bringing it, about ${Math.max(0, eta)} minutes out.`);
+  switchScreen(currentGameState, 'grocery', 'orders', undefined, device === 'phone' ? 'phone' : 'computer');
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('grocery-checkout', currentGameState);
+}
+
+// --- ChefBook (food-overhaul Phase 8, D21/D22) ---
+// Same "app state, never DOM state" pattern as Classifieds' viewingApplicantId
+// / DoorDrop's openRestaurantId (doFoodOpenRestaurant) — device-aware nav,
+// no save boundary (opening a card isn't a world change).
+function doRecipesOpenDetail(recipeId, device) {
+  if (!recipeId || !currentGameState) return;
+  const app = currentGameState.world.computer?.apps?.recipes;
+  if (!app) return;
+  app.viewingRecipeId = recipeId;
+  switchScreen(currentGameState, 'recipes', 'detail', undefined, device === 'phone' ? 'phone' : 'computer');
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+}
+
+async function doRecipesAddToCart(recipeId) {
+  if (!recipeId || !currentGameState) return;
+  const result = addRecipeIngredientsToCart(currentGameState, recipeId);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  const label = RECIPES[recipeId]?.label || recipeId;
+  addLogEntry('system', result.added > 0
+    ? `Added the missing ingredients for ${label} to your Nile cart.`
+    : `Your kitchen already has everything for ${label}.`);
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('recipes-add-cart', currentGameState);
+}
+
+// The recipe/day pair is read off the planner's own inputs at submit time
+// (the same DOM-holds-transient-form-state pattern DoorDrop's delivery-time
+// select and the maid's addon grid both use), scoped by device since the
+// computer and phone shells can both have a planner screen in the DOM at
+// once.
+async function doRecipesPlannerAdd(device) {
+  if (!currentGameState) return;
+  const scope = device === 'phone' ? document.getElementById('phone-screen') : document;
+  const recipeSelect = scope?.querySelector?.('#planner-recipe') || document.getElementById('planner-recipe');
+  const dayInput = scope?.querySelector?.('#planner-day') || document.getElementById('planner-day');
+  const recipeId = recipeSelect?.value;
+  const day = Number(dayInput?.value);
+  if (!recipeId) return;
+  const result = addToPlanner(currentGameState, recipeId, day);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('recipes-planner-add', currentGameState);
+}
+
+async function doRecipesPlannerRemove(index) {
+  if (!currentGameState) return;
+  removeFromPlanner(currentGameState, Number(index));
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('recipes-planner-remove', currentGameState);
+}
+
+async function doRecipesPlannerFillCart() {
+  if (!currentGameState) return;
+  const result = addPlannerIngredientsToCart(currentGameState);
+  addLogEntry('system', result.added > 0
+    ? "Added the plan's missing ingredients to your Nile cart."
+    : 'Your kitchen already has everything the plan needs.');
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('recipes-planner-fill', currentGameState);
+}
+
 // --- Home placement screen (decor-economy plan Phase 2) ---
 // Transient interaction state for the `home-placement` screen: which room is
 // being edited, what's selected, an in-progress placement draft, and the
@@ -1160,8 +1281,15 @@ function doImOpenThread(npcId) {
   if (thread) thread.unread = 0;
   // No switchScreen — Messages is a single always-both-panes screen now
   // (renderMessages, RENDER.COMPUTER); selecting a thread just changes
-  // which conversation shows in the right-hand pane.
+  // which conversation shows in the right-hand pane. That pane is SHARED
+  // by both devices — the phone renders the same renderer via
+  // renderPhoneContent — so every surface currently showing Messages must
+  // repaint. A phone left open on the app only re-renders when
+  // renderPhoneScreen runs, which was the 2026-08-17 audit's U1 bug (a
+  // phone thread click never took effect). Both calls are cheap no-ops
+  // when their device is off/closed.
   renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
 }
 
 // Guard so concurrent Send clicks/races can't fire overlapping sends —
@@ -1175,8 +1303,8 @@ let imSending = false;
 // while the NPC reply is being generated — the player's own message has
 // already been appended and painted before this is shown, so the thread
 // reads naturally: your bubble, then their typing dots, then their reply.
-function showImTypingIndicator() {
-  const log = document.querySelector('.im-msg-log');
+function showImTypingIndicator(scope) {
+  const log = (scope || document).querySelector('.im-msg-log');
   if (!log) return () => {};
   const indicator = document.createElement('div');
   indicator.className = 'im-typing';
@@ -1186,9 +1314,20 @@ function showImTypingIndicator() {
   return () => { if (indicator.parentNode) indicator.remove(); };
 }
 
-async function doImSend(npcId) {
+// Which DOM subtree an IM interaction belongs to. The computer window and
+// the phone app BOTH render the shared renderMessages UI (including a
+// duplicate id="cs-chat-input"), so every part of the send path must read
+// and write within the device that actually sent — getElementById would
+// always return the computer's copy whenever both were in the DOM
+// (2026-08-17 audit, U2).
+function imScopeForDevice(device) {
+  return device === 'phone' ? document.getElementById('phone-screen') : document;
+}
+
+async function doImSend(npcId, device) {
   if (!npcId || imSending) return;
-  const input = document.getElementById('cs-chat-input');
+  const scope = imScopeForDevice(device);
+  const input = scope?.querySelector('#cs-chat-input');
   const text = input?.value.trim();
   if (!text) return;
   // Clear the input and set the guard IMMEDIATELY, before any await —
@@ -1196,7 +1335,7 @@ async function doImSend(npcId) {
   // same text and firing a duplicate send.
   if (input) input.value = '';
   imSending = true;
-  const sendBtn = document.querySelector('.im-send-btn');
+  const sendBtn = scope?.querySelector('.im-send-btn');
   if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
 
   // Append the player's message and re-render immediately so their bubble
@@ -1204,16 +1343,19 @@ async function doImSend(npcId) {
   // reply. No global loading overlay (the whole point: keep typing/reading).
   const appended = appendPlayerImMessage(currentGameState, npcId, text);
   if (!appended.ok) { addLogEntry('system', appended.reason); imSending = false; if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send'; } return; }
+  // The thread is shared state, so both devices showing Messages repaint;
+  // each render call is a no-op when its device is off/closed.
   renderComputerScreen(currentGameState);
-  // renderComputerScreen rebuilt the window body, so the send button we
-  // disabled above is gone — re-disable the fresh one to show a reply is
-  // in flight. (imSending already guards against duplicate sends.)
-  const pendingBtn = document.querySelector('.im-send-btn');
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  // Rendering rebuilt the DOM, so the send button we disabled above is
+  // gone — re-disable the fresh one to show a reply is in flight.
+  // (imSending already guards against duplicate sends.)
+  const pendingBtn = scope?.querySelector('.im-send-btn');
   if (pendingBtn) { pendingBtn.disabled = true; pendingBtn.textContent = 'Sending…'; }
 
   // Show the "typing…" indicator on the freshly rendered log while the
   // NPC generates a reply.
-  const removeTyping = showImTypingIndicator();
+  const removeTyping = showImTypingIndicator(scope);
 
   try {
     const result = await resolveImReply(currentGameState, npcId, text);
@@ -1234,12 +1376,12 @@ async function doImSend(npcId) {
   } finally {
     removeTyping();
     imSending = false;
-    // Re-enable the send button (renderComputerScreen may have rebuilt
-    // the window body, so find it fresh).
-    const btn = document.querySelector('.im-send-btn');
+    // Re-enable the send button (the render calls may have rebuilt the
+    // DOM, so find it fresh within the same device scope).
+    const btn = scope?.querySelector('.im-send-btn');
     if (btn) { btn.disabled = false; btn.textContent = 'Send'; }
     // Refocus the input for rapid follow-up messages.
-    const freshInput = document.getElementById('cs-chat-input');
+    const freshInput = scope?.querySelector('#cs-chat-input');
     if (freshInput) freshInput.focus();
   }
 }

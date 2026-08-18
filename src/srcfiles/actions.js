@@ -11,7 +11,14 @@
 function resolveAvailableActions(gameState) {
   const ctx = buildActionContext(gameState);
   const out = [];
+  // Phase 1 (D5): submenu verbs surface ONLY through their parent's
+  // popover — never as flat chips. Build the exclusion set once.
+  const submenuVerbIds = new Set();
   for (const def of Object.values(ACTION_DEFS)) {
+    for (const verbId of def.submenu || []) submenuVerbIds.add(verbId);
+  }
+  for (const def of Object.values(ACTION_DEFS)) {
+    if (submenuVerbIds.has(def.id)) continue;
     if (!actionSourceMatches(def, ctx)) continue;
     const check = checkRequirements(def, ctx);
     out.push({ actionId: def.id, label: def.label, group: def.group, chipPriority: def.chipPriority || 0, ok: check.ok, reason: check.reason });
@@ -20,6 +27,9 @@ function resolveAvailableActions(gameState) {
 }
 
 function actionSourceMatches(def, ctx) {
+  // Submenu parents (e.g. 'door.interact') are grouping-only defs — they
+  // declare `submenu` but no source and never resolve as executable actions.
+  if (!def.source) return false;
   if (def.source.kind === 'room') return def.source.roomIds.includes(ctx.roomId);
   if (def.source.kind === 'self') return true;
   if (def.source.kind === 'object') {
@@ -66,9 +76,15 @@ function findObjectInRoom(ctx, defId) {
 // --- Requirement checking (mirrors SIM's CAST_REQUIREMENT_CHECKERS: a
 // config-declared list of requirement names against a name→predicate
 // registry, so extending `requires` is a data change, not a code change). ---
-function checkRequirements(def, ctx) {
+// `opts.skipWillingness` (Intimacy & Voyeurism Phase 11) drops the willingness
+// rule from the pass: the Make-a-Move act picker lists acts that are otherwise
+// possible so that the GATE can refuse the chosen one with the target's own
+// refusal prose — a picker that pre-filtered on willingness would read as a
+// system no instead of a person saying no.
+function checkRequirements(def, ctx, opts) {
   for (const rule of def.requires || []) {
     const [name, ...args] = rule.split(':');
+    if (opts?.skipWillingness && name === 'willingness') continue;
     const checker = ACTION_REQUIREMENT_CHECKERS[name];
     if (!checker) { console.warn(`Unknown action requirement checker: ${name}`); continue; }
     const result = checker(ctx, ...args);
@@ -91,15 +107,42 @@ function checkRequirements(def, ctx) {
 // same recipe pick can't disagree between what happened and what got
 // said about it. Actions that don't need this (the four simple ones)
 // leave `prepare`/`buildEffects` unset and keep using the static
-// `effects`/`narration.templates` shape from P0. ---
-async function executeAction(actionId, gameState, actorId) {
+// `effects`/`narration.templates` shape from P0.
+//
+// `opts.targetNpcId` (Phase 11, D3/D13) sets ctx.actTargetNpcId before any
+// requirement runs — the willingness checker reads it. The Make-a-Move flow
+// passes the chosen partner this way; the paired `def.paired` block is what
+// makes executeAction resolve the two-party half (resolvePairedAct).
+async function executeAction(actionId, gameState, actorId, opts) {
   const def = ACTION_DEFS[actionId];
   if (!def) return { ok: false, reason: 'Unknown action.' };
   const ctx = buildActionContext(gameState, actorId);
+  if (opts && opts.targetNpcId) ctx.actTargetNpcId = opts.targetNpcId;
+  // Intimacy & Voyeurism Phase 19: the sound verbs act on the exact device
+  // their submenu row was opened from — the parent chip's data-obj-id rides
+  // through as opts.objId into ctx.actObjId, which prepare() reads.
+  if (opts && opts.objId) ctx.actObjId = opts.objId;
   const actor = actionActor(gameState, actorId);
 
   const check = checkRequirements(def, ctx);
-  if (!check.ok) return { ok: false, reason: check.reason, ticksSpent: 0 };
+  if (!check.ok) {
+    // Intimacy & Voyeurism Phase 11 (D9/D13): a declined intimacy attempt is
+    // a real event — the first production call of the Phase 9 refusal writer
+    // (noteIntimacyRefusal), which is what makes "a no means no for a while"
+    // true instead of a one-tick annoyance. Only a conscious soft no
+    // (below_threshold) writes: the hard floors are STATES (asleep, hostile,
+    // stranger, already-refusing), not refusals, and writing a lockout over
+    // a sleeping person would be exactly the wrong read.
+    let refusal = false;
+    if (def.paired && ctx.actTargetNpcId && ctx._willingnessRefused === 'below_threshold') {
+      const day = gameState.meta && gameState.meta.clock ? gameState.meta.clock.day : null;
+      if (day != null) {
+        noteIntimacyRefusal(gameState.npcs[ctx.actTargetNpcId], day);
+        refusal = true;
+      }
+    }
+    return { ok: false, reason: check.reason, ticksSpent: 0, refusal };
+  }
 
   const prepared = def.prepare ? await def.prepare(ctx) : null;
   // A prepare() that presented a choice and got cancelled (self.cook's
@@ -107,6 +150,18 @@ async function executeAction(actionId, gameState, actorId) {
   // or ingredient consumption happens — executeAction returns a cancelled
   // result and the caller (runRegisteredAction) exits silently.
   if (prepared && prepared.cancelled) return { ok: false, reason: null, cancelled: true, ticksSpent: 0 };
+  // The picker/choice await above let the continuous clock replace
+  // currentGameState (a heartbeat rebuilds the player object, a checkpoint
+  // rebuilds the whole state), so everything below that MUTATES must land on
+  // the LIVE object or the action's effects — the eaten food, the restored
+  // hunger, the rel deltas — would be applied to the detached snapshot the
+  // renderer and saver have already moved past, and the player would see a
+  // "You eat a pasta." that leaves hunger at 0 and the food untouched. Same
+  // pattern as resolvePairedAct and withVulnerableState's finally: write to
+  // the live global; the parameter stays the fallback for pure/harness
+  // callers with no global. On the fast path (no await gap) they are the
+  // same object, so nothing changes.
+  const live = (typeof currentGameState !== 'undefined' && currentGameState) || gameState;
   const effectLines = def.buildEffects ? def.buildEffects(ctx, prepared) : [...(def.effects || [])];
   // Skill XP is declarative (def.skill), not something buildEffects has to
   // remember to emit itself — checkRequirements already guaranteed the
@@ -114,7 +169,7 @@ async function executeAction(actionId, gameState, actorId) {
   // unconditionally is correct, not a "gained XP for nothing" risk.
   if (def.skill) effectLines.push(`ADD_SKILL_XP ${def.skill.id} ${def.skill.xp}`);
   const effects = effectLines.map(line => parseEffectDSL(line)[0]).filter(Boolean);
-  const effCtx = buildEffectContext(gameState, [], ctx.presentNpcIds, ctx.roomObjects, actor ? (actor.inventory || []) : []);
+  const effCtx = buildEffectContext(live, [], ctx.presentNpcIds, ctx.roomObjects, actor ? (actor.inventory || []) : []);
   applyEffects(effects, effCtx);
 
   // Phase 7 (D7): an action that dirtied a room's objects (SET_OBJECT_STATE
@@ -128,11 +183,11 @@ async function executeAction(actionId, gameState, actorId) {
   const touchedRooms = new Set();
   for (const eff of effects) {
     if (eff.type === 'SET_OBJECT_STATE') {
-      const obj = findObjectById(gameState, eff.params?.objId);
+      const obj = findObjectById(live, eff.params?.objId);
       if (obj && obj.bucket?.startsWith('room_')) touchedRooms.add(obj.bucket.slice('room_'.length));
     }
   }
-  for (const roomId of touchedRooms) refreshRoomCleanliness(gameState, roomId);
+  for (const roomId of touchedRooms) refreshRoomCleanliness(live, roomId);
 
   // Phase 5: meter utility usage for actions that consume utilities. The
   // `meters` field on an ACTION_DEFS entry is a list of [meterKey, amount]
@@ -140,8 +195,17 @@ async function executeAction(actionId, gameState, actorId) {
   // player-side metering; NPC drives meter in drives.js.
   if (def.meters) {
     for (const [key, amt] of def.meters) {
-      recordUtilityUsage(gameState, key, amt);
+      recordUtilityUsage(live, key, amt);
     }
+  }
+
+  // Intimacy & Voyeurism Phase 5 (D11): a change_outfit action writes the
+  // player's outfit from prepare()'s pick — a pure player-state write with
+  // no need/suspicion/relationship math for the effects vocabulary to carry
+  // (same trusted-producer pattern as def.skill / def.meters above). The
+  // prepared pick and the applied outfit are the same object by construction.
+  if (def.writesOutfit && prepared?.outfit && live.player) {
+    applyPlayerOutfit(live.player, prepared.outfit);
   }
 
   // Perception plan Phase 3: the player is audible too. Same declarative
@@ -150,7 +214,7 @@ async function executeAction(actionId, gameState, actorId) {
   // which is what Plan 3 needs in order for an NPC to react to the player
   // being somewhere without a bespoke check for each case.
   if (def.emitsSignal) {
-    emitTransient(gameState, {
+    emitTransient(live, {
       id: def.emitsSignal.signal,
       roomId: actor?.location ?? ctx.roomId,
       intensity: def.emitsSignal.intensity,
@@ -168,7 +232,7 @@ async function executeAction(actionId, gameState, actorId) {
       if (req.startsWith('facilityFunctional:')) {
         // Direct facility reference: 'facilityFunctional:kitchen_stove'
         const facilityId = req.split(':')[1];
-        const dropped = decayFacilityCondition(gameState, facilityId);
+        const dropped = decayFacilityCondition(live, facilityId);
         if (dropped) {
           const facDef = FACILITY_DEFS[facilityId];
           addLogEntry('system', `The ${facDef?.label || facilityId} has worn out and needs repair.`);
@@ -183,7 +247,7 @@ async function executeAction(actionId, gameState, actorId) {
         for (const fid of facilityIds) {
           const facDef = FACILITY_DEFS[fid];
           if (!facDef?.gatesActions?.includes(actionId)) continue;
-          const dropped = decayFacilityCondition(gameState, fid);
+          const dropped = decayFacilityCondition(live, fid);
           if (dropped) {
             addLogEntry('system', `The ${facDef.label} has worn out and needs repair.`);
           }
@@ -193,14 +257,14 @@ async function executeAction(actionId, gameState, actorId) {
     }
   }
 
-  const minutes = resolveTimeCost(def, gameState, prepared, actorId);
+  const minutes = resolveTimeCost(def, live, prepared, actorId);
 
   // Initiative plan Phase 5 (D16/D17): the same act, with somebody in it with
   // you. Declarative off `def.shared`, like `meters` and `emitsSignal` above.
   // Resolved BEFORE the clock advances, and off the `ctx` built at the top of
   // this function: the participants are the people who were here when it
   // started, not whoever wandered in while it ran.
-  const shared = resolveSharedActivity(gameState, def, ctx, minutes);
+  const shared = resolveSharedActivity(live, def, ctx, minutes);
 
   // Declaring `vulnerableState` on an action is all it takes for the NPC
   // peep system (DRIVES/STEALTH) to be able to catch the player mid-action:
@@ -209,7 +273,32 @@ async function executeAction(actionId, gameState, actorId) {
   // finally so a throw mid-resolve can't strand the player permanently
   // "showering" — the failure mode the old location-inference version had
   // by construction.
-  const ticks = await withVulnerableState(gameState, def.vulnerableState, () => advanceAndResolveMinutes(minutes));
+  // Intimacy & Voyeurism Phase 5 (D11): the same window carries the action's
+  // transient clothing state (def.transientClothing, e.g. self.shower →
+  // 'nude') and leaves def.afterClothing behind (shower → 'towel', reverted
+  // by TRANSIENT_CLOTHING on the next decayPlayerNeeds span).
+  //
+  // Intimacy & Voyeurism Phase 11 (D3/D13): a PAIRED act sets the partner's
+  // clothing to `def.paired.npcClothing` for the same window — the person in
+  // it with you is undressed (or nude in the shower) while the ticks of the
+  // act run, not just afterwards, so a mid-act peep/read sees the truth.
+  if (def.paired && ctx.actTargetNpcId && def.paired.npcClothing) {
+    const partner = live.npcs[ctx.actTargetNpcId];
+    if (partner) partner.clothing = def.paired.npcClothing;
+  }
+  const ticks = await withVulnerableState(live, def.vulnerableState, {
+    clothing: def.transientClothing,
+    after: def.afterClothing,
+  }, () => advanceAndResolveMinutes(minutes));
+
+  // Intimacy & Voyeurism Phase 11 (D3/D13): the paired act's second half —
+  // the partner's effects, rel deltas, final clothing, bed, intimacy history
+  // and the player's ledger entry. Runs AFTER the clock advanced so the
+  // partner's state reflects a completed act. One writer (resolvePairedAct,
+  // below) — mirrors resolveSharedActivity's single-writer rule.
+  if (def.paired && ctx.actTargetNpcId) {
+    resolvePairedAct(live, def, ctx, minutes);
+  }
 
   return { ok: true, ticksSpent: ticks, minutesSpent: minutes, shared, narration: narrateAction(def, ctx, prepared, shared) };
 }
@@ -217,19 +306,43 @@ async function executeAction(actionId, gameState, actorId) {
 // Runs `fn` with gameState.player.flags._vulnerableState set, restoring
 // whatever was there before (normally nothing) afterward. A null/undefined
 // state is a no-op passthrough, so non-private actions pay nothing.
-async function withVulnerableState(gameState, state, fn) {
+//
+// Intimacy & Voyeurism Phase 5 (D11): the same window may also carry a
+// transient CLOTHING state (opts.clothing, e.g. self.shower → 'nude' — the
+// naked-in-scene state the scene/peek systems read), and may leave a
+// follow-on state behind once the window closes (opts.after, e.g. shower →
+// 'towel', which TRANSIENT_CLOTHING then reverts on the next decayPlayerNeeds
+// span). The old 3-arg shape (state, fn) still works — callers without a
+// clothing window pass nothing for opts.
+async function withVulnerableState(gameState, state, opts, fn) {
+  if (typeof opts === 'function') { fn = opts; opts = null; }
   if (!state) return fn();
   const flags = gameState.player.flags || (gameState.player.flags = {});
   const previous = flags._vulnerableState;
   flags._vulnerableState = state;
+  const clothingState = opts?.clothing || null;
+  const afterState = opts?.after || null;
+  const hadClothing = Object.prototype.hasOwnProperty.call(gameState.player, 'clothing');
+  const prevClothing = gameState.player.clothing;
+  if (clothingState) gameState.player.clothing = clothingState;
   try {
-    return await fn();
+    const result = await fn();
+    if (afterState) {
+      const live = (typeof currentGameState !== 'undefined' && currentGameState?.player) || gameState.player;
+      live.clothing = afterState;
+    }
+    return result;
   } finally {
     // currentGameState may have been replaced by resolveBatch during fn,
     // so restore on the live player object, not the captured one.
     const liveFlags = (typeof currentGameState !== 'undefined' && currentGameState?.player?.flags) || flags;
     if (previous === undefined) delete liveFlags._vulnerableState;
     else liveFlags._vulnerableState = previous;
+    if (clothingState && !afterState) {
+      const live = (typeof currentGameState !== 'undefined' && currentGameState?.player) || gameState.player;
+      if (hadClothing) live.clothing = prevClothing;
+      else delete live.clothing;
+    }
   }
 }
 
@@ -244,8 +357,9 @@ async function withVulnerableState(gameState, state, fn) {
 //   means 20 min minus up to 50% at max cooking level, floored at 15
 // - `perIngredient` (number): adds N minutes per ingredient in the recipe
 //   picked by `prepare()` (the prepared result must include `recipe`)
-// - `perDirtyDish` (number): adds N minutes per dirty-dish level — reads
-//   the sink's dishes state ('clean'=0, 'few'=1, 'many'=2)
+// - `perDishUnit` (number): adds N minutes per dish unit the action will
+//   wash — reads `prepared.units` (the wash capacity the prepare measured,
+//   food-overhaul Phase 4's self.dishes)
 // - `max`/`min` (number): clamp
 // `prepare()` data (prepared) is passed as the 3rd arg so perIngredient
 // can read the recipe pick.
@@ -280,12 +394,18 @@ function resolveTimeCost(def, gameState, prepared, actorId) {
   if (tc.perIngredient && prepared?.recipe) {
     minutes += (prepared.recipe.ingredients?.length || 0) * tc.perIngredient;
   }
-  if (tc.perDirtyDish) {
-    const sink = Object.values((gameState.objects && gameState.objects['room_kitchen']) || {})
-      .find(o => o.defId === 'sink_kitchen');
-    const dishLevel = sink?.state?.dishes;
-    const level = dishLevel === 'many' ? 2 : dishLevel === 'few' ? 1 : 0;
-    minutes += level * tc.perDirtyDish;
+  // Food-overhaul Phase 5: the interactive cook's minutes ARE the plan's
+  // step total (prep + mixing + method + rescues), computed by the engine
+  // in prepare(). fromPrepared makes that the base, then the skill curve
+  // below scales it like any other time cost. The static base/perIngredient
+  // values stay as the fallback for the no-plan path (harness callers).
+  if (tc.fromPrepared && prepared?.minutes != null) {
+    minutes = prepared.minutes;
+  }
+  if (tc.perDishUnit && prepared?.units) {
+    // Food-overhaul Phase 4 (D11): self.dishes' time scales with the dish
+    // UNITS this action clears (prepared.units — the hand-wash capacity).
+    minutes += prepared.units * tc.perDishUnit;
   }
   if (tc.skill && tc.curve) {
     // Whose skill shrinks the time is the actor's — the player for today's
@@ -508,6 +628,124 @@ function resolveSharedActivity(gameState, def, ctx, minutes) {
   return result;
 }
 
+// --- Paired intimacy acts (Intimacy & Voyeurism Phase 11, D3/D13) ---------
+// The player's paired acts resolved beside resolveSharedActivity, mirroring
+// its single-writer rule: ONE function applies the partner's half of a
+// completed act. Deliberately not resolveSharedActivity itself — its
+// participants are "every present resident", its deltas come from
+// SHARED_ACTIVITY.rates, and it has no clothing/bed/ledger vocabulary. An
+// intimacy partner is EXPLICITLY chosen (the Make-a-Move picker), the deltas
+// are per-act magnitudes (INTIMACY.relDeltas), and invariant 7 wants the act
+// to leave its own trace. Same file, same idioms (addMemoryFact/applyRelDelta
+// return new NPCs, so the assignment is the write).
+//
+// Mutates the LIVE state's npcs[targetId] and player.ledger. Pure of rng and
+// LLM (D15 — deterministic authority; this never asks a model whether the act
+// happened).
+function resolvePairedAct(gameState, def, ctx, minutes) {
+  const targetId = ctx.actTargetNpcId;
+  if (!targetId || !def.paired) return null;
+  // The global may have been REPLACED by the clock advance this runs after:
+  // advanceAndResolve (ui.js) assigns resolveBatch's fresh state object to
+  // currentGameState, so writing through the `gameState` executeAction was
+  // handed would land on the discarded pre-advance map — every delta, the
+  // intimacy history and the ledger entry would silently evaporate. Write to
+  // the live object (the withVulnerableState finally's pattern); the
+  // parameter stays the fallback for pure/harness callers with no global.
+  const live = (typeof currentGameState !== 'undefined' && currentGameState) || gameState;
+  let npc = live.npcs?.[targetId];
+  if (!npc) return null;
+  const day = live.meta && live.meta.clock ? live.meta.clock.day : 1;
+  const roomObjects = live.objects?.[`room_${ctx.roomId}`] || {};
+
+  // The partner's needs/mood. {target} substituted into the config-authored
+  // lines; applyEffects is the trusted-producer path (skips validation — the
+  // list was vetted when it was written into CONFIG, not by the narrator).
+  if (def.paired.npcEffects) {
+    const effCtx = buildEffectContext(live, [targetId], [targetId], roomObjects, []);
+    const lines = def.paired.npcEffects.map(l => l.replace('{target}', targetId));
+    applyEffects(lines.map(l => parseEffectDSL(l)[0]).filter(Boolean), effCtx);
+  }
+
+  // relPlayer deltas toward the player (re-derives intimacyLevel/phase), then
+  // the final clothing state (undressed stays until the wardrobe; towel is
+  // TRANSIENT_CLOTHING and reverts on the partner's next resolveTick pass 2).
+  npc = live.npcs[targetId];
+  if (def.paired.relDeltas) npc = applyRelDelta(npc, def.paired.relDeltas, day);
+  if (def.paired.npcClothingAfter) npc = { ...npc, clothing: def.paired.npcClothingAfter };
+
+  // Intimacy history (the Phase 9 recency term's writer) + the player's
+  // per-character ledger entry (the Phase 15 codex's source). Every act
+  // leaves a trace (invariant 7) even when nothing else hears it. The two
+  // note* writers return the record they wrote, NOT the npc — call them for
+  // the write, never reassign from them.
+  noteIntimacyOccurred(npc, day, 'player');
+  live.npcs[targetId] = npc;
+  notePlayerLedgerEntry(live, targetId, def.paired.ledgerAct || def.id, day, ctx.roomId);
+
+  // Intimacy & Voyeurism Phase 18 (D14/D16): conception on a completed
+  // qualifying act. The willingness gate was the act's own requirement — this
+  // is the chance roll (player.flags._tryingWith vs the base unprotected
+  // chance) + the record write, silent (nobody knows until the bump shows).
+  if (typeof maybeConceive === 'function') {
+    maybeConceive(live, 'player', targetId, def.paired.ledgerAct || def.id, { location: ctx.roomId });
+  }
+
+  // Intimacy & Voyeurism Phase 14 (D14): the infidelity pass. If the target
+  // holds a committed/seeing record with a third party, the player just became
+  // the "other" — the target's memory gains the gossip fact, their record with
+  // the wronged party gains the 'cheat' entry, and a wronged party who
+  // perceives the act (in the room, or the moan reaches them) gets the
+  // jealousy immediately: castWeb deltas, a mood drop, a grievance toward the
+  // player. Symmetric with the NPC pair act (D3) — the SAME function both
+  // paths call, so a player-initiated infidelity and an NPC-initiated one
+  // have identical consequences. Player-path writes are direct (this runs on
+  // a click, outside any tick, so there is no resolveBatch clobber to dodge);
+  // the events surface to the player log below.
+  if (typeof applyInfidelityFootprint === 'function') {
+    const infidelity = applyInfidelityFootprint(live, 'player', targetId, def.paired.ledgerAct || def.id, { location: ctx.roomId });
+    if (infidelity.events.length > 0 && typeof addLogEntry === 'function') {
+      for (const evt of infidelity.events) {
+        const wronged = live.npcs[evt.npcId];
+        addLogEntry('narration', `${wronged?.bible?.name || 'Someone'} found out what happened and is furious.`);
+      }
+    }
+  }
+
+  // The bed the plan says these acts leave unmade. Guarded: a quickie in a
+  // bathroom has no bed to unmake, and a bed is a room object like any other.
+  if (INTIMACY.leavesBedUnmade.includes(def.id.split('.').pop())) {
+    const bed = Object.values(roomObjects).find(o => o.defId === 'bed');
+    if (bed) {
+      bed.state = { ...(bed.state || {}), made: 'unmade' };
+      refreshRoomCleanliness(live, ctx.roomId);
+    }
+  }
+  return targetId;
+}
+
+// The player's knowledge-ledger writer (Phase 11 writes the 'participated'
+// half; Phase 15's codex.js adds the 'witnessed' writes from the peek flow
+// and in-room event surfacing). Free-form player state, per the plan:
+// player.ledger[npcId] is a day-stamped entry list whose `spent` flag
+// Phase 15's Confront/Spread/Matchmake verbs flip. Nothing else in the game
+// has a competing ledger writer today. opts: { kind, otherNpcId, outcome }.
+function notePlayerLedgerEntry(gameState, npcId, act, day, roomId, opts = {}) {
+  if (!gameState || !gameState.player || !npcId) return;
+  const player = gameState.player;
+  const entries = Array.isArray(player.ledger?.[npcId]) ? player.ledger[npcId] : [];
+  const entry = {
+    kind: opts.kind || 'participated',
+    act,
+    day: typeof day === 'number' ? day : 1,
+    roomId: roomId || null,
+    otherNpcId: opts.otherNpcId || null,
+    spent: !!opts.spent,
+    outcome: opts.outcome || null,
+  };
+  player.ledger = { ...(player.ledger || {}), [npcId]: [...entries, entry] };
+}
+
 // "Victor" / "Victor and Bruno" / "Victor, Bruno and Neve" — the {name} the
 // shared templates substitute. A shared activity with two roommates in the room
 // is one activity with two people in it, not two narrations.
@@ -531,13 +769,22 @@ function narrateAction(def, ctx, prepared, shared) {
   }
   if (def.narration?.mode === 'dynamic' && def.narration.build) return def.narration.build(ctx, prepared);
   const templates = def.narration?.templates || ['You do it.'];
-  return templates[Math.floor(orbitalRandom() * templates.length)];
+  let line = templates[Math.floor(orbitalRandom() * templates.length)];
+  // Intimacy & Voyeurism Phase 11 (D3): a paired act's narration names the
+  // chosen partner — the shared-activity branch above already substitutes
+  // for shared actions; the paired acts have no `shared` block, so {name}
+  // would otherwise print verbatim.
+  if (ctx?.actTargetNpcId) {
+    const name = ctx.gameState?.npcs?.[ctx.actTargetNpcId]?.bible?.name || 'them';
+    line = line.replace(/\{name\}/g, name);
+  }
+  return line;
 }
 
 // --- UI-facing wrapper: mirrors the existing doX() convention (loading
 // state, render, save-at-boundary) so a registered action is a drop-in
 // replacement for a hand-written doX(). Called from UI's handleAction. ---
-async function runRegisteredAction(actionId) {
+async function runRegisteredAction(actionId, opts) {
   showLoading();
   // Phase 7 (D7): a set_meal that HAPPENED is the moment a scheduled meal
   // commitment in the player's room becomes 'held' — captured BEFORE the
@@ -549,11 +796,20 @@ async function runRegisteredAction(actionId) {
     ? activeMealCommitmentsInRoom(currentGameState, currentGameState.player.location)
     : [];
   try {
-    const result = await executeAction(actionId, currentGameState);
+    const result = await executeAction(actionId, currentGameState, undefined, opts);
     // A cancelled choice (e.g. closing the recipe picker) aborts silently —
     // no system-log line, no narration, no save.
     if (result.cancelled) return;
-    if (!result.ok) { addLogEntry('system', result.reason || "You can't do that right now."); return; }
+    if (!result.ok) {
+      addLogEntry('system', result.reason || "You can't do that right now.");
+      // Intimacy & Voyeurism Phase 11 (D9): a declined intimacy attempt wrote
+      // the target's refusal lockout (noteIntimacyRefusal — a no means no for
+      // a while). That IS a state change and must survive a reload, so the
+      // refusal flushes like any boundary; every other failing check is pure
+      // ("can't do that right now") and saves nothing.
+      if (result.refusal) await saveAtBoundary('intimacy-refusal', currentGameState);
+      return;
+    }
     addLogEntry('narration', result.narration);
     if (actionId === 'set_meal') {
       for (const c of mealCommitments) c.status = 'held';
@@ -566,6 +822,13 @@ async function runRegisteredAction(actionId) {
         ENERGY.absoluteMax,
         currentGameState.player.energyMax + ENERGY.growthPerWorkout
       );
+    }
+    // food-overhaul Phase 2 (D2/D4): real physical actions feed the
+    // activity meter — the impulse lifts the metabolic rate for the rest
+    // of the day and the kcal lands on the ledger immediately.
+    if (actionId === 'self.workout' || actionId === 'self.swim') {
+      const act = METABOLISM.activities[actionId === 'self.workout' ? 'workout' : 'swim'];
+      notePlayerActivity(currentGameState, act.impulse, act.kcal, currentGameState.meta.clock.day);
     }
     // Chain quest progress: check if this action type completes a step
     const def = ACTION_DEFS[actionId];

@@ -204,6 +204,10 @@ function resolveNpcPeep(gameState, npcId, playerState) {
     showering: 'in the shower',
     sleeping: 'asleep in bed',
     undressed: 'getting changed',
+    // Intimacy & Voyeurism Phase 11 (D3/D13): the paired acts hold this
+    // vulnerable state for their whole duration. Vague on purpose — the NPC
+    // remembers seeing the player with someone, not a boundary inventory.
+    intimacy: 'with someone',
   }[playerState] || 'in a private moment';
 
   const memoryText = `Saw you ${stateDesc}.`;
