@@ -16,8 +16,14 @@ const { api } = loadEngine();
 
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.log(`  FAIL  ${name}${detail ? `\n        ${detail}` : ''}`); }
+  // STRICT pass: only a literal `true` counts — a truthy failure MESSAGE
+  // must not count as a pass (it becomes the printed detail instead).
+  if (cond === true) { pass++; console.log(`  PASS  ${name}`); }
+  else {
+    fail++;
+    const d = typeof cond === 'string' && cond ? cond : detail;
+    console.log(`  FAIL  ${name}${d ? `\n        ${d}` : ''}`);
+  }
 }
 
 // A spread option in the shape prepareSetMeal builds: { stack, def, from }.

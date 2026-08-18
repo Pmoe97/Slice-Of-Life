@@ -7,22 +7,56 @@ const path = require('path');
 const SRC = path.join(__dirname, '..', '..', 'src', 'srcfiles');
 
 // Load order per ARCHITECTURE.md, truncated before the render/ui layer.
+// NOTE: this ORDER intentionally diverges from index.html at two files, both
+// documented below: codex.js (pure ledger/domain logic, loads after
+// interruption.js) and studio.js (UI-layer file whose logic half is pure,
+// loads after pregnancy.js). No load-time dependencies, so either position is
+// safe — the divergence is deliberate, not drift.
 const ORDER = [
   'config.js', 'icons.js', 'defs.world.js', 'defs.actions.js', 'defs.computer.js',
   'defs.menu.js', 'defs.intro.js', 'defs.design.js',
   'orbital.js', 'state.js', 'sim.js', 'commitments.js', 'world.js', 'movement.js',
   'signals.js', 'scene.js',
-  'items.js', 'inventory.js', 'effects.js', 'drives.js', 'cognition.js', 'overture.js',
+  'items.js', 'inventory.js', 'effects.js', 'cooking.js', 'taste.js', 'drives.js', 'cognition.js', 'overture.js',
   'actions.js', 'intent.js',
   'skills.js', 'stealth.js', 'time.js', 'computer.js', 'tracker.js', 'phone.js',
-  'npc.js', 'rumination.js', 'prompt.js', 'llm.js', 'x5.js', 'interruption.js',
-  // image.js sits BELOW llm.js in main.html but above render.js, and it was
+  'npc.js', 'willingness.js', 'relationships.js', 'rumination.js', 'prompt.js', 'llm.js', 'x5.js', 'interruption.js',
+  // codex.js (intimacy-voyeurism Phase 15, D8) sits after relationships.js
+  // in index.html; its whole surface (ledger readers, the three spendable
+  // verbs, the witnessed-entry writer) is pure/domain logic with no DOM
+  // dependencies, so it loads cleanly here and the verbs are directly
+  // testable against real game state.
+  'codex.js',
+  // image.js sits BELOW llm.js in index.html but above render.js, and it was
   // missing from this list — which rule 6 says it must not be. It only needs a
   // DOM at call time (generateImage/canvas), never at load, so the pure half
   // (composeSceneKey, buildImagePrompt, sceneDetailSignature) is directly
   // testable here. That half is exactly the part with logic worth testing.
   'image.js',
-  // studio.js is a UI-layer file and sits BELOW ui.js in main.html, but like
+  // peek.js (intimacy-voyeurism Phase 10) sits between image.js and render.js
+  // in index.html. Its load-time surface is module state + pure derivation
+  // functions (peekRiskPerTick, peekCaughtChance, peekOutcomeWeights,
+  // composePeekViewLine...); the session controller (startPeekSession /
+  // _peekTick) needs the DOM and currentGameState only at call time, so the
+  // whole file loads cleanly here and the logic half is directly testable.
+  'peek.js',
+  // boundary.js (intimacy-voyeurism Phase 17, D13/D14) sits between peek.js
+  // and render.js in index.html. Its whole surface — BOUNDARY_ACT_DEFS, the
+  // sleeping-room gate, wake/catch, the throuple gate, three-way infidelity,
+  // and the sneak-into-bed drive resolver — is pure domain logic with no DOM
+  // dependencies, so it loads cleanly here and is directly testable against
+  // real game state (willingness.js/npc.js/relationships.js/codex.js are
+  // already loaded above it).
+  'boundary.js',
+  // pregnancy.js (intimacy-voyeurism Phase 18, D14/D16) sits between
+  // boundary.js and render.js in index.html. Its whole surface — the
+  // conception roll, the day-rollover pass, and the pure readers the scene
+  // reader / prompt builders call — is domain logic with no DOM
+  // dependencies, so it loads cleanly here and is directly testable against
+  // real game state (relationships.js/willingness.js/npc.js are loaded
+  // above it).
+  'pregnancy.js',
+  // studio.js is a UI-layer file and sits BELOW ui.js in index.html, but like
   // image.js its logic half is pure: PLAYER_STUDIO_TABS and
   // STUDIO_ROW_GROUPS are tables asserted against CHARACTER_SCHEMA, and
   // buildPlayerDraftForNewGame / introInterpolate are pure functions. It

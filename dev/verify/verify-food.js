@@ -16,8 +16,14 @@ const { api } = loadEngine();
 
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
-  if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.log(`  FAIL  ${name}${detail ? `\n        ${detail}` : ''}`); }
+  // STRICT pass: only a literal `true` counts — a truthy failure MESSAGE
+  // must not count as a pass (it becomes the printed detail instead).
+  if (cond === true) { pass++; console.log(`  PASS  ${name}`); }
+  else {
+    fail++;
+    const d = typeof cond === 'string' && cond ? cond : detail;
+    console.log(`  FAIL  ${name}${d ? `\n        ${d}` : ''}`);
+  }
 }
 
 // A stack of `defId` acquired at time 0, read at `hours` in `container`.
@@ -114,9 +120,10 @@ check('the fridge holds leftovers for days and the counter does not',
       && freshAt('meal_pasta', 48, null).key === 'rotten');
 check('preservation scales effective shelf life exactly',
       api(`effectiveShelfDays(ITEM_DEFS.meal_pasta, OBJECT_DEFS.fridge)
-           === ITEM_DEFS.meal_pasta.perishable.days * OBJECT_DEFS.fridge.container.preservation`));
+           === ITEM_DEFS.meal_pasta.perishable.days * preservationFor(OBJECT_DEFS.fridge)
+           && preservationFor(OBJECT_DEFS.fridge) === ROT.preservation.fridge`));
 check('a doormat is kinder than a floor — covered hallway vs. dropped on the ground',
-      api(`OBJECT_DEFS.doormat.container.preservation > OBJECT_DEFS.floor.container.preservation`));
+      api(`preservationFor(OBJECT_DEFS.doormat) > preservationFor(OBJECT_DEFS.floor)`));
 // Moving between containers must preserve the FRACTION consumed, not reset it.
 check('moving food between containers keeps the fraction it has used up',
       api(`(() => {

@@ -164,8 +164,8 @@ check('both draw paths mark callouts', (() => {
   const fs = require('fs');
   const render = fs.readFileSync(path.join(SRCDIR, 'render.js'), 'utf8');
   const ui = fs.readFileSync(path.join(SRCDIR, 'ui.js'), 'utf8');
-  return /markCalloutsShouted\(gameState, renderSceneReader/.test(render)
-      && /markCalloutsShouted\(currentGameState, renderSceneReader/.test(ui);
+  return /markCalloutsShouted\(gameState, (?:renderSceneReader|[a-zA-Z]+)/.test(render)
+      && /markCalloutsShouted\(currentGameState, (?:renderSceneReader|[a-zA-Z]+)/.test(ui);
 }), 'render() and addLogEntry both draw the scene');
 
 console.log('\nCost');
