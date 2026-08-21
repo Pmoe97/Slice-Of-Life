@@ -1,8 +1,9 @@
 # Character Cutout Scene Rendering
 
 Status: **planned — not started**. Design session complete 2026-08-21; all
-decisions locked (D1–D13).
-Last updated 2026-08-21.
+decisions locked (D1–D16).
+Last updated 2026-08-21 (review pass — D14/D15/D16 added, Phase 1 verify
+extended).
 
 Companions:
 - `src/ref/complete/scene-reader-ui-plan.md` (built — the frosted reader panel this plan renders *underneath*; the scene goes from one `<img>` to a plate plus layered cutouts below that panel)
@@ -52,6 +53,22 @@ at the start of the first implementation session.
 - **Uncertainties for Phase 1 to settle:** whether the alpha survives the
   plugin's `result.canvas` → blob round-trip, and whether `removeBorderComponents`
   must stay off for seated/edge poses.
+
+**Review pass (2026-08-21, same day, no code written):** persona-realm's
+algorithm was proven for exactly one job — one cutout per persona, flattened
+onto a plausible backdrop once. This plan asks it to do a harder job (many
+independent generations per character, kept as live layers on arbitrary
+plates), and three gaps in a verbatim port were identified and locked as
+D14–D16 below: edge-color spill was never suppressed (persona-realm's JPEG
+flatten hid it; a transparent layer on a dark plate won't), the specks
+cleanup can amputate hair wisps/fingertips that are legitimately part of the
+subject, and `bottomFrac` was a design-time guess where a generation-time
+measurement is both more accurate and free. A fourth open risk — whether
+independently-generated poses/expressions for the same character stay
+recognizably the same person, which persona-realm never had to solve since
+it only ever rendered one pose — is not a locked decision but is now an
+explicit Phase 1 verify step (see below); if cutouts drift, D3's identity
+anchoring needs strengthening before Phase 3 wires anything live.
 
 **Blockers / flagged deviations:** None.
 
@@ -260,7 +277,8 @@ the people-ban to the plate surface (D6).
   labeling on alpha (threshold 20), speck removal (`< 120` px **or**
   border-touching, both `< 0.85×` main), but `CUTOUT_TUNING.removeBorderComponents`
   defaults **false** so seated/edge poses aren't clipped. Alpha-bbox
-  threshold 24.
+  threshold 24. Amended by D14/D15 below — a verbatim port of this stage
+  handles islands but not edge color or thin-extremity pruning.
 
 ### Prompt and gating
 - **D6 — Plates ban people.** Character clauses leave the room prompt;
@@ -291,6 +309,53 @@ the people-ban to the plate surface (D6).
   describe the plate; Regenerate replaces it under the same plate key.
   Cutouts are untouched ("reroll characters" is parked in Open questions).
 
+### Cutout quality amendments (review pass, 2026-08-21)
+persona-realm's Stage 1–2 was validated for one cutout per persona, flattened
+once. Placing the same algorithm's output as a live transparent layer on
+many different, arbitrary plates is a harder job it was never tested
+against. These three amendments close the gaps a verbatim port would carry
+forward.
+
+- **D14 — Edge spill suppression (decontamination).** A new step between
+  Stage 1 (mask apply) and Stage 2 (specks cleanup): for every pixel with
+  partial alpha (`speckAlpha < alpha < spillAlphaMax`, i.e. a soft matte
+  edge, not solid subject and not solid background), blend its RGB toward
+  the mean color of the subject's own opaque (`alpha ≈ 255`) pixels,
+  weighted by how far the pixel's alpha sits below full. Why: RMBG-1.4's
+  mask is soft with no color decontamination, so partial-alpha border pixels
+  keep the *background's* color — white, since Stage 0's prompt is "pure
+  white background." persona-realm never surfaced this because it flattened
+  onto a plausible JPEG immediately; this plan places the same fringed edge
+  on arbitrary plates, including night scenes, where a white halo around
+  hair reads as a bug. Cheap (one pass over already-decoded pixel data,
+  no new model), and it runs once per cutout generation, not per render.
+- **D15 — Morphological closing before component labeling.** Stage 2's
+  connected-component sweep runs on a binarized foreground mask
+  (`alpha > speckAlpha`) that is first dilated then eroded by
+  `CUTOUT_TUNING.closeRadius` (default 2px) before labeling. Why: a hair
+  wisp or fingertip connected to the main silhouette only through a couple
+  of low-alpha (but nonzero) pixels gets severed into its own tiny
+  component by strict adjacency and then pruned as a speck — this is the
+  actual mechanism behind the "floating hair" and "clipped fingers"
+  artifacts Phase 5's verify step already anticipated. Speck-area or
+  border-margin tuning cannot fix this: it's a labeling-input problem, not
+  a threshold problem. A morphological close reconnects near-touching
+  wisps before the sweep ever runs, so real extremities survive and true
+  islands (dust, background fragments) still get pruned.
+- **D16 — The floor anchor is measured, not guessed.** `CUTOUT_POSES`'
+  `bottomFrac` values become fallback defaults only, used before any
+  generation exists for a pose. The authoritative `bottomFrac` for a given
+  cutout is recomputed from its own alpha channel — the same bbox scan
+  `cutoutBBox` (Stage 3) already performs, re-run at layout/render time
+  against the decoded PNG (an offscreen canvas `getImageData`, one scan,
+  cheap) to find the lowest opaque row. Why: generation framing (how much
+  floor a pose includes) is not strictly controlled by the model, so a
+  static per-pose constant risks floating or clipped feet; the true answer
+  is already sitting in the pixels the pipeline generated, for free. This
+  needs no cache-format change and no new index — it stays inside D2/design
+  invariant 3 (the blob itself is still the only thing stored; the anchor
+  is derived on load like the bbox already is).
+
 ### Failure
 - **D12 — Degrade order.** A missing/failed cutout hides that layer and the
   scene-reader text still narrates the character. A missing plate falls
@@ -310,6 +375,13 @@ const CUTOUT_TUNING = {
   speckMainRatio: 0.85,       // ...and smaller than this share of the main
   borderMarginFrac: 0.02,     // border band: max(3, round(min(W,H)*this))
   removeBorderComponents: false, // D5: seated/edge poses may touch the frame
+  closeRadius: 2,              // D15: dilate-then-erode radius (px) before
+                                // component labeling — protects hair wisps/
+                                // fingertips from being pruned as specks
+  spillAlphaMax: 250,          // D14: pixels with speckAlpha < alpha < this
+                                // are matte-edge pixels; their RGB gets
+                                // decontaminated toward the subject's own
+                                // opaque-pixel mean color
 };
 ```
 
@@ -329,6 +401,9 @@ function plateKey(roomId, phase, detail, styleToken) {
 
 ### The pose catalogue (config.js or image.js)
 ```js
+// bottomFrac here is a FALLBACK ONLY (D16) — used before a pose has ever
+// been generated. Once a cutout exists, its real floor anchor is measured
+// from its own alpha channel at layout time and this value is ignored.
 const CUTOUT_POSES = {
   standing: { label: 'Standing', scale: 1.0,  bottomFrac: 0.06, seedWord: 'standing casually' },
   seated:   { label: 'Seated',   scale: 0.82, bottomFrac: 0.04, seedWord: 'seated' },
@@ -341,7 +416,10 @@ const CUTOUT_EXPRESSIONS = ['neutral', 'happy', 'talking'];
 ```js
 { charId, isPlayer, pose, expression,
   xFrac,      // 0..1 across the plate's width  (the layer's anchor)
-  bottomFrac, // 0..1 up from the plate's bottom (the floor anchor)
+  bottomFrac, // 0..1 up from the plate's bottom (the floor anchor) — the
+              // MEASURED value off the cutout's own alpha (D16), falling
+              // back to CUTOUT_POSES[pose].bottomFrac only when no cutout
+              // has been generated yet
   scale,      // pose.scale × layout spread factor
   z }         // draw order; player always top
 ```
@@ -375,9 +453,27 @@ wired into rendering yet.
   hits the LRU (no second generation), and a same-seed regenerate is
   byte-identical (delete the key, regenerate, compare). Test a `towel` and a
   `nude` (mature-on) state to confirm clothing prose lands. **Phase 1 must
-  also settle** whether alpha survives the plugin canvas → blob round-trip
-  and whether `removeBorderComponents: false` is truly required for a
-  standing cutout.
+  also settle** whether alpha survives the plugin canvas → blob round-trip,
+  whether `removeBorderComponents: false` is truly required for a standing
+  cutout, and whether `imports/text-to-image-plugin`'s `removeBackground`
+  path is hard-locked to RMBG-1.4 or a newer matting model can be passed
+  through (record the finding in the Handoff either way — a better matting
+  model reduces halo/wisp problems at the source, which D14/D15 otherwise
+  have to compensate for after the fact).
+- Verify D14 (spill suppression) and D15 (morphological closing) with
+  `browser_eval` + `vision`: zoom a generated cutout's edge pixels and
+  confirm no white-fringe halo survives against a dark test background;
+  confirm a character with visible hair strands or an extended hand keeps
+  them intact (not severed by the specks sweep) with `removeBorderComponents`
+  still off.
+- Verify cross-pose identity consistency: generate `standing`/`neutral` and
+  `seated`/`happy` for the same NPC and vision-check they read as the same
+  character (hair color/style, skin tone, outfit color, face shape). This
+  is untested territory relative to persona-realm, which only ever rendered
+  one pose per persona (see the Handoff's review-pass note) — if the two
+  drift noticeably, flag it before Phase 3 wires layout live; the likely
+  fix is strengthening `buildVisualCharacterClause`'s anchoring, not a
+  cutout-pipeline change.
 
 ### Phase 2 — Empty background plates
 **Goal:** `buildBackgroundPrompt` and `getScenePlate` exist alongside the
