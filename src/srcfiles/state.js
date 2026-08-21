@@ -1436,8 +1436,17 @@ function captureSave(gs, kind, opts = {}) {
 
   const roomId = gs.player?.location;
   const minutes = clock.minutes ?? CLOCK.startMinutes;
+  // character-cutout-scene-rendering-plan, Phase 3: the thumbnail store
+  // wants a kv.images key for whatever is CURRENTLY DISPLAYED as the scene
+  // backdrop — since the switch, that is the plate (composeSceneKey/
+  // getSceneImage are retired; the cast is drawn as separate cutout
+  // layers, not part of any single cacheable "scene photo" a thumbnail
+  // could point at). Most callers pass opts.sceneKey straight from the DOM
+  // (ui.js's currentSceneKey(), reading #scene-img's data-scene-key, which
+  // renderScene now stamps with the plate key) — this recompute is only the
+  // fallback for autosaves, which never pass it.
   const sceneKey = opts.sceneKey
-    || (roomId ? composeSceneKey(roomId, clock.phase || getPhase(minutes), 'normal', getPresentNpcIds(gs.npcs, roomId)) : null);
+    || (roomId ? plateKey(roomId, clock.phase || getPhase(minutes), sceneDetailSignature(gs.objects?.[`room_${roomId}`]), imageStyleToken()) : null);
 
   const log = meta.sessionLog || [];
   const headlineEntry = [...log].reverse()

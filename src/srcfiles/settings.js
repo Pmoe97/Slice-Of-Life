@@ -192,6 +192,8 @@ async function loadSettings() {
   // D10: persisted theme applies on every load (the [data-theme="…"]
   // rule-sets in the tokens <style> key off data-theme on <html>).
   applyTheme();
+  // character-cutout plan D9: persisted reduceMotion applies on every load.
+  applyReduceMotion();
   return settingsCache;
 }
 
@@ -213,6 +215,10 @@ async function setSettings(patch) {
   // D10 (Phase 8): a theme change re-skins the UI chrome live — data-theme
   // on <html> flips the CSS token rule-sets, so no re-render is needed.
   if (patch.theme !== undefined) applyTheme();
+  // character-cutout plan D9: stills the scene cutout transitions live —
+  // data-reduce-motion on <html> is what the .scene-cutout rule keys off,
+  // alongside the prefers-reduced-motion media query.
+  if (patch.reduceMotion !== undefined) applyReduceMotion();
   // D9 (Phase 7): a style change re-filters the boot gallery's ring + session
   // buffer to the new style (image.js hook; every cache key is style-tagged
   // regardless, so even without the hook the next menu open self-heals).
@@ -275,6 +281,17 @@ function applyTextScale() {
 function applyTheme() {
   if (typeof document === 'undefined') return;
   document.documentElement.setAttribute('data-theme', settingsCache.theme);
+}
+
+// character-cutout plan D9. The OS-level prefers-reduced-motion media query
+// already stills the cutout transitions on its own; this is the in-game
+// override for players whose OS is not set but who still want the movement
+// stopped, so the attribute is only ever ADDED — never removed to force
+// motion back on over a system preference that asked for none.
+function applyReduceMotion() {
+  if (typeof document === 'undefined') return;
+  if (settingsCache.reduceMotion) document.documentElement.setAttribute('data-reduce-motion', '');
+  else document.documentElement.removeAttribute('data-reduce-motion');
 }
 
 // --- Pure helpers (consumed by later phases) ---
@@ -543,6 +560,7 @@ async function resetAllData() {
   settingsCache = deepCloneSettings(SETTINGS_DEFAULTS);
   applyTextScale();
   applyTheme();
+  applyReduceMotion();
   if (typeof resetMenuOptionsCache === 'function') resetMenuOptionsCache();
   // The doExitGame boot dance, guarded for this file's early load position.
   if (typeof closeModal === 'function') closeModal();

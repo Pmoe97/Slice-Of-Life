@@ -23,6 +23,11 @@ const SETTINGS_DEFAULTS = {
   imageStyle: 'none',             // style id from IMAGE_STYLES, or '__custom' (D9)
   customStylePrompt: '',          // used when imageStyle === '__custom'
   theme: 'midnight',              // id from COLOR_THEMES (D10)
+  reduceMotion: false,            // character-cutout plan D9: stills the scene
+                                  // cutout transitions. OS prefers-reduced-motion
+                                  // already does this on its own; this is the
+                                  // in-game override for players whose OS is not
+                                  // set but who still want the movement stopped.
 };
 
 // Phase 7 (D9): the image style presets — ONE global style across every
@@ -704,6 +709,19 @@ const SETTINGS_TABS = [
             desc: 'Fourteen palettes over the UI colors. Midnight is today\'s classic look; Match System follows your OS setting.',
             searchText: COLOR_THEMES.map((t) => `${t.label} ${t.group}`).join(' '),
             keys: COLOR_THEMES,
+          },
+        ],
+      },
+      {
+        title: 'Motion',
+        rows: [
+          {
+            id: 'reduce-motion',
+            kind: 'toggle',
+            field: 'reduceMotion',
+            label: 'Reduce motion',
+            desc: 'Stops characters sliding between positions when a scene changes — they simply appear in place. Already on automatically if your system asks for reduced motion.',
+            action: 'settings.toggle',
           },
         ],
       },

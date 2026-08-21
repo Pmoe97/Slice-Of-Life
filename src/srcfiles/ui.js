@@ -6654,6 +6654,9 @@ function openImageInfo(meta) {
 // The scene backdrop's static ⓘ — the prompt/seed are stamped by renderScene
 // (RENDER) whenever the scene art changes; before the first scene renders
 // there is nothing to show.
+// D11 (character-cutout Phase 3): the prompt/seed/negative shown here now
+// describe the room PLATE, and Regenerate rerolls only that — the cutout
+// layers standing on it are untouched.
 function openSceneImageInfo() {
   openImageInfo({
     label: 'Scene Art',
@@ -6661,7 +6664,7 @@ function openSceneImageInfo() {
       ? currentSceneArtPrompt
       : '',
     seed: typeof currentSceneArtSeed === 'number' ? currentSceneArtSeed : null,
-    negativePrompt: IMAGE_NEGATIVE.scene,
+    negativePrompt: backgroundNegPrompt(),
     reroll: (fields) => rerollSceneImage(currentGameState, currentSceneState, fields),
   });
 }

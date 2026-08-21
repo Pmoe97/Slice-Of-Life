@@ -125,35 +125,47 @@ check('the creation form can only offer values the generator rolls',
 
 console.log('\nA laid table reaches the art, and clearing it un-lays it');
 const mkRoom = (clutter, spread) => `{ t: { defId: 'dining_table', state: { clutter: '${clutter}' }, flags: ${spread ? `{ spread: ${JSON.stringify(spread)} }` : '{}'} } }`;
-check('a cluttered table with a spread changes the scene key',
-      api(`composeSceneKey('dining','evening','normal',[], sceneDetailSignature(${mkRoom('cluttered', ['dish_cheese_pizza', 'dish_fries'])}))`)
-      !== api(`composeSceneKey('dining','evening','normal',[], sceneDetailSignature(${mkRoom('tidy', null)}))`),
+// Ported from composeSceneKey to plateKey by the character-cutout refactor
+// (Phase 3): the backdrop is people-free now, so the function that owns
+// "the cache key of the art this room is currently showing" is plateKey.
+// The concern is unchanged and still worth guarding.
+check('a cluttered table with a spread changes the backdrop key',
+      api(`plateKey('dining','evening', sceneDetailSignature(${mkRoom('cluttered', ['dish_cheese_pizza', 'dish_fries'])}), '')`)
+      !== api(`plateKey('dining','evening', sceneDetailSignature(${mkRoom('tidy', null)}), '')`),
       'otherwise the dining room serves its cached empty-table art through dinner');
 // The spread has no expiry of its own — clearing the table is what ends it.
 check('clearing the table reverts to the PLAIN cached key, byte for byte',
-      api(`composeSceneKey('dining','evening','normal',[], sceneDetailSignature(${mkRoom('tidy', ['dish_cheese_pizza'])}))`)
-      === api(`composeSceneKey('dining','evening','normal',[])`),
+      api(`plateKey('dining','evening', sceneDetailSignature(${mkRoom('tidy', ['dish_cheese_pizza'])}), '')`)
+      === api(`plateKey('dining','evening', '', '')`),
       'a tidied table must reuse the art that was already cached, not mint a new key');
-check('and a key composed with no detail, no player is stable',
-      api(`composeSceneKey('kitchen','morning','normal',['a','b'])`) === 'pv3_landscape_kitchen_morning_normal_a-b_nobody',
-      'stale since the VN refactor (D15) added the orientation segment and bumped pv2 -> pv3; this call was silently never reached before loadgame.js gained innerWidth/innerHeight');
+check('and a plain key is stable',
+      api(`plateKey('kitchen','morning','','')`) === 'plate_pv4_kitchen_morning_plain_landscape',
+      'the literal is the whole point — a silent key-shape change orphans every cached plate');
 check('the signature is order-independent',
       api(`sceneDetailSignature(${mkRoom('cluttered', ['dish_fries', 'dish_cheese_pizza'])})
            === sceneDetailSignature(${mkRoom('cluttered', ['dish_cheese_pizza', 'dish_fries'])})`),
       'the same table laid in a different pick order is the same picture');
-check('the prompt names the dishes on the table',
-      api(`buildImagePrompt('dining','evening',[],${mkRoom('cluttered', ['dish_cheese_pizza', 'dish_fries'])})`).includes('cheese pizza')
-      && api(`buildImagePrompt('dining','evening',[],${mkRoom('cluttered', ['dish_cheese_pizza', 'dish_fries'])})`).includes('basket of fries'),
+check('the plate prompt names the dishes on the table',
+      api(`buildBackgroundPrompt('dining','evening',${mkRoom('cluttered', ['dish_cheese_pizza', 'dish_fries'])})`).includes('cheese pizza')
+      && api(`buildBackgroundPrompt('dining','evening',${mkRoom('cluttered', ['dish_cheese_pizza', 'dish_fries'])})`).includes('basket of fries'),
       'a key that changes without the prompt changing just repaints the same picture');
-check('and says people are seated when there is a meal',
-      api(`buildImagePrompt('dining','evening',[],${mkRoom('cluttered', ['dish_cheese_pizza'])},{ player: SIM_generateHouse(20260810,3).player })`).includes('seated at the table'));
-check('the player is IN their own scene',
+// Post-refactor the SEATING is no longer a phrase in the backdrop prompt —
+// the backdrop has nobody in it to seat. It is now expressed by the layout
+// choosing the seated pose for every cutout standing on that plate.
+check('a laid table seats the cast via the cutout layout, not via prompt prose',
       api(`(() => {
         const gs = SIM_generateHouse(20260810, 3);
-        const withPlayer = buildImagePrompt('dining','evening',[],{}, { player: gs.player });
-        const without    = buildImagePrompt('dining','evening',[],{});
-        return withPlayer.length > without.length
-          && withPlayer.includes(getPhysicalDescriptionForPrompt(gs.player).split('.')[0].trim());
+        gs.player.location = 'dining';
+        gs.objects.room_dining = ${mkRoom('cluttered', ['dish_cheese_pizza'])};
+        const out = layoutSceneCutouts(gs, { active: [] }, 'plate_k');
+        return out.length > 0 && out.every(p => p.pose === 'seated');
+      })()`));
+check('the player is IN their own scene — now as a cutout layer, always present',
+      api(`(() => {
+        const gs = SIM_generateHouse(20260810, 3);
+        gs.player.location = 'dining';
+        const out = layoutSceneCutouts(gs, { active: [] }, 'plate_k');
+        return out.some(p => p.isPlayer === true);
       })()`),
       'every scene image used to draw the roommates and omit the player');
 check('an unknown dish id cannot reach the prompt',

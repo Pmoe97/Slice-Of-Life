@@ -949,9 +949,15 @@ body {
 }
 .scene-cutout[data-ready] { opacity: 1; }
 .scene-cutout.cutout-missing { opacity: 0; pointer-events: none; }
+/* D9: two independent ways to still the movement — the OS preference, and
+   the in-game Appearance > Reduce motion toggle (settings.js stamps
+   data-reduce-motion on <html>). Both drop only the POSITION transition;
+   the opacity fade-in stays, since a cutout popping in abruptly is jarring
+   in its own right and is not the motion anyone is asking to reduce. */
 @media (prefers-reduced-motion: reduce) {
   .scene-cutout { transition: opacity 0.4s ease; }
 }
+:root[data-reduce-motion] .scene-cutout { transition: opacity 0.4s ease; }
 /* A bottom scrim so the seam between image and frosted panel reads as a
    deliberate fade, whatever height the panel lands at. The panel sits on
    top of this, so the visible part is the gradient bleeding out above the
@@ -6094,14 +6100,14 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/srcfiles/config.js?v=140"></script>
+<script src="src/srcfiles/config.js?v=141"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
      STATE (which consults autosaveIntervalMs at runtime only) for tidy load
      order. -->
-<script src="src/srcfiles/defs.settings.js?v=8"></script>
-<script src="src/srcfiles/settings.js?v=6"></script>
+<script src="src/srcfiles/defs.settings.js?v=9"></script>
+<script src="src/srcfiles/settings.js?v=7"></script>
 <script src="src/srcfiles/icons.js?v=30"></script>
 <script src="src/srcfiles/defs.world.js?v=43"></script>
 <script src="src/srcfiles/defs.actions.js?v=43"></script>
@@ -6120,7 +6126,7 @@ body {
 <!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/srcfiles/orbital.js?v=12"></script>
-<script src="src/srcfiles/state.js?v=59"></script>
+<script src="src/srcfiles/state.js?v=60"></script>
 <script src="src/srcfiles/sim.js?v=79"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
@@ -6195,7 +6201,7 @@ body {
      ui.js; x5.js itself is pure and calls no model. -->
 <script src="src/srcfiles/x5.js?v=15"></script>
 <script src="src/srcfiles/interruption.js?v=22"></script>
-<script src="src/srcfiles/image.js?v=31"></script>
+<script src="src/srcfiles/image.js?v=32"></script>
 <!-- Intimacy & Voyeurism Phase 10 (D6/D7): the peek/listen hold — the timed
      real-time session loop (risk ramp, per-NPC caught outcomes, image budget)
      plus the pure derivations it re-reads every real second. After image.js
@@ -6212,7 +6218,7 @@ body {
      render.js/ui.js which call its resolvers/applys at runtime only. -->
 <script src="src/srcfiles/boundary.js?v=1"></script>
 <script src="src/srcfiles/pregnancy.js?v=1"></script>
-<script src="src/srcfiles/render.js?v=73"></script>
+<script src="src/srcfiles/render.js?v=74"></script>
 <script src="src/srcfiles/render.computer.js?v=47"></script>
 <script src="src/srcfiles/render.desktop.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
@@ -6245,7 +6251,7 @@ body {
      pipeline at runtime). Every dependency is a call-time one, so this slot
      is flexible within that range. -->
 <script src="src/srcfiles/asks.js?v=11"></script>
-<script src="src/srcfiles/ui.js?v=114"></script>
+<script src="src/srcfiles/ui.js?v=115"></script>
 <script src="src/srcfiles/ui.computer.js?v=47"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),

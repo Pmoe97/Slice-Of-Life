@@ -19,8 +19,10 @@ function check(name, cond, detail) {
 
 console.log('\nKey and seed composition (D2/D3)');
 check('cutoutKey has the documented shape',
-  api(`cutoutKey('n123', 'seated', 'happy', 'cdressed_o_tshirt_bjeans', '')`) === 'cut_pv3_n123_seated_happy_cdressed_o_tshirt_bjeans',
+  api(`cutoutKey('n123', 'seated', 'happy', 'cdressed_o_tshirt_bjeans', '')`) === 'cut_pv4_n123_seated_happy_cdressed_o_tshirt_bjeans',
   api(`cutoutKey('n123', 'seated', 'happy', 'cdressed_o_tshirt_bjeans', '')`));
+check('the key carries the CURRENT prompt version, whatever it is — a bump must turn the namespace over',
+  api(`cutoutKey('n1', 'standing', 'neutral', 'c_o_t_b', '').startsWith('cut_' + IMAGE_PROMPT_VERSION + '_')`));
 check('a style token appends',
   api(`cutoutKey('n123', 'seated', 'happy', 'cdressed_o_tshirt_bjeans', 'st_noir')`).endsWith('_st_noir'));
 check('composeCutoutSeed is deterministic — same inputs, same seed',

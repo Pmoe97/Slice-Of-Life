@@ -1,10 +1,12 @@
 # Character Cutout Scene Rendering
 
-Status: **in progress — Phases 1 and 2 built**. Design session complete
-2026-08-21; all decisions locked (D1–D16).
-Last updated 2026-08-21 (implementation session — Phase 1 the cutout
-factory, Phase 2 the empty background plates; both additive, nothing wired
-into rendering yet).
+Status: **code complete — all 6 phases built. Pixel output still unseen.**
+Design session complete 2026-08-21; all decisions locked (D1–D16).
+Last updated 2026-08-21 (implementation session — all six phases). The
+plan does NOT move to `complete/` yet: every phase's *logic* is built and
+verified, but no cutout has ever actually been generated, because
+`root.generateImage` exists only inside Perchance's runtime. One live run
+is the remaining gate — see the Handoff.
 
 Companions:
 - `src/ref/complete/scene-reader-ui-plan.md` (built — the frosted reader panel this plan renders *underneath*; the scene goes from one `<img>` to a plate plus layered cutouts below that panel)
@@ -25,9 +27,145 @@ at the start of the first implementation session.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 3 (layered scene rendering — the switch). Phases 1 and
-2 are built and additive; nothing is wired into live rendering yet, so the
-game plays identically to before this session.
+**Resume at:** a **live Perchance run**, not a phase. All six phases are
+code-complete and the game now renders plate + cutout layers, but the
+cutout pipeline has never produced a real pixel in this environment (see
+below). Do that run before treating any of D14/D15/D16 as proven, and
+before moving this document to `complete/`.
+
+---
+
+### Live-run checklist (the one thing left)
+
+Everything below needs `root.generateImage` and therefore a published
+Perchance generator. Nothing in this repo can substitute for it.
+
+1. **Does alpha survive the plugin's `result.canvas` → `canvasToBlob` PNG
+   round-trip?** If not, every cutout is an opaque rectangle and
+   `cleanCutout` is operating on a fully-opaque buffer. This is the single
+   highest-risk unknown and the first thing to check.
+2. **Does `removeBorderComponents: false` (D5) hold for a standing
+   cutout?** Flip it true on one and compare; the default was chosen for
+   seated/edge poses.
+3. **Do D14/D15 actually do their jobs on real RMBG output?** Put a cutout
+   on a DARK plate and look for a white fringe (D14); check hair wisps and
+   fingertips survive (D15). The synthetic tests prove the algorithms are
+   correct on constructed buffers, not that the thresholds suit real masks.
+   Tune `CUTOUT_TUNING` and record what changed.
+4. **Cross-pose identity consistency** — generate `standing/neutral` and
+   `seated/happy` for one NPC and confirm they read as the same person.
+   Untested territory relative to persona-realm (one pose per persona,
+   ever). If they drift, strengthen `buildVisualCharacterClause` anchoring
+   rather than changing the cutout pipeline.
+5. **Is `IMAGE_CACHE.resolutions.cutout` (512x768) the right shape** for a
+   full-body sprite, and does a generated cutout's own measured
+   `bottomFrac` (D16) land the feet on the floor plane convincingly?
+6. **A vision pass on a composed scene** — plate + 2-3 cutouts + the
+   reader. Do they read as one image, or as stickers on a photo? Tuning
+   levers: the `.scene-cutout` `height: 70%` / `max-width: 60%`, the pose
+   scales, and the (deliberately unbuilt) floor shadow — see the deviation
+   note below.
+
+**Measured tuning datapoint from the live DOM this session:** with the
+current CSS, **53%** of a cutout's height reads above the scene reader's
+top edge (reader covers the bottom 40%, figures are 70% tall anchored 6%
+up from the floor). The reader is translucent so the lower half is still
+partly visible, which is the intended VN look — but if a vision pass says
+the characters read as submerged, the lever is `.scene-cutout { height }`
+plus `CUTOUT_POSES[*].bottomFrac`, not the reader.
+
+---
+
+**Implementation session part 2 (2026-08-21, Phases 3–6 — the switch and
+everything after it):**
+- **Phase 3 is live.** `sceneArtContext` now returns a PLATE key/prompt/seed
+  plus an `overlay` layer plan; `renderScene` calls `getScenePlate` and a new
+  `renderSceneCutouts` that diffs live layers against desired ones by
+  `data-cutout-key`. `layoutSceneCutouts` (D10) does the seeded spread.
+  `IMAGE_PROMPT_VERSION` → `pv4`. **Verified in a real browser** against
+  `dev-harness.html`: cast changes never re-stamp `data-loading` on the
+  plate and the player's DOM node survives them (so its CSS transition
+  animates rather than restarting); a no-op re-render produces byte-identical
+  node identity; a room change DOES reload the plate; a laid table seats
+  everyone and puts `meal-` in the plate key; measured geometry has each
+  layer centered exactly on its anchor with all feet on one floor line; the
+  resize handler re-derives pixel offsets and preserves fractions exactly
+  (0.303/0.534/0.763 across a 716px→436px change).
+- **Two "bugs" during that verification were both test artifacts, recorded
+  so the next session doesn't re-chase them.** (1) `currentGameState` and
+  `currentSceneState` are `let` bindings in `ui.js` (global *lexical*
+  scope), so `window.currentGameState = …` from an injected script does NOT
+  set them — the resize handler's guard correctly bailed and looked like a
+  dead listener. Assign the bare name, not the `window.` property. (2) CSS
+  transitions do not tick while `document.visibilityState === 'hidden'` (a
+  backgrounded preview tab) or under `visibility: hidden` — layers sat
+  frozen at `currentTime: 0` with vars apparently ignored. `getAnimations()
+  .forEach(a => a.finish())` settles them for measurement.
+- **Phase 4** was largely satisfied by Phase 3's shape: `rerollSceneImage`
+  already recomputes through `sceneArtContext`, so it rerolls the plate
+  under the plate key (D11) and never touches cutouts; its negative prompt
+  and the ⓘ modal's (`ui.js` `openSceneImageInfo`) now use
+  `backgroundNegPrompt()` so a reroll cannot reintroduce people. Degrade
+  (D12): a failed cutout gets `.cutout-missing` and stays invisible while
+  the reader still narrates that character — confirmed live, since the
+  harness stubs generation to throw, so *every* scene rendered during
+  verification was exercising the degrade path. `cleanupImageUrls`'s
+  keep-list needed no change: it has **no callers at all** (verified by
+  grep), so the plan's Phase 4 bullet about it is moot.
+- **Phase 5**: `cutoutExpressionFor` replaces the hardcoded `'neutral'` —
+  `talking` when the player's conversation overlay is open with that NPC
+  (the same `_inConversation` flag OVERTURE's do-not-disturb registry
+  reads, plus `convState.npcId`), `happy` at mood ≥ 0.35, else neutral. A
+  bad mood stays neutral **on purpose**: there is no sad cutout in the
+  catalogue and silently inventing one would be worse than the omission.
+  `reduceMotion` is now a real setting (`SETTINGS_DEFAULTS`, an Appearance >
+  Motion toggle row, `applyReduceMotion` stamping `data-reduce-motion` on
+  `<html>`, applied on boot/reset/write-through) — verified live: the
+  position transition drops and the opacity fade stays, both directions.
+  The attribute is only ever *added*, never removed to force motion back on
+  over an OS preference. Speck-parameter tuning against real cutouts is the
+  one Phase 5 item that genuinely cannot be done here — see the live-run
+  checklist.
+- **Phase 6**: `verify-cutout-p6.js` pins all four "what this plan is not"
+  promises as assertions — portraits (`getCharacterImage`, no
+  `removeBackground`), peek (its own namespace, still the only surface
+  opting into the intimate layer), photos (prompt+seed record, people still
+  baked in), and the menu gallery (own ring/cap) — plus a check that all six
+  LRU namespaces are mutually distinct by prefix, and that `captureSave`'s
+  thumbnail fallback composes a key `getScenePlate` would actually produce.
+- **One genuine deviation from the plan, flagged.** D6 says
+  "`buildImagePrompt` becomes `buildBackgroundPrompt`" and "`getSceneImage`
+  is removed (render.js is its only consumer)". That is right about
+  `getSceneImage` but **wrong about `buildImagePrompt`, which had a second
+  consumer the plan missed: `takePhoto`** (the phone camera). A photo
+  legitimately *should* have people in it, and it carries none of the
+  multiplicative cost D6 exists to kill — a photo is keyed by its own id
+  (`photo_<id>`), frozen at capture and never recomposed, so there is no
+  cast-combination namespace to explode. It was therefore **renamed to
+  `buildPhotoPrompt` and scoped to the camera** rather than deleted;
+  `composeSceneKey`, `composeSceneSeed` and `getSceneImage` are gone
+  outright as specified. `verify-cutout-p2.js` asserts both halves (the
+  three are `undefined`; `buildPhotoPrompt` exists and still names people).
+- **One deviation from the plan's CSS sketch**, already noted last session
+  and now load-bearing: `--cutout-x`/`--cutout-y` are PIXEL offsets computed
+  by `renderSceneCutouts`, not 0..1 fractions, because a percentage inside
+  `transform: translate()` resolves against the layer's own box rather than
+  its parent's. This is why a `resize` listener is required and exists.
+- **Not built, deliberately: the D10/Stage-4 floor shadow.** The plan calls
+  for a `.scene-cutout::after` radial-gradient ellipse to seat figures on
+  the floor plane. `::after` **does not render on replaced elements like
+  `<img>`**, so the layer would need a wrapper `<div>` per cutout. That is a
+  real structural change to the layer diff, and whether it's needed at all
+  is a question only a vision pass on real cutouts can answer (a cutout with
+  a soft matte edge may seat fine without one). Left out rather than guessed
+  at; it is item 6 on the live-run checklist.
+- **Suite state:** 2277 passed / 61 failed / 1 harness errored, against a
+  2170 / 61 / 2 baseline at the start of this work. The failing set is
+  **identical to baseline** (unrelated NPC-willingness / cognition /
+  world-gen harnesses); broken harnesses went 2 → 1 because `verify-meal.js`
+  is now fixed. Its laid-table assertions were **ported, not deleted** —
+  they now exercise `plateKey` and `layoutSceneCutouts`, since those own the
+  concern the deleted `composeSceneKey` used to.
 
 **Implementation session (2026-08-21, Phases 1 and 2 — code written):**
 - **What actually got verified, and what didn't.** This repo only runs for
@@ -681,12 +819,12 @@ tuning decisions.
 
 | Phase | Status | What it does |
 |---|---|---|
-| 1 | **Built** — code complete, pure-logic-verified (`verify-cutout-p1.js`, 20/20). Pixel output unseen — needs a live Perchance run. | Cutout factory: RMBG removal, specks cleanup (D5/D15), spill suppression (D14), bbox/bottomFrac (D16), deterministic keys, LRU round-trip |
-| 2 | **Built** — code complete, verified (`verify-cutout-p2.js`, 14/14). Additive; `getSceneImage` untouched. | Empty background plates: people-free prompt, people-ban negative, plate keys |
-| 3 | Not started — resume here | Layered render: plate + positioned cutouts, layout, shadows, transitions, pv4 switch |
-| 4 | Not started | Reroll = plate only; degrade paths; images-off playability |
-| 5 | Not started | Pose/expression catalogue, outfit keying, content gating, style fold, tuning |
-| 6 | Not started | Integration sweep + live visual verification + tuning record |
+| 1 | **Built** — `verify-cutout-p1.js` 21/21. Pixel output unseen (live-run items 1–4). | Cutout factory: RMBG removal, specks cleanup (D5/D15), spill suppression (D14), bbox/bottomFrac (D16), deterministic keys, LRU round-trip |
+| 2 | **Built** — `verify-cutout-p2.js` 19/19. | Empty background plates: people-free prompt, people-ban negative, plate keys |
+| 3 | **Built** — `verify-cutout-p3.js` 15/15 + live browser verification of the layer diff, idempotency, geometry and resize. | Layered render: plate + positioned cutouts, layout, transitions, pv4 switch. **Floor shadow deliberately not built** — `::after` doesn't render on `<img>`; needs a wrapper and a vision pass first. |
+| 4 | **Built** — covered by `verify-cutout-p45.js` + the live degrade path (harness generation always throws, so every verified render exercised it). | Reroll = plate only (D11); degrade paths (D12); images-off playability |
+| 5 | **Built** — `verify-cutout-p45.js` 25/25 + live expression/reduce-motion checks. Speck tuning against real cutouts remains (live-run item 3). | Pose/expression catalogue, outfit keying, content gating, style fold, reduceMotion setting |
+| 6 | **Built** — `verify-cutout-p6.js` 16/16. Live visual verification remains (live-run item 6). | Integration sweep: portraits/peek/photos/gallery provably untouched, namespace separation, save-thumbnail key |
 
 ## Dependency order
 

@@ -966,33 +966,37 @@ function renderPlayerPanel(gs) {
 let currentSceneArtPrompt = '';
 let currentSceneArtKey = '';
 let currentSceneArtSeed = null;
+// character-cutout-scene-rendering-plan Phase 3: `sceneKey` is now the PLATE
+// key — the backdrop is people-free (D6), and the cast is drawn as separate
+// cutout layers on top of it (D1). The name `sceneKey` is kept because it is
+// still "the cache key of the image displayed as the scene backdrop", which
+// is exactly what its two outside consumers (ui.js's currentSceneKey → the
+// save thumbnail, and rerollSceneImage) mean by it. `overlay` is the layer
+// plan (D10) the cutout renderer diffs against.
 function sceneArtContext(gs, sceneState) {
   const roomId = gs.player.location;
   const phase = gs.meta.clock.phase;
-  // npc objects (currentGameState.npcs[id]) never carry their own id —
-  // it only ever exists as the map key — so getSceneImage's internal
-  // `.map(n => n.id)` for cache-key composition always saw `undefined`
-  // regardless of who was actually present, meaning every scene in a
-  // given room/phase collided on one cache key no matter who was in it.
-  // Attach id here, at the one call site that has it, rather than
-  // changing IMAGE's function signature.
+  // npc objects (currentGameState.npcs[id]) never carry their own id — it
+  // only ever exists as the map key — so anything downstream that needs to
+  // identify them gets the id attached here, at the one call site that has
+  // it, rather than changing IMAGE's function signatures.
   const activeNpcs = (sceneState?.active || [])
     .map(id => (gs.npcs[id] ? { ...gs.npcs[id], id } : null))
     .filter(Boolean);
-  // The room's objects are needed BEFORE the key now: a laid table is part of
-  // what makes this scene this scene (sceneDetailSignature), so the key has to
-  // see it or the dining room would keep serving its cached empty-table art
-  // through dinner.
+  // The room's objects are needed BEFORE the key: a laid table is part of
+  // what makes this plate this plate (sceneDetailSignature), so the key has
+  // to see it or the dining room would keep serving its cached empty-table
+  // art through dinner.
   const roomObjects = gs.objects?.[`room_${roomId}`];
-  const sceneKey = composeSceneKey(roomId, phase, 'normal', activeNpcs.map(n => n.id), sceneDetailSignature(roomObjects), gs.player);
+  const sceneKey = plateKey(roomId, phase, sceneDetailSignature(roomObjects), imageStyleToken());
   // The prompt is exactly what IMAGE feeds generateImage (style-applied),
-  // so the info modal's text matches the pixels byte for byte.
-  const prompt = applyImageStyle(buildImagePrompt(roomId, phase, activeNpcs, roomObjects, { player: gs.player, gameState: gs }));
-  // The deterministic seed that produced the current frame — the info modal
-  // pre-fills it so the player sees what anchored the pixels (leaving it
-  // unchanged rolls a fresh frame instead).
-  const seed = composeSceneSeed(sceneKey, gs.player, activeNpcs);
-  return { roomId, phase, activeNpcs, roomObjects, sceneKey, prompt, seed };
+  // so the info modal's text matches the pixels byte for byte. D11: this
+  // now describes the PLATE — rerolling replaces the backdrop, never the
+  // cutouts.
+  const prompt = applyImageStyle(buildBackgroundPrompt(roomId, phase, roomObjects));
+  const seed = composePlateSeed(sceneKey);
+  const overlay = layoutSceneCutouts(gs, sceneState, sceneKey);
+  return { roomId, phase, activeNpcs, roomObjects, sceneKey, prompt, seed, overlay };
 }
 
 function renderScene(gs, sceneState) {
@@ -1014,11 +1018,18 @@ function renderScene(gs, sceneState) {
   const infoBtn = document.getElementById('scene-info-btn');
   if (infoBtn) infoBtn.hidden = false;
 
-  // Idempotent: only touch the image (placeholder swap + async fetch) when
-  // the scene actually changed. Re-stamping data-loading and swapping to
-  // the placeholder on every render() call — including calls where
+  // Cutouts are diffed on EVERY render (design invariant 2 lives inside
+  // renderSceneCutouts' own per-layer diff, not here): the cast can change
+  // without the plate changing at all — that is the entire point of the
+  // plate/cutout split — so this must not sit behind the plate's
+  // idempotency gate below.
+  renderSceneCutouts(gs, ctx);
+
+  // Idempotent: only touch the PLATE (placeholder swap + async fetch) when
+  // the plate key actually changed. Re-stamping data-loading and swapping
+  // to the placeholder on every render() call — including calls where
   // nothing about the scene changed — flickered the image after every
-  // single action.
+  // single action. A cutout-only change must never re-stamp it either.
   if (img.getAttribute('data-scene-key') === ctx.sceneKey) return;
   img.setAttribute('data-scene-key', ctx.sceneKey);
 
@@ -1026,23 +1037,101 @@ function renderScene(gs, sceneState) {
   img.setAttribute('data-loading', '');
   img.src = getPlaceholder();
 
-  // Generate scene async. roomObjects (WORLD) drives the room-specific
-  // detail phrase in the prompt — note the scene cache key still doesn't
+  // Generate the plate async. roomObjects (WORLD) drives the room-specific
+  // detail phrase in the prompt — note the plate cache key still doesn't
   // reflect ORDINARY object state, so a room getting dirtier won't by itself
   // trigger new art; that's a deliberate deferral (regenerating art on
   // every state change would be expensive), not an oversight. A laid table is
   // the one exception, because it is a thing the player did on purpose and
-  // the scene is about it. `player` puts the player in their own scene.
-  getSceneImage(roomId, phase, ctx.activeNpcs, ctx.roomObjects, { player: gs.player, gameState: gs }).then(result => {
+  // the scene is about it.
+  getScenePlate(roomId, phase, ctx.roomObjects).then(result => {
     if (img.getAttribute('data-scene-key') !== ctx.sceneKey) return; // scene moved on before this resolved
-    if (result.url) {
-      img.src = result.url;
-      img.removeAttribute('data-loading');
-    } else {
-      img.removeAttribute('data-loading');
-    }
+    if (result.url) img.src = result.url;
+    img.removeAttribute('data-loading'); // D12: plate failure degrades to the placeholder, never a blocked render
   });
 }
+
+// --- Cutout layers (character-cutout-scene-rendering-plan, D1/D9/D10/D12) ---
+// Diffs the LIVE layer set against the desired one rather than rebuilding
+// it: an existing layer gets its CSS vars updated (so the .scene-cutout
+// transition animates the move, D9), a new layer is created and faded in
+// when its cutout resolves, and a stale layer is removed. Rebuilding would
+// restart every transition and re-request every cutout on every render.
+//
+// D12: nothing here can block or fail the scene. A cutout that fails to
+// generate leaves its layer hidden (.cutout-missing) and the scene reader
+// still narrates that character normally.
+function renderSceneCutouts(gs, ctx) {
+  const host = document.getElementById('scene-cutouts');
+  if (!host) return;
+  const overlay = ctx.overlay || [];
+
+  const desired = new Map();
+  for (const p of overlay) {
+    const who = p.isPlayer ? gs.player : gs.npcs[p.charId];
+    if (!who) continue;
+    const identity = cutoutIdentityToken(who, p.isPlayer);
+    desired.set(cutoutKey(identity, p.pose, p.expression, cutoutOutfitToken(who), imageStyleToken()), { placement: p, who });
+  }
+
+  for (const layer of [...host.children]) {
+    if (!desired.has(layer.getAttribute('data-cutout-key'))) layer.remove();
+  }
+
+  for (const [key, { placement, who }] of desired) {
+    let layer = host.querySelector(`[data-cutout-key="${CSS.escape(key)}"]`);
+    if (!layer) {
+      layer = document.createElement('img');
+      layer.className = 'scene-cutout';
+      layer.alt = '';
+      layer.setAttribute('data-cutout-key', key);
+      host.appendChild(layer);
+      const fetch = placement.isPlayer
+        ? getPlayerCutout(who, placement.pose, placement.expression)
+        : getCharacterCutout(who, placement.pose, placement.expression);
+      fetch.then(result => {
+        if (!layer.isConnected) return; // scene moved on before this resolved
+        if (!result.url) { layer.classList.add('cutout-missing'); return; }
+        layer.src = result.url;
+        layer.decode().catch(() => {}).then(() => {
+          if (layer.isConnected) layer.setAttribute('data-ready', '');
+        });
+      });
+    }
+    placeSceneCutout(host, layer, placement);
+  }
+}
+
+// The fraction→pixel conversion the .scene-cutout rule's --cutout-x/-y
+// expect. It lives here rather than in CSS because a percentage inside
+// transform: translate() resolves against the LAYER's own box, not its
+// parent's — so placing a variable-width layer at a fraction of the PLATE
+// is only expressible in JS.
+function placeSceneCutout(host, layer, placement) {
+  const w = host.clientWidth || 0;
+  const h = host.clientHeight || 0;
+  layer.style.setProperty('--cutout-x', `${placement.xFrac * w}px`);
+  layer.style.setProperty('--cutout-y', `${-placement.bottomFrac * h}px`);
+  layer.style.setProperty('--cutout-scale', String(placement.scale));
+  layer.style.zIndex = String(placement.z);
+}
+
+// The pixel offsets above are computed from #scene-cutouts' rendered size,
+// so a viewport change invalidates every one of them. Re-placing is pure
+// arithmetic over the layers already in the DOM — no refetch, no diff.
+window.addEventListener('resize', () => {
+  const host = document.getElementById('scene-cutouts');
+  if (!host || host.children.length === 0) return;
+  if (!currentGameState || !currentSceneState) return;
+  const ctx = sceneArtContext(currentGameState, currentSceneState);
+  for (const p of ctx.overlay || []) {
+    const who = p.isPlayer ? currentGameState.player : currentGameState.npcs[p.charId];
+    if (!who) continue;
+    const key = cutoutKey(cutoutIdentityToken(who, p.isPlayer), p.pose, p.expression, cutoutOutfitToken(who), imageStyleToken());
+    const layer = host.querySelector(`[data-cutout-key="${CSS.escape(key)}"]`);
+    if (layer) placeSceneCutout(host, layer, p);
+  }
+});
 
 // --- Status strip: prominent need bars in the footer ---
 // Compact one-row status display: icon + bar + percentage per need.

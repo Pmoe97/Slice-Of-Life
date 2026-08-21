@@ -36,8 +36,14 @@ const activeImageUrls = new Map(); // sceneKey → objectURL
 // full-bleed backdrop now, so it generates toward the viewport's own
 // orientation (landscape/portrait) with a matching framing clause and an
 // orientation token in the key — every scene key changed shape, so the whole
-// scene namespace turns over with it.
-const IMAGE_PROMPT_VERSION = 'pv3';
+// scene namespace turns over with it. pv4 = the character-cutout refactor
+// (character-cutout-scene-rendering-plan Phase 3): the scene stopped being
+// one image with people baked in and became a people-free PLATE plus
+// per-character transparent cutout layers. Every backdrop prompt lost its
+// character clauses and gained the people-ban negative, so no pv3 scene
+// entry could ever be correctly served against the new prompt shape — the
+// whole scene namespace turns over again with it.
+const IMAGE_PROMPT_VERSION = 'pv4';
 
 // VN refactor (D15): the scene backdrop's box follows the viewport's aspect,
 // so generate toward it — a portrait phone should not cram a 3:2 landscape
@@ -48,48 +54,24 @@ function sceneOrientation() {
   return innerWidth >= innerHeight ? 'landscape' : 'portrait';
 }
 
-function composeSceneKey(roomId, phase, lighting, npcIds, detail, player) {
-  const ids = (npcIds || []).filter(Boolean);
-  const npcPart = ids.length > 0 ? ids.slice().sort().join('-') : 'empty';
-  const base = `${roomId}_${phase}_${lighting || 'normal'}_${npcPart}`;
-  const stylePart = imageStyleToken();
-  // The player is ALWAYS in their own scene, so who they are is part of what
-  // this scene IS. Without this, two different solo saves in the same
-  // room/phase with nobody present shared one cache entry — player B was
-  // served player A's art. The token also anchors the deterministic scene
-  // seed (composeSceneSeed), so revisiting a moment reproduces its frame.
-  const playerPart = playerIdentityToken(player);
-  const middle = `${base}_${playerPart}${detail ? `_${detail}` : ''}`;
-  return `${IMAGE_PROMPT_VERSION}_${sceneOrientation()}_${stylePart ? `${middle}_${stylePart}` : middle}`;
-}
+// composeSceneKey / composeSceneSeed are GONE (character-cutout Phase 3,
+// D6): a backdrop no longer contains characters, so a backdrop key can no
+// longer contain them either — see plateKey/composePlateSeed. Design
+// invariant 6: reintroducing a person into the plate prompt (or a character
+// id into its key) reintroduces the multiplicative cost structure this plan
+// exists to kill.
 
-// A short stable signature of who the player is, for scene cache keys and
-// seeds. The portrait seed is the strongest anchor when one exists (it is
-// hashStr of the portrait prompt — change the portrait, change the token);
-// without a portrait, a hash of the appearance fields stands in.
+// A short stable signature of who the player is, for cache keys and seeds.
+// The portrait seed is the strongest anchor when one exists (it is hashStr
+// of the portrait prompt — change the portrait, change the token); without
+// a portrait, a hash of the appearance fields stands in. Still live: it
+// anchors the PLAYER'S OWN CUTOUT key (D7), which is exactly the kind of
+// thing it should key — the player's own pixels, not a room's.
 function playerIdentityToken(player) {
   if (!player) return 'nobody';
   if (player.portrait?.seed) return `p${player.portrait.seed}`;
   const src = player.appearance ? JSON.stringify(player.appearance) : String(player.name || '');
   return `ph${hashStr(src).toString(36)}`;
-}
-
-// Deterministic scene seed: the SAME scene — same save, same room, same
-// phase, same cast — always reproduces the same image instead of rerolling
-// every person's face on every cache miss (the #1 volatility complaint).
-// The hash mixes in each present character's OWN identity seed (portrait hash
-// / genSeed) so the scene's latent noise stays anchored to who is actually
-// in it, and the scene key so two different scenes never share a seed.
-function composeSceneSeed(sceneKey, player, activeNpcs) {
-  const anchors = [];
-  if (player) anchors.push(playerIdentityToken(player));
-  for (const npc of activeNpcs || []) {
-    anchors.push(npc.bible?.genSeed != null
-      ? `n${npc.bible.genSeed}`
-      : `ni${hashStr(String(npc.id || npc.name || '')).toString(36)}`);
-  }
-  anchors.sort();
-  return hashStr(`${sceneKey}|${anchors.join('|')}`);
 }
 
 // What is on the table in this room right now, or '' for "nothing worth
@@ -175,7 +157,22 @@ function phaseLighting(phase) {
   }
 }
 
-// --- Build image prompt ---
+// --- Build a PHOTO prompt (people baked in) ---
+// This was `buildImagePrompt`, the scene-backdrop builder, until the
+// character-cutout refactor (Phase 3) split scenes into a people-free plate
+// (buildBackgroundPrompt) plus cutout layers. The CAMERA is the one
+// surface that still legitimately wants everybody baked into one flat
+// frame, so this survived the D6 deletion under a name that says what it
+// is now. Its only caller is takePhoto.
+//
+// It keeps people for a reason the plan's cost argument does not apply to:
+// a photo is keyed by its OWN id (`photo_<id>`, see getPhotoImage), frozen
+// at capture time and never recomposed, so there is no cast-combination
+// namespace to explode — the multiplicative blow-up D6 exists to kill is a
+// property of a SHARED, recomposed room key, which a photo does not have.
+// A snapshot of an empty room where the player pointed a camera at their
+// roommates would also just be wrong.
+//
 // `roomObjects` (optional, WORLD's bucket for this room) drives the
 // room-specific detail sentence from each object def's imagePhrase — real
 // furniture the player can act on, instead of a fixed per-roomType string
@@ -183,17 +180,14 @@ function phaseLighting(phase) {
 // generic phrasing when objects aren't available (e.g. a caller that
 // hasn't loaded WORLD state), so this stays non-breaking.
 // `opts.player` is the player object — passing it puts THEM in the picture.
-// Until they had an appearance at all (SIM's generatePlayerAppearance) this
-// function could only ever draw the roommates, so every scene was shot from
-// the perspective of someone who wasn't in it.
 //
 // B (scene imagery audit): the character clauses come from the VISUAL-only
 // describer (buildVisualCharacterClause) — never the LLM describer, which
 // adds voice/scent/gait noise an image model cannot render — and the player
 // is drawn LAST, immediately before the style clause. Diffusion models weight
-// the start and end of a prompt most strongly, so the scene's subject belongs
+// the start and end of a prompt most strongly, so the shot's subject belongs
 // at the end, not buried mid-prompt behind the roommates.
-function buildImagePrompt(roomId, phase, activeNpcs, roomObjects, opts = {}) {
+function buildPhotoPrompt(roomId, phase, activeNpcs, roomObjects, opts = {}) {
   const room = ROOMS[roomId];
   const roomName = String(room?.name || roomId);
   const roomType = room?.type || 'common';
@@ -238,12 +232,8 @@ function buildImagePrompt(roomId, phase, activeNpcs, roomObjects, opts = {}) {
     prompt += `${clause}${seated ? seatedTail : ''}. `;
   }
 
-  // VN refactor (D15): the scene is a full-bleed backdrop, so say so. The
-  // framing clause matches the orientation the frame was generated for, and
-  // deliberately keeps the subjects' faces toward the top two-thirds of the
-  // image — that is the band that stays visible above the reader panel.
   prompt += sceneOrientation() === 'landscape'
-    ? 'Wide cinematic composition, the room filling the frame, subjects in the upper two-thirds, facing the camera. '
+    ? 'Wide composition, the room filling the frame, subjects in the upper two-thirds, facing the camera. '
     : 'Tall vertical composition, the room filling the frame, subjects in the middle of the frame, facing the camera. ';
 
   prompt += 'Anime-inspired illustration style, warm tones, detailed background, slice-of-life atmosphere.';
@@ -493,51 +483,22 @@ async function getPlayerPortraitImage(portrait) {
   }
 }
 
-// --- Generate or retrieve cached background ---
-// The generation passes a DETERMINISTIC seed (composeSceneSeed) derived from
-// the scene key plus every present character's own identity seed — the same
-// moment revisited reproduces the same frame, instead of rerolling every
-// person's face on every cache miss. This is the core of the volatility fix.
-async function getSceneImage(roomId, phase, activeNpcs, roomObjects, opts = {}) {
-  const sceneKey = composeSceneKey(roomId, phase, 'normal', activeNpcs?.map(n => n.id) || [], sceneDetailSignature(roomObjects), opts.player);
-
-  // Check cache
-  const cached = await getCachedImage(sceneKey);
-  if (cached) {
-    return { url: createObjectUrl(sceneKey, cached), cached: true };
-  }
-
-  // Generate new
-  try {
-    const prompt = applyImageStyle(buildImagePrompt(roomId, phase, activeNpcs, roomObjects, opts));
-    // VN refactor (D15): generate toward the viewport's orientation — the
-    // backdrop box matches the screen, so the frame should too.
-    const resolution = IMAGE_CACHE.resolutions.scene[sceneOrientation()];
-    const result = await root.generateImage(prompt, {
-      resolution,
-      seed: composeSceneSeed(sceneKey, opts.player, activeNpcs),
-      negativePrompt: 'blurry, distorted, extra limbs, low quality, text, watermark',
-    });
-
-    // Convert canvas to blob
-    const blob = await canvasToBlob(result.canvas);
-    await setCachedImage(sceneKey, blob);
-
-    return { url: createObjectUrl(sceneKey, blob), cached: false };
-  } catch (e) {
-    console.warn('Image generation failed:', e.message);
-    return { url: null, cached: false, error: e.message };
-  }
-}
+// getSceneImage is GONE (character-cutout Phase 3, D6). The scene backdrop
+// is now getScenePlate (below) — people-free, cast-independent, one plate
+// per room/phase/room-state shared by every save — and the characters are
+// drawn on top of it as separate cutout layers by RENDER's
+// renderSceneCutouts. render.js was its only consumer.
 
 // ===== EMPTY BACKGROUND PLATES (character-cutout-scene-rendering-plan, Phase 2) =====
-// D6: buildBackgroundPrompt is buildImagePrompt with every character clause
-// removed — a plate is a function of the ROOM, the phase, and what's on the
-// table, never of who is standing in it, so plateKey (below) can never
-// carry an npc id or the player token (design invariants 1 and 6). Additive
-// for now: buildImagePrompt/getSceneImage/composeSceneKey are UNTOUCHED
-// until Phase 3 deletes the character-baking path for real and switches
-// renderScene onto this.
+// D6: buildBackgroundPrompt is the old buildImagePrompt with every
+// character clause removed — a plate is a function of the ROOM, the phase,
+// and what's on the table, never of who is standing in it, so plateKey
+// (below) can never carry an npc id or the player token (design invariants
+// 1 and 6). Phase 3 switched renderScene onto this and deleted the
+// character-baking scene path outright: composeSceneKey/composeSceneSeed/
+// getSceneImage are gone, and buildImagePrompt survives ONLY as
+// buildPhotoPrompt, scoped to the camera (see its own note for why a photo
+// legitimately keeps its people).
 function buildBackgroundPrompt(roomId, phase, roomObjects) {
   const room = ROOMS[roomId];
   const roomName = String(room?.name || roomId);
@@ -596,8 +557,7 @@ function composePlateSeed(key) {
   return hashStr(key);
 }
 
-// Cache-then-generate, mirroring getSceneImage's shape exactly, under the
-// plate key instead of the scene key — one plate serves every cast and
+// Cache-then-generate under the plate key — one plate serves every cast and
 // every save that shares a room/phase/room-state, which is the cost fix
 // this whole plan exists for (see the plan's Evidence section).
 async function getScenePlate(roomId, phase, roomObjects) {
@@ -625,16 +585,87 @@ async function getScenePlate(roomId, phase, roomObjects) {
     return { url: null, cached: false, key, error: e.message };
   }
 }
+// Phase 5: which of the three catalogue expressions this character wears
+// right now. Talking wins when the player has a conversation overlay open
+// with them (the same `_inConversation` flag OVERTURE's do-not-disturb
+// registry reads); otherwise a clearly good mood earns 'happy'; otherwise
+// neutral. Deliberately coarse — every distinct expression is its own
+// generated cutout (D4), so a finely-graded scale would multiply the
+// per-character namespace for differences nobody would read at this size.
+const CUTOUT_HAPPY_MOOD = 0.35;
+function cutoutExpressionFor(gs, who, isPlayer, charId) {
+  if (!isPlayer && gs?.player?.flags?._inConversation
+      && typeof convState !== 'undefined' && convState && convState.npcId === charId) {
+    return 'talking';
+  }
+  const mood = typeof who?.mood === 'number' ? who.mood : 0;
+  return mood >= CUTOUT_HAPPY_MOOD ? 'happy' : 'neutral';
+}
+
+// --- D10: deterministic scene layout ---------------------------------------
+// Seeds on the plate key + the sorted cast — the same scene lays out the
+// same way every visit, but no character IDENTITY feeds the seed (only how
+// many are present), so a layout reseed never depends on WHO is standing
+// there, matching the plate/cutout split's whole premise. Returns Placement
+// records (see the plan's "Data model" section); pose/xFrac/scale/z are all
+// this function's job, bottomFrac here is the D16 FALLBACK only — the
+// renderer overrides it with a measured value once a cutout has loaded.
+function layoutSceneCutouts(gs, sceneState, plateKeyStr) {
+  const roomId = gs.player.location;
+  const roomObjects = gs.objects?.[`room_${roomId}`];
+  const seated = tableSpreadIds(roomObjects).length > 0;
+  const activeNpcIds = (sceneState?.active || []).slice().sort();
+  const seed = hashStr(`${plateKeyStr}|${activeNpcIds.join(',')}`);
+  const rng = mulberry32(seed);
+
+  // The player is always the center-most slot (D10 — "player center-front"),
+  // regardless of join order: NPCs sorted by id fill outward from the
+  // middle where the player sits.
+  const npcSlots = activeNpcIds.map(id => ({ charId: id, isPlayer: false }));
+  const centerIdx = Math.floor(npcSlots.length / 2);
+  const slots = npcSlots.slice(0, centerIdx)
+    .concat([{ charId: 'player', isPlayer: true }])
+    .concat(npcSlots.slice(centerIdx));
+  const count = slots.length;
+
+  const pose = seated ? 'seated' : 'standing';
+  const poseDef = CUTOUT_POSES[pose] || CUTOUT_POSES.standing;
+
+  return slots.map((slot, i) => {
+    // Evenly spaced across a central band, with a small deterministic
+    // jitter (same seed -> same jitter, forever) so same-size casts don't
+    // all look mechanically identical scene to scene.
+    const base = (i + 1) / (count + 1);
+    const jitter = (rng() - 0.5) * (0.5 / (count + 1));
+    const xFrac = Math.max(0.08, Math.min(0.92, base + jitter));
+    const who = slot.isPlayer ? gs.player : gs.npcs?.[slot.charId];
+    return {
+      charId: slot.charId,
+      isPlayer: slot.isPlayer,
+      pose,
+      expression: cutoutExpressionFor(gs, who, slot.isPlayer, slot.charId),
+      xFrac,
+      bottomFrac: poseDef.bottomFrac,
+      scale: poseDef.scale,
+      z: slot.isPlayer ? 100 : 10 + i, // player always drawn on top (D10)
+    };
+  });
+}
 // ===== /SECTION: EMPTY BACKGROUND PLATES =====
 
-// --- Reroll the current scene backdrop (D17/D17.6) ---
+// --- Reroll the current scene PLATE (D17/D17.6; D11) ---
 // The info modal's Regenerate button. `fields` = { prompt, seed, negativePrompt }
 // from the modal: prompt is used verbatim (it was pre-filled with the exact
 // style-applied prompt the current pixels came from), seed null means "roll
 // fresh", negativePrompt defaults to the surface's usual one. The result is
-// cached UNDER THE SAME scene key — the player chose this art, so revisiting
-// the scene shows the rerolled frame. Falls through render.js's
-// sceneArtContext so it always rerolls whatever the CURRENT scene is.
+// cached UNDER THE SAME plate key — the player chose this art, so revisiting
+// the room shows the rerolled backdrop. Falls through render.js's
+// sceneArtContext so it always rerolls whatever the CURRENT room is.
+//
+// D11: this rerolls the PLATE ONLY. The cutout layers standing on it are
+// untouched — a reroll changes the room the characters are standing in,
+// never who they are. (A per-character reroll is parked in the plan's Open
+// questions.)
 async function rerollSceneImage(gs, sceneState, fields) {
   const ctx = sceneArtContext(gs, sceneState);
   if (!ctx || !ctx.sceneKey) return { error: 'No scene to reroll.' };
@@ -642,7 +673,7 @@ async function rerollSceneImage(gs, sceneState, fields) {
     const result = await root.generateImage(fields.prompt, {
       resolution: IMAGE_CACHE.resolutions.scene[sceneOrientation()],
       seed: fields.seed ?? Math.floor(Math.random() * 2147483647),
-      negativePrompt: fields.negativePrompt || IMAGE_NEGATIVE.scene,
+      negativePrompt: fields.negativePrompt || backgroundNegPrompt(),
     });
     const blob = await canvasToBlob(result.canvas);
     if (!blob) return { error: 'The model returned an empty frame.' };
@@ -1151,7 +1182,7 @@ function takePhoto(gameState, tags) {
   const id = `photo_${hashStr(`${gameState.meta.seed}|camera|${day}|${tick}|${slot}`).toString(36)}`;
   const seed = hashStr(`${gameState.meta.seed}|photo_seed|${id}`);
 
-  const prompt = buildImagePrompt(roomId, phase, activeNpcs, roomObjects, { gameState })
+  const prompt = buildPhotoPrompt(roomId, phase, activeNpcs, roomObjects, { gameState })
     + ' Candid smartphone photo, casual snapshot framing, slightly imperfect composition.';
 
   const photo = {
