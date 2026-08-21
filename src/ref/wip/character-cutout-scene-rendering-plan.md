@@ -1,9 +1,10 @@
 # Character Cutout Scene Rendering
 
-Status: **planned — not started**. Design session complete 2026-08-21; all
-decisions locked (D1–D16).
-Last updated 2026-08-21 (review pass — D14/D15/D16 added, Phase 1 verify
-extended).
+Status: **in progress — Phases 1 and 2 built**. Design session complete
+2026-08-21; all decisions locked (D1–D16).
+Last updated 2026-08-21 (implementation session — Phase 1 the cutout
+factory, Phase 2 the empty background plates; both additive, nothing wired
+into rendering yet).
 
 Companions:
 - `src/ref/complete/scene-reader-ui-plan.md` (built — the frosted reader panel this plan renders *underneath*; the scene goes from one `<img>` to a plate plus layered cutouts below that panel)
@@ -24,7 +25,103 @@ at the start of the first implementation session.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 1. Nothing has been built yet.
+**Resume at:** Phase 3 (layered scene rendering — the switch). Phases 1 and
+2 are built and additive; nothing is wired into live rendering yet, so the
+game plays identically to before this session.
+
+**Implementation session (2026-08-21, Phases 1 and 2 — code written):**
+- **What actually got verified, and what didn't.** This repo only runs for
+  real inside Perchance's platform runtime — `root.generateImage`/`root.kv`
+  are injected by Perchance at load time. Both `dev-harness.html` and
+  `dev/verify/loadgame.js` deliberately stub `generateImage` (one throws,
+  one returns `{}`), so there is no way to call real generation, and
+  therefore no way to check actual pixels (transparency, halo-free edges,
+  cross-pose identity, a vision pass on a laid table) from this
+  environment. Everything mechanically checkable WITHOUT real generation —
+  key/seed composition, prompt content, the pixel-math cleanup algorithm
+  (D5/D14/D15/D16) — is now covered by `dev/verify/verify-cutout-p1.js`
+  (20 checks) and `verify-cutout-p2.js` (14 checks), all passing. The
+  pixel-math tests are the meaningful ones: they construct a synthetic
+  alpha buffer with a main blob, a genuinely detached speck, and a hair-wisp
+  attached only through a 2px gap, and prove D15's morphological closing is
+  load-bearing (a `closeRadius: 0` control case shows the wisp WOULD be
+  pruned exactly like the speck without it). **Still unverified, and
+  cannot be until a real Perchance run:** whether alpha survives the
+  plugin's canvas→blob round-trip, whether `removeBorderComponents: false`
+  is truly sufficient for a standing cutout, whether RMBG-1.4 is swappable
+  for a newer matting model, and the cross-pose identity-consistency check
+  Phase 1's verify list calls for. Whoever picks up Phase 3 should get a
+  real Perchance run before trusting the cutout pipeline's actual output —
+  the code is written to spec but its pixels are unseen.
+- **Two harness gaps found and fixed while writing the above tests**, both
+  in `dev/verify/loadgame.js` (shared by every harness, not cutout-specific):
+  the vm sandbox never exposed `Uint8Array`/`Uint8ClampedArray`/`Int32Array`
+  (nothing needed them before the cutout pipeline's pure pixel-math
+  functions), and it never exposed bare `innerWidth`/`innerHeight` (which
+  `image.js`'s `sceneOrientation()` reads directly). The second one was a
+  real, pre-existing, silent breakage: ANY call reaching `sceneOrientation()`
+  — including the already-shipped `composeSceneKey` — threw a
+  `ReferenceError` in this harness before today, which is why
+  `verify-meal.js` was crashing outright (`DID NOT REPORT` in `run-all.js`)
+  rather than failing individual checks. Fixing it unmasked one further
+  pre-existing stale assertion in `verify-meal.js` (a key string hardcoded
+  before the VN refactor added the orientation segment and bumped
+  `pv2`→`pv3`) — corrected in the same commit. `verify-intro.js`'s own
+  `DID NOT REPORT` (a null `playerStudioDraft.gender` in `studio.js`) and
+  the ~60 pre-existing failures scattered across unrelated `verify-c*/i*/
+  p4/r*/s*/w*` harnesses are untouched by this session — confirmed
+  unrelated to `image.js`/`config.js`/the cutout files by content (NPC
+  willingness, cognition, world-gen — nothing cutout/image-adjacent) and
+  out of scope for this plan.
+- **Phase 1 built exactly to spec**, with the D14/D15/D16 amendments folded
+  in from the start rather than bolted on: `cutoutIdentityToken`/
+  `cutoutOutfitToken`/`cutoutKey`/`composeCutoutSeed`/`buildCutoutPrompt`/
+  `cutoutNegativePrompt`, the pure pixel-math pipeline
+  (`cutoutSuppressSpill` D14, `cutoutDilate`/`cutoutErode`/`cutoutMorphClose`/
+  `cutoutLabelComponents`/`cutoutPruneSpecks` D15+D5, `cutoutBBox`/
+  `cutoutBottomFrac` D16/Stage 3, `cleanCutout` orchestrating all of it on a
+  canvas), and `getCharacterCutout`/`getPlayerCutout` — all in `image.js`.
+  `CUTOUT_TUNING`/`CUTOUT_POSES`/`CUTOUT_EXPRESSIONS` and the cutout/500-cap
+  `IMAGE_CACHE` changes are in `config.js`. `#scene-cutouts`/`.scene-cutout`
+  CSS and the container div landed in `main.html` between `#scene-img` and
+  `.scene-overlay`, per D1's DOM ordering — dead until Phase 3. One
+  deliberate deviation from the plan's literal data-model sketch: CSS
+  `--cutout-x`/`--cutout-y` are documented as PIXEL offsets computed by
+  Phase 3's JS, not 0..1 fractions — a percentage inside `transform:
+  translate()` resolves against the LAYER's own box, not its parent's, so
+  fraction-to-pixel conversion has to happen in JS regardless; doing it
+  there instead of leaning on CSS container-query units (`cqw`/`cqh`, which
+  would have worked but add a newer-CSS-feature risk for zero benefit)
+  keeps the rule itself boring and universally supported.
+- **Phase 2 built exactly to spec:** `buildBackgroundPrompt`/
+  `backgroundNegPrompt`/`plateKey`/`composePlateSeed`/`getScenePlate` in
+  `image.js`, additive next to the untouched `buildImagePrompt`/
+  `getSceneImage`. `plateKey`'s arity (4 params, no npc/player slot) is
+  itself asserted in the verify harness as a structural proof the cast
+  cannot enter the key even by mistake, not just an empirical one.
+
+**Resume-at-Phase-3 checklist** (from the plan's own dependency order —
+Phase 3 needs both 1 and 2, which is why it's next):
+- `sceneArtContext` (render.js:969) returns a plate key/prompt/seed + an
+  overlay plan instead of a scene key; `renderScene` calls `getScenePlate`
+  and a new `renderSceneCutouts` that diffs the live `#scene-cutouts`
+  children against the desired layer set via `data-cutout-key`.
+- `layoutSceneCutouts(gs, sceneState, plateKey)` (D10) — seeded spread,
+  player front-center, seated mode on a laid table.
+- `buildImagePrompt`/`getSceneImage`/`composeSceneKey` get DELETED at this
+  switchover (D6's last sentence), not left as a fallback — `render.js` is
+  `getSceneImage`'s only consumer, confirmed via grep this session.
+  `IMAGE_PROMPT_VERSION` moves `pv3` → `pv4` (this plan's own namespace
+  turnover) — bump it in the SAME commit as the switch so no `pv3` cache
+  entry is ever misread against the new (plate-only) prompt shape.
+- The `--cutout-x`/`-y` pixel-offset design (see above) means
+  `renderSceneCutouts` needs a resize listener alongside the room-change
+  path to keep layers correctly placed — `#scene-cutouts`' rendered size is
+  the conversion basis and it changes with the viewport.
+- A live Perchance run is the earliest point any of Phase 1's D14/D15/D16
+  pixel work can actually be SEEN — strongly consider doing that before or
+  during Phase 3, since Phase 3 is also the first phase a vision pass has
+  anything to look at.
 
 **Last session's notes (design session 2026-08-21 — no code written):**
 - **The idea's provenance.** `perchance.org/persona-realm` (fetched to
@@ -584,9 +681,9 @@ tuning decisions.
 
 | Phase | Status | What it does |
 |---|---|---|
-| 1 | Not started | Cutout factory: RMBG removal, specks cleanup, bbox, deterministic keys, LRU round-trip |
-| 2 | Not started | Empty background plates: people-free prompt, people-ban negative, plate keys |
-| 3 | Not started | Layered render: plate + positioned cutouts, layout, shadows, transitions, pv4 switch |
+| 1 | **Built** — code complete, pure-logic-verified (`verify-cutout-p1.js`, 20/20). Pixel output unseen — needs a live Perchance run. | Cutout factory: RMBG removal, specks cleanup (D5/D15), spill suppression (D14), bbox/bottomFrac (D16), deterministic keys, LRU round-trip |
+| 2 | **Built** — code complete, verified (`verify-cutout-p2.js`, 14/14). Additive; `getSceneImage` untouched. | Empty background plates: people-free prompt, people-ban negative, plate keys |
+| 3 | Not started — resume here | Layered render: plate + positioned cutouts, layout, shadows, transitions, pv4 switch |
 | 4 | Not started | Reroll = plate only; degrade paths; images-off playability |
 | 5 | Not started | Pose/expression catalogue, outfit keying, content gating, style fold, tuning |
 | 6 | Not started | Integration sweep + live visual verification + tuning record |

@@ -79,7 +79,20 @@ function loadEngine(opts = {}) {
     var setTimeout = (fn) => 0;
     var clearTimeout = () => {};
     var performance = { now: () => 0 };
+    // Bare browser globals (not window.*) — image.js's sceneOrientation()
+    // reads these directly. Nothing reached it until the character-cutout
+    // plan's plate/cutout key composers, which is why this was missing.
+    // Landscape desktop default; a harness that cares about the portrait
+    // branch can override before calling in.
+    var innerWidth = 1280;
+    var innerHeight = 800;
   `, ctx);
+  // Typed arrays: not in the vm's original exposed-globals list (nothing
+  // needed them until the cutout pipeline's pure pixel-math functions,
+  // image.js's cutoutDilate/cutoutErode/cutoutLabelComponents/
+  // cutoutPruneSpecks). Real browsers always have these; only the sandbox
+  // was missing them.
+  Object.assign(ctx, { Uint8Array, Uint8ClampedArray, Int32Array });
 
   const loaded = [];
   for (const f of ORDER) {

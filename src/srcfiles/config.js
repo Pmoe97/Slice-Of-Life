@@ -5070,9 +5070,43 @@ const DEMOTION_BEATS = [
 
 // --- Image cache ---
 const IMAGE_CACHE = {
-  cap: 200,               // LRU max entries
-  resolutions: { bg: '768x512', char: '512x768', scene: { landscape: '768x512', portrait: '512x768' } },
+  cap: 500,               // LRU max entries (D2, character-cutout-scene-rendering-plan: 200 -> 500 to hold the plate+cutout namespace split)
+  resolutions: { bg: '768x512', char: '512x768', scene: { landscape: '768x512', portrait: '512x768' }, cutout: '512x768' },
 };
+
+// ===== CHARACTER CUTOUTS (character-cutout-scene-rendering-plan, Phase 1) =====
+// Tuning for the cutout cleanup pipeline: RMBG-1.4's mask (via the
+// text-to-image plugin's removeBackground:true) is soft and carries no color
+// decontamination, so a straight port of persona-realm's specks cleanup
+// (killParasitesSync) is not enough on its own — D14/D15 below are the
+// amendments the plan's review pass added on top of the ported D5 algorithm.
+const CUTOUT_TUNING = {
+  bboxAlpha: 24,              // alpha-bbox threshold (persona-realm spriteBBox)
+  speckAlpha: 20,             // foreground alpha in the cleanup
+  speckAreaMax: 120,          // erase components smaller than this
+  speckMainRatio: 0.85,       // ...and smaller than this share of the main
+  borderMarginFrac: 0.02,     // border band: max(3, round(min(W,H)*this))
+  removeBorderComponents: false, // D5: seated/edge poses may touch the frame
+  closeRadius: 2,              // D15: dilate-then-erode radius (px) before
+                                // component labeling — protects hair wisps/
+                                // fingertips from being pruned as specks
+  spillAlphaMax: 250,          // D14: pixels with speckAlpha < alpha < this
+                                // are matte-edge pixels; their RGB gets
+                                // decontaminated toward the subject's own
+                                // opaque-pixel mean color
+};
+
+// D16 fallback defaults only — once a cutout has actually been generated,
+// its real floor anchor is measured from its own alpha channel (cutoutBBox)
+// at layout time, and these bottomFrac values are never consulted again for
+// that (charId, pose) pair. scale is the base placement scale before the
+// layout's own spread factor (D10); seedWord threads into the prompt.
+const CUTOUT_POSES = {
+  standing: { label: 'Standing', scale: 1.0,  bottomFrac: 0.06, seedWord: 'standing casually' },
+  seated:   { label: 'Seated',   scale: 0.82, bottomFrac: 0.04, seedWord: 'seated' },
+  lounging: { label: 'Lounging', scale: 0.90, bottomFrac: 0.03, seedWord: 'lounging' },
+};
+const CUTOUT_EXPRESSIONS = ['neutral', 'happy', 'talking'];
 
 // --- Title-gallery slideshow (menu overhaul Phase 10) ---
 // Adopts the reference games' two-layer crossfade + lazy 3-image buffer

@@ -135,7 +135,8 @@ check('clearing the table reverts to the PLAIN cached key, byte for byte',
       === api(`composeSceneKey('dining','evening','normal',[])`),
       'a tidied table must reuse the art that was already cached, not mint a new key');
 check('and a key composed with no detail, no player is stable',
-      api(`composeSceneKey('kitchen','morning','normal',['a','b'])`) === 'pv2_kitchen_morning_normal_a-b_nobody');
+      api(`composeSceneKey('kitchen','morning','normal',['a','b'])`) === 'pv3_landscape_kitchen_morning_normal_a-b_nobody',
+      'stale since the VN refactor (D15) added the orientation segment and bumped pv2 -> pv3; this call was silently never reached before loadgame.js gained innerWidth/innerHeight');
 check('the signature is order-independent',
       api(`sceneDetailSignature(${mkRoom('cluttered', ['dish_fries', 'dish_cheese_pizza'])})
            === sceneDetailSignature(${mkRoom('cluttered', ['dish_cheese_pizza', 'dish_fries'])})`),
