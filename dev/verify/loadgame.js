@@ -13,7 +13,7 @@ const SRC = path.join(__dirname, '..', '..', 'src', 'srcfiles');
 // loads after pregnancy.js). No load-time dependencies, so either position is
 // safe — the divergence is deliberate, not drift.
 const ORDER = [
-  'config.js', 'icons.js', 'defs.world.js', 'defs.actions.js', 'defs.computer.js',
+  'config.js', 'defs.settings.js', 'settings.js', 'icons.js', 'defs.world.js', 'defs.actions.js', 'defs.computer.js',
   'defs.menu.js', 'defs.intro.js', 'defs.design.js',
   'orbital.js', 'state.js', 'sim.js', 'commitments.js', 'world.js', 'movement.js',
   'signals.js', 'scene.js',

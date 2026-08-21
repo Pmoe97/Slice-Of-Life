@@ -911,11 +911,12 @@ function renderGigAccepted(body, gs, app, screen) {
   // rather than the mystery grind the old UI was.
   const focus = computeFocusMultiplier(gs);
   const effPct = Math.round(focus * 100);
+  const perClick = Math.round(focus * GIG_TUNING.progressPerClick * 100) / 100;
   const effNote = document.createElement('div');
   effNote.className = 'dim tiny';
   effNote.textContent = effPct >= 100
-    ? 'Work efficiency: 100% — full speed.'
-    : `Work efficiency: ${effPct}% — you work ${effPct}% of a block per click. Sleep and a better mood speed this up.`;
+    ? `Work efficiency: 100% — each click completes ${perClick} blocks.`
+    : `Work efficiency: ${effPct}% — each click completes ~${perClick} blocks (${effPct}% of ${GIG_TUNING.progressPerClick}). Sleep and a better mood speed this up.`;
   body.appendChild(effNote);
 
   const accepted = gigs.accepted || [];
@@ -2769,7 +2770,7 @@ const STUDIO_TABS = {
     { label: 'Hair', paths: ['bible.physical.hair.color', 'bible.physical.hair.style', 'bible.physical.hair.length', 'bible.physical.hair.texture'] },
     { label: 'Eyes', paths: ['bible.physical.eyes.color', 'bible.physical.eyes.shape'] },
     { label: 'Skin', paths: ['bible.physical.skin.tone', 'bible.physical.skin.texture', 'bible.physical.skin.ethnicity'] },
-    { label: 'Face', paths: ['bible.physical.face.shape', 'bible.physical.face.nose', 'bible.physical.face.lips', 'bible.physical.face.cheekbones', 'bible.physical.face.jawline', 'bible.physical.face.ears'] },
+    { label: 'Face', paths: ['bible.physical.face.shape', 'bible.physical.face.nose', 'bible.physical.face.lips', 'bible.physical.face.cheekbones', 'bible.physical.face.jawline', 'bible.physical.face.ears', 'bible.physical.facialHair'] },
     { label: 'Body', paths: ['bible.physical.body.shape', 'bible.physical.body.chestSize', 'bible.physical.body.buttSize', 'bible.physical.body.legs', 'bible.physical.body.posture'] },
     { label: 'Details', paths: ['bible.physical.distinguishingFeatures', 'bible.physical.piercings', 'bible.physical.tattoos'] },
     { label: 'Style', paths: ['bible.physical.fashion', 'bible.physical.accessories', 'bible.physical.gait', 'bible.physical.scent'] },
@@ -3281,6 +3282,17 @@ function renderStudioGalleryTab(content, gs, studio, npc) {
     img.alt = shot.label;
     img.className = 'rl-studio-gallery-img';
     canvasEl.appendChild(img);
+    // D17.5: register the portrait tile with the shared info mechanic —
+    // info-only (reroll deliberately omitted): the tile is "linked to this
+    // character via their generation seed", so a random-seed reroll would
+    // break identity across shots.
+    setImageMeta(img, {
+      label: `${npc.bible?.name || 'Character'} — ${shot.label}`,
+      prompt: applyImageStyle(buildCharacterPrompt(npc, shot.expression, shot.pose)),
+      seed: npc.bible?.genSeed ?? null,
+      negativePrompt: IMAGE_NEGATIVE.char,
+      reroll: null,
+    });
     getCharacterImage(npc, shot.expression, shot.pose).then((res) => {
       if (!res || !res.url) {
         tile.querySelector('.rl-studio-gallery-loader').textContent = 'Failed to generate';

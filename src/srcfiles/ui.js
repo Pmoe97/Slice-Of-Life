@@ -2364,6 +2364,27 @@ async function doKnock(roomId) {
   await saveAtBoundary('knock', currentGameState);
 }
 
+// Unlock a locked door from the OUTSIDE. The only locks in the game are the
+// player's own (no NPC ever locks a door), so a locked door you're standing
+// next to is always one you locked — and undoing it from out here is what
+// makes lock-your-room-and-walk-out a recovery instead of a softlock. The
+// roomId param is the ADJACENT room whose door this is (set by render.js as
+// data-room-id on the chip), matching doKnock's convention.
+async function doUnlockDoorFromOutside(roomId) {
+  if (!currentGameState) return;
+  const bucket = currentGameState.objects?.[`room_${roomId}`] || {};
+  const door = Object.values(bucket).find(o => o.defId === 'bedroom_door' || o.defId === 'bathroom_door');
+  if (!door) { addLogEntry('narration', 'There is no door here to unlock.'); return; }
+  if (door.state?.lock !== 'locked') { addLogEntry('narration', 'The door is already unlocked.'); return; }
+  door.state = { ...door.state, lock: 'unlocked' };
+  const roomName = ROOMS[roomId]?.name || 'room';
+  addLogEntry('narration', `You unlock the ${roomName} door from the outside. Click.`);
+  await advanceAndResolve(1);
+  currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('unlock-door', currentGameState);
+}
+
 // --- Room search (inventory overhaul Phase 8, D8) ---
 // Searching a roommate's room surfaces their possessions via the modal
 // (render.js's openRoomSearchModal); the take that follows routes through
@@ -2614,8 +2635,21 @@ function inventoryUseNarration(stack) {
   const c = def.consumable || {};
   const label = inventoryStackLabel(stack);
   const verb = def.category === 'drink' ? 'drink' : (c.hunger > 0 ? 'eat' : 'use');
+  let line = `You ${verb} some ${label}`;
+  // 2026-08-20 (playtest feedback): the inventory panel's Use verb never
+  // admitted when eating was a mistake, unlike the Eat chip's narration —
+  // so a frozen pizza read as "You eat some Frozen Pizza." with no hint of
+  // the D28 mood ding, and raw eggs read as a plain non-event. Mirror
+  // DEFS.ACTIONS' eatNarration here.
+  const fresh = freshnessState(stack, gameDaysNow(currentGameState?.meta?.clock), null);
+  const cold = fresh?.frozenState === 'frozen' || fresh?.frozenState === 'thawing';
+  if (cold && !stackFrozenFood(stack)) {
+    line += ', straight from the freezer — a miserable mouthful';
+  } else if (def.rawDangerous && verb === 'eat') {
+    line += ', raw — your stomach files a protest';
+  }
   const extra = c.energy > 0 ? ' — it perks you up.' : (c.mood > 0 ? ' — that hits the spot.' : '.');
-  return `You ${verb} some ${label}${extra}`;
+  return line + extra;
 }
 
 async function applyInventoryVerb(effectLine, minutes, narration, reason) {
@@ -3132,9 +3166,35 @@ const MENU_ACTIONS = ['menu', 'new-game-solo', 'new-game-random', 'new-game-guid
   // reachable at boot (no game) and from the in-play pause menu.
   'menu.continue', 'menu.new-game', 'menu.load', 'menu.options',
   'menu.resume', 'menu.exit', 'menu.back', 'menu.prev', 'menu.next',
-  'menu.debug', 'options.bg-art', 'options.autosave',
-  'prefs.gender-f', 'prefs.gender-m', 'prefs.gender-nb',
-  'prefs.pairing-hetero', 'prefs.pairing-gay', 'prefs.pairing-lesbian',
+  'menu.debug', 'options.bg-art',
+  // Settings & Pause Overhaul Phase 2 (D2): the tabbed settings sub-screen's
+  // verbs — meta, reachable from the boot options row and the pause context
+  // alike, free at any energy. Rows carry their target as data-field and
+  // share 'settings.toggle'/'settings.cycle'. (Phase 4: 'options.autosave'
+  // retired with the boot row — autosave now lives in the General tab.
+  // Phase 5: the six 'prefs.*' actions retired with the boot toggles —
+  // population distribution + pairing allowlist now live in the Population
+  // tab, and the slider grids' nudge buttons dispatch 'set.population-dist'
+  // with data-field/data-key/data-delta.)
+  'settings.open', 'settings.tab', 'settings.back',
+  'settings.toggle', 'settings.cycle', 'set.population-dist',
+  // Settings & Pause Overhaul Phase 7 (D9): the Images tab's verbs — the
+  // style grid's tiles ('set.image-style'), the Custom phrase field
+  // ('set.custom-style', shared with the input's own write-through) and the
+  // cache-control button ('images.clear-cache', confirmed in the modal).
+  'set.image-style', 'set.custom-style', 'images.clear-cache',
+  // Settings & Pause Overhaul Phase 8 (D10): the Appearance tab's verbs —
+  // the theme grid's tiles ('set.theme', extra.key is the COLOR_THEMES id).
+  'set.theme',
+  // Settings & Pause Overhaul Phase 9 (D11): the Data tab's verbs — Export
+  // opens the save panel (reusing its per-card Export buttons), Import
+  // opens the import modal, 'data.reset' wipes kv after a confirm, and
+  // 'data.storage' re-queries the storage insight in place.
+  'set.export-save', 'set.import-save', 'data.reset', 'data.storage',
+  // Settings & Pause Overhaul Phase 10 (D12): the header game-speed
+  // cluster — a meta preset switch (session-local), clickable whenever the
+  // header exists. extra.id is the SPEED_PRESETS id (x0/x1/x20/x100).
+  'speed.set',
   // Player creation + intro plan (Phases 3-5): the studio and the cutscene
   // are pre-game surfaces by definition — they run BEFORE a game exists, so
   // every one of their verbs must be reachable with currentGameState null.
@@ -3149,6 +3209,10 @@ const MENU_ACTIONS = ['menu', 'new-game-solo', 'new-game-random', 'new-game-guid
 // observation. Menu/save/debug actions are meta, not in-world actions.
 const ENERGY_GATE_EXEMPT = new Set([
   'move', 'sleep', 'look', 'pay-bills',
+  // Door handling is a one-minute mechanical act, not exertion — and the
+  // unlock from outside must always be reachable, or an exhausted player
+  // who locked their own door at 0 energy could never get back in to sleep.
+  'door.unlock', 'self.unlock_door', 'self.lock_door',
   'menu', 'save', 'debug', 'debug-close',
   'new-game-solo', 'new-game-random', 'new-game-guided', 'new-game-manual', 'new-game-seed',
   'generate-cast', 'reroll-char', 'approve-cast', 'back-to-form', 'continue',
@@ -3162,6 +3226,10 @@ const ENERGY_GATE_EXEMPT = new Set([
   // (inventory.use/drop/trash) are NOT exempt and stay gated like any
   // other action.
   'inventory.open', 'inventory.close',
+  // Full floor plan overlay (desktop legibility): the map overlay is free
+  // browsing (zero game time), same rule as the bag and chests.
+  'floorplan.open', 'floorplan.close',
+  'floorplan.zoom-in', 'floorplan.zoom-out', 'floorplan.zoom-reset',
   // Inventory overhaul Phase 2: same rule for containers — opening a
   // chest to browse is free, the transfer verbs inside it
   // (container.take/put/take-all/put-all) are NOT exempt.
@@ -3176,9 +3244,17 @@ const ENERGY_GATE_EXEMPT = new Set([
   // Options/Exit/arrows) must be clickable even exhausted.
   'menu', 'menu.continue', 'menu.new-game', 'menu.load', 'menu.options',
   'menu.resume', 'menu.exit', 'menu.back', 'menu.prev', 'menu.next',
-  'menu.debug', 'options.bg-art', 'options.autosave',
-  'prefs.gender-f', 'prefs.gender-m', 'prefs.gender-nb',
-  'prefs.pairing-hetero', 'prefs.pairing-gay', 'prefs.pairing-lesbian',
+  'menu.debug', 'options.bg-art',
+  'settings.open', 'settings.tab', 'settings.back',
+  'settings.toggle', 'settings.cycle', 'set.population-dist',
+  'set.image-style', 'set.custom-style', 'images.clear-cache',
+  'set.theme',
+  // Settings & Pause Overhaul Phase 9 (D11): data management is meta —
+  // free at any energy, reachable with no game.
+  'set.export-save', 'set.import-save', 'data.reset', 'data.storage',
+  // Settings & Pause Overhaul Phase 10 (D12): switching game speed is a
+  // zero-cost meta preset, like pausing — free at any energy.
+  'speed.set',
   // Same reasoning as the menu's own verbs, one step further: the studio and
   // cutscene run before any player exists to be exhausted. The gate reads
   // currentGameState.player.energy, which is null on these surfaces.
@@ -3198,85 +3274,22 @@ function isActionExemptFromEnergyGate(action) {
   // must be glanceable regardless of exhaustion — same rationale as
   // computer.use above.
   if (action.startsWith('phone.')) return true;
+  // D17: the scene-art info/reroll controls are viewing tools, not actions —
+  // exhaustion never blocks reading a prompt or rerolling art.
+  if (action === 'scene.image-info' || action === 'scene.image-reroll') return true;
   return false;
 }
 
-// --- Intimacy & Voyeurism Overhaul Phase 1 (D5): the expandable action
-// submenu popover. One level, ever: a parent chip ("X ▸") opens a popover
-// of its verbs; clicking the parent again, another chip, or anywhere else
-// closes it. The popover floats over <body> and is positioned fixed from
-// the chip's rect at open time, so the chips row's overflow-x can never
-// clip it. Verb rows are plain [data-action] buttons that inherit the
-// parent's context (data-room-id/data-npc/data-obj-id) — they flow through
-// the normal delegation chain unchanged, and being ACTION_DEFS entries the
-// verbs stay clickable exactly as any flat chip would be. ---
-let _openSubmenuKey = null;
-
-function closeSubmenuPopover() {
-  _openSubmenuKey = null;
-  const popover = document.getElementById('submenu-popover');
-  if (!popover) return;
-  popover.setAttribute('hidden', '');
-}
-
-function toggleSubmenuPopover(parentChip) {
-  const actionId = parentChip.getAttribute('data-action');
-  const key = parentChip.getAttribute('data-submenu-key') || actionId;
-  const verbs = ACTION_DEFS[actionId]?.submenu || [];
-  if (verbs.length === 0) return;
-
-  if (_openSubmenuKey === key) { closeSubmenuPopover(); return; }
-
-  let popover = document.getElementById('submenu-popover');
-  if (!popover) {
-    popover = document.createElement('div');
-    popover.id = 'submenu-popover';
-    popover.className = 'submenu-popover';
-    popover.setAttribute('hidden', '');
-    document.body.appendChild(popover);
-  }
-  popover.innerHTML = '';
-  const energyDepleted = currentGameState?.player?.energy <= 0;
-  for (const verbId of verbs) {
-    const vdef = ACTION_DEFS[verbId];
-    if (!vdef) continue;
-    const row = document.createElement('button');
-    row.className = 'submenu-verb';
-    row.setAttribute('data-action', verbId);
-    for (const attr of ['data-room-id', 'data-npc', 'data-obj-id']) {
-      if (parentChip.hasAttribute(attr)) row.setAttribute(attr, parentChip.getAttribute(attr));
-    }
-    // Phase 17 (D13): the bed verbs' labels carry {name} for the sleeping
-    // resident the parent chip points at (data-npc) — substituted here so
-    // the popover says "Slide Into Bed With Maya" instead of a template
-    // placeholder. Other verbs have no {name} and are unaffected.
-    let label = vdef.label;
-    if (label.includes('{name}')) {
-      const npcId = parentChip.getAttribute('data-npc');
-      label = label.replace('{name}', currentGameState?.npcs?.[npcId]?.bible?.name || 'Them');
-    }
-    row.textContent = label;
-    if (energyDepleted && !isActionExemptFromEnergyGate(verbId)) row.disabled = true;
-    popover.appendChild(row);
-  }
-
-  popover.removeAttribute('hidden');
-  _openSubmenuKey = key;
-
-  // Position above the chip, flipping below when it would overflow the top
-  // of the viewport; clamped to the viewport either way.
-  const rect = parentChip.getBoundingClientRect();
-  const popRect = popover.getBoundingClientRect();
-  const gap = 6;
-  let top = rect.top - popRect.height - gap;
-  if (top < 8) top = rect.bottom + gap;
-  // Clamp into the viewport. A popover taller than the viewport (degenerate
-  // short iframes) can't fit — floor the clamp at 8 so it stays on-screen
-  // instead of getting pushed off the top.
-  top = Math.min(Math.max(8, top), Math.max(8, window.innerHeight - popRect.height - 8));
-  popover.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - popRect.width - 8))}px`;
-  popover.style.top = `${top}px`;
-}
+// --- Nested action navigation (D14) --------------------------------
+// The chips row itself is the menu. A group chip ("X ▸", data-group-key)
+// drills INTO the row — the other buttons disappear, a "‹" chip appears
+// first, and tapping it walks back up. Routing lives here because clicks
+// arrive through the global delegation; the stack itself is owned by
+// RENDER (_actionNavStack + openActionGroup/navigateActionBack/resetActionNav),
+// which is what actually re-renders the chips. Nothing floats over the
+// page anymore — submenu verbs are ordinary [data-action] chips carrying
+// the parent's context (data-room-id/data-npc/data-obj-id), so they flow
+// through the delegation chain exactly like any flat chip.
 
 async function handleAction(action, npcId, extra) {
   if (!currentGameState && !MENU_ACTIONS.includes(action)) return;
@@ -3314,6 +3327,17 @@ async function handleAction(action, npcId, extra) {
       return;
     }
     await startPeekSession(roomId, action === 'door.listen' ? 'listen' : 'peek');
+    return;
+  }
+  // door.unlock — the one door verb that works from the OUTSIDE. The door
+  // lives in the ADJACENT room (the room you're locked out of), not the one
+  // the player is standing in, so it can't flow through the registered-
+  // action bridge's current-room context — intercepted here, the same
+  // pattern as door.keyhole, carrying the adjacent room as data-room-id.
+  if (action === 'door.unlock') {
+    const roomId = npcId || extra?.roomId;
+    if (!roomId) return;
+    await doUnlockDoorFromOutside(roomId);
     return;
   }
   // Intimacy & Voyeurism Phase 17 (D13): the sleeping-room verbs — same
@@ -3360,6 +3384,12 @@ async function handleAction(action, npcId, extra) {
   switch (action) {
     case 'look':
       await doLookAround();
+      break;
+    case 'scene.image-info':
+      openSceneImageInfo();
+      break;
+    case 'scene.image-reroll':
+      await doRerollImageInfo();
       break;
     case 'wait':
       await doWait();
@@ -3857,6 +3887,23 @@ async function handleAction(action, npcId, extra) {
     case 'move':
       if (extra?.roomId) await doMove(extra.roomId);
       break;
+    // Full floor plan overlay (desktop legibility): meta/browsing actions —
+    // opening the big map, zooming it, closing it — free at any energy.
+    case 'floorplan.open':
+      openFloorPlanOverlay();
+      break;
+    case 'floorplan.close':
+      closeFloorPlanOverlay();
+      break;
+    case 'floorplan.zoom-in':
+      floorPlanZoom(1.25);
+      break;
+    case 'floorplan.zoom-out':
+      floorPlanZoom(1 / 1.25);
+      break;
+    case 'floorplan.zoom-reset':
+      floorPlanZoomReset();
+      break;
     case 'save':
       // Phase 9: Save now opens the slot grid (save mode) instead of
       // silently overwriting the single live folder set.
@@ -3922,6 +3969,31 @@ async function handleAction(action, npcId, extra) {
     case 'menu.options':
       doMenuOpenOptions();
       break;
+    case 'settings.open':
+      // Opens the tabbed settings screen. The boot row's "Cast & more
+      // settings…" carries no tab (→ last remembered, default General);
+      // callers that want a specific tab pass extra.tab (Phase 2 has none
+      // yet — later phases' entries may).
+      openSettingsScreen(extra.tab || undefined);
+      break;
+    case 'settings.tab':
+      rememberSettingsTab(extra.tab);
+      if (extra.clearFilter) {
+        settingsFilter = '';
+        const filterInput = document.getElementById('settings-filter-input');
+        if (filterInput) filterInput.value = '';
+      }
+      renderSettingsUi();
+      break;
+    case 'settings.back':
+      closeSettingsScreen();
+      break;
+    case 'settings.toggle':
+      if (extra.field) await doSettingsToggle(extra.field);
+      break;
+    case 'settings.cycle':
+      if (extra.field) await doSettingsCycle(extra.field);
+      break;
     case 'menu.resume':
       doMenuResume();
       break;
@@ -3943,18 +4015,83 @@ async function handleAction(action, npcId, extra) {
     case 'options.bg-art':
       await doToggleBgArt();
       break;
-    case 'options.autosave':
-      await doToggleAutosave();
+    case 'speed.set':
+      // Phase 10 (D12): a header speed-cluster button. extra.id is the
+      // SPEED_PRESETS id. setSpeed is session-local and getTimeScale reads
+      // the multiplier live every frame, so the click takes effect on the
+      // next clock frame — only the cluster's active-state highlight needs
+      // refreshing here.
+      if (extra.id) {
+        setSpeed(extra.id);
+        if (typeof renderSpeedButtons === 'function') renderSpeedButtons();
+      }
       break;
-    case 'prefs.gender-f':
-    case 'prefs.gender-m':
-    case 'prefs.gender-nb':
-      await doTogglePreference('gender', action.slice('prefs.gender-'.length));
+    case 'set.population-dist':
+      // Phase 5 (D13/D14): the Population tab's proportional slider grids.
+      // extra carries data-field (genderDist|raceDist), data-key (the
+      // changed identity/race) and data-delta (nudge step); the range and
+      // number inputs call doPopulationDist directly (they're inputs, not
+      // actions). Pins the changed key, re-balances the rest to 100, and
+      // writes through setSettings (D2 immediate-apply).
+      await doPopulationDist(extra);
       break;
-    case 'prefs.pairing-hetero':
-    case 'prefs.pairing-gay':
-    case 'prefs.pairing-lesbian':
-      await doTogglePreference('pairing', action.slice('prefs.pairing-'.length));
+    case 'set.image-style':
+      // Phase 7 (D9): a style-grid tile click. extra.key is the style id
+      // ('none' or an IMAGE_STYLES id incl. the '__custom' sentinel).
+      if (extra.key) await doSetImageStyle(extra.key);
+      break;
+    case 'set.custom-style':
+      // Phase 7 (D9): the Custom phrase field. Its input writes through
+      // directly (no re-render, so focus survives); this case exists so the
+      // row's action id is real (design invariant 1) and so the phrase can
+      // be set programmatically too.
+      if (typeof extra.value === 'string') await doSetCustomStyle(extra.value);
+      break;
+    case 'set.theme':
+      // Phase 8 (D10): an Appearance-tab theme tile. extra.key is the
+      // COLOR_THEMES id; setSettings persists it and applyTheme() re-skins
+      // the UI chrome live (data-theme on <html>), so the selection sticks
+      // and nothing needs re-rendering.
+      if (extra.key) await doSetTheme(extra.key);
+      break;
+    case 'images.clear-cache':
+      // Phase 7 (D9): wipe the image LRU + menu ring, after a confirm —
+      // regeneration spends image quota again, so it must be deliberate.
+      {
+        const ok = await askConfirm(
+          'Delete every cached generated image? Scenes, portraits, photos and the boot-menu slideshow will regenerate on demand — each one spends image generation quota again.',
+          'Clear cache'
+        );
+        if (ok && typeof clearImageCache === 'function') await clearImageCache();
+      }
+      break;
+    // --- Data tab (Phase 9, D11) ---
+    case 'set.export-save':
+      // The Data tab's Export row opens the save panel so the player can
+      // pick a slot — every occupied card already carries its own Export
+      // button ('save-export' → doExportSlot → showExportModal).
+      openSaveMenu('load');
+      break;
+    case 'set.import-save':
+      // The Data tab's Import row — the same modal the save panel uses.
+      openImportModal();
+      break;
+    case 'data.reset':
+      // Reset all data: wipe every kv folder (saves + images + settings +
+      // the live playthrough) after a confirm, then boot clean. resetAllData
+      // is deliberate — nothing here is recoverable.
+      {
+        const ok = await askConfirm(
+          'Delete EVERYTHING this game stores in your browser — every save slot, every cached image, and all settings (theme, text size, cast distribution, SFW mode, image style)? This cannot be undone.',
+          'Reset all data'
+        );
+        if (ok && typeof resetAllData === 'function') await resetAllData();
+      }
+      break;
+    case 'data.storage':
+      // Re-query the storage insight in place (no pane rebuild — the fill
+      // is async, so the row's Refresh button just re-runs it).
+      if (typeof refreshStorageReadout === 'function') refreshStorageReadout();
       break;
     case 'new-game-solo':
       await startSoloGame();
@@ -4271,6 +4408,18 @@ async function doSleep() {
     let sleepMsg = describeSleep(sleepHours, currentGameState.player.energy);
     if (alarmFired) sleepMsg += ' The alarm dragged you out of bed.';
     else if (phoneDead && currentGameState.player.alarm != null) sleepMsg += ' Your phone died overnight — the alarm never went off.';
+    // 2026-08-20 (playtest feedback): sleep never restores hunger — the
+    // fullness window keeps draining through the night — but the sleep
+    // narration only ever mentioned energy, so a player woke to "bars
+    // full" + an unexplained empty stomach. Name the night's toll when it
+    // actually hurt.
+    const wakeBand = hungerBand(
+      currentGameState.player.fullnessRemainingHours ?? 0,
+      currentGameState.player.fullnessWindowHours ?? HUNGER_RHYTHM.starveHours
+    );
+    if (wakeBand.key === 'hungry') sleepMsg += ' You wake up hungry — the night burned through what was left of your food.';
+    else if (wakeBand.key === 'very_hungry') sleepMsg += ' You wake up very hungry. Whatever you ate before bed is gone.';
+    else if (wakeBand.key === 'starving') sleepMsg += ' You wake up starving. That snack was nowhere near a meal.';
     addLogEntry('narration', sleepMsg);
     // Narrate some of what happened while asleep, most recent first. Marked
     // seen so a later visit to the same room doesn't repeat it as evidence.
@@ -5784,6 +5933,12 @@ async function startSoloGame(draft) {
   try {
     const seed = genSeed();
     pendingCast = SIM_generateHouse(seed, 0, [], draft);
+    // Settings & Pause Overhaul Phase 4 (D5): the solo path bypasses the
+    // cast-approval step where pendingCast.contentConfig is normally built
+    // (handleGenerateCast), so seed it from defaults and apply the SFW
+    // mode before the state write — same baking-in as approveCastAndStartGame.
+    pendingCast.contentConfig = { tone: CONTENT_CONFIG.tone, contentPrefs: [], contentFlags: { ...CONTENT_CONFIG.contentFlags } };
+    applySfwMode(pendingCast);
     await writeGeneratedGameState(pendingCast);
     pendingCast = null;
     await syncGameStateFromKv();
@@ -5858,6 +6013,10 @@ async function approveCastAndStartGame() {
       }
     }));
 
+    // Settings & Pause Overhaul Phase 4 (D5): apply the SFW flag to the
+    // approved cast's contentConfig BEFORE the state write, so the new
+    // game's meta.contentConfig ships with the current mode baked in.
+    applySfwMode(pendingCast);
     await writeGeneratedGameState(pendingCast);
     pendingCast = null;
 
@@ -6056,6 +6215,11 @@ async function resumeFromRecord(record) {
     if (!loaded) { showError('That save could not be loaded.'); return; }
     ensureHotSinglesRoster(loaded);
     currentGameState = loaded;
+    // Settings & Pause Overhaul Phase 4 (D5): the SFW flag is re-applied
+    // after restore so a save written before the toggle picked up the
+    // current mode (and a mid-SFW-mode load of an older save gets patched
+    // too). Saved contentConfig is authoritative for everything else.
+    applySfwMode(currentGameState);
     currentSceneState = getSceneParticipants(loaded.player, loaded.npcs, loaded.world);
     render(loaded, currentSceneState);
     startAutosave(() => currentGameState);
@@ -6355,6 +6519,202 @@ function closeModal() {
   overlay.removeAttribute('data-open');
 }
 
+// --- Image info/reroll system (D17 + D17.5) ---
+// One modal + one set of plumbing, shared by EVERY generated image. Each
+// surface registers its <img> with setImageMeta(imgEl, meta), where meta =
+// { label, prompt, reroll } and reroll is an async function returning
+// {ok:true} or {error}. The scene backdrop keeps its own static ⓘ corner
+// button (openSceneImageInfo below); every other registered image gets the
+// floating ⓘ (imageInfoFloatBtn) that appears at the hovered image's
+// top-right corner. Both open the same modal.
+const imageMetaRegistry = new WeakMap();
+function setImageMeta(imgEl, meta) {
+  if (imgEl && meta) imageMetaRegistry.set(imgEl, meta);
+}
+
+let imageInfoFloatBtn = null;
+let currentFloatingMeta = null;
+
+function getImageInfoFloatBtn() {
+  if (imageInfoFloatBtn) return imageInfoFloatBtn;
+  imageInfoFloatBtn = document.createElement('button');
+  imageInfoFloatBtn.className = 'scene-info-btn image-info-float';
+  imageInfoFloatBtn.textContent = 'ⓘ';
+  imageInfoFloatBtn.title = 'About this image';
+  imageInfoFloatBtn.setAttribute('aria-label', 'About this image');
+  imageInfoFloatBtn.hidden = true;
+  document.body.appendChild(imageInfoFloatBtn);
+  imageInfoFloatBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (currentFloatingMeta) openImageInfo(currentFloatingMeta);
+    hideImageInfoFloatBtn();
+  });
+  return imageInfoFloatBtn;
+}
+
+function showImageInfoFloatBtn(imgEl) {
+  const btn = getImageInfoFloatBtn();
+  const r = imgEl.getBoundingClientRect();
+  btn.style.left = Math.max(6, Math.min(innerWidth - 34, r.right - 30)) + 'px';
+  btn.style.top = Math.max(6, r.top + 6) + 'px';
+  currentFloatingMeta = imageMetaRegistry.get(imgEl);
+  btn.hidden = false;
+}
+
+function hideImageInfoFloatBtn() {
+  if (imageInfoFloatBtn) imageInfoFloatBtn.hidden = true;
+  currentFloatingMeta = null;
+}
+
+// The shared info/reroll modal. meta = { label, prompt, seed, negativePrompt,
+// reroll } where reroll is async (fields) => ({ok:true}|{error}) and fields
+// = { prompt, seed|null, negativePrompt }. A null seed means "roll fresh" —
+// the modal only passes a concrete seed when the player typed one different
+// from the pre-fill. reroll null renders the fields read-only (character
+// portraits, where the seed is the identity anchor).
+let imageInfoActive = null; // {label, prompt, seed, negativePrompt, reroll}
+
+function openImageInfo(meta) {
+  const title = document.getElementById('modal-title');
+  const body = document.getElementById('modal-body');
+  const actions = document.getElementById('modal-actions');
+  const overlay = document.getElementById('modal-overlay');
+  if (!title || !body || !actions || !overlay || !meta) return;
+  imageInfoActive = meta;
+  hideImageInfoFloatBtn();
+  const editable = !!meta.reroll;
+
+  title.textContent = meta.label || 'Image';
+  body.innerHTML = '';
+
+  const promptLbl = document.createElement('div');
+  promptLbl.className = 'scene-prompt-label';
+  promptLbl.textContent = 'Prompt';
+  body.appendChild(promptLbl);
+  const field = document.createElement('textarea');
+  field.className = 'scene-prompt-field';
+  field.readOnly = !editable;
+  if (!editable) field.disabled = true;
+  field.value = meta.prompt || '';
+  body.appendChild(field);
+
+  const seedRow = document.createElement('div');
+  seedRow.className = 'scene-prompt-seed-row';
+  const seedLbl = document.createElement('div');
+  seedLbl.className = 'scene-prompt-label';
+  seedLbl.textContent = 'Seed';
+  const seedInput = document.createElement('input');
+  seedInput.className = 'scene-prompt-seed';
+  seedInput.type = 'number';
+  seedInput.disabled = !editable;
+  seedInput.value = meta.seed != null ? String(meta.seed) : '';
+  seedRow.append(seedLbl, seedInput);
+  if (editable) {
+    const seedHint = document.createElement('span');
+    seedHint.className = 'scene-prompt-seed-hint';
+    seedHint.textContent = 'leave as-is to roll a fresh frame';
+    seedRow.appendChild(seedHint);
+  }
+  body.appendChild(seedRow);
+
+  const negLbl = document.createElement('div');
+  negLbl.className = 'scene-prompt-label';
+  negLbl.textContent = 'Negative prompt';
+  body.appendChild(negLbl);
+  const negInput = document.createElement('input');
+  negInput.className = 'scene-prompt-neg';
+  negInput.type = 'text';
+  negInput.disabled = !editable;
+  negInput.value = meta.negativePrompt || '';
+  body.appendChild(negInput);
+
+  const hint = document.createElement('p');
+  hint.className = 'scene-prompt-hint';
+  hint.textContent = editable
+    ? 'Edit any field, then Regenerate renders with your values.'
+    : 'This image is tied to a fixed seed (character identity) — read-only.';
+  body.appendChild(hint);
+  const err = document.createElement('p');
+  err.className = 'scene-prompt-error';
+  err.id = 'scene-prompt-error';
+  err.hidden = true;
+  body.appendChild(err);
+
+  actions.innerHTML = (editable
+    ? '<button class="btn scene-reroll-btn" id="scene-reroll-btn" data-action="scene.image-reroll">↻ Regenerate</button>'
+    : '')
+    + '<button class="btn btn-secondary" data-action="close-modal">Close</button>';
+  // Defensive: the platform's `hidden` attribute always wins over CSS, so a
+  // stale hidden on the overlay would swallow the whole modal. The app's
+  // other modals never set it, but clearing it here costs nothing.
+  overlay.hidden = false;
+  overlay.setAttribute('data-open', '');
+}
+
+// The scene backdrop's static ⓘ — the prompt/seed are stamped by renderScene
+// (RENDER) whenever the scene art changes; before the first scene renders
+// there is nothing to show.
+function openSceneImageInfo() {
+  openImageInfo({
+    label: 'Scene Art',
+    prompt: (typeof currentSceneArtPrompt === 'string' && currentSceneArtPrompt)
+      ? currentSceneArtPrompt
+      : '',
+    seed: typeof currentSceneArtSeed === 'number' ? currentSceneArtSeed : null,
+    negativePrompt: IMAGE_NEGATIVE.scene,
+    reroll: (fields) => rerollSceneImage(currentGameState, currentSceneState, fields),
+  });
+}
+
+// Generic Regenerate handler for whichever image the open modal belongs to.
+// Reads the field values: the prompt and negative prompt pass through
+// verbatim; the seed only passes when the player typed something different
+// from the pre-fill (null otherwise = "roll fresh").
+async function doRerollImageInfo() {
+  const meta = imageInfoActive;
+  if (!meta || !meta.reroll) return;
+  const promptField = document.querySelector('.scene-prompt-field');
+  const seedField = document.querySelector('.scene-prompt-seed');
+  const negField = document.querySelector('.scene-prompt-neg');
+  const btn = document.getElementById('scene-reroll-btn');
+  const err = document.getElementById('scene-prompt-error');
+  let seedArg = null;
+  if (seedField) {
+    const prefilled = meta.seed != null ? String(meta.seed) : '';
+    const typed = seedField.value.trim();
+    if (typed !== prefilled) {
+      if (typed !== '') {
+        seedArg = Number(typed);
+        if (!Number.isFinite(seedArg)) {
+          if (err) { err.textContent = 'Seed must be a whole number, or empty.'; err.hidden = false; }
+          return;
+        }
+      }
+    }
+  }
+  if (btn) btn.disabled = true;
+  if (err) err.hidden = true;
+  showLoading('Rerolling image…');
+  try {
+    const result = await meta.reroll({
+      prompt: promptField ? promptField.value : meta.prompt,
+      seed: seedArg,
+      negativePrompt: negField ? negField.value.trim() : meta.negativePrompt,
+    });
+    if (result && result.ok) {
+      closeModal();
+    } else {
+      if (err) { err.textContent = `Couldn't regenerate: ${result?.error || 'unknown error'}`; err.hidden = false; }
+      if (btn) btn.disabled = false;
+    }
+  } catch (e) {
+    if (err) { err.textContent = `Couldn't regenerate: ${e.message}`; err.hidden = false; }
+    if (btn) btn.disabled = false;
+  } finally {
+    hideLoading();
+  }
+}
+
 // Free-text delivery ordering (showDeliveryModal/placeDelivery) was
 // replaced by Nile (COMPUTER's shop app) — a real priced catalog instead
 // of typing anything and getting a flat $8 fee. See defs.computer.js's
@@ -6472,6 +6832,11 @@ async function boot() {
   // browser-local settings (Background art / Autosave) into the cache the
   // slideshow and startAutosave consult.
   await loadMenuOptions();
+  // Settings & Pause Overhaul Phase 1: the single settings store. Loaded
+  // before first render — every later phase reads settingsCache through
+  // the settings.js helpers. loadSettings is idempotent, so a future
+  // path that touches settings earlier can never break this call.
+  await loadSettings();
   showMainMenu('boot');
 
   // Exit save: best-effort — navigation can cut off IndexedDB writes, but
@@ -6487,13 +6852,35 @@ async function boot() {
 function attachEventHandlers() {
   // Global click delegation
   document.addEventListener('click', (e) => {
-    // Phase 1 (D5): the submenu popover. A parent chip toggles its popover
-    // and consumes the click (the parent never executes an action); a click
-    // anywhere else closes any open popover. Verb rows inside the popover
-    // fall through to the normal [data-action] dispatch below.
+    // Nested action nav (D14): a "‹" back chip walks the drill-down up one
+    // level; a group chip ("X ▸") drills INTO the chips row. Both consume
+    // the click — a group chip never executes an action.
+    const navBack = e.target.closest('[data-nav-back]');
+    if (navBack) { navigateActionBack(); return; }
     const parentChip = e.target.closest('[data-submenu-parent]');
-    if (parentChip) { toggleSubmenuPopover(parentChip); return; }
-    closeSubmenuPopover();
+    if (parentChip) {
+      const key = parentChip.getAttribute('data-group-key');
+      if (key) openActionGroup(key);
+      return;
+    }
+
+    // D17.5: the floating image-info ⓘ over registered generated images.
+    // pointerover fires on hover (desktop) and on tap (touch) — the button
+    // appears at the image's top-right corner and the image's own tap still
+    // goes through. Only reasonably-sized images qualify so gallery thumbs
+    // stay clean; #scene-img keeps its static corner button instead.
+    document.addEventListener('pointerover', (e) => {
+      const fbtn = imageInfoFloatBtn;
+      if (fbtn && !fbtn.hidden && e.target === fbtn) return;
+      const t = e.target;
+      const img = (t instanceof Element && t.closest ? t.closest('img') : null);
+      if (!img || img.id === 'scene-img' || !imageMetaRegistry.has(img)) { hideImageInfoFloatBtn(); return; }
+      const r = img.getBoundingClientRect();
+      if (r.width < 140 || r.height < 140 || r.bottom < 0 || r.top > innerHeight) { hideImageInfoFloatBtn(); return; }
+      showImageInfoFloatBtn(img);
+    });
+    window.addEventListener('scroll', hideImageInfoFloatBtn, true);
+    window.addEventListener('resize', hideImageInfoFloatBtn);
 
     const target = e.target.closest('[data-action]');
     if (!target) {
@@ -6533,6 +6920,9 @@ function attachEventHandlers() {
     if (target.hasAttribute('data-search-text')) extra.searchText = target.getAttribute('data-search-text');
     if (target.hasAttribute('data-source')) extra.source = target.getAttribute('data-source');
     if (target.hasAttribute('data-key')) extra.key = target.getAttribute('data-key');
+    // Phase 10 (D12): header speed-cluster buttons carry which SPEED_PRESETS
+    // id they set.
+    if (target.hasAttribute('data-id')) extra.id = target.getAttribute('data-id');
     if (target.hasAttribute('data-days')) extra.days = Number(target.getAttribute('data-days'));
     if (target.hasAttribute('data-service')) extra.service = target.getAttribute('data-service');
     // Intimacy & Voyeurism Phase 15: codex verbs carry which ledger entry
@@ -6549,6 +6939,16 @@ function attachEventHandlers() {
     // Save system v2 (Phase 9): save-menu verbs carry which slot the card
     // was drawn for.
     if (target.hasAttribute('data-slot')) extra.slotId = target.getAttribute('data-slot');
+    // Settings & Pause Overhaul Phase 2 (D2): the settings sub-screen's
+    // verbs carry which tab (data-tab), which settings field a toggle/cycle
+    // row targets (data-field), and the filter-view "jump to tab" headers
+    // ask for the filter to be cleared on jump (data-clear-filter).
+    if (target.hasAttribute('data-tab')) extra.tab = target.getAttribute('data-tab');
+    if (target.hasAttribute('data-field')) extra.field = target.getAttribute('data-field');
+    if (target.hasAttribute('data-clear-filter')) extra.clearFilter = true;
+    // Phase 5: the Population slider nudge buttons carry the changed key +
+    // step (data-key is already collected above) and delta.
+    if (target.hasAttribute('data-delta')) extra.delta = Number(target.getAttribute('data-delta'));
     // Device-parameterised nav (BrineOS 0.2): the shell that owns the node
     // declares its device via data-device on itself or any ancestor, and
     // computer.open-screen dispatches on it — the phone shell will emit
@@ -6558,9 +6958,13 @@ function attachEventHandlers() {
     handleAction(action, npcId || null, extra);
   });
 
-  // Phase 1 (D5): Escape closes an open submenu popover.
+  // Nested action nav (D14): Escape pops the whole drill-down back to the
+  // active tab's root.
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && _openSubmenuKey) closeSubmenuPopover();
+    if (e.key === 'Escape' && _actionNavStack.length) {
+      resetActionNav();
+      renderActionChipsOnly();
+    }
   });
 
   // Free-text input
@@ -6637,6 +7041,19 @@ function attachEventHandlers() {
     });
   });
 
+  // VN refactor (D15): the scene backdrop generates toward the viewport's
+  // orientation, so flipping a phone landscape↔portrait must repaint it —
+  // renderScene is keyed on orientation and will pick up (and cache) the
+  // right frame. Only fires when the orientation actually flips, never on
+  // every resize jitter.
+  let _lastSceneOrientation = null;
+  window.addEventListener('resize', () => {
+    const orient = innerWidth >= innerHeight ? 'landscape' : 'portrait';
+    if (orient === _lastSceneOrientation) return;
+    _lastSceneOrientation = orient;
+    if (currentGameState) render(currentGameState, currentSceneState);
+  });
+
   // NPC card click → talk
   document.addEventListener('click', (e) => {
     const card = e.target.closest('[data-npc-id]');
@@ -6645,6 +7062,19 @@ function attachEventHandlers() {
     if (npcId && npcId !== 'player') {
       handleAction('talk', npcId);
     }
+  });
+
+  // Full floor plan overlay (desktop legibility): clicking the dark stage
+  // closes it, and Escape does too (the handlers here are late in the list,
+  // so a modal/conversation open on top keeps its own Escape behaviour).
+  const floorplanOverlay = document.getElementById('floorplan-overlay');
+  if (floorplanOverlay) {
+    floorplanOverlay.addEventListener('click', (e) => {
+      if (e.target === floorplanOverlay) closeFloorPlanOverlay();
+    });
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && floorplanOverlay && !floorplanOverlay.hidden) closeFloorPlanOverlay();
   });
 
   // Inventory panel (overhaul Phase 1): row selection, search, sort, and

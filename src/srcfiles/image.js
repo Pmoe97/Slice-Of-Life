@@ -17,10 +17,79 @@ const activeImageUrls = new Map(); // sceneKey → objectURL
 // be ruinous). A spread earns its place because it is the one piece of room
 // state a scene is explicitly ABOUT: the player laid it out on purpose, and
 // it lasts until the table is cleared rather than changing every tick.
-function composeSceneKey(roomId, phase, lighting, npcIds, detail) {
-  const npcPart = npcIds && npcIds.length > 0 ? npcIds.slice().sort().join('-') : 'empty';
+//
+// D9 (Settings & Pause Overhaul Phase 7): the active image style also folds
+// into every key — a style change must produce fresh frames, never a cached
+// one from the old style (styleKeyPart, below). The 'none' style (the
+// default) contributes NOTHING, exactly like an empty `detail`: default-
+// settings keys are byte-identical to pre-overhaul, so the existing cache
+// survives the feature.
+// IMAGE_PROMPT_VERSION: bump whenever a change makes CACHED pixels stale
+// because the PROMPT TEXT for a surface changed — not merely because a fresh
+// draw would roll different data. Folds into every content key that does not
+// already change with the prompt (the player-portrait key is excluded on
+// purpose: it is the portrait prompt's own hash, so a prompt change is a key
+// change). pv2 = the visual-only describer (buildVisualCharacterClause) took
+// over image prompts from getPhysicalDescriptionForPrompt, and scenes gained
+// deterministic seeds + the player anchor. All pre-pv2 cache entries are
+// simply never looked up again. pv3 = the VN refactor (D15): the scene is a
+// full-bleed backdrop now, so it generates toward the viewport's own
+// orientation (landscape/portrait) with a matching framing clause and an
+// orientation token in the key — every scene key changed shape, so the whole
+// scene namespace turns over with it.
+const IMAGE_PROMPT_VERSION = 'pv3';
+
+// VN refactor (D15): the scene backdrop's box follows the viewport's aspect,
+// so generate toward it — a portrait phone should not cram a 3:2 landscape
+// frame into a tall column. Mirrors the menu gallery's orientation split;
+// the token folds into the scene key so landscape and portrait frames can
+// never share a cache entry (they would, and both would crop badly).
+function sceneOrientation() {
+  return innerWidth >= innerHeight ? 'landscape' : 'portrait';
+}
+
+function composeSceneKey(roomId, phase, lighting, npcIds, detail, player) {
+  const ids = (npcIds || []).filter(Boolean);
+  const npcPart = ids.length > 0 ? ids.slice().sort().join('-') : 'empty';
   const base = `${roomId}_${phase}_${lighting || 'normal'}_${npcPart}`;
-  return detail ? `${base}_${detail}` : base;
+  const stylePart = imageStyleToken();
+  // The player is ALWAYS in their own scene, so who they are is part of what
+  // this scene IS. Without this, two different solo saves in the same
+  // room/phase with nobody present shared one cache entry — player B was
+  // served player A's art. The token also anchors the deterministic scene
+  // seed (composeSceneSeed), so revisiting a moment reproduces its frame.
+  const playerPart = playerIdentityToken(player);
+  const middle = `${base}_${playerPart}${detail ? `_${detail}` : ''}`;
+  return `${IMAGE_PROMPT_VERSION}_${sceneOrientation()}_${stylePart ? `${middle}_${stylePart}` : middle}`;
+}
+
+// A short stable signature of who the player is, for scene cache keys and
+// seeds. The portrait seed is the strongest anchor when one exists (it is
+// hashStr of the portrait prompt — change the portrait, change the token);
+// without a portrait, a hash of the appearance fields stands in.
+function playerIdentityToken(player) {
+  if (!player) return 'nobody';
+  if (player.portrait?.seed) return `p${player.portrait.seed}`;
+  const src = player.appearance ? JSON.stringify(player.appearance) : String(player.name || '');
+  return `ph${hashStr(src).toString(36)}`;
+}
+
+// Deterministic scene seed: the SAME scene — same save, same room, same
+// phase, same cast — always reproduces the same image instead of rerolling
+// every person's face on every cache miss (the #1 volatility complaint).
+// The hash mixes in each present character's OWN identity seed (portrait hash
+// / genSeed) so the scene's latent noise stays anchored to who is actually
+// in it, and the scene key so two different scenes never share a seed.
+function composeSceneSeed(sceneKey, player, activeNpcs) {
+  const anchors = [];
+  if (player) anchors.push(playerIdentityToken(player));
+  for (const npc of activeNpcs || []) {
+    anchors.push(npc.bible?.genSeed != null
+      ? `n${npc.bible.genSeed}`
+      : `ni${hashStr(String(npc.id || npc.name || '')).toString(36)}`);
+  }
+  anchors.sort();
+  return hashStr(`${sceneKey}|${anchors.join('|')}`);
 }
 
 // What is on the table in this room right now, or '' for "nothing worth
@@ -52,7 +121,45 @@ function sceneDetailSignature(roomObjects) {
 }
 
 function composeCharKey(npc, expression, pose) {
-  return `char_${npc.bible.genSeed}_${expression || 'neutral'}_${pose || 'standing'}`;
+  const stylePart = imageStyleToken();
+  const base = `char_${IMAGE_PROMPT_VERSION}_${npc.bible.genSeed}_${expression || 'neutral'}_${pose || 'standing'}`;
+  return stylePart ? `${base}_${stylePart}` : base;
+}
+
+// ===== IMAGE STYLE (Settings & Pause Overhaul Phase 7, D9) =====
+// ONE global style across every generated image. The active style id lives
+// in settings (kv.menu 'settings'.imageStyle); applyImageStyle is the SINGLE
+// funnel every generateImage prompt passes through — call it at every call
+// site so a style change repaints every surface. 'none' (the default)
+// appends nothing, so default-settings prompts are byte-identical to
+// pre-overhaul and the existing cache stays valid. Style is prompt-text
+// only: per-character seeds are untouched, so determinism holds.
+function applyImageStyle(prompt) {
+  const style = (typeof activeImageStyle === 'function' ? activeImageStyle() : null) || { id: 'none', customPrompt: '' };
+  if (style.id === 'none') return prompt;
+  if (style.id === '__custom') {
+    const custom = String(style.customPrompt || '').trim().replace(/^,+\s*/, '');
+    return custom ? `${prompt}, ${custom}` : prompt;
+  }
+  const def = IMAGE_STYLES.find((s) => s.id === style.id);
+  if (!def || !def.suffix) return prompt;
+  return `${prompt}${def.suffix}`;
+}
+
+// The cache-key fold for the active style (D9). '' when no style is active —
+// a default-settings key is byte-identical to pre-overhaul, so the existing
+// cache survives the feature (mirrors the empty-`detail` rule). Any other
+// style folds in so a style change produces fresh frames and the LRU evicts
+// the old ones. Custom folds the custom PHRASE (hashed) rather than just the
+// id — editing the phrase must also invalidate, not only toggling Custom on.
+function imageStyleToken() {
+  const style = (typeof activeImageStyle === 'function' ? activeImageStyle() : null) || { id: 'none', customPrompt: '' };
+  if (style.id === 'none') return '';
+  if (style.id === '__custom') {
+    const custom = String(style.customPrompt || '').trim().replace(/^,+\s*/, '');
+    return custom ? `stc_${hashStr(custom).toString(36)}` : '';
+  }
+  return `st_${style.id}`;
 }
 
 // --- Lighting from phase ---
@@ -80,22 +187,17 @@ function phaseLighting(phase) {
 // function could only ever draw the roommates, so every scene was shot from
 // the perspective of someone who wasn't in it.
 //
-// `opts.seated` is who is actually at the table when a meal is laid out:
-// people sitting down to eat should be drawn sitting down to eat, not
-// standing around a room that happens to have food in it.
+// B (scene imagery audit): the character clauses come from the VISUAL-only
+// describer (buildVisualCharacterClause) — never the LLM describer, which
+// adds voice/scent/gait noise an image model cannot render — and the player
+// is drawn LAST, immediately before the style clause. Diffusion models weight
+// the start and end of a prompt most strongly, so the scene's subject belongs
+// at the end, not buried mid-prompt behind the roommates.
 function buildImagePrompt(roomId, phase, activeNpcs, roomObjects, opts = {}) {
   const room = ROOMS[roomId];
   const roomName = String(room?.name || roomId);
   const roomType = room?.type || 'common';
   const light = phaseLighting(phase);
-  const describe = (who, fallback, isPlayer) => {
-    if (typeof getPhysicalDescriptionForPrompt !== 'function') return who?.bible?.visual || fallback;
-    // Intimacy & Voyeurism Phase 18 (D16): thread gameState + the player flag
-    // through so a visible pregnancy reads in the scene image. Without the
-    // state, no bump is claimed (fail-closed, like the intimate gate).
-    const o = opts.gameState ? { gameState: opts.gameState, ...(isPlayer ? { isPlayer: true } : {}) } : undefined;
-    return getPhysicalDescriptionForPrompt(who, o) || who?.bible?.visual || fallback;
-  };
 
   let prompt = `Interior of a ${roomType === 'bedroom' ? 'cozy bedroom' : roomName.toLowerCase()} in a shared apartment, ${light}. `;
   prompt += roomObjectsPhrase(roomObjects) || fallbackRoomPhrase(roomId, roomType);
@@ -120,22 +222,195 @@ function buildImagePrompt(roomId, phase, activeNpcs, roomObjects, opts = {}) {
     }
   }
 
-  // Character layers. The player first — it is their apartment and their
-  // scene — then the roommates who are present.
-  const posture = seated ? ', seated at the table' : '';
-  if (opts.player) {
-    prompt += `${describe(opts.player, 'a young adult', true)}${posture}. `;
-  }
+  // Character layers: the roommates who are present first, then the PLAYER
+  // last (see the B note above — the player is the scene's subject and must
+  // sit where the model pays most attention).
+  const seatedTail = ', seated at the table';
   if (activeNpcs && activeNpcs.length > 0) {
     for (const npc of activeNpcs) {
-      const v = describe(npc, 'a person');  // NPC Overhaul Phase 1
-      const expr = seated ? posture : (npc.activity ? `, ${npc.activity}` : '');
-      prompt += `${v}${expr}. `;
+      const clause = buildVisualCharacterClause(npc, { gameState: opts.gameState });
+      const tail = seated ? seatedTail : (npc.activity ? `, ${npc.activity}` : '');
+      prompt += `${clause}${tail}. `;
     }
   }
+  if (opts.player) {
+    const clause = buildVisualCharacterClause(opts.player, { gameState: opts.gameState, isPlayer: true });
+    prompt += `${clause}${seated ? seatedTail : ''}. `;
+  }
+
+  // VN refactor (D15): the scene is a full-bleed backdrop, so say so. The
+  // framing clause matches the orientation the frame was generated for, and
+  // deliberately keeps the subjects' faces toward the top two-thirds of the
+  // image — that is the band that stays visible above the reader panel.
+  prompt += sceneOrientation() === 'landscape'
+    ? 'Wide cinematic composition, the room filling the frame, subjects in the upper two-thirds, facing the camera. '
+    : 'Tall vertical composition, the room filling the frame, subjects in the middle of the frame, facing the camera. ';
 
   prompt += 'Anime-inspired illustration style, warm tones, detailed background, slice-of-life atmosphere.';
   return prompt;
+}
+
+// ===== VISUAL-ONLY CHARACTER CLAUSE (B) =====
+// Image prompts get THIS composer, not getPhysicalDescriptionForPrompt: the
+// LLM describer also names voice, scent and gait — noise a diffusion model
+// cannot render, which dilutes the attributes it CAN. This one keeps only
+// what is actually visible, leads with the character's NAME so the model
+// treats them as one subject across shots (and can tell people apart in a
+// multi-person frame), always states gender explicitly (the LLM describer
+// omits it for women), caps low-salience detail, and names the actual worn
+// outfit instead of an abstract fashion line. Deterministic — same character,
+// same state, same clause. Reads the same `bible.physical` shape every other
+// consumer reads (`who.bible` for NPCs, `who.appearance` for the player).
+const VISUAL_CAP = { face: 3, body: 2, distinguishing: 2, piercings: 2, tattoos: 2 };
+
+// Gender → natural image-prompt noun. "a 28-year-old woman" reads far better
+// to a diffusion model than "28-year-old female"; nonbinary flags survive
+// ("futanari woman") rather than being erased.
+const IMAGE_GENDER_NOUN = {
+  female: 'woman', male: 'man',
+  trans_female: 'woman', trans_male: 'man',
+  futanari: 'futanari woman', nonbinary: 'person', agender: 'person',
+};
+
+function buildVisualCharacterClause(who, opts = {}) {
+  const b = who?.bible || who?.appearance;
+  const p = b?.physical;
+  if (!p || !p.hair || !p.hair.color) {
+    return b?.visual || 'a young adult';
+  }
+
+  const parts = [];
+  const name = opts.name || who?.name || who?.bible?.name;
+  if (name) parts.push(name);
+
+  // Race, with the same article+noun the LLM describer uses. Human is the
+  // default and adds nothing to an image prompt, so it stays unspoken.
+  const species = b.species || 'human';
+  const race = species !== 'human' && typeof RACES !== 'undefined' ? RACES.find(r => r.id === species) : null;
+  if (race) parts.push(`${race.article} ${race.noun}`);
+
+  // Age + gender ALWAYS stated — an image subject's sex is a visual fact,
+  // and leaving it implicit (as the LLM describer does for women) invites
+  // the model to guess.
+  const ageBit = typeof b?.age === 'number' ? `${b.age}-year-old` : null;
+  const genderBit = IMAGE_GENDER_NOUN[b?.gender];
+  if (ageBit && genderBit) parts.push(`a ${ageBit} ${genderBit}`);
+  else if (ageBit) parts.push(ageBit);
+  else if (genderBit) parts.push(genderBit);
+
+  if (p.heightBuild) parts.push(p.heightBuild);
+  else if (p.height && p.build) parts.push(`${p.height} and ${p.build}`);
+
+  const hairBits = [p.hair.length, p.hair.texture, p.hair.color, p.hair.style].filter(Boolean);
+  if (hairBits.length > 0) parts.push(`with ${hairBits.join(' ')} hair`);
+
+  const eyeBits = [p.eyes.color, p.eyes.shape].filter(Boolean);
+  if (eyeBits.length > 0) parts.push(`${eyeBits.join(' ')} eyes`);
+
+  const skinBits = [p.skin.tone, p.skin.texture].filter(Boolean);
+  if (skinBits.length > 0) parts.push(`${skinBits.join(' ')} skin`);
+  if (p.skin.ethnicity) parts.push(p.skin.ethnicity);
+
+  const faceBits = [
+    p.face.shape && `${p.face.shape} face`,
+    p.face.nose && `a ${p.face.nose} nose`,
+    p.face.lips && `${p.face.lips} lips`,
+    p.face.cheekbones && `${p.face.cheekbones} cheekbones`,
+    p.face.jawline && `a ${p.face.jawline} jawline`,
+    p.face.ears && `${p.face.ears} ears`,
+  ].filter(Boolean);
+  if (faceBits.length > 0) parts.push(faceBits.slice(0, VISUAL_CAP.face).join(', '));
+
+  if (p.facialHair && p.facialHair !== 'clean-shaven') parts.push(`with ${p.facialHair}`);
+
+  const bodyBits = [
+    p.body.shape && `${p.body.shape} build`,
+    p.body.chestSize && `${p.body.chestSize} pectorals`,
+    p.body.buttSize && `${p.body.buttSize} hips`,
+    p.body.legs && `${p.body.legs} legs`,
+    p.body.posture && `${p.body.posture} posture`,
+  ].filter(Boolean);
+  if (bodyBits.length > 0) parts.push(bodyBits.slice(0, VISUAL_CAP.body).join(', '));
+
+  if (Array.isArray(p.distinguishingFeatures) && p.distinguishingFeatures.length > 0) {
+    parts.push(p.distinguishingFeatures.slice(0, VISUAL_CAP.distinguishing).join(', '));
+  }
+  if (Array.isArray(p.piercings) && p.piercings.length > 0) {
+    parts.push(p.piercings.slice(0, VISUAL_CAP.piercings).map(pi => `a ${pi.type} on the ${pi.location}`).join(', '));
+  }
+  if (Array.isArray(p.tattoos) && p.tattoos.length > 0) {
+    parts.push(p.tattoos.slice(0, VISUAL_CAP.tattoos).map(t => `a ${t.style} tattoo on the ${t.location}`).join(', '));
+  }
+
+  if (race && race.traitPhrase) parts.push(race.traitPhrase);
+
+  // Actual clothing: the state first (a towel overrides everything), then the
+  // worn garments — never the abstract "typically wears X" fashion line.
+  const clothing = who?.clothing;
+  if (clothing && clothing !== 'dressed') {
+    const stateProse = {
+      changing: 'mid-change, between two outfits',
+      nude: 'completely naked',
+      towel: 'wrapped in a towel',
+      sleepwear: 'currently in sleepwear',
+      undressed: 'currently undressed',
+    }[clothing];
+    if (stateProse) parts.push(stateProse);
+  } else {
+    const outfit = outfitPhrase(who);
+    if (outfit) parts.push(outfit);
+  }
+
+  // Visible pregnancy, gated exactly like the LLM describer's clause.
+  const selfId = opts?.isPlayer ? 'player' : (opts?.npcId || who?.id);
+  if (opts.gameState && typeof pregnancyVisible === 'function'
+      && selfId && pregnancyVisible(opts.gameState, selfId)) {
+    parts.push('visibly pregnant, with a prominent baby bump');
+  }
+
+  // The intimate layer — peek only. Scenes and portraits never opt in, so
+  // their output is byte-identical whether or not the gate is open.
+  if (opts.intimate && intimateAllowed(opts.gameState) && NAKED_CLOTHING_STATES.includes(clothing)) {
+    const intimateBits = typeof composeIntimateDescription === 'function' ? composeIntimateDescription(p.intimate) : '';
+    if (intimateBits) parts.push(intimateBits);
+  }
+
+  return parts.join(', ').trim();
+}
+
+// The garments actually worn right now, as concrete nouns ("a graphic tee and
+// jeans"), or null when the subject is not in a describable outfit. Reads the
+// same CLOTHING_DEFS slot view everything else uses. Outerwear first (it is
+// what you SEE), then the top, then the bottom — never more than three
+// pieces, so the clause stays light.
+function outfitPhrase(who) {
+  const outfit = who?.outfit;
+  if (!outfit || typeof outfit !== 'object') return null;
+  const item = id => {
+    const def = typeof CLOTHING_DEFS !== 'undefined' ? CLOTHING_DEFS[id] : null;
+    return def ? (def.nouns?.[0] || def.label) : null;
+  };
+  const wear = [];
+  const outer = item(outfit.outerwear);
+  if (outer) wear.push(outer);
+  const top = item(outfit.top);
+  if (top) wear.push(top);
+  const bottom = item(outfit.bottom) || item(outfit.swimwear);
+  if (bottom && wear.length < 3) wear.push(bottom);
+  if (wear.length < 3) {
+    const shoes = item(outfit.shoes);
+    if (shoes) wear.push(shoes);
+  }
+  if (wear.length === 0) return null;
+  // Plural garment nouns (jeans, chinos, shorts, slippers...) take no
+  // article; singulars get "a/an" — "wearing jeans and a tee", never
+  // "a chinos". Join three pieces as "A, B and C".
+  const words = wear.map(w => {
+    if (/^(a|an|the) /.test(w)) return w;
+    return (/s$/.test(w) && !/ss$/.test(w)) ? w : `a ${w}`;
+  });
+  const joined = words.length > 1 ? `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}` : words[0];
+  return `wearing ${joined}`;
 }
 
 function roomObjectsPhrase(roomObjects) {
@@ -167,7 +442,7 @@ function fallbackRoomPhrase(roomId, roomType) {
 }
 
 function buildCharacterPrompt(npc, expression, pose) {
-  const v = (typeof getPhysicalDescriptionForPrompt === 'function' ? getPhysicalDescriptionForPrompt(npc) : null) || npc.bible.visual || 'a young adult';  // NPC Overhaul Phase 1
+  const v = buildVisualCharacterClause(npc);
   return `${v}, ${expression || 'neutral expression'}, ${pose || 'standing casually'}, anime-inspired illustration style, full body, clean background, character sheet pose, warm lighting.`;
 }
 
@@ -175,19 +450,18 @@ function buildCharacterPrompt(npc, expression, pose) {
 // Composed from the studio draft through the SAME describer that serves every
 // NPC portrait, so the player is drawn by the machinery that draws the cast.
 // The draft is `{ name, surname, age, gender, physical, portrait }`, and
-// getPhysicalDescriptionForPrompt reads `{ age, gender, physical }` off
+// buildVisualCharacterClause reads `{ age, gender, physical }` off
 // `.appearance` — so it is handed a shim with that key rather than a second
-// composer being written for the same job.
+// composer being written for the same job. The name is threaded through so
+// the portrait carries the same identity anchor as the scenes.
 //
 // Deliberately does NOT opt into the intimate layer: a character-sheet
 // portrait is a clothed, face-and-figure shot, and the describer's gate wants
 // an explicit request plus an undressed subject. This is the honest default,
 // not an oversight.
 function buildPlayerPortraitPrompt(draft) {
-  const shim = { appearance: { age: draft?.age, gender: draft?.gender, physical: draft?.physical || {} } };
-  const desc = (typeof getPhysicalDescriptionForPrompt === 'function'
-    ? getPhysicalDescriptionForPrompt(shim)
-    : null) || 'a young adult';
+  const shim = { name: draft?.name, appearance: { age: draft?.age, gender: draft?.gender, physical: draft?.physical || {} } };
+  const desc = buildVisualCharacterClause(shim, { name: shim.name });
   return `${desc}, neutral confident expression, standing casually, `
     + 'anime-inspired illustration style, upper body portrait, clean simple background, warm lighting.';
 }
@@ -196,12 +470,16 @@ function buildPlayerPortraitPrompt(draft) {
 // prompt is editable, so "what this portrait is" is the prompt+seed pair the
 // record froze, exactly like a photo record (takePhoto, below). Two different
 // prompts are two different keys; regenerating an unchanged prompt hits cache.
+// D9: the active style folds into the key (and is appended to the frozen
+// prompt at generation time), so a style change re-renders the portrait
+// rather than serving the old style's frame.
 async function getPlayerPortraitImage(portrait) {
-  const key = `player_portrait_${portrait.seed}`;
+  const stylePart = imageStyleToken();
+  const key = `player_portrait_${portrait.seed}${stylePart ? '_' + stylePart : ''}`;
   const cached = await getCachedImage(key);
   if (cached) return { url: createObjectUrl(key, cached), cached: true };
   try {
-    const result = await root.generateImage(portrait.prompt, {
+    const result = await root.generateImage(applyImageStyle(portrait.prompt), {
       resolution: IMAGE_CACHE.resolutions.char,
       seed: portrait.seed,
       negativePrompt: 'blurry, distorted, extra limbs, low quality, text, watermark',
@@ -216,8 +494,12 @@ async function getPlayerPortraitImage(portrait) {
 }
 
 // --- Generate or retrieve cached background ---
+// The generation passes a DETERMINISTIC seed (composeSceneSeed) derived from
+// the scene key plus every present character's own identity seed — the same
+// moment revisited reproduces the same frame, instead of rerolling every
+// person's face on every cache miss. This is the core of the volatility fix.
 async function getSceneImage(roomId, phase, activeNpcs, roomObjects, opts = {}) {
-  const sceneKey = composeSceneKey(roomId, phase, 'normal', activeNpcs?.map(n => n.id) || [], sceneDetailSignature(roomObjects));
+  const sceneKey = composeSceneKey(roomId, phase, 'normal', activeNpcs?.map(n => n.id) || [], sceneDetailSignature(roomObjects), opts.player);
 
   // Check cache
   const cached = await getCachedImage(sceneKey);
@@ -227,10 +509,14 @@ async function getSceneImage(roomId, phase, activeNpcs, roomObjects, opts = {}) 
 
   // Generate new
   try {
-    const prompt = buildImagePrompt(roomId, phase, activeNpcs, roomObjects, opts);
+    const prompt = applyImageStyle(buildImagePrompt(roomId, phase, activeNpcs, roomObjects, opts));
+    // VN refactor (D15): generate toward the viewport's orientation — the
+    // backdrop box matches the screen, so the frame should too.
+    const resolution = IMAGE_CACHE.resolutions.scene[sceneOrientation()];
     const result = await root.generateImage(prompt, {
-      resolution: IMAGE_CACHE.resolutions.bg,
-      negativePrompt: 'blurry, distorted, extra limbs, low quality',
+      resolution,
+      seed: composeSceneSeed(sceneKey, opts.player, activeNpcs),
+      negativePrompt: 'blurry, distorted, extra limbs, low quality, text, watermark',
     });
 
     // Convert canvas to blob
@@ -244,6 +530,39 @@ async function getSceneImage(roomId, phase, activeNpcs, roomObjects, opts = {}) 
   }
 }
 
+// --- Reroll the current scene backdrop (D17/D17.6) ---
+// The info modal's Regenerate button. `fields` = { prompt, seed, negativePrompt }
+// from the modal: prompt is used verbatim (it was pre-filled with the exact
+// style-applied prompt the current pixels came from), seed null means "roll
+// fresh", negativePrompt defaults to the surface's usual one. The result is
+// cached UNDER THE SAME scene key — the player chose this art, so revisiting
+// the scene shows the rerolled frame. Falls through render.js's
+// sceneArtContext so it always rerolls whatever the CURRENT scene is.
+async function rerollSceneImage(gs, sceneState, fields) {
+  const ctx = sceneArtContext(gs, sceneState);
+  if (!ctx || !ctx.sceneKey) return { error: 'No scene to reroll.' };
+  try {
+    const result = await root.generateImage(fields.prompt, {
+      resolution: IMAGE_CACHE.resolutions.scene[sceneOrientation()],
+      seed: fields.seed ?? Math.floor(Math.random() * 2147483647),
+      negativePrompt: fields.negativePrompt || IMAGE_NEGATIVE.scene,
+    });
+    const blob = await canvasToBlob(result.canvas);
+    if (!blob) return { error: 'The model returned an empty frame.' };
+    await setCachedImage(ctx.sceneKey, blob);
+    const url = createObjectUrl(ctx.sceneKey, blob);
+    const img = document.getElementById('scene-img');
+    if (img) {
+      img.src = url;
+      img.removeAttribute('data-loading');
+    }
+    return { ok: true };
+  } catch (e) {
+    console.warn('Scene art reroll failed:', e.message);
+    return { error: e.message };
+  }
+}
+
 // --- Generate character image ---
 async function getCharacterImage(npc, expression, pose) {
   const charKey = composeCharKey(npc, expression, pose);
@@ -254,7 +573,7 @@ async function getCharacterImage(npc, expression, pose) {
   }
 
   try {
-    const prompt = buildCharacterPrompt(npc, expression, pose);
+    const prompt = applyImageStyle(buildCharacterPrompt(npc, expression, pose));
     const result = await root.generateImage(prompt, {
       resolution: IMAGE_CACHE.resolutions.char,
       seed: npc.bible.genSeed,
@@ -275,7 +594,7 @@ async function getCharacterImage(npc, expression, pose) {
 // The keyhole-lens image. The keyhole is NEVER baked into the art (D6) —
 // the prompt describes a plain room view and index.html's CSS mask crops it.
 // The prompt is deterministic and gate-governed (D15): the occupant is
-// described through getPhysicalDescriptionForPrompt with opts.intimate, so
+// described through buildVisualCharacterClause with opts.intimate, so
 // the SAME three-condition gate (explicit request + mature flag + naked
 // state) decides how much of the scene the prompt may name. The explicit
 // activity phrase (PEEK_VIEW_ACT) is read only when that gate is open; with
@@ -284,7 +603,9 @@ async function getCharacterImage(npc, expression, pose) {
 // moment reuses the frame instead of spending quota.
 function composePeekKey(gs, roomId, npc, actKey) {
   const phase = gs?.meta?.clock?.phase || 'day';
-  return `peek_${roomId}_${npc.bible.genSeed}_${phase}_${actKey || 'none'}`;
+  const stylePart = imageStyleToken();
+  const base = `peek_${IMAGE_PROMPT_VERSION}_${roomId}_${npc.bible.genSeed}_${phase}_${actKey || 'none'}`;
+  return stylePart ? `${base}_${stylePart}` : base;
 }
 
 // PURE. Builds the peek prompt from live state — deterministic, no rng.
@@ -296,7 +617,7 @@ function composePeekPrompt(gs, roomId, npc, actKey, npcId) {
   const gateOpen = intimateAllowed(gs) && NAKED_CLOTHING_STATES.includes(clothing);
   const actDef = PEEK_VIEW_ACT[actKey || ''] || PEEK_VIEW_ACT._default;
   const act = gateOpen && actDef.explicit ? actDef.explicit : actDef.safe;
-  const desc = getPhysicalDescriptionForPrompt(npc, { gameState: gs, intimate: true, npcId });
+  const desc = buildVisualCharacterClause(npc, { gameState: gs, intimate: true, npcId });
   return `Interior of the ${roomName.toLowerCase()} in a shared apartment, ${light}, ` +
     `viewed from the doorway, looking into the room from the threshold. ` +
     `${desc} is ${act}, at ease in their own space. ` +
@@ -311,7 +632,7 @@ async function getPeekImage(gs, roomId, npc, npcId) {
   const cached = await getCachedImage(key);
   if (cached) return { url: createObjectUrl(key, cached), cached: true, key };
   try {
-    const prompt = composePeekPrompt(gs, roomId, npc, actKey, npcId);
+    const prompt = applyImageStyle(composePeekPrompt(gs, roomId, npc, actKey, npcId));
     const result = await root.generateImage(prompt, {
       resolution: IMAGE_CACHE.resolutions.char, // 512x768 portrait — fits the keyhole
       negativePrompt: 'blurry, distorted, extra limbs, low quality, text, watermark, keyhole, door hardware',
@@ -408,16 +729,25 @@ function takePhoto(gameState, tags) {
 // the photo's own id, not by room/phase/npc composition — two photos of
 // the same room a day apart must stay visually distinct and individually
 // addressable, unlike getSceneImage's shared "current state of this room"
-// cache key.
+// cache key. D9: the active style folds into the key and is appended to the
+// record's frozen prompt at generation time — the ROOM content stays frozen
+// at capture (landmine L10), while the style overlay follows the current
+// setting like every other generated image.
 async function getPhotoImage(photo) {
-  const photoKey = `photo_${photo.id}`;
+  const stylePart = imageStyleToken();
+  const photoKey = `photo_${photo.id}${stylePart ? '_' + stylePart : ''}`;
   const cached = await getCachedImage(photoKey);
   if (cached) return { url: createObjectUrl(photoKey, cached), cached: true };
   try {
-    const result = await root.generateImage(photo.prompt, {
+    // D17.6: a photo rerolled through the info modal stores the EDITED
+    // (already style-applied) prompt verbatim with promptStyled set, so it
+    // is never re-styled here; a normal capture keeps the raw frozen prompt
+    // and gets the style overlay applied like every other generated image.
+    const promptForGen = photo.promptStyled ? photo.prompt : applyImageStyle(photo.prompt);
+    const result = await root.generateImage(promptForGen, {
       resolution: IMAGE_CACHE.resolutions.bg,
       seed: photo.seed,
-      negativePrompt: 'blurry, distorted, extra limbs, low quality',
+      negativePrompt: photo.negativePrompt || IMAGE_NEGATIVE.photo,
     });
     const blob = await canvasToBlob(result.canvas);
     await setCachedImage(photoKey, blob);
@@ -439,11 +769,12 @@ async function getPhotoImage(photo) {
 // quota, and the same flavor always yields the same photo (D1 — the flavor
 // shapes the image CONTENT, never the decision).
 async function getAskPhotoImage(record) {
-  const photoKey = `photo_${record.id}`;
+  const stylePart = imageStyleToken();
+  const photoKey = `photo_${record.id}${stylePart ? '_' + stylePart : ''}`;
   const cached = await getCachedImage(photoKey);
   if (cached) return { url: createObjectUrl(photoKey, cached), cached: true };
   try {
-    const result = await root.generateImage(record.prompt, {
+    const result = await root.generateImage(applyImageStyle(record.prompt), {
       resolution: IMAGE_CACHE.resolutions.char,
       seed: record.seed,
       negativePrompt: 'blurry, distorted, extra limbs, low quality, text, watermark',
@@ -454,6 +785,78 @@ async function getAskPhotoImage(record) {
   } catch (e) {
     console.warn('Ask photo generation failed:', e.message);
     return { url: null, cached: false, error: e.message };
+  }
+}
+
+// --- Reroll helpers (D17.5/D17.6) ---
+// The shared info/reroll modal's regenerate paths for the non-scene
+// surfaces. Each reroll receives the modal's field values verbatim —
+// { prompt, seed, negativePrompt } — where a null seed means "roll fresh"
+// (the modal only passes a concrete seed when the player typed one). All
+// cache under the same key, so the player's chosen pixels persist.
+
+// Default negative prompts, one per surface. The modal pre-fills from these
+// (or the surface's own stored override), and the reroll passes the field
+// through verbatim.
+const IMAGE_NEGATIVE = {
+  scene: 'blurry, distorted, extra limbs, low quality, text, watermark',
+  char: 'blurry, distorted, extra limbs, low quality, text, watermark',
+  photo: 'blurry, distorted, extra limbs, low quality',
+  peek: 'blurry, distorted, extra limbs, low quality, text, watermark, keyhole, door hardware',
+};
+
+// Photo reroll: re-freezes the memory — the edited prompt (verbatim,
+// flagged so getPhotoImage never re-styles it), the seed (or a fresh roll
+// when the player left it untouched), and any edited negative prompt all
+// persist in the record via the same boundary-save the rest of the phone
+// app uses.
+async function rerollPhotoImage(photo, imgEl, fields) {
+  if (!photo) return { error: 'Photo not found.' };
+  const stylePart = imageStyleToken();
+  const photoKey = `photo_${photo.id}${stylePart ? '_' + stylePart : ''}`;
+  try {
+    photo.prompt = fields.prompt;
+    photo.promptStyled = true;
+    photo.seed = fields.seed ?? Math.floor(Math.random() * 2147483647);
+    photo.negativePrompt = fields.negativePrompt || IMAGE_NEGATIVE.photo;
+    const result = await root.generateImage(photo.prompt, {
+      resolution: IMAGE_CACHE.resolutions.bg,
+      seed: photo.seed,
+      negativePrompt: photo.negativePrompt,
+    });
+    const blob = await canvasToBlob(result.canvas);
+    if (!blob) return { error: 'The model returned an empty frame.' };
+    await setCachedImage(photoKey, blob);
+    const url = createObjectUrl(photoKey, blob);
+    if (imgEl) imgEl.src = url;
+    await saveAtBoundary('photo-reroll', currentGameState);
+    return { ok: true };
+  } catch (e) {
+    console.warn('Photo reroll failed:', e.message);
+    return { error: e.message };
+  }
+}
+
+// Peek-frame reroll: fresh frame for the CURRENT act the player is watching
+// through the keyhole, cached under the same peek key.
+async function rerollPeekFrame(gs, roomId, npc, npcId, imgEl, fields) {
+  const actKey = npc.activity || npc.clothing || 'hanging_out';
+  const key = composePeekKey(gs, roomId, npc, actKey);
+  try {
+    const result = await root.generateImage(fields.prompt, {
+      resolution: IMAGE_CACHE.resolutions.char,
+      seed: fields.seed ?? Math.floor(Math.random() * 2147483647),
+      negativePrompt: fields.negativePrompt || IMAGE_NEGATIVE.peek,
+    });
+    const blob = await canvasToBlob(result.canvas);
+    if (!blob) return { error: 'The model returned an empty frame.' };
+    await setCachedImage(key, blob);
+    const url = createObjectUrl(key, blob);
+    if (imgEl) imgEl.src = url;
+    return { ok: true };
+  } catch (e) {
+    console.warn('Peek frame reroll failed:', e.message);
+    return { error: e.message };
   }
 }
 
@@ -559,9 +962,14 @@ function menuGalleryKeyPrefix(rating) {
 }
 
 // A key from the current generation. Anything else — including every
-// pre-token key, which is by definition pre-crop-removal — is stale.
+// pre-token key, which is by definition pre-crop-removal — is stale. D9: the
+// active image style also gates currency — a key whose style token differs
+// from the current style is stale too, so a style change regenerates the
+// slideshow instead of replaying the old style's pixels.
 function isCurrentGenerationKey(key) {
-  return typeof key === 'string' && key.startsWith(`menu_${MENU_GALLERY_GENERATION}_`);
+  if (typeof key !== 'string' || !key.startsWith(`menu_${MENU_GALLERY_GENERATION}_`)) return false;
+  const m = /^menu_g\d+_(sfw|suggestive|explicit)_(?:((?:st_|stc_)[^_]+)_)?(?:l|p)_/.exec(key);
+  return m ? (m[1] || '') === imageStyleToken() : false;
 }
 
 function menuGalleryKeyRating(key) {
@@ -571,11 +979,13 @@ function menuGalleryKeyRating(key) {
 
 function genMenuGalleryKey(rating) {
   const o = titleGallery.orientation === 'portrait' ? 'p' : 'l';
-  return `${menuGalleryKeyPrefix(rating)}${o}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  const styleToken = imageStyleToken();
+  const stylePart = styleToken ? `${styleToken}_` : '';
+  return `${menuGalleryKeyPrefix(rating)}${stylePart}${o}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
 function menuGalleryKeyOrientation(key) {
-  const m = /^menu_g\d+_(sfw|suggestive|explicit)_(l|p)_/.exec(key || '');
+  const m = /^menu_g\d+_(sfw|suggestive|explicit)_(?:(?:st_|stc_)[^_]+_)?(l|p)_/.exec(key || '');
   return m ? m[2] : null;
 }
 
@@ -606,7 +1016,16 @@ function menuViewportOrientation() {
 }
 
 function menuContentConfig() {
-  return (currentGameState && currentGameState.meta && currentGameState.meta.contentConfig) || CONTENT_CONFIG;
+  const live = currentGameState && currentGameState.meta && currentGameState.meta.contentConfig;
+  if (live) return live;
+  // Settings & Pause Overhaul Phase 4 (D5): with no live game the boot
+  // gallery falls back to the settings SFW state — when SFW mode is on the
+  // slideshow's cap drops to 'sfw' before a save exists. The live-game
+  // branch above stays authoritative whenever one owns the menu.
+  if (typeof isSfwMode === 'function' && isSfwMode()) {
+    return { tone: CONTENT_CONFIG.tone, contentPrefs: [], contentFlags: { ...CONTENT_CONFIG.contentFlags, mature: false } };
+  }
+  return CONTENT_CONFIG;
 }
 
 async function loadMenuGalleryRing() {
@@ -640,6 +1059,32 @@ async function purgeStaleGenerationImages() {
   }
   console.debug(`Menu gallery: purged ${stale.length} pre-${MENU_GALLERY_GENERATION} image(s).`);
   return stale.length;
+}
+
+// D9 (Settings & Pause Overhaul Phase 7): called from SETTINGS' setSettings
+// whenever the image style (or the Custom phrase) changes — re-filters the
+// boot gallery's persisted ring AND its in-memory session buffer to the new
+// style and hard-deletes the old style's blobs, so the slideshow shows the
+// new style on its next frame instead of replaying stale pixels. A no-op
+// when the gallery hasn't been initialized (the style change still lands —
+// every new key is style-tagged, so the next menu open self-heals via
+// purgeStaleGenerationImages).
+async function applyImageStyleLive() {
+  if (typeof titleGallery === 'undefined' || !titleGallery) return;
+  const purged = await purgeStaleGenerationImages();
+  const kept = titleGallery.images.filter(img => isCurrentGenerationKey(img.key));
+  if (kept.length === titleGallery.images.length) return;
+  titleGallery.images = kept;
+  if (titleGallery.idx >= kept.length) titleGallery.idx = Math.max(0, kept.length - 1);
+  if (kept.length > 0) {
+    await showTitleImg(titleGallery.idx);
+    setMenuPrevNextDisabled(false);
+  } else {
+    setMenuCounter(0, 0);
+    setMenuPrevNextDisabled(true);
+    genNextTitleImg();
+  }
+  if (purged > 0) console.debug(`Menu gallery: style change dropped ${purged} cached image(s).`);
 }
 
 async function saveMenuGalleryRing() {
@@ -788,7 +1233,7 @@ async function genNextTitleImg() {
   try {
     const cap = menuRatingCap(titleGallery.contentConfig);
     const orient = titleGallery.orientation || menuViewportOrientation();
-    const prompt = genTitlePrompt(titleGallery.contentConfig, orient);
+    const prompt = applyImageStyle(genTitlePrompt(titleGallery.contentConfig, orient));
     const result = await root.generateImage(prompt, {
       resolution: MENU_SLIDESHOW.resolutions[orient],
       negativePrompt: MENU_ART.negativePrompt,
@@ -890,6 +1335,12 @@ function hydrateRemainingTitleImages(keys) {
 async function initTitleGallery() {
   const menu = document.getElementById('main-menu');
   if (!menu || menu.hidden) return;
+  // Settings & Pause Overhaul Phase 3 (D3): only the boot title context
+  // runs the gallery. The pause menu is a plain dimmed overlay — the
+  // slideshow, its generation pacer, and the darkening overlay never run
+  // behind it. menuContext lives in MENU (loaded after IMAGE); absent here
+  // means boot-context default.
+  if (typeof menuContext !== 'undefined' && menuContext !== 'boot') return;
   stopTitleAutoCycle();
   titleGallery.generating = false;
   titleGallery.contentConfig = menuContentConfig();

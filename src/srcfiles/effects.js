@@ -577,6 +577,14 @@ function applyEatItem(p, ctx) {
     if (who === 'player' && cold && !stackFrozenFood(s) && PLATE_TUNING.frozenEatenPenalty > 0) {
       applyAdjustNeed({ who, need: 'mood', delta: String(-PLATE_TUNING.frozenEatenPenalty * eat) }, ctx);
     }
+    // Raw-ingredient consequence (2026-08-20): a rawDangerous def eaten
+    // as-is — never as a plate, so a cooked omelette is not raw eggs — is
+    // a small food-safety sting. Scaled per serving like the frozen
+    // penalty above; the eat picker and narration both warn first.
+    if (who === 'player' && !plate && def.rawDangerous) {
+      applyAdjustNeed({ who, need: 'mood', delta: String(-(RAW_FOOD.moodPenalty * eat)) }, ctx);
+      applyAdjustNeed({ who, need: 'energy', delta: String(-(RAW_FOOD.energyPenalty * eat)) }, ctx);
+    }
     // Food-overhaul Phase 5 (D15): a BURNT plate's snapshot carries its
     // flaw, and eating it stings a little on top of the quality dent —
     // burnt food is still food (never deleted), just a worse meal.

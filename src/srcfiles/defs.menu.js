@@ -184,10 +184,16 @@ const ORIENTATION_HINT = {
 // Authoring decisions from the planning-doc Q&A:
 //  - Inclusive pairings (ff/mm/mf, mixed race/gender) with per-player
 //    preference filters (gender pools + orientation pairings) read from kv
-//    (`menu`/`prefs`). The Options-menu UI comes in a later pass; the engine
-//    already honors the data (menuPreferencesCache).
+//    (`menu`/`prefs`). RETIRED in Phase 5 (Settings & Pause Overhaul): the
+//    six toggles and the 'prefs' key are gone. The gender pool is now the
+//    cast identity distribution (settings.genderDist, D14) mapped to f/m
+//    art tags, and the pairing allowlist is settings.pairings — both live
+//    in kv.menu 'settings' (migrated one-way from the old keys on first
+//    load, settings.js). The engine reads settingsCache directly.
 //  - Group scenes up to 4 actors; each actor gets their own clothing clause
-//    so the generator keeps them distinct.
+//    so the generator keeps them distinct. Phase 5 (D13): each actor also
+//    rolls a species from settings.raceDist; non-human rolls append a race
+//    phrase (RACES.artPhrase + traitPhrase) to the actor description.
 //  - Explicit next to mundane settings/activities is DELIBERATE (full nudity
 //    while doing ordinary things); the kink slot carries the community's
 //    "Free Use" and "Bored & Ignored" scenarios.
@@ -197,35 +203,6 @@ const ORIENTATION_HINT = {
 //
 // The v1 MENU_ART trait lists (subjects/poses/emotions/settings) remain as
 // the migration source; the engine reads PROMPT_V2 below.
-
-const MENU_GALLERY_PREFS_KEY = 'prefs';
-
-const MENU_PREFERENCES_DEFAULTS = {
-  actorGenders: { f: true, m: true, nb: true },   // actor pool filters
-  pairings: { hetero: true, gay: true, lesbian: true }, // duo orientation pairings
-};
-
-let menuPreferencesCache = normalizePreferences(null);
-
-function normalizePreferences(p) {
-  const d = MENU_PREFERENCES_DEFAULTS;
-  return {
-    actorGenders: { ...d.actorGenders, ...((p && p.actorGenders) || {}) },
-    pairings: { ...d.pairings, ...((p && p.pairings) || {}) },
-  };
-}
-
-// Persisted via kv (same 'menu' folder as the gallery options). Called from
-// showMainMenu; the options-menu toggles (a later pass) write here too.
-async function loadMenuPreferences() {
-  try {
-    const saved = await root.kv.menu.get(MENU_GALLERY_PREFS_KEY);
-    menuPreferencesCache = normalizePreferences(saved);
-  } catch (e) {
-    menuPreferencesCache = normalizePreferences(null);
-  }
-  return menuPreferencesCache;
-}
 
 const PROMPT_V2 = {
   context: {
@@ -696,52 +673,75 @@ function pickFrom(pool, order) {
   return elig[Math.floor(Math.random() * elig.length)];
 }
 
-function enabledGenders(prefs) {
-  return ['f', 'm', 'nb'].filter((g) => prefs.actorGenders[g]);
+// Phase 5 (D14): the gender pool is the cast identity distribution, not a
+// filter toggle. Each actor's presentation tag is drawn from
+// settings.genderDist via genderDistSampler() → identityToArtTag();
+// 'nb' is unreachable by construction (there is no nb cast identity).
+function reachableArtTags() {
+  const tags = new Set();
+  for (const [id, w] of Object.entries(settingsCache.genderDist || {})) {
+    if (Number(w) > 0) tags.add(identityToArtTag(id));
+  }
+  return tags;
 }
 
-// Possible duo gender-pairs given the preference filters.
-function pairingGenders(prefs) {
-  const g = enabledGenders(prefs);
+function drawArtTag() {
+  return identityToArtTag(genderDistSampler());
+}
+
+// Possible duo gender-pairs given the pairing allowlist (art only — it
+// never gates relationships). Pairings are honoured only among the art tags
+// the distribution can actually reach: male at 0% drops the gay 'mm' option
+// rather than drawing an impossible couple.
+function pairingGenders() {
+  const pairings = settingsCache.pairings || {};
+  const tags = reachableArtTags();
   const options = [];
-  if (prefs.pairings.hetero && g.includes('f') && g.includes('m')) options.push(['f', 'm']);
-  if (prefs.pairings.gay && g.includes('m')) options.push(['m', 'm']);
-  if (prefs.pairings.lesbian && g.includes('f')) options.push(['f', 'f']);
-  if (options.length === 0 && g.length > 0) {
-    options.push(g.length > 1 ? [g[0], g[1]] : [g[0], g[0]]);
+  if (pairings.hetero !== false && tags.has('f') && tags.has('m')) options.push(['f', 'm']);
+  if (pairings.gay !== false && tags.has('m')) options.push(['m', 'm']);
+  if (pairings.lesbian !== false && tags.has('f')) options.push(['f', 'f']);
+  if (options.length === 0 && tags.size) {
+    const tag = tags.has('f') ? 'f' : 'm';
+    options.push(tags.size > 1 ? ['f', 'm'] : [tag, tag]);
   }
   return options;
 }
 
-function chooseActorGenders(count, prefs) {
-  const g = enabledGenders(prefs);
-  if (g.length === 0) return null;
-  if (count === 1) return [g[Math.floor(Math.random() * g.length)]];
+function chooseActorGenders(count) {
+  if (count <= 0) return [];
+  if (count === 1) return [drawArtTag()];
   if (count === 2) {
-    const pairs = pairingGenders(prefs);
-    if (pairs.length === 0) return null;
+    const pairs = pairingGenders();
+    if (pairs.length === 0) return [drawArtTag(), drawArtTag()];
     const p = pairs[Math.floor(Math.random() * pairs.length)];
     return Math.random() < 0.5 ? p.slice() : p.slice().reverse();
   }
   const out = [];
-  for (let i = 0; i < count; i++) out.push(g[Math.floor(Math.random() * g.length)]);
-  if (out.length >= 2 && new Set(out).size === 1 && g.length > 1) {
-    out[1] = g[(g.indexOf(out[0]) + 1) % g.length];
+  for (let i = 0; i < count; i++) out.push(drawArtTag());
+  if (out.length >= 2 && new Set(out).size === 1) {
+    const others = [...reachableArtTags()].filter((t) => t !== out[0]);
+    if (others.length) out[1] = others[Math.floor(Math.random() * others.length)];
   }
   return out;
 }
 
-function rollActors(v, prefs) {
+// Phase 5 (D13): every art actor also rolls a species from
+// settings.raceDist; describeActors appends the race phrase for non-human
+// rolls. With raceDist at {human:100} nothing is appended, so today's
+// prompts are reproduced exactly.
+function rollActors(v) {
   const bandOrder = RATING_ORDER[v.intensity.r];
-  const genders = chooseActorGenders(v.actorCount, prefs);
-  if (!genders) return [];
+  const genders = chooseActorGenders(v.actorCount);
+  if (genders.length === 0) return [];
   const actors = [];
   for (let i = 0; i < genders.length; i++) {
     let pool = PROMPT_V2.detail.actor.pool.filter((e) => RATING_ORDER[e.r] <= bandOrder && e.g === genders[i]);
     pool = pool.filter((e) => !actors.some((a) => a.id === e.id));
     if (pool.length === 0) pool = PROMPT_V2.detail.actor.pool.filter((e) => RATING_ORDER[e.r] <= bandOrder && e.g === genders[i]);
     const pick = pool[Math.floor(Math.random() * pool.length)];
-    actors.push(pick || { id: 'unknown', t: 'a person', r: 'sfw', g: genders[i] });
+    const a = pick || { id: 'unknown', t: 'a person', r: 'sfw', g: genders[i] };
+    a.species = raceDistSampler();
+    actors.push(a);
   }
   return actors;
 }
@@ -786,10 +786,11 @@ function rollClothing(v) {
 
 // Layer 1 + Layer 2 in a single linear pass: all context slots roll first
 // (in parallel), then all detail slots (in parallel), each conditioned on
-// the context. Layer 3 (guard repair) then polishes the vector.
-function rollPromptVector(contentConfig, prefs) {
+// the context. Layer 3 (guard repair) then polishes the vector. Phase 5:
+// the actor pool draws gender + species from settings (D13/D14) — the old
+// prefs argument is gone.
+function rollPromptVector(contentConfig) {
   const capOrder = RATING_ORDER[menuRatingCap(contentConfig)];
-  prefs = prefs || normalizePreferences(null);
   for (let attempt = 0; attempt < 3; attempt++) {
     const v = {};
     v.intensity = pickFrom(PROMPT_V2.context.intensity.pool, capOrder);
@@ -803,14 +804,14 @@ function rollPromptVector(contentConfig, prefs) {
     v.weather = pickFrom(PROMPT_V2.context.weather.pool, RATING_ORDER.sfw);
     v.framing = pickFrom(PROMPT_V2.context.framing.pool, bandOrder);
     v.actorCount = v.gathering ? v.gathering.actors + (v.gathering.id === 'group' && Math.random() < 0.5 ? 1 : 0) : 1;
-    v.actors = rollActors(v, prefs);
+    v.actors = rollActors(v);
     v.clothing = rollClothing(v);
     v.pose = pickFrom(PROMPT_V2.detail.pose.pool.filter((e) => peopleOK(e.p, v.actorCount)), bandOrder);
     v.activity = pickFrom(PROMPT_V2.detail.activity.pool.filter((e) => activityOK(e, v)), bandOrder);
     v.emotion = pickFrom(PROMPT_V2.detail.emotion.pool, bandOrder);
     v.style = pickFrom(PROMPT_V2.detail.style.pool, RATING_ORDER.sfw);
     v.kink = pickFrom(PROMPT_V2.detail.kink.pool.filter((e) => peopleOK(e.p, v.actorCount)), bandOrder);
-    if (v.intensity && v.actors.length > 0 && repairVector(v, prefs)) return v;
+    if (v.intensity && v.actors.length > 0 && repairVector(v)) return v;
   }
   return fallbackPromptVector();
 }
@@ -824,7 +825,7 @@ function ruleMatches(rule, v) {
   return true;
 }
 
-function repairVector(v, prefs) {
+function repairVector(v) {
   for (let i = 0; i < 8; i++) {
     let fixed = false;
     for (const rule of PROMPT_V2.rules) {
@@ -887,11 +888,14 @@ function fallbackPromptVector() {
 }
 
 // Per-actor clothing clauses keep the generator from merging actors in
-// multi-person scenes.
+// multi-person scenes. Phase 5 (D13): a non-human actor's race phrase is
+// appended right after the actor description (raceArtPhrase — empty for
+// human, so a human-100 distribution adds nothing).
 function describeActors(v) {
   const parts = v.actors.map((a, i) => {
     const c = v.clothing[i];
-    return `${a.t}${c && c.t ? ', ' + c.t : ''}`;
+    const race = a.species && a.species !== 'human' ? ', ' + raceArtPhrase(a.species, a.g) : '';
+    return `${a.t}${race}${c && c.t ? ', ' + c.t : ''}`;
   });
   if (parts.length === 1) return parts[0];
   if (parts.length === 2) return `${parts[0]}, together with ${parts[1]}`;
@@ -940,9 +944,11 @@ function dumpPromptDebug(v, prompt) {
 }
 
 // Public entry point — signature unchanged, so image.js's slideshow (which
-// calls genTitlePrompt(contentConfig, orientation)) needs no edits.
+// calls genTitlePrompt(contentConfig, orientation)) needs no edits. Phase 5:
+// the actor pool reads settings (genderDist/raceDist/pairings) internally —
+// the old prefs argument and menuPreferencesCache are gone.
 function genTitlePrompt(contentConfig, orientation) {
-  const v = rollPromptVector(contentConfig, menuPreferencesCache);
+  const v = rollPromptVector(contentConfig);
   const prompt = promptFromVector(v, orientation);
   if (promptDebugEnabled()) dumpPromptDebug(v, prompt);
   return prompt;

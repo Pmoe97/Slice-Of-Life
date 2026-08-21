@@ -960,7 +960,7 @@ const ITEM_DEFS = {
   // plate builder (ITEMS' makePlate) reads through foodGroupOf, so the
   // bonus metric (food-group variety, the phase's resolution of the open
   // question) has ONE owning definition per def and one consumer.
-  eggs: { id: 'eggs', storageClass: 'fridge', label: 'Eggs', nouns: ['egg', 'eggs'], category: 'ingredient', stackable: true, maxStack: 24, perishable: { days: 7 }, consumable: { hunger: 6, kcal: 72 }, foodGroup: 'protein', price: 4, buyQty: 12 },
+  eggs: { id: 'eggs', storageClass: 'fridge', label: 'Eggs', nouns: ['egg', 'eggs'], category: 'ingredient', stackable: true, maxStack: 24, perishable: { days: 7 }, consumable: { hunger: 6, kcal: 72 }, foodGroup: 'protein', rawDangerous: true, price: 4, buyQty: 12 },
   milk: { id: 'milk', storageClass: 'fridge', label: 'Milk', nouns: ['milk'], category: 'ingredient', stackable: true, maxStack: 4, perishable: { days: 3 }, consumable: { hunger: 3, kcal: 120 }, foodGroup: 'dairy', price: 3, buyQty: 1 },
   bread: { id: 'bread', storageClass: 'fridge', label: 'Bread', nouns: ['bread', 'loaf'], category: 'ingredient', stackable: true, maxStack: 4, perishable: { days: 5 }, consumable: { hunger: 10, kcal: 80 }, foodGroup: 'starchy', price: 3, buyQty: 1 },
   pasta_dry: { id: 'pasta_dry', storageClass: 'pantry', label: 'Dry Pasta', nouns: ['pasta'], category: 'ingredient', stackable: true, maxStack: 8, consumable: { hunger: 15, kcal: 200 }, foodGroup: 'starchy', price: 2, buyQty: 2 },
@@ -969,8 +969,8 @@ const ITEM_DEFS = {
   // Raw meat is the shortest-lived thing you can buy, but not so short that
   // a Nile order can rot on the doormat before you get up — 1 day out is
   // 18h on the mat and 4 days in the fridge.
-  chicken_raw: { id: 'chicken_raw', storageClass: 'fridge', label: 'Raw Chicken', nouns: ['chicken'], category: 'ingredient', stackable: true, maxStack: 6, perishable: { days: 1.5 }, consumable: { hunger: 5, kcal: 165 }, foodGroup: 'protein', price: 8, buyQty: 2 },
-  ground_beef: { id: 'ground_beef', storageClass: 'fridge', label: 'Ground Beef', nouns: ['ground beef', 'beef'], category: 'ingredient', stackable: true, maxStack: 6, perishable: { days: 1.5 }, consumable: { hunger: 5, kcal: 243 }, foodGroup: 'protein', price: 9, buyQty: 1 },
+  chicken_raw: { id: 'chicken_raw', storageClass: 'fridge', label: 'Raw Chicken', nouns: ['chicken'], category: 'ingredient', stackable: true, maxStack: 6, perishable: { days: 1.5 }, consumable: { hunger: 5, kcal: 165 }, foodGroup: 'protein', rawDangerous: true, price: 8, buyQty: 2 },
+  ground_beef: { id: 'ground_beef', storageClass: 'fridge', label: 'Ground Beef', nouns: ['ground beef', 'beef'], category: 'ingredient', stackable: true, maxStack: 6, perishable: { days: 1.5 }, consumable: { hunger: 5, kcal: 243 }, foodGroup: 'protein', rawDangerous: true, price: 9, buyQty: 1 },
   cheese: { id: 'cheese', storageClass: 'fridge', label: 'Cheese', nouns: ['cheese'], category: 'ingredient', stackable: true, maxStack: 6, perishable: { days: 7 }, consumable: { hunger: 4, kcal: 110 }, foodGroup: 'dairy', price: 5, buyQty: 1 },
   butter: { id: 'butter', kcal: 102, storageClass: 'fridge', label: 'Butter', nouns: ['butter'], category: 'ingredient', stackable: true, maxStack: 4, perishable: { days: 14 }, foodGroup: 'fat', price: 4, buyQty: 1 },
   onion: { id: 'onion', storageClass: 'pantry', label: 'Onion', nouns: ['onion'], category: 'ingredient', stackable: true, maxStack: 10, consumable: { hunger: 2, kcal: 44 }, foodGroup: 'vegetable', price: 1, buyQty: 3 },
@@ -978,7 +978,7 @@ const ITEM_DEFS = {
   potatoes: { id: 'potatoes', storageClass: 'pantry', label: 'Potatoes', nouns: ['potato', 'potatoes'], category: 'ingredient', stackable: true, maxStack: 10, consumable: { hunger: 8, kcal: 160 }, foodGroup: 'starchy', price: 3, buyQty: 5 },
   lettuce: { id: 'lettuce', storageClass: 'fridge', label: 'Lettuce', nouns: ['lettuce'], category: 'ingredient', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 3, kcal: 8 }, foodGroup: 'vegetable', price: 2, buyQty: 1 },
   tomato: { id: 'tomato', storageClass: 'fridge', label: 'Tomato', nouns: ['tomato'], category: 'ingredient', stackable: true, maxStack: 8, perishable: { days: 5 }, consumable: { hunger: 2, kcal: 22 }, foodGroup: 'vegetable', price: 1, buyQty: 4 },
-  bacon: { id: 'bacon', storageClass: 'fridge', label: 'Bacon', nouns: ['bacon'], category: 'ingredient', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 5, kcal: 86 }, foodGroup: 'protein', price: 6, buyQty: 1 },
+  bacon: { id: 'bacon', storageClass: 'fridge', label: 'Bacon', nouns: ['bacon'], category: 'ingredient', stackable: true, maxStack: 4, perishable: { days: 2 }, consumable: { hunger: 5, kcal: 86 }, foodGroup: 'protein', rawDangerous: true, price: 6, buyQty: 1 },
   flour: { id: 'flour', kcal: 228, storageClass: 'pantry', label: 'Flour', nouns: ['flour'], category: 'ingredient', stackable: true, maxStack: 4, foodGroup: 'starchy', price: 3, buyQty: 1 },
   sugar: { id: 'sugar', kcal: 48, storageClass: 'pantry', label: 'Sugar', nouns: ['sugar'], category: 'ingredient', stackable: true, maxStack: 4, foodGroup: 'sweet', price: 3, buyQty: 1 },
   // Food-overhaul Phase 5 (D8): the fat/seasoning reagents — real pantry
@@ -1358,6 +1358,26 @@ const ITEM_DEFS = {
   necklace: { id: 'necklace', label: 'Necklace', nouns: ['necklace', 'pendant'], category: 'casual', sortGroup: 'clothing', slot: 'accessory', stackable: false, maxStack: 1, price: 20, buyQty: 1, stats: { attraction: 0.25, comfort: 0, modesty: 0, thermal: 0, reveal: 0.05 }, traits: ['sexy', 'formal', 'everyday'], styleTags: ['delicate'] },
   cap: { id: 'cap', label: 'Cap', nouns: ['cap', 'baseball cap'], category: 'casual', sortGroup: 'clothing', slot: 'accessory', stackable: false, maxStack: 1, price: 12, buyQty: 1, stats: { attraction: 0.05, comfort: 0.1, modesty: 0, thermal: 0, reveal: 0 }, traits: ['everyday', 'sport'], styleTags: ['casual', 'sporty'] },
   glasses: { id: 'glasses', label: 'Glasses', nouns: ['glasses', 'spectacles'], category: 'casual', sortGroup: 'clothing', slot: 'accessory', stackable: false, maxStack: 1, price: 30, buyQty: 1, stats: { attraction: 0.08, comfort: 0, modesty: 0, thermal: 0, reveal: 0 }, traits: ['everyday', 'versatile'], styleTags: ['studious'] },
+  // --- Fashion-flavored clothing (Everyday style → wardrobe, Phase: style) ---
+  // The wardrobe seeder keys the starter sets off the player's/NPC's
+  // `physical.fashion`, and these defs are the palette those sets draw from
+  // so each style reads differently at a glance (the preppy roommate in a
+  // polo, the goth one in the leather jacket). Same slot/trait/stat shape as
+  // the base clothing above; pricing is the shop's only concern beyond that.
+  flannel_shirt: { id: 'flannel_shirt', label: 'Flannel Shirt', nouns: ['flannel', 'flannel shirt'], category: 'casual', sortGroup: 'clothing', slot: 'top', stackable: false, maxStack: 1, price: 24, buyQty: 1, stats: { attraction: 0.12, comfort: 0.2, modesty: 0.42, thermal: 0.3, reveal: 0 }, traits: ['everyday', 'versatile'], styleTags: ['plaid', 'cozy'] },
+  turtleneck: { id: 'turtleneck', label: 'Turtleneck', nouns: ['turtleneck', 'turtle neck'], category: 'casual', sortGroup: 'clothing', slot: 'top', stackable: false, maxStack: 1, price: 28, buyQty: 1, stats: { attraction: 0.2, comfort: 0.2, modesty: 0.5, thermal: 0.4, reveal: 0 }, traits: ['everyday', 'work'], styleTags: ['minimal', 'neutral'] },
+  polo_shirt: { id: 'polo_shirt', label: 'Polo Shirt', nouns: ['polo shirt', 'polo'], category: 'casual', sortGroup: 'clothing', slot: 'top', stackable: false, maxStack: 1, price: 18, buyQty: 1, stats: { attraction: 0.1, comfort: 0.2, modesty: 0.4, thermal: 0.18, reveal: 0 }, traits: ['everyday', 'work'], styleTags: ['collared', 'sporty'] },
+  cardigan: { id: 'cardigan', label: 'Cardigan', nouns: ['cardigan', 'cardie'], category: 'lounge', sortGroup: 'clothing', slot: 'top', stackable: false, maxStack: 1, price: 32, buyQty: 1, stats: { attraction: 0.18, comfort: 0.35, modesty: 0.5, thermal: 0.4, reveal: 0 }, traits: ['comfortable', 'everyday'], styleTags: ['knit', 'cozy'] },
+  cargo_pants: { id: 'cargo_pants', label: 'Cargo Pants', nouns: ['cargo pants', 'cargos'], category: 'casual', sortGroup: 'clothing', slot: 'bottom', stackable: false, maxStack: 1, price: 28, buyQty: 1, stats: { attraction: 0.1, comfort: 0.2, modesty: 0.5, thermal: 0.2, reveal: 0 }, traits: ['everyday', 'sport'], styleTags: ['tactical', 'loose'] },
+  chinos: { id: 'chinos', label: 'Chinos', nouns: ['chinos', 'khakis'], category: 'casual', sortGroup: 'clothing', slot: 'bottom', stackable: false, maxStack: 1, price: 30, buyQty: 1, stats: { attraction: 0.18, comfort: 0.2, modesty: 0.52, thermal: 0.22, reveal: 0 }, traits: ['work', 'everyday'], styleTags: ['tailored', 'neutral'] },
+  overalls: { id: 'overalls', label: 'Overalls', nouns: ['overalls', 'dungarees'], category: 'casual', sortGroup: 'clothing', slot: 'bottom', stackable: false, maxStack: 1, price: 34, buyQty: 1, stats: { attraction: 0.12, comfort: 0.25, modesty: 0.5, thermal: 0.3, reveal: 0 }, traits: ['everyday', 'work'], styleTags: ['denim', 'casual'] },
+  leather_jacket: { id: 'leather_jacket', label: 'Leather Jacket', nouns: ['leather jacket', 'biker jacket'], category: 'casual', sortGroup: 'clothing', slot: 'outerwear', stackable: false, maxStack: 1, price: 95, buyQty: 1, stats: { attraction: 0.35, comfort: 0.05, modesty: 0.4, thermal: 0.35, reveal: 0 }, traits: ['everyday', 'work'], styleTags: ['edgy', 'street'] },
+  windbreaker: { id: 'windbreaker', label: 'Windbreaker', nouns: ['windbreaker', 'windcheater'], category: 'sport', sortGroup: 'clothing', slot: 'outerwear', stackable: false, maxStack: 1, price: 38, buyQty: 1, stats: { attraction: 0.12, comfort: 0.3, modesty: 0.35, thermal: 0.3, reveal: 0 }, traits: ['sport', 'everyday'], styleTags: ['technical', 'bright'] },
+  work_boots: { id: 'work_boots', label: 'Work Boots', nouns: ['work boots', 'boots'], category: 'work', sortGroup: 'clothing', slot: 'shoes', stackable: false, maxStack: 1, price: 42, buyQty: 1, stats: { attraction: 0.12, comfort: 0.15, modesty: 0, thermal: 0.3, reveal: 0 }, traits: ['work', 'sport'], styleTags: ['boots', 'sturdy'] },
+  beanie: { id: 'beanie', label: 'Beanie', nouns: ['beanie', 'knit cap'], category: 'casual', sortGroup: 'clothing', slot: 'accessory', stackable: false, maxStack: 1, price: 10, buyQty: 1, stats: { attraction: 0.03, comfort: 0.15, modesty: 0, thermal: 0.15, reveal: 0 }, traits: ['everyday', 'comfortable'], styleTags: ['cozy', 'winter'] },
+  sun_hat: { id: 'sun_hat', label: 'Sun Hat', nouns: ['sun hat', 'wide-brim hat'], category: 'casual', sortGroup: 'clothing', slot: 'accessory', stackable: false, maxStack: 1, price: 14, buyQty: 1, stats: { attraction: 0.06, comfort: 0.1, modesty: 0, thermal: 0.05, reveal: 0 }, traits: ['everyday', 'swim'], styleTags: ['summer', 'wide-brim'] },
+  bracelet: { id: 'bracelet', label: 'Bracelet', nouns: ['bracelet', 'bangle'], category: 'casual', sortGroup: 'clothing', slot: 'accessory', stackable: false, maxStack: 1, price: 15, buyQty: 1, stats: { attraction: 0.15, comfort: 0, modesty: 0, thermal: 0, reveal: 0 }, traits: ['sexy', 'everyday'], styleTags: ['bohemian'] },
+  high_tops: { id: 'high_tops', label: 'High-Top Sneakers', nouns: ['high tops', 'high-top sneakers'], category: 'casual', sortGroup: 'clothing', slot: 'shoes', stackable: false, maxStack: 1, price: 50, buyQty: 1, stats: { attraction: 0.15, comfort: 0.2, modesty: 0, thermal: 0.15, reveal: 0 }, traits: ['everyday', 'sport'], styleTags: ['street', 'bold'] },
 };
 
 // --- Sort groups (inventory overhaul Phase 1) ---
@@ -1517,6 +1537,19 @@ const RECIPES = {
     servings: 1, method: 'bake', cookware: 'oven', betterHot: true,
     leaves: [],
   },
+  // 2026-08-20 (playtest feedback): the starter freezer's frozen pizza
+  // finally gets the "pop it in the oven" beat its spawn comment always
+  // promised — there was no recipe for it, so the ONLY thing a player could
+  // do was eat it frozen (and take the D28 mood penalty for the privilege).
+  // Baked, it's a real meal: 4 servings, betterHot so it should be eaten
+  // fresh or reheated. Eating it straight from the freezer stays legal and
+  // stays sad.
+  frozen_pizza: {
+    id: 'frozen_pizza', label: 'Baked Pizza',
+    ingredients: [{ defId: 'frozen_pizza', qty: 1 }],
+    servings: 4, method: 'bake', cookware: 'baking_tray', betterHot: true,
+    leaves: [],
+  },
 };
 
 // Seeded into the fridge/pantry at new-game spawn (WORLD's
@@ -1586,6 +1619,107 @@ const STARTER_WARDROBES = {
     { defId: 'one_piece', qty: 1 }, { defId: 'sandals', qty: 1 },
     { defId: 'jeans', qty: 1 }, { defId: 'sneakers', qty: 1 },
     { defId: 'socks_cotton', qty: 1 }, { defId: 'boxers', qty: 1 },
+  ],
+};
+
+// The Everyday-style wardrobe catalog (Player Design studio's `fashion`
+// select). WORLD's seedStarterWardrobes swaps the fixed STARTER_WARDROBES
+// sets above for whichever of these matches each character's rolled or
+// chosen `physical.fashion`, so the style choice is not just a description
+// line — it's the actual clothes on the hangers and the outfit on the
+// person's back. Every set:
+//   - fits tier-1 wardrobe capacity (12 items),
+//   - carries real underwear + socks + shoes so a full outfit composes,
+//   - keeps at least one everyday/versatile core so composeOutfit can always
+//     build a daily outfit, and
+//   - mostly carries a work-capable top so an NPC with a job isn't naked at
+//     the office (degrade-gracefully covers the ones that don't).
+const FASHION_WARDROBES = {
+  'casual hoodies and jeans': [
+    { defId: 'basic_tee', qty: 1 }, { defId: 'button_up', qty: 1 },
+    { defId: 'hoodie', qty: 1 }, { defId: 'jeans', qty: 1 },
+    { defId: 'sweatpants', qty: 1 }, { defId: 'sneakers', qty: 1 },
+    { defId: 'socks_cotton', qty: 1 }, { defId: 'boxers', qty: 1 },
+    { defId: 'briefs', qty: 1 }, { defId: 'cap', qty: 1 },
+  ],
+  'thrifted vintage': [
+    { defId: 'graphic_tee', qty: 1 }, { defId: 'flannel_shirt', qty: 1 },
+    { defId: 'denim_jacket', qty: 1 }, { defId: 'cardigan', qty: 1 },
+    { defId: 'overalls', qty: 1 }, { defId: 'jeans', qty: 1 },
+    { defId: 'sandals', qty: 1 }, { defId: 'socks_cotton', qty: 1 },
+    { defId: 'boxers', qty: 1 }, { defId: 'beanie', qty: 1 },
+  ],
+  'minimalist monochrome': [
+    { defId: 'turtleneck', qty: 1 }, { defId: 'basic_tee', qty: 1 },
+    { defId: 'button_up', qty: 1 }, { defId: 'chinos', qty: 1 },
+    { defId: 'jeans', qty: 1 }, { defId: 'coat', qty: 1 },
+    { defId: 'sneakers', qty: 1 }, { defId: 'socks_cotton', qty: 1 },
+    { defId: 'boxers', qty: 1 }, { defId: 'wristwatch', qty: 1 },
+  ],
+  'bright patterns': [
+    { defId: 'graphic_tee', qty: 1 }, { defId: 'tank_top', qty: 1 },
+    { defId: 'windbreaker', qty: 1 }, { defId: 'shorts', qty: 1 },
+    { defId: 'jeans', qty: 1 }, { defId: 'sneakers', qty: 1 },
+    { defId: 'sports_socks', qty: 1 }, { defId: 'boxers', qty: 1 },
+    { defId: 'cap', qty: 1 },
+  ],
+  'comfort-first athleisure': [
+    { defId: 'basic_tee', qty: 1 }, { defId: 'tank_top', qty: 1 },
+    { defId: 'sweatpants', qty: 1 }, { defId: 'athletic_shorts', qty: 1 },
+    { defId: 'hoodie', qty: 1 }, { defId: 'sneakers', qty: 1 },
+    { defId: 'sports_socks', qty: 1 }, { defId: 'boxers', qty: 1 },
+    { defId: 'slippers', qty: 1 },
+  ],
+  'smart-casual': [
+    { defId: 'button_up', qty: 1 }, { defId: 'blouse', qty: 1 },
+    { defId: 'chinos', qty: 1 }, { defId: 'dress_pants', qty: 1 },
+    { defId: 'coat', qty: 1 }, { defId: 'dress_shoes', qty: 1 },
+    { defId: 'dress_socks', qty: 1 }, { defId: 'boxers', qty: 1 },
+    { defId: 'wristwatch', qty: 1 },
+  ],
+  'bohemian layers': [
+    { defId: 'blouse', qty: 1 }, { defId: 'sweater', qty: 1 },
+    { defId: 'cardigan', qty: 1 }, { defId: 'flannel_shirt', qty: 1 },
+    { defId: 'skirt', qty: 1 }, { defId: 'jeans', qty: 1 },
+    { defId: 'sandals', qty: 1 }, { defId: 'socks_cotton', qty: 1 },
+    { defId: 'boxers', qty: 1 }, { defId: 'sun_hat', qty: 1 },
+    { defId: 'bracelet', qty: 1 },
+  ],
+  'streetwear': [
+    { defId: 'graphic_tee', qty: 1 }, { defId: 'tank_top', qty: 1 },
+    { defId: 'hoodie', qty: 1 }, { defId: 'windbreaker', qty: 1 },
+    { defId: 'cargo_pants', qty: 1 }, { defId: 'high_tops', qty: 1 },
+    { defId: 'sports_socks', qty: 1 }, { defId: 'boxers', qty: 1 },
+    { defId: 'cap', qty: 1 },
+  ],
+  'preppy': [
+    { defId: 'polo_shirt', qty: 1 }, { defId: 'button_up', qty: 1 },
+    { defId: 'chinos', qty: 1 }, { defId: 'sweater', qty: 1 },
+    { defId: 'jeans', qty: 1 }, { defId: 'sneakers', qty: 1 },
+    { defId: 'socks_cotton', qty: 1 }, { defId: 'boxers', qty: 1 },
+    { defId: 'wristwatch', qty: 1 },
+  ],
+  'goth-adjacent': [
+    { defId: 'turtleneck', qty: 1 }, { defId: 'basic_tee', qty: 1 },
+    { defId: 'graphic_tee', qty: 1 }, { defId: 'leather_jacket', qty: 1 },
+    { defId: 'cargo_pants', qty: 1 }, { defId: 'jeans', qty: 1 },
+    { defId: 'high_tops', qty: 1 }, { defId: 'socks_cotton', qty: 1 },
+    { defId: 'boxers', qty: 1 }, { defId: 'necklace', qty: 1 },
+  ],
+  'workwear': [
+    { defId: 'flannel_shirt', qty: 1 }, { defId: 'basic_tee', qty: 1 },
+    { defId: 'cargo_pants', qty: 1 }, { defId: 'overalls', qty: 1 },
+    { defId: 'jeans', qty: 1 }, { defId: 'denim_jacket', qty: 1 },
+    { defId: 'work_boots', qty: 1 }, { defId: 'socks_cotton', qty: 1 },
+    { defId: 'boxers', qty: 1 }, { defId: 'cap', qty: 1 },
+  ],
+  'flowy dresses': [
+    { defId: 'blouse', qty: 1 }, { defId: 'skirt', qty: 1 },
+    { defId: 'sweater', qty: 1 }, { defId: 'cardigan', qty: 1 },
+    { defId: 'sandals', qty: 1 }, { defId: 'socks_cotton', qty: 1 },
+    { defId: 'bra', qty: 1 }, { defId: 'panties', qty: 1 },
+    { defId: 'sun_hat', qty: 1 }, { defId: 'bracelet', qty: 1 },
+    { defId: 'necklace', qty: 1 },
   ],
 };
 

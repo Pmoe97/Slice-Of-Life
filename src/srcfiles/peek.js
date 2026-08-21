@@ -306,6 +306,18 @@ async function _refreshView(s, focus) {
   if (peekSession !== s) return; // session ended while generating
   if (result && result.url) {
     if (img) img.src = result.url;
+    // D17.5: register the keyhole frame with the shared info/reroll
+    // mechanic — the floating ⓘ reveals on hover/tap; rerolling rolls a
+    // fresh frame for the act being watched, cached under the same key.
+    if (img) {
+      setImageMeta(img, {
+        label: 'Peek Frame',
+        prompt: applyImageStyle(composePeekPrompt(gs, s.roomId, focus.npc, desc.actKey, focus.npcId)),
+        seed: null,
+        negativePrompt: IMAGE_NEGATIVE.peek,
+        reroll: (fields) => rerollPeekFrame(gs, s.roomId, focus.npc, focus.npcId, img, fields),
+      });
+    }
     if (shimmer) shimmer.setAttribute('hidden', '');
     s._peekImageUrl = result.url;
     s._peekImageKey = key;

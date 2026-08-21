@@ -229,7 +229,7 @@ const INTRO_BEATS = [
       + 'the lid casting a hard shadow across the contents. No people in frame. '
       + 'A shaft of bright light from off-frame falls across the papers',
     lines: [
-      { speaker: 'lawyer', text: 'I represent the interests of one late Julius {surname}. I have come because you are a beneficiary of his will.' },
+      { speaker: 'lawyer', text: 'I am a representative of Zoro Zoro & Zoro. Our firm has the pleasure of representing the interests of the late Julius {surname}. I am here because you were named a beneficiary of his will.' },
     ],
   },
   {

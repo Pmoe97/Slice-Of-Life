@@ -122,7 +122,13 @@ check('every bedroom\'s starter set fits its wardrobe at tier 1 (12 items)',
         const ids = items.map(i => i.defId);
         return total <= 12 && ids.every(id => !!CLOTHING_DEFS[id]);
       })`));
-check('the player\'s starter set composes a full daily outfit and a work top',
+check('every fashion wardrobe fits tier-1 capacity and is real clothing',
+      api(`Object.entries(FASHION_WARDROBES).every(([fashion, items]) => {
+        const total = items.reduce((s, i) => s + i.qty, 0);
+        return items.length <= 12 && total <= 12 &&
+               items.every(i => !!CLOTHING_DEFS[i.defId]);
+      })`));
+check('the fallback starter set composes a full daily outfit and a work top',
       api(`(() => {
         const ids = STARTER_WARDROBES.bedroom_player.map(i => i.defId);
         const daily = composeOutfit('daily', ids);
@@ -130,11 +136,30 @@ check('the player\'s starter set composes a full daily outfit and a work top',
         return !!daily.top && !!daily.bottom && !!daily.shoes && !!daily.socks &&
                !!daily.underwear && work.top === 'button_up';
       })()`));
-check('fresh house spawn seeds the wardrobes (SIM_generateHouse → seedStarterWardrobes)',
+check('fresh house seeds the player\'s wardrobe from their everyday style',
       api(`(() => {
         const h = SIM_generateHouse(20260816, 3);
+        const fashion = h.player.appearance.physical.fashion;
+        const expected = (FASHION_WARDROBES[fashion] || STARTER_WARDROBES.bedroom_player);
         const w = Object.values(h.objects.room_bedroom_player).find(o => o.defId === 'wardrobe');
-        return !!w && containerItemCount(w) === STARTER_WARDROBES.bedroom_player.reduce((s, i) => s + i.qty, 0);
+        const got = (w.contents || []).map(s => s.defId);
+        return !!w && expected.every(g => got.includes(g.defId)) &&
+               containerItemCount(w) === expected.reduce((s, i) => s + i.qty, 0);
+      })()`));
+check('every resident\'s bedroom wardrobe matches their everyday style',
+      api(`(() => {
+        const h = SIM_generateHouse(20260816, 3);
+        for (const id of h.npcIds) {
+          const npc = h.npcs[id];
+          const fashion = npc.bible.physical.fashion;
+          const expected = FASHION_WARDROBES[fashion];
+          if (!expected) continue;
+          const room = npc.residency.room;
+          const w = Object.values(h.objects['room_' + room]).find(o => o.defId === 'wardrobe');
+          const got = (w.contents || []).map(s => s.defId);
+          if (!expected.every(g => got.includes(g.defId))) return false;
+        }
+        return true;
       })()`));
 check('seeded wardrobe\'s tier survives a JSON round-trip (save/load shape)',
       api(`(() => {

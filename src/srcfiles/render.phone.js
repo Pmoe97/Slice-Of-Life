@@ -490,6 +490,16 @@ function renderPhoneCameraDetail(body, gs, photoId) {
   img.alt = photo.caption;
   body.appendChild(img);
   getPhotoImage(photo).then(result => { if (result.url) img.src = result.url; });
+  // D17.5/D17.6: register the hero photo with the shared info/reroll modal —
+  // the floating ⓘ reveals on hover/tap; the prompt is editable and
+  // regenerating re-freezes the memory (prompt/seed/negative persist).
+  setImageMeta(img, {
+    label: `Photo — ${photo.caption}`,
+    prompt: applyImageStyle(photo.prompt),
+    seed: photo.seed,
+    negativePrompt: photo.negativePrompt || IMAGE_NEGATIVE.photo,
+    reroll: (fields) => rerollPhotoImage(photo, img, fields),
+  });
 
   const caption = document.createElement('div');
   caption.className = 'phone-camera-caption';

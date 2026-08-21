@@ -123,11 +123,12 @@ check('clothingLabel knows the new states via the shared prose table',
 
 // ---------------------------------------------------------------- 3
 console.log('\n3. Player outfit persistence (sim.js)');
-check('fresh game: player starts dressed with a composed daily outfit from the starter wardrobe',
+check('fresh game: player starts dressed with a composed daily outfit from their style wardrobe',
       api(`(() => {
         const h = house(20260817, 3);
         const p = h.player;
-        const ids = STARTER_WARDROBES.bedroom_player.map(i => i.defId);
+        const fashion = p.appearance.physical.fashion;
+        const ids = (FASHION_WARDROBES[fashion] || STARTER_WARDROBES.bedroom_player).map(i => i.defId);
         const daily = composeOutfit('daily', ids);
         return p.clothing === 'dressed' && JSON.stringify(p.outfit) === JSON.stringify(daily);
       })()`));

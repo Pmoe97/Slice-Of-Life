@@ -101,9 +101,18 @@ function getTimeContext() {
   return timeContextStack[timeContextStack.length - 1];
 }
 
+// D12 (game-speed HUD): the resolved context scale times the session's
+// speed multiplier — x20 = multiplier 1 (today's default), x1 = 1/20 (1
+// game-sec per real-sec), x100 = multiplier 5, x0 = 0 (time frozen; the
+// caller's `scale > 0` guard then skips accumulation entirely, so the rAF
+// loop stays alive and a later preset change resumes cleanly). The
+// multiplier is read LIVE every frame (currentSpeed is a session-local
+// cache), so clicking a header preset takes effect on the next frame. The
+// discrete action path (advanceAndResolveMinutes) never calls this — sleep
+// and other time-jumping actions stay minute-exact regardless of speed.
 function getTimeScale() {
   const ctx = getTimeContext();
-  return TIME_DILATION.scales[ctx] ?? TIME_DILATION.scales.idle;
+  return (TIME_DILATION.scales[ctx] ?? TIME_DILATION.scales.idle) * currentSpeed().multiplier;
 }
 
 // --- Advance the clock by raw game-minutes (not ticks).

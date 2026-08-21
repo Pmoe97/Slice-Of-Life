@@ -257,7 +257,7 @@ function uniqueObjectSlot(bucketMap, seed, bucket, defId) {
 
 // Full spawn for a brand-new game: every room bucket from APARTMENT_LAYOUT,
 // plus an empty carry bucket for the player and each npc.
-function spawnObjectsForNewGame(seed, npcs) {
+function spawnObjectsForNewGame(seed, npcs, playerFashion) {
   const objects = {};
   for (const [roomId, placements] of Object.entries(APARTMENT_LAYOUT)) {
     const bucket = `room_${roomId}`;
@@ -268,7 +268,7 @@ function spawnObjectsForNewGame(seed, npcs) {
     });
   }
   seedStarterGroceries(objects);
-  seedStarterWardrobes(objects);
+  seedStarterWardrobes(objects, npcs, playerFashion);
   objects['carry_player'] = {};
   for (const npcId of Object.keys(npcs)) objects[`carry_${npcId}`] = {};
   return objects;
@@ -303,13 +303,43 @@ function seedStarterGroceries(objects) {
 // real clothes from day one. Same seed shape as seedStarterGroceries —
 // each wardrobe starts at tier 1 (flags.tier) and every starter set is
 // written to fit under its 12-item capacity.
-function seedStarterWardrobes(objects) {
-  for (const [roomId, wardrobeItems] of Object.entries(STARTER_WARDROBES)) {
+//
+// The set each wardrobe actually gets is the character's EVERYDAY STYLE, not
+// a fixed per-room kit: the player's and each roommate's `physical.fashion`
+// picks their FASHION_WARDROBES entry, so a goth player genuinely starts
+// with a leather jacket and the preppy roommate's wardrobe is full of polos
+// and chinos. The old fixed sets remain as the fallback for an unknown
+// fashion string or an unstaffed room.
+function starterWardrobeFor(roomId, npcs, playerFashion) {
+  if (roomId === 'bedroom_player') {
+    return FASHION_WARDROBES[playerFashion] || STARTER_WARDROBES.bedroom_player;
+  }
+  const residents = Object.values(npcs || {}).filter(n => n?.residency?.room === roomId);
+  if (residents.length === 0) return STARTER_WARDROBES[roomId];
+  // A bedroom can hold more than one roommate: merge their styles, first
+  // come first served (wardrobe order = residency order), capped at the
+  // tier-1 capacity the seed writes.
+  const seen = new Set();
+  const merged = [];
+  for (const npc of residents) {
+    for (const g of FASHION_WARDROBES[npc?.bible?.physical?.fashion] || []) {
+      if (merged.length >= 12) break;
+      if (seen.has(g.defId)) continue;
+      seen.add(g.defId);
+      merged.push(g);
+    }
+    if (merged.length >= 12) break;
+  }
+  return merged.length > 0 ? merged : STARTER_WARDROBES[roomId];
+}
+
+function seedStarterWardrobes(objects, npcs, playerFashion) {
+  for (const [roomId] of Object.entries(STARTER_WARDROBES)) {
     const bucket = objects[`room_${roomId}`];
     if (!bucket) continue;
     const obj = Object.values(bucket).find(o => o.defId === 'wardrobe');
     if (!obj) continue;
-    obj.contents = wardrobeItems.map(g => ({ defId: g.defId, qty: g.qty, ownerId: null, meta: { acquiredDay: 1 } }));
+    obj.contents = starterWardrobeFor(roomId, npcs, playerFashion).map(g => ({ defId: g.defId, qty: g.qty, ownerId: null, meta: { acquiredDay: 1 } }));
   }
 }
 

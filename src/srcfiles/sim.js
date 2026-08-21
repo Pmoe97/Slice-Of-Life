@@ -91,13 +91,45 @@ function pickUnique(rng, pool, count, weightFn) {
 // Phase 0: deterministic gender assignment from the weighted enum, used
 // by rollCastSlot and stub generation. Overrides via partial.gender
 // (character studio) skip the roll entirely.
+//
+// Settings & Pause Overhaul Phase 6 (D14): the Population tab's genderDist
+// is the single source — the default 40/40/8/6/6 is exactly the ratio
+// CHAR_GEN.genderWeights carried, so a default-settings seed reproduces the
+// same identities as before. CHAR_GEN.genderWeights remains the fallback
+// (only reachable on a corrupt store — normalizeSettings already guarantees
+// a shape). This makes rollGender a settings read for EVERY caller at once:
+// the apartment cast, applicants, studio builds, stubs, Hot Singles and all
+// external presence.
 function rollGender(rng) {
-  const weights = CHAR_GEN.genderWeights;
-  const entries = Object.entries(weights);
-  const total = entries.reduce((s, [, w]) => s + w, 0);
+  const weights = (typeof settingsCache !== 'undefined' && settingsCache && settingsCache.genderDist)
+    ? settingsCache.genderDist
+    : CHAR_GEN.genderWeights;
+  const entries = Object.entries(weights).filter(([, w]) => Number(w) > 0);
+  const total = entries.reduce((s, [, w]) => s + Number(w), 0);
   let r = rng() * total;
   for (const [g, w] of entries) {
-    r -= w;
+    r -= Number(w);
+    if (r <= 0) return g;
+  }
+  return entries[entries.length - 1][0];
+}
+
+// Settings & Pause Overhaul Phase 6 (D13): deterministic species roll from
+// the settings raceDist (default {human:100}). The draw is APPENDED at the
+// very end of a character's sequence — never inserted mid-stream — so with
+// the default human-100% distribution every existing seed's cast is
+// byte-identical to pre-overhaul (design invariant 4). raceDist keys are
+// RACES ids (defs.settings.js); unknown or empty weights fall back to human.
+function rollSpecies(rng) {
+  const weights = (typeof settingsCache !== 'undefined' && settingsCache && settingsCache.raceDist)
+    ? settingsCache.raceDist
+    : { human: 100 };
+  const entries = Object.entries(weights).filter(([, w]) => Number(w) > 0);
+  if (!entries.length) return 'human';
+  const total = entries.reduce((s, [, w]) => s + Number(w), 0);
+  let r = rng() * total;
+  for (const [g, w] of entries) {
+    r -= Number(w);
     if (r <= 0) return g;
   }
   return entries[entries.length - 1][0];
@@ -3153,10 +3185,11 @@ function normalizeGenitals(genitals) {
 
 function generateIntimate(rng, gender) {
   const pickPhys = (pool) => pool[Math.floor(rng() * pool.length)];
+  const breastPool = breastPoolForGender(gender);
   return {
     breasts: {
-      size: pickPhys(PHYS_POOL_BREAST_SIZE),
-      shape: pickPhys(PHYS_POOL_BREAST_SHAPE),
+      size: pickPhys(breastPool.size),
+      shape: pickPhys(breastPool.shape),
       areola: pickPhys(PHYS_POOL_BREAST_AREOLA),
       nipples: pickPhys(PHYS_POOL_BREAST_NIPPLES),
       sensitivity: pickPhys(PHYS_POOL_SENSITIVITY),
@@ -3231,6 +3264,19 @@ function generatePhysical(rng) {
   };
 }
 
+// Facial hair (2026-08-19). Deliberately drawn AFTER generateIntimate by the
+// two callers, NOT inside generatePhysical: inserting a draw mid-sequence
+// would shift every existing seed's stream and silently re-roll the cast for
+// a pasted seed (design invariant 6 — same seed, same house). `rng() < 0.4`
+// is the same gate idiom piercings/tattoos use — most people are
+// clean-shaven, and the gate (not a pool stuffed with 'clean-shaven') is what
+// makes that true.
+function appendFacialHairDraw(physical, rng) {
+  const pickPhys = (pool) => pool[Math.floor(rng() * pool.length)];
+  physical.facialHair = rng() < 0.4 ? pickPhys(PHYS_POOL_FACIAL_HAIR) : 'clean-shaven';
+  return physical;
+}
+
 // The player's own appearance, in the SAME shape an NPC's bible carries —
 // `bible.physical` plus the `age`/`gender` fields getPhysicalDescriptionForPrompt
 // leads with. Giving it that shape rather than a bespoke one is the whole
@@ -3252,6 +3298,7 @@ function generatePlayerAppearance(seed, authored) {
   // the player is drawn from the same table as everyone they live with.
   const gender = a.gender || rollGender(rng);
   physical.intimate = generateIntimate(rng, gender);
+  appendFacialHairDraw(physical, rng);
 
   if (a.physical) {
     // A shallow per-group merge, not a wholesale replace: creation may author
@@ -3529,6 +3576,15 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
     // decided — the genital set is derived from it. Appended after every
     // pre-existing draw so no seed's household changes (see generatePhysical).
     structured.physical.intimate = generateIntimate(charRng, structured.gender);
+    appendFacialHairDraw(structured.physical, charRng);
+
+    // Settings & Pause Overhaul Phase 6 (D13): species, drawn AFTER every
+    // pre-existing draw in the sequence — the append-at-end rule that keeps
+    // a default human-100% distribution byte-identical to pre-overhaul for
+    // the same seed (design invariant 4). partial.species pins an authored
+    // species and skips the roll (Del and the stub-pin paths both rely on
+    // this); the schema enum guards against an invalid pin failing validation.
+    structured.species = partial.species || rollSpecies(charRng);
 
     const result = validateCharacter({ bible: structured });
     if (!result.valid) {
@@ -3828,11 +3884,19 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
   // assigned bedroom in generateCast; the player starts in bedroom_player
   // (set below).
   //
+  // Player appearance and name are resolved BEFORE the objects spawn (not
+  // after, as they historically were): the wardrobe seeder needs the player's
+  // resolved Everyday style to stock the bedroom wardrobe, and the name roll
+  // depends on the resolved gender. Both are seeded streams independent of
+  // object spawning, so hoisting them changes no RNG sequence.
+  const playerAppearance = generatePlayerAppearance(seed, cast.playerDraft);
+  const playerName = rollPlayerName(seed, playerAppearance.gender, cast.playerDraft);
+
   // Objects are spawned first (WORLD's spawnObjectsForNewGame) so
   // cleanliness can be derived from them immediately rather than starting
   // at a fixed placeholder that then never moves until something touches
   // it — see recomputeRoomCleanliness.
-  const objects = spawnObjectsForNewGame(seed, npcs);
+  const objects = spawnObjectsForNewGame(seed, npcs, playerAppearance.physical.fashion);
   const rooms = {};
   for (const roomId of ALL_ROOMS) {
     const bucket = objects[`room_${roomId}`];
@@ -3872,13 +3936,9 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
   // world object is assembled.
   let rent = { total: ECONOMY.rent.total, playerShare: ECONOMY.rent.total, roommateShares: {}, coveredByRoommates: 0, contributorCount: 0, shareCeiling: 0 };
 
-  // Player state. Appearance and name are resolved first because the name
-  // roll depends on the resolved gender — a blank name on a male player must
-  // draw from the male pool, and the gender is only settled once the authored
-  // draft and the roll have been reconciled.
-  const playerAppearance = generatePlayerAppearance(seed, cast.playerDraft);
-  const playerName = rollPlayerName(seed, playerAppearance.gender, cast.playerDraft);
-
+  // Player state. The appearance/name were already resolved above (before
+  // the object spawn, which the wardrobe seeder needs the resolved fashion
+  // for); the rest of the player is built here.
   // Intimacy & Voyeurism Phase 5 (D11): the player starts DRESSED. The daily
   // outfit is composed deterministically from their starter wardrobe (the
   // same composeOutfit Phase 6's NPCs use), so the wardrobe panel opens on a

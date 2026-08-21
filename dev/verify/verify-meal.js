@@ -134,8 +134,8 @@ check('clearing the table reverts to the PLAIN cached key, byte for byte',
       api(`composeSceneKey('dining','evening','normal',[], sceneDetailSignature(${mkRoom('tidy', ['dish_cheese_pizza'])}))`)
       === api(`composeSceneKey('dining','evening','normal',[])`),
       'a tidied table must reuse the art that was already cached, not mint a new key');
-check('and a key composed with no detail is unchanged from before the field existed',
-      api(`composeSceneKey('kitchen','morning','normal',['a','b'])`) === 'kitchen_morning_normal_a-b');
+check('and a key composed with no detail, no player is stable',
+      api(`composeSceneKey('kitchen','morning','normal',['a','b'])`) === 'pv2_kitchen_morning_normal_a-b_nobody');
 check('the signature is order-independent',
       api(`sceneDetailSignature(${mkRoom('cluttered', ['dish_fries', 'dish_cheese_pizza'])})
            === sceneDetailSignature(${mkRoom('cluttered', ['dish_cheese_pizza', 'dish_fries'])})`),

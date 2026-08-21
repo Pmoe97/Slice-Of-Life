@@ -71,6 +71,22 @@ function renderHeader(gs) {
     if (val < NEEDS[need].warnBelow) bar.setAttribute('data-low', '');
     else bar.removeAttribute('data-low');
   }
+
+  renderSpeedButtons();
+}
+
+// Phase 10 (D12): highlight the active game-speed preset in the header
+// cluster (data-active on the matching button). Idempotent; also called
+// directly by the 'speed.set' action so a click re-marks the buttons
+// without a full render pass.
+function renderSpeedButtons() {
+  const cluster = document.getElementById('hdr-speed');
+  if (!cluster) return;
+  const speed = currentSpeed();
+  for (const btn of cluster.querySelectorAll('[data-id]')) {
+    if (btn.getAttribute('data-id') === speed.id) btn.setAttribute('data-active', '');
+    else btn.removeAttribute('data-active');
+  }
 }
 
 // --- Floor plan (SVG) ---
@@ -167,15 +183,29 @@ function wallPieces(fixed, from, to, vertical, openings) {
   return pieces.filter(([s, e]) => e - s > 0.5);
 }
 
+// Every floor plan that should be on screen right now: the sidebar always,
+// and the large overlay map while its overlay is open. The static pass
+// renders into each, the live pass mutates each, and the same click
+// delegation serves both — the overlay is the same map, just bigger.
+function floorPlanContainers() {
+  const out = [];
+  const sidebar = document.getElementById('floor-plan');
+  if (sidebar) out.push(sidebar);
+  const overlay = document.getElementById('floorplan-overlay');
+  const large = document.getElementById('floor-plan-large');
+  if (overlay && large && !overlay.hidden) out.push(large);
+  return out;
+}
+
 function renderFloorPlan(gs) {
-  const container = document.getElementById('floor-plan');
-  if (!container) return;
   // D12: two loops, two costs. This entry is the STATIC pass — walls, fills,
   // furniture, labels — rebuilt on real state changes (render() calls it on
   // every action) and the one place the avatar markers are CREATED. The
   // per-frame loop is renderFloorPlanLive, called from clockFrame: direct
   // attribute mutation only, never innerHTML.
-  renderFloorPlanStatic(gs, container);
+  const containers = floorPlanContainers();
+  if (containers.length === 0) return;
+  for (const c of containers) renderFloorPlanStatic(gs, c);
   renderFloorPlanLive(gs);
   hydrateFloorPlanAvatars(gs);
 }
@@ -755,21 +785,24 @@ function floorPlanAvatarPlacement(gs, id, npc) {
 // The per-frame live loop (D12). Direct attribute mutation only — never
 // innerHTML — so it can run every rAF alongside the clock (clockFrame) at a
 // fixed small cost while the static layer sits untouched. This is the ONLY
-// per-frame touch of the floor plan.
+// per-frame touch of the floor plan. Every live container (sidebar + large
+// overlay) gets the same transform/class mutations.
 function renderFloorPlanLive(gs) {
-  const container = document.getElementById('floor-plan');
-  if (!container) return;
-  const markers = container.querySelectorAll('.fp-people [data-avatar-id]');
-  if (markers.length === 0) return;
-  for (const m of markers) {
-    const id = m.getAttribute('data-avatar-id');
-    const npc = id === 'player' ? null : (gs.npcs && gs.npcs[id]);
-    const p = floorPlanAvatarPlacement(gs, id, npc);
-    m.setAttribute('transform', `translate(${p.x},${p.y})`);
-    if (p.offMap) m.setAttribute('hidden', '');
-    else m.removeAttribute('hidden');
-    m.classList.toggle('is-sleeping', p.sleeping);
-    m.classList.toggle('is-transit', p.transit);
+  const containers = floorPlanContainers();
+  if (containers.length === 0) return;
+  for (const container of containers) {
+    const markers = container.querySelectorAll('.fp-people [data-avatar-id]');
+    if (markers.length === 0) continue;
+    for (const m of markers) {
+      const id = m.getAttribute('data-avatar-id');
+      const npc = id === 'player' ? null : (gs.npcs && gs.npcs[id]);
+      const p = floorPlanAvatarPlacement(gs, id, npc);
+      m.setAttribute('transform', `translate(${p.x},${p.y})`);
+      if (p.offMap) m.setAttribute('hidden', '');
+      else m.removeAttribute('hidden');
+      m.classList.toggle('is-sleeping', p.sleeping);
+      m.classList.toggle('is-transit', p.transit);
+    }
   }
 }
 
@@ -803,6 +836,69 @@ async function hydrateFloorPlanAvatars(gs) {
       for (const t of document.querySelectorAll(`[data-initials-for="${id}"]`)) t.setAttribute('hidden', 'hidden');
     } catch (e) { /* cache miss is the normal case, not an error */ }
   }
+}
+
+// --- Full floor plan overlay (desktop legibility) ---
+// The sidebar map is ~240px of 19 rooms — labels illegible at that scale. The
+// overlay renders the same map large (floorPlanContainers keeps both maps
+// live) with zoom controls. Open/close/zoom ride the data-action chain; a
+// click on the dark stage or Escape closes it too (see attachEventHandlers).
+
+function openFloorPlanOverlay() {
+  const overlay = document.getElementById('floorplan-overlay');
+  if (!overlay) return;
+  overlay.hidden = false;
+  // Open zoomed on the player's room, not fit-to-screen: the sidebar map is
+  // already the whole-plan overview, and the point of the overlay is to READ
+  // the rooms. Fit (scale 1) is one click away for the bird's-eye view.
+  const box = overlay.querySelector('.floorplan-overlay-box');
+  if (box) box.style.setProperty('--fp-scale', '1.4');
+  // Re-render so the large map exists, then land on where the player is —
+  // the overlay opens on the action, not on the title screen.
+  if (currentGameState) {
+    renderFloorPlan(currentGameState);
+    centerFloorPlanOn(currentGameState.player.location);
+  }
+}
+
+function closeFloorPlanOverlay() {
+  const overlay = document.getElementById('floorplan-overlay');
+  if (overlay) overlay.hidden = true;
+}
+
+// Zoom the large map, keeping whatever was at the viewport centre in place.
+function floorPlanZoom(factor) {
+  const box = document.querySelector('#floorplan-overlay .floorplan-overlay-box');
+  const body = document.getElementById('floorplan-overlay-body');
+  if (!box || !body) return;
+  const cur = parseFloat(box.style.getPropertyValue('--fp-scale')) || 1;
+  const next = Math.min(3.5, Math.max(0.6, cur * factor));
+  if (next === cur) return;
+  const cx = body.scrollLeft + body.clientWidth / 2;
+  const cy = body.scrollTop + body.clientHeight / 2;
+  box.style.setProperty('--fp-scale', String(next));
+  const ratio = next / cur;
+  body.scrollLeft = cx * ratio - body.clientWidth / 2;
+  body.scrollTop = cy * ratio - body.clientHeight / 2;
+}
+
+function floorPlanZoomReset() {
+  const box = document.querySelector('#floorplan-overlay .floorplan-overlay-box');
+  if (box) box.style.setProperty('--fp-scale', '1');
+  if (currentGameState) centerFloorPlanOn(currentGameState.player.location);
+}
+
+// Scroll the large map so a room's centre sits in the middle of the viewport
+// (used when the overlay opens / on Fit, so the player lands on their room).
+function centerFloorPlanOn(roomId) {
+  const body = document.getElementById('floorplan-overlay-body');
+  const svg = document.querySelector('#floor-plan-large svg');
+  if (!body || !svg || !svg.viewBox) return;
+  const [cx, cy] = typeof roomCentre === 'function' ? roomCentre(roomId) : [0, 0];
+  const vb = svg.viewBox.baseVal;
+  if (!vb || !vb.width || !vb.height) return;
+  body.scrollLeft = cx * (svg.clientWidth / vb.width) - body.clientWidth / 2;
+  body.scrollTop = cy * (svg.clientHeight / vb.height) - body.clientHeight / 2;
 }
 
 function escapeHtml(s) {
@@ -861,16 +957,18 @@ function renderPlayerPanel(gs) {
 }
 
 // --- Scene image ---
-function renderScene(gs, sceneState) {
-  const img = document.getElementById('scene-img');
-  const label = document.getElementById('scene-label');
-  if (!img) return;
-  const { meta, player } = gs;
-  const roomId = player.location;
-  const phase = meta.clock.phase;
-
-  if (label) label.textContent = `${ROOMS[roomId]?.name || roomId} — ${CLOCK.phaseNames[phase] || phase}`;
-
+// Shared scene-art context (D17): everything renderScene needs to draw the
+// backdrop AND everything the ⓘ info modal (ui.js) needs to describe or
+// reroll it, computed once. The scene key and prompt get stamped onto the
+// module vars below so the modal can show the exact prompt that produced
+// the current frame and force a reroll under the SAME cache key (IMAGE's
+// rerollSceneImage recomputes the context through this helper again).
+let currentSceneArtPrompt = '';
+let currentSceneArtKey = '';
+let currentSceneArtSeed = null;
+function sceneArtContext(gs, sceneState) {
+  const roomId = gs.player.location;
+  const phase = gs.meta.clock.phase;
   // npc objects (currentGameState.npcs[id]) never carry their own id —
   // it only ever exists as the map key — so getSceneImage's internal
   // `.map(n => n.id)` for cache-key composition always saw `undefined`
@@ -886,15 +984,43 @@ function renderScene(gs, sceneState) {
   // see it or the dining room would keep serving its cached empty-table art
   // through dinner.
   const roomObjects = gs.objects?.[`room_${roomId}`];
-  const sceneKey = composeSceneKey(roomId, phase, 'normal', activeNpcs.map(n => n.id), sceneDetailSignature(roomObjects));
+  const sceneKey = composeSceneKey(roomId, phase, 'normal', activeNpcs.map(n => n.id), sceneDetailSignature(roomObjects), gs.player);
+  // The prompt is exactly what IMAGE feeds generateImage (style-applied),
+  // so the info modal's text matches the pixels byte for byte.
+  const prompt = applyImageStyle(buildImagePrompt(roomId, phase, activeNpcs, roomObjects, { player: gs.player, gameState: gs }));
+  // The deterministic seed that produced the current frame — the info modal
+  // pre-fills it so the player sees what anchored the pixels (leaving it
+  // unchanged rolls a fresh frame instead).
+  const seed = composeSceneSeed(sceneKey, gs.player, activeNpcs);
+  return { roomId, phase, activeNpcs, roomObjects, sceneKey, prompt, seed };
+}
+
+function renderScene(gs, sceneState) {
+  const img = document.getElementById('scene-img');
+  const label = document.getElementById('scene-label');
+  if (!img) return;
+  const ctx = sceneArtContext(gs, sceneState);
+  const roomId = ctx.roomId;
+  const phase = ctx.phase;
+
+  if (label) label.textContent = `${ROOMS[roomId]?.name || roomId} — ${CLOCK.phaseNames[phase] || phase}`;
+
+  // D17: stamp the ⓘ affordance's data and reveal the button. The scene
+  // reader renders separately, so this is the one place that knows what the
+  // current art IS.
+  currentSceneArtPrompt = ctx.prompt;
+  currentSceneArtKey = ctx.sceneKey;
+  currentSceneArtSeed = ctx.seed;
+  const infoBtn = document.getElementById('scene-info-btn');
+  if (infoBtn) infoBtn.hidden = false;
 
   // Idempotent: only touch the image (placeholder swap + async fetch) when
   // the scene actually changed. Re-stamping data-loading and swapping to
   // the placeholder on every render() call — including calls where
   // nothing about the scene changed — flickered the image after every
   // single action.
-  if (img.getAttribute('data-scene-key') === sceneKey) return;
-  img.setAttribute('data-scene-key', sceneKey);
+  if (img.getAttribute('data-scene-key') === ctx.sceneKey) return;
+  img.setAttribute('data-scene-key', ctx.sceneKey);
 
   // Show placeholder immediately
   img.setAttribute('data-loading', '');
@@ -907,8 +1033,8 @@ function renderScene(gs, sceneState) {
   // every state change would be expensive), not an oversight. A laid table is
   // the one exception, because it is a thing the player did on purpose and
   // the scene is about it. `player` puts the player in their own scene.
-  getSceneImage(roomId, phase, activeNpcs, roomObjects, { player: gs.player, gameState: gs }).then(result => {
-    if (img.getAttribute('data-scene-key') !== sceneKey) return; // scene moved on before this resolved
+  getSceneImage(roomId, phase, ctx.activeNpcs, ctx.roomObjects, { player: gs.player, gameState: gs }).then(result => {
+    if (img.getAttribute('data-scene-key') !== ctx.sceneKey) return; // scene moved on before this resolved
     if (result.url) {
       img.src = result.url;
       img.removeAttribute('data-loading');
@@ -948,7 +1074,15 @@ function renderStatusStrip(gs) {
     // fullness prose ("Satisfied — that meal is still holding") and the
     // deficit-day energy hint, so the strip stays compact while the new
     // meaning of the number is one hover away.
-    if (need === 'hunger') item.title = fullnessStatusText(player, gs);
+    if (need === 'hunger') {
+      item.title = fullnessStatusText(player, gs);
+      // 2026-08-20 (playtest feedback): the fullness prose was only a
+      // tooltip — invisible unless hovered. Surface the band label on the
+      // bar itself so "why am I hungry again?" is answered at a glance
+      // instead of by the mystery number.
+      const bandEl = item.querySelector('.fsi-band');
+      if (bandEl) bandEl.textContent = hungerBand(player.fullnessRemainingHours ?? 0, player.fullnessWindowHours ?? HUNGER_RHYTHM.starveHours).label;
+    }
     // Desire's tuning lives in DESIRE (its own block), not NEEDS — the strip
     // is the one reader that would otherwise need a second tuning home.
     const warnBelow = need === 'desire' ? DESIRE.player.warnBelow : NEEDS[need].warnBelow;
@@ -1100,6 +1234,10 @@ function renderInventoryPanel(gs) {
       const header = document.createElement('div');
       header.className = 'invp-group-header';
       header.textContent = group.label;
+      const count = document.createElement('span');
+      count.className = 'invp-group-count';
+      count.textContent = `${group.stacks.reduce((s, x) => s + (x.qty || 1), 0)} item${group.stacks.length === 1 ? '' : 's'}`;
+      header.appendChild(count);
       listEl.appendChild(header);
       for (const stack of group.stacks) appendInventoryRow(listEl, rowTpl, stack, gs);
     }
@@ -1112,7 +1250,64 @@ function renderInventoryPanel(gs) {
     empty.textContent = inv.length === 0 ? 'Your pockets are empty.' : 'Nothing matches your search.';
     listEl.appendChild(empty);
   }
+  const summary = document.getElementById('invp-summary');
+  if (summary) {
+    const totalItems = inv.reduce((s, i) => s + (i?.qty || 0), 0);
+    const money = gs.player?.money;
+    summary.textContent = `${totalItems} item${totalItems === 1 ? '' : 's'} · ${inv.length} kind${inv.length === 1 ? '' : 's'}` + (typeof money === 'number' ? ' · $' + money.toLocaleString() : '');
+  }
   renderInventoryDetail(gs, selected);
+}
+
+// --- Inventory glow-up helpers -----------------------------------------
+// Icon, badges and stat block for the inventory rows/detail. All pure: given
+// a stack/def/state they return DOM-ready data, so the panel never mutates
+// the inventory to style itself.
+const INV_ICON_BY_ID = {
+  apartment_keys: '🔑', wallet: '👛', id_card: '🪪', phone: '📱', mp3_player: '🎧', headphones: '🎧',
+  eggs: '🥚', milk: '🥛', cheese: '🧀', butter: '🧈', bacon: '🥓', lettuce: '🥬', tomato: '🍅', onion: '🧅', garlic: '🧄', potatoes: '🥔',
+  bread: '🍞', pasta_dry: '🍝', tomato_sauce: '🍅', rice: '🍚', cereal: '🥣', flour: '🌾', sugar: '🍬', oil: '🫗', salt: '🧂', spices: '🌶️',
+  coffee_beans: '☕', tea_bags: '🍵', frozen_pizza: '🍕', comfort_ice_cream: '🍨', chicken_raw: '🍗', ground_beef: '🥩',
+  meal_pasta: '🍝', meal_omelette: '🍳', meal_stirfry: '🥘', meal_sandwich: '🥪', meal_breakfast: '🍳', meal_burger: '🍔',
+  meal_salad: '🥗', meal_fried_rice: '🍚', meal_soup: '🍲', meal_potato: '🥔', cooked_meal: '🍲',
+};
+const INV_ICON_BY_SLOT = { top: '👕', bottom: '👖', outerwear: '🧥', shoes: '👟', socks: '🧦', underwear: '🩲', swimwear: '🩱', accessory: '🕶️' };
+const INV_ICON_BY_GROUP = {
+  food: '🍲', drink: '🥤', clothing: '👕', comfort: '🕯️', hobby: '🎮', gift: '🎁',
+  cleaning: '🧽', toiletry: '🧴', medication: '💊', gear: '🧰', key: '🔑', junk: '📦', other: '📦',
+};
+function inventoryIcon(def) {
+  if (!def) return '📦';
+  if (INV_ICON_BY_ID[def.id]) return INV_ICON_BY_ID[def.id];
+  if (def.slot) return INV_ICON_BY_SLOT[def.slot] || '👕';
+  if (def.id.startsWith('dish_')) return '🥡';
+  if (def.sortGroup === 'food') {
+    if (def.category === 'snack') return '🍫';
+    if (def.category === 'ingredient') return '🥕';
+    if (def.category === 'drink') return '🥤';
+    return '🍲';
+  }
+  if (def.sortGroup === 'drink') return '🥤';
+  return INV_ICON_BY_GROUP[def.sortGroup] || '📦';
+}
+const CLOTHING_STAT_LABELS = { attraction: 'Attraction', comfort: 'Comfort', modesty: 'Modesty', thermal: 'Warmth', reveal: 'Reveal' };
+function inventoryRowTags(stack, def, gs) {
+  const tags = [];
+  if (!!(stack?.meta?.keyItem || def.keyItem)) tags.push({ kind: 'key', label: 'Key' });
+  if (gs?.player?.outfit && Object.values(gs.player.outfit).includes(def.id)) tags.push({ kind: 'worn', label: 'Worn' });
+  if (stack?.meta?.frozen?.frozenAtAbs != null) tags.push({ kind: 'frozen', label: 'Frozen' });
+  return tags;
+}
+function inventoryRowSublabel(stack, def) {
+  const group = SORT_GROUPS[def.sortGroup]?.label || def.category || 'Item';
+  if (def.slot) return WARDROBE_SLOT_LABELS[def.slot] || def.slot;
+  return group;
+}
+function inventoryStatRows(stack, def) {
+  if (!def.slot || !def.stats) return [];
+  return Object.entries(CLOTHING_STAT_LABELS)
+    .filter(([key]) => (def.stats[key] ?? 0) > 0)
+    .map(([key, label]) => ({ key, label, value: Math.round((def.stats[key] ?? 0) * 100) }));
 }
 
 function appendInventoryRow(container, tpl, stack, gs) {
@@ -1121,9 +1316,19 @@ function appendInventoryRow(container, tpl, stack, gs) {
   row.setAttribute('data-def-id', stack.defId);
   if (invpSelectedDefId === stack.defId) row.setAttribute('data-selected', '');
   const d = describeStack(stack, { day: gameDaysNow(gs.meta.clock) });
+  const def = stackDef(stack);
+  node.querySelector('.invp-row-icon').textContent = inventoryIcon(def);
   node.querySelector('.invp-row-name').textContent = d.label;
   node.querySelector('.invp-row-qty').textContent = `×${d.qty}`;
-  node.querySelector('.invp-row-sublabel').textContent = d.sublabel;
+  node.querySelector('.invp-row-sublabel').textContent = inventoryRowSublabel(stack, def);
+  const tagsEl = node.querySelector('.invp-row-tags');
+  for (const t of inventoryRowTags(stack, def, gs)) {
+    const chip = document.createElement('span');
+    chip.className = 'invp-row-tag';
+    chip.setAttribute('data-kind', t.kind);
+    chip.textContent = t.label;
+    tagsEl.appendChild(chip);
+  }
   // Food-overhaul Phase 3 (D25): a plate row carries its Servings bar —
   // same visual as the pickers, so inventory and the eat picker agree.
   const bar = d.plate ? plateServingsLeft(stack) : null;
@@ -1153,14 +1358,68 @@ function renderInventoryDetail(gs, stack) {
   const tpl = document.getElementById('tpl-inv-detail');
   const node = tpl.content.cloneNode(true);
   const d = describeStack(stack, ctx);
+  const def = stackDef(stack);
+  node.querySelector('.invp-detail-icon').textContent = inventoryIcon(def);
   node.querySelector('.invp-detail-name').textContent = d.label;
-  node.querySelector('.invp-detail-meta').textContent = `×${d.qty} · ${d.sublabel}`;
+  const metaBits = [`×${d.qty}`, inventoryRowSublabel(stack, def)];
+  if (typeof def.price === 'number') metaBits.push(String.fromCharCode(36) + def.price);
+  node.querySelector('.invp-detail-meta').textContent = metaBits.join(' · ');
   const descEl = node.querySelector('.invp-detail-desc');
   descEl.textContent = d.description + (d.tooltip ? ` ${d.tooltip}` : '');
   const freshEl = node.querySelector('.invp-detail-fresh');
   freshEl.textContent = d.freshnessText || 'Non-perishable';
   if (d.freshness) freshEl.setAttribute('data-state', d.freshness.key);
   else freshEl.removeAttribute('data-state');
+
+  const chipsEl = node.querySelector('.invp-detail-chips');
+  if (!!(stack?.meta?.keyItem || def.keyItem)) {
+    const c = document.createElement('span');
+    c.className = 'invp-chip';
+    c.setAttribute('data-kind', 'key');
+    c.textContent = 'Key item';
+    chipsEl.appendChild(c);
+  }
+  for (const t of def.traits || []) {
+    const c = document.createElement('span');
+    c.className = 'invp-chip';
+    c.setAttribute('data-kind', 'trait');
+    c.textContent = studioPrettify(t);
+    chipsEl.appendChild(c);
+  }
+  for (const s of def.styleTags || []) {
+    const c = document.createElement('span');
+    c.className = 'invp-chip';
+    c.setAttribute('data-kind', 'style');
+    c.textContent = s;
+    chipsEl.appendChild(c);
+  }
+
+  const statsEl = node.querySelector('.invp-detail-stats');
+  const stats = inventoryStatRows(stack, def);
+  if (stats.length > 0) {
+    for (const s of stats) {
+      const row = document.createElement('div');
+      row.className = 'invp-stat';
+      const label = document.createElement('span');
+      label.className = 'invp-stat-label';
+      label.textContent = s.label;
+      row.appendChild(label);
+      const bar = document.createElement('div');
+      bar.className = 'invp-stat-bar';
+      const fill = document.createElement('div');
+      fill.className = 'fill';
+      fill.style.width = `${s.value}%`;
+      if (s.value >= 40) fill.setAttribute('data-high', '');
+      if (s.key === 'reveal') fill.setAttribute('data-reveal', '');
+      bar.appendChild(fill);
+      row.appendChild(bar);
+      const val = document.createElement('span');
+      val.className = 'invp-stat-val';
+      val.textContent = `${s.value}%`;
+      row.appendChild(val);
+      statsEl.appendChild(row);
+    }
+  }
 
   const actions = stackActions(stack, ctx);
   const btns = node.querySelector('.invp-detail-btns');
@@ -1749,6 +2008,16 @@ function buildPickRowContent(option) {
       const tag = document.createElement('span');
       tag.className = `eat-pick-freshness eat-pick-${fresh.key}`;
       tag.textContent = fresh.label;
+      meta.appendChild(document.createTextNode(' · '));
+      meta.appendChild(tag);
+    }
+    // Raw-food warning (2026-08-20): a rawDangerous ingredient (eggs, raw
+    // chicken...) offers itself in the picker, but eating it raw costs
+    // RAW_FOOD's penalty — say so BEFORE the player commits.
+    if (option.def.rawDangerous) {
+      const tag = document.createElement('span');
+      tag.className = 'eat-pick-freshness eat-pick-warn';
+      tag.textContent = 'raw — cook it first';
       meta.appendChild(document.createTextNode(' · '));
       meta.appendChild(tag);
     }
@@ -2942,12 +3211,80 @@ let footerActiveTab = null;
 // can rebuild only the tabs+chips DOM without touching the rest of the page.
 let _lastActionGroups = [];
 
+// --- Nested action navigation (D14) -------------------------------
+// A chip is either a leaf (has `action`) or a group (has `children`).
+// Groups render with a trailing ▸ and, when tapped, drill down INTO the
+// chips row itself: the row's other buttons disappear and a "‹" chip is
+// pinned first, popping back up the levels you came from (one tap per
+// level; the root of the active tab is the "Home" list). The stack lives
+// in _actionNavStack ([] = at a tab's root) and survives re-renders, so
+// executing an action inside a submenu doesn't bounce you back home —
+// it only resets when you move rooms or switch tabs. Group chips render
+// before flat chips at every level, and `‹` is always first inside a
+// submenu, per the two ordering rules that define this UI.
+let _actionNavStack = [];
+let _lastNavRoom = null;
+
+function resetActionNav() { _actionNavStack = []; }
+
+function openActionGroup(groupKey) {
+  _actionNavStack.push(groupKey);
+  renderActionChipsOnly();
+}
+
+function navigateActionBack() {
+  _actionNavStack.pop();
+  renderActionChipsOnly();
+}
+
+// Walk _actionNavStack down the active tab's chip tree to the currently
+// shown level. Levels whose group no longer exists (left the room, an
+// object moved) are dropped rather than crashed over — the stack silently
+// rewinds to the deepest still-valid level.
+function resolveNavLevel(group) {
+  let level = group.chips;
+  const valid = [];
+  for (const key of _actionNavStack) {
+    const sub = level.find(c => c.children?.length && c.groupKey === key);
+    if (!sub) break;
+    valid.push(key);
+    level = sub.children;
+  }
+  if (valid.length !== _actionNavStack.length) _actionNavStack = valid;
+  return level;
+}
+
+// The verbs of a grouping-only ACTION_DEFS entry (e.g. 'door.interact')
+// as leaf chips, inheriting the parent chip's context (room/object/NPC).
+// A {name} in a verb label (the bed-boundary verbs) resolves to the NPC
+// the parent chip points at — the drill-down replaces the old popover's
+// name substitution one for one.
+function submenuVerbChips(parentChip) {
+  const verbs = ACTION_DEFS[parentChip.action]?.submenu || [];
+  const out = [];
+  for (const verbId of verbs) {
+    const vdef = ACTION_DEFS[verbId];
+    if (!vdef) continue;
+    let label = vdef.label;
+    if (label.includes('{name}')) {
+      const npcId = parentChip.npcId;
+      label = label.replace('{name}', currentGameState?.npcs?.[npcId]?.bible?.name || 'Them');
+    }
+    out.push({ label, action: verbId, extra: parentChip.extra, npcId: parentChip.npcId });
+  }
+  return out;
+}
+
 function renderActionChips(gs, sceneState) {
   const chipContainer = document.getElementById('action-chips');
   const tabContainer = document.getElementById('footer-tab-row');
   if (!chipContainer || !tabContainer) return;
   chipContainer.innerHTML = '';
   tabContainer.innerHTML = '';
+
+  // Moving rooms invalidates every open submenu — start back at the tab's
+  // root so a stale drill-down can never linger into an unrelated room.
+  if (_lastNavRoom !== gs.player.location) { _actionNavStack = []; _lastNavRoom = gs.player.location; }
 
   const phase = gs.meta.clock.phase;
   const player = gs.player;
@@ -2990,9 +3327,6 @@ function renderActionChipsOnly() {
 function _renderTabsAndChips(groups, energyDepleted) {
   const chipContainer = document.getElementById('action-chips');
   const tabContainer = document.getElementById('footer-tab-row');
-  // Phase 1 (D5): any re-render rebuilds the chips DOM, so an open popover
-  // (which floats over <body>, keyed to the old chip) must close with it.
-  closeSubmenuPopover();
 
   for (const group of groups) {
     const tab = document.createElement('button');
@@ -3006,6 +3340,8 @@ function _renderTabsAndChips(groups, energyDepleted) {
     } else {
       tab.addEventListener('click', () => {
         footerActiveTab = group.id;
+        // A new tab is a new root — any drill-down in the old tab is reset.
+        resetActionNav();
         renderActionChipsOnly();
       });
     }
@@ -3014,24 +3350,37 @@ function _renderTabsAndChips(groups, energyDepleted) {
 
   const active = groups.find(g => g.id === footerActiveTab);
   if (active) {
-    for (const chip of active.chips) {
+    const level = resolveNavLevel(active);
+    // The back chip is ALWAYS the first option in a submenu.
+    if (_actionNavStack.length > 0) {
+      const back = document.createElement('button');
+      back.className = 'chip chip-nav-back';
+      back.setAttribute('data-nav-back', '');
+      back.setAttribute('aria-label', 'Back');
+      back.textContent = '‹';
+      chipContainer.appendChild(back);
+    }
+    // Ordering rule: grouped buttons first, then flat actions.
+    const groupChips = level.filter(c => c.children?.length);
+    const leafChips = level.filter(c => !c.children?.length);
+    for (const chip of [...groupChips, ...leafChips]) {
       const btn = document.createElement('button');
       btn.className = 'chip';
-      btn.setAttribute('data-action', chip.action);
+      if (chip.action) btn.setAttribute('data-action', chip.action);
       if (chip.npcId) btn.setAttribute('data-npc', chip.npcId);
       if (chip.extra?.roomId) btn.setAttribute('data-room-id', chip.extra.roomId);
       if (chip.extra?.rowId) btn.setAttribute('data-row-id', chip.extra.rowId);
       if (chip.extra?.objId) btn.setAttribute('data-obj-id', chip.extra.objId);
-      // Phase 1 (D5): a chip carrying `submenu` is a parent — it toggles a
-      // one-level popover of its verbs (ui.js) instead of executing. The
-      // key lets the popover know which chip it belongs to across re-renders.
-      if (chip.submenu) {
+      // A chip with children is a group: tapping it drills down into the
+      // chips row (ui.js routes [data-submenu-parent] to openActionGroup),
+      // and the stable data-group-key is what the nav stack resolves on.
+      if (chip.children?.length) {
         btn.classList.add('chip-submenu');
         btn.setAttribute('data-submenu-parent', '');
-        btn.setAttribute('data-submenu-key', `${chip.action}|${chip.extra?.roomId || ''}|${chip.npcId || ''}`);
+        btn.setAttribute('data-group-key', chip.groupKey);
       }
       btn.textContent = chip.label;
-      if (energyDepleted && !isActionExemptFromEnergyGate(chip.action)) btn.disabled = true;
+      if (chip.action && energyDepleted && !isActionExemptFromEnergyGate(chip.action)) btn.disabled = true;
       chipContainer.appendChild(btn);
     }
   }
@@ -3077,6 +3426,56 @@ function maybeChipNudgeHint() {
   requestAnimationFrame(step);
 }
 
+// Bucketing: which named group a Here chip belongs to, by likeness — the
+// object you're interacting with (a device, the bed, a container) or the
+// family of act (food, hygiene, relaxation, notes). ACTION_DEFS.group is
+// the declarative half; hand-built chips (computer/sleep/containers) are
+// tagged with an explicit `bucket` when they're created. A bucket only
+// becomes a real group chip when it has something to show (2+ leaves, or
+// a single child that is itself a group) — one-off actions stay flat so a
+// lone chip never hides behind an extra tap.
+const HERE_BUCKET_ORDER = ['devices', 'containers', 'bed', 'food', 'hygiene', 'relax', 'notes'];
+const HERE_BUCKET_LABELS = { devices: 'Devices', containers: 'Containers', bed: 'Bed', food: 'Food', hygiene: 'Bathroom', relax: 'Relax', notes: 'Notes' };
+
+function defBucketFor(action) {
+  const g = ACTION_DEFS[action]?.group;
+  if (action === 'self.nap') return 'bed';
+  if (g === 'phone' || g === 'sound') return 'devices';
+  if (g === 'kitchen') return 'food';
+  if (g === 'bathroom') return 'hygiene';
+  if (g === 'living_room' || g === 'chill') return 'relax';
+  if (g === 'intimacy') return 'bed';
+  if (g === 'here') return 'notes';
+  return null;
+}
+
+function partitionHereChips(hereChips) {
+  const buckets = new Map();
+  const flat = [];
+  for (const chip of hereChips) {
+    const b = chip.bucket || defBucketFor(chip.action);
+    if (b) {
+      if (!buckets.has(b)) buckets.set(b, []);
+      buckets.get(b).push(chip);
+    } else {
+      flat.push(chip);
+    }
+  }
+  const groups = [];
+  for (const key of HERE_BUCKET_ORDER) {
+    const children = buckets.get(key);
+    if (!children?.length) continue;
+    const leafTotal = children.reduce((n, c) => n + (c.children?.length ? countLeaves(c.children) : 1), 0);
+    if (leafTotal === 1) { flat.push(children[0]); continue; }
+    groups.push({ label: HERE_BUCKET_LABELS[key], groupKey: key, children });
+  }
+  return { groups, flat };
+}
+
+function countLeaves(chips) {
+  return chips.reduce((n, c) => n + (c.children?.length ? countLeaves(c.children) : 1), 0);
+}
+
 function buildActionGroups(gs, sceneState, phase, energyDepleted) {
   const player = gs.player;
   const roomId = player.location;
@@ -3096,8 +3495,8 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
   const hereChips = [];
   hereChips.push({ label: 'Look Around', action: 'look' });
   if (player.location === 'bedroom_player') {
-    if (phase === 'night' || phase === 'early_morning') hereChips.push({ label: 'Sleep', action: 'sleep' });
-    hereChips.push({ label: 'Use Computer', action: 'computer.use' });
+    if (phase === 'night' || phase === 'early_morning') hereChips.push({ label: 'Sleep', action: 'sleep', bucket: 'bed' });
+    hereChips.push({ label: 'Use Computer', action: 'computer.use', bucket: 'devices' });
   }
   for (const avail of resolveAvailableActions(gs)) {
     if (!avail.ok) continue;
@@ -3116,16 +3515,19 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
     // the same Phase 1 (D5) pattern as the door — instead of a flat Open
     // chip. The verb rows inherit the objId via the parent chip's context.
     if (obj.defId === 'wardrobe') {
-      hereChips.push({
+      const wardrobeChip = {
         label: def.container?.label || def.label || 'Wardrobe',
         action: 'wardrobe.interact',
-        submenu: ACTION_DEFS['wardrobe.interact'].submenu,
+        bucket: 'containers',
+        groupKey: `wardrobe-${obj.id}`,
         extra: { objId: obj.id },
-      });
+      };
+      wardrobeChip.children = submenuVerbChips(wardrobeChip);
+      hereChips.push(wardrobeChip);
       continue;
     }
     const label = def.container?.label || def.label || 'Container';
-    hereChips.push({ label: `Open ${label}`, action: 'container.open', extra: { objId: obj.id } });
+    hereChips.push({ label: `Open ${label}`, action: 'container.open', bucket: 'containers', extra: { objId: obj.id } });
   }
   // Intimacy & Voyeurism Phase 19 (sound): sound devices render as "X >"
   // submenu chips — Play / Set Volume / Eject (SOUND_DEVICE_DEFS.affords),
@@ -3137,12 +3539,15 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
     if (!sdef.sourceObjDef) continue;
     const obj = Object.values(gs.objects?.[`room_${roomId}`] || {}).find(o => o.defId === sdef.sourceObjDef);
     if (!obj) continue;
-    hereChips.push({
+    const soundChip = {
       label: OBJECT_DEFS[obj.defId]?.label || sdef.label,
       action: 'sound.interact',
-      submenu: ACTION_DEFS['sound.interact'].submenu,
+      bucket: 'devices',
+      groupKey: `sound-${obj.id}`,
       extra: { objId: obj.id },
-    });
+    };
+    soundChip.children = submenuVerbChips(soundChip);
+    hereChips.push(soundChip);
   }
   // Intimacy & Voyeurism Phase 17 (D13): a bed with a resident asleep in
   // this room offers the boundary submenu — Slide Into Bed / Watch Them
@@ -3156,38 +3561,64 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
     if (obj.defId !== 'bed' && obj.defId !== 'bed_basic') continue;
     const sleeperId = sleepingOccupantInRoom(gs, roomId);
     if (sleeperId) {
-      hereChips.push({
-        label: 'Bed',
-        action: 'bed.interact',
-        submenu: ACTION_DEFS['bed.interact'].submenu,
-        extra: { objId: obj.id },
-        npcId: sleeperId,
-      });
+      // The bed bucket is the place for everything bed-shaped: the boundary
+      // verbs (Slide Into Bed / Watch Them Sleep) merge in as plain leaves
+      // alongside Nap/Sleep/Masturbate rather than nesting a second "Bed ▸"
+      // inside the Bed group.
+      const bedChip = { label: 'Bed', action: 'bed.interact', extra: { objId: obj.id }, npcId: sleeperId };
+      for (const child of submenuVerbChips(bedChip)) { child.bucket = 'bed'; hereChips.push(child); }
     }
     break;
   }
   if ((player.rentOwed || 0) > 0) hereChips.push({ label: `Pay Rent (${player.rentOwed})`, action: 'pay-rent' });
   if (Object.values(gs.world.bills || {}).some(b => b && b.cutoffActive)) hereChips.push({ label: 'Pay Bills (service cut off)', action: 'pay-bills' });
-  if (roomId === 'hallway_a' || roomId === 'hallway_b') {
-    for (const adjId of adjacentRooms) {
-      const roomType = ROOMS[adjId]?.type;
-      const isBedroom = roomType === 'bedroom';
-      const isBathroom = adjId === 'bathroom_a' || adjId === 'bathroom_b';
-      if (!isBedroom && !isBathroom) continue;
-      if (adjId === 'bedroom_player') continue;
-      const roomName = ROOMS[adjId]?.name || 'Room';
-      // Intimacy & Voyeurism Phase 1 (D5): a multi-verb door renders as one
-      // "X Door ▸" chip expanding a one-level popover of its verbs. The
-      // verbs live in ACTION_DEFS' 'door.interact' submenu; the flat
-      // Open/Knock/Peek chips are gone and the adjacent room's id rides on
-      // the parent chip as room context for every sub-verb.
+  // Door chips. In the hallways every reachable bedroom/bathroom door is
+  // one you can do something at (peek/listen/unlock/knock/open), so those
+  // get the full "X Door ▸" submenu. The player's OWN door is normally
+  // ceremony-free — you just walk in — but a LOCKED one is the one way your
+  // own lock locks YOU out (lock from inside, walk out, now it's sealed),
+  // so it appears only then. And anywhere at all, a locked ADJACENT door —
+  // the ensuite case: you can lock bathroom_a from inside it and leave —
+  // needs an Unlock affordance. Only the player ever locks doors, so a
+  // locked door you're standing next to is always your own lock to undo.
+  for (const adjId of adjacentRooms) {
+    const roomType = ROOMS[adjId]?.type;
+    const isBedroom = roomType === 'bedroom';
+    const isBathroom = adjId === 'bathroom_a' || adjId === 'bathroom_b';
+    if (!isBedroom && !isBathroom) continue;
+    const locked = getDoorState(gs, adjId) === 'locked';
+    const inHallway = roomId === 'hallway_a' || roomId === 'hallway_b';
+    if (adjId === 'bedroom_player') {
+      if (!locked) continue;
+    } else if (!inHallway && !locked) {
+      continue;
+    }
+    const roomName = ROOMS[adjId]?.name || 'Room';
+    // Outside the hallways the voyeurism verbs make no sense — the chip is
+    // a flat Unlock, and nothing else.
+    if (!inHallway) {
       hereChips.push({
-        label: `${roomName} Door`,
-        action: 'door.interact',
-        submenu: ACTION_DEFS['door.interact'].submenu,
+        label: adjId === 'bedroom_player' ? `Unlock ${roomName} Door` : `Unlock the ${roomName} Door`,
+        action: 'door.unlock',
         extra: { roomId: adjId },
       });
+      continue;
     }
+    // Intimacy & Voyeurism Phase 1 (D5): a multi-verb door renders as one
+    // "X Door ▸" chip drilling into its verbs. The verbs live in
+    // ACTION_DEFS' 'door.interact' submenu; the flat Open/Knock/Peek
+    // chips are gone and the adjacent room's id rides on the parent chip
+    // as room context for every sub-verb.
+    const doorChip = {
+      label: `${roomName} Door`,
+      action: 'door.interact',
+      groupKey: `door-${adjId}`,
+      extra: { roomId: adjId },
+    };
+    // Unlock is only real against a locked door — drop it otherwise.
+    const verbs = submenuVerbChips(doorChip);
+    doorChip.children = locked ? verbs : verbs.filter(v => v.action !== 'door.unlock');
+    hereChips.push(doorChip);
   }
   // Phase 8 (D8): searching a roommate's room surfaces their possessions
   // (openRoomSearchModal) and taking something routes through the
@@ -3217,7 +3648,9 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
       hereChips.push({ label: `Search ${owner.bible.name || 'Their'} Room`, action: 'search-room', npcId: roomOwner });
     }
   }
-  groups.push({ id: 'here', label: 'Here', chips: hereChips });
+  // Group by likeness and render groups before flat actions.
+  const { groups: hereGroups, flat: hereFlat } = partitionHereChips(hereChips);
+  groups.push({ id: 'here', label: 'Here', chips: [...hereGroups, ...hereFlat] });
 
   // Social
   const socialChips = [];
@@ -3445,6 +3878,10 @@ function renderSceneReader(gs, sceneState) {
     for (const entry of scene.beats) {
       beats.appendChild(buildLogEntryNode(tpl, entry));
     }
+    // D16 now/before: flag the newest beat so the reader can render it as
+    // the big bright anchor while earlier beats shrink + grey-shift.
+    const lastBeat = beats.lastElementChild;
+    if (lastBeat) lastBeat.classList.add('is-latest');
     beats.scrollTop = beats.scrollHeight;
   }
 

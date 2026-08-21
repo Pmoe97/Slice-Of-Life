@@ -18,6 +18,14 @@
   --color-text: #e0e0f0;
   --color-text-dim: #8888aa;
   --color-text-faint: #5a5a7c;
+  /* Reader grey boost bases (D16): default to the plain themed greys, so
+     any .log-entry rendered OUTSIDE the scene reader keeps its current
+     color. .scene-reader overrides these with brighter mixes (dark themes)
+     / darker mixes (light themes) so the dim/faint tiers hold up against
+     a see-through backdrop. Named --sr-* instead of overriding
+     --color-text-dim because a custom property can't reference itself. */
+  --sr-dim: var(--color-text-dim);
+  --sr-faint: var(--color-text-faint);
   --color-accent: #7b6cf6;
   --color-accent-hover: #9d92f8;
   --color-accent-dim: #5a4fa0;
@@ -29,6 +37,11 @@
   --color-warning: #f6d76c;
   --color-shadow: rgba(0,0,0,0.4);
   --color-overlay: rgba(10,10,20,0.7);
+  /* The reader's glyph-contrast layer (D16): the text-shadow color that
+     keeps the translucent (40%) scene-reader legible over ANY image. Dark
+     themes halo their light text with dark; light themes flip it to a
+     light halo so their dark text pops the same way. */
+  --text-halo: rgba(0,0,0,0.85);
   /* Referenced by ~12 app-card rules (Nile/Streamly/WorkHub/Browser/IM/
      AfterHours) since the P4/P7 visual pass but never defined until now —
      those cards were rendering on a transparent background. */
@@ -47,13 +60,19 @@
   --font-sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
   --font-serif: Georgia, 'Times New Roman', serif;
   --font-mono: 'Consolas', 'Courier New', monospace;
-  --fs-xs: 11px;
-  --fs-sm: 13px;
-  --fs-base: 15px;
-  --fs-md: 17px;
-  --fs-lg: 22px;
-  --fs-xl: 28px;
-  --fs-xxl: 36px;
+  /* Settings & Pause Overhaul Phase 4 (D7): text size is font-size-only.
+     Every --fs-* token is calc(px * var(--text-scale)); applyTextScale
+     (settings.js) sets data-text-scale on <html> to small|medium|large,
+     which overrides --text-scale below. Layout metrics never read these —
+     UI scale is explicitly cut. */
+  --text-scale: 1;
+  --fs-xs: calc(11px * var(--text-scale));
+  --fs-sm: calc(13px * var(--text-scale));
+  --fs-base: calc(15px * var(--text-scale));
+  --fs-md: calc(17px * var(--text-scale));
+  --fs-lg: calc(22px * var(--text-scale));
+  --fs-xl: calc(28px * var(--text-scale));
+  --fs-xxl: calc(36px * var(--text-scale));
   --lh-tight: 1.2;
   --lh-normal: 1.45;
   --lh-loose: 1.7;
@@ -95,7 +114,7 @@
   /* Layout */
   --header-h: 56px;
   --footer-h: 56px;
-  --sidebar-w: 240px;
+  --sidebar-w: 280px;
   --grid-gap: 2px;
   --transition-fast: 0.15s ease;
   --transition-med: 0.3s ease;
@@ -117,6 +136,352 @@
   --taskbar-bg: rgba(35, 35, 66, 0.9);
   --desktop-icon-w: 84px;
   --desktop-icon-gap: var(--space-5);
+}
+
+/* D7: text-size override — the attribute lives on <html> (set by
+   applyTextScale), and these beat the :root default on specificity. */
+html[data-text-scale="small"] { --text-scale: 0.9; }
+html[data-text-scale="large"] { --text-scale: 1.2; }
+
+/* D10 (Settings & Pause Overhaul Phase 8): 14 color themes over the :root
+   token set, applied via a data-theme attribute on <html> set by
+   applyTheme() (settings.js). html[data-theme="…"] beats :root on
+   specificity, so these rule-sets win over the base tokens above.
+   'midnight' IS the :root block above (byte-identical values), so it needs
+   no rule-set of its own. 'match-system' has no fixed palette — the media
+   queries below pick the dark (midnight) or light (daylight) palette from
+   the OS setting. KEEP THESE IN SYNC WITH COLOR_THEMES.vars in
+   defs.settings.js: the JS vars drive the Appearance tab's tile swatches,
+   these drive the pixels — a drift shows as wrong swatch previews. Themes
+   recolor UI chrome only; generated imagery is untouched (D10). */
+html[data-theme="daylight"] {
+  --color-bg: #f4f1ea;
+  --color-surface: #ffffff;
+  --color-surface-alt: #ece8dd;
+  --color-surface-hover: #e2dccd;
+  --color-border: #cbc5b6;
+  --color-border-strong: #a49d8c;
+  --color-text: #2c2730;
+  --color-text-dim: #5d5768;
+  --color-text-faint: #8b8596;
+  --color-accent: #5d4fd1;
+  --color-accent-hover: #4638b0;
+  --color-accent-dim: #8f84e8;
+  --color-warm: #cf7a24;
+  --color-cool: #1f7fbf;
+  --color-positive: #1f9d66;
+  --color-negative: #c93f52;
+  --color-desire: #c04a86;
+  --color-warning: #a67a00;
+  --color-shadow: rgba(60,50,30,0.18);
+  --color-overlay: rgba(40,35,28,0.38);
+  --text-halo: rgba(255,252,244,0.92);
+  --color-card: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  html[data-theme="match-system"] {
+    --color-bg: #1a1a2e;
+    --color-surface: #232342;
+    --color-surface-alt: #2a2a4a;
+    --color-surface-hover: #32326a;
+    --color-border: #3a3a5c;
+    --color-border-strong: #4a4a7c;
+    --color-text: #e0e0f0;
+    --color-text-dim: #8888aa;
+    --color-text-faint: #5a5a7c;
+    --color-accent: #7b6cf6;
+    --color-accent-hover: #9d92f8;
+    --color-accent-dim: #5a4fa0;
+    --color-warm: #f6a96c;
+    --color-cool: #6cc7f6;
+    --color-positive: #6cf6a9;
+    --color-negative: #f66c8c;
+    --color-desire: #e26ca6;
+    --color-warning: #f6d76c;
+    --color-shadow: rgba(0,0,0,0.4);
+    --color-overlay: rgba(10,10,20,0.7);
+    --color-card: #2c2c50;
+  }
+}
+@media (prefers-color-scheme: light) {
+  html[data-theme="match-system"] {
+    --color-bg: #f4f1ea;
+    --color-surface: #ffffff;
+    --color-surface-alt: #ece8dd;
+    --color-surface-hover: #e2dccd;
+    --color-border: #cbc5b6;
+    --color-border-strong: #a49d8c;
+    --color-text: #2c2730;
+    --color-text-dim: #5d5768;
+    --color-text-faint: #8b8596;
+    --color-accent: #5d4fd1;
+    --color-accent-hover: #4638b0;
+    --color-accent-dim: #8f84e8;
+    --color-warm: #cf7a24;
+    --color-cool: #1f7fbf;
+    --color-positive: #1f9d66;
+    --color-negative: #c93f52;
+    --color-desire: #c04a86;
+    --color-warning: #a67a00;
+    --color-shadow: rgba(60,50,30,0.18);
+    --color-overlay: rgba(40,35,28,0.38);
+    --text-halo: rgba(255,252,244,0.92);
+    --color-card: #ffffff;
+  }
+}
+html[data-theme="high-contrast"] {
+  --color-bg: #000000;
+  --color-surface: #101014;
+  --color-surface-alt: #1a1a20;
+  --color-surface-hover: #2c2c38;
+  --color-border: #5f5f7a;
+  --color-border-strong: #9f9fbe;
+  --color-text: #ffffff;
+  --color-text-dim: #dcdcec;
+  --color-text-faint: #b0b0c6;
+  --color-accent: #c9a6ff;
+  --color-accent-hover: #e2d0ff;
+  --color-accent-dim: #6a3d9a;
+  --color-warm: #ffb54d;
+  --color-cool: #4db8ff;
+  --color-positive: #00e6b8;
+  --color-negative: #ff3b4e;
+  --color-desire: #ff6bd6;
+  --color-warning: #ffe14d;
+  --color-shadow: rgba(0,0,0,0.65);
+  --color-overlay: rgba(0,0,0,0.82);
+  --color-card: #15151c;
+}
+html[data-theme="dimmed"] {
+  --color-bg: #0d0d14;
+  --color-surface: #14141d;
+  --color-surface-alt: #191924;
+  --color-surface-hover: #232331;
+  --color-border: #2c2c3a;
+  --color-border-strong: #3a3a4e;
+  --color-text: #b4b4c4;
+  --color-text-dim: #767688;
+  --color-text-faint: #535364;
+  --color-accent: #8a82d0;
+  --color-accent-hover: #a49ee0;
+  --color-accent-dim: #564f8c;
+  --color-warm: #c98a58;
+  --color-cool: #58a2c4;
+  --color-positive: #58c492;
+  --color-negative: #c45866;
+  --color-desire: #ad5886;
+  --color-warning: #c0ab58;
+  --color-shadow: rgba(0,0,0,0.3);
+  --color-overlay: rgba(7,7,12,0.7);
+  --color-card: #181826;
+}
+html[data-theme="sepia"] {
+  --color-bg: #f2e8d4;
+  --color-surface: #eae0c8;
+  --color-surface-alt: #e0d3b6;
+  --color-surface-hover: #d3c3a0;
+  --color-border: #b6a584;
+  --color-border-strong: #96855f;
+  --color-text: #3a2f20;
+  --color-text-dim: #6d5f47;
+  --color-text-faint: #99896c;
+  --color-accent: #8a5a2e;
+  --color-accent-hover: #a8743c;
+  --color-accent-dim: #6d441f;
+  --color-warm: #b3661f;
+  --color-cool: #3f7090;
+  --color-positive: #3f7f52;
+  --color-negative: #a03f3f;
+  --color-desire: #8f4f6f;
+  --color-warning: #8f7a1c;
+  --color-shadow: rgba(60,45,20,0.2);
+  --color-overlay: rgba(60,45,20,0.38);
+  --text-halo: rgba(255,248,230,0.92);
+  --color-card: #efe5cd;
+}
+html[data-theme="nord"] {
+  --color-bg: #2e3440;
+  --color-surface: #3b4252;
+  --color-surface-alt: #434c5e;
+  --color-surface-hover: #4c566a;
+  --color-border: #4c566a;
+  --color-border-strong: #616e88;
+  --color-text: #eceff4;
+  --color-text-dim: #d8dee9;
+  --color-text-faint: #8d97ab;
+  --color-accent: #b48ead;
+  --color-accent-hover: #cfa9c9;
+  --color-accent-dim: #7d5a82;
+  --color-warm: #d08770;
+  --color-cool: #81a1c1;
+  --color-positive: #a3be8c;
+  --color-negative: #bf616a;
+  --color-desire: #c990c0;
+  --color-warning: #ebcb8b;
+  --color-shadow: rgba(0,0,0,0.4);
+  --color-overlay: rgba(22,26,34,0.72);
+  --color-card: #434c5e;
+}
+html[data-theme="crimson"] {
+  --color-bg: #1a0e11;
+  --color-surface: #261419;
+  --color-surface-alt: #301a21;
+  --color-surface-hover: #44232e;
+  --color-border: #472532;
+  --color-border-strong: #613442;
+  --color-text: #f0e2e5;
+  --color-text-dim: #b08a92;
+  --color-text-faint: #7c5660;
+  --color-accent: #d96a9a;
+  --color-accent-hover: #e88ab2;
+  --color-accent-dim: #8a3a5e;
+  --color-warm: #f0a05a;
+  --color-cool: #86b0d4;
+  --color-positive: #72d29a;
+  --color-negative: #ff5d66;
+  --color-desire: #e0809c;
+  --color-warning: #f0cf5a;
+  --color-shadow: rgba(0,0,0,0.45);
+  --color-overlay: rgba(18,5,9,0.72);
+  --color-card: #2e1a20;
+}
+html[data-theme="ocean"] {
+  --color-bg: #0a1520;
+  --color-surface: #0f2333;
+  --color-surface-alt: #132c40;
+  --color-surface-hover: #1a3a54;
+  --color-border: #1d384e;
+  --color-border-strong: #2b516e;
+  --color-text: #dceaf4;
+  --color-text-dim: #8fb0c4;
+  --color-text-faint: #5a778c;
+  --color-accent: #9fb2f4;
+  --color-accent-hover: #bcc9f8;
+  --color-accent-dim: #5a6fae;
+  --color-warm: #ffb86b;
+  --color-cool: #57b8f0;
+  --color-positive: #63e6be;
+  --color-negative: #ff6b7a;
+  --color-desire: #f07fb4;
+  --color-warning: #ffe066;
+  --color-shadow: rgba(0,0,0,0.45);
+  --color-overlay: rgba(4,14,24,0.72);
+  --color-card: #12303f;
+}
+html[data-theme="synthwave"] {
+  --color-bg: #12001e;
+  --color-surface: #1d0630;
+  --color-surface-alt: #260a42;
+  --color-surface-hover: #34105c;
+  --color-border: #341256;
+  --color-border-strong: #4d1f7c;
+  --color-text: #f2e6ff;
+  --color-text-dim: #bd96e8;
+  --color-text-faint: #8459b8;
+  --color-accent: #c77bff;
+  --color-accent-hover: #dd9eff;
+  --color-accent-dim: #8a3fd0;
+  --color-warm: #ffb35c;
+  --color-cool: #4df3ff;
+  --color-positive: #5cffb0;
+  --color-negative: #ff5d6b;
+  --color-desire: #ff8ad4;
+  --color-warning: #ffe15c;
+  --color-shadow: rgba(0,0,0,0.55);
+  --color-overlay: rgba(10,0,20,0.75);
+  --color-card: #260744;
+}
+html[data-theme="forest"] {
+  --color-bg: #0e1711;
+  --color-surface: #16231a;
+  --color-surface-alt: #1c2b20;
+  --color-surface-hover: #273a2c;
+  --color-border: #28392c;
+  --color-border-strong: #39513f;
+  --color-text: #e0eee0;
+  --color-text-dim: #9cb89c;
+  --color-text-faint: #69866c;
+  --color-accent: #b49ad8;
+  --color-accent-hover: #cbaddb;
+  --color-accent-dim: #7b5c9c;
+  --color-warm: #e0b25c;
+  --color-cool: #7fb5d0;
+  --color-positive: #7fe0a0;
+  --color-negative: #e05c6a;
+  --color-desire: #d08ac0;
+  --color-warning: #e0d25c;
+  --color-shadow: rgba(0,0,0,0.45);
+  --color-overlay: rgba(6,14,8,0.72);
+  --color-card: #1a2c1e;
+}
+html[data-theme="sunset"] {
+  --color-bg: #1e0f18;
+  --color-surface: #2b1622;
+  --color-surface-alt: #351c2b;
+  --color-surface-hover: #4a2740;
+  --color-border: #48263a;
+  --color-border-strong: #653654;
+  --color-text: #f7e6ea;
+  --color-text-dim: #c99aa6;
+  --color-text-faint: #916372;
+  --color-accent: #d8a0c4;
+  --color-accent-hover: #e8b8d4;
+  --color-accent-dim: #965f86;
+  --color-warm: #ff9a5c;
+  --color-cool: #7fb0d8;
+  --color-positive: #8fd8a8;
+  --color-negative: #ff5d6b;
+  --color-desire: #f77fb0;
+  --color-warning: #ffd95c;
+  --color-shadow: rgba(0,0,0,0.45);
+  --color-overlay: rgba(20,8,16,0.72);
+  --color-card: #331f2d;
+}
+html[data-theme="blossom"] {
+  --color-bg: #2a1a26;
+  --color-surface: #382332;
+  --color-surface-alt: #422a3c;
+  --color-surface-hover: #56394e;
+  --color-border: #4e3448;
+  --color-border-strong: #6c4a62;
+  --color-text: #f6ecf2;
+  --color-text-dim: #d0a8c0;
+  --color-text-faint: #96708a;
+  --color-accent: #e0a0c8;
+  --color-accent-hover: #f0bcd8;
+  --color-accent-dim: #a0608c;
+  --color-warm: #f0b06c;
+  --color-cool: #8ab0d8;
+  --color-positive: #8ad8a8;
+  --color-negative: #e0607c;
+  --color-desire: #f58fc4;
+  --color-warning: #f0d56c;
+  --color-shadow: rgba(0,0,0,0.4);
+  --color-overlay: rgba(24,12,20,0.72);
+  --color-card: #40283a;
+}
+html[data-theme="monochrome"] {
+  --color-bg: #101014;
+  --color-surface: #17171c;
+  --color-surface-alt: #1e1e24;
+  --color-surface-hover: #2a2a32;
+  --color-border: #2e2e36;
+  --color-border-strong: #3f3f4a;
+  --color-text: #e8e8ec;
+  --color-text-dim: #a0a0aa;
+  --color-text-faint: #6a6a74;
+  --color-accent: #b8b8c2;
+  --color-accent-hover: #d8d8e0;
+  --color-accent-dim: #6c6c76;
+  --color-warm: #cfc2b0;
+  --color-cool: #b0becf;
+  --color-positive: #d8e0c8;
+  --color-negative: #e0b0b0;
+  --color-desire: #cfb0c0;
+  --color-warning: #d8cfae;
+  --color-shadow: rgba(0,0,0,0.45);
+  --color-overlay: rgba(10,10,14,0.75);
+  --color-card: #1a1a20;
 }
 </style>
 <!-- ===== /SECTION: TOKENS ===== -->
@@ -171,6 +536,13 @@ body {
 #header .h-label-emoji { font-size: var(--fs-md); text-transform: none; letter-spacing: 0; line-height: 1; }
 #header .h-value { font-size: var(--fs-md); font-weight: 600; }
 #header .h-sep { width: 1px; height: 28px; background: var(--color-border); }
+/* Phase 10 (D12): header game-speed cluster. A 4-button segmented control
+   next to the status group; [data-active] marks the live preset and must
+   out-spec .btn-secondary's flat background. */
+#hdr-speed { gap: var(--space-2); }
+#hdr-speed .hdr-speed-btns { display: flex; gap: 2px; }
+#hdr-speed .hdr-speed-btns .btn { padding: 2px 8px; font-size: var(--fs-xs); min-width: 0; }
+#hdr-speed .hdr-speed-btns .btn[data-active] { background: var(--color-accent); color: #fff; }
 #header .spacer { flex: 1; }
 
 /* Need bars */
@@ -220,6 +592,19 @@ body {
 
 .sidebar-section { padding: var(--space-3); border-bottom: 1px solid var(--color-border); }
 .sidebar-section:last-child { border-bottom: none; }
+/* The Floor Plan section gives the map all the room the sidebar has: trim the
+   section padding (the default 12px all round) and the header gap so the
+   rendered plan is as large as the sidebar allows. */
+.sidebar-section-fp { padding: var(--space-2) var(--space-2) 0; }
+.sidebar-section-fp .sidebar-section-head { margin-bottom: var(--space-1); }
+.sidebar-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.sidebar-section-head h3 { margin-bottom: 0; }
 .sidebar-section h3 {
   font-size: var(--fs-xs);
   text-transform: uppercase;
@@ -237,6 +622,69 @@ body {
   width: 100%;
   height: auto;
   display: block;
+}
+/* Full floor plan overlay (desktop legibility): the sidebar map renders the
+   whole 19-room plan at ~240px, which shrinks the 11px labels well below
+   readable. This overlay renders the SAME map large — same static pass, same
+   live avatar layer, same click-to-walk delegation — with zoom controls on
+   top. Sized by HEIGHT because the plan is tall and portrait (520x670). */
+#floorplan-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--color-overlay);
+  z-index: var(--z-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+#floorplan-overlay[hidden] { display: none !important; }
+.floorplan-overlay-box {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--win-shadow-focused);
+  width: min(96vw, 940px);
+  max-height: 94vh;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4);
+  /* floorPlanZoom multiplies the large map's rendered size via this. */
+  --fp-scale: 1;
+}
+.floorplan-overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.floorplan-overlay-head h3 {
+  font-size: var(--fs-md);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-text-dim);
+}
+.floorplan-overlay-tools { display: flex; align-items: center; gap: var(--space-2); }
+.floorplan-overlay-body {
+  overflow: auto;
+  min-height: 0;
+}
+/* width:max-content + min-width:100% + margin:auto is the classic "centre an
+   oversized child in a scroll container" pattern — at fit scale the map is
+   centred; zoomed in, it scrolls both ways with no clipped edges. */
+#floor-plan-large {
+  width: max-content;
+  min-width: 100%;
+  margin: 0 auto;
+}
+#floor-plan-large svg {
+  display: block;
+  margin: 0 auto;
+  height: calc(min(88vh, 900px) * var(--fp-scale, 1));
+  width: auto;
+  user-select: none;
 }
 /* Floor plan (floorplan-and-movement-plan.md Phase 4-5). Rooms TILE, so the
    plan is drawn in layers: fills, then walls with the doorways cut out of
@@ -431,29 +879,134 @@ body {
 /* Main content */
 #main-content {
   grid-area: main;
+  position: relative;
   background: var(--color-bg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
+/* VN refactor (D15): the scene image is now a FULL-BLEED backdrop of the
+   whole main column, and the scene reader floats over it on a frosted
+   panel. The container is an absolute fill layer (no flex sizing — the
+   column's height belongs to the panel/reader split, not a fixed strip),
+   the image covers the whole column at an aspect close to the image's own
+   (3:2 landscape on desktop, 512x768 portrait on phones), so the old
+   4.9:1 banner center-crop — which showed a neck-and-shoulders sliver of
+   the middle of the frame — is gone. The vertical anchor biases toward
+   the upper third where faces sit. */
 .scene-container {
-  position: relative;
-  width: 100%;
-  flex: 0 0 32%;
-  min-height: 150px;
-  max-height: 260px;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
   background: var(--color-surface-alt);
   overflow: hidden;
 }
 #scene-img {
   width: 100%; height: 100%;
   object-fit: cover;
+  object-position: 50% 30%;
   display: block;
 }
 #scene-img[data-loading] { opacity: 0.3; }
-.scene-overlay { position: absolute; bottom: 0; left: 0; right: 0; padding: var(--space-2) var(--space-3); background: linear-gradient(transparent, rgba(0,0,0,0.6)); }
-.scene-overlay .scene-label { font-size: var(--fs-sm); color: var(--color-text); }
+/* A bottom scrim so the seam between image and frosted panel reads as a
+   deliberate fade, whatever height the panel lands at. The panel sits on
+   top of this, so the visible part is the gradient bleeding out above the
+   panel's top edge. D16 (40% panel): the scrim now runs from 50% height
+   so its fade reaches the panel's top seam and the panel doesn't sit on
+   a fully-bright image line. */
+.scene-container::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 50%;
+  background: linear-gradient(transparent, rgba(8, 8, 16, 0.55));
+  pointer-events: none;
+}
+/* The location label moves to the TOP of the backdrop — the panel owns the
+   bottom edge now (the label would collide with it). Classic VN placement:
+   room name top-left, its own downward scrim for legibility. */
+.scene-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  padding: var(--space-2) var(--space-3);
+  background: linear-gradient(rgba(0,0,0,0.5), transparent);
+}
+.scene-overlay .scene-label { font-size: var(--fs-sm); color: var(--color-text); text-shadow: 0 1px 3px rgba(0,0,0,0.6); }
+
+/* D17: a discreet "about this art" affordance on the scene backdrop — a
+   small ⓘ top-right that stays invisible until you hover the image
+   (desktop) or sits faintly on touch, opening a modal with the full
+   prompt that generated the current scene art plus a reroll button. This
+   is image-overlay chrome like .scene-overlay, so it uses the dark glass
+   treatment regardless of theme. */
+.scene-info-btn {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 3;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(255,255,255,0.28);
+  border-radius: 50%;
+  background: rgba(8, 8, 16, 0.45);
+  color: rgba(255,255,255,0.78);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.scene-container:hover .scene-info-btn,
+.scene-info-btn:focus-visible { opacity: 1; }
+.scene-info-btn:hover { background: rgba(8, 8, 16, 0.72); color: #fff; }
+/* Touch: no hover to reveal it, so keep it faintly visible instead. */
+@media (hover: none) {
+  .scene-info-btn { opacity: 0.55; }
+}
+
+/* D17.5: the shared floating ⓘ that follows whichever registered generated
+   image is hovered/tapped (the scene backdrop keeps its own static corner
+   button; every other generated image gets this one). Fixed so it can sit
+   over any surface; z-index between overlays (200) and modals (300). */
+.image-info-float {
+  position: fixed;
+  opacity: 0.95;
+  z-index: 250;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+}
+
+/* The scene-art info modal's prompt field (D17). */
+.scene-prompt-field {
+  width: 100%;
+  min-height: 132px;
+  max-height: 42vh;
+  resize: vertical;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--color-text);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+.scene-prompt-hint { margin: var(--space-2) 0 0; font-size: var(--fs-xs); color: var(--color-text-faint); }
+.scene-prompt-error { margin-top: var(--space-2); font-size: var(--fs-sm); color: var(--color-negative); }
+.scene-reroll-btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+.scene-prompt-label { display: block; margin: var(--space-3) 0 var(--space-1); font-size: var(--fs-xs); font-weight: 600; color: var(--color-text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+.scene-prompt-seed-row { display: flex; align-items: center; gap: var(--space-2); }
+.scene-prompt-seed { width: 130px; box-sizing: border-box; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text); background: var(--color-surface-alt); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); padding: var(--space-2) var(--space-2); }
+.scene-prompt-seed-hint { font-size: var(--fs-xs); color: var(--color-text-faint); }
+.scene-prompt-neg { width: 100%; box-sizing: border-box; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text); background: var(--color-surface-alt); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); padding: var(--space-2) var(--space-2); }
+.scene-prompt-field[disabled],
+.scene-prompt-seed[disabled],
+.scene-prompt-neg[disabled] { opacity: 0.55; cursor: not-allowed; }
 
 /* --- The scene reader (scene-reader plan Phase 2) ---------------------
    Three bands in one column: a heading and establishing passage that hold
@@ -461,12 +1014,67 @@ body {
    the bottom. The establishing passage NOT scrolling away with the beats is
    the whole structural point — you should always be able to see where you
    are without scrolling back up. */
+/* VN refactor (D15) + glass tune (D16): the reader is a frosted-glass panel
+   docked to the bottom of the column, overlaying the scene backdrop.
+   D16 drops the panel to 40% height at 40% glass with only a 1px blur, so
+   the image really shows through. Legibility at that transparency is
+   carried by TWO theme-aware layers, not the glass:
+     1. a ~35% scrim of the theme's own --color-bg (background-image below),
+        which PULLS whatever the image is showing behind the panel toward
+        the theme's usual reading surface — bright themes get lighter,
+        dark themes get darker — so text contrast is bounded no matter the
+        image;
+     2. --text-halo on the prose (see the text-shadow rule below): a glyph
+        shadow the opposite of the theme's text color, subtitle-style, so
+        the pixels right behind every letter are guaranteed to contrast
+        even when the image is a busy midtone the scrim can't neutralize.
+   The color-mix lines are the modern forms; the rgba lines beneath them
+   are fallbacks for browsers without color-mix. */
 .scene-reader {
-  flex: 1;
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  /* A DEFINITE height (not max-height): flex items are sized to fit the
+     panel instead of being laid out at their natural height and then
+     clipped by the box — the history summary was ending up under the
+     panel's bottom edge. The beats region (flex 1 1 auto, min-height 0)
+     is what absorbs the slack either way. */
+  height: 40%;
   min-height: 0;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  border-top: 1px solid var(--color-border);
+  box-shadow: 0 -8px 24px rgba(0,0,0,0.25);
+  /* 40% themed backdrop + 1px blur, plus TWO stacked washes above the
+     glass (see the block comment at the top of this rule): a uniform
+     ~35% theme-bg scrim for the whole panel, and a top-edge feather that
+     fades from ~70% theme-bg at the seam to transparent over ~110px —
+     so the panel doesn't slam into the image with a hard line, and the
+     heading/date band at the top gets extra darkening behind it. */
+  background: rgba(14, 14, 26, 0.40);
+  background-color: color-mix(in srgb, var(--color-bg) 40%, transparent);
+  background-image: linear-gradient(rgba(10, 10, 18, 0.35), rgba(10, 10, 18, 0.35)),
+                    linear-gradient(rgba(10, 10, 18, 0.55), rgba(10, 10, 18, 0.55) 24px, transparent 110px);
+  background-image: linear-gradient(
+                      color-mix(in srgb, var(--color-bg) 35%, transparent),
+                      color-mix(in srgb, var(--color-bg) 35%, transparent)
+                    ),
+                    linear-gradient(
+                      color-mix(in srgb, var(--color-bg) 70%, transparent),
+                      color-mix(in srgb, var(--color-bg) 70%, transparent) 24px,
+                      transparent 110px
+                    );
+  backdrop-filter: blur(1px);
+  -webkit-backdrop-filter: blur(1px);
+  /* Scoped grey-text boost (D16): the dim/faint tiers are nudged toward
+     --color-text so they hold up against a see-through backdrop — dark
+     themes brighten them, light themes darken them, both toward the full
+     readable color. These override the :root --sr-* bases; scoped to the
+     reader only, so the rest of the app's chrome keeps its original grey
+     values. */
+  --sr-dim: color-mix(in srgb, var(--color-text) 82%, var(--color-text-dim));
+  --sr-faint: color-mix(in srgb, var(--color-text) 55%, var(--color-text-faint));
 }
 
 /* The moodle strip (Phase 3, D8): glanceable awareness, above the heading.
@@ -481,7 +1089,8 @@ body {
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface);
+  /* VN refactor (D15): no solid backdrop of its own — the frosted panel
+     behind the whole reader is the surface now. */
   overflow-x: auto;
 }
 .sr-moodles[hidden] { display: none; }
@@ -500,7 +1109,7 @@ body {
 .sr-moodle-glyph { font-size: var(--fs-base); }
 /* A filled pip for a strong signal, hollow for a faint one — the band, at a
    glance, without needing to read anything. */
-.sr-moodle-pip { font-size: 9px; color: var(--color-text-dim); }
+.sr-moodle-pip { font-size: 9px; color: var(--sr-dim); }
 .sr-moodle[data-kind="need"] { background: transparent; border: 1px solid var(--color-warning); }
 .sr-moodle[data-kind="need"][data-critical] { border-color: var(--color-negative); }
 
@@ -525,7 +1134,7 @@ body {
 }
 .sr-when {
   font-size: var(--fs-sm);
-  color: var(--color-text-dim);
+  color: var(--sr-dim);
   font-variant-numeric: tabular-nums;
   margin-left: auto;
 }
@@ -547,14 +1156,25 @@ body {
   font-size: var(--fs-base);
   line-height: var(--lh-loose);
 }
+/* VN refactor (D15) + glass tune (D16): the reader's prose floats over a
+   full-bleed image through 40% glass, so every text tier gets the theme's
+   --text-halo behind the glyphs — a dark halo on dark themes, light on
+   light themes, which is what guarantees the words read over ANY image
+   color, busy or bright, no matter how transparent the panel is. */
+.scene-reader .sr-establishing,
+.scene-reader .sr-beats,
+.scene-reader .sr-heading,
+.scene-reader .sr-history {
+  text-shadow: 0 0 2px var(--text-halo), 0 1px 2px var(--text-halo);
+}
 .sr-presence { color: var(--color-text); }
-.sr-sensory { color: var(--color-text-dim); }
+.sr-sensory { color: var(--sr-dim); }
 .sr-sensory[data-here="false"] { font-style: italic; }
-.sr-empty { color: var(--color-text-faint); font-style: italic; }
+.sr-empty { color: var(--sr-faint); font-style: italic; }
 /* Your own clothing line (intimacy-voyeurism Phase 5): the scene's first
    word about you — a towel, sleepwear, a swimsuit. Dim but not faint: it is
    about the player, not about a door across the hall. */
-.sr-self { color: var(--color-text-dim); font-style: italic; }
+.sr-self { color: var(--sr-dim); font-style: italic; }
 
 /* An attention callout (D11): in the prose, but set apart. Reads as part of
    the fiction rather than as a system notification. */
@@ -574,7 +1194,7 @@ body {
    are warm (there IS a lamp in there), ajar cues are dim, sound cues plain. */
 .sr-door-cue { font-style: italic; }
 .sr-door-cue[data-kind="light"] { color: var(--color-warm); }
-.sr-door-cue[data-kind="ajar"] { color: var(--color-text-dim); }
+.sr-door-cue[data-kind="ajar"] { color: var(--sr-dim); }
 .sr-door-cue[data-kind="sound"] { color: var(--color-text); }
 
 /* Beats: what has happened since you walked in. This is the ONLY band that
@@ -595,15 +1215,20 @@ body {
 /* Closed scenes, folded away. Subordinate always (design invariant 5) — the
    moment history competes with the present moment, this plan has failed. */
 .sr-history {
+  /* flex: 0 0 auto — the drawer NEVER gives up its own height to flex
+     pressure, so the "Earlier — N scenes" summary can't be squeezed under
+     the panel's bottom edge (the beats region absorbs all the slack
+     instead). The open list scrolls inside its own capped box below. */
   flex: 0 0 auto;
   border-top: 1px solid var(--color-border);
-  background: var(--color-surface);
+  /* VN refactor (D15): transparent like the moodles strip — the frosted
+     panel is the surface. */
 }
 .sr-history[hidden] { display: none; }
 .sr-history-summary {
   padding: var(--space-2) var(--space-3);
   font-size: var(--fs-sm);
-  color: var(--color-text-dim);
+  color: var(--sr-dim);
   cursor: pointer;
   user-select: none;
   list-style: none;
@@ -613,7 +1238,7 @@ body {
 .sr-history-summary::before { content: '▸'; display: inline-block; margin-right: var(--space-2); transition: transform 0.15s ease; }
 .sr-history-summary:hover { color: var(--color-text); }
 .sr-history-list {
-  max-height: 30vh;
+  max-height: min(30vh, 140px);
   overflow-y: auto;
   padding: 0 var(--space-3) var(--space-2);
   display: flex;
@@ -625,10 +1250,10 @@ body {
   gap: var(--space-2);
   align-items: baseline;
   font-size: var(--fs-sm);
-  color: var(--color-text-faint);
+  color: var(--sr-faint);
 }
 .sr-history-time { font-variant-numeric: tabular-nums; min-width: 3.6em; }
-.sr-history-room { color: var(--color-text-dim); }
+.sr-history-room { color: var(--sr-dim); }
 .sr-history-count { margin-left: auto; }
 
 .log-entry { font-size: var(--fs-base); line-height: var(--lh-loose); }
@@ -636,10 +1261,19 @@ body {
 .log-entry[data-type="dialogue"] { color: var(--color-text); }
 .log-entry[data-type="dialogue"] .speaker { font-weight: 700; color: var(--color-accent); }
 .log-entry[data-type="dialogue"] .speech { font-style: italic; }
-.log-entry[data-type="system"] { color: var(--color-text-dim); font-size: var(--fs-sm); text-align: center; padding: var(--space-1); }
-.log-entry[data-type="action"] { color: var(--color-text-dim); font-style: italic; font-size: var(--fs-sm); }
-.log-entry.log-action { color: var(--color-text-dim); font-style: italic; font-size: var(--fs-sm); }
-.log-entry.log-internal { color: var(--color-text-dim); font-style: italic; font-size: var(--fs-sm); opacity: 0.7; }
+.log-entry[data-type="system"] { color: var(--sr-dim); font-size: var(--fs-sm); text-align: center; padding: var(--space-1); }
+.log-entry[data-type="action"] { color: var(--sr-dim); font-style: italic; font-size: var(--fs-sm); }
+.log-entry.log-action { color: var(--sr-dim); font-style: italic; font-size: var(--fs-sm); }
+.log-entry.log-internal { color: var(--sr-dim); font-style: italic; font-size: var(--fs-sm); opacity: 0.7; }
+/* D16 now/before: RENDER's renderSceneReader marks the newest beat
+   .is-latest. The latest line is the big bright anchor — "what just
+   happened". Everything before it is a touch smaller and shifted to the
+   (brightened) dim grey, so "now" vs "came before" reads at a glance.
+   These two rules come AFTER the per-type rules so the grey/size win over
+   the type colors; the type flourishes (accent speaker, italic action)
+   ride along on their higher-specificity children. */
+.log-entry:not(.is-latest) { font-size: calc(var(--fs-base) * 0.9); color: var(--sr-dim); opacity: 0.85; }
+.log-entry.is-latest { font-size: calc(var(--fs-md) * 1.1); font-weight: 600; color: var(--color-text); opacity: 1; }
 .log-entry[data-fresh] { animation: fade-in 0.4s ease; }
 @keyframes fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -924,8 +1558,11 @@ body {
   flex-shrink: 0;
   align-items: center;
   /* Phase 8 added a fifth bar (desire); on very narrow screens the row can
-     overflow instead of squishing the bars into illegibility — swipe it. */
+     overflow instead of squishing the bars into illegibility — swipe it.
+     overflow-y pinned like the chips row: horizontal scroll only, so the
+     bars can never be vertically clipped on mobile. */
   overflow-x: auto;
+  overflow-y: hidden;
 }
 .fsi {
   display: flex;
@@ -949,6 +1586,12 @@ body {
   transition: width var(--transition-med);
 }
 .fsi .fsi-pct { font-size: var(--fs-xs); font-weight: 600; color: var(--color-text-dim); min-width: 28px; text-align: right; flex-shrink: 0; }
+/* Hunger band label (2026-08-20): the visible Satisfied/Peckish/Hungry…
+   answer to "why am I hungry again" — the fuller prose lives in the bar's
+   title tooltip. Tints with the warning ladder like the bar itself. */
+.fsi .fsi-band { font-size: calc(10px * var(--text-scale)); font-weight: 600; color: var(--color-text-dim); white-space: nowrap; flex-shrink: 0; }
+.fsi[data-need="hunger"][data-low] .fsi-band { color: var(--color-warning); }
+.fsi[data-need="hunger"][data-critical] .fsi-band { color: var(--color-negative); }
 .fsi[data-need="energy"] .fsi-bar > .fill { background: var(--color-warm); }
 .fsi[data-need="energy"] .fsi-icon { color: var(--color-warm); }
 .fsi[data-need="hunger"] .fsi-bar > .fill { background: var(--color-cool); }
@@ -1025,12 +1668,19 @@ body {
   flex-wrap: nowrap;
   gap: var(--space-1);
   padding: var(--space-2) var(--space-3);
+  /* D14: two-axis overflow is the mobile clipping bug — `overflow-x:auto`
+     forces overflow-y to auto too, so a collapsed row turns the chips into
+     an invisible vertical scroll trap (chips get clipped mid-height and the
+     row's height can collapse under them). Pin the axes: horizontal scroll
+     only, and never let the row shrink below its own content (flex: 1 0
+     auto = grow to fill, size to content, never compress). */
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: thin;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-x;
   min-height: 0;
-  flex: 1;
+  flex: 1 0 auto;
 }
 .footer-chips-row::-webkit-scrollbar { height: 4px; }
 .footer-chips-row::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 2px; }
@@ -1058,38 +1708,18 @@ body {
 .chip[data-action="move"]:hover { background: var(--color-accent-dim); border-color: var(--color-accent); }
 .chip[data-action="sleep"] { border-color: var(--color-warm); }
 
-/* Intimacy & Voyeurism Phase 1 (D5): the expandable action submenu. A
-   parent chip is an ordinary .chip with a trailing ▸; its verbs live in a
-   one-level popover that ui.js positions fixed over <body> at open time,
-   so the chips row's overflow-x can never clip it. */
+/* Intimacy & Voyeurism Phase 1 (D5), reworked D14: the drill-down chip. A
+   group chip is an ordinary .chip with a trailing ▸; tapping it replaces
+   the chips row with its children and pins a "‹" chip first (ui.js routes
+   [data-submenu-parent] through the nav stack in render.js). The ▸ hint is
+   the only affordance a group chip needs — nothing floats over the page. */
 .chip-submenu::after { content: " ▸"; }
-.submenu-popover {
-  position: fixed;
-  z-index: 60;
-  min-width: 200px;
-  max-width: min(90vw, 320px);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: 0 6px 20px rgb(0 0 0 / 0.25);
-  padding: var(--space-1);
-  display: flex;
-  flex-direction: column;
+.chip-nav-back {
+  border-color: var(--color-border-strong);
+  font-weight: 700;
+  padding: var(--space-1) var(--space-3);
 }
-.submenu-verb {
-  background: none;
-  border: none;
-  text-align: left;
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--fs-sm);
-  color: var(--color-text);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  white-space: nowrap;
-}
-.submenu-verb:hover { background: var(--color-surface-hover); }
-.submenu-verb:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
-.submenu-verb:disabled { opacity: 0.35; cursor: default; }
+.chip-nav-back:hover { background: var(--color-surface-hover); border-color: var(--color-accent); }
 
 /* The peek/listen lens (intimacy-voyeurism Phase 10, D6/D7). A fixed
    overlay at the modal tier with a dark stage. The keyhole itself is the
@@ -1326,6 +1956,7 @@ body {
   flex-shrink: 0;
 }
 .invp-header h2 { font-size: var(--fs-lg); flex-shrink: 0; margin: 0; }
+.invp-summary { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .invp-tools { display: flex; align-items: center; gap: var(--space-2); flex: 1; justify-content: flex-end; }
 .invp-search, .invp-sort {
   background: var(--color-surface-alt);
@@ -1350,12 +1981,18 @@ body {
   border-right: 1px solid var(--color-border);
 }
 .invp-group-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
   font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--color-text-dim);
-  padding: var(--space-2) var(--space-1) var(--space-1);
+  padding: var(--space-3) var(--space-1) var(--space-1);
 }
+.invp-group-header:first-child { padding-top: var(--space-1); }
+.invp-group-header .invp-group-count { font-size: 10px; color: var(--color-text-faint); font-variant-numeric: tabular-nums; letter-spacing: 0; }
 .invp-row {
   display: flex;
   align-items: center;
@@ -1364,18 +2001,50 @@ body {
   text-align: left;
   background: none;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-2);
   color: var(--color-text);
   font-family: var(--font-sans);
   font-size: var(--fs-sm);
   cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
 }
-.invp-row:hover { background: var(--color-surface-hover); }
+.invp-row:hover { background: var(--color-surface-hover); transform: translateX(2px); }
 .invp-row[data-selected] { background: var(--color-accent-dim); border-color: var(--color-accent); }
+/* Per-item icon chip — a small tinted tile that makes the list scannable by
+   shape, not just text. Data-driven from the def's sortGroup/slot. */
+.invp-row-icon {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+.invp-row[data-selected] .invp-row-icon { background: rgba(255,255,255,0.08); border-color: var(--color-accent); }
 .invp-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.invp-row-qty { color: var(--color-text-dim); flex-shrink: 0; }
-.invp-row-sublabel { color: var(--color-text-faint); font-size: var(--fs-xs); flex-shrink: 0; }
+.invp-row-tags { display: flex; gap: 3px; flex-shrink: 0; }
+.invp-row-tag {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: var(--color-text-dim);
+  background: var(--color-surface-alt);
+}
+.invp-row-tag[data-kind="key"] { color: var(--color-warning); background: rgba(246,215,108,0.12); }
+.invp-row-tag[data-kind="worn"] { color: var(--color-accent); background: rgba(123,108,246,0.15); }
+.invp-row-tag[data-kind="frozen"] { color: var(--color-cool); background: rgba(108,199,246,0.12); }
+.invp-row-tag[data-kind="fragile"] { color: var(--color-warm); background: rgba(246,169,108,0.12); }
+.invp-row-qty { color: var(--color-text-dim); flex-shrink: 0; font-variant-numeric: tabular-nums; font-weight: 700; min-width: 26px; text-align: right; }
+.invp-row-sublabel { color: var(--color-text-faint); font-size: var(--fs-xs); flex-shrink: 0; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .invp-freshness-tag { font-size: var(--fs-xs); padding: 1px 6px; border-radius: 3px; flex-shrink: 0; }
 .invp-freshness-tag[data-state="fresh"] { background: rgba(108, 246, 169, 0.15); color: var(--color-positive); }
 .invp-freshness-tag[data-state="stale"] { background: rgba(246, 215, 108, 0.15); color: var(--color-warning); }
@@ -1391,13 +2060,50 @@ body {
   flex-direction: column;
   gap: var(--space-3);
 }
+.invp-detail-head { display: flex; align-items: center; gap: var(--space-3); }
+.invp-detail-icon {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+.invp-detail-title { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .invp-detail-name { font-size: var(--fs-lg); font-weight: 700; }
 .invp-detail-meta { font-size: var(--fs-xs); color: var(--color-text-dim); }
+.invp-detail-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.invp-chip {
+  font-size: 10px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-dim);
+  background: var(--color-surface-alt);
+}
+.invp-chip[data-kind="trait"] { color: #b89aff; border-color: rgba(180,140,255,0.35); }
+.invp-chip[data-kind="style"] { color: var(--color-text-faint); border-color: transparent; background: transparent; }
+.invp-chip[data-kind="key"] { color: var(--color-warning); border-color: rgba(246,215,108,0.4); }
 .invp-detail-desc { font-size: var(--fs-sm); color: var(--color-text); line-height: var(--lh-loose); }
 .invp-detail-fresh { font-size: var(--fs-sm); color: var(--color-text-dim); }
 .invp-detail-fresh[data-state="stale"] { color: var(--color-warning); }
 .invp-detail-fresh[data-state="spoiled"] { color: var(--color-warm); }
 .invp-detail-fresh[data-state="rotten"] { color: var(--color-negative); }
+/* Clothing stat block: one row per stat, label + thin bar. Reads at a glance
+   how formal/revealing/cozy a garment is before you put it on. */
+.invp-detail-stats { display: flex; flex-direction: column; gap: 4px; }
+.invp-detail-stats[hidden] { display: none; }
+.invp-stat { display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-xs); }
+.invp-stat-label { flex-shrink: 0; width: 72px; color: var(--color-text-dim); text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; }
+.invp-stat-bar { flex: 1; height: 4px; border-radius: 2px; background: var(--color-surface-alt); overflow: hidden; }
+.invp-stat-bar > .fill { height: 100%; border-radius: 2px; background: var(--color-accent); }
+.invp-stat-bar > .fill[data-high] { background: var(--color-positive); }
+.invp-stat-bar > .fill[data-reveal] { background: var(--color-desire); }
+.invp-stat-val { flex-shrink: 0; width: 34px; text-align: right; color: var(--color-text-faint); font-variant-numeric: tabular-nums; }
 .invp-detail-actions { display: flex; flex-direction: column; gap: var(--space-2); }
 .invp-qty-row { display: flex; align-items: center; gap: var(--space-2); }
 .invp-qty-row label { font-size: var(--fs-xs); color: var(--color-text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
@@ -1412,6 +2118,7 @@ body {
   font-family: var(--font-sans);
 }
 .invp-detail-btns { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.invp-detail-btns .btn { flex: 1 1 auto; min-width: 72px; }
 .sidebar-open-btn { margin-top: var(--space-2); }
 
 /* Container panel (overhaul Phase 2) — reuses the inventory overlay/box
@@ -1999,7 +2706,7 @@ body {
 .menu-screen[hidden] { display: none !important; }
 .menu-title {
   font-family: 'Cinzel', Georgia, serif;
-  font-size: clamp(24px, 8vh, 64px);
+  font-size: calc(clamp(24px, 8vh, 64px) * var(--text-scale));
   line-height: 1.05;
   color: #d9b871;
   letter-spacing: 4px;
@@ -2009,7 +2716,7 @@ body {
 .menu-subtitle {
   font-family: 'Cormorant Garamond', Georgia, serif;
   font-style: italic;
-  font-size: clamp(12px, 2.6vh, 20px);
+  font-size: calc(clamp(12px, 2.6vh, 20px) * var(--text-scale));
   color: #e11d48;
   margin: 0 0 clamp(10px, 3.5vh, 30px);
   text-shadow: 0 0 15px rgba(225, 29, 72, 0.3);
@@ -2017,7 +2724,7 @@ body {
 .menu-buttons { display: flex; flex-direction: column; gap: clamp(6px, 1.5vh, 12px); max-width: 280px; }
 .title-btn {
   font-family: 'Cinzel', Georgia, serif;
-  font-size: clamp(10px, 2vh, 16px);
+  font-size: calc(clamp(10px, 2vh, 16px) * var(--text-scale));
   letter-spacing: 2px;
   padding: clamp(6px, 1.6vh, 12px) clamp(14px, 3.2vh, 26px);
   border: 2px solid rgba(217, 184, 113, 0.55);
@@ -2046,6 +2753,31 @@ body {
   background: rgba(10, 7, 19, 0.4);
 }
 .title-btn[hidden] { display: none !important; }
+
+/* Pause sub-screen (Settings & Pause Overhaul Phase 3, D3): the in-play
+   pause menu is a PLAIN dimmed overlay — the title gallery, its slideshow
+   auto-cycle, and the slideshow darkening never run behind it. MENU's
+   showMainMenu sets [data-context] on #main-menu; the "pause" value hides
+   the gallery's image/darkening layers so the live game shows dimmed
+   beneath (the menu's own translucent background is the dim). */
+#main-menu[data-context="pause"] { background: rgba(8, 6, 16, 0.82); }
+#main-menu[data-context="pause"] .title-bg-layer,
+#main-menu[data-context="pause"] .title-bg-img,
+#main-menu[data-context="pause"] .title-bg-overlay { display: none; }
+.pause-title {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: calc(clamp(18px, 5vh, 40px) * var(--text-scale));
+  letter-spacing: 6px;
+  color: #d9b871;
+  margin: 0 0 4px;
+  text-shadow: 0 0 24px rgba(217, 184, 113, 0.45);
+}
+.pause-clock {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: calc(clamp(12px, 2.4vh, 18px) * var(--text-scale));
+  color: #c9b68a;
+  margin: 0 0 clamp(10px, 3vh, 26px);
+}
 
 /* ===== Player Design studio (player creation + intro plan, Phase 3) =====
    z-index 200 sits above .main-menu's 190, so the title screen and its
@@ -2168,6 +2900,16 @@ body {
 }
 .ps-control:focus { outline: none; border-color: #6f5cc4; }
 .ps-field-hint { font-size: 10px; color: #625a80; line-height: 1.4; }
+.ps-fullbody {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: #8880a6;
+  cursor: pointer;
+  user-select: none;
+}
+.ps-fullbody input { accent-color: #7b6cf6; margin: 0; }
 .ps-toggle-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .ps-toggle {
   background: #191527;
@@ -2180,6 +2922,23 @@ body {
 }
 .ps-toggle:hover { border-color: #4a4070; color: #c9c0e6; }
 .ps-toggle.active { background: #3b2f66; border-color: #7b6cf6; color: #e6e0ff; }
+.ps-toggle:disabled { opacity: 0.35; cursor: default; }
+/* The None/Custom row above the Distinguishing features grid. None is
+   exclusive and literally disables the grid beneath it; Custom coexists
+   with the grid and reveals a free-text field. */
+.ps-toggle-special { display: flex; gap: 6px; margin-bottom: 6px; }
+.ps-toggle-special-btn {
+  border-radius: 999px;
+  padding: 4px 14px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.ps-toggle-special-btn[data-row-id$="|__none__"] { border-color: #5a4a3a; color: #c9a86e; }
+.ps-toggle-special-btn[data-row-id$="|__none__"].active { background: #3d3222; border-color: #f6d76c; color: #ffe9b0; }
+.ps-toggle-special-btn[data-row-id$="|__custom__"] { border-color: #3a5a5a; color: #6ec9c9; }
+.ps-toggle-special-btn[data-row-id$="|__custom__"].active { background: #223d3d; border-color: #6cc7f6; color: #b0ecff; }
+.ps-features-custom { margin-bottom: 6px; }
+.ps-toggle-grid.disabled .ps-toggle:not(:disabled) { opacity: 0.5; }
 .ps-rows { display: flex; flex-direction: column; gap: var(--space-3); }
 .ps-row {
   border: 1px solid #241f38;
@@ -2379,7 +3138,7 @@ body {
 
 .menu-loading, .menu-unavailable {
   font-family: 'Cormorant Garamond', Georgia, serif;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   color: #b57bff;
   margin-top: clamp(6px, 1.7vh, 14px);
   min-height: 18px;
@@ -2387,7 +3146,7 @@ body {
 .menu-unavailable { color: #7a7090; }
 .menu-warning {
   font-family: 'Cormorant Garamond', Georgia, serif;
-  font-size: clamp(9px, 1.6vh, 12px);
+  font-size: calc(clamp(9px, 1.6vh, 12px) * var(--text-scale));
   color: #e11d48;
   margin-top: clamp(8px, 2.2vh, 18px);
   opacity: 0.75;
@@ -2395,13 +3154,13 @@ body {
 }
 .menu-footnote {
   font-family: 'Cormorant Garamond', Georgia, serif;
-  font-size: clamp(9px, 1.5vh, 11px);
+  font-size: calc(clamp(9px, 1.5vh, 11px) * var(--text-scale));
   color: #7a7090;
   margin-top: clamp(3px, 0.8vh, 6px);
   opacity: 0.7;
   max-width: 340px;
 }
-.menu-exit-note { font-size: clamp(10px, 1.6vh, 12px); color: #d9b871; margin-top: clamp(6px, 1.2vh, 10px); min-height: 16px; }
+.menu-exit-note { font-size: calc(clamp(10px, 1.6vh, 12px) * var(--text-scale)); color: #d9b871; margin-top: clamp(6px, 1.2vh, 10px); min-height: 16px; }
 .title-arrows {
   position: absolute;
   bottom: 30px;
@@ -2419,7 +3178,7 @@ body {
   border: 2px solid rgba(217, 184, 113, 0.4);
   background: rgba(10, 7, 19, 0.6);
   color: #d9b871;
-  font-size: 20px;
+  font-size: calc(20px * var(--text-scale));
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -2430,7 +3189,7 @@ body {
 .title-arrow-btn:disabled { opacity: 0.25; cursor: not-allowed; }
 .title-counter {
   font-family: 'Cormorant Garamond', Georgia, serif;
-  font-size: 14px;
+  font-size: calc(14px * var(--text-scale));
   color: #d9b871;
   min-width: 50px;
   text-align: center;
@@ -2441,7 +3200,7 @@ body {
 .options-title {
   font-family: 'Cinzel', Georgia, serif;
   color: #d9b871;
-  font-size: 26px;
+  font-size: calc(26px * var(--text-scale));
   letter-spacing: 2px;
   margin-bottom: 22px;
 }
@@ -2454,9 +3213,9 @@ body {
   border-bottom: 1px solid rgba(217, 184, 113, 0.18);
   max-width: 340px;
 }
-.menu-option-name { font-size: 15px; color: var(--color-text); font-weight: 600; }
-.menu-option-desc { font-size: 12px; color: var(--color-text-faint); margin-top: 2px; }
-.menu-option-toggle { padding: 8px 18px; font-size: 13px; min-width: 64px; }
+.menu-option-name { font-size: calc(15px * var(--text-scale)); color: var(--color-text); font-weight: 600; }
+.menu-option-desc { font-size: calc(12px * var(--text-scale)); color: var(--color-text-faint); margin-top: 2px; }
+.menu-option-toggle { padding: 8px 18px; font-size: calc(13px * var(--text-scale)); min-width: 64px; }
 .menu-options-back {
   margin-top: 22px;
   /* Sticky footer: the options list scrolls inside .menu-screen, and the
@@ -2472,15 +3231,315 @@ body {
 }
 .menu-option-section-title {
   font-family: 'Cinzel', Georgia, serif;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   letter-spacing: 2px;
   color: #d9b871;
   margin-top: 22px;
   margin-bottom: 2px;
   text-transform: uppercase;
 }
-.menu-option-hint { font-size: 11px; color: #7a7090; margin: 0 0 10px; max-width: 300px; }
-.menu-option-note { font-size: 11px; color: #e11d48; margin-top: 10px; min-height: 14px; }
+.menu-option-hint { font-size: calc(11px * var(--text-scale)); color: #7a7090; margin: 0 0 10px; max-width: 300px; }
+.menu-option-note { font-size: calc(11px * var(--text-scale)); color: #e11d48; margin-top: 10px; min-height: 14px; }
+
+/* Settings sub-screen (Settings & Pause Overhaul Phase 2, D2): the tabbed
+   settings surface — a full-panel sub-screen of #main-menu that sits above
+   the title screen and arrows (z 10 within the menu's own stacking
+   context), dims the gallery behind it, and is built entirely by
+   renderSettingsUi() from SETTINGS_TABS. Left rail + scrollable content
+   pane, cross-tab filter, immediate-apply rows, origin-tracked Back. */
+#menu-settings-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 6, 16, 0.8);
+  backdrop-filter: blur(3px);
+  padding: clamp(8px, 2vh, 28px);
+}
+#menu-settings-screen[hidden] { display: none !important; }
+.settings-frame {
+  display: flex;
+  flex-direction: column;
+  width: min(980px, 100%);
+  max-height: 100%;
+  background: linear-gradient(160deg, #12101f, #0d0b16);
+  border: 1px solid rgba(217, 184, 113, 0.35);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(217, 184, 113, 0.18);
+  flex-shrink: 0;
+}
+.settings-title {
+  font-family: 'Cinzel', Georgia, serif;
+  color: #d9b871;
+  font-size: calc(24px * var(--text-scale));
+  letter-spacing: 2px;
+  margin: 0;
+}
+.settings-sub { font-size: calc(12px * var(--text-scale)); color: var(--color-text-faint); margin: 2px 0 0; }
+.settings-filter {
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  color: var(--color-text);
+  font-size: calc(13px * var(--text-scale));
+  font-family: var(--font-sans);
+  width: min(260px, 34vw);
+}
+.settings-filter:focus-visible { outline: none; border-color: var(--color-accent); }
+.settings-body { display: flex; flex: 1; min-height: 0; }
+.settings-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 176px;
+  flex-shrink: 0;
+  padding: 12px 10px;
+  border-right: 1px solid rgba(217, 184, 113, 0.15);
+  overflow-y: auto;
+}
+.settings-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-dim);
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: calc(13px * var(--text-scale));
+  letter-spacing: 1px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+}
+.settings-tab-btn:hover { background: rgba(217, 184, 113, 0.1); color: var(--color-text); }
+.settings-tab-btn.active {
+  background: rgba(217, 184, 113, 0.16);
+  border-color: rgba(217, 184, 113, 0.4);
+  color: #f3e3b8;
+}
+.settings-tab-icon { font-size: calc(15px * var(--text-scale)); }
+.settings-content { flex: 1; min-width: 0; overflow-y: auto; padding: 16px 20px; }
+.settings-section { margin-bottom: 22px; }
+.settings-section-title {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: calc(13px * var(--text-scale));
+  letter-spacing: 2px;
+  color: #d9b871;
+  text-transform: uppercase;
+  margin: 0 0 4px;
+}
+.settings-filter-tab {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: #d9b871;
+}
+.settings-filter-tab:hover { color: #f3e3b8; }
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 0;
+  border-bottom: 1px solid rgba(217, 184, 113, 0.14);
+  max-width: 560px;
+}
+.settings-row-name { font-size: calc(15px * var(--text-scale)); color: var(--color-text); font-weight: 600; }
+.settings-row-desc { font-size: calc(12px * var(--text-scale)); color: var(--color-text-faint); margin-top: 2px; }
+.settings-empty { text-align: center; color: var(--color-text-dim); padding: 44px 0; font-size: calc(14px * var(--text-scale)); }
+.settings-empty-icon { font-size: calc(28px * var(--text-scale)); margin-bottom: 8px; }
+.settings-section-empty { font-size: calc(12px * var(--text-scale)); color: var(--color-text-faint); font-style: italic; margin: 4px 0 10px; }
+.settings-row-placeholder { color: var(--color-text-faint); }
+
+/* Population tab sliders (Settings & Pause Overhaul Phase 5, D13/D14): the
+   two proportional grids — label, range, nudge arrows, typed number input —
+   plus the total-100 readout and the ⚠ rebalance warning. Mirrors the
+   office-clicker HR pattern. */
+.settings-section-desc { font-size: calc(12px * var(--text-scale)); color: var(--color-text-faint); margin: 0 0 10px; }
+.settings-sliders { width: 350px; flex-shrink: 0; }
+.settings-row:has(.settings-sliders) { align-items: flex-start; }
+.settings-slider-grid { display: flex; flex-direction: column; gap: 8px; }
+.settings-slider-row { display: flex; align-items: center; gap: 8px; }
+.settings-slider-label {
+  width: 96px; flex-shrink: 0;
+  font-size: calc(12px * var(--text-scale)); color: var(--color-text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.settings-slider-range { flex: 1; min-width: 0; accent-color: var(--color-accent); }
+.settings-slider-arrows { display: flex; gap: 2px; }
+.settings-slider-nudge {
+  min-width: 22px; height: 24px; padding: 0 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  color: var(--color-text-dim);
+  font-size: calc(11px * var(--text-scale));
+  line-height: 1;
+  cursor: pointer;
+}
+.settings-slider-nudge:hover { background: var(--color-surface-hover); color: var(--color-text); }
+.settings-slider-num {
+  width: 58px; flex-shrink: 0; height: 26px; padding: 0 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  font-size: calc(12px * var(--text-scale));
+  font-family: var(--font-sans);
+  text-align: center;
+}
+.settings-slider-num:focus-visible { outline: none; border-color: var(--color-accent); }
+.settings-slider-total { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: calc(12px * var(--text-scale)); }
+.settings-slider-total-value { color: var(--color-positive); font-weight: 600; }
+.settings-slider-warn { color: var(--color-warning); }
+
+/* Images tab style grid + custom field + cache button (Settings & Pause
+   Overhaul Phase 7, D9): the tile grid of style presets (+ None + Custom),
+   the free-text Custom phrase field, and the destructive clear-cache
+   button. Tiles show label + one-line blurb; the active style is
+   highlighted. */
+.settings-row:has(.settings-style-grid) { align-items: flex-start; }
+.settings-style-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  width: 100%;
+  max-width: 640px;
+  flex-shrink: 0;
+}
+.settings-grid-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: calc(13px * var(--text-scale));
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.settings-grid-tile:hover { background: var(--color-surface-hover); border-color: var(--color-border-strong); }
+.settings-grid-tile.active {
+  background: rgba(217, 184, 113, 0.16);
+  border-color: rgba(217, 184, 113, 0.5);
+  color: #f3e3b8;
+}
+.settings-grid-tile-label { font-weight: 600; }
+.settings-grid-tile-blurb { font-size: calc(11px * var(--text-scale)); color: var(--color-text-faint); line-height: 1.35; }
+.settings-grid-tile.active .settings-grid-tile-blurb { color: var(--color-text-dim); }
+
+/* Appearance-tab theme-tile additions (Settings & Pause Overhaul Phase 8,
+   D10): swatch chips previewing the theme's bg/surface/accent/text tokens
+   (drawn from COLOR_THEMES.vars), and a small group tag. 'match-system'
+   has no vars, so its tile shows one CSS-drawn light/dark split chip. */
+.settings-grid-tile-swatches { display: flex; gap: 4px; margin-top: 2px; }
+.settings-grid-tile-swatch {
+  width: 18px; height: 18px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border-strong);
+  flex-shrink: 0;
+}
+.settings-grid-tile-swatch-system {
+  width: 40px;
+  background: linear-gradient(135deg, #f4f1ea 0 50%, #1a1a2e 50% 100%);
+}
+.settings-grid-tile-group {
+  font-size: calc(10px * var(--text-scale));
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--color-text-faint);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  margin-top: 2px;
+}
+.settings-style-custom-input {
+  width: 320px;
+  max-width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  font-size: calc(13px * var(--text-scale));
+  font-family: var(--font-sans);
+}
+.settings-style-custom-input:focus-visible { outline: none; border-color: var(--color-accent); }
+.settings-clear-btn {
+  border-color: color-mix(in srgb, var(--color-negative) 60%, var(--color-border));
+  color: var(--color-negative);
+}
+.settings-clear-btn:hover {
+  background: color-mix(in srgb, var(--color-negative) 14%, transparent);
+  box-shadow: 0 0 20px color-mix(in srgb, var(--color-negative) 25%, transparent);
+}
+
+/* Data-tab storage insight (Settings & Pause Overhaul Phase 9, D11): the
+   per-folder readout box (label + entries/bytes per group, total at the
+   bottom) and its Refresh button. The row's readout is wider than the
+   toggle pills, so the row flex aligns it to the top like the slider grids. */
+.settings-row:has(.settings-storage) { align-items: flex-start; }
+.settings-storage {
+  width: 340px;
+  max-width: 100%;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-storage-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+  font-family: var(--font-sans);
+  font-size: calc(12px * var(--text-scale));
+  color: var(--color-text-dim);
+}
+.settings-storage-row { display: flex; justify-content: space-between; gap: 12px; }
+.settings-storage-value { color: var(--color-text); white-space: nowrap; }
+.settings-storage-total {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-positive);
+  font-weight: 600;
+}
+.settings-storage-footer { display: flex; justify-content: flex-end; }
+.settings-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 18px;
+  border-top: 1px solid rgba(217, 184, 113, 0.18);
+}
 
 /* Discord badge (reference §4, recoloured to this game's gold) */
 .discord-logo-link {
@@ -2575,6 +3634,10 @@ body {
      a bare #hdr-needs selector (ID only) — qualify with #header so this
      actually wins instead of silently losing the cascade. */
   .h-status-group, #hdr-room-sep, #header #hdr-needs, #hdr-needs-sep { display: none; }
+  /* Phase 10 (D12): the speed cluster rides with the status group (Day/
+     Time/Money) — hidden on mobile for the same reason, only location +
+     utility buttons survive there. */
+  #hdr-speed-sep, #header #hdr-speed { display: none; }
   #hdr-room-group { min-width: 0; }
   #hdr-room-group .h-value {
     display: inline-block; max-width: 38vw; overflow: hidden;
@@ -2651,10 +3714,12 @@ body {
   #save-btn, #menu-btn { padding: var(--space-1); }
 }
 
-/* D8: on portrait phones the scene image takes less of the column so the
-   reader's beats have room. */
+/* D8 + VN refactor (D15) + glass tune (D16): on portrait phones the reader
+   matches the desktop 40% share — the scene backdrop gets the top 60% of a
+   portrait column, right where object-position's upper-third faces band
+   sits. */
 @media (max-width: 600px) and (orientation: portrait) {
-  .scene-container { flex-basis: 26%; }
+  .scene-reader { height: 40%; }
 }
 
 /* --- BrineOS Phase 3: phone shell --- */
@@ -4043,16 +5108,38 @@ body {
 /* Menu overhaul Phase 10: responsive + reduced-motion for the menu. */
 @media (max-width: 600px) {
   .menu-screen { padding: 0 20px; max-width: 320px; }
-  .menu-title { font-size: clamp(20px, 7vh, 36px); letter-spacing: 2px; margin: 0 0 6px; }
-  .menu-subtitle { font-size: clamp(11px, 2.4vh, 16px); }
-  .title-btn { font-size: clamp(10px, 2vh, 15px); padding: clamp(6px, 1.6vh, 10px) clamp(12px, 2.8vh, 20px); }
+  .menu-title { font-size: calc(clamp(20px, 7vh, 36px) * var(--text-scale)); letter-spacing: 2px; margin: 0 0 6px; }
+  .menu-subtitle { font-size: calc(clamp(11px, 2.4vh, 16px) * var(--text-scale)); }
+  .title-btn { font-size: calc(clamp(10px, 2vh, 15px) * var(--text-scale)); padding: clamp(6px, 1.6vh, 10px) clamp(12px, 2.8vh, 20px); }
   .title-arrows { bottom: 20px; right: 14px; }
   .discord-logo-link { width: 60px; height: 60px; top: 12px; right: 12px; }
   .menu-buttons a.title-btn[href*="discord"] { display: none; }
+  /* Settings sub-screen: full-bleed panel, header stacks, rail becomes a
+     horizontal scroll row above the content. */
+  #menu-settings-screen { padding: 0; }
+  .settings-frame { width: 100%; max-height: 100%; border-radius: 0; border: none; }
+  .settings-header { flex-direction: column; align-items: stretch; gap: 8px; padding: 10px 14px; }
+  .settings-title { font-size: 18px; letter-spacing: 1px; }
+  .settings-filter { width: 100%; }
+  .settings-body { flex-direction: column; }
+  .settings-content { padding: 12px 14px; }
+  .settings-rail {
+    flex-direction: row;
+    width: auto;
+    border-right: none;
+    border-bottom: 1px solid rgba(217, 184, 113, 0.15);
+    overflow-x: auto;
+    padding: 8px;
+  }
+  .settings-tab-btn { flex-shrink: 0; }
+  /* Population tab (Phase 5): on narrow panels stack each slider row's
+     label over its range+arrows+number so the controls keep full width. */
+  .settings-row { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .settings-sliders { width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
   .title-bg-img { transition-duration: 0.001ms; }
-  .title-btn, .title-arrow-btn, .discord-logo-link { transition-duration: 0.001ms; }
+  .title-btn, .title-arrow-btn, .discord-logo-link, .settings-tab-btn { transition-duration: 0.001ms; }
 }
 </style>
 <!-- ===== /SECTION: STYLES ===== -->
@@ -4091,6 +5178,21 @@ body {
         <span class="h-value" id="hdr-money">0</span>
       </div>
     </div>
+    <!-- Settings & Pause Overhaul Phase 10 (D12): the game-speed cluster.
+         Session-local (resets to x20 on reload); the multiplier is read
+         live by the continuous clock loop (getTimeScale), so a click takes
+         effect on the very next frame. Buttons are plain [data-action]
+         rows — data-id rides through as extra.id. -->
+    <div class="h-sep" id="hdr-speed-sep"></div>
+    <div class="h-group" id="hdr-speed" title="Game speed — how fast game time flows">
+      <span class="h-label">Speed</span>
+      <div class="hdr-speed-btns">
+        <button class="btn btn-secondary tiny" data-action="speed.set" data-id="x0">0×</button>
+        <button class="btn btn-secondary tiny" data-action="speed.set" data-id="x1">1×</button>
+        <button class="btn btn-secondary tiny" data-action="speed.set" data-id="x20">20×</button>
+        <button class="btn btn-secondary tiny" data-action="speed.set" data-id="x100">100×</button>
+      </div>
+    </div>
     <div class="h-sep" id="hdr-room-sep"></div>
     <div class="h-group" id="hdr-room-group">
       <span class="h-label">Room</span>
@@ -4113,8 +5215,11 @@ body {
 
   <!-- Left Sidebar -->
   <aside id="sidebar-left">
-    <div class="sidebar-section">
-      <h3>Floor Plan</h3>
+    <div class="sidebar-section sidebar-section-fp">
+      <div class="sidebar-section-head">
+        <h3>Floor Plan</h3>
+        <button class="btn btn-secondary tiny" data-action="floorplan.open" title="Open the full floor plan">⤢</button>
+      </div>
       <div id="floor-plan"></div>
     </div>
     <div class="sidebar-section">
@@ -4133,6 +5238,10 @@ body {
       <div class="scene-overlay">
         <span class="scene-label" id="scene-label">—</span>
       </div>
+      <!-- D17: discreet ⓘ (top-right, invisible until hover/touch) opening
+           the scene-art info modal — full prompt + reroll. Hidden until
+           RENDER's renderScene stamps a real scene. -->
+      <button class="scene-info-btn" id="scene-info-btn" data-action="scene.image-info" title="See this image's prompt" aria-label="About this scene image" hidden>ⓘ</button>
     </div>
     <!-- The scene reader (scene-reader plan Phase 2). Replaces the flat
          narration log: a room-scoped scene with an establishing passage that
@@ -4192,7 +5301,7 @@ body {
   <footer id="footer">
     <div class="footer-status-row" id="footer-status-row">
       <div class="fsi" data-need="energy"><span class="fsi-icon">⚡</span><div class="fsi-bar"><div class="fill" data-fill="100"></div></div><span class="fsi-pct">100%</span></div>
-      <div class="fsi" data-need="hunger"><span class="fsi-icon">🍔</span><div class="fsi-bar"><div class="fill" data-fill="100"></div></div><span class="fsi-pct">100%</span></div>
+      <div class="fsi" data-need="hunger"><span class="fsi-icon">🍔</span><div class="fsi-bar"><div class="fill" data-fill="100"></div></div><span class="fsi-pct">100%</span><span class="fsi-band">Satisfied</span></div>
       <div class="fsi" data-need="hygiene"><span class="fsi-icon">🚿</span><div class="fsi-bar"><div class="fill" data-fill="100"></div></div><span class="fsi-pct">100%</span></div>
       <div class="fsi" data-need="mood"><span class="fsi-icon">😊</span><div class="fsi-bar"><div class="fill" data-fill="50"></div></div><span class="fsi-pct">50%</span></div>
       <div class="fsi" data-need="desire"><span class="fsi-icon">🔥</span><div class="fsi-bar"><div class="fill" data-fill="20"></div></div><span class="fsi-pct">20%</span></div>
@@ -4251,7 +5360,6 @@ body {
     <h1 class="menu-title">Slice of Life</h1>
     <p class="menu-subtitle">An apartment living sim</p>
     <div class="menu-buttons">
-      <button class="title-btn" id="menu-resume-btn" data-action="menu.resume" hidden>Resume</button>
       <button class="title-btn" id="menu-continue-btn" data-action="menu.continue" disabled>Continue</button>
       <button class="title-btn" data-action="menu.new-game">New Game</button>
       <button class="title-btn" data-action="menu.load">Load Game</button>
@@ -4266,6 +5374,28 @@ body {
     <p class="menu-footnote">All characters are fictional and AI-generated. Content is dynamically created, not pre-written.</p>
   </div>
 
+  <!-- Pause sub-screen (Settings & Pause Overhaul Phase 3, D3): the real
+       pause menu. A plain dimmed overlay — the game stays visible beneath
+       it (the [data-context="pause"] rule dims it), the title gallery /
+       slideshow never runs behind it (menu.js skips initTitleGallery for
+       the pause context and stops any stale auto-cycle), and the game
+       clock was paused by showMainMenu('pause'), so #pause-clock is
+       populated once at open time and stays accurate. Save/Load open the
+       VN slot grid above this menu (z 200 > 190); Quit to Menu reuses
+       doExitGame (exit-save then back to boot). -->
+  <div id="menu-pause-screen" class="menu-screen" hidden>
+    <h2 class="pause-title">Paused</h2>
+    <p class="pause-clock" id="pause-clock"></p>
+    <div class="menu-buttons">
+      <button class="title-btn" data-action="menu.resume">Resume</button>
+      <button class="title-btn" data-action="save">Save</button>
+      <button class="title-btn" data-action="load-menu">Load</button>
+      <button class="title-btn" data-action="menu.options">Options</button>
+      <a class="title-btn" href="https://discord.com/invite/E6N9WKpGPA" target="_blank" rel="noopener noreferrer" title="Join our Discord community!">Discord</a>
+      <button class="title-btn" data-action="menu.exit">Quit to Menu</button>
+    </div>
+  </div>
+
   <!-- Options sub-screen (same column, toggled from the title screen). -->
   <div id="menu-options-screen" class="menu-screen" hidden>
     <h2 class="options-title">Options</h2>
@@ -4276,13 +5406,9 @@ body {
       </div>
       <button class="title-btn menu-option-toggle" id="opt-bg-art-btn" data-action="options.bg-art">On</button>
     </div>
-    <div class="menu-option-row">
-      <div>
-        <div class="menu-option-name">Autosave</div>
-        <div class="menu-option-desc">Write a rotating autosave every 30 seconds while playing.</div>
-      </div>
-      <button class="title-btn menu-option-toggle" id="opt-autosave-btn" data-action="options.autosave">On</button>
-    </div>
+    <!-- Settings & Pause Overhaul Phase 4 (D1): the Autosave row moved off
+         this boot-only list into the General tab of the settings screen —
+         it is a gameplay setting, and the settings store owns it. -->
     <div class="menu-option-row">
       <div>
         <div class="menu-option-name">Debug Panel</div>
@@ -4290,52 +5416,44 @@ body {
       </div>
       <button class="title-btn menu-option-toggle" data-action="menu.debug">Open</button>
     </div>
-    <div class="menu-option-section-title">Cast preferences</div>
-    <p class="menu-option-hint">Which actors and pairings appear in generated background art. At least one of each must stay on.</p>
+    <!-- Settings & Pause Overhaul Phase 2 (D2/D1): the boot row's entry into
+         the tabbed settings screen. Gameplay settings live in the tabs, not
+         on this row — this is just the door. -->
     <div class="menu-option-row">
       <div>
-        <div class="menu-option-name">Female actors</div>
-        <div class="menu-option-desc">Women and female-presenting cast members.</div>
+        <div class="menu-option-name">Cast &amp; more settings…</div>
+        <div class="menu-option-desc">Population distribution, image style, themes and data — one searchable screen.</div>
       </div>
-      <button class="title-btn menu-option-toggle" id="pref-gender-f-btn" data-action="prefs.gender-f">On</button>
+      <button class="title-btn menu-option-toggle" data-action="settings.open">Open</button>
     </div>
-    <div class="menu-option-row">
-      <div>
-        <div class="menu-option-name">Male actors</div>
-        <div class="menu-option-desc">Men and male-presenting cast members.</div>
-      </div>
-      <button class="title-btn menu-option-toggle" id="pref-gender-m-btn" data-action="prefs.gender-m">On</button>
-    </div>
-    <div class="menu-option-row">
-      <div>
-        <div class="menu-option-name">Non-binary actors</div>
-        <div class="menu-option-desc">Non-binary and androgynous cast members.</div>
-      </div>
-      <button class="title-btn menu-option-toggle" id="pref-gender-nb-btn" data-action="prefs.gender-nb">On</button>
-    </div>
-    <div class="menu-option-row">
-      <div>
-        <div class="menu-option-name">Hetero pairings</div>
-        <div class="menu-option-desc">Mixed-gender couples.</div>
-      </div>
-      <button class="title-btn menu-option-toggle" id="pref-pairing-hetero-btn" data-action="prefs.pairing-hetero">On</button>
-    </div>
-    <div class="menu-option-row">
-      <div>
-        <div class="menu-option-name">Gay pairings</div>
-        <div class="menu-option-desc">Male–male couples.</div>
-      </div>
-      <button class="title-btn menu-option-toggle" id="pref-pairing-gay-btn" data-action="prefs.pairing-gay">On</button>
-    </div>
-    <div class="menu-option-row">
-      <div>
-        <div class="menu-option-name">Lesbian pairings</div>
-        <div class="menu-option-desc">Female–female couples.</div>
-      </div>
-      <button class="title-btn menu-option-toggle" id="pref-pairing-lesbian-btn" data-action="prefs.pairing-lesbian">On</button>
-    </div>
-    <p class="menu-option-note" id="menu-pref-note" hidden></p>
     <button class="title-btn menu-options-back" data-action="menu.back">← Back</button>
+  </div>
+
+  <!-- Settings sub-screen (Settings & Pause Overhaul Phase 2, D2): the
+       tabbed settings surface. A sibling of the options sub-screen;
+       menu.js's renderSettingsUi() builds the rail + panes from
+       SETTINGS_TABS, and Back/Esc return to wherever it was opened from
+       (the boot options row or the pause title screen). Immediate-apply
+       rows — every change writes kv.menu 'settings' and takes effect live. -->
+  <div id="menu-settings-screen" hidden>
+    <div class="settings-frame">
+      <header class="settings-header">
+        <div>
+          <h2 class="settings-title">Settings</h2>
+          <p class="settings-sub">Changes apply immediately.</p>
+        </div>
+        <input id="settings-filter-input" class="settings-filter" type="text" placeholder="Search settings…" autocomplete="off" spellcheck="false" aria-label="Search settings">
+      </header>
+      <div class="settings-body">
+        <nav id="settings-tab-rail" class="settings-rail" aria-label="Settings tabs"></nav>
+        <div class="settings-content" id="settings-content">
+          <div id="settings-panes" class="settings-panes"></div>
+        </div>
+      </div>
+      <footer class="settings-footer">
+        <button class="title-btn" data-action="settings.back">← Back</button>
+      </footer>
+    </div>
   </div>
 
   <!-- Slideshow nav — hidden on the options screen. -->
@@ -4400,6 +5518,28 @@ body {
   </div>
 </div>
 
+<!-- Full floor plan (desktop legibility): the sidebar map is too small to
+     read room labels, so this overlay renders the same map at a large scale
+     with zoom controls. Same renderer (renderFloorPlan renders into
+     #floor-plan-large while this is open), same live avatar layer, same
+     click-to-walk on the room rects. -->
+<div id="floorplan-overlay" hidden>
+  <div class="floorplan-overlay-box">
+    <div class="floorplan-overlay-head">
+      <h3>Floor Plan</h3>
+      <div class="floorplan-overlay-tools">
+        <button class="btn btn-secondary tiny" data-action="floorplan.zoom-out" title="Zoom out">−</button>
+        <button class="btn btn-secondary tiny" data-action="floorplan.zoom-in" title="Zoom in">+</button>
+        <button class="btn btn-secondary tiny" data-action="floorplan.zoom-reset" title="Fit the whole map">Fit</button>
+        <button class="btn btn-secondary tiny" data-action="floorplan.close">Close</button>
+      </div>
+    </div>
+    <div class="floorplan-overlay-body" id="floorplan-overlay-body">
+      <div id="floor-plan-large"></div>
+    </div>
+  </div>
+</div>
+
 <!-- Modal -->
 <div id="modal-overlay">
   <div class="modal-box">
@@ -4418,6 +5558,7 @@ body {
   <div class="invp-box">
     <div class="invp-header">
       <h2>Inventory</h2>
+      <span class="dim tiny invp-summary" id="invp-summary"></span>
       <div class="invp-tools">
         <input type="text" id="invp-search" class="invp-search" placeholder="Search items…" autocomplete="off" aria-label="Search inventory">
         <select id="invp-sort" class="invp-sort" aria-label="Sort inventory">
@@ -4679,8 +5820,10 @@ body {
 
 <template id="tpl-inv-row">
   <button type="button" class="invp-row" data-inv-row>
+    <span class="invp-row-icon"></span>
     <span class="invp-row-name"></span>
     <span class="invp-row-servings" hidden></span>
+    <span class="invp-row-tags"></span>
     <span class="invp-row-qty"></span>
     <span class="invp-row-sublabel"></span>
     <span class="invp-freshness-tag"></span>
@@ -4689,10 +5832,17 @@ body {
 
 <template id="tpl-inv-detail">
   <div class="invp-detail-inner">
-    <div class="invp-detail-name"></div>
-    <div class="invp-detail-meta"></div>
+    <div class="invp-detail-head">
+      <div class="invp-detail-icon"></div>
+      <div class="invp-detail-title">
+        <div class="invp-detail-name"></div>
+        <div class="invp-detail-meta"></div>
+        <div class="invp-detail-chips"></div>
+      </div>
+    </div>
     <div class="invp-detail-desc"></div>
     <div class="invp-detail-fresh"></div>
+    <div class="invp-detail-stats"></div>
     <div class="invp-detail-actions">
       <div class="invp-qty-row">
         <label for="invp-qty">Qty</label>
@@ -4889,7 +6039,8 @@ body {
 <!-- ===== SECTION: SCRIPTS ==== -->
 <!-- Load order matters (each script's top-level code may reference an
      earlier script's data at load time — e.g. DEFS.ACTIONS reading NEEDS
-     from CONFIG): CONFIG → ICONS → DEFS.WORLD → DEFS.ACTIONS →
+     from CONFIG): CONFIG → DEFS.SETTINGS → SETTINGS → ICONS →
+     DEFS.WORLD → DEFS.ACTIONS →
      DEFS.COMPUTER → DEFS.MENU → ORBITAL → STATE → SIM → COMMITMENTS →
      WORLD → ITEMS → INVENTORY → EFFECTS → COOKING → ACTIONS → SKILLS → COMPUTER →
      NPC → WILLINGNESS → RUMINATION → PROMPT → LLM → IMAGE → PEEK → RENDER →
@@ -4899,32 +6050,39 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/srcfiles/config.js?v=136"></script>
+<script src="src/srcfiles/config.js?v=140"></script>
+<!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
+     SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
+     'settings' only at runtime, but sits right after its schema and before
+     STATE (which consults autosaveIntervalMs at runtime only) for tidy load
+     order. -->
+<script src="src/srcfiles/defs.settings.js?v=8"></script>
+<script src="src/srcfiles/settings.js?v=6"></script>
 <script src="src/srcfiles/icons.js?v=30"></script>
-<script src="src/srcfiles/defs.world.js?v=42"></script>
+<script src="src/srcfiles/defs.world.js?v=43"></script>
 <script src="src/srcfiles/defs.actions.js?v=43"></script>
 <script src="src/srcfiles/defs.computer.js?v=31"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
      at runtime; IMAGE's titleGallery consumes genTitlePrompt. -->
-<script src="src/srcfiles/defs.menu.js?v=19"></script>
+<script src="src/srcfiles/defs.menu.js?v=20"></script>
 <!-- The opening cutscene's script, as data (player creation + intro plan,
      Phase 5). Pure strings — no dependency on anything, but grouped with the
      other defs.* files because that is what it is. -->
-<script src="src/srcfiles/defs.intro.js?v=12"></script>
+<script src="src/srcfiles/defs.intro.js?v=13"></script>
 <!-- The interior: the composite-shape library and the authored room designs
      (Home Design Studio). Pure data; authored in dev/designer.html. -->
 <script src="src/srcfiles/defs.design.js?v=2"></script>
 <!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/srcfiles/orbital.js?v=12"></script>
-<script src="src/srcfiles/state.js?v=57"></script>
-<script src="src/srcfiles/sim.js?v=76"></script>
+<script src="src/srcfiles/state.js?v=59"></script>
+<script src="src/srcfiles/sim.js?v=79"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
 <script src="src/srcfiles/commitments.js?v=13"></script>
-<script src="src/srcfiles/world.js?v=30"></script>
+<script src="src/srcfiles/world.js?v=31"></script>
 <script src="src/srcfiles/movement.js?v=2"></script>
 <script src="src/srcfiles/signals.js?v=19"></script>
 <script src="src/srcfiles/scene.js?v=17"></script>
@@ -4951,8 +6109,8 @@ body {
 <script src="src/srcfiles/intent.js?v=18"></script>
 <script src="src/srcfiles/skills.js?v=19"></script>
 <script src="src/srcfiles/stealth.js?v=19"></script>
-<script src="src/srcfiles/time.js?v=28"></script>
-<script src="src/srcfiles/computer.js?v=59"></script>
+<script src="src/srcfiles/time.js?v=29"></script>
+<script src="src/srcfiles/computer.js?v=60"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -4960,7 +6118,7 @@ body {
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
 <script src="src/srcfiles/phone.js?v=20"></script>
-<script src="src/srcfiles/npc.js?v=46"></script>
+<script src="src/srcfiles/npc.js?v=50"></script>
 <!-- Intimacy & Voyeurism Phase 9 (D13): the willingness gate — the ONLY door
      into any intimacy act. Pure function + tuning (willingness.js); reads
      npc.js's shared clothing reads at call time, consumed by cognition.js's
@@ -4993,7 +6151,7 @@ body {
      ui.js; x5.js itself is pure and calls no model. -->
 <script src="src/srcfiles/x5.js?v=15"></script>
 <script src="src/srcfiles/interruption.js?v=22"></script>
-<script src="src/srcfiles/image.js?v=28"></script>
+<script src="src/srcfiles/image.js?v=31"></script>
 <!-- Intimacy & Voyeurism Phase 10 (D6/D7): the peek/listen hold — the timed
      real-time session loop (risk ramp, per-NPC caught outcomes, image budget)
      plus the pure derivations it re-reads every real second. After image.js
@@ -5010,7 +6168,7 @@ body {
      render.js/ui.js which call its resolvers/applys at runtime only. -->
 <script src="src/srcfiles/boundary.js?v=1"></script>
 <script src="src/srcfiles/pregnancy.js?v=1"></script>
-<script src="src/srcfiles/render.js?v=70"></script>
+<script src="src/srcfiles/render.js?v=73"></script>
 <script src="src/srcfiles/render.computer.js?v=47"></script>
 <script src="src/srcfiles/render.desktop.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
@@ -5043,7 +6201,7 @@ body {
      pipeline at runtime). Every dependency is a call-time one, so this slot
      is flexible within that range. -->
 <script src="src/srcfiles/asks.js?v=11"></script>
-<script src="src/srcfiles/ui.js?v=105"></script>
+<script src="src/srcfiles/ui.js?v=114"></script>
 <script src="src/srcfiles/ui.computer.js?v=47"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
@@ -5060,11 +6218,12 @@ body {
      invokes boot() — anything loading after that runs once boot has already
      started, which is a race nobody should have to reason about. Calls into
      SIM/IMAGE/STATE at runtime only, so it needs nothing at load time. -->
-<script src="src/srcfiles/studio.js?v=12"></script>
+<script src="src/srcfiles/studio.js?v=16"></script>
+
 <!-- Menu overhaul Phase 10: the main-menu component — after ui.js (calls
      resumeFromRecord/openSaveMenu/startAutosave and the data-action chain
      at runtime). Loads LAST: the bottom of menu.js invokes boot(), which
      ui.js can no longer call itself because boot() reaches into MENU/IMAGE
      functions defined after UI. -->
-<script src="src/srcfiles/menu.js?v=17"></script>
+<script src="src/srcfiles/menu.js?v=24"></script>
 <!-- ===== /SECTION: SCRIPTS ===== -->

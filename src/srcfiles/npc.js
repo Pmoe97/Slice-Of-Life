@@ -2150,25 +2150,39 @@ async function applyProposal(proposal, context, gameState, playerAction, opts = 
 // like physical.hair, physical.eyes, etc. Applies defaults for missing
 // fields, never errors on missing optional sub-fields (all new fields are
 // additive — existing saves simply get defaults).
+// Default values are CLONED at assignment, never handed out by reference.
+// The schema defaults are shared module objects (`{ type:'object', default:{} }`
+// is ONE `{}` for every NPC), and a second validation of the same bible
+// (createNpcFromStub/buildStudioNpc validate the same physical object twice)
+// used to recurse INTO that shared object — filling typicalAttire's empty
+// sub-keys into the schema itself and permanently changing the shape of
+// every later NPC's validation. Cloning makes the default assignment
+// idempotent: validating the same bible any number of times yields the same
+// output, so a cast is byte-identical regardless of page history (Phase 6's
+// determinism requirement).
+function cloneDefault(v) {
+  return (v && typeof v === 'object') ? JSON.parse(JSON.stringify(v)) : v;
+}
+
 function validateNestedObject(prefix, obj, fields, errors, normalized) {
   for (const [key, spec] of Object.entries(fields)) {
     const v = obj[key];
     if (v === undefined || v === null) {
-      obj[key] = spec.default;
+      obj[key] = cloneDefault(spec.default);
       continue;
     }
     if (spec.type === 'object' && spec.fields) {
       if (typeof v !== 'object' || Array.isArray(v)) {
-        obj[key] = spec.default;
+        obj[key] = cloneDefault(spec.default);
         continue;
       }
       validateNestedObject(`${prefix}.${key}`, v, spec.fields, errors, normalized);
     }
     if (spec.type === 'array' && !Array.isArray(v)) {
-      obj[key] = spec.default;
+      obj[key] = cloneDefault(spec.default);
     }
     if (spec.type === 'string' && typeof v !== 'string') {
-      obj[key] = spec.default;
+      obj[key] = cloneDefault(spec.default);
     }
     if (spec.type === 'number' && typeof v === 'number' && spec.range && (v < spec.range[0] || v > spec.range[1])) {
       errors.push(`${prefix}.${key} out of range: ${v}`);
@@ -2380,11 +2394,27 @@ function outfitFlavorProse(outfit) {
 function getPhysicalDescriptionForPrompt(npc, opts = {}) {
   const b = npc?.bible || npc?.appearance;
   const p = b?.physical;
+  // Settings & Pause Overhaul Phase 6 (D13): species resolved up front — the
+  // fallback branch below (external NPCs built by createExternalNpc carry no
+  // `physical` block) still names the race. human short-circuits everywhere.
+  const species = b.species || 'human';
+  const race = species !== 'human' ? RACES.find(r => r.id === species) : null;
   if (!p || !p.hair || !p.hair.color) {
-    return b?.visual || 'a young adult';
+    const fallback = b?.visual || 'a young adult';
+    if (race) {
+      return `${race.article} ${race.noun}, ${fallback}${race.traitPhrase ? ', ' + race.traitPhrase : ''}`;
+    }
+    return fallback;
   }
 
   const parts = [];
+
+  // Settings & Pause Overhaul Phase 6 (D13): lead with the race for
+  // non-human species. article+noun compose the plain form ("an elf"); the
+  // traitPhrase is appended further down as the visible-feature cue. human
+  // short-circuits — today's prose, byte-identical. The player's appearance
+  // shim and authored NPCs (Del) carry no species, so they read as human.
+  if (race) parts.push(`${race.article} ${race.noun}`);
 
   // Phase 0: lead with age + gender for prompt and image consistency
   if (typeof b?.age === 'number') parts.push(`${b.age}-year-old`);
@@ -2420,10 +2450,14 @@ function getPhysicalDescriptionForPrompt(npc, opts = {}) {
   ].filter(Boolean);
   if (faceBits.length > 0) parts.push(faceBits.join(', '));
 
+  // Facial hair (2026-08-19). 'clean-shaven' is the neutral default and stays
+  // unspoken — prose only claims a beard when there is one.
+  if (p.facialHair && p.facialHair !== 'clean-shaven') parts.push(`with ${p.facialHair}`);
+
   // Body. Phase 5 wired in buttSize/posture, same story.
   const bodyBits = [
     p.body.shape && `${p.body.shape} build`,
-    p.body.chestSize && `${p.body.chestSize} chest`,
+    p.body.chestSize && `${p.body.chestSize} pectorals`,
     p.body.buttSize && `${p.body.buttSize} hips`,
     p.body.legs && `${p.body.legs} legs`,
     p.body.posture && `${p.body.posture} posture`,
@@ -2460,6 +2494,11 @@ function getPhysicalDescriptionForPrompt(npc, opts = {}) {
 
   // Scent
   if (p.scent) parts.push(`smells of ${p.scent}`);
+
+  // Settings & Pause Overhaul Phase 6 (D13): the race's visible-feature
+  // fragment ("with pointed ears and angular features"), appended with the
+  // static physical descriptors so the clothing/intimate state stays last.
+  if (race && race.traitPhrase) parts.push(race.traitPhrase);
 
   // Clothing state (appended if not normal)
   const clothing = npc?.clothing;
@@ -2581,14 +2620,14 @@ function validateCharacter(obj) {
     if (spec.required && (val === undefined || val === null || val === '')) {
       // Allow empty for prose fields that will be filled by LLM later
       if (field === 'name' || field === 'visual' || field === 'history' || field === 'sketch' || field === 'sampleLines') {
-        normalized.bible[field] = spec.default;
+        normalized.bible[field] = cloneDefault(spec.default);
         continue;
       }
       errors.push(`Missing required field: bible.${field}`);
       continue;
     }
     if (val === undefined || val === null) {
-      normalized.bible[field] = spec.default;
+      normalized.bible[field] = cloneDefault(spec.default);
       continue;
     }
 
@@ -2655,11 +2694,11 @@ function validateCharacter(obj) {
     for (const [key, pspec] of Object.entries(schema.personality.fields)) {
       const v = normalized.bible.personality[key];
       if (v === undefined || v === null) {
-        normalized.bible.personality[key] = pspec.default;
+        normalized.bible.personality[key] = cloneDefault(pspec.default);
       } else if (pspec.type === 'array' && !Array.isArray(v)) {
-        normalized.bible.personality[key] = pspec.default;
+        normalized.bible.personality[key] = cloneDefault(pspec.default);
       } else if (pspec.type === 'string' && typeof v !== 'string') {
-        normalized.bible.personality[key] = pspec.default;
+        normalized.bible.personality[key] = cloneDefault(pspec.default);
       }
     }
   }

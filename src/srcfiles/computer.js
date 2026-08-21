@@ -439,6 +439,13 @@ function gigPayMult(rep) {
   return tier.payMult[0] + (tier.payMult[1] - tier.payMult[0]) * frac;
 }
 
+// Reputation scale for a gig — one shared curve for gains AND penalties,
+// so a big gig is a big deal in both directions. Roughly one point of rep
+// per block delivered (a 5-block gig = ×1 → +5 at base), capped.
+function gigRepScale(gig) {
+  return clamp(gig.blocks / GIG_REP_SIZE_BLOCK, GIG_REP_SIZE_MIN, GIG_REP_SIZE_MAX);
+}
+
 // Which templates a player at `rep` is eligible for (skill-gated). A
 // low-skill player still sees the entry-level gigs; a high-skill player
 // sees everything. minSkill is a hard gate — a tier that's reachable but
@@ -541,15 +548,17 @@ function workGigBlock(gameState, gigId, device) {
   // work-pay penalty scales progress down at high burnout levels — the
   // death-spiral is the feature.
   const burnoutMult = getBurnoutWorkPayMult(gameState.player);
-  // Each block advances progress by focus (0.4-1.0 of a block), so low
-  // energy/mood makes a gig take more blocks than its `blocks` count
-  // implies — the grind becomes less profitable exactly as burnout
-  // needs. Rounded to 2 decimals to avoid float drift.
-  const progress = Math.round(focus * burnoutMult * 100) / 100;
+  // Each CLICK advances progress by focus × burnoutMult × progressPerClick
+  // (up to 2.0 blocks fresh, down to ~0.39 tired and burnt out), so a gig
+  // takes roughly half its block count of clicks at full rest and low
+  // energy/mood makes it drag — the grind becomes less profitable exactly
+  // as burnout needs. Rounded to 2 decimals to avoid float drift.
+  const progress = Math.round(focus * burnoutMult * GIG_TUNING.progressPerClick * 100) / 100;
   gig.blocksDone = Math.min(gig.blocks, gig.blocksDone + progress);
   gameState.player.energy = clamp(gameState.player.energy - GIG_ENERGY_PER_BLOCK, 0, 100);
-  // Phase 8: track work blocks per day for burnout. Resets at day rollover.
-  gigs.workBlocksToday = (gigs.workBlocksToday || 0) + 1;
+  // Phase 8: track work BLOCKS per day (not clicks — each click completes
+  // progressPerClick blocks) for burnout. Reset at day rollover.
+  gigs.workBlocksToday = (gigs.workBlocksToday || 0) + progress;
   // Phase 5: computer work meters as device usage. One work block = 0.5h
   // of computer time at $0.04/kWh — small but itemised, so the player
   // sees "Computer — $X" next to "Heat — $206" on the electric bill.
@@ -582,12 +591,19 @@ function deliverGig(gameState, gigId) {
     taxes.reserve = (taxes.reserve || 0) + skim;
   }
   // Reputation: on-time delivery gains (more the earlier it's delivered),
-  // late delivery loses. Scaled by gig size so big gigs matter more.
-  const sizeFactor = clamp(gig.blocks / 10, 0.5, 2);
+  // late delivery loses. Scaled by gig size so big gigs matter more. A
+  // rep tier promotion is a celebration — a bigger mood hit than any single
+  // gig, and returned so the UI can announce it.
+  const sizeFactor = gigRepScale(gig);
+  const daysEarly = gig.deadlineDay - gameState.meta.clock.day;
+  const repBefore = gigs.reputation || 0;
   const repDelta = late
     ? Math.round(GIG_REP_MISS * sizeFactor)
-    : Math.round(GIG_REP_DELIVERY * sizeFactor);
+    : Math.round(GIG_REP_DELIVERY * sizeFactor + (daysEarly >= 2 ? GIG_REP_EARLY_BONUS : 0));
   gigs.reputation = clamp((gigs.reputation || 0) + repDelta, 0, GIG_REP_MAX);
+  const tierUp = gigTier(repBefore).name !== gigTier(gigs.reputation).name
+    ? { from: gigTier(repBefore).name, to: gigTier(gigs.reputation).name }
+    : null;
   gigs.accepted = gigs.accepted.filter(g => g.gigId !== gigId);
   // Phase 6 (D13): delivering a finished gig is a dopamine hit — a mood
   // impulse scaled by the payout (a big contract feels better than a small
@@ -597,7 +613,10 @@ function deliverGig(gameState, gigId) {
     Math.min(MOOD_PAYOUTS.workGigCap, MOOD_PAYOUTS.workGigBase + gig.payout * MOOD_PAYOUTS.workGigPerDollar),
     gameState.meta.clock.day
   );
-  return { ok: true, gig, late, payout: gig.payout, repDelta };
+  if (tierUp) {
+    pushMoodImpulse(gameState.player, MOOD_PAYOUTS.repTierUp, gameState.meta.clock.day);
+  }
+  return { ok: true, gig, late, payout: gig.payout, repDelta, tierUp };
 }
 
 // Abandon a gig — a deliberate choice that costs more reputation than a
@@ -606,7 +625,7 @@ function abandonGig(gameState, gigId) {
   const gigs = gameState.world.computer.apps.gigs;
   const gig = gigs.accepted.find(g => g.gigId === gigId);
   if (!gig) return { ok: false, reason: 'You have no such gig.' };
-  const sizeFactor = clamp(gig.blocks / 10, 0.5, 2);
+  const sizeFactor = gigRepScale(gig);
   const repDelta = Math.round(GIG_REP_ABANDON * sizeFactor);
   gigs.reputation = clamp((gigs.reputation || 0) + repDelta, 0, GIG_REP_MAX);
   gigs.accepted = gigs.accepted.filter(g => g.gigId !== gigId);
@@ -639,7 +658,7 @@ function processGigDeadlinesForDay(gameState, day) {
       const taxes = gameState.world.taxes;
       if (taxes) taxes.quarterGross = (taxes.quarterGross || 0) + partialPay;
     }
-    const sizeFactor = clamp(gig.blocks / 10, 0.5, 2);
+    const sizeFactor = gigRepScale(gig);
     const repDelta = Math.round(GIG_REP_MISS * sizeFactor);
     gigs.reputation = clamp((gigs.reputation || 0) + repDelta, 0, GIG_REP_MAX);
     results.push({ gigId: gig.gigId, label: gig.label, missed: true, partialPay, repDelta });
@@ -1196,6 +1215,13 @@ function generateApplicantStubsForDay(gameState, day) {
     // roll happens later when the NPC is actually created)
     const warmth = rollAxis(subRng);
 
+    // Settings & Pause Overhaul Phase 6 (D13): species — APPENDED at the end
+    // of the stub's draw sequence so every pre-existing field (name/age/
+    // gender/occupation/traits/warmth) stays byte-identical for a given seed
+    // at default human-100%. createNpcFromStub pins it back into the full
+    // NPC via partial.species, so the card and the person always match.
+    const species = rollSpecies(subRng);
+
     // One-line sketch — templated, not LLM
     const warm = warmth > 0 ? 'warm' : 'reserved';
     const sketch = `${age}-year-old ${occ.title}, ${warm} and ${coreTrait}`;
@@ -1208,6 +1234,7 @@ function generateApplicantStubsForDay(gameState, day) {
       name,
       age,
       gender,
+      species,
       occupation: { category: occ.category, title: occ.title, incomeBand: occ.incomeBand, hours: occ.hours },
       coreTrait,
       traits,
@@ -1281,6 +1308,7 @@ function createNpcFromStub(gameState, stub, residencyStatus, tag) {
     name: stub.name,
     age: stub.age,
     gender: stub.gender,
+    species: stub.species,          // Phase 6 (D13): pinned so the full NPC matches the card
     occupationCategory: stub.occupation.category,
   };
   if (typeof stub.warmth === 'number') {
@@ -1352,6 +1380,9 @@ function buildStudioNpc(gameState, draft) {
   if (draft.name) partial.name = draft.name;
   if (typeof draft.age === 'number') partial.age = draft.age;
   if (draft.gender) partial.gender = draft.gender;
+  // Phase 6 (D13): a player-authored species pins the roll — validated
+  // against RACES so a bad pin fails the partial, not every roll attempt.
+  if (draft.species && RACES.some(r => r.id === draft.species)) partial.species = draft.species;
   if (draft.occupationCategory) partial.occupationCategory = draft.occupationCategory;
   if (draft.temperament) partial.temperament = draft.temperament;
   if (draft.interests && draft.interests.length > 0) partial.interests = draft.interests;
@@ -2506,6 +2537,11 @@ function createExternalNpc(gameState, npcId, seedKey, occupationTitle, opts = {}
     sketch: `${age}-year-old ${occupationTitle || occ.title}`,
     sampleLines: [],
   };
+  // Settings & Pause Overhaul Phase 6 (D13): species, drawn AFTER the bible
+  // literal above (whose own draws — genSeed, the speech fields — must stay
+  // in their pre-overhaul positions). Appending at the very end keeps every
+  // existing seed's external NPC byte-identical at the default human-100%.
+  bible.species = rollSpecies(rng);
   const npc = createNpcFromBible(bible, 'visitor');
   gameState.npcs[npcId] = npc;
   return npc;
@@ -2564,6 +2600,10 @@ function generateFriendStub(gameState, hostNpcId, index) {
     : CHAR_GEN.namePools.first_f;
   const name = namePool[Math.floor(rng() * namePool.length)];
   const warmth = rollAxis(rng);
+  // Settings & Pause Overhaul Phase 6 (D13): species — APPENDED at the end
+  // of the stub's draw sequence (same rule as the applicant stubs), so the
+  // default human-100% distribution reproduces every seed's friends exactly.
+  const species = rollSpecies(rng);
 
   const stub = {
     stubId,
@@ -2573,6 +2613,7 @@ function generateFriendStub(gameState, hostNpcId, index) {
     name,
     age,
     gender,
+    species,
     occupation: { category: occ.category, title: occ.title, incomeBand: occ.incomeBand, hours: occ.hours },
     coreTrait,
     traits,

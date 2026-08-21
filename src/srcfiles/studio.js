@@ -24,6 +24,7 @@
 // actually chose.
 let playerStudioDraft = null;
 let playerStudioTab = 'identity';
+let studioFullBodyLink = false;
 let playerStudioPortraitUrl = null;
 let playerStudioBusy = false;
 
@@ -66,8 +67,8 @@ const PLAYER_STUDIO_TABS = [
     ] },
     { label: 'Shape', fields: [
       { path: 'physical.body.shape',     label: 'Body shape', kind: 'select', schemaPath: 'bible.physical.body.shape',     pool: () => PHYS_POOL_BODY_SHAPE },
-      { path: 'physical.body.chestSize', label: 'Chest',      kind: 'select', schemaPath: 'bible.physical.body.chestSize', pool: () => PHYS_POOL_CHEST_SIZE,
-        hint: 'The clothed silhouette. Undressed detail lives on the Intimate tab.' },
+      { path: 'physical.body.chestSize', label: 'Chest (frame)', kind: 'select', schemaPath: 'bible.physical.body.chestSize', pool: () => PHYS_POOL_CHEST_SIZE,
+        hint: 'Your pectorals and ribcage — the clothed silhouette, not breast tissue. Breast size and shape live on the Intimate tab.' },
       { path: 'physical.body.buttSize',  label: 'Hips',       kind: 'select', schemaPath: 'bible.physical.body.buttSize',  pool: () => PHYS_POOL_BUTT_SIZE },
       { path: 'physical.body.legs',      label: 'Legs',       kind: 'select', schemaPath: 'bible.physical.body.legs',      pool: () => PHYS_POOL_LEGS },
       { path: 'physical.body.posture',   label: 'Posture',    kind: 'select', schemaPath: 'bible.physical.body.posture',   pool: () => PHYS_POOL_POSTURE },
@@ -97,6 +98,7 @@ const PLAYER_STUDIO_TABS = [
       { path: 'physical.face.cheekbones', label: 'Cheekbones', kind: 'select', schemaPath: 'bible.physical.face.cheekbones', pool: () => PHYS_POOL_CHEEKBONES },
       { path: 'physical.face.jawline',    label: 'Jawline',    kind: 'select', schemaPath: 'bible.physical.face.jawline',    pool: () => PHYS_POOL_JAWLINE },
       { path: 'physical.face.ears',       label: 'Ears',       kind: 'select', schemaPath: 'bible.physical.face.ears',       pool: () => PHYS_POOL_EARS },
+      { path: 'physical.facialHair',      label: 'Facial hair', kind: 'select', schemaPath: 'bible.physical.facialHair',      pool: () => PHYS_POOL_FACIAL_HAIR },
     ] },
   ] },
 
@@ -125,9 +127,9 @@ const PLAYER_STUDIO_TABS = [
   ] },
 
   { id: 'intimate', label: 'Intimate', sections: [
-    { label: 'Chest', fields: [
-      { path: 'physical.intimate.breasts.size',        label: 'Size',        kind: 'select', schemaPath: 'bible.physical.intimate.breasts.size',        pool: () => PHYS_POOL_BREAST_SIZE },
-      { path: 'physical.intimate.breasts.shape',       label: 'Shape',       kind: 'select', schemaPath: 'bible.physical.intimate.breasts.shape',       pool: () => PHYS_POOL_BREAST_SHAPE },
+    { label: 'Breasts (tissue)', hint: 'Breast tissue — the undressed layer. Your frame\'s pectoral size is on the Body tab under "Chest (frame)".', fields: [
+      { path: 'physical.intimate.breasts.size',        label: 'Size',        kind: 'select', schemaPath: 'bible.physical.intimate.breasts.size',        pool: () => breastPoolForGender(playerStudioDraft.gender).size },
+      { path: 'physical.intimate.breasts.shape',       label: 'Shape',       kind: 'select', schemaPath: 'bible.physical.intimate.breasts.shape',       pool: () => breastPoolForGender(playerStudioDraft.gender).shape },
       { path: 'physical.intimate.breasts.nipples',     label: 'Nipples',     kind: 'select', schemaPath: 'bible.physical.intimate.breasts.nipples',     pool: () => PHYS_POOL_BREAST_NIPPLES },
       { path: 'physical.intimate.breasts.areola',      label: 'Areolae',     kind: 'select', schemaPath: 'bible.physical.intimate.breasts.areola',      pool: () => PHYS_POOL_BREAST_AREOLA },
       { path: 'physical.intimate.breasts.sensitivity', label: 'Sensitivity', kind: 'select', schemaPath: 'bible.physical.intimate.breasts.sensitivity', pool: () => PHYS_POOL_SENSITIVITY },
@@ -243,12 +245,33 @@ function validateStudioField(field, value) {
   return { ok: true, value: v };
 }
 
+// The Full body checkbox's payload: copy each build-equivalent into its
+// field, skipping anything the target's own pool can't hold. Updates the
+// open selects in place (no re-render, no focus loss).
+function applyStudioBuildLink(build) {
+  const link = BUILD_FULL_BODY_LINK[build];
+  if (!link) return;
+  let changed = false;
+  for (const [path, val] of Object.entries(link)) {
+    const field = findStudioField(path);
+    if (!field) continue;
+    if (field.kind === 'select' && field.pool && !field.pool().includes(val)) continue;
+    if (studioGet(path) === val) continue;
+    studioSet(path, val);
+    const sel = [...document.querySelectorAll('[data-studio-path]')].find(s => s.getAttribute('data-studio-path') === path);
+    if (sel) sel.value = val;
+    changed = true;
+  }
+  if (changed && !playerStudioDraft.portrait.promptDirty) playerStudioDraft.portrait.prompt = '';
+}
+
 // --- Surface ---
 function openPlayerStudio() {
   playerStudioDraft = blankPlayerDraft();
   playerStudioTab = 'identity';
   playerStudioPortraitUrl = null;
   playerStudioBusy = false;
+  studioFullBodyLink = false;
   const el = document.getElementById('player-studio');
   if (!el) return;
   // Idempotent (guards on data-wired), so this is the honest place for it:
@@ -385,6 +408,20 @@ function buildStudioField(field) {
   control.setAttribute('data-studio-path', field.path);
   wrap.appendChild(control);
 
+  if (field.path === 'physical.build') {
+    const cbWrap = document.createElement('label');
+    cbWrap.className = 'ps-fullbody';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = studioFullBodyLink;
+    cb.setAttribute('data-studio-fullbody', '');
+    cbWrap.appendChild(cb);
+    const cbLabel = document.createElement('span');
+    cbLabel.textContent = 'Full body?';
+    cbWrap.appendChild(cbLabel);
+    wrap.appendChild(cbWrap);
+  }
+
   if (field.hint) {
     const hint = document.createElement('div');
     hint.className = 'ps-field-hint';
@@ -396,26 +433,74 @@ function buildStudioField(field) {
 
 // Multi-select over a flat string pool, capped at `max`. Same shape as the
 // Character Studio's studioPoolPickerFor, routed to this surface's action.
+// Studio-only sentinels for the Distinguishing features toggles. A toggle
+// grid can only hold strings, so "no features at all" and "I'll write my own"
+// are encoded as these two markers (plus a free-text sibling field for the
+// custom text) and flattened away the moment the draft leaves the studio —
+// they must never reach the schema, the save, or the describer. See
+// flattenStudioFeatures.
+const FEATURES_NONE = '__none__';
+const FEATURES_CUSTOM = '__custom__';
+
 function buildStudioToggles(field) {
   const wrap = document.createElement('div');
   wrap.className = 'ps-toggles';
   const selected = new Set(studioGet(field.path) || []);
+  const isFeatures = field.path === 'physical.distinguishingFeatures';
+
+  // The Marks toggles get two special controls that a bare grid can't hold:
+  // an explicit "None" (no features — even better than leaving it unset,
+  // which silently rolls 1-2 for you) and "Custom" (type your own), which
+  // reveals a free-text field below the grid. Both are sentinel values in
+  // the same array so the one toggle engine serves all three cases.
+  if (isFeatures) {
+    const special = document.createElement('div');
+    special.className = 'ps-toggle-special';
+    for (const [val, label] of [['__none__', 'None'], ['__custom__', 'Custom']]) {
+      const btn = document.createElement('button');
+      btn.className = 'ps-toggle ps-toggle-special-btn' + (selected.has(val) ? ' active' : '');
+      btn.setAttribute('data-action', 'studio.toggle');
+      btn.setAttribute('data-row-id', `${field.path}|${val}`);
+      btn.textContent = label;
+      special.appendChild(btn);
+    }
+    wrap.appendChild(special);
+  }
+
   const grid = document.createElement('div');
-  grid.className = 'ps-toggle-grid';
+  grid.className = 'ps-toggle-grid' + (selected.has(FEATURES_NONE) ? ' disabled' : '');
   for (const val of field.pool()) {
     const btn = document.createElement('button');
     btn.className = 'ps-toggle' + (selected.has(val) ? ' active' : '');
     btn.setAttribute('data-action', 'studio.toggle');
     btn.setAttribute('data-row-id', `${field.path}|${val}`);
     btn.textContent = studioPrettify(val);
+    btn.disabled = selected.has(FEATURES_NONE);
     grid.appendChild(btn);
   }
   wrap.appendChild(grid);
+
+  if (isFeatures && selected.has(FEATURES_CUSTOM)) {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'ps-control ps-features-custom';
+    input.maxLength = 200;
+    input.placeholder = 'e.g. a lightning-shaped scar, a sleeve of bad tattoos, heterochromia';
+    input.value = studioGet('physical.distinguishingFeaturesCustom') || '';
+    input.setAttribute('data-studio-features-custom', '');
+    wrap.appendChild(input);
+  }
+
   const note = document.createElement('div');
   note.className = 'ps-field-hint';
-  note.textContent = selected.size === 0
-    ? `None chosen — one or two will be rolled for you. Pick up to ${field.max}.`
-    : `${selected.size} of ${field.max} chosen.`;
+  if (selected.has(FEATURES_NONE)) {
+    note.textContent = 'No distinguishing features.';
+  } else {
+    const real = [...selected].filter(v => v !== FEATURES_NONE && v !== FEATURES_CUSTOM).length;
+    note.textContent = real === 0
+      ? `None chosen — one or two will be rolled for you. Pick up to ${field.max}, or choose None above.`
+      : `${real} of ${field.max} chosen.${selected.has(FEATURES_CUSTOM) ? ' Custom features will be added to these.' : ''}`;
+  }
   wrap.appendChild(note);
   return wrap;
 }
@@ -540,10 +625,26 @@ function doStudioToggle(rowId) {
   const [path, value] = String(rowId).split('|');
   const field = findStudioField(path);
   if (!field) return;
+  const isFeatures = path === 'physical.distinguishingFeatures';
   const current = studioGet(path) || [];
-  const next = current.includes(value)
-    ? current.filter(v => v !== value)
-    : (current.length >= (field.max ?? 99) ? current : [...current, value]);
+  let next;
+  // None is exclusive: it clears every real feature AND the custom marker.
+  // Choosing a real feature again clears None. Custom coexists with real
+  // picks but never with None.
+  if (isFeatures && value === FEATURES_NONE) {
+    next = current.includes(FEATURES_NONE) ? [] : [FEATURES_NONE];
+  } else if (isFeatures && value === FEATURES_CUSTOM) {
+    next = current.includes(FEATURES_CUSTOM)
+      ? current.filter(v => v !== FEATURES_CUSTOM)
+      : [...current.filter(v => v !== FEATURES_NONE), FEATURES_CUSTOM];
+  } else {
+    next = current.includes(value)
+      ? current.filter(v => v !== value)
+      : (current.filter(v => v !== FEATURES_NONE && v !== FEATURES_CUSTOM).length >= (field.max ?? 99)
+          ? current
+          : [...current, value]);
+    if (isFeatures) next = next.filter(v => v !== FEATURES_NONE);
+  }
   if (next.length === 0) studioSet(path, '');   // empty deletes → back to rolling
   else studioSet(path, next);
   renderPlayerStudio();
@@ -585,18 +686,32 @@ function findStudioField(path) {
 // a body the game would not have rolled on its own.
 function doStudioRollAll() {
   const seed = genSeed();
+  // The Mark toggles' None/Custom sentinels are studio-only; strip them from
+  // the authored object before the roller sees it (an unset features field is
+  // what triggers the roll), then restore the toggle state on the result so
+  // the player's None/Custom choice survives Roll Everything.
+  const authoredPhysical = JSON.parse(JSON.stringify(playerStudioDraft.physical || {}));
+  const featuresState = {
+    none: (authoredPhysical.distinguishingFeatures || []).includes(FEATURES_NONE),
+    custom: (authoredPhysical.distinguishingFeatures || []).includes(FEATURES_CUSTOM),
+    customText: authoredPhysical.distinguishingFeaturesCustom || '',
+  };
+  flattenStudioFeatures(authoredPhysical);
   const rolled = generatePlayerAppearance(seed, {
     // Anything already authored is preserved: Roll Everything fills the
     // blanks, it does not overwrite the player's choices.
     age: playerStudioDraft.age ?? undefined,
     gender: playerStudioDraft.gender || undefined,
-    physical: playerStudioDraft.physical,
+    physical: authoredPhysical,
   });
   const names = rollPlayerName(seed, rolled.gender, playerStudioDraft);
   playerStudioDraft.name = playerStudioDraft.name || names.name;
   playerStudioDraft.surname = playerStudioDraft.surname || names.surname;
   playerStudioDraft.age = rolled.age;
   playerStudioDraft.gender = rolled.gender;
+  if (featuresState.none) rolled.physical.distinguishingFeatures = [FEATURES_NONE];
+  else if (featuresState.custom) rolled.physical.distinguishingFeatures = [FEATURES_CUSTOM, ...rolled.physical.distinguishingFeatures];
+  rolled.physical.distinguishingFeaturesCustom = featuresState.customText;
   playerStudioDraft.physical = rolled.physical;
   // The portrait prompt is derived from the fields, so a full reroll
   // invalidates it — UNLESS the player hand-edited it, which is permanent
@@ -643,9 +758,33 @@ function buildPlayerDraftForNewGame() {
     surname: (d.surname || '').trim(),
     age: Number.isFinite(d.age) ? d.age : undefined,
     gender: d.gender || undefined,
-    physical,
+    physical: flattenStudioFeatures(physical),
     portrait: { ...d.portrait },
   };
+}
+
+// The Mark toggles' None/Custom sentinels are studio UI, not character data.
+// This is the single cleanup: `__none__` → no features (the empty array is
+// the real value — it explicitly means "don't roll any", unlike an absent
+// field which rolls 1-2), `__custom__` + the sibling free-text field → real
+// feature strings (split on commas/semicolons), and the raw picks pass
+// through untouched. Mutates the passed object's own properties; safe on a
+// shallow copy, which is what every caller hands it.
+function flattenStudioFeatures(physical) {
+  if (!physical) return physical;
+  const raw = physical.distinguishingFeatures;
+  if (Array.isArray(raw)) {
+    const none = raw.includes(FEATURES_NONE);
+    const custom = raw.includes(FEATURES_CUSTOM);
+    const picked = raw.filter(v => v !== FEATURES_NONE && v !== FEATURES_CUSTOM);
+    const customText = String(physical.distinguishingFeaturesCustom || '')
+      .split(/[,;]/).map(s => s.trim()).filter(Boolean);
+    physical.distinguishingFeatures = (none || picked.length === 0 && customText.length === 0)
+      ? []
+      : [...picked, ...customText];
+  }
+  delete physical.distinguishingFeaturesCustom;
+  return physical;
 }
 
 // --- Portrait tab (Phase 4) ---
@@ -773,6 +912,24 @@ function wirePlayerStudioInputs() {
     const el = e.target;
     if (!playerStudioDraft) return;
 
+    // The Custom free-text field for distinguishing features — a sibling
+    // store to the toggles array, flattened away at draft exit.
+    if (el.getAttribute?.('data-studio-features-custom') != null) {
+      if (!playerStudioDraft.physical) playerStudioDraft.physical = {};
+      playerStudioDraft.physical.distinguishingFeaturesCustom = el.value;
+      if (!playerStudioDraft.portrait.promptDirty) playerStudioDraft.portrait.prompt = '';
+      return;
+    }
+
+    // The Full body checkbox beside Build. A convenience, not a stored
+    // field: checking it links the picked build to every body field with
+    // an equivalent option.
+    if (el.getAttribute?.('data-studio-fullbody') != null) {
+      studioFullBodyLink = el.checked;
+      if (el.checked) applyStudioBuildLink(studioGet('physical.build') || '');
+      return;
+    }
+
     const rowAttr = el.getAttribute?.('data-studio-row');
     if (rowAttr) {
       const [path, idxRaw, key] = rowAttr.split('|');
@@ -808,6 +965,9 @@ function wirePlayerStudioInputs() {
       return;
     }
     studioSet(path, res.value);
+    // Full body link: with the checkbox on, picking a build populates every
+    // body field that has an equivalent option.
+    if (path === 'physical.build' && studioFullBodyLink) applyStudioBuildLink(res.value);
     // The portrait prompt is derived from these fields; a change invalidates
     // a machine-built one. A hand-edited one is never touched (D6).
     if (!playerStudioDraft.portrait.promptDirty) playerStudioDraft.portrait.prompt = '';

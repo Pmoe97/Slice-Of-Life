@@ -264,7 +264,19 @@ const ACTION_DEFS = {
   'door.interact': {
     id: 'door.interact', label: 'Door',
     group: 'door', chipPriority: 45,
-    submenu: ['door.keyhole', 'door.listen', 'door.open', 'door.knock'],
+    submenu: ['door.keyhole', 'door.listen', 'door.unlock', 'door.open', 'door.knock'],
+  },
+  // door.unlock — the one door verb that works from the OUTSIDE. Only the
+  // player ever locks a door (no NPC lock rule exists), so a locked door
+  // you're standing next to is always one you locked — and undoing it from
+  // out here is what makes lock-your-room-and-walk-out a recovery instead
+  // of a permanent softlock (the door lives in the ADJACENT room, not the
+  // one you're in, so the registered-action bridge can't run it; ui.js
+  // intercepts it before the bridge, the same pattern as door.keyhole).
+  'door.unlock': {
+    id: 'door.unlock', label: 'Unlock the Door',
+    source: { kind: 'room', roomIds: ['hallway_a', 'hallway_b'] },
+    group: 'door', chipPriority: 31,
   },
   'door.keyhole': {
     id: 'door.keyhole', label: 'Peek Through the Keyhole',
@@ -1735,6 +1747,19 @@ function eatNarration(ctx, prepared) {
   const fresh = freshnessOf(option.stack, option.containerDef ?? null, gameDaysNow(ctx?.gameState?.meta?.clock));
   if (fresh?.key === 'spoiled') return `You eat some ${label}. It tastes off, and you know it the whole way down.`;
   if (fresh?.key === 'stale') return `You eat some ${label}. It has been sitting a while — it does the job.`;
+  // Raw-ingredient line (2026-08-20): a rawDangerous def eaten straight
+  // from storage reads as the mistake it is — mirroring RAW_FOOD's penalty
+  // in EFFECTS' applyEatItem. Plates are never raw, so the check is
+  // def-driven only.
+  if (!option.stack?.meta?.plate && def.rawDangerous) {
+    const reaction = {
+      eggs: "Eggy. There's a reason eggs go in a pan.",
+      chicken_raw: 'Cold and rubbery. Your stomach files a protest.',
+      ground_beef: 'Cold and raw. Your stomach files a protest.',
+      bacon: 'Chewy and raw. Your stomach files a protest.',
+    }[def.id] || 'That was probably a mistake.';
+    return `You eat some ${label} raw. ${reaction}`;
+  }
   // Food-overhaul Phase 3 (D27/D28): a plate eaten in a way that costs mood
   // gets its own line — the cold betterHot plate forfeiting its bonus, and
   // the frozen-ordinary-plate penalty bite — mirroring what applyEatItem

@@ -154,6 +154,9 @@ async function doGigDeliver(gigId) {
   const result = deliverGig(currentGameState, gigId);
   if (!result.ok) { addLogEntry('system', result.reason); return; }
   addLogEntry('system', `Delivered "${result.gig.label}"${result.late ? ' (late)' : ''}. +${result.payout}. Reputation ${result.repDelta >= 0 ? '+' : ''}${result.repDelta}.`);
+  if (result.tierUp) {
+    addLogEntry('system', `Career milestone — you're now ${result.tierUp.to}! Better gigs and higher pay await on the board.`);
+  }
   renderComputerScreen(currentGameState);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('gig-deliver', currentGameState);

@@ -30,7 +30,7 @@ const FOLDER_VERSIONS = {
   meta: 2,
   player: 7,
   world: 5,
-  npcs: 7,
+  npcs: 8,
   images: 1,
   snapshots: 1,
   objects: 3,
@@ -413,6 +413,16 @@ const MIGRATIONS = {
         },
       };
     } },
+    // npcs 7->8 (Settings & Pause Overhaul Phase 6, D13): backfill
+    // bible.species = 'human' for every NPC written before the species
+    // schema field existed. Pure additive default — the same pattern as the
+    // facialHair/typicalAttire schema defaults; a pre-species NPC IS a human,
+    // and the describer's human short-circuit keeps their prose identical.
+    { from: 7, to: 8, fn: (npc) => {
+      if (!npc || typeof npc !== 'object' || !npc.bible) return npc;
+      if (npc.bible.species) return npc;   // already migrated / authored
+      return { ...npc, bible: { ...npc.bible, species: 'human' } };
+    } },
   ],
   images: [],
   snapshots: [],
@@ -711,7 +721,6 @@ async function forceFlush() {
 }
 
 // --- Autosave: timer + boundary triggers ---
-const AUTOSAVE_MS = 30000; // 30s timer
 let autosaveTimer = null;
 
 // getState is a zero-arg callback returning the current game state (or
@@ -727,18 +736,23 @@ function startAutosave(getState) {
   // same forward-reference rule every startX in this file relies on).
   // Absent (nothing defined it yet) means on — the historical default.
   if (typeof isAutosaveEnabled === 'function' && !isAutosaveEnabled()) return;
-  autosaveTimer = setInterval(() => saveAtBoundary('timer', getState ? getState() : null), AUTOSAVE_MS);
+  // Settings & Pause Overhaul Phase 4 (D6): the timer period is a runtime
+  // read from settings (autosaveIntervalMs lives in SETTINGS, which loads
+  // before STATE). Changing the interval re-arms the timer through
+  // SETTINGS' setSettings — this call just honors whatever period is set.
+  autosaveTimer = setInterval(() => saveAtBoundary('timer', getState ? getState() : null), autosaveIntervalMs());
 }
 
 // Stops ticking without restarting — used at the start of a new-game
 // transition (UI's approveCastAndStartGame), which awaits prose expansion
-// and several kv writes that can easily exceed AUTOSAVE_MS. Without this,
-// a stale timer from the PREVIOUS game could fire mid-transition (its
-// getState closure still resolves to the old currentGameState, since that
-// module-level binding isn't reassigned until syncGameStateFromKv
-// completes) and write the old game's NPCs back into kv via the debounced
-// queue, after writeGeneratedGameState already wrote the new cast —
-// polluting the new game with leftover roommates from the old one.
+// and several kv writes that can easily exceed the autosave interval.
+// Without this, a stale timer from the PREVIOUS game could fire
+// mid-transition (its getState closure still resolves to the old
+// currentGameState, since that module-level binding isn't reassigned until
+// syncGameStateFromKv completes) and write the old game's NPCs back into kv
+// via the debounced queue, after writeGeneratedGameState already wrote the
+// new cast — polluting the new game with leftover roommates from the old
+// one.
 function stopAutosave() {
   if (autosaveTimer) clearInterval(autosaveTimer);
   autosaveTimer = null;

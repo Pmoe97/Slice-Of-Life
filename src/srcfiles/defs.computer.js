@@ -359,37 +359,37 @@ const GIG_TEMPLATES = {
   data_entry: {
     id: 'data_entry', label: 'Data Entry Batch', category: 'admin',
     skill: 'tech', minSkill: 0,
-    blocksRange: [3, 8], deadlineRange: [3, 7], basePayoutPerBlock: 28,
+    blocksRange: [3, 8], deadlineRange: [3, 7], basePayoutPerBlock: 35,
     clientPool: ['Meridian Logistics', 'Crestline Retail', 'Harbor Data Co', 'Pinebrook Clinic'],
   },
   web_tweak: {
     id: 'web_tweak', label: 'Website Tweak', category: 'web',
     skill: 'tech', minSkill: 2,
-    blocksRange: [4, 10], deadlineRange: [3, 8], basePayoutPerBlock: 48,
+    blocksRange: [4, 10], deadlineRange: [3, 8], basePayoutPerBlock: 60,
     clientPool: ['Lumen Studio', 'Northgate Bakery', 'Field & Fern Co', 'Sablewood Designs'],
   },
   copy_edit: {
     id: 'copy_edit', label: 'Copy Edit Pass', category: 'writing',
     skill: 'tech', minSkill: 1,
-    blocksRange: [3, 9], deadlineRange: [3, 9], basePayoutPerBlock: 40,
+    blocksRange: [3, 9], deadlineRange: [3, 9], basePayoutPerBlock: 50,
     clientPool: ['Quill & Page', 'Lighthouse Press', 'Marlow Books', 'Saltmarsh Media'],
   },
   script_automation: {
     id: 'script_automation', label: 'Automation Script', category: 'dev',
     skill: 'tech', minSkill: 3,
-    blocksRange: [6, 14], deadlineRange: [4, 9], basePayoutPerBlock: 72,
+    blocksRange: [6, 14], deadlineRange: [4, 9], basePayoutPerBlock: 90,
     clientPool: ['Vantage Analytics', 'GreenlineOps', 'Cobalt Systems', 'Tidepool HR'],
   },
   app_feature: {
     id: 'app_feature', label: 'App Feature Build', category: 'dev',
     skill: 'tech', minSkill: 4,
-    blocksRange: [10, 20], deadlineRange: [5, 10], basePayoutPerBlock: 120,
+    blocksRange: [10, 20], deadlineRange: [5, 10], basePayoutPerBlock: 150,
     clientPool: ['Bramble Inc', 'Hollowpoint Games', 'Cedar & Co', 'Northstar Apps'],
   },
   infra_project: {
     id: 'infra_project', label: 'Infrastructure Project', category: 'dev',
     skill: 'tech', minSkill: 5,
-    blocksRange: [14, 30], deadlineRange: [6, 10], basePayoutPerBlock: 175,
+    blocksRange: [14, 30], deadlineRange: [6, 10], basePayoutPerBlock: 220,
     clientPool: ['Mesa Cloud', 'Atlas Platform', 'Ironroot Labs', 'Verge Distribution'],
   },
 };
@@ -405,28 +405,52 @@ const GIG_REPUTATION_TIERS = [
   { name: 'Elite',       floor: 85, payMult: [4.00, 5.00], boardSize: [6, 8] },
 ];
 
-// Per-block energy cost of gig work. Smaller than the old per-job figure;
-// gigs pay lump sums on delivery, so each block is progress, not a wage.
+// Energy cost of gig work, per BLOCK of progress. Gigs pay lump sums on
+// delivery, so each block is progress, not a wage.
 // 2026-08-17 audit (B5): 6 → 5. The gig economy was too steep — 70 energy
 // capped a day at ~11.6 clicks (≈ the whole day's rent at full grind), and
 // the focus collapse at low energy/mood made real progress a fraction of
-// that. 5/click widens the energy budget to ~14 blocks/day. See
+// that. 5/block widened the energy budget to ~14 blocks/day. See
 // bug-fix-audit-2026-08-17.md.
-const GIG_ENERGY_PER_BLOCK = 5;
+// 2026-08-20 retune (playtest feedback): with GIG_TUNING.progressPerClick=2
+// each click completes up to 2 blocks, so the cost is 10 energy/click to
+// hold the ~14-blocks-per-day ceiling steady. Same daily income capacity,
+// half the clicks — the fix for "too clicky", not a raise.
+const GIG_ENERGY_PER_BLOCK = 10;
 // Wall-clock minutes one work-block click takes. A flat time-cost for a
 // single block, not a scheduling window — deliberately detached from
 // CLOCK.tickMinutes so a future change to (or retirement of) the tick grid
 // can't silently change how long a gig work session takes.
 // (external-world-retiming plan, D5.)
-const GIG_TUNING = { workBlockMinutes: 30 };
+//
+// progressPerClick: how many BLOCKS of progress one work click advances at
+// full focus. 2026-08-20 retune (playtest feedback): the early game read as
+// clicky — a 7-block gig was 7+ clicks on top of sleep/eat/burnout. Each
+// click now completes up to 2 blocks (× focus, see computeFocusMultiplier),
+// so a gig takes roughly half its block count of clicks at full rest.
+// Burnout counts actual blocks done, not clicks, so grind pressure survives
+// at a saner click count.
+const GIG_TUNING = { workBlockMinutes: 30, progressPerClick: 2 };
 // Max concurrent gigs — the deadline pressure does the limiting.
 const GIG_MAX_CONCURRENT = 3;
-// Reputation movement. Delivery on time scales up by how close to the
-// deadline; a miss scales down by how late. Abandoning is worse.
-const GIG_REP_DELIVERY = 3;     // base rep gain per delivered gig
+// Reputation movement. Delivery on time gains rep roughly equal to the gig's
+// size (GIG_REP_DELIVERY per GIG_REP_SIZE_BLOCK blocks, capped), with a
+// small bonus for handing work in well ahead of the deadline; a miss scales
+// down by how late it was; abandoning is worse. 2026-08-20 retune: rep used
+// to crawl — a 7-block gig earned +2, so Competent (20) took ~10 gigs. Now
+// that same gig earns +7, so each tier takes a handful of deliveries and
+// promotions feel like they arrive. See gigRepScale below.
+const GIG_REP_DELIVERY = 5;     // base rep gain per delivered gig
+const GIG_REP_EARLY_BONUS = 2;  // extra rep for delivering 2+ days early
 const GIG_REP_MISS = -8;        // per missed-deadline gig
 const GIG_REP_ABANDON = -15;    // per abandoned gig
 const GIG_REP_MAX = 100;
+// Reputation scales with a gig's size — the same scale drives gains and
+// penalties, so a missed 30-block project hurts as much as a 30-block
+// delivery rewards. One block of delivered work ≈ one point of rep.
+const GIG_REP_SIZE_BLOCK = 5;   // divisor — rep gain per delivered block
+const GIG_REP_SIZE_MIN = 0.6;   // floor (a 3-block gig still gains ~3)
+const GIG_REP_SIZE_MAX = 4;     // cap (an infra project gains up to 20)
 
 // --- Browser: a handful of authored sites, not (yet) LLM-generated
 // content — deferred rather than faked; see ARCHITECTURE.md's P4 Browser

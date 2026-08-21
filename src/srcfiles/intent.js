@@ -120,6 +120,20 @@ function classifyIntent(text, gameState) {
   const roomId = matchRoomIntent(norm, gameState);
   if (roomId) return { kind: 'move', roomId };
 
+  // 2b. Eating is room-agnostic for FREE TEXT. The Eat chip stays scoped to
+  // the kitchen/dining "Here" tab (self.eat's room source keeps the footer
+  // quiet), but the textbar means "I want food" wherever the player stands —
+  // and the inventory panel's Use verb already eats from anywhere. So
+  // eat-family verbs still resolve to self.eat whenever there is edible food
+  // on hand (bag food counts — see INVENTORY's edibleStacks), with
+  // executeAction's hasEdibleFood requirement doing the real gating.
+  const eatDef = ACTION_DEFS['self.eat'];
+  if (eatDef && matchVerbPhrase(norm, [...(eatDef.verbs || []), eatDef.label])) {
+    if (checkRequirements(eatDef, buildActionContext(gameState)).ok) {
+      return { kind: 'registered', actionId: 'self.eat' };
+    }
+  }
+
   // 3. Alarm setting (Phase 8).
   const alarmIntent = matchAlarmIntent(norm);
   if (alarmIntent) return alarmIntent;

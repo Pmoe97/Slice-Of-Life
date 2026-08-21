@@ -871,6 +871,19 @@ const ROT = {
   clearMessMinutes: 5,           // game minutes the throw-out button pays
 };
 
+// --- Raw-food consequences (2026-08-20 playtest feedback) ---
+// Eating a raw ingredient that's meant to be cooked (raw chicken, ground
+// beef, bacon, eggs) is legal but ill-advised: it costs a small mood and
+// energy ding per serving eaten raw — the quiet way of saying "that was
+// supposed to go in a pan". Cooking transforms the ingredient into a
+// plate, so only the eat-raw path ever reads this. The eat picker warns
+// first (RENDER's buildPickRowContent) so the penalty never lands
+// unannounced, and the narration names it too (DEFS.ACTIONS' eatNarration).
+const RAW_FOOD = {
+  moodPenalty: 0.03,   // per serving eaten raw
+  energyPenalty: 5,    // per serving eaten raw
+};
+
 // --- Renovation jobs (src/ref/complete/renovation-occupancy-overhaul-plan.md) ---
 // Tier purchases are timed, contracted jobs rather than instant clicks.
 // v1 allows at most one active job at a time (locked decision #6); the
@@ -2707,6 +2720,7 @@ const MOOD_PAYOUTS = {
   workGigBase: 0.03,        // flat per delivered gig
   workGigPerDollar: 0.0005, // plus scaled by payout (a big gig feels bigger)
   workGigCap: 0.12,
+  repTierUp: 0.15,          // crossing a gig reputation tier (the big milestone)
   courseLesson: 0.02,       // per lesson attended
   courseComplete: 0.08,     // on top, when the course finishes
   payRent: 0.06,            // paying down the whole balance
@@ -5057,7 +5071,7 @@ const DEMOTION_BEATS = [
 // --- Image cache ---
 const IMAGE_CACHE = {
   cap: 200,               // LRU max entries
-  resolutions: { bg: '768x512', char: '512x768' },
+  resolutions: { bg: '768x512', char: '512x768', scene: { landscape: '768x512', portrait: '512x768' } },
 };
 
 // --- Title-gallery slideshow (menu overhaul Phase 10) ---
@@ -5133,6 +5147,7 @@ const CHARACTER_SCHEMA = {
     genSeed:       { type: 'number', required: true, default: 0 },                  // stable seed for image gen
     age:           { type: 'number', required: true, default: 25, range: [18, 60] },   // Phase 0: first-class age field for filtering/stubs
     gender:        { type: 'string', required: true, default: 'female', enum: ['male','female','futanari','trans_male','trans_female'] }, // Phase 0: filterable identity field
+    species:       { type: 'string', required: false, default: 'human', enum: ['human','elf','orc','dwarf','tiefling','vampire','fae','catfolk','wolffolk','dragonborn'] }, // Settings & Pause Overhaul Phase 6 (D13): species from the Population tab's raceDist. The enum MUST stay in sync with RACES in defs.settings.js (a standing content lever — extending the pool is a data edit in BOTH places). default 'human' keeps every pre-overhaul NPC and authored character (Del) reading as a human.
     physical:      { type: 'object', required: false, default: {},                   // THE 25+ ITEM DESCRIPTION SECTION
       fields: {
         height:               { type: 'string', default: '' },
@@ -5151,6 +5166,7 @@ const CHARACTER_SCHEMA = {
         distinguishingFeatures: { type: 'array', default: [] },
         piercings:            { type: 'array', default: [] },
         tattoos:              { type: 'array', default: [] },
+        facialHair:           { type: 'string', default: '' },
         fashion:              { type: 'string', default: '' },
         accessories:          { type: 'string', default: '' },
         // RESERVED for roadmap Plan 2 (the scene reader). No reader today, but
@@ -5792,6 +5808,22 @@ const TEXTING_STYLES = ['terse', 'emoji-heavy', 'all-lowercase', 'properly-punct
 // to compose into a coherent physical description.
 const PHYS_POOL_HEIGHT = ['tall', 'average height', 'short', 'very tall', 'slightly below average'];
 const PHYS_POOL_BUILD = ['slim', 'athletic', 'average', 'lean', 'curvy', 'stocky', 'wiry', 'muscular', 'petite', 'broad-shouldered'];
+// Studio convenience ("Full body?" checkbox beside Build): each build maps
+// to the equivalent option in every body field whose own vocabulary has
+// one. Values are checked against the target field's pool when applied, so
+// a mapping can never set an option the select doesn't offer.
+const BUILD_FULL_BODY_LINK = {
+  slim:     { 'physical.body.shape': 'willowy',         'physical.body.chestSize': 'small', 'physical.body.buttSize': 'small', 'physical.body.legs': 'slender', 'physical.body.posture': 'straight' },
+  athletic: { 'physical.body.shape': 'athletic',        'physical.body.chestSize': 'medium', 'physical.body.buttSize': 'medium', 'physical.body.legs': 'muscular', 'physical.body.posture': 'straight' },
+  average:  { 'physical.body.shape': 'rectangle',       'physical.body.chestSize': 'medium', 'physical.body.buttSize': 'medium', 'physical.body.legs': 'average', 'physical.body.posture': 'relaxed' },
+  lean:     { 'physical.body.shape': 'rectangle',       'physical.body.chestSize': 'small', 'physical.body.buttSize': 'flat', 'physical.body.legs': 'slender', 'physical.body.posture': 'straight' },
+  curvy:    { 'physical.body.shape': 'hourglass',       'physical.body.chestSize': 'large', 'physical.body.buttSize': 'rounded', 'physical.body.legs': 'slender', 'physical.body.posture': 'relaxed' },
+  stocky:   { 'physical.body.shape': 'compact',         'physical.body.chestSize': 'broad', 'physical.body.buttSize': 'medium', 'physical.body.legs': 'stocky', 'physical.body.posture': 'straight' },
+  wiry:     { 'physical.body.shape': 'athletic',        'physical.body.chestSize': 'small', 'physical.body.buttSize': 'small', 'physical.body.legs': 'slender', 'physical.body.posture': 'straight' },
+  muscular: { 'physical.body.shape': 'inverted triangle', 'physical.body.chestSize': 'broad', 'physical.body.buttSize': 'medium', 'physical.body.legs': 'muscular', 'physical.body.posture': 'confident' },
+  petite:   { 'physical.body.shape': 'compact',         'physical.body.chestSize': 'small', 'physical.body.buttSize': 'small', 'physical.body.legs': 'short', 'physical.body.posture': 'straight' },
+  'broad-shouldered': { 'physical.body.shape': 'inverted triangle', 'physical.body.chestSize': 'broad', 'physical.body.buttSize': 'medium', 'physical.body.legs': 'average', 'physical.body.posture': 'confident' },
+};
 const PHYS_POOL_HAIR_COLOR = ['black', 'dark brown', 'brown', 'auburn', 'chestnut', 'blonde', 'dirty blonde', 'platinum blonde', 'red', 'ginger', 'grey', 'salt-and-pepper', 'bleached', 'dyed blue', 'dyed pink', 'dyed purple'];
 const PHYS_POOL_HAIR_STYLE = ['straight', 'wavy', 'curly', 'coily', 'loc\'d', 'braided', 'slicked back', 'messy', 'tousled', 'swept back', 'undercut', 'buzzed', 'shaved'];
 const PHYS_POOL_HAIR_LENGTH = ['short', 'ear-length', 'chin-length', 'shoulder-length', 'past the shoulders', 'very long', 'cropped', 'medium-length'];
@@ -5813,14 +5845,34 @@ const PHYS_POOL_BUTT_SIZE = ['small', 'medium', 'large', 'flat', 'rounded'];
 const PHYS_POOL_LEGS = ['long', 'short', 'average', 'slender', 'muscular', 'stocky'];
 const PHYS_POOL_POSTURE = ['straight', 'slouched', 'relaxed', 'tense', 'confident', 'meek'];
 const PHYS_POOL_FEATURES = ['glasses', 'a scar through the eyebrow', 'freckles across the nose', 'a birthmark on the neck', 'dark circles under the eyes', 'a crooked smile', 'dimples', 'a gap between the front teeth', 'a mole near the lip', 'laugh lines', 'a jagged scar on the jaw', 'tattoos on the forearm', 'a nose ring', 'stretch marks', 'a cleft chin', 'bushy eyebrows', 'a beauty mark', 'a missing tooth'];
+// Player-requested (Discord, 2026-08-17): beards and mustaches as a real
+// field, not a distinguishing-feature dice roll. 'clean-shaven' is the
+// neutral default — the ROLLER gates how often a beard appears
+// (appendFacialHairDraw's rng() < 0.4), and the describer skips the value
+// entirely, so prose only speaks when there is hair to speak of.
+const PHYS_POOL_FACIAL_HAIR = ['clean-shaven', 'light stubble', 'heavy stubble', 'a goatee', 'a mustache', 'a mustache and goatee', 'a short beard', 'a neat trimmed beard', 'a full beard', 'a bushy beard', 'a soul patch'];
 const PHYS_POOL_PIERCING_LOC = ['earlobe', 'cartilage', 'nose', 'eyebrow', 'lip', 'tongue', 'navel', 'nipple'];
 const PHYS_POOL_PIERCING_TYPE = ['stud', 'ring', 'barbell', 'hoop'];
 const PHYS_POOL_TATTOO_STYLE = ['tribal', 'floral', 'geometric', 'script', 'traditional', 'minimalist', 'blackwork', 'watercolor'];
 const PHYS_POOL_TATTOO_LOC = ['upper arm', 'forearm', 'shoulder', 'ribcage', 'back', 'ankle', 'wrist', 'neck', 'thigh'];
 const PHYS_POOL_FASHION = ['casual hoodies and jeans', 'thrifted vintage', 'minimalist monochrome', 'bright patterns', 'comfort-first athleisure', 'smart-casual', 'bohemian layers', 'streetwear', 'preppy', 'goth-adjacent', 'workwear', 'flowy dresses'];
-const PHYS_POOL_VOICE_PITCH = ['deep', 'low', 'medium', 'high-pitched', 'husky'];
-const PHYS_POOL_VOICE_TEXTURE = ['smooth', 'raspy', 'clear', 'gravelly', 'soft', 'sharp'];
-const PHYS_POOL_VOICE_ACCENT = ['neutral American', 'Southern', 'British', 'Australian', 'Irish', 'Scottish', 'Canadian', 'New York', 'Midwestern', 'Spanish-inflected', 'French-inflected', 'slightly Southern'];
+const PHYS_POOL_VOICE_PITCH = ['deep', 'baritone', 'low', 'tenor', 'medium', 'alto', 'high-pitched', 'soprano'];
+const PHYS_POOL_VOICE_TEXTURE = ['smooth', 'raspy', 'clear', 'gravelly', 'soft', 'sharp', 'velvety', 'airy', 'nasal', 'hoarse', 'melodic', 'crisp'];
+const PHYS_POOL_VOICE_ACCENT = [
+  // American regionals — the full vowel geography, New York finally has
+  // company (a player asked for Boston so the New Yorkers wouldn't have all
+  // the fun; the fun is now shared).
+  'neutral American', 'Boston', 'New York', 'Brooklyn', 'Chicago', 'Philadelphia',
+  'Midwestern', 'Minnesota', 'Southern', 'slightly Southern', 'Texas drawl',
+  'Appalachian', 'Cajun', 'Southern California', 'Pacific Northwest',
+  // UK & Ireland
+  'British', 'Cockney', 'Irish', 'Scottish',
+  // The wider anglophone world
+  'Australian', 'New Zealand', 'Canadian', 'Jamaican', 'South African', 'Nigerian',
+  // International-inflected English
+  'Indian', 'Filipino', 'Spanish-inflected', 'French-inflected', 'Italian', 'German',
+  'Brazilian Portuguese', 'Mexican', 'Russian', 'Japanese', 'Korean',
+];
 const PHYS_POOL_GAIT = ['long confident strides', 'a slight slouch', 'quick short steps', 'a relaxed amble', 'an upright purposeful walk', 'a slight limp', 'bouncy steps'];
 const PHYS_POOL_SCENT = ['faint bergamot', 'clean laundry', 'woody cologne', 'vanilla', 'coffee', 'cigarettes and leather', 'fresh soap', 'lavender', 'sandalwood', 'nothing distinctive', 'gunpowder and mint', 'cinnamon'];
 
@@ -5833,6 +5885,21 @@ const PHYS_POOL_SCENT = ['faint bergamot', 'clean laundry', 'woody cologne', 'va
 // through getPhysicalDescriptionForPrompt's three-part gate (see npc.js).
 const PHYS_POOL_BREAST_SIZE = ['flat', 'barely-there', 'small', 'modest', 'average', 'full', 'large', 'very large', 'heavy'];
 const PHYS_POOL_BREAST_SHAPE = ['round', 'teardrop', 'bell-shaped', 'east-west', 'side-set', 'close-set', 'athletic', 'slender', 'pert'];
+// Gender-gated breast vocabulary (intimacy fix): the feminine pool above is
+// what female/futanari draws roll from; masculine genders (male, trans_male)
+// draw from this set instead, so a randomly-rolled male can never land on
+// "very large, teardrop" — arbitrarily girlish features belong to the studio,
+// not to the roller. Same draw count either way (pickPhys per field), so a
+// seed's rng sequence is unchanged by gender.
+const PHYS_POOL_BREAST_SIZE_MASC = ['flat', 'barely-there', 'small', 'slight'];
+const PHYS_POOL_BREAST_SHAPE_MASC = ['flat', 'broad', 'athletic', 'soft', 'slight'];
+
+function breastPoolForGender(gender) {
+  const masculine = gender === 'male' || gender === 'trans_male';
+  return masculine
+    ? { size: PHYS_POOL_BREAST_SIZE_MASC, shape: PHYS_POOL_BREAST_SHAPE_MASC }
+    : { size: PHYS_POOL_BREAST_SIZE, shape: PHYS_POOL_BREAST_SHAPE };
+}
 const PHYS_POOL_BREAST_AREOLA = ['small and pale', 'small and pink', 'medium pink', 'medium dusky', 'wide and pale', 'wide and dark', 'dark brown', 'rosy'];
 const PHYS_POOL_BREAST_NIPPLES = ['small', 'pert', 'puffy', 'prominent', 'inverted', 'wide', 'perpetually stiff'];
 const PHYS_POOL_SENSITIVITY = ['low', 'muted', 'average', 'responsive', 'high', 'exquisite'];
