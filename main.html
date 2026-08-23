@@ -531,6 +531,13 @@ body {
   padding: 0 var(--space-4);
   overflow: hidden;
 }
+/* Pre-existing bug, surfaced while moving Day/Time into the mobile header
+   (mobile-layout-space plan): .h-status-group wraps Day/sep/Time/sep/Money
+   but was never itself given a flex display, so those children fell back
+   to block-stacking top to bottom instead of sitting in one row — on
+   desktop, #header's overflow:hidden silently clipped everything but Time.
+   Matches the same rule .h-group already has below. */
+#header .h-status-group { display: flex; align-items: center; gap: var(--space-2); }
 #header .h-group { display: flex; align-items: center; gap: var(--space-2); }
 #header .h-label { color: var(--color-text-dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.05em; }
 #header .h-label-emoji { font-size: var(--fs-md); text-transform: none; letter-spacing: 0; line-height: 1; }
@@ -1596,6 +1603,13 @@ body {
   min-height: var(--footer-h);
   border-top: 1px solid var(--color-border);
 }
+
+/* Peek-bar handle and the dot need-indicator it implies only exist for the
+   mobile HUD hybrid (see the @media (max-width: 900px) block) — hidden by
+   default so desktop, which keeps the footer's full stack always on, never
+   renders either. */
+.footer-hud-toggle { display: none; }
+.fsi-dot { display: none; }
 
 /* --- Status row (compact, lives in the footer now) --- */
 .footer-status-row {
@@ -3922,29 +3936,122 @@ body {
   #sidebar-left[data-open] { transform: translateX(0); }
   #sidebar-right { transform: translateX(100%); right: 0; }
   #sidebar-right[data-open] { transform: translateX(0); }
-  /* Header — keep only what's about the current location/scene (Room)
-     plus the drawer toggle and utility buttons; Day/Time/Money and the
-     need bars move to the left sidebar's Player panel (now the only
-     place they're shown at all on mobile, see renderPlayerPanel) since
-     there isn't room for both header and content to be legible at once
-     at phone widths. */
+  /* Header — keep the drawer toggle, utility buttons, current location
+     (Room), and now Day/Time (mobile-layout-space hybrid plan): with the
+     footer HUD collapsed to a peek bar by default, the header has the
+     room to carry the clock instead of burying it in the sidebar's Player
+     panel drawer. Money and the speed/need clusters still move there —
+     they're not needed at a glance the way the clock is. */
   #header { gap: var(--space-2); padding: 0 var(--space-2); }
   /* #hdr-needs also carries the .h-group class, which #header .h-group's
      base rule sets display:flex on at higher specificity (ID+class) than
      a bare #hdr-needs selector (ID only) — qualify with #header so this
      actually wins instead of silently losing the cascade. */
-  .h-status-group, #hdr-room-sep, #header #hdr-needs, #hdr-needs-sep { display: none; }
-  /* Phase 10 (D12): the speed cluster rides with the status group (Day/
-     Time/Money) — hidden on mobile for the same reason, only location +
-     utility buttons survive there. */
+  #hdr-room-sep, #header #hdr-needs, #hdr-needs-sep { display: none; }
+  /* Money rides with the speed cluster into the sidebar's Player panel;
+     Day/Time (the rest of .h-status-group) stay put in the header. */
+  #header .h-money-group, #hdr-money-sep { display: none; }
+  /* Both clusters below get an EXPLICIT flex-basis (flex: 0 0 <px>) rather
+     than left at the implied "auto" (content-sized). flex-shrink:0 alone
+     doesn't pin a box to a fixed size when its basis is auto and its
+     content includes a max-width-clamped descendant — the two engines'
+     bookkeeping for that combination disagreed with what actually got
+     drawn here, so Day/Time and Room kept coming out narrower than their
+     own ellipsis caps allowed and starving each other. An explicit basis
+     removes the ambiguity: each box is exactly its stated width, and only
+     the text inside it — via the max-width/ellipsis rules below — gives
+     up space when it doesn't fit. Budget for a 390px phone: 8 padding +
+     30 drawer-toggle + 8 gap + 140 status + 8 gap + 70 room + 8 gap + 0
+     spacer + 8 gap + 42 save + 8 gap + 45 menu + 8 padding = 383px. */
+  .h-status-group { flex: 0 0 140px; }
+  .h-status-group .h-label { display: none; }
+  .h-status-group .h-sep { height: 14px; }
+  /* #header prefixed so this actually beats the base "#header .h-value"
+     rule (an ID beats two bare classes regardless of class count) — without
+     it this font-size silently lost the cascade and the group kept
+     rendering at fs-md, which is what was eating the width budget above. */
+  #header .h-status-group .h-value {
+    font-size: var(--fs-sm); white-space: nowrap;
+    display: inline-block; overflow: hidden; text-overflow: ellipsis;
+    vertical-align: bottom;
+  }
+  /* Time ("08:01", 5 fixed-width digits/punctuation) needs ~46px at fs-sm —
+     measured, not guessed, after the font-size fix above actually landed —
+     so Day gets what's left of the 140px box rather than an even split. */
+  #header #hdr-day { max-width: 76px; }
+  #header #hdr-time { max-width: 46px; }
+  /* Phase 10 (D12): the speed cluster rides with Money — hidden on mobile
+     for the same reason, only location + utility buttons survive there. */
   #hdr-speed-sep, #header #hdr-speed { display: none; }
-  #hdr-room-group { min-width: 0; }
+  #hdr-room-group { flex: 0 0 70px; }
+  /* The "Room" eyebrow label goes the same way Day/Time's did — the room
+     NAME is what's worth the width, not repeating a label the ⓘ/drawer
+     already make obvious from context. */
+  #hdr-room-group .h-label { display: none; }
   #hdr-room-group .h-value {
-    display: inline-block; max-width: 38vw; overflow: hidden;
+    display: inline-block; width: 70px; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
   }
   #save-btn, #menu-btn { padding: var(--space-1) var(--space-2); font-size: var(--fs-xs); }
   .drawer-toggle { display: flex !important; }
+
+  /* --- Mobile HUD hybrid (mobile-layout-space plan) -----------------------
+     Collapsed by default: #footer-status-row and .footer-input-row share one
+     slim row (a colour dot per need instead of its bar/pct/band) under a
+     drag-handle toggle; the tab and chip rows are hidden entirely. Tapping
+     the handle sets #footer[data-hud-expanded], which simply drops back to
+     #footer's normal (desktop) display:flex column stack — same status row
+     now showing its full bar/pct/band, tabs and chips visible again — so
+     nothing here needs to duplicate that layout. */
+  .footer-hud-toggle {
+    display: flex; align-items: center; justify-content: center;
+    width: 100%; padding: var(--space-1) 0; background: none; border: none; cursor: pointer;
+  }
+  .footer-hud-handle { width: 34px; height: 4px; border-radius: 2px; background: var(--color-border-strong); }
+
+  #footer:not([data-hud-expanded]) {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto auto;
+    grid-template-areas: "handle handle" "status input";
+    align-items: center;
+  }
+  #footer:not([data-hud-expanded]) .footer-hud-toggle { grid-area: handle; }
+  #footer:not([data-hud-expanded]) .footer-status-row {
+    grid-area: status;
+    background: none; border-bottom: none; padding: 0 0 0 var(--space-2);
+  }
+  #footer:not([data-hud-expanded]) .footer-status-row .fsi { flex: 0 0 auto; gap: var(--space-1); }
+  #footer:not([data-hud-expanded]) .footer-input-row { grid-area: input; border-top: none; }
+  #footer:not([data-hud-expanded]) .footer-tab-row,
+  #footer:not([data-hud-expanded]) .footer-chips-row { display: none; }
+
+  /* The dot stands in for the bar/pct/band while collapsed — coloured by
+     need like the bar's own fill (see the .fsi[data-need] rules above),
+     and picks up the same data-low/data-critical the status strip already
+     sets, so no JS change was needed to drive it. */
+  .fsi-dot { display: none; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  #footer:not([data-hud-expanded]) .fsi-bar,
+  #footer:not([data-hud-expanded]) .fsi-pct { display: none; }
+  #footer:not([data-hud-expanded]) .fsi-dot { display: block; }
+  /* Hunger's band word ("Satisfied"/"Hungry") is the one thing that made its
+     .fsi wider than its four siblings — on a 390px row that was enough to
+     overflow into hygiene's item next to it (the original "needs folding
+     over each other" bug). Dropping it on mobile in BOTH HUD states — not
+     just collapsed — keeps every item the same width; the colour + percent
+     still carry the same information. */
+  .fsi-band { display: none; }
+  .fsi[data-need="energy"] .fsi-dot { background: var(--color-warm); }
+  .fsi[data-need="hunger"] .fsi-dot { background: var(--color-cool); }
+  .fsi[data-need="hygiene"] .fsi-dot { background: var(--color-positive); }
+  .fsi[data-need="mood"] .fsi-dot { background: var(--color-accent); }
+  .fsi[data-need="desire"] .fsi-dot { background: var(--color-desire); }
+  .fsi[data-low] .fsi-dot { background: var(--color-negative) !important; box-shadow: 0 0 0 2px rgba(246,108,140,.35); }
+
+  #footer[data-hud-expanded] {
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    box-shadow: 0 -8px 24px var(--color-shadow);
+  }
 }
 
 /* Desktop shell — compact/touch mode. Condition kept in sync with
@@ -5512,8 +5619,8 @@ body {
         <span class="h-label">Time</span>
         <span class="h-value" id="hdr-time">08:00</span>
       </div>
-      <div class="h-sep"></div>
-      <div class="h-group">
+      <div class="h-sep" id="hdr-money-sep"></div>
+      <div class="h-group h-money-group">
         <span class="h-label">$</span>
         <span class="h-value" id="hdr-money">0</span>
       </div>
@@ -5640,12 +5747,20 @@ body {
 
   <!-- Footer -->
   <footer id="footer">
+    <!-- Mobile HUD hybrid (mobile-layout-space plan): on narrow screens this
+         is the only visible footer chrome by default — CSS (≤900px) turns
+         #footer into a slim peek bar and hides the tab/chip rows until this
+         is tapped. Desktop never shows it (display:none outside that
+         breakpoint) and #footer keeps its normal always-on stack. -->
+    <button class="footer-hud-toggle" id="footer-hud-toggle" data-hud-toggle aria-expanded="false" aria-label="Toggle status and actions">
+      <span class="footer-hud-handle"></span>
+    </button>
     <div class="footer-status-row" id="footer-status-row">
-      <div class="fsi" data-need="energy"><span class="fsi-icon">⚡</span><div class="fsi-bar"><div class="fill" data-fill="100"></div></div><span class="fsi-pct">100%</span></div>
-      <div class="fsi" data-need="hunger"><span class="fsi-icon">🍔</span><div class="fsi-bar"><div class="fill" data-fill="100"></div></div><span class="fsi-pct">100%</span><span class="fsi-band">Satisfied</span></div>
-      <div class="fsi" data-need="hygiene"><span class="fsi-icon">🚿</span><div class="fsi-bar"><div class="fill" data-fill="100"></div></div><span class="fsi-pct">100%</span></div>
-      <div class="fsi" data-need="mood"><span class="fsi-icon">😊</span><div class="fsi-bar"><div class="fill" data-fill="50"></div></div><span class="fsi-pct">50%</span></div>
-      <div class="fsi" data-need="desire"><span class="fsi-icon">🔥</span><div class="fsi-bar"><div class="fill" data-fill="20"></div></div><span class="fsi-pct">20%</span></div>
+      <div class="fsi" data-need="energy"><span class="fsi-icon">⚡</span><span class="fsi-dot"></span><div class="fsi-bar"><div class="fill" data-fill="100"></div></div><span class="fsi-pct">100%</span></div>
+      <div class="fsi" data-need="hunger"><span class="fsi-icon">🍔</span><span class="fsi-dot"></span><div class="fsi-bar"><div class="fill" data-fill="100"></div></div><span class="fsi-pct">100%</span><span class="fsi-band">Satisfied</span></div>
+      <div class="fsi" data-need="hygiene"><span class="fsi-icon">🚿</span><span class="fsi-dot"></span><div class="fsi-bar"><div class="fill" data-fill="100"></div></div><span class="fsi-pct">100%</span></div>
+      <div class="fsi" data-need="mood"><span class="fsi-icon">😊</span><span class="fsi-dot"></span><div class="fsi-bar"><div class="fill" data-fill="50"></div></div><span class="fsi-pct">50%</span></div>
+      <div class="fsi" data-need="desire"><span class="fsi-icon">🔥</span><span class="fsi-dot"></span><div class="fsi-bar"><div class="fill" data-fill="20"></div></div><span class="fsi-pct">20%</span></div>
     </div>
     <div class="footer-tab-row" id="footer-tab-row"></div>
     <div class="footer-chips-row" id="action-chips"></div>
@@ -6540,7 +6655,7 @@ body {
      render.js/ui.js which call its resolvers/applys at runtime only. -->
 <script src="src/srcfiles/boundary.js?v=1"></script>
 <script src="src/srcfiles/pregnancy.js?v=1"></script>
-<script src="src/srcfiles/render.js?v=75"></script>
+<script src="src/srcfiles/render.js?v=76"></script>
 <script src="src/srcfiles/render.computer.js?v=51"></script>
 <script src="src/srcfiles/render.desktop.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
@@ -6573,7 +6688,7 @@ body {
      pipeline at runtime). Every dependency is a call-time one, so this slot
      is flexible within that range. -->
 <script src="src/srcfiles/asks.js?v=11"></script>
-<script src="src/srcfiles/ui.js?v=127"></script>
+<script src="src/srcfiles/ui.js?v=128"></script>
 <script src="src/srcfiles/ui.computer.js?v=47"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),

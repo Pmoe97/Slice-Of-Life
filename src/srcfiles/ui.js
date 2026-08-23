@@ -7274,6 +7274,22 @@ function attachEventHandlers() {
     });
   });
 
+  // Footer HUD toggle (mobile-layout-space hybrid plan) — the peek bar's
+  // drag handle expands the footer into its full stack (status/tabs/chips)
+  // and the same button collapses it back. State lives entirely on
+  // #footer's data-hud-expanded attribute; render() never touches it, so
+  // it survives every re-render on its own until tapped again.
+  const footerHudToggle = document.getElementById('footer-hud-toggle');
+  if (footerHudToggle) {
+    footerHudToggle.addEventListener('click', () => {
+      const footer = document.getElementById('footer');
+      if (!footer) return;
+      const expanding = !footer.hasAttribute('data-hud-expanded');
+      footer.toggleAttribute('data-hud-expanded', expanding);
+      footerHudToggle.setAttribute('aria-expanded', String(expanding));
+    });
+  }
+
   // VN refactor (D15): the scene backdrop generates toward the viewport's
   // orientation, so flipping a phone landscape↔portrait must repaint it —
   // renderScene is keyed on orientation and will pick up (and cache) the

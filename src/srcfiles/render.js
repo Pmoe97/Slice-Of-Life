@@ -912,13 +912,12 @@ function renderPlayerPanel(gs) {
   const { player } = gs;
 
   stats.innerHTML = '';
-  // Day/Time duplicate the header's own clock — deliberate: on mobile the
-  // header hides everything but Room to make room for it (see the
-  // @media (max-width: 900px) block), so this sidebar panel becomes the
-  // only place that info is visible at all, not just a secondary copy.
+  // Day/Time used to duplicate here for mobile, back when the header hid
+  // everything but Room (see the @media (max-width: 900px) block). The
+  // mobile-layout-space hybrid plan put the clock back in the header on
+  // every width, so it's no longer duplicated in this panel — Money still
+  // is, since the header only ever shows Day/Time.
   const items = [
-    { label: 'Day', val: formatDate(gs.meta.clock.day) },
-    { label: 'Time', val: formatTime(gs.meta.clock.minutes) },
     { label: 'Money', val: `${player.money}` },
     { label: 'Energy', val: `${Math.round(player.energy)}%` },
     // food-overhaul Phase 2 (D3/D4): the Hunger row keeps its familiar % and
