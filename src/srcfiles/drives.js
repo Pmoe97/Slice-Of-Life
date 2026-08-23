@@ -340,7 +340,7 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
     // (D14): the resolver also runs the infidelity footprint, so a completed
     // act that contradicts a relationship record emits the cheating fact and
     // the wronged party's jealousy through the same resolver.
-    const pairResult = tryIntimatePair(updatedNpc, npcId, resolved, gameState, drive);
+    const pairResult = tryIntimatePair(updatedNpc, npcId, resolved, gameState, drive, driveId);
     if (pairResult) {
       if (pairResult.activityOverride) activityOverride = pairResult.activityOverride;
       if (pairResult.clothingState) clothingState = pairResult.clothingState;
@@ -691,6 +691,37 @@ function resolveStandardDrive(driveId, drive, c) {
     activityOverride = drive.activityOverride || 'relaxing';
   }
 
+  // Vocation plan Phase 7 — an idle pastime happens in a room that fits it.
+  // Same shape as moveToComfort: pick from the declared rooms, capacity-aware,
+  // and STAY when the NPC is already in one of them (a room in the list is
+  // not a candidate for moving). `'bedroom'` is the own-bedroom sentinel, the
+  // same idiom resolveHomeWorkPlacement's workRoom list uses. No activity
+  // re-assignment here — activityOverride was already set above; this branch
+  // only decides where they do it.
+  if (drive.moveToRoom && drive.moveToRoom.length) {
+    const own = npc.residency?.room;
+    const candidates = drive.moveToRoom.map(r => r === 'bedroom' ? own : r)
+      .filter(r => r && ROOMS[r] && r !== location
+        && (ROOMS[r].type !== 'bedroom' || r === own));
+    if (candidates.length > 0) {
+      const weighted = candidates.map(roomId => {
+        const occCount = getPresentNpcIds(npcs, roomId).length;
+        const capacity = ROOMS[roomId].capacity;
+        const weight = occCount >= capacity ? 1 / SCENE.crowdAvoidanceWeight : 1;
+        return { roomId, weight };
+      });
+      const picked = weightedPick(rng, weighted, c => c.weight);
+      // Code-review fix: was `picked !== location` — picked is the whole
+      // {roomId, weight} candidate object (weightedPick returns the item,
+      // not a field of it), so that comparison was an object-vs-string check
+      // that could never be false and made this guard vacuous. Copy-pasted
+      // from moveToComfort just above, where `picked` genuinely is a bare
+      // string. Currently harmless because `candidates` already filters out
+      // `r !== location` upstream, but the guard itself did nothing.
+      if (picked && picked.roomId !== location) locationOverride = picked.roomId;
+    }
+  }
+
   // Clean room — reuses COMPUTER's cleanRoomObjects (same function the
   // hired housekeeper uses) instead of reimplementing the dirty-state
   // convention here. The version this replaced checked obj.dirtyWhen
@@ -994,9 +1025,15 @@ function findIntimatePartner(npc, npcId, gameState, location, block) {
 // commitment — the act must PIN both NPCs whatever room it happens in (a
 // bathroom has no bed, and an unpinned partner wanders off mid-act). Pure
 // read; openCommitment is the one writer.
-function buildPairCommitmentChoice(gameState, drive, npcId, location, activity) {
+function buildPairCommitmentChoice(gameState, drive, npcId, location, activity, driveId) {
   const choice = {
-    driveId: 'intimate', kind: 'drive', roomId: location, activity,
+    // Vocation plan D19: the driveId comes from the DRIVE, not a literal.
+    // `content_collab` reuses this whole pair path, and a hardcoded 'intimate'
+    // would label its commitment as something it is not — which the cooldown,
+    // the recency multiplier and every reader of commitment.id would then
+    // believe. Falls back to 'intimate' so the original caller is unchanged.
+    driveId: driveId || 'intimate',
+    kind: 'drive', roomId: location, activity,
     score: drive?.utility?.baseAppeal || 0, startRoom: location,
   };
   if (drive?.actionId && location) {
@@ -1016,12 +1053,31 @@ function buildPairCommitmentChoice(gameState, drive, npcId, location, activity) 
 // clothingState, the partner's merged state (pairState, consumed by sim.js),
 // the initiator's commitmentChoice (opened by evaluateDrives' step 5),
 // events and deltas.
-function tryIntimatePair(npc, npcId, resolved, gameState, drive) {
+function tryIntimatePair(npc, npcId, resolved, gameState, drive, driveId) {
+  // Vocation plan D19: `content_collab` reuses this whole resolver — the same
+  // findIntimatePartner, the same willingness gate, the same both-ways effects
+  // — and differs only in what the pair is DOING. The activity comes off the
+  // drive so the couple session reads as filming rather than as sex, and the
+  // driveId is threaded so the commitment is labelled with the drive that
+  // actually opened it.
+  const pairActivity = drive?.activityOverride || 'having sex';
   const location = resolved?.location;
   const block = resolved?.block;
   const partnerId = findIntimatePartner(npc, npcId, gameState, location, block);
   if (!partnerId) return null;
-  const act = NPC_INTIMACY.intimate.act;
+  // Code-review fix: `act` used to be hardcoded to NPC_INTIMACY.intimate.act
+  // regardless of which drive called this resolver, which meant
+  // content_collab (a filming/business drive, explicitly NOT sex per its own
+  // design comment) fed 'sex' into the willingness gate, the pregnancy roll,
+  // and the relationship-history writer below — a "filming together" session
+  // could conceive a real pregnancy and write a false 'first_sex' record.
+  // `act` now comes from the DRIVE ITSELF (drive.act on the DRIVE_DEFS entry,
+  // same place activityOverride/pairDeltas already live), with the old
+  // NPC_INTIMACY.intimate.act as the fallback for any caller that predates
+  // this field. `intimate` carries `act: 'sex'`; `content_collab` carries
+  // `act: 'content'`, which is not in PREGNANCY.qualifyingActs, so the
+  // maybeConceive call below is automatically a no-op for it.
+  const act = drive?.act || NPC_INTIMACY.intimate.act;
   const gate = resolveWillingnessGate(gameState, partnerId, npcId, act, { location, block, npcId: partnerId });
   if (!gate.allowed) return null;
   const partner = gameState.npcs?.[partnerId];
@@ -1059,10 +1115,21 @@ function tryIntimatePair(npc, npcId, resolved, gameState, drive) {
   }
 
   // 3. Relationship history — first_sex then sex (the Phase 12 store's
-  // writer; read by Phase 14's infidelity and Phase 18's trying).
+  // writer; read by Phase 14's infidelity and Phase 18's trying). Gated on
+  // whether `act` actually qualifies as sex (PREGNANCY.qualifyingActs is the
+  // single source of truth both this write and maybeConceive below key on,
+  // so the two can never disagree about what counts): a genuinely
+  // non-sex act — content_collab's `act: 'content'` — gets its OWN history
+  // kind (the driveId) instead of a false 'sex'/'first_sex' entry, which
+  // used to make relationships.js's lastIntimateDay and pregnancy.js's
+  // hadSex check both treat a filmed shoot as literal intercourse.
   const rec = getRelationship(gameState, npcId, partnerId, true);
-  const firstSex = !(rec.history || []).some(h => h.kind === 'sex' || h.kind === 'first_sex');
-  addRelationshipHistory(gameState, npcId, partnerId, firstSex ? 'first_sex' : 'sex', day);
+  if (PREGNANCY.qualifyingActs.includes(act)) {
+    const firstSex = !(rec.history || []).some(h => h.kind === 'sex' || h.kind === 'first_sex');
+    addRelationshipHistory(gameState, npcId, partnerId, firstSex ? 'first_sex' : 'sex', day);
+  } else {
+    addRelationshipHistory(gameState, npcId, partnerId, driveId || 'intimate', day);
+  }
 
   // 4. Intimacy & Voyeurism Phase 18 (D14/D16): conception. The act is
   // COMPLETE and both parties were willing by the gate above — this is the
@@ -1095,8 +1162,14 @@ function tryIntimatePair(npc, npcId, resolved, gameState, drive) {
   // 8. Pin the PARTNER to the act: commitment opened BEFORE the cooldown
   // stamp so the spread keeps it. This is what stops the same couple
   // re-firing every tick — the partner is mid-act until completesAtAbs.
-  openCommitment(gameState, partnerId, buildPairCommitmentChoice(gameState, drive, partnerId, location, 'having sex'));
-  gameState.npcs[partnerId] = setCooldown(gameState.npcs[partnerId], 'intimate', nowAbs);
+  openCommitment(gameState, partnerId, buildPairCommitmentChoice(gameState, drive, partnerId, location, pairActivity, driveId));
+  // Code-review fix: was hardcoded to 'intimate' regardless of driveId — a
+  // content_collab pairing gave the partner a false 18h 'intimate' cooldown
+  // (blocking their real intimate drive) while never setting the real
+  // content_collab cooldown at all (letting them be re-selected for another
+  // shoot immediately). The initiator's own cooldown a few lines up in
+  // evaluateDrives already uses driveId; this is the matching partner-side fix.
+  gameState.npcs[partnerId] = setCooldown(gameState.npcs[partnerId], driveId || 'intimate', nowAbs);
 
   // 9. The off-screen event. data.other = the partner makes
   // stampEventParticipants name both; seenByPlayer:false until the player
@@ -1106,7 +1179,12 @@ function tryIntimatePair(npc, npcId, resolved, gameState, drive) {
     tick: getTickIndex(gameState.meta.clock.minutes),
     roomId: location,
     npcId,
-    type: 'intimate',
+    // Code-review fix: was hardcoded to 'intimate' regardless of driveId, so
+    // a content_collab event was indistinguishable from an ordinary intimate
+    // one to any consumer reading event.type (ui.js's surfaceRoomEvidence
+    // wrote the exact same "caught having sex" witnessed-knowledge codex
+    // entry for a filmed business shoot). ui.js widened to accept both.
+    type: driveId || 'intimate',
     moodDelta: drive.eventMood || 0.05,
     data: { other: partnerId },
     template: drive.eventTemplate || '{name} and {other} were alone together for a while.',
@@ -1127,15 +1205,22 @@ function tryIntimatePair(npc, npcId, resolved, gameState, drive) {
   if (infidelity.events.length > 0) events.push(...infidelity.events);
 
   return {
-    activityOverride: 'having sex',
+    // Code-review fix: both of these were hardcoded to 'having sex' instead
+    // of the already-computed `pairActivity` (drive.activityOverride) —
+    // for the opening tick of a content_collab session, the initiator's own
+    // displayed activity (and everything keyed on it: ACTIVITY_OUTFIT_TYPES'
+    // 'sexy' entry, the peek text) silently read as ordinary sex instead of
+    // 'filming together' until the NEXT tick picked up the correct label off
+    // the held commitment.
+    activityOverride: pairActivity,
     clothingState: 'undressed',
     pairState: {
       partnerId,
       npc: gameState.npcs[partnerId],
       clothing: 'undressed',
-      activity: 'having sex',
+      activity: pairActivity,
     },
-    commitmentChoice: buildPairCommitmentChoice(gameState, drive, npcId, location, 'having sex'),
+    commitmentChoice: buildPairCommitmentChoice(gameState, drive, npcId, location, pairActivity, driveId),
     events,
     relDeltas,
     // Third-party npc writes (the wronged party's memory/mood/flags/relPlayer)

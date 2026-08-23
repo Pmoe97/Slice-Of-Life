@@ -71,7 +71,16 @@ function getEligibleNpcs(gameState) {
     if (npc.location === playerRoom) return false;
     const { block } = resolveScheduleActivity(npc, gameState.meta.clock);
     if (block === 'sleep') return false;
-    if (block === 'work' || block === 'commute') return false;
+    // D13. This used to be `block === 'work' || block === 'commute'`, which
+    // was right while work always meant gone. It no longer does: a remote
+    // worker is home, awake, and two rooms away, so disqualifying them on the
+    // block name would exclude the person most obviously able to walk in.
+    // Deleting the gate outright is the other wrong answer — it would add a
+    // full working day of eligibility per remote NPC and move the event's
+    // overall rate by accident. So: OFFSITE is ineligible (unchanged), and
+    // at-home working stays eligible with a damping multiplier applied in
+    // getInterruptionProbability below.
+    if (npcIsOffsite(npc, block, gameState.meta.clock, id)) return false;
     return true;
   });
 }
@@ -124,7 +133,19 @@ function getInterruptionProbability(gameState, npcId) {
   const block = onSocialVisit
     ? 'leisure'
     : resolveScheduleActivity(npc, gameState.meta.clock).block;
-  p *= cfg.scheduleMultiplier[block] ?? 1.0;
+  // D13. `scheduleMultiplier.work` is 0 — the SECOND place work-means-gone is
+  // encoded, and the one that would have made the eligibility fix above look
+  // like it worked while every at-home roll still resolved to zero. An NPC
+  // who is home during their work block gets workingFromHomeMultiplier
+  // instead: they are present and interruptible, but someone mid-call is
+  // meaningfully less likely to wander in than someone at loose ends, and one
+  // dial is the whole model.
+  const atHomeWorking = !onSocialVisit
+    && (block === 'work' || block === 'commute' || block === 'commute_home')
+    && !npcIsOffsite(npc, block, gameState.meta.clock, npcId);
+  p *= atHomeWorking
+    ? (cfg.workingFromHomeMultiplier ?? 0.4)
+    : (cfg.scheduleMultiplier[block] ?? 1.0);
   if (p <= 0) return 0;
 
   // Relationship

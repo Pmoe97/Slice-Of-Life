@@ -105,7 +105,7 @@ const DRIVE_CANDIDACY = {
   // temperamentWeights, not a second condition here.
   change_clothes: (npc, npcId, gameState, ctx) => {
     if (ACTIVITY_OUTFIT_TYPES[ctx.activity]) return false;
-    const target = outfitTypeForContext(npc, ctx.block, null);
+    const target = outfitTypeForContext(npc, ctx.block, null, gameState?.meta?.clock, npcId);
     if (outfitMatchesType(npc.outfit, target)) return false;
     return npcWardrobeItems(gameState, npc).length > 0;
   },
@@ -122,6 +122,61 @@ const DRIVE_CANDIDACY = {
     isPrivateRoom(ctx.location)
       && (npc.needs?.desire || 0) >= NPC_INTIMACY.intimate.desireThreshold
       && !!findIntimatePartner(npc, npcId, gameState, ctx.location, ctx.block),
+  // --- Content-creation work (vocation plan D16/D17, Phase 5) -------------
+  // `content_session` is the at-home shift of someone whose job is filmed.
+  // The door is the OCCUPATION plus a private room — deliberately not a
+  // desire threshold, because this is work: a cam model with a schedule to
+  // keep does not need to be in the mood, and gating on desire would turn
+  // their job into an occasional urge. Desire still SCORES it
+  // (utility.desire), so wanting to makes it more likely; it just is not the
+  // door. The private-room requirement is the same isPrivateRoom the Phase 13
+  // drives read, so a shoot cannot happen in the living room.
+  content_session: (npc, npcId, gameState, ctx) =>
+    !!npc?.bible?.occupation?.contentWork && isPrivateRoom(ctx.location),
+
+  // D17 — the rare late-night pool session. Four conditions on top of the
+  // occupation, and each one is doing a job:
+  //   - high disinhibition: this is the exhibitionist end of the trait, not
+  //     something every content creator does. Reuses npcDisinhibition (D8),
+  //     the same [0,1] the adult-occupation floor is scored on.
+  //   - a late block: the point is LATE, when the flat has gone quiet.
+  //   - a functional pool: registered in MAINTENANCE.npcDecayActions against
+  //     pool_systems, exactly as `swim` is, so scoreDrive's existing facility
+  //     gate does the work. Filming in a dry basin is not a beat.
+  //   - an EMPTY pool room: what makes it a private act in a common space,
+  //     and the reason walking in on it lands at all. It also means the
+  //     session simply does not happen on a busy evening, which is most of
+  //     why it stays rare.
+  content_pool_session: (npc, npcId, gameState, ctx) => {
+    if (!npc?.bible?.occupation?.contentWork) return false;
+    if (npcDisinhibition(npc) < CONTENT_WORK_TUNING.poolDisinhibitionFloor) return false;
+    if (ctx.block !== 'wind_down' && ctx.block !== 'evening') return false;
+    // The pool's working state is NOT checked here: scoreDrive already
+    // refuses any drive whose MAINTENANCE.npcDecayActions facility is broken,
+    // and 'content_pool_session' is registered there against pool_systems.
+    // One gate, in the place the swim drive already uses.
+    return getPresentNpcIds(gameState.npcs, 'pool_room').filter(id => id !== npcId).length === 0;
+  },
+
+  // D19 — the couple session. Reads as a stack of conditions ON TOP of the
+  // ordinary pair-act door, and the order matters: findIntimatePartner is
+  // called LAST and its answer is the answer. That function is what runs
+  // resolveWillingnessGate, so no arrangement of the content conditions above
+  // it can produce a candidate whose partner has not consented. Adding a
+  // cheaper path around it — a "they're both creators so skip the gate"
+  // shortcut — is the specific mistake design invariant 5 exists to forbid.
+  //
+  // The initiator must do content work; the PARTNER need only clear the
+  // collab disinhibition floor, because being in someone's shoot is a smaller
+  // step than running one. Both still clear the willingness gate.
+  content_collab: (npc, npcId, gameState, ctx) => {
+    if (!npc?.bible?.occupation?.contentWork) return false;
+    if (!isPrivateRoom(ctx.location)) return false;
+    const partnerId = findIntimatePartner(npc, npcId, gameState, ctx.location, ctx.block);
+    if (!partnerId) return false;
+    return npcDisinhibition(gameState.npcs[partnerId]) >= CONTENT_WORK_TUNING.collabDisinhibitionFloor;
+  },
+
   // Intimacy & Voyeurism Phase 14 (D14): the long-distance thread's door.
   // The drive is only a candidate when the NPC has an OUTSIDE partner (a
   // visitor-status relationship record created by ensureOutsidePartners) who
@@ -268,6 +323,17 @@ function routineRampWeight(minutesOfDay, start, end, inBand) {
 // sketched this as `scoreDrive(drive, npc, perceived, block)`; recency needs
 // the drive id and the absolute minute as well, so the four loose arguments
 // became a context object rather than growing to six.
+
+// The D23 reader for the occupation's `idlePastimes` list (Phase 7). True when
+// the drive is one of the low-stakes idle pastimes this NPC's occupation names.
+// An absent or empty list — a legacy save, a hand-authored NPC — is false for
+// every drive, which is exactly the field's schema default: no list, no lean,
+// and every idle drive scores its bare base appeal.
+function idlePastimePreferred(npc, driveId) {
+  const list = npc?.bible?.occupation?.idlePastimes;
+  return Array.isArray(list) && list.length > 0 && list.includes(driveId);
+}
+
 function scoreDrive(driveId, npc, ctx) {
   const drive = candidateDef(driveId);
   const u = drive && drive.utility;
@@ -365,7 +431,22 @@ function scoreDrive(driveId, npc, ctx) {
     }
   }
 
-  const appeal = base + need + signal + motive + desireBias + willingnessBias;
+  // Phase 7 (vocation-and-lifestyle plan, D23) — the pastime term. The idle
+  // drives (read_book/watch_tv/scroll_phone) clear the action bar on appeal
+  // alone — that is the whole fix for the empty afternoon. WHICH one a person
+  // reaches for is the occupation's `idlePastimes` list, authored in the pool
+  // and carried onto the bible: the listed drive gains `utility.pastimeWeight`
+  // on top of its base appeal, so it ranks decisively ahead of its unlisted
+  // siblings without either ever dropping below the bar. A lean, never a
+  // gate — and an absent list (a legacy save, a hand-authored NPC) means
+  // every idle drive scores flat, so untinted NPCs still idle, just without
+  // a favourite. The field and this reader ship in the same phase (RI6).
+  let pastime = 0;
+  if (u.pastimeWeight && idlePastimePreferred(npc, driveId)) {
+    pastime = u.pastimeWeight;
+  }
+
+  const appeal = base + need + signal + motive + desireBias + willingnessBias + pastime;
 
   // D7 — personality, as `1 + Σ(temperament[axis] × weight[axis])`. This is the
   // THIRD use of the idiom INTERRUPTION.personalityWeights established and
@@ -402,7 +483,12 @@ function scoreDrive(driveId, npc, ctx) {
   const recency = ctx.ignoreRecency ? 1 : recencyMultiplier(npc, driveId, ctx.nowAbs);
 
   const score = (appeal + temperament) * block * recency;
-  return { driveId, score, terms: { base, need, signal, motive, desireBias, willingnessBias, temperament, block, recency } };
+  // Code-review fix: `pastime` (the Phase 7 idle-pastime lean, folded into
+  // `appeal` above) was missing from this object, so `terms` no longer summed
+  // to `score` whenever a drive's pastime term was non-zero — breaking the
+  // debugging surface this field exists for (verify-c1.js's own regression
+  // test asserts the sum) for every idle-pastime-preferred drive.
+  return { driveId, score, terms: { base, need, signal, motive, desireBias, willingnessBias, pastime, temperament, block, recency } };
 }
 
 // --- Scoring everything this NPC could do -------------------------------
@@ -791,6 +877,41 @@ function frontDoorAnchor(gameState) {
   return { roomId: 'entry', objId: door ? door.id : null, point: { x: cx, y: cy } };
 }
 
+// Code-review fix: the end-of-work-block computation used to be duplicated
+// verbatim between openWorkCommitment and openHomeWorkCommitment (same
+// SCHEDULES lookup, same daySched derivation, same workEndTick loop, same
+// `day*1440 + tick*CLOCK.tickMinutes` formula) — a future change to how this
+// is computed would have to be made in both places or the two sibling
+// commitment-openers would silently diverge on completion time. One shared
+// reader now, called by both.
+//
+// Also fixes the falsy-zero sentinel both copies shared: `workEndTick`
+// started at 0 as the "no work range found" marker, but 0 is also a
+// legitimate tick value (midnight) — night_shift's own `work` range starts
+// at tick 0 in this config, so 0 is already a normal in-range boundary here,
+// not something that can safely stand for "absent". A `found` flag replaces
+// it, so a work block that genuinely ends at midnight is no longer
+// indistinguishable from a day with no work block at all.
+//
+// Returns the absolute minute the work block ends, or null if there is no
+// work block in today's schedule.
+function workBlockEndAbs(npc, clock) {
+  const template = SCHEDULES[npc.bible.scheduleTemplate] || SCHEDULES.standard;
+  const dayType = isWeekend(clock.day) ? 'weekend' : 'weekday';
+  const daySched = template[dayType] || template.weekday;
+  let workEndTick = 0;
+  let found = false;
+  for (const [blockName, ranges] of Object.entries(daySched)) {
+    if (blockName !== 'work') continue;
+    for (const [, end] of ranges) {
+      found = true;
+      workEndTick = Math.max(workEndTick, end);
+    }
+  }
+  if (!found) return null;
+  return clock.day * 1440 + workEndTick * CLOCK.tickMinutes;
+}
+
 // The one builder of the work commitment (D5). `npc.commitment` is off-limits
 // here if one already exists — a work commitment must never stack on another
 // commitment. Pure of rng/model: block, walk and completion time all come from
@@ -802,6 +923,13 @@ function openWorkCommitment(gameState, npcId) {
   const clock = gameState.meta.clock;
   const nowAbs = clockToAbsolute(clock);
   const sched = resolveScheduleActivity(npc, clock, gameState, npcId);
+  // D15 — the top-of-function guard, deliberately BEFORE the walk is planned.
+  // This commitment means "leave the flat": it walks to the front-door anchor
+  // and movement.js lands it by setting pos/location to null. Opening it for
+  // someone who works from home would strand them off-map for the entire
+  // shift with no return path. The check belongs here and not in movement.js,
+  // where by then the walk already exists and the damage is a repair job.
+  if (!npcIsOffsite(npc, sched?.block, clock, npcId)) return null;
   // Completion = the end of today's shift, expressed once. Same-day and in
   // the future whenever the caller's block is a work-boundary block — no
   // schedule template runs a shift across midnight.
@@ -809,16 +937,8 @@ function openWorkCommitment(gameState, npcId) {
   if (sched && sched.willReturnAt != null) {
     returnAbs = clock.day * 1440 + sched.willReturnAt;
   } else {
-    const template = SCHEDULES[npc.bible.scheduleTemplate] || SCHEDULES.standard;
-    const dayType = isWeekend(clock.day) ? 'weekend' : 'weekday';
-    const daySched = template[dayType] || template.weekday;
-    let workEndTick = 0;
-    for (const [blockName, ranges] of Object.entries(daySched)) {
-      if (blockName !== 'work') continue;
-      for (const [, end] of ranges) workEndTick = Math.max(workEndTick, end);
-    }
-    if (!workEndTick) return null; // no work block today — not a work-boundary day
-    returnAbs = clock.day * 1440 + workEndTick * CLOCK.tickMinutes;
+    returnAbs = workBlockEndAbs(npc, clock);
+    if (returnAbs == null) return null; // no work block today — not a work-boundary day
   }
   if (!(returnAbs > nowAbs)) return null;
 
@@ -848,6 +968,145 @@ function openWorkCommitment(gameState, npcId) {
     activity: 'heading to work',
     score: 0,
     shouted: [],
+  };
+  return npc.commitment;
+}
+
+// --- The at-home shift (vocation plan D5/D16, Phase 3) --------------------
+// The sibling of openWorkCommitment for someone whose work happens HERE.
+//
+// It exists because of what happened without it. `npcIsOffsite` correctly
+// stopped a remote worker from walking out the front door — and then they
+// fell through to the ordinary drive scorer and spent their entire shift
+// doing laundry. Measured: a week of remote Backend Engineers produced ZERO
+// ticks in the study and 140 in the laundry room. Not working from home;
+// just not working. This file's own Phase 5 comment already says why that is
+// wrong — "a worker at their desk is not also folding laundry" — and it is
+// no less true when the desk is in the study.
+//
+// A SEPARATE KIND, not a flag on the work record, and that is load-bearing:
+// movement.js nulls `pos`/`location` at two sites keyed on
+// `kind === 'work'`, which is exactly the behaviour an at-home worker must
+// never get. A distinct kind means those checks simply never fire, rather
+// than needing two more mode-aware edits in the file whose whole job is
+// walking people out of the flat.
+//
+// Two deliberate differences from the off-site shift:
+//   - It BINDS TO A ROOM instead of leaving. The room comes from
+//     resolveWorkRoom (D5), so it respects capacity and the study contends.
+//   - It is INTERRUPTIBLE. shouldInterruptCommitment exempts `kind: 'work'`
+//     because an off-site worker cannot answer their needs from the office;
+//     someone working in the next room obviously can, so a real need still
+//     pulls them to the kitchen and they go back after. That is more life
+//     than the schedule ever gave them, not less.
+//
+// Completion is the end of the WORK block, not of commute_home: a person who
+// works from home does not have a commute home, and reading one would keep
+// them "at work" for an extra hour of nothing.
+// `precomputedPlacement` (optional): resolveTick's pass 1 already calls
+// resolveHomeWorkPlacement for every at-home worker before this function ever
+// runs, and by the time a caller reaches this function it has already
+// confirmed the NPC is not offsite — so that result is a real placement.
+// Used ONLY for the yield-to-content-work candidacy check below, which reads
+// it in place of last tick's stale npc.location; it is deliberately NOT
+// reused for the actual room commit further down, which still calls
+// resolveHomeWorkPlacement fresh. That recompute has to stay live: its
+// capacity check reads npcs' CURRENT location, and this function commits one
+// NPC at a time within the same per-tick loop pass 1 ran in — pass 1's
+// placements were each computed against that loop's pre-start snapshot, with
+// no visibility into each other, so trusting one for the commit let multiple
+// home workers independently "win" the same under-capacity room in one tick.
+function openHomeWorkCommitment(gameState, npcId, precomputedPlacement) {
+  const npc = gameState.npcs?.[npcId];
+  if (!npc || npc.commitment || !npc.bible?.scheduleTemplate) return null;
+  const clock = gameState.meta.clock;
+  const nowAbs = clockToAbsolute(clock);
+  const sched = resolveScheduleActivity(npc, clock, gameState, npcId);
+  if (sched?.block !== 'work') return null;
+  if (npcIsOffsite(npc, sched.block, clock, npcId)) return null;
+
+  // D16 — the generic at-home shift must YIELD to content work.
+  //
+  // sim.js opens this commitment and then `continue`s, skipping the drive
+  // scorer entirely for the rest of the tick. That is the whole point for an
+  // ordinary remote worker (it is what stopped them spending their shift in
+  // the laundry room), and it is exactly wrong for someone whose shift IS a
+  // drive: a cam model bound to "answering messages" for eight hours never
+  // gets to be a candidate for the job they actually do.
+  //
+  // Measured before this guard: 28 content sessions against 60 pool sessions
+  // over 336 npc-days — the rare late-night beat firing more than twice as
+  // often as the ordinary working one, because the ordinary one could never
+  // win a tick it was never scored on.
+  //
+  // So a content worker who COULD film right now is left to the scorer, where
+  // content_session's work-block appeal makes it the strong favourite. If it
+  // loses, or is on cooldown, they fall through to pass 1's placement and are
+  // at their desk anyway — the desk is the fallback, not the cage.
+  // Code-review fix: this used to hardcode a check against content_session
+  // alone, so content_collab — whose own timeOfDay also includes 'work' —
+  // never got asked, even with a willing co-located partner right there. The
+  // `isContentWorkDrive` flag on all three content drives (config.js) existed
+  // for exactly this generalization and was never actually read anywhere
+  // until now. content_pool_session is included in the same sweep for free
+  // and stays inert here on its own terms — its candidacy function already
+  // requires a 'wind_down'/'evening' block, so it correctly returns false
+  // during 'work' without this site needing to know that.
+  if (npc.bible?.occupation?.contentWork) {
+    const ctx = {
+      block: sched.block,
+      location: precomputedPlacement?.location ?? npc.location,
+      activity: precomputedPlacement?.activity ?? (npc.activity || ''),
+      nowAbs,
+    };
+    for (const [contentDriveId, contentDrive] of Object.entries(DRIVE_DEFS)) {
+      if (!contentDrive.isContentWorkDrive) continue;
+      const candidacy = DRIVE_CANDIDACY[contentDriveId];
+      if (!candidacy) continue;
+      if (isOnCooldown(npc, contentDriveId, nowAbs)) continue;
+      if (candidacy(npc, npcId, gameState, ctx)) return null;
+    }
+  }
+
+  // Code-review fix: shares workBlockEndAbs with openWorkCommitment above
+  // instead of re-deriving the same computation (and the same falsy-zero
+  // sentinel bug) a second time.
+  const completesAtAbs = workBlockEndAbs(npc, clock);
+  if (completesAtAbs == null) return null;
+  if (!(completesAtAbs > nowAbs)) return null;
+
+  // Code-review correction: the efficiency fix's first draft reused
+  // `precomputedPlacement` HERE too, not just for the yield-guard's ctx above
+  // — and that broke real capacity checking. resolveHomeWorkPlacement's
+  // capacity check reads getPresentNpcIds, which reads LIVE npc.location; the
+  // old code recomputed fresh, sequentially, in this same per-NPC commit
+  // loop, so NPC B's check correctly saw NPC A already seated in the study
+  // (A's `npc.location = placed.location` a few lines below had already
+  // landed before B ran). Pass 1's precomputed placements are each checked
+  // against the PRE-TICK snapshot instead — none of them see each other — so
+  // reusing pass 1's result here let three home workers all independently
+  // "win" the same under-capacity room in the same tick. Measured: 0
+  // over-capacity ticks before this reuse, 14 after. So this one recomputes
+  // fresh, live, same as before the efficiency pass; only the yield-guard's
+  // candidacy context above (which has no commit-ordering consequence) still
+  // reuses the pass-1 result.
+  const rng = seededRng(`homework_${npcId}`, `d${clock.day}`);
+  const placed = resolveHomeWorkPlacement(npc, npcId, gameState.npcs, rng, gameState);
+
+  npc.location = placed.location;
+  npc.walk = null;
+  reconcileNpcPos(npc);   // no walk — the workspace is a room change, not a journey
+  npc.commitment = {
+    id: 'work_from_home',
+    kind: 'work_home',
+    startedAtAbs: nowAbs,
+    completesAtAbs,
+    anchor: { roomId: placed.location, objId: null, point: null },
+    arrived: true,
+    activity: placed.activity,
+    score: 0,
+    shouted: [],
+    needsAtOpen: npcNeedsSnapshot(npc),
   };
   return npc.commitment;
 }
@@ -1015,10 +1274,52 @@ function deriveHeldRecord(npcId, npc, gameState, isVisitor) {
       transit: null,
     };
   }
-  if (sched.block === 'work' || sched.block === 'commute' || sched.block === 'commute_home') {
+  // D12: mirrors pass 1's branch, which is now mode-aware — an at-home worker
+  // is not off-screen, so the mirror must not claim they are. It still returns
+  // BEFORE the held-activity branch below, for the same reason as always: a
+  // worker at their desk is not also folding laundry, whether that desk is in
+  // an office or in the study.
+  // The at-home shift's held record (D5/Phase 3). Same shape and the same
+  // reason as the off-site branch above: the commitment owns where they are
+  // and what they are doing, so the schedule is not re-rolled underneath it.
+  // The only difference is that the location is a real room in this flat.
+  if (c.kind === 'work_home') {
     return {
       block: sched.block,
-      location: null, // off-screen — the pass-1 convention
+      location: c.anchor?.roomId || npc.location || null,
+      activity: c.activity || 'working',
+      transit: null,
+    };
+  }
+  // Code-review fix, corrected on a second pass. The first draft of this fix
+  // removed the block entirely for any commitment that isn't 'work' or
+  // 'work_home', reasoning that such a commitment "already carries its own
+  // real anchor". That is true for content_session/content_collab (they only
+  // ever OPEN while the NPC is not offsite, by openHomeWorkCommitment's own
+  // guard) — but it broke the pre-existing "fluid work boundary" mechanism
+  // this function's own header comment documents: ageCommitment's
+  // missing-location release depends on THIS function returning
+  // `location: null` the instant a held NPC becomes offsite, whatever
+  // ordinary commitment (read_book, do_laundry, anything) they happened to
+  // be mid-hold on — that is what cuts an in-flight drive short at a real
+  // work boundary instead of leaving them reading straight through a hybrid
+  // worker's office-day shift. Measured: removing the check let a `read_book`
+  // commitment held into an office day's first work-block tick keep reporting
+  // its stale living-room anchor instead of going offsite.
+  //
+  // So the offsite check is restored, generically, for ANY commitment kind —
+  // but the resolveHomeWorkPlacement RE-ROLL is not: when offsite, this
+  // returns the same off-map record 'work'/'work_home' already return; when
+  // NOT offsite, execution falls through to the generic anchor-based
+  // fallback below, which is what actually fixed the content-work clobbering
+  // bug. content_session/content_collab can never trip the offsite branch
+  // (their own candidacy requires !npcIsOffsite to have opened at all, and
+  // workMode/officeDays/gigDay are stable for the rest of that day), so
+  // they still always take the fallback path exactly as intended.
+  if (npcIsOffsite(npc, sched.block, gameState.meta.clock, npcId)) {
+    return {
+      block: sched.block,
+      location: null,
       activity: ACTIVITY_TABLES[sched.block] ? ACTIVITY_TABLES[sched.block][0] : sched.block,
       transit: null,
     };

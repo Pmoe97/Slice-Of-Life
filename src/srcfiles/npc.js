@@ -2226,9 +2226,17 @@ function npcSwimsNude(npc, rng) {
 // home hours are loungewear, and everything else is the daily fit. Null
 // activity (the change_clothes drive's candidacy, which has no activity) just
 // skips the activity branch.
-function outfitTypeForContext(npc, block, activity) {
+function outfitTypeForContext(npc, block, activity, clock, npcId) {
   if (ACTIVITY_OUTFIT_TYPES[activity]) return ACTIVITY_OUTFIT_TYPES[activity];
   if (WORK_BLOCKS.includes(block)) {
+    // Vocation plan D14: the office fit is for people going to an office.
+    // The question is whether TODAY takes them out of the flat at all — asked
+    // once, against the work block, so 'morning' and 'prep' answer the same
+    // way the shift does. A remote worker in a pressed shirt at their own
+    // desk all day is wrong on its face, and it also breaks change_clothes:
+    // that drive compares last tick's outfit against this target, so a
+    // permanent mismatch would fire it every single day on the same beat.
+    if (!npcIsOffsite(npc, 'work', clock, npcId)) return 'daily';
     const consc = npc?.bible?.temperament?.conscientiousness ?? 0;
     return consc < NUDITY_TUNING.workDressConscientiousnessFloor ? 'daily' : 'work';
   }
@@ -2252,8 +2260,19 @@ function npcWardrobeItems(gameState, npc) {
 // The outfit an NPC is wearing this tick: type from context, items composed
 // from their wardrobe. Deterministic, idempotent — resolveTick derives it
 // every tick, so it self-heals and can never contradict the block/activity.
-function npcOutfitForContext(npc, gameState, block, activity) {
-  return composeOutfit(outfitTypeForContext(npc, block, activity), npcWardrobeItems(gameState, npc));
+function npcOutfitForContext(npc, gameState, block, activity, npcId) {
+  // Phase 7 Dimension 1 (styleLean): thread the occupation's style tags into the
+  // within-type score (the styleTagBonus term in composeOutfit). The TYPE is
+  // still outfitTypeForContext's call (untouched, D14) — the lean only re-ranks
+  // items inside a type, so the change_clothes drive's type-level comparison stays
+  // quiet. A lean that shifted TYPES would thrash that drive, so it deliberately
+  // does not.
+  const lean = npc?.bible?.occupation?.styleLean;
+  return composeOutfit(
+    outfitTypeForContext(npc, block, activity, gameState?.meta?.clock, npcId),
+    npcWardrobeItems(gameState, npc),
+    { styleLean: Array.isArray(lean) ? lean : [] }
+  );
 }
 
 // Does this outfit already count as this type? The cheap proxy the
@@ -2294,7 +2313,16 @@ function npcClothingForContext(npc, block, activity, currentClothing, rng) {
   if (activity === 'showering' && NUDITY_TUNING.nudeShower) return 'nude';
   if (activity === 'masturbating' || activity === 'masturbating in bed') return 'nude';
   if (INTIMACY_ACTIVITIES.includes(activity)) return 'undressed';
-  if (activity === 'swimming laps' || activity === 'swimming') {
+  // Code-review fix: content_pool_session's activityOverride is 'filming by
+  // the pool' (config.js), which never matched this check — the drive's own
+  // extensive design comment insists nudity for it "comes from the existing
+  // deviancyThreshold x nudeSwimChance path, the same gate the swim drive
+  // uses," but with the string unmatched and no setsClothing field on that
+  // drive, there was no path to nudity left at all. Added here rather than
+  // given its own setsClothing, because THIS is the one gate every nudity
+  // decision in the game is supposed to route through (design invariant 4) —
+  // a setsClothing shortcut would have been a second gate, not a fix.
+  if (activity === 'swimming laps' || activity === 'swimming' || activity === 'filming by the pool') {
     if (clothing === 'nude') return 'nude';
     return npcSwimsNude(npc, rng) ? 'nude' : 'dressed';
   }

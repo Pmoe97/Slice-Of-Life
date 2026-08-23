@@ -59,6 +59,14 @@ function deriveNpcTaste(npc) {
     for (const k of anchor.likes || []) push(likes, k);
     for (const k of anchor.dislikes || []) push(dislikes, k);
   }
+  // Phase 7 Dimension 2 (foodLean): the occupation's foodLean keys become LIKES
+  // through the SAME guarded push as the trait anchors — a job tint, not a gate
+  // (a lean never hard-empties a pool, D11's spirit) and it can never exceed
+  // likesPerNpc (the shared `used` guard + cap already bound it). A sweet lean
+  // fills a like slot like any anchor; the draw then fills the rest. Field and
+  // reader ship together (RI6).
+  const foodLean = npc?.bible?.occupation?.foodLean || [];
+  for (const k of foodLean) push(likes, k);
   // The draw pool is RE-FILTERED after each pass: the dislike draw must not
   // hand back a key the like draw already claimed (the shared `used` guard
   // would then drop it and the profile would come up a dislike short).

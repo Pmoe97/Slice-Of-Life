@@ -166,7 +166,12 @@ api(`
 
 const DEFS = J('OVERTURE_DEFS');
 const DEF_IDS = Object.keys(DEFS);
-const BY_CHANNEL = Object.fromEntries(DEF_IDS.map(id => [DEFS[id].channel, id]));
+// FIRST id per channel, not last. The vocation plan added a fifth entry
+// (collab_ask) riding the propose channel, and Object.fromEntries keeps the
+// LAST write — which silently repointed every BY_CHANNEL.propose assertion
+// below at the new entry instead of at propose_player.
+const BY_CHANNEL = {};
+for (const id of DEF_IDS) if (!BY_CHANNEL[DEFS[id].channel]) BY_CHANNEL[DEFS[id].channel] = id;
 
 // ---------------------------------------------------------------------------
 console.log('\n(D8) all four channels ship, and each is an ENTRY rather than a code path');
@@ -174,8 +179,23 @@ console.log('\n(D8) all four channels ship, and each is an ENTRY rather than a c
 check(`the table carries all four channels (${DEF_IDS.map(id => DEFS[id].channel).join(', ')})`,
       ['approach', 'text', 'propose', 'knock'].every(c => !!BY_CHANNEL[c]),
       JSON.stringify(Object.keys(BY_CHANNEL)));
-check('every channel appears exactly once — two entries on one channel would need a tiebreak nobody wrote',
-      new Set(DEF_IDS.map(id => DEFS[id].channel)).size === DEF_IDS.length);
+// Two entries CAN share a channel. The scorer ranks every def independently
+// and choosePursuit takes the highest — the same tiebreak that already
+// resolves drive-against-overture — so the engine needs nothing new. What a
+// shared channel actually costs is the ARRIVAL LINES: ui.js picks those by
+// channel, so a second entry that brought none would speak the first one's
+// words. That is the real rule, and it is what is asserted.
+check('a channel shared by two entries means the later ones bring their own arrival lines',
+      (() => {
+        const seen = {};
+        for (const id of DEF_IDS) {
+          const ch = DEFS[id].channel;
+          if (seen[ch] && !DEFS[id].arrivalTemplates) return false;
+          seen[ch] = true;
+        }
+        return true;
+      })(),
+      JSON.stringify(DEF_IDS.map(id => [id, DEFS[id].channel, !!DEFS[id].arrivalTemplates])));
 // The Phase 3 assertion, restated because the new entries are the ones that
 // could break it: candidateDef checks DRIVE_DEFS first, so a collision makes
 // the overture silently unreachable rather than erroring. `text_player` was a
@@ -210,13 +230,21 @@ check('a channel that awaits an answer says where it waits, and one that does no
 // R8 again: a `respond` label RENDER never draws, or a surface with no labels,
 // are the same bug from opposite ends.
 check('every `respond` pair carries both labels and the {name} substitution they are rendered with',
-      DEF_IDS.filter(id => DEFS[id].respond).length === 2
+      DEF_IDS.filter(id => DEFS[id].respond).length >= 2
       && DEF_IDS.filter(id => DEFS[id].respond).every(id =>
         DEFS[id].respond.accept.includes('{name}') && DEFS[id].respond.decline.includes('{name}')),
       JSON.stringify(DEF_IDS.map(id => [id, DEFS[id].respond])));
-check('...and only the channels with no existing verb declare one (D8: approach is Talk and Go)',
+check('...and only the channels with no existing player verb declare one (D8: approach is Talk and Go)',
+      // NOT keyed on awaitsAnswer — approach awaits an answer too, and answers
+      // it through the verbs the player already has (Talk and Go). Which
+      // channels need a BESPOKE surface is a property of the channel, not
+      // something derivable from a field, so the two that must never carry
+      // labels are named and every OTHER waiting entry must carry them.
       !DEFS[BY_CHANNEL.approach].respond && !DEFS[BY_CHANNEL.text].respond
-      && !!DEFS[BY_CHANNEL.propose].respond && !!DEFS[BY_CHANNEL.knock].respond);
+      && DEF_IDS
+        .filter(id => id !== BY_CHANNEL.approach && id !== BY_CHANNEL.text)
+        .every(id => !DEFS[id].awaitsAnswer || !!DEFS[id].respond),
+      JSON.stringify(DEF_IDS.map(id => [id, !!DEFS[id].awaitsAnswer, !!DEFS[id].respond])));
 check('the knock\'s emitsSignal names a real TRANSIENT, in the same shape a drive declares one',
       api(`(() => {
         const e = OVERTURE_DEFS.${BY_CHANNEL.knock}.emitsSignal;

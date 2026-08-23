@@ -1442,6 +1442,17 @@ const OUTFIT_TYPES = {
   workout:    { label: 'Workout',    traits: ['sport'], note: 'exercise gear' },
   swim:       { label: 'Swimwear',   traits: ['swim'], note: 'swim gear' },
   formal:     { label: 'Formal',     traits: ['formal', 'work'], note: 'something sharp' },
+  // Vocation plan D16 (content work). The `sexy`/`revealing` traits already
+  // exist on real garments (crop top, lingerie set, bikini, skirt) and were
+  // read only by the clothing-effects stats until now — this is the outfit
+  // TYPE that composes from them, added with its reader
+  // (ACTIVITY_OUTFIT_TYPES → 'filming'), not ahead of it.
+  //
+  // `everyday` is a deliberate second trait, not padding: composeOutfit fills
+  // every slot it can, and a wardrobe with no sexy bottom should still put
+  // something on rather than degrade to a bare torso by accident. Nudity in
+  // this game is decided in exactly one place and it is not here.
+  sexy:       { label: 'Something Revealing', traits: ['sexy', 'revealing', 'everyday'], note: 'something deliberately revealing' },
 };
 
 // --- Recipes: what stove.cook_meal (DEFS.ACTIONS) draws from. Checked in

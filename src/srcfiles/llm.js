@@ -317,6 +317,44 @@ function clothingLabel(npc) {
 // buildNpcBlockV2's [Possessions] line. Reads the same npc.inventory stack
 // list the room-search surfaces, so prose and gameplay can never disagree
 // about what someone owns.
+// --- How they live off it (vocation plan D20, Phase 4) --------------------
+// The clause appended to the [Occupation] line. `incomeSource` answers WHERE
+// the money comes from, which `incomeBand` (how much) and the title (what
+// they do) both leave open — and it is the difference between two characters
+// who share an identical empty calendar.
+//
+// Deliberately terse and non-prescriptive: it states the situation and lets
+// the model's own read of the personality decide how they feel about it. A
+// sentence telling the model how to play it would flatten every unemployed
+// NPC into the same anxious or the same smug.
+//
+// `wage` says nothing — a salaried job is the unmarked case and spending a
+// prompt line on it would be noise on every NPC in the flat.
+function occupationLivingClause(occ) {
+  const src = occ?.incomeSource || 'wage';
+  const band = occ?.incomeBand || 'mid';
+  let clause = '';
+  if (src === 'self') clause = ' — self-employed; income varies month to month';
+  else if (src === 'means') {
+    clause = band === 'high'
+      ? ' — does not work; money comes from family/prior wealth and rent is not a worry'
+      : ' — does not work; living off savings or a settlement that will not last forever';
+  } else if (src === 'none') {
+    clause = ' — not working and not earning; money is running out';
+  }
+  // Phase 7 Dimension 4 (spendingLean, persona-only reader — the mechanical
+  // consumer is Phase 8's rent-negotiation, which does not exist yet; the
+  // same pattern incomeSource already uses, and the player observes it in
+  // conversation). A flavour only — it tints how they talk about money, never a
+  // number, so the economy's central pressure cannot move (D22). Independent of
+  // incomeSource so a frugal wage earner reads frugal; neutral (and every
+  // default) stays silent.
+  const lean = occ?.spendingLean || 'neutral';
+  if (lean === 'frugal') clause += (clause ? '; ' : ' — ') + 'watches spending carefully and hates waste';
+  else if (lean === 'free_spender') clause += (clause ? '; ' : ' — ') + 'spends freely and lives a little wider than their income';
+  return clause;
+}
+
 function possessionsLine(npc) {
   const inv = npc.inventory || [];
   if (inv.length === 0) return '';
@@ -398,7 +436,13 @@ function buildNpcBlockV2(npc, query, channel, day, gameState) {
   }
 
   // [Occupation]
-  block += `[Occupation]: ${b.occupation?.title || 'unknown'} (${b.occupation?.hours || 'flexible'})\n`;
+  // Vocation plan D20: the line carries HOW they live off it, not just the
+  // title. "Between things (none)" tells the model almost nothing, and the
+  // two people it could describe — someone with family money who never
+  // thinks about rent, and someone three months from broke — are completely
+  // different characters who would never say the same thing about money.
+  // The model cannot infer that from a title, so the line says it.
+  block += `[Occupation]: ${b.occupation?.title || 'unknown'} (${b.occupation?.hours || 'flexible'})${occupationLivingClause(b.occupation)}\n`;
 
   // Phase 8 (D8): what this NPC actually owns. Possessions ground the
   // prose — a musician's guitar is referenceable, a student's book is on
@@ -1055,6 +1099,79 @@ async function expandCharacterProse(structured) {
   }
 }
 
+// --- Authored-field lock (Seasonal Calendar & Sandbox plan, B1/D12) ---
+// A bible may carry `authoredFields: string[]` — dotted paths the player
+// filled in by hand ('name', 'physical', 'physical.hair.color', 'visual', …).
+// mergeProseIntoBible is the ONE merge point for prose expansion and skips
+// any path the list covers. Coverage is an ancestor prefix match: 'physical'
+// protects physical and everything under it; 'physical.hair' protects
+// physical.hair.color but NOT physical.eyes.color.
+//
+// WHY the lock exists: physical survived the old inline merge only because
+// expandCharacterProse returns the same object it was handed — it mutates
+// structured.physical in place for fashion/accessories and hands it back, so
+// `{ ...bible.physical, ...prose.physical }` was a copy of one object and
+// looked safe. That is accidental and undocumented, and a refactor that made
+// prose.physical a fresh object would silently overwrite an authored
+// appearance with no error. visual does not even survive that accident: the
+// old merge overwrote it with prose.visual unconditionally.
+//
+// With an EMPTY authoredFields this must produce exactly what the old merge
+// produced — the no-regression assertion in verify-sbx-p1.js pins it.
+function pathIsAuthored(authoredFields, path) {
+  return Array.isArray(authoredFields) && authoredFields.some(a =>
+    a === path || path.startsWith(a + '.'));
+}
+
+function mergeAuthoredPhysical(biblePhys, prosePhys, authoredFields, prefix) {
+  // A whole subtree covered by the list (the path itself or an ancestor of
+  // it authored) is kept untouched — no descent needed.
+  if (pathIsAuthored(authoredFields, prefix)) return biblePhys;
+  const out = { ...biblePhys };
+  for (const [k, v] of Object.entries(prosePhys)) {
+    const path = `${prefix}.${k}`;
+    if (pathIsAuthored(authoredFields, path)) continue;
+    // Descend only when BOTH sides are plain objects, so a partially
+    // authored nested group (only physical.hair.color written) keeps the
+    // rolled siblings instead of the whole hair object being replaced.
+    if (v && typeof v === 'object' && !Array.isArray(v) &&
+        biblePhys[k] && typeof biblePhys[k] === 'object' && !Array.isArray(biblePhys[k])) {
+      out[k] = mergeAuthoredPhysical(biblePhys[k], v, authoredFields, path);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+function mergeProseIntoBible(bible, prose, authoredFields = []) {
+  const out = { ...bible };
+
+  // name — the guarded field: today's rule is that an existing bible name
+  // wins over the LLM's. The explicit lock extends that protection to a
+  // player-authored name even when it is empty (the sandbox UI always fills
+  // it, so this only matters for hand-edited bibles).
+  if (!pathIsAuthored(authoredFields, 'name')) {
+    out.name = bible.name || prose.name;
+  }
+
+  // The four unconditional fields — overwritten unless the player authored
+  // them (visual is the one the old merge clobbered even when present).
+  for (const f of ['visual', 'history', 'sketch', 'sampleLines']) {
+    if (!pathIsAuthored(authoredFields, f)) out[f] = prose[f];
+  }
+
+  // physical — a nested merge, not a replace, so a partially authored
+  // appearance (only physical.hair.color) keeps the rolled fields. Protected
+  // wholesale by 'physical', or left exactly as the bible carries it when
+  // authoredFields covers the whole subtree.
+  if (!pathIsAuthored(authoredFields, 'physical')) {
+    out.physical = mergeAuthoredPhysical(bible.physical || {}, prose.physical || {}, authoredFields, 'physical');
+  }
+
+  return out;
+}
+
 function buildProsePrompt(structured) {
   const t = structured.temperament;
   const p = structured.physical || {};
@@ -1074,7 +1191,7 @@ Personality: ${structured.personality?.traits?.join(', ') || 'TBD'} — core: ${
 Quirks: ${structured.personality?.quirks?.join('; ') || 'TBD'}
 Likes: ${structured.personality?.likes?.join(', ') || 'TBD'}
 Dislikes: ${structured.personality?.dislikes?.join(', ') || 'TBD'}
-Occupation: ${structured.occupation?.title || 'TBD'} — ${structured.occupation?.hours || 'flexible'} hours
+Occupation: ${structured.occupation?.title || 'TBD'} — ${structured.occupation?.hours || 'flexible'} hours${occupationLivingClause(structured.occupation)}
 Interests: ${structured.interests?.map(i => i.name).join(', ') || 'TBD'}
 Values: ${structured.values?.map(v => v.name).join(', ') || 'TBD'}
 Baggage: ${structured.baggage}

@@ -806,6 +806,16 @@ function composeOutfit(wantedType, itemIds, bias = {}) {
   const preferred = new Set(type.traits || []);
   const statWeights = { comfort: 2, attraction: 1, ...(bias.stats || {}) };
   const traitBonus = (bias.traitBonus != null) ? bias.traitBonus : 4;
+  // Phase 7 Dimension 1 (styleLean): the occupation's style tags tint the
+  // within-type choice. Each worn candidate whose styleTags intersect the lean
+  // gains a small per-tag bonus — a within-type preference, never a gate and
+  // never enough to beat a true trait match (traitBonus is 4; a lean is
+  // a fraction of it, so a 'cozy'-lean chef still wears the button-up for
+  // the work outfit). The TYPE is still decided by outfitTypeForContext (D14
+  // untouched) — this only re-ranks items inside a type, so the
+  // change_clothes drive's type-level comparison stays quiet.
+  const lean = new Set((bias.styleLean || []));
+  const styleTagBonus = (bias.styleTagBonus != null) ? bias.styleTagBonus : 1.5;
   const score = (id) => {
     const def = CLOTHING_DEFS[id];
     if (!def) return -Infinity;
@@ -816,6 +826,7 @@ function composeOutfit(wantedType, itemIds, bias = {}) {
     // carry the `sport` trait.
     (def.traits || []).forEach((t, i) => { if (preferred.has(t)) s += traitBonus / (i + 1); });
     for (const [stat, w] of Object.entries(statWeights)) s += (def.stats?.[stat] || 0) * w;
+    (def.styleTags || []).forEach(t => { if (lean.has(t)) s += styleTagBonus; });
     return s;
   };
   const outfit = {};

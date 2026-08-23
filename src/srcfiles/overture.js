@@ -133,6 +133,41 @@ function overtureAllowed(gameState, overtureId) {
   return { allowed: true, reason: null };
 }
 
+// --- Per-def candidacy (vocation-and-lifestyle plan D18) -------------------
+// The overture equivalent of COGNITION's DRIVE_CANDIDACY, and added for the
+// same reason that table exists: a channel whose conditions live nowhere the
+// scorer can see them is a channel that scores, wins the tick, and opens a
+// record the player should never have been offered.
+//
+// Every gate the four original channels needed was expressible in the existing
+// registries — proximity, do-not-disturb, motives, cooldown. The collab ask is
+// the first entry that needs to ask something about the NPC THEMSELF (what
+// they do for a living, and how close you actually are), so it gets a named
+// predicate rather than a special case inside scoreOvertures.
+//
+// Absent means "no extra conditions", so the four original channels are
+// untouched. Pure: reads state, returns a boolean, writes nothing.
+const OVERTURE_CANDIDACY = {
+  // D18. Someone whose work is filmed asks you to help with it. Three
+  // conditions, and the relationship ones are the point:
+  //
+  //   - it is their actual job (contentWork), not a whim;
+  //   - real affection, well above the threshold the other channels use. This
+  //     beat is worth something BECAUSE it is a person asking you specifically,
+  //     and it is worth nothing — worse than nothing — if it fires at
+  //     acquaintance. CONTENT_WORK_TUNING.collabAskAffection is set high on
+  //     purpose and is the dial if it ever feels too eager;
+  //   - and low tension. Fondness is not the same as comfort, and someone who
+  //     is fond of you but currently at odds with you does not ask this.
+  collab_ask: (npc, npcId, gameState) => {
+    if (!npc?.bible?.occupation?.contentWork) return false;
+    const rel = npc.relPlayer || {};
+    if ((rel.affection || 0) < CONTENT_WORK_TUNING.collabAskAffection) return false;
+    if ((rel.tension || 0) > CONTENT_WORK_TUNING.collabAskMaxTension) return false;
+    return true;
+  },
+};
+
 // --- D10, the other half: the NPC learns to stop asking --------------------
 // A refusal moves the relationship AND is remembered, and both halves have to
 // self-limit or a long game turns a few brush-offs into a permanent grudge.
@@ -317,6 +352,11 @@ function scoreOvertures(npc, npcId, gameState, ctx) {
     if (ctx.isVisitor) continue;
     if (isOnCooldown(npc, overtureId, ctx.nowAbs)) continue;
     if (!overtureAllowed(gameState, overtureId).allowed) continue;
+    // D18 — the per-def door, checked here for the same reason DRIVE_CANDIDACY
+    // is checked in scoreDrive: conditions the scorer cannot see are conditions
+    // that open records the player should never have been offered.
+    const can = OVERTURE_CANDIDACY[overtureId];
+    if (can && !can(npc, npcId, gameState, ctx)) continue;
     // D29 — where this channel needs the NPC to be standing, as a named
     // predicate. An unknown name has already blocked in overtureAllowed above,
     // so by here the lookup cannot miss.
@@ -420,7 +460,20 @@ function proposeTerms(npc, def, gameState) {
       if (startAbs <= nowAbs) continue;
       const { block } = resolveScheduleActivity(npc, absoluteToClock(startAbs));
       if (COMMITMENT_TUNING.busyBlocks.includes(block)) continue;
-      return { kind: spec.kind, startAbs, endAbs, roomId: kindDef.roomId };
+      // D18: `roomId: 'own_bedroom'` resolves to the PROPOSER's room. The
+      // four original kinds name a fixed common room, which is right for a
+      // dinner or a hangout and wrong for anything that has to happen
+      // somewhere private — a shoot in the living room is not the beat. A
+      // sentinel keeps COMMITMENT_KINDS declarative rather than making every
+      // reader of `.roomId` learn about bedrooms.
+      const roomId = kindDef.roomId === 'own_bedroom'
+        ? (npc.residency && npc.residency.room) || null
+        : kindDef.roomId;
+      // Reject only a FAILED sentinel (a proposer with no assigned room),
+      // never a kind that legitimately names no room at all — meal has none,
+      // and a blanket !roomId check would silently refuse every kind like it.
+      if (kindDef.roomId === "own_bedroom" && !roomId) continue;
+      return { kind: spec.kind, startAbs, endAbs, roomId };
     }
   }
   return null;
