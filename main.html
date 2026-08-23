@@ -3986,6 +3986,28 @@ body {
   .phone-screennav-btn { min-height: 44px; padding-top: var(--space-3); padding-bottom: var(--space-3); }
 }
 
+/* Mobile input-zoom guard (playtest report: text boxes "not working" on
+   mobile). Distinct from D4 just above — D4 ruled out font-size changes
+   for touch-target *typography scale*; this is a hard iOS Safari platform
+   threshold on actual <input>/<textarea> elements only. Safari auto-zooms
+   the whole page when a focused text field's computed font-size is under
+   16px, which then snaps this fixed-position/vh-vw shell out of alignment
+   underneath the keyboard. Every text field in the app sits under that
+   line at the default text-scale (--fs-base is 15px, --fs-sm is 13px), so
+   this floors real text entry at 16px without touching the visual scale
+   anywhere else (buttons, chips, labels are untouched). */
+@media (hover: none) and (pointer: coarse) {
+  input[type="text"],
+  input[type="number"],
+  input[type="search"],
+  input[type="email"],
+  input[type="password"],
+  input:not([type]),
+  textarea {
+    font-size: max(16px, var(--fs-base));
+  }
+}
+
 /* D3: right-edge fade on the chip strip so a cut-off chip reads as "more".
    Only painted while the strip actually overflows — the render hook in
    render.js toggles #action-chips[data-scrollable] (and keeps it honest on
