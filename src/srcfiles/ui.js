@@ -4623,6 +4623,32 @@ function convAddBubble(from, text, tag) {
 // pattern from render.computer.js (a resolved promise writing to a since-
 // removed <img> is a harmless no-op). textContent, never innerHTML, for
 // anything that can carry player/LLM-derived text.
+// F3 (Discord feedback, 2026-08-23): decides whether this turn earns a new
+// illustrated panel, per the player's chosen cadence, then generates and
+// paints it in. Fire-and-forget from doConvSend, like showActionMomentModal
+// — a slow/failed generation should never hold up the conversation itself.
+async function maybeShowConversationScene(npc) {
+  const mode = settingsCache?.sceneVisualizerMode || 'off';
+  if (mode === 'off' || !convState || !npc) return;
+  let due = false;
+  if (mode === 'everyMessage') {
+    due = true;
+  } else if (mode === 'everyN') {
+    convState.sceneVisCount = (convState.sceneVisCount || 0) + 1;
+    const opt = SCENE_VIS_EVERY_N_OPTIONS.find((o) => o.id === settingsCache.sceneVisualizerEveryN);
+    const n = opt ? opt.n : 3;
+    if (convState.sceneVisCount >= n) { due = true; convState.sceneVisCount = 0; }
+  } else if (mode === 'mood') {
+    const label = moodLabel(npc.mood);
+    if (label !== convState.sceneVisLastMood) { due = true; convState.sceneVisLastMood = label; }
+  }
+  if (!due) return;
+  const npcId = npc.id;
+  const result = await generateConversationSceneImage(currentGameState, npc);
+  if (!convState || convState.npcId !== npcId) return; // conversation closed/switched mid-generation
+  if (result.url) convAddImageBubble('npc', result.url, '', '🎨 Scene');
+}
+
 function convAddImageBubble(from, url, text, tag) {
   const log = document.getElementById('conv-log');
   if (!log) return null;
@@ -5021,7 +5047,10 @@ async function doTalk(npcId) {
 
   // Open the conversation overlay before any LLM call so the player sees
   // the interface immediately, not a loading screen.
-  convState = { npcId, sending: false };
+  // sceneVisCount/sceneVisLastMood: F3's cadence trackers — per-conversation,
+  // reset on every open so a later 'everyN'/'mood' setting change or a new
+  // conversation with someone else starts counting fresh.
+  convState = { npcId, sending: false, sceneVisCount: 0, sceneVisLastMood: null };
   openConversationOverlay(npcId);
 
   // Deterministic confrontation, before the LLM ever runs — a suspicion
@@ -5205,6 +5234,10 @@ async function doConvSend(forcedText, giftDefId) {
         ? resolveSpeakerIds(result.proposal.dialogue, context.activeNpcs)
         : [convState.npcId];
       currentSceneState = advanceEngagement(currentSceneState, speakerIds);
+      // F3: fire-and-forget, after the turn's own dialogue/beats are already
+      // painted in — never blocks the reply the player is waiting on.
+      const sceneNpc = currentGameState.npcs?.[convState.npcId];
+      if (sceneNpc) maybeShowConversationScene(sceneNpc);
     }
 
     currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);

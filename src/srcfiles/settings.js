@@ -151,6 +151,10 @@ function normalizeSettings(s) {
     ...SETTINGS_DEFAULTS.pairings,
     ...(out.pairings && typeof out.pairings === 'object' ? out.pairings : {}),
   };
+  // F3: same bogus-id guard as imageStyle/theme above — a stored id the
+  // cycle rows can't resolve would show a blank "—" tile forever.
+  if (!SCENE_VIS_MODES.some((m) => m.id === out.sceneVisualizerMode)) out.sceneVisualizerMode = SETTINGS_DEFAULTS.sceneVisualizerMode;
+  if (!SCENE_VIS_EVERY_N_OPTIONS.some((n) => n.id === out.sceneVisualizerEveryN)) out.sceneVisualizerEveryN = SETTINGS_DEFAULTS.sceneVisualizerEveryN;
   return out;
 }
 

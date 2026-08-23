@@ -1238,6 +1238,40 @@ function buildActionMomentPrompt(actor, def, ctx) {
     + (sceneOrientation() === 'landscape' ? 'wide composition, subject centered.' : 'tall vertical composition, subject centered.');
 }
 
+// ===== F3 — conversation scene visualizer (Discord feedback, 2026-08-23) =====
+// A dedicated one-off panel of the current conversation, drawn straight into
+// the chat log (ui.js's maybeShowConversationScene → convAddImageBubble) —
+// a separate system from the character-cutout layer (which never opts into
+// this; see buildCharacterPrompt's own note). Ungoverned by the camera-roll
+// cache: nothing here is meant to be revisited later, so every call is a
+// fresh, uncached generation with its own random seed, same pattern as
+// rerollSceneImage's one-off reroll path.
+function buildConversationScenePrompt(gameState, npc) {
+  const roomId = gameState.player.location;
+  const npcClause = buildVisualCharacterClause(npc, { gameState, npcId: npc.id });
+  const playerClause = buildVisualCharacterClause(gameState.player, { gameState, isPlayer: true });
+  const room = ROOMS[roomId]?.name || roomId;
+  const mood = moodLabel(npc.mood);
+  return `${npcClause}, talking with ${playerClause}, in the ${String(room).toLowerCase()}, `
+    + `${mood} mood, mid-conversation, expressive body language, two people, `
+    + (sceneOrientation() === 'landscape' ? 'wide composition, both figures visible.' : 'tall vertical composition, both figures visible.');
+}
+
+async function generateConversationSceneImage(gameState, npc) {
+  const prompt = buildConversationScenePrompt(gameState, npc);
+  try {
+    const result = await root.generateImage(applyImageStyle(prompt), {
+      resolution: IMAGE_CACHE.resolutions.scene[sceneOrientation()],
+      seed: Math.floor(Math.random() * 2147483647),
+      negativePrompt: IMAGE_NEGATIVE.scene,
+    });
+    const blob = await canvasToBlob(result.canvas);
+    return { url: URL.createObjectURL(blob), prompt, error: null };
+  } catch (e) {
+    return { url: null, prompt, error: e.message };
+  }
+}
+
 // Regenerate (or fetch from cache) the image for a photo record. Keyed by
 // the photo's own id, not by room/phase/npc composition — two photos of
 // the same room a day apart must stay visually distinct and individually
