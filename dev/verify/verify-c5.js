@@ -162,15 +162,21 @@ check('deriveHeldRecord reads a work block as off-screen, so ageCommitment relea
   (() => {
     const g = __mk();
     const id = __ids(g)[0];
-    for (let m = 0; m < 1440; m += 30) {
-      const probe = { day: 1, minutes: m, phase: '' };
-      const b = resolveScheduleActivity(g.npcs[id], probe, g, id).block;
-      if (b !== 'work') continue;
-      g.meta.clock = { ...g.meta.clock, minutes: m };
-      __forceCommit(g, id, 120, 'living_room');
-      const r = deriveHeldRecord(id, g.npcs[id], g, false);
-      const releases = r.location === null && ageCommitment(g, id, r) === null;
-      return releases;
+    // Probe the WHOLE week, not day 1: which weekday a work block lands on
+    // depends on the calendar's weekday base (day 1 was a Monday before the
+    // seasonal-calendar change and is a Sunday after it), and this property
+    // is about work blocks existing at all, not about any particular day.
+    for (let d = 1; d <= 7; d++) {
+      for (let m = 0; m < 1440; m += 30) {
+        const probe = { day: d, minutes: m, phase: '' };
+        const b = resolveScheduleActivity(g.npcs[id], probe, g, id).block;
+        if (b !== 'work') continue;
+        g.meta.clock = { ...g.meta.clock, day: d, minutes: m };
+        __forceCommit(g, id, 120, 'living_room');
+        const r = deriveHeldRecord(id, g.npcs[id], g, false);
+        const releases = r.location === null && ageCommitment(g, id, r) === null;
+        return releases;
+      }
     }
     return false;   // no work block found — a template with no job
   })()

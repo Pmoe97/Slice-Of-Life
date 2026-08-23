@@ -387,7 +387,7 @@ function updateClockDisplay() {
   const hdrTime = document.getElementById('hdr-time');
   if (hdrTime) hdrTime.textContent = formatTime(m);
   const hdrDay = document.getElementById('hdr-day');
-  if (hdrDay) hdrDay.textContent = formatDate(currentGameState.meta.clock.day);
+  if (hdrDay) hdrDay.textContent = formatDateShort(currentGameState.meta.clock.day);
   const csClock = document.getElementById('cs-clock');
   if (csClock) csClock.textContent = `Day ${currentGameState.meta.clock.day} — ${formatTime(m)}`;
   const phoneClock = document.getElementById('phone-clock');

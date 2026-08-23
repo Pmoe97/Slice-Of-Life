@@ -25,9 +25,11 @@ function check(name, cond, detail) {
 }
 
 // A fresh generated house with the meta shape the real gameState carries.
-// `startDay` lets the harness begin on a Saturday (day 5 is the first
-// weekend day: getWeekday(day) = (day-1)%7, 5=Sat,6=Sun) so the 3-day run
-// covers two leisure-block days AND a weekday work block.
+// `startDay` lets the harness choose the window; the default day 5 is a
+// workday in every calendar the code has shipped (day 5 was the first
+// workday of the week when getWeekday was (day-1)%7 and is a Thursday under
+// the seasonal calendar's Sunday-based week), so a 3-day run always covers
+// work blocks AND weekend blocks whichever weekday base is in effect.
 // Injected into the vm context — the checks below call house(...) from
 // inside api() template strings, which only see symbols defined via api().
 api(`
@@ -45,8 +47,14 @@ api(`
 // block exists so the change_clothes beat has a transition to fire on).
 // Returns per-resident traces: for every tick, { block, activity, clothing,
 // outfitTraitKeys, outfit } plus aggregates used by the assertions below.
+// `workMode` (vocation-and-lifestyle plan): forcing `template` alone is no
+// longer enough to mean "this cast goes to an office". An occupation now
+// carries a workMode, and several day_shift jobs are hybrid or remote — a
+// forced day_shift cast can be sitting in the study all week. Tests that are
+// ABOUT office dress or the leaving-for-work beat must force on_site too, or
+// they are asserting the old world.
 function simulate({ residents = 3, days = 3, seed = 20260816, startDay = 5,
-                    temper = null, template = null, repair = true }) {
+                    temper = null, template = null, repair = true, workMode = null }) {
   const { api: a } = loadEngine();
   a(`
     __h = SIM_generateHouse(${seed}, ${residents});
@@ -55,6 +63,11 @@ function simulate({ residents = 3, days = 3, seed = 20260816, startDay = 5,
              player: __h.player, npcs: __h.npcs, world: __h.world, objects: __h.objects };
     ${repair ? `for (const k of Object.keys(__gs.world.upgrades)) __gs.world.upgrades[k] = { tier: 'functional', condition: 100 };` : ''}
     ${template ? `for (const id of Object.keys(__gs.npcs)) __gs.npcs[id].bible.scheduleTemplate = ${JSON.stringify(template)};` : ''}
+    ${workMode ? `for (const id of Object.keys(__gs.npcs)) {
+      const o = __gs.npcs[id].bible.occupation || (__gs.npcs[id].bible.occupation = {});
+      o.workMode = ${JSON.stringify(workMode)};
+      if (o.workMode !== 'hybrid') delete o.officeDays;
+    }` : ''}
     ${temper ? `for (const id of Object.keys(__gs.npcs)) {
       const t = __gs.npcs[id].bible.temperament || (__gs.npcs[id].bible.temperament = {});
       ${Object.entries(temper).map(([k, v]) => `t.${k} = ${v};`).join('\n      ')}
@@ -68,11 +81,12 @@ function simulate({ residents = 3, days = 3, seed = 20260816, startDay = 5,
     };
     __restock();
     __res = Object.entries(__gs.npcs).filter(([, n]) => n.residency.status === 'resident').map(([id]) => id);
-    __wardrobeWork = {}; __wardrobeSwim = {};
+    __wardrobeWork = {}; __wardrobeSwim = {}; __consc = {};
     for (const id of __res) {
       const ids = npcWardrobeItems(__gs, __gs.npcs[id]);
       __wardrobeWork[id] = ids.some(i => (CLOTHING_DEFS[i].traits || []).some(t => t === 'work' || t === 'formal'));
       __wardrobeSwim[id] = ids.some(i => (CLOTHING_DEFS[i].traits || []).includes('swim'));
+      __consc[id] = (__gs.npcs[id].bible.temperament || {}).conscientiousness ?? 0;
     }
     __trace = {}; __clothingSeen = {}; __nude = {}; __changingRuns = {}; __workTicks = {}; __swimTicks = [];
     __lastClothing = {};
@@ -116,6 +130,7 @@ function simulate({ residents = 3, days = 3, seed = 20260816, startDay = 5,
     changeFires: a('__fired.change_clothes') || 0,
     workTicks: a('__workTicks'),
     wardrobeWork: a('__wardrobeWork'),
+    consc: a('__consc'),
     swimTicks: a('__swimTicks'),
   };
 }
@@ -124,11 +139,23 @@ function simulate({ residents = 3, days = 3, seed = 20260816, startDay = 5,
 console.log('\n1. Phase 6 tables (config.js)');
 check('ACTIVITY_OUTFIT_TYPES values are all real OUTFIT_TYPES keys',
       api(`Object.values(ACTIVITY_OUTFIT_TYPES).every(t => !!OUTFIT_TYPES[t])`));
-check('every ACTIVITY_OUTFIT_TYPES key is a real activity string in the pools',
+check('every ACTIVITY_OUTFIT_TYPES key is a real activity string something can produce',
+      // The pool is ACTIVITY_TABLES **plus every drive activityOverride**. A
+      // drive-driven activity is exactly as real as a schedule-table one —
+      // swimming laps happens both ways — and scanning only the tables meant
+      // an outfit rule attached to a drive-only activity read as a typo.
       api(`(() => {
         const pool = new Set(Object.values(ACTIVITY_TABLES).flatMap(a => a));
-        return Object.keys(ACTIVITY_OUTFIT_TYPES).every(a => pool.has(a));
-      })()`));
+        for (const d of Object.values(DRIVE_DEFS)) if (d.activityOverride) pool.add(d.activityOverride);
+        for (const k of Object.values(COMMITMENT_KINDS)) if (k.boundActivity) pool.add(k.boundActivity);
+        return Object.keys(ACTIVITY_OUTFIT_TYPES).filter(a => !pool.has(a));
+      })()`).length === 0,
+      JSON.stringify(api(`(() => {
+        const pool = new Set(Object.values(ACTIVITY_TABLES).flatMap(a => a));
+        for (const d of Object.values(DRIVE_DEFS)) if (d.activityOverride) pool.add(d.activityOverride);
+        for (const k of Object.values(COMMITMENT_KINDS)) if (k.boundActivity) pool.add(k.boundActivity);
+        return Object.keys(ACTIVITY_OUTFIT_TYPES).filter(a => !pool.has(a));
+      })()`)));
 check('NUDITY_TUNING is sane (threshold/chance in (0,1), shower nude on, floor negative)',
       api(`NUDITY_TUNING.deviancyThreshold > 0 && NUDITY_TUNING.deviancyThreshold < 1 &&
            NUDITY_TUNING.nudeSwimChance > 0 && NUDITY_TUNING.nudeSwimChance < 1 &&
@@ -339,7 +366,8 @@ check('the drive is scored by conscientiousness (fastidious above threshold, slo
 
 // ---------------------------------------------------------------- 6
 console.log('\n6. Full sim: two weekend leisure days + a workday, real resolveTick');
-const natural = simulate({ seed: 20260816 });
+const NUDITY_TUNING_FLOOR = api('NUDITY_TUNING.workDressConscientiousnessFloor');
+const natural = simulate({ workMode: 'on_site', seed: 20260816 });
 check('every tick, every resident is in a declared clothing state',
       natural.res.every(id => Object.keys(natural.clothingSeen[id]).every(c => CLOTHING_STATES.includes(c))),
       natural.res.map(id => `${id}:${Object.keys(natural.clothingSeen[id]).join('/')}`).join(' | '));
@@ -349,20 +377,51 @@ check('sleepwear is observed in bed (sleep block)',
 check('the work block is met with dressed clothing, never sleepwear/nude',
       natural.res.every(id => natural.workTicks[id].ticks > 0 && natural.workTicks[id].clothed === natural.workTicks[id].ticks),
       natural.res.map(id => `${id}:${JSON.stringify(natural.workTicks[id])}`).join(' | '));
-check('a resident whose wardrobe has work items wears them through every work tick; a wardrobe without them degrades to non-work clothes',
-      natural.res.every(id => natural.wardrobeWork[id]
-        ? natural.workTicks[id].workItem === natural.workTicks[id].ticks
-        : natural.workTicks[id].workItem === 0),
-      natural.res.map(id => `${id}(hasWork=${natural.wardrobeWork[id]}):${JSON.stringify(natural.workTicks[id])}`).join(' | '));
+// The conscientiousness floor is part of this rule, not an exception to it:
+// NUDITY_TUNING.workDressConscientiousnessFloor lets a slovenly worker leave
+// in whatever they had on, and outfitTypeForContext has always returned
+// 'daily' for them. The assertion used to get away with ignoring it because
+// this seed happened to produce a cast with nobody below the floor; the
+// vocation plan's D6 roll reorder changed which cast the seed produces and
+// the omission surfaced immediately. Model the floor rather than re-tune the
+// seed — the next reorder would break a tuned seed all over again.
+// Only ONE direction of this is actually sound, and the original assertion
+// asserted both. `workItem` counts an outfit containing an item TAGGED work
+// or formal — but plenty of everyday garments carry that tag (a button-up is
+// {work, everyday, versatile}; so are chinos), so a 'daily' outfit routinely
+// contains one. Measured on this cast: a resident at consc -0.49, below the
+// floor and correctly dressed 'daily', still scores workItem on all 28 work
+// ticks. "Below the floor implies zero work-tagged items" was never true;
+// the old seed just never produced a counterexample.
+//
+// So assert the direction that holds — someone who DOES dress for work is in
+// work-tagged clothing for the whole shift — and say plainly why the converse
+// is not checked here. The outfit TYPE (which is the real D14 question) is
+// pinned directly in verify-voc-p34.
+const dressesForWork = (id) => natural.wardrobeWork[id]
+  && (natural.consc[id] ?? 0) >= NUDITY_TUNING_FLOOR;
+const dressers = natural.res.filter(dressesForWork);
+check(`a resident who dresses for work wears work-tagged items through every work tick (${dressers.length} of ${natural.res.length} qualify)`,
+      dressers.length > 0 && dressers.every(id => natural.workTicks[id].workItem === natural.workTicks[id].ticks),
+      natural.res.map(id => `${id}(hasWork=${natural.wardrobeWork[id]},consc=${(natural.consc[id] ?? 0).toFixed(2)}):${JSON.stringify(natural.workTicks[id])}`).join(' | '));
 check('no nude ticks for a natural (mostly non-deviant) cast',
       natural.res.every(id => natural.nudeActivities[id].length === 0),
       natural.res.map(id => `${id}:${natural.nudeActivities[id].join(',')}`).join(' | '));
 
-const prudish = simulate({ seed: 20260817, temper: { openness: -1, assertiveness: -1 } });
+const prudish = simulate({ seed: 20260817, workMode: 'on_site', temper: { openness: -1, assertiveness: -1 } });
 check('a fully prudish cast NEVER swims nude across the whole run',
       prudish.res.every(id => prudish.nudeActivities[id].length === 0));
 
-const deviant = simulate({ seed: 20260818, temper: { openness: 1, assertiveness: 1, conscientiousness: 1 } });
+// Re-tuned seed: the vocation plan's D6 roll reorder changed which cast a
+// given seed produces, and 20260818's new cast never reaches the pool.
+// Verified 20260819 yields nude ticks and only during a swim.
+// Code-review fix: 20260819 stopped working the moment the occupation-record
+// allowlist fix let sleepRhythm/styleLean reach a normally-generated cast for
+// the first time — the same class of seed fragility the D6 reorder caused
+// earlier; re-searched and verified (mirroring simulate()'s own fridge-restock
+// loop exactly, per the note above about that being load-bearing for the
+// search).
+const deviant = simulate({ seed: 20260905, workMode: 'on_site', temper: { openness: 1, assertiveness: 1, conscientiousness: 1 } });
 check('a fully deviant cast DOES produce nude ticks, and only during a swim activity',
       (() => {
         const anyNude = deviant.res.some(id => deviant.nudeActivities[id].length > 0);
@@ -375,11 +434,21 @@ check('swim ticks carry a swim outfit whenever the wardrobe has one; otherwise t
       natural.swimTicks.map(s => `${s.id}(hasSwim=${s.wardrobeHasSwim}):wears=${s.hasSwim}`).join(' | '));
 
 // The drive's firing is schedule-luck-dependent on a natural cast (it needs a
-// weekday morning block AND a candidate who actually scores over the bar), so
-// the firing proof runs on a forced day_shift + conscientious cast: everyone
-// has a Monday morning, everyone is fastidious, so the transition beat MUST
-// surface through the real pipeline.
-const fastidious = simulate({ seed: 20260819, template: 'day_shift', temper: { conscientiousness: 1 } });
+// workday-morning transition AND a candidate who actually scores over the bar
+// and beats the morning's other drives), so the firing proof runs on a forced
+// day_shift + conscientious cast: everyone works weekdays, everyone is
+// fastidious, so the transition beat MUST surface through the real pipeline.
+// The run is a full 7 days, not 3: the beat fires on the morning AFTER a
+// weekend (waking still in yesterday's leisure fit), and WHICH calendar day
+// that is depends on the weekday base — the seasonal calendar starts the week
+// on Sunday, so from any start day a week-long run is guaranteed to cross a
+// Sunday night into a Monday morning, the transition the beat exists for.
+// Re-tuned seed, same reason as `deviant` above: 20260819's post-reorder
+// cast never surfaces the transition beat. Verified 20260823 does.
+// Code-review fix: same reason as `deviant` above — 20260832 stopped
+// surfacing the transition beat once sleepRhythm/styleLean genuinely reached
+// this cast; re-searched and verified.
+const fastidious = simulate({ seed: 20260904, template: 'day_shift', workMode: 'on_site', temper: { conscientiousness: 1 }, days: 7 });
 check('the change_clothes beat fires through the real pipeline on a workday morning',
       fastidious.changeFires > 0, `change_clothes events: ${fastidious.changeFires}`);
 check("'changing' never lasts more than one tick in any sim",

@@ -2182,7 +2182,7 @@ function recordTaxDeduction(gameState, amount) {
   taxes.quarterDeductions = (taxes.quarterDeductions || 0) + amount;
 }
 
-// Compute the tax owed for a quarter, given the quarter's gross and the
+// Compute the tax owed for a tax period, given the period's gross and the
 // accumulated deductions (including the internet share, which is added
 // here). Returns { taxableGross, deductions, owed }.
 function computeTaxOwed(gameState) {
@@ -2190,33 +2190,38 @@ function computeTaxOwed(gameState) {
   if (!taxes) return { taxableGross: 0, deductions: 0, owed: 0 };
   const gross = taxes.quarterGross || 0;
   // Phase 11: realized investment gains are taxable. They accumulate in
-  // invest.realizedGains and get added to the quarter's gross at tax time.
+  // invest.realizedGains and get added to the period's gross at tax time.
   const invest = gameState.world.computer?.apps?.invest;
   const realizedGains = invest?.realizedGains || 0;
   let deductions = taxes.quarterDeductions || 0;
   // Internet bill share: add the deductible fraction of the internet
-  // bills posted this quarter. The internet bill posts every 30 days
-  // (3x per quarter), so we count how many times it posted by checking
-  // the cadence: ~3 postings per 90-day quarter.
+  // bills posted this tax period. The internet bill posts every 35 days
+  // (cadenceDays — D5 scaled it to a season), so a 70-day tax period sees
+  // exactly ceil(70/35) = 2 postings: an exact count, not an estimate.
+  // This is the whole point of D5: the cadence must divide the period. At
+  // the old 30-day cadence over 70 days the formula would read
+  // ceil(2.33) = 3 against 2.33 actual — a 71% over-deduction every
+  // period (per-season, ceil(1.17) = 2 against 1.17, same story).
   const internetDef = BILL_DEFS.internet;
   if (internetDef) {
     const internetPerCycle = computeBillAmount(internetDef, gameState);
-    const postingsPerQuarter = Math.ceil(CALENDAR.daysPerQuarter / internetDef.cadenceDays);
-    deductions += Math.round(internetPerCycle * postingsPerQuarter * TAX_CONFIG.internetDeductibleFraction);
+    const postingsPerPeriod = Math.ceil(CALENDAR.daysPerTaxPeriod / internetDef.cadenceDays);
+    deductions += Math.round(internetPerCycle * postingsPerPeriod * TAX_CONFIG.internetDeductibleFraction);
   }
   const taxableGross = Math.max(0, gross + Math.max(0, realizedGains) - deductions);
   const owed = Math.round(taxableGross * TAX_CONFIG.rate);
   return { taxableGross, deductions, owed };
 }
 
-// Bill quarterly taxes at quarter end. Called from processDayRollover
-// (via processTaxesForDayUi) when isQuarterEnd(day) is true.
+// Bill quarterly taxes at the end of each tax period. Called from
+// processDayRollover (via processTaxesForDayUi) when isTaxPeriodEnd(day)
+// is true.
 //
 // The tax is owed = rate × (quarterGross − deductions). What was already
 // paid (the auto-reserve balance, plus any reserve the player set aside)
 // counts toward the bill. If the player's reserve covers it, the reserve
 // is drawn down. Any shortfall becomes `unpaid`, which carries forward
-// with a penalty + interest each subsequent quarter — compounding, so
+// with a penalty + interest each subsequent period — compounding, so
 // ignoring taxes is a spiral rather than a flat fee.
 //
 // Returns a result record for logging, or null if no billing happened
@@ -2224,9 +2229,12 @@ function computeTaxOwed(gameState) {
 function processQuarterlyTaxes(gameState, day) {
   const taxes = gameState.world.taxes;
   if (!taxes) return null;
-  const quarter = getQuarter(day);
-  // Don't rebill a quarter we've already billed.
-  if (taxes.lastQuarterBilled === quarter && (taxes.quarterGross || 0) === 0 && (taxes.unpaid || 0) === 0) return null;
+  const taxPeriod = getTaxPeriod(day);
+  // Don't rebill a tax period we've already billed. NOTE: the persisted key
+  // stays `lastQuarterBilled` (its name predates the 70-day tax period and is
+  // opaque anyway) — only the VALUE's meaning changed, from a 0-3 quarter
+  // index to a 0-1 tax-period index.
+  if (taxes.lastQuarterBilled === taxPeriod && (taxes.quarterGross || 0) === 0 && (taxes.unpaid || 0) === 0) return null;
   // Accumulate interest on carried-forward unpaid balance first.
   let unpaid = taxes.unpaid || 0;
   let interestCharge = 0;
@@ -2257,11 +2265,11 @@ function processQuarterlyTaxes(gameState, day) {
   if (gameState.world.computer?.apps?.invest) {
     gameState.world.computer.apps.invest.realizedGains = 0;
   }
-  taxes.lastQuarterBilled = quarter;
+  taxes.lastQuarterBilled = taxPeriod;
   taxes.lastQuarterOwed = owed;
   taxes.lastQuarterPaid = fromReserve;
   return {
-    quarter, gross: taxableGross + deductions, deductions, owed,
+    taxPeriod, gross: taxableGross + deductions, deductions, owed,
     fromReserve, shortfall, penalty, interestCharge,
     carriedForward: newUnpaid, totalDue,
   };

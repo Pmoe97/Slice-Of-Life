@@ -3330,7 +3330,7 @@ function renderStudioMoreDetailsTab(content, gs, studio, npc) {
       ['partnerOf', residency.partnerOf || '—'],
       ['since', residency.since ?? '—'],
       ['contributesRent', residency.contributesRent === true ? 'yes' : 'no'],
-      ['rentShare', residency.rentShare ?? '—'],
+      ['rentShare', residency.rentShare ?? incomeRentShare(npc)],
     ]],
     ['Whereabouts', [
       ['location', npc.location || '—'],
@@ -3699,9 +3699,9 @@ function renderTaxPanel(body, gs) {
   const taxes = gs.world.taxes;
   if (!taxes) return;
   const day = gs.meta.clock.day;
-  const quarter = getQuarter(day);
-  const quarterDay = getQuarterDay(day);
-  const daysLeft = CALENDAR.daysPerQuarter - quarterDay;
+  const taxPeriod = getTaxPeriod(day);
+  const taxPeriodDay = getTaxPeriodDay(day);
+  const daysLeft = CALENDAR.daysPerTaxPeriod - taxPeriodDay;
   const { taxableGross, deductions, owed } = computeTaxOwed(gs);
   const reserve = taxes.reserve || 0;
   const unpaid = taxes.unpaid || 0;
@@ -3709,17 +3709,19 @@ function renderTaxPanel(body, gs) {
   const panel = document.createElement('div');
   panel.className = 'tax-panel';
 
-  // Header: quarter label + days remaining
+  // Header: period name (the season the current tax period ends in) + days remaining
   const header = document.createElement('div');
   header.className = 'tax-header';
+  const endDay = Math.ceil(day / CALENDAR.daysPerTaxPeriod) * CALENDAR.daysPerTaxPeriod;
+  const periodName = CALENDAR.seasonNames[getSeason(endDay)];
   header.innerHTML = '<span class="tax-title">Estimated Taxes</span>' +
-    '<span class="tax-quarter">Q' + (quarter + 1) + ' \u00b7 ' + daysLeft + 'd left</span>';
+    '<span class="tax-quarter">' + periodName + ' period \u00b7 ' + daysLeft + 'd left</span>';
   panel.appendChild(header);
 
-  // Progress bar: how far through the quarter
+  // Progress bar: how far through the tax period
   const progress = document.createElement('div');
   progress.className = 'tax-progress-bar';
-  const pct = Math.round((quarterDay / CALENDAR.daysPerQuarter) * 100);
+  const pct = Math.round((taxPeriodDay / CALENDAR.daysPerTaxPeriod) * 100);
   progress.innerHTML = '<div class="tax-progress-fill" style="width:' + pct + '%"></div>';
   panel.appendChild(progress);
 
@@ -3727,7 +3729,7 @@ function renderTaxPanel(body, gs) {
   const grid = document.createElement('div');
   grid.className = 'tax-numbers';
   const rows = [
-    { label: 'Quarter gross', value: '$' + (taxes.quarterGross || 0), cls: 'tax-gross' },
+    { label: 'Period gross', value: '$' + (taxes.quarterGross || 0), cls: 'tax-gross' },
     { label: 'Deductions', value: '$' + deductions, cls: 'tax-deductions' },
     { label: 'Estimated owed', value: '$' + owed, cls: 'tax-owed' },
     { label: 'Reserve', value: '$' + reserve, cls: reserve > 0 ? 'tax-reserve' : '' },
@@ -3787,8 +3789,6 @@ function renderTaxPanel(body, gs) {
 // The whole money picture at a glance. Four real numbers, all drawn
 // straight from live state (decision A of src/ref/BrineOS-The-Phone-plan.md):
 // --- Brine Bank Overview (BrineOS Phase 1) ---
-// The whole money picture at a glance. Four real numbers, all drawn
-// straight from live state (decision A of src/ref/BrineOS-The-Phone-plan.md):
 // checking balance, the tax reserve, portfolio value, and total
 // outstanding bills. No new account types — getting to Bills or Portfolia
 // is the shell's screen tabs' job, so this screen is all-numbers.
@@ -4269,16 +4269,743 @@ function renderInvestDashboard(body, gs, app, screen) {
     const card = document.createElement('div');
     card.className = 'invest-fund-card';
 
-    const returnPct = (fund.expectedReturn * 100).toFixed(1);
+    const seasonReturnPct = (fund.expectedReturn * CALENDAR.daysPerSeason / INVESTING.daysPerFinancialYear * 100).toFixed(1);
+    const annualReturnPct = (fund.expectedReturn * 100).toFixed(1);
     const volPct = (fund.volatility * 100).toFixed(1);
     const plClass2 = fundPL >= 0 ? 'positive' : 'negative';
 
     card.innerHTML = `
       <div class="invest-fund-header">
         <span class="invest-fund-name">${fund.label}</span>
-        <span class="invest-fund-return">${returnPct}%/yr · ±${volPct}%/day</span>
+        <span class="invest-fund-return">${seasonReturnPct}%/season · ±${volPct}%/day</span>
       </div>
-      <div class="invest-fund-desc dim tiny">${fund.desc}</div>
+      <div class="invest-fund-desc dim tiny">${fund.desc} · ${annualReturnPct}%/yr</div>
+      <div class="invest-fund-holding">
+        ${shares > 0 ? `
+          <span class="invest-fund-value">${Math.round(shares).toLocaleString()}</span>
+          <span class="invest-fund-pl ${plClass2}">${fundPL >= 0 ? '+' : ''}${Math.round(fundPL).toLocaleString()}</span>
+        ` : '<span class="dim tiny">No position</span>'}
+      </div>
+      <div class="invest-fund-min dim tiny">Min: ${fund.minInvest}</div>
+    `;
+
+    // Buy/sell controls
+    const controls = document.createElement('div');
+    controls.className = 'invest-fund-controls';
+
+    // Quick buy buttons
+    const quickAmounts = [fund.minInvest, fund.minInvest * 5, fund.minInvest * 20];
+    for (const amt of quickAmounts) {
+      const buyBtn = document.createElement('button');
+      buyBtn.className = 'btn tiny invest-buy-btn';
+      buyBtn.setAttribute('data-action', 'invest.buy');
+      buyBtn.setAttribute('data-row-id', fund.id);
+      buyBtn.setAttribute('data-amount', amt);
+      buyBtn.textContent = `+${amt}`;
+      controls.appendChild(buyBtn);
+    }
+
+    // Sell button (if holding)
+    if (shares > 0) {
+      const sellAllBtn = document.createElement('button');
+      sellAllBtn.className = 'btn btn-secondary tiny invest-sell-btn';
+      sellAllBtn.setAttribute('data-action', 'invest.sell-all');
+      sellAllBtn.setAttribute('data-row-id', fund.id);
+      sellAllBtn.textContent = 'Sell All';
+      controls.appendChild(sellAllBtn);
+    }
+
+    card.appendChild(controls);
+    body.appendChild(card);
+  }
+
+  // Disclaimer
+  const disc = document.createElement('div');
+  disc.className = 'invest-disclaimer dim tiny';
+  disc.textContent = 'Investing involves risk. Fund values fluctuate daily. Past performance does not guarantee future results.';
+  body.appendChild(disc);
+}
+
+// --- Codex (Intimacy & Voyeurism Phase 15, D8) -----------------------------
+// The per-character knowledge ledger: a roster of every NPC the player holds
+// entries for, then per-NPC detail pages with day-stamped entries and the
+// three spendable verbs (Confront / Spread / Matchmake). Pure state→DOM like
+// everything in this file — the verbs' domain logic lives in codex.js and the
+// click handlers in UI.js (codex.open-npc / codex.confront / codex.spread /
+// codex.matchmake). Rendered on both devices through the shared-app path
+// (render.phone.js's COMPUTER_RENDERERS dispatch).
+
+// The current screen's params for the codex app on whichever device is
+// showing it (phone navStack or computer window) — the detail screen's npcId.
+function codexScreenParams(gs) {
+  const phone = gs?.world?.phone;
+  if (phone?.openAppId === 'codex' && Array.isArray(phone.navStack)) {
+    const top = phone.navStack[phone.navStack.length - 1];
+    if (top && top.appId === 'codex' && top.screenId === 'detail') return top.params || {};
+  }
+  const win = gs?.world?.computer?.windows?.codex;
+  if (win && win.screenId === 'detail') return win.params || {};
+  return {};
+}
+
+function codexEmptyState(text) {
+  const div = document.createElement('div');
+  div.className = 'codex-empty';
+  div.textContent = text;
+  return div;
+}
+
+function renderCodexRoster(body, gs, app, screenDef) {
+  body.innerHTML = '';
+  const ids = codexKnownNpcIds(gs);
+  const known = ids.filter(id => gs.npcs[id]);
+  if (known.length === 0) {
+    body.appendChild(codexEmptyState('Your codex is empty — it fills as you witness and take part in things.'));
+    return;
+  }
+  const list = document.createElement('div');
+  list.className = 'codex-roster';
+  for (const id of known) {
+    const npc = gs.npcs[id];
+    const entries = codexEntries(gs, id);
+    const unspent = entries.filter(e => !e.spent).length;
+    const btn = document.createElement('button');
+    btn.className = 'codex-roster-row';
+    btn.setAttribute('data-action', 'codex.open-npc');
+    btn.setAttribute('data-npc', id);
+    const name = document.createElement('span');
+    name.className = 'codex-roster-name';
+    name.textContent = npc.bible?.name || id;
+    const meta = document.createElement('span');
+    meta.className = 'codex-roster-meta';
+    meta.textContent = `${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}`;
+    if (unspent > 0) meta.textContent += ` · ${unspent} ready to use`;
+    const chevron = document.createElement('span');
+    chevron.className = 'codex-roster-chevron';
+    chevron.textContent = '›';
+    btn.appendChild(name);
+    btn.appendChild(meta);
+    btn.appendChild(chevron);
+    list.appendChild(btn);
+  }
+  body.appendChild(list);
+}
+
+function renderCodexDetail(body, gs, app, screenDef) {
+  body.innerHTML = '';
+  const params = codexScreenParams(gs);
+  const npcId = params.npcId;
+  const npc = npcId && gs.npcs[npcId];
+  if (!npc) {
+    body.appendChild(codexEmptyState('Nobody selected.'));
+    return;
+  }
+
+  const entries = codexEntries(gs, npcId);
+  const nextIndex = codexNextUnspentIndex(gs, npcId);
+  const nextEntry = nextIndex != null ? (gs.player?.ledger?.[npcId] || [])[nextIndex] : null;
+  const rel = npc.relPlayer || {};
+  const relationship = relationshipSummaryForNpc(gs, npcId);
+  const phase = rel.conversationPhase || 'early';
+
+  // Header
+  const header = document.createElement('div');
+  header.className = 'codex-head';
+  const name = document.createElement('div');
+  name.className = 'codex-head-name';
+  name.textContent = npc.bible?.name || npcId;
+  const statusBits = [phase];
+  if (relationship) statusBits.push(`${relationship.status} with ${relationship.partnerName}`);
+  const status = document.createElement('div');
+  status.className = 'codex-head-status dim tiny';
+  status.textContent = statusBits.join(' · ');
+  header.appendChild(name);
+  header.appendChild(status);
+  body.appendChild(header);
+
+  // Verbs — each enabled when the page has an entry that verb can consume.
+  const verbs = document.createElement('div');
+  verbs.className = 'codex-verbs';
+
+  const confrontBtn = document.createElement('button');
+  confrontBtn.className = 'btn tiny codex-verb-btn';
+  confrontBtn.setAttribute('data-action', 'codex.confront');
+  confrontBtn.setAttribute('data-npc', npcId);
+  confrontBtn.setAttribute('data-index', nextIndex ?? '');
+  confrontBtn.textContent = 'Confront';
+  if (nextIndex == null) {
+    confrontBtn.disabled = true;
+    confrontBtn.title = 'Nothing unsaid yet.';
+  } else {
+    confrontBtn.title = nextEntry.otherNpcId
+      ? `I saw you with ${gs.npcs[nextEntry.otherNpcId]?.bible?.name || 'someone'}.`
+      : 'I saw what you were up to.';
+  }
+  verbs.appendChild(confrontBtn);
+
+  const spreadBtn = document.createElement('button');
+  spreadBtn.className = 'btn btn-secondary tiny codex-verb-btn';
+  spreadBtn.setAttribute('data-action', 'codex.spread');
+  spreadBtn.setAttribute('data-npc', npcId);
+  spreadBtn.setAttribute('data-index', nextIndex ?? '');
+  spreadBtn.textContent = 'Spread Secret';
+  if (nextIndex == null || !spreadEligible(nextEntry)) {
+    spreadBtn.disabled = true;
+    spreadBtn.title = nextIndex == null
+      ? 'Nothing unsaid yet.'
+      : 'This one is just between you two — there is no third party to tell.';
+  } else {
+    spreadBtn.title = 'Tell someone what you know.';
+  }
+  verbs.appendChild(spreadBtn);
+
+  const matchCandidates = matchmakeCandidates(gs, npcId);
+  const matchBtn = document.createElement('button');
+  matchBtn.className = 'btn btn-secondary tiny codex-verb-btn';
+  matchBtn.setAttribute('data-action', 'codex.matchmake');
+  matchBtn.setAttribute('data-npc', npcId);
+  matchBtn.setAttribute('data-index', nextIndex ?? '');
+  matchBtn.textContent = 'Matchmake';
+  if (matchCandidates.length === 0) {
+    matchBtn.disabled = true;
+    matchBtn.title = 'Needs knowledge of both people and a spark already forming between them.';
+  } else {
+    matchBtn.title = `You could introduce ${npc.bible?.name || 'them'} to someone.`;
+  }
+  verbs.appendChild(matchBtn);
+  body.appendChild(verbs);
+
+  // Entries — day-stamped, provenance-badged, newest first.
+  if (entries.length === 0) {
+    body.appendChild(codexEmptyState('Nothing recorded about them yet.'));
+    return;
+  }
+  const list = document.createElement('div');
+  list.className = 'codex-entries';
+  for (const entry of entries) {
+    const row = document.createElement('div');
+    row.className = 'codex-entry' + (entry.spent ? ' codex-entry-spent' : '');
+    const left = document.createElement('div');
+    left.className = 'codex-entry-main';
+    const act = document.createElement('div');
+    act.className = 'codex-entry-act';
+    const other = entry.otherNpcId && gs.npcs[entry.otherNpcId]
+      ? ` with ${gs.npcs[entry.otherNpcId].bible?.name || 'someone'}`
+      : '';
+    act.textContent = `${codexKindLabel(entry.kind)} ${codexActLabel(entry.act)}${other}`;
+    const detail = document.createElement('div');
+    detail.className = 'codex-entry-detail dim tiny';
+    const roomName = entry.roomId ? roomPhrase(entry.roomId) : 'somewhere';
+    detail.textContent = `Day ${entry.day} · ${roomName}${entry.outcome ? ` · ended ${entry.outcome}` : ''}`;
+    left.appendChild(act);
+    left.appendChild(detail);
+    row.appendChild(left);
+    const badge = document.createElement('span');
+    badge.className = 'codex-entry-badge tiny';
+    badge.textContent = entry.spent ? 'spent' : 'fresh';
+    if (!entry.spent) badge.setAttribute('data-fresh', '');
+    row.appendChild(badge);
+    list.appendChild(row);
+  }
+  body.appendChild(list);
+}
+
+// ===== /SECTION: RENDER.COMPUTER =====
+// ===== SECTION: RENDER.COMPUTER (MOBILE) =====
+// The whole money picture at a glance. Four real numbers, all drawn
+// straight from live state (decision A of src/ref/BrineOS-The-Phone-plan.md):
+// --- Brine Bank Overview (BrineOS Phase 1) ---
+// checking balance, the tax reserve, portfolio value, and total
+// outstanding bills. No new account types — getting to Bills or Portfolia
+// is the shell's screen tabs' job, so this screen is all-numbers.
+function renderBankOverview(body, gs, app, screen) {
+  const checking = Math.round(gs.player.money || 0);
+  const reserve = Math.round((gs.world.taxes && gs.world.taxes.reserve) || 0);
+  const portfolio = Math.round(getPortfolioValue(gs));
+  const bills = gs.world.bills || {};
+  let outstanding = 0;
+  const owed = [];
+  for (const def of Object.values(BILL_DEFS)) {
+    const bill = bills[def.id];
+    if (!bill || (bill.balance || 0) <= 0) continue;
+    outstanding += bill.balance;
+    owed.push({ label: def.label, balance: bill.balance, cutoff: !!bill.cutoffActive });
+  }
+  const netWorth = checking + reserve + portfolio;
+  const outstandingNote = outstanding > 0 ? '$' + outstanding.toLocaleString() + ' in bills outstanding' : 'Bills all paid up';
+
+  const hero = document.createElement('div');
+  hero.className = 'invest-hero';
+  hero.innerHTML = `
+    <div class="invest-summary">
+      <div class="invest-value">${netWorth.toLocaleString()}</div>
+      <div class="invest-label dim tiny">Net Worth (checking + reserve + portfolio)</div>
+    </div>
+    <div class="invest-realized dim tiny">
+      ${outstandingNote}
+    </div>
+  `;
+  body.appendChild(hero);
+
+  const balances = makePanel(`
+    <div class="bank-balance-grid">
+      <div class="bank-balance-card">
+        <div class="bank-balance-value">$${checking.toLocaleString()}</div>
+        <div class="bank-balance-label dim tiny">Checking</div>
+      </div>
+      <div class="bank-balance-card">
+        <div class="bank-balance-value">$${reserve.toLocaleString()}</div>
+        <div class="bank-balance-label dim tiny">Tax Reserve</div>
+      </div>
+      <div class="bank-balance-card">
+        <div class="bank-balance-value">$${portfolio.toLocaleString()}</div>
+        <div class="bank-balance-label dim tiny">Portfolio</div>
+      </div>
+    </div>
+  `);
+  body.appendChild(balances);
+
+  const owedPanel = document.createElement('div');
+  owedPanel.className = 'cs-panel';
+  const header = document.createElement('div');
+  header.className = 'tax-header';
+  header.innerHTML = '<span class="tax-title">Outstanding</span>' +
+    '<span class="tax-quarter">' + (outstanding > 0 ? '$' + outstanding.toLocaleString() + ' total' : 'all current') + '</span>';
+  owedPanel.appendChild(header);
+  if (owed.length === 0) {
+    const none = document.createElement('div');
+    none.className = 'dim tiny';
+    none.textContent = 'Nothing owing. Everything is current.';
+    owedPanel.appendChild(none);
+  } else {
+    for (const o of owed) {
+      const row = document.createElement('div');
+      row.className = 'bank-owed-row' + (o.cutoff ? ' cutoff' : '');
+      row.innerHTML = '<span class="bank-owed-label">' + o.label + (o.cutoff ? ' <span class="bills-status-pill cutoff">CUTOFF</span>' : '') + '</span>' +
+        '<span class="bank-owed-value">$' + o.balance.toLocaleString() + '</span>';
+      owedPanel.appendChild(row);
+    }
+  }
+  body.appendChild(owedPanel);
+
+  const hint = document.createElement('div');
+  hint.className = 'dim tiny';
+  hint.textContent = 'Head to the Bills tab to pay, or Portfolia to invest.';
+  body.appendChild(hint);
+}
+
+
+// --- Bills dashboard (Phase 3) ---
+// One card per bill showing label, status pill, balance, due day, and a
+// Pay button. Cutoff banners at the top show which utilities are off —
+// that's the most game-relevant info, so it goes first. A Pay All button
+// at the bottom clears every bill with a balance in one click.
+function renderBillsDashboard(body, gs, app, screen) {
+  const bills = gs.world.bills;
+  if (!bills) { body.innerHTML = '<p class="dim">No bills yet.</p>'; return; }
+
+  // Phase 6: Tax panel — the quarterly estimated tax status. Goes at the
+  // very top because it's the largest and most consequential obligation.
+  renderTaxPanel(body, gs);
+
+  // Cutoff banners — the utilities that are currently OFF. These block
+  // real systems (gig work, cooking, showers), so they go at the top.
+  const activeCutoffs = [];
+  for (const def of Object.values(BILL_DEFS)) {
+    const bill = bills[def.id];
+    if (bill && bill.cutoffActive && def.cutoff) {
+      const eff = BILL_CUTOFF_EFFECTS[def.cutoff];
+      activeCutoffs.push({ billId: def.id, label: def.label, cutoff: def.cutoff, effLabel: eff?.label || 'Service off' });
+    }
+  }
+  if (activeCutoffs.length > 0) {
+    const banner = document.createElement('div');
+    banner.className = 'bills-cutoff-banner';
+    for (const c of activeCutoffs) {
+      const row = document.createElement('div');
+      row.className = 'bills-cutoff-row';
+      row.innerHTML = '<span class="bills-cutoff-icon">\u26a0</span> <strong>' + c.effLabel + '</strong> \u2014 ' + c.label + ' unpaid. Pay to restore service.';
+      banner.appendChild(row);
+    }
+    body.appendChild(banner);
+  }
+
+  // Bill cards
+  const grid = document.createElement('div');
+  grid.className = 'bills-grid';
+  let totalOwed = 0;
+  for (const def of Object.values(BILL_DEFS)) {
+    const bill = bills[def.id];
+    if (!bill) continue;
+    totalOwed += bill.balance || 0;
+    const card = document.createElement('div');
+    card.className = 'bills-card' + (bill.cutoffActive ? ' cutoff' : '') + (bill.balance > 0 ? ' owed' : '');
+
+    // Status pill
+    let statusLabel = 'Current', statusClass = 'current';
+    if (bill.cutoffActive) { statusLabel = 'CUTOFF'; statusClass = 'cutoff'; }
+    else if (bill.status === 'overdue') { statusLabel = 'Overdue'; statusClass = 'overdue'; }
+    else if (bill.status === 'due') { statusLabel = 'Due'; statusClass = 'due'; }
+    else if (bill.status === 'paid') { statusLabel = 'Paid'; statusClass = 'paid'; }
+
+    const daysNote = bill.overdueDays > 0 ? ' \u00b7 ' + bill.overdueDays + 'd overdue' : '';
+    const splitNote = def.split === 'lease' ? 'lease' : def.split === 'personal' ? 'personal' : 'even split';
+
+    card.innerHTML =
+      '<div class="bills-card-header">' +
+        '<span class="bills-card-title">' + def.label + '</span>' +
+        '<span class="bills-status-pill ' + statusClass + '">' + statusLabel + '</span>' +
+      '</div>' +
+      '<div class="bills-card-balance">' + (bill.balance > 0 ? ('$' + bill.balance) : 'Paid up') + '</div>' +
+      '<div class="dim tiny">Due day ' + bill.dueDay + ' \u00b7 ' + def.cadenceDays + 'd cadence \u00b7 ' + splitNote + daysNote + '</div>';
+
+    // Phase 5: itemised usage breakdown for metered bills.
+    const usageBreakdown = buildUsageBreakdown(gs, def.id);
+    if (usageBreakdown) {
+      const usageDiv = document.createElement('div');
+      usageDiv.className = 'bills-usage-breakdown';
+      usageDiv.innerHTML = usageBreakdown;
+      card.appendChild(usageDiv);
+    }
+
+    if (bill.balance > 0) {
+      const btn = document.createElement('button');
+      btn.className = 'btn tiny bills-pay-btn';
+      btn.setAttribute('data-action', 'bills.pay');
+      btn.setAttribute('data-row-id', def.id);
+      const fee = bill.cutoffActive ? def.reconnectionFee : 0;
+      btn.textContent = fee > 0 ? 'Pay ' + bill.balance + ' + ' + fee + ' reconnect' : 'Pay ' + bill.balance;
+      card.appendChild(btn);
+    }
+
+    // BrineOS Phase 7: a standing preference, not a payment action, so it
+    // renders regardless of current balance. Rent (split:'lease') has its
+    // own cap/eviction path and is not eligible.
+    if (def.split !== 'lease') {
+      const autopayBtn = document.createElement('button');
+      autopayBtn.className = 'btn tiny bills-autopay-btn';
+      autopayBtn.setAttribute('data-action', 'bills.toggle-autopay');
+      autopayBtn.setAttribute('data-row-id', def.id);
+      autopayBtn.setAttribute('data-on', bill.autopay ? 'on' : 'off');
+      autopayBtn.textContent = bill.autopay ? 'Autopay: On' : 'Autopay: Off';
+      card.appendChild(autopayBtn);
+    }
+    grid.appendChild(card);
+  }
+  body.appendChild(grid);
+
+  // Pay All footer
+  if (totalOwed > 0) {
+    const footer = document.createElement('div');
+    footer.className = 'bills-footer';
+    const payAllBtn = document.createElement('button');
+    payAllBtn.className = 'btn bills-payall-btn';
+    payAllBtn.setAttribute('data-action', 'bills.pay-all');
+    payAllBtn.textContent = 'Pay All (' + totalOwed + ')';
+    footer.appendChild(payAllBtn);
+    body.appendChild(footer);
+  }
+}
+
+// --- Phase 4: Apartment upgrades / disrepair dashboard ---
+// Shows the apartment quality score, the rent ceiling it produces, and
+// every facility grouped by room with its current tier and upgrade cost.
+// The quality→ceiling link is the thing the player needs to see: this is
+// where spending money on the building translates into rent leverage.
+function renderUpgradesDashboard(body, gs, app, screen) {
+  const upgrades = gs.world.upgrades;
+  if (!upgrades) { body.innerHTML = '<p class="dim">Upgrade system not initialized.</p>'; return; }
+
+  const quality = getApartmentQuality(gs);
+  const ceiling = roommateShareCeiling(quality);
+  const ceilingPct = Math.round(ceiling * 100);
+
+  // Quality hero — the headline number + what it means for rent.
+  const hero = document.createElement('div');
+  hero.className = 'upg-hero';
+  const qualityPct = Math.round(quality * 100);
+  const qualityLabel = quality < 0.2 ? 'Wreck' : quality < 0.4 ? 'Rough' : quality < 0.6 ? 'Decent' : quality < 0.8 ? 'Good' : 'Pristine';
+  hero.innerHTML = `
+    <div class="upg-quality-bar">
+      <div class="upg-quality-fill" style="width:${qualityPct}%"></div>
+    </div>
+    <div class="upg-quality-label">Apartment Quality: ${qualityLabel} (${qualityPct}%)</div>
+    <div class="upg-ceiling">Rent ceiling: ${ceilingPct}% per roommate — ${quality < 0.99 ? 'restore facilities to raise it' : 'maxed out'}</div>
+  `;
+  body.appendChild(hero);
+
+  // Group facilities by room, in ROOMS order. Post-overhaul every facility
+  // (including the four bedrooms) maps to exactly one concrete room, so
+  // there are no type-wide sections left — each facility renders as an
+  // independent row under its own room.
+  const roomOrder = Object.keys(ROOMS);
+  const byRoom = {};
+  for (const def of FACILITY_LIST) {
+    const r = def.room;
+    (byRoom[r] = byRoom[r] || []).push(def);
+  }
+
+  const sections = [];
+  for (const roomId of roomOrder) {
+    const facilities = byRoom[roomId];
+    if (!facilities || facilities.length === 0) continue;
+    sections.push({ label: ROOMS[roomId]?.name || roomId, facilities });
+  }
+
+  for (const { label, facilities } of sections) {
+    const section = document.createElement('div');
+    section.className = 'upg-room-section';
+    const heading = document.createElement('div');
+    heading.className = 'upg-room-heading';
+    heading.textContent = label;
+    section.appendChild(heading);
+
+    for (const def of facilities) {
+      const upgrade = upgrades[def.id];
+      if (!upgrade) continue;
+      const currentTierIdx = def.tiers.findIndex(t => t.tier === upgrade.tier);
+      const currentTier = def.tiers[currentTierIdx];
+      const nextTier = currentTierIdx < def.tiers.length - 1 ? def.tiers[currentTierIdx + 1] : null;
+      const isMaxed = !nextTier;
+
+      // Renovation overhaul Phase 3: an active job flips the card into its
+      // live job-board state — stage label / day-of / ETA, no purchase
+      // controls.
+      const activeJob = upgrade.activeJobId
+        ? (gs.world.renovationJobs || []).find(j => j.id === upgrade.activeJobId && j.status === 'active')
+        : null;
+
+      const card = document.createElement('div');
+      card.className = 'upg-facility-card'
+        + (isMaxed ? ' maxed' : '')
+        + (upgrade.tier === 'broken' ? ' broken' : '')
+        + (activeJob ? ' working' : '');
+
+      const tierDots = def.tiers.map((t, i) => {
+        const filled = i <= currentTierIdx;
+        return `<span class="upg-tier-dot ${filled ? 'filled' : ''} ${i === currentTierIdx ? 'current' : ''}"></span>`;
+      }).join('');
+
+      let actionHtml = '';
+      if (activeJob) {
+        const stage = getRenovationJobStage(activeJob, gs.meta.clock.day);
+        const dayN = Math.max(1, Math.min(activeJob.durationDays, gs.meta.clock.day - activeJob.startDay + 1));
+        actionHtml = `
+          <div class="upg-job">
+            <span class="upg-job-stage">${stage.label}</span>
+            <span class="upg-job-progress">day ${dayN} of ${activeJob.durationDays}</span>
+            <span class="upg-job-eta dim tiny">ETA ${formatDate(activeJob.etaDay)}</span>
+          </div>`;
+      } else if (isMaxed) {
+        actionHtml = '<span class="upg-maxed-badge">Fully Upgraded</span>';
+      } else {
+        // Phase 2 (contractor doc): the button advertises the Contractor's
+        // full price (materials + labor markup) and affordability checks
+        // against it, matching what bookRenovationJob actually charges.
+        // Phase 3: the tutorial's first auxiliary-bedroom job shows FREE
+        // and is always affordable (charged 0).
+        const tutorialFree = isTutorialFreeJob(gs, def.id);
+        const bookPrice = tutorialFree ? 0 : getContractorJobPrice(nextTier.cost);
+        const affordable = gs.player.money >= bookPrice;
+        const btnLabel = nextTier.tier === 'functional' ? 'Book Repair' : 'Book Upgrade';
+        const etaDay = gs.meta.clock.day + (nextTier.durationDays || 1);
+        actionHtml = `
+          <button class="btn tiny upg-book-btn ${affordable ? '' : 'disabled'}" data-action="upgrades.purchase" data-row-id="${def.id}">${btnLabel} — ${tutorialFree ? 'FREE' : bookPrice}</button>
+          <span class="upg-book-preview dim tiny">${nextTier.durationDays || 1}d job · done Day ${etaDay}${tutorialFree ? ' · on the house' : ''}</span>`;
+      }
+
+      // Phase 9: condition bar + repair button for functional+ facilities.
+      // Condition degrades with use; at 0 the facility drops a tier.
+      // Show the wear so the player can see maintenance coming.
+      let conditionHtml = '';
+      if (upgrade.tier !== 'broken' && upgrade.condition !== undefined) {
+        const condPct = Math.round(upgrade.condition);
+        const needsRepair = upgrade.condition < MAINTENANCE.startingCondition;
+        const repairCost = Math.round((MAINTENANCE.startingCondition - upgrade.condition) * MAINTENANCE.repairCostPerPoint);
+        const canRepair = needsRepair && gs.player.money >= repairCost;
+        const condClass = condPct > 60 ? 'good' : condPct > 30 ? 'worn' : 'critical';
+        conditionHtml = `
+          <div class="upg-condition">
+            <div class="upg-condition-bar ${condClass}"><div class="upg-condition-fill" style="width:${condPct}%"></div></div>
+            <span class="upg-condition-label dim tiny">Condition: ${condPct}%</span>
+            ${needsRepair ? `<button class="btn tiny upg-repair-btn ${canRepair ? '' : 'disabled'}" data-action="upgrades.repair" data-row-id="${def.id}">Repair — ${repairCost}</button>` : ''}
+          </div>
+        `;
+      }
+
+      card.innerHTML = `
+        <div class="upg-facility-header">
+          <span class="upg-facility-label">${def.label}</span>
+          <span class="upg-tier-dots">${tierDots}</span>
+        </div>
+        <div class="upg-facility-status">${currentTier.label}</div>
+        <div class="upg-facility-desc dim tiny">${currentTier.desc}</div>
+        ${nextTier ? `<div class="upg-next-tier dim tiny">Next: ${nextTier.label} — ${nextTier.desc}</div>` : ''}
+        ${conditionHtml}
+        <div class="upg-facility-action">${actionHtml}</div>
+      `;
+      // BrineOS Phase 8.4: a before/after restoration shot for this
+      // facility at its current tier — appended as a node rather than
+      // folded into the innerHTML template above, matching how the bills
+      // dashboard appends its usage breakdown/pay button after its own
+      // innerHTML assignment.
+      const snapBtn = document.createElement('button');
+      snapBtn.className = 'btn tiny upg-snap-btn';
+      snapBtn.setAttribute('data-action', 'upgrades.snap-photo');
+      snapBtn.setAttribute('data-row-id', def.id);
+      snapBtn.textContent = 'Snap Photo';
+      card.querySelector('.upg-facility-action').appendChild(snapBtn);
+      section.appendChild(card);
+    }
+    body.appendChild(section);
+  }
+
+  renderStructuralSection(body, gs);
+}
+
+// --- Structural work (floorplan plan Phase 6) ---
+// Kept as its own section rather than mixed in with the facilities above,
+// because it is a different KIND of purchase and the player should feel
+// that: a facility upgrade makes a room better, a structural job changes
+// what the apartment IS. Two of the five make it smaller and quieter rather
+// than bigger and nicer, which no other screen in the game offers.
+function renderStructuralSection(body, gs) {
+  const defs = Object.values(STRUCTURAL_UPGRADES || {});
+  if (defs.length === 0) return;
+
+  const section = document.createElement('div');
+  section.className = 'upg-room-section upg-structural';
+  const heading = document.createElement('div');
+  heading.className = 'upg-room-heading';
+  heading.textContent = 'Structural Work';
+  section.appendChild(heading);
+
+  const blurb = document.createElement('div');
+  blurb.className = 'dim tiny upg-structural-note';
+  blurb.textContent = 'Walls, doors and what a room is for. These change the layout itself — some of them by closing it down.';
+  section.appendChild(blurb);
+
+  for (const def of defs) {
+    const state = structuralUpgradeState(gs, def.id);
+    const card = document.createElement('div');
+    card.className = 'upg-facility-card' + (state.built ? ' maxed' : '') + (state.job ? ' working' : '');
+
+    let actionHtml;
+    if (state.job) {
+      const stage = getRenovationJobStage(state.job, gs.meta.clock.day);
+      const dayN = Math.max(1, Math.min(state.job.durationDays, gs.meta.clock.day - state.job.startDay + 1));
+      actionHtml = `
+        <div class="upg-job">
+          <span class="upg-job-stage">${escapeHtml(stage.label)}</span>
+          <span class="upg-job-progress">day ${dayN} of ${state.job.durationDays}</span>
+          <span class="upg-job-eta dim tiny">ETA ${formatDate(state.job.etaDay)}</span>
+        </div>`;
+    } else if (state.built) {
+      actionHtml = '<span class="upg-maxed-badge">Done</span>';
+    } else {
+      const affordable = gs.player.money >= def.cost;
+      const etaDay = gs.meta.clock.day + (def.durationDays || 1);
+      actionHtml = `
+        <button class="btn tiny upg-book-btn ${affordable ? '' : 'disabled'}" data-action="upgrades.book-structural" data-row-id="${def.id}">Book — $${def.cost.toLocaleString()}</button>
+        <span class="upg-book-preview dim tiny">${def.durationDays || 1}d job · done Day ${etaDay}</span>`;
+    }
+
+    // What it actually does to the graph, in the player's terms. Derived from
+    // the same `edits` list the applier runs, so the description can never
+    // promise something the upgrade does not do.
+    const effects = (def.edits || []).map(e => {
+      if (e.threshold) {
+        const [a, b] = e.threshold.split('|');
+        return `Fits a ${e.to} between ${ROOMS[a]?.name || a} and ${ROOMS[b]?.name || b}`;
+      }
+      if (e.addEdge) {
+        const [a, b] = e.addEdge.split('|');
+        return e.as === 'glass'
+          ? `Glazes through from ${ROOMS[a]?.name || a} to ${ROOMS[b]?.name || b} — you see it, you still walk round`
+          : `Opens a way between ${ROOMS[a]?.name || a} and ${ROOMS[b]?.name || b}`;
+      }
+      if (e.removeEdge) {
+        const [a, b] = e.removeEdge.split('|');
+        return `Walls up the way between ${ROOMS[a]?.name || a} and ${ROOMS[b]?.name || b}`;
+      }
+      if (e.roomType) return `Turns ${ROOMS[e.roomType]?.name || e.roomType} into a ${e.to}`;
+      return '';
+    }).filter(Boolean);
+
+    card.innerHTML = `
+      <div class="upg-facility-main">
+        <div class="upg-facility-name">${escapeHtml(def.label)}</div>
+        <div class="upg-facility-desc dim tiny">${escapeHtml(def.desc)}</div>
+        <div class="upg-structural-effects tiny">${effects.map(t => `<span class="upg-effect">${escapeHtml(t)}</span>`).join('')}</div>
+      </div>
+      <div class="upg-facility-action">${actionHtml}</div>
+    `;
+    section.appendChild(card);
+  }
+  body.appendChild(section);
+}
+
+// --- Phase 11: Investing dashboard ---
+// Shows the portfolio summary (total value, cost basis, P&L), each fund
+// with buy/sell controls, and the realized gains tally. The funds are
+// displayed with their expected return and volatility so the player can
+// make an informed choice.
+function renderInvestDashboard(body, gs, app, screen) {
+  const invest = gs.world.computer.apps.invest;
+  if (!invest) { body.innerHTML = '<p class="dim">Investing not initialized.</p>'; return; }
+
+  const portfolioValue = getPortfolioValue(gs);
+  const costBasis = getPortfolioCostBasis(gs);
+  const unrealizedPL = portfolioValue - costBasis;
+  const plPct = costBasis > 0 ? (unrealizedPL / costBasis * 100) : 0;
+
+  // Portfolio summary hero
+  const hero = document.createElement('div');
+  hero.className = 'invest-hero';
+  const plClass = unrealizedPL >= 0 ? 'positive' : 'negative';
+  const plSign = unrealizedPL >= 0 ? '+' : '';
+  hero.innerHTML = `
+    <div class="invest-summary">
+      <div class="invest-value">${Math.round(portfolioValue).toLocaleString()}</div>
+      <div class="invest-label dim tiny">Portfolio Value</div>
+    </div>
+    <div class="invest-pl ${plClass}">
+      ${plSign}${Math.round(unrealizedPL).toLocaleString()} (${plPct.toFixed(1)}%)
+      <span class="dim tiny">unrealized</span>
+    </div>
+    <div class="invest-realized dim tiny">
+      Realized gains: ${invest.realizedGains >= 0 ? '+' : ''}${Math.round(invest.realizedGains || 0).toLocaleString()}
+    </div>
+  `;
+  body.appendChild(hero);
+
+  // Cash on hand
+  const cashBar = document.createElement('div');
+  cashBar.className = 'invest-cash-bar';
+  cashBar.innerHTML = `<span class="dim tiny">Cash available: </span>${Math.round(gs.player.money).toLocaleString()}`;
+  body.appendChild(cashBar);
+
+  // Fund list
+  for (const fund of INVESTING.funds) {
+    const holding = invest.holdings[fund.id];
+    const shares = holding?.shares || 0;
+    const basis = holding?.costBasis || 0;
+    const fundPL = shares - basis;
+
+    const card = document.createElement('div');
+    card.className = 'invest-fund-card';
+
+    const seasonReturnPct = (fund.expectedReturn * CALENDAR.daysPerSeason / INVESTING.daysPerFinancialYear * 100).toFixed(1);
+    const annualReturnPct = (fund.expectedReturn * 100).toFixed(1);
+    const volPct = (fund.volatility * 100).toFixed(1);
+    const plClass2 = fundPL >= 0 ? 'positive' : 'negative';
+
+    card.innerHTML = `
+      <div class="invest-fund-header">
+        <span class="invest-fund-name">${fund.label}</span>
+        <span class="invest-fund-return">${seasonReturnPct}%/season · ±${volPct}%/day</span>
+      </div>
+      <div class="invest-fund-desc dim tiny">${fund.desc} · ${annualReturnPct}%/yr</div>
       <div class="invest-fund-holding">
         ${shares > 0 ? `
           <span class="invest-fund-value">${Math.round(shares).toLocaleString()}</span>

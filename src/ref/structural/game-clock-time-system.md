@@ -28,6 +28,42 @@ All file:line references are as of this writing; line numbers drift.
   clock: `CLOCK.tickMinutes: 30`, `CLOCK.ticksPerDay: 48`, and
   `getTickIndex(minutes) = floor(minutes/30)` used across the sim.
 
+## 1a. The calendar (seasonal-calendar-and-sandbox-plan)
+
+The calendar is **derived from the day counter** — nothing about it is
+persisted, so old saves load and start printing a different date string with
+no migration. `CALENDAR` (CONFIG) defines the four 35-day seasons, five
+7-day weeks each, **140 days to the year** (`daysPerSeason: 35`,
+`daysPerYear: 140`, `daysPerTaxPeriod: 70`, `seasons`,
+`seasonNames`). The season period (35) and the tax period (70 — two
+seasons, billing at the end of Summer and end of Winter) are deliberately
+separate constants. Months no longer exist; the old month fields were
+deleted and `formatDate` was their only reader.
+
+Weekday base (SIM, D2): `getWeekday(day) = (day + 5) % 7`, so
+**day 1 is a Sunday** and, because 35 % 7 === 0, every season and every
+year begins on a Sunday forever. `WEEKDAY_NAMES` stays Monday-first and
+is not reordered — reordering would silently move every persisted maid
+contract's `schedule[].weekday` (a raw 0-6 index) by one day.
+
+Date rendering (SIM): `formatDate(day)` → `"Sunday, 1st of Spring,
+Year 1"` (weekday, `dom` with `ordinalSuffix`, `of Season`, `Year N`);
+`formatDateShort(day)` → `"Sun 12 Autumn"`, used only by the two
+space-constrained surfaces — the HUD `hdr-day` readout (RENDER and TIME
+both write it) and the phone lock screen (RENDER.PHONE). The calendar
+helpers are pure functions of `day`: `getWeekday`, `isWeekend`,
+`getSeasonIndex`/`isSeasonEnd`, `getSeason`, `getYear`,
+`getTaxPeriod`/`getTaxPeriodDay`/`isTaxPeriodEnd`.
+
+Tax cadence: taxes bill at the end of each 70-day tax period (days 70 and
+140 in year 1) via `processQuarterlyTaxes` / `processTaxesForDayUi`. The
+tax panel (RENDER.COMPUTER `renderTaxPanel`) labels the period by the
+season it ends in — "Summer period" / "Winter period" — and its progress
+bar reads `CALENDAR.daysPerTaxPeriod`. The tracker's `trackerTaxes`
+detail strings and the ui.js tax log lines say "period", not "quarter".
+
+
+
 ## 2. The two time paths
 
 Everything that advances time funnels through exactly one of these. Both

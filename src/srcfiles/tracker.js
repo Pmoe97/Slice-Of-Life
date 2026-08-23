@@ -20,7 +20,7 @@
 // surface anyway, just without a countdown.
 //
 // Loads after config.js (TRACKER, BILL_DEFS, FACILITY_DEFS, REL_CONSEQUENCES),
-// sim.js (formatDate, getQuarter helpers), defs.computer.js (APP_DEFS via
+// sim.js (formatDate, getTaxPeriod helpers), defs.computer.js (APP_DEFS via
 // deepLink appIds), computer.js (computeTaxOwed, computeBillAmount) and
 // defs.world.js/items.js (ITEM_DEFS) — it only *reads* them at call time,
 // but keeps the same load slot convention as every other module. Loads
@@ -134,7 +134,7 @@ function trackerTaxes(gs) {
   const unpaid = taxes.unpaid || 0;
   const owed = computeTaxOwed(gs).owed || 0;
   if (unpaid <= 0 && owed <= 0) return null;
-  const nextDue = day + ((CALENDAR.daysPerQuarter - (day % CALENDAR.daysPerQuarter)) % CALENDAR.daysPerQuarter);
+  const nextDue = day + ((CALENDAR.daysPerTaxPeriod - (day % CALENDAR.daysPerTaxPeriod)) % CALENDAR.daysPerTaxPeriod);
   const daysUntil = nextDue - day;
   return {
     key: `taxes:due:${nextDue}`,
@@ -142,8 +142,8 @@ function trackerTaxes(gs) {
     urgency: unpaid > 0 ? 100 : trackerUrgencyFromDaysUntil(daysUntil),
     title: 'Estimated taxes due',
     detail: unpaid > 0
-      ? `$${unpaid} unpaid${owed > 0 ? ` + ~$${owed} this quarter` : ''} — due ${formatDate(nextDue)}`
-      : `~$${owed} owed at quarter end — ${formatDate(nextDue)}`,
+      ? `${unpaid} unpaid${owed > 0 ? ` + ~${owed} this period` : ''} — due ${formatDate(nextDue)}`
+      : `~${owed} owed at period end — ${formatDate(nextDue)}`,
     dueDay: nextDue,
     daysUntil,
     deepLink: { appId: 'bank', screenId: 'overview', params: {} },

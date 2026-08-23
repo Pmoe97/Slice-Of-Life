@@ -401,7 +401,7 @@ function renderPhoneClock(body, gs) {
   face.textContent = formatTime(Math.floor(gs.meta.clock.minutes));
   const date = document.createElement('div');
   date.className = 'phone-clock-date';
-  date.textContent = formatDate(gs.meta.clock.day);
+  date.textContent = formatDateShort(gs.meta.clock.day);
   body.appendChild(face);
   body.appendChild(date);
 

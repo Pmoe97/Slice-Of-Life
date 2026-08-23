@@ -1208,10 +1208,10 @@ async function loadGameState() {
   // undefined one. The wardrobe buckets are guaranteed present by
   // ensureAllObjectBuckets above; visitors stay untouched (their sim is
   // dormant, and they keep whatever they arrived in).
-  for (const npc of Object.values(gameState.npcs)) {
+  for (const [npcId, npc] of Object.entries(gameState.npcs)) {
     if (npc.residency?.status !== 'resident') continue;
     const block = npc.schedule?.currentBlock || 'morning';
-    if (!npc.outfit) npc.outfit = npcOutfitForContext(npc, gameState, block, null);
+    if (!npc.outfit) npc.outfit = npcOutfitForContext(npc, gameState, block, null, npcId);
     if (!npc.clothing) npc.clothing = 'dressed';
   }
   return gameState;

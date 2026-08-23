@@ -42,7 +42,7 @@ function renderHeader(gs) {
   const hdrMoney = document.getElementById('hdr-money');
   const hdrRoom = document.getElementById('hdr-room');
 
-  if (hdrDay) hdrDay.textContent = formatDate(meta.clock.day);
+  if (hdrDay) hdrDay.textContent = formatDateShort(meta.clock.day);
   if (hdrTime) hdrTime.textContent = formatTime(meta.clock.minutes);
   if (hdrMoney) hdrMoney.textContent = `$${player.money}`;
   if (hdrRoom) {

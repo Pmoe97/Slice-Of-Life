@@ -105,6 +105,35 @@ api(`
       g.objects['room_' + room].test_phone = { id: 'test_phone', defId: 'phone', state: { lock: 'unlocked' } };
       return { ...npc, relPlayer: { ...npc.relPlayer, affection: 1 } };
     },
+    // PRIVATE. The sweep pinned every arrangement to hallway_a, which made
+    // every room-gated drive structurally UNREACHABLE rather than unreachable
+    // for a reason worth reporting — masturbate, intimate and the vocation
+    // plan's content drives all require isPrivateRoom and could never be
+    // scored from a hallway however the clock was swept. This arrangement
+    // puts the NPC alone in their own bedroom and NAMES that room.
+    (g, npc) => {
+      const id = __ids(g)[0];
+      const own = g.npcs[id].residency.room;
+      g.player.location = 'living_room';
+      g.player.flags = {};
+      const occ = g.npcs[id].bible.occupation || {};
+      g.npcs[id].bible.occupation = { ...occ, contentWork: true };
+      return { ...npc, __room: own,
+               bible: { ...npc.bible, occupation: { ...occ, contentWork: true } } };
+    },
+    // POOLSIDE, alone and late — same reasoning, for the pool-gated drives.
+    (g, npc) => {
+      const id = __ids(g)[0];
+      for (const other of __ids(g)) if (other !== id) g.npcs[other].location = 'living_room';
+      g.player.location = 'living_room';
+      g.player.flags = {};
+      const occ = g.npcs[id].bible.occupation || {};
+      const t = { ...g.npcs[id].bible.temperament, volatility: 1, openness: 1, assertiveness: 1 };
+      g.npcs[id].bible.occupation = { ...occ, contentWork: true };
+      g.npcs[id].bible.temperament = t;
+      return { ...npc, __room: 'pool_room',
+               bible: { ...npc.bible, temperament: t, occupation: { ...occ, contentWork: true } } };
+    },
   ];
 `);
 
@@ -171,9 +200,18 @@ const best = JSON.parse(api(`
     __arrangements().forEach((arrange, ai) => {
       const g = __mk();
       const npc = arrange(g, __needy(g, ${NEEDY}), ROOM);
+      // An arrangement may NAME its own room (the private/poolside ones do).
+      const useRoom = npc.__room || ROOM;
+      g.npcs[__ids(g)[0]].location = useRoom;
       for (const m of __mins()) {
         g.meta.clock.minutes = m;
-        const ranked = scoreCandidates(npc, __ids(g)[0], g, { block: null, location: ROOM }, perceived);
+        // The block the swept minute actually falls in. Candidacy reads
+        // ctx.block (change_clothes derives an outfit target from it; the
+        // pool session requires a late one), and null could never satisfy
+        // either. Scoring is untouched — that half reads the minute.
+        const __blk = Object.keys(BLOCK_TIME_OF_DAY).find(b =>
+          (BLOCK_TIME_OF_DAY[b] || []).some(([s2, e2]) => m >= s2 && m < e2)) || null;
+        const ranked = scoreCandidates(npc, __ids(g)[0], g, { block: __blk, location: useRoom }, perceived);
         for (const hit of ranked) {
           const top = out[hit.driveId];
           // Initiative plan Phase 3: scoreCandidates now ranks OVERTURE_DEFS in
@@ -340,7 +378,18 @@ check('terms sum to the score when block and recency are neutral', api(`
       const s = scoreDrive(d, npc, { perceived: __sigs(0.4), block: '__none__', nowAbs: 0 });
       const t = s.terms;
       if (t.block !== 1 || t.recency !== 1) return false;
-      if (Math.abs((t.base + t.need + t.signal + t.temperament) - s.score) > 1e-9) return false;
+      // Vocation plan Phase 7 fix: this sum omitted motive/desireBias/
+      // willingnessBias/pastime — it happened to still equal score because
+      // all four were 0 for every drive under this fixture, until the
+      // idle-pastime drives (read_book/watch_tv/scroll_phone) made pastime
+      // genuinely non-zero for an NPC whose occupation lists them.
+      // Sum every additive term scoreDrive actually returns, not a
+      // hand-picked subset that has to be remembered every time a new one
+      // is added — the same generalization principle the occupation-record
+      // fix applies to a different allowlist.
+      const additiveTerms = ['base', 'need', 'signal', 'motive', 'desireBias', 'willingnessBias', 'pastime', 'temperament'];
+      const sum = additiveTerms.reduce((a, k) => a + (t[k] || 0), 0);
+      if (Math.abs(sum - s.score) > 1e-9) return false;
     }
     return true;
   })()
