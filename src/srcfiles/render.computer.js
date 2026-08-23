@@ -1798,7 +1798,10 @@ function renderRecipesPlanner(body, gs, app, screen) {
   body.appendChild(addRow);
 
   if (planner.length === 0) {
-    body.innerHTML += '<p class="dim tiny">No meals planned yet.</p>';
+    const empty = document.createElement('p');
+    empty.className = 'dim tiny';
+    empty.textContent = 'No meals planned yet.';
+    body.appendChild(empty);
     return;
   }
   const list = document.createElement('div');
