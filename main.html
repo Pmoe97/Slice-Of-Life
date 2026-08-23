@@ -3264,6 +3264,126 @@ body {
 }
 .menu-option-name { font-size: calc(15px * var(--text-scale)); color: var(--color-text); font-weight: 600; }
 .menu-option-desc { font-size: calc(12px * var(--text-scale)); color: var(--color-text-faint); margin-top: 2px; }
+.sbx-panes .menu-option-row { max-width: 560px; text-align: left; }
+.sbx-row-placeholder { color: var(--color-text-faint); }
+
+/* Sandbox roommates (Seasonal Calendar & Sandbox plan, Phase B5). Cards in
+   the config screen, each with an identity form, room assignment, the
+   appearance-studio entry and the skipProse toggle. */
+.sbx-section-title {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: calc(13px * var(--text-scale));
+  letter-spacing: 2px;
+  color: #d9b871;
+  margin: 18px 0 2px;
+  text-transform: uppercase;
+  text-align: left;
+}
+.sbx-section-hint { font-size: calc(11px * var(--text-scale)); color: #7a7090; margin: 0 0 10px; text-align: left; }
+/* Sandbox Pre-Game Editor Overhaul Phase 5 (D3): the roommate rail's compact
+   cards (replacing the old always-expandable .sbx-roommate-card accordion,
+   deleted with renderSandboxRoommateCard) and the detail-view header shown
+   above a selected roommate's five sub-tabs. */
+.sbx-roommate-rail-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  border: 1px solid #2e2745;
+  border-radius: 8px;
+  background: rgba(25, 21, 39, 0.5);
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+.sbx-roommate-rail-open {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+.sbx-roommate-rail-open:hover .sbx-card-name { color: #d9b871; }
+.sbx-roommate-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(217, 184, 113, 0.15);
+}
+.sbx-card-name { font-weight: 600; color: var(--color-text); font-size: calc(14px * var(--text-scale)); }
+.sbx-card-sub { font-size: calc(11px * var(--text-scale)); color: #7a7090; }
+.sbx-card-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.sbx-btn {
+  background: #191527;
+  border: 1px solid #2e2745;
+  border-radius: 4px;
+  color: #b9b1d6;
+  font-family: var(--font-sans);
+  font-size: calc(12px * var(--text-scale));
+  padding: 5px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sbx-btn:hover { color: #d9b871; border-color: #d9b871; }
+.sbx-btn-accent { color: #d9b871; border-color: rgba(217, 184, 113, 0.45); }
+.sbx-btn-danger:hover { color: #f87171; border-color: #f87171; }
+.sbx-form {
+  margin-top: 10px;
+  border-top: 1px solid #211c33;
+  padding-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px 10px;
+}
+.sbx-form .sbx-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.sbx-form .sbx-full { grid-column: 1 / -1; }
+.sbx-label { font-size: calc(11px * var(--text-scale)); color: #8880a6; letter-spacing: 0.4px; }
+.sbx-control {
+  width: 100%;
+  box-sizing: border-box;
+  background: #191527;
+  border: 1px solid #2e2745;
+  border-radius: 4px;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  padding: 6px 8px;
+}
+.sbx-row { display: flex; align-items: center; gap: 8px; }
+.sbx-slider { flex: 1; min-width: 60px; }
+.sbx-slider-val { font-size: 11px; color: #8880a6; min-width: 44px; text-align: right; white-space: nowrap; }
+.sbx-slider-reset {
+  background: none;
+  border: none;
+  color: #6f6790;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.sbx-slider-reset:hover { color: #f87171; }
+.sbx-skip-row { margin-top: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.sbx-skip-label { font-size: calc(11px * var(--text-scale)); color: #8880a6; }
+.sbx-skip-hint { font-size: calc(11px * var(--text-scale)); color: #7a7090; }
+.sbx-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.sbx-badge {
+  font-size: 10px;
+  color: #9a8fc0;
+  border: 1px solid #2e2745;
+  border-radius: 10px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.sbx-badge-on { color: #d9b871; border-color: rgba(217, 184, 113, 0.5); }
+.sbx-preset-row { flex-wrap: wrap; }
+.sbx-facility-room { font-size: calc(12px * var(--text-scale)); font-weight: 600; color: #b8aed6; margin: 14px 0 4px; text-align: left; letter-spacing: 0.3px; }
+.sbx-facility-ctl { display: flex; gap: 6px; min-width: 0; flex: 0 1 auto; }
+.sbx-facility-ctl .sbx-control { width: auto; }
+.sbx-cond { max-width: 70px; text-align: right; }
+.menu-option-value { font-size: calc(14px * var(--text-scale)); color: var(--color-accent, #d9b871); font-weight: 600; white-space: nowrap; }
 .menu-option-toggle { padding: 8px 18px; font-size: calc(13px * var(--text-scale)); min-width: 64px; }
 .menu-options-back {
   margin-top: 22px;
@@ -3289,6 +3409,137 @@ body {
 }
 .menu-option-hint { font-size: calc(11px * var(--text-scale)); color: #7a7090; margin: 0 0 10px; max-width: 300px; }
 .menu-option-note { font-size: calc(11px * var(--text-scale)); color: #e11d48; margin-top: 10px; min-height: 14px; }
+
+/* Sandbox Pre-Game Editor Overhaul Phase 1 (D1): the tab shell — a
+   full-panel overlay sub-screen of #main-menu, structurally identical to
+   the Settings screen below (left rail + scrollable content pane) but
+   recolored into this file's existing .sbx-* palette rather than a new one
+   (the two palettes already share the same gold/#2e2745-border language, so
+   this is mostly a class-name mirror of .settings-*, not a new design). */
+#menu-sandbox-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 6, 16, 0.8);
+  backdrop-filter: blur(3px);
+  padding: clamp(8px, 2vh, 28px);
+}
+#menu-sandbox-screen[hidden] { display: none !important; }
+.sbx-frame {
+  display: flex;
+  flex-direction: column;
+  width: min(980px, 100%);
+  max-height: 100%;
+  background: linear-gradient(160deg, #12101f, #0d0b16);
+  border: 1px solid rgba(217, 184, 113, 0.35);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.sbx-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(217, 184, 113, 0.18);
+  flex-shrink: 0;
+}
+.sbx-title {
+  font-family: 'Cinzel', Georgia, serif;
+  color: #d9b871;
+  font-size: calc(24px * var(--text-scale));
+  letter-spacing: 2px;
+  margin: 0;
+}
+.sbx-sub { font-size: calc(12px * var(--text-scale)); color: var(--color-text-faint); margin: 2px 0 0; }
+/* Phase 6 (polish): a persistent readout — roommate count, house quality,
+   active difficulty preset — shown regardless of which tab is active, so
+   "what am I actually starting with" never requires a dedicated review tab
+   (checked against both PLAYER_STUDIO_TABS and SETTINGS_TABS: neither has
+   one). Refreshed by renderSandboxSummaryStrip on every renderSandboxUi. */
+.sbx-summary-strip {
+  font-size: calc(12px * var(--text-scale));
+  color: var(--color-text-dim);
+  white-space: nowrap;
+  text-align: right;
+  flex-shrink: 0;
+}
+.sbx-body { display: flex; flex: 1; min-height: 0; }
+.sbx-tab-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 176px;
+  flex-shrink: 0;
+  padding: 12px 10px;
+  border-right: 1px solid rgba(217, 184, 113, 0.15);
+  overflow-y: auto;
+}
+.sbx-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-dim);
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: calc(13px * var(--text-scale));
+  letter-spacing: 1px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+}
+.sbx-tab-btn:hover { background: rgba(217, 184, 113, 0.1); color: var(--color-text); }
+.sbx-tab-btn.active {
+  background: rgba(217, 184, 113, 0.16);
+  border-color: rgba(217, 184, 113, 0.4);
+  color: #f3e3b8;
+}
+.sbx-tab-icon { font-size: calc(15px * var(--text-scale)); }
+.sbx-content { flex: 1; min-width: 0; overflow-y: auto; padding: 16px 20px; }
+.sbx-subtab-strip {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(217, 184, 113, 0.15);
+}
+.sbx-subtab-btn {
+  background: transparent;
+  border: 1px solid #2e2745;
+  border-radius: var(--radius-md);
+  color: var(--color-text-dim);
+  font-family: var(--font-sans);
+  font-size: calc(12px * var(--text-scale));
+  letter-spacing: 0.4px;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.sbx-subtab-btn:hover { color: var(--color-text); border-color: rgba(217, 184, 113, 0.3); }
+.sbx-subtab-btn.active {
+  background: rgba(217, 184, 113, 0.16);
+  border-color: rgba(217, 184, 113, 0.4);
+  color: #f3e3b8;
+}
+.sbx-section-wrap { margin-bottom: 22px; }
+.sbx-empty { text-align: center; color: var(--color-text-dim); padding: 44px 0; font-size: calc(14px * var(--text-scale)); }
+.sbx-empty-icon { font-size: calc(28px * var(--text-scale)); margin-bottom: 8px; }
+.sbx-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 10px 18px;
+  border-top: 1px solid rgba(217, 184, 113, 0.18);
+}
 
 /* Settings sub-screen (Settings & Pause Overhaul Phase 2, D2): the tabbed
    settings surface — a full-panel sub-screen of #main-menu that sits above
@@ -5185,10 +5436,28 @@ body {
      label over its range+arrows+number so the controls keep full width. */
   .settings-row { flex-direction: column; align-items: flex-start; gap: 8px; }
   .settings-sliders { width: 100%; }
+  /* Sandbox tab shell (Overhaul Phase 1): same full-bleed/stacked-rail
+     treatment as Settings above. */
+  #menu-sandbox-screen { padding: 0; }
+  .sbx-frame { width: 100%; max-height: 100%; border-radius: 0; border: none; }
+  .sbx-header { flex-direction: column; align-items: stretch; gap: 8px; padding: 10px 14px; }
+  .sbx-title { font-size: 18px; letter-spacing: 1px; }
+  .sbx-summary-strip { text-align: left; }
+  .sbx-body { flex-direction: column; }
+  .sbx-content { padding: 12px 14px; }
+  .sbx-tab-rail {
+    flex-direction: row;
+    width: auto;
+    border-right: none;
+    border-bottom: 1px solid rgba(217, 184, 113, 0.15);
+    overflow-x: auto;
+    padding: 8px;
+  }
+  .sbx-tab-btn { flex-shrink: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   .title-bg-img { transition-duration: 0.001ms; }
-  .title-btn, .title-arrow-btn, .discord-logo-link, .settings-tab-btn { transition-duration: 0.001ms; }
+  .title-btn, .title-arrow-btn, .discord-logo-link, .settings-tab-btn, .sbx-tab-btn, .sbx-subtab-btn { transition-duration: 0.001ms; }
 }
 </style>
 <!-- ===== /SECTION: STYLES ===== -->
@@ -5412,6 +5681,7 @@ body {
     <div class="menu-buttons">
       <button class="title-btn" id="menu-continue-btn" data-action="menu.continue" disabled>Continue</button>
       <button class="title-btn" data-action="menu.new-game">New Game</button>
+      <button class="title-btn" data-action="menu.sandbox">Sandbox</button>
       <button class="title-btn" data-action="menu.load">Load Game</button>
       <button class="title-btn" data-action="menu.options">Options</button>
       <a class="title-btn" href="https://discord.com/invite/E6N9WKpGPA" target="_blank" rel="noopener noreferrer" title="Join our Discord community!">Discord</a>
@@ -5479,6 +5749,36 @@ body {
     <button class="title-btn menu-options-back" data-action="menu.back">← Back</button>
   </div>
 
+  <!-- Sandbox setup sub-screen (Seasonal Calendar & Sandbox plan, Phase B4+;
+       reshelled by the Sandbox Pre-Game Editor Overhaul plan, Phase 1). A
+       sibling of the options sub-screen, now built the same way the tabbed
+       Settings screen is: menu.js's renderSandboxUi() builds the rail +
+       panes from SANDBOX_TABS. Back/Esc return to the title WITHOUT
+       uncovering #app — closeMainMenu is the single place the boot cover
+       comes off, and the config screen must never half-start a game. -->
+  <div id="menu-sandbox-screen" hidden>
+    <div class="sbx-frame">
+      <header class="sbx-header">
+        <div>
+          <h2 class="sbx-title">Sandbox Setup</h2>
+          <p class="sbx-sub">Author every roommate, the apartment and the economy before you start.</p>
+        </div>
+        <div id="sandbox-summary-strip" class="sbx-summary-strip"></div>
+      </header>
+      <div class="sbx-body">
+        <nav id="sandbox-tab-rail" class="sbx-tab-rail" aria-label="Sandbox tabs"></nav>
+        <div class="sbx-content" id="sandbox-content">
+          <div id="sandbox-subtab-strip" class="sbx-subtab-strip" hidden></div>
+          <div id="sandbox-panes" class="sbx-panes"></div>
+        </div>
+      </div>
+      <footer class="sbx-footer">
+        <button class="title-btn" data-action="sandbox.start">Start Sandbox</button>
+        <button class="title-btn" data-action="sandbox.back">← Back</button>
+      </footer>
+    </div>
+  </div>
+
   <!-- Settings sub-screen (Settings & Pause Overhaul Phase 2, D2): the
        tabbed settings surface. A sibling of the options sub-screen;
        menu.js's renderSettingsUi() builds the rail + panes from
@@ -5530,7 +5830,7 @@ body {
   <div class="ps-frame">
     <header class="ps-header">
       <div>
-        <h1 class="ps-title">Who are you?</h1>
+        <h1 class="ps-title" id="ps-title">Who are you?</h1>
         <p class="ps-sub" id="ps-name-note">Everything unset will be rolled for you.</p>
       </div>
       <div class="ps-header-btns">
@@ -5542,8 +5842,8 @@ body {
     <div class="ps-body" id="ps-body"></div>
     <p class="ps-note" id="ps-note" hidden></p>
     <footer class="ps-footer">
-      <button class="ps-btn ps-btn-secondary" data-action="studio.cancel">Back to menu</button>
-      <button class="ps-btn ps-btn-primary" data-action="studio.confirm">Begin</button>
+      <button class="ps-btn ps-btn-secondary" id="ps-cancel-btn" data-action="studio.cancel">Back to menu</button>
+      <button class="ps-btn ps-btn-primary" id="ps-confirm-btn" data-action="studio.confirm">Begin</button>
     </footer>
   </div>
 </div>
@@ -6100,7 +6400,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/srcfiles/config.js?v=141"></script>
+<script src="src/srcfiles/config.js?v=149"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -6109,7 +6409,7 @@ body {
 <script src="src/srcfiles/defs.settings.js?v=9"></script>
 <script src="src/srcfiles/settings.js?v=7"></script>
 <script src="src/srcfiles/icons.js?v=30"></script>
-<script src="src/srcfiles/defs.world.js?v=43"></script>
+<script src="src/srcfiles/defs.world.js?v=44"></script>
 <script src="src/srcfiles/defs.actions.js?v=43"></script>
 <script src="src/srcfiles/defs.computer.js?v=31"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
@@ -6126,8 +6426,8 @@ body {
 <!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/srcfiles/orbital.js?v=12"></script>
-<script src="src/srcfiles/state.js?v=60"></script>
-<script src="src/srcfiles/sim.js?v=79"></script>
+<script src="src/srcfiles/state.js?v=61"></script>
+<script src="src/srcfiles/sim.js?v=86"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
@@ -6147,28 +6447,28 @@ body {
      functions are called at runtime by defs.actions.js and render.js. -->
 <script src="src/srcfiles/cooking.js?v=4"></script>
 <script src="src/srcfiles/taste.js?v=1"></script>
-<script src="src/srcfiles/drives.js?v=41"></script>
+<script src="src/srcfiles/drives.js?v=42"></script>
 <!-- NPC utility scoring (npc-cognition-plan.md). Loads after drives.js: it
      reuses driveGateValue / isOnCooldown / DRIVE_COOLDOWN_KEY from it. -->
-<script src="src/srcfiles/cognition.js?v=28"></script>
+<script src="src/srcfiles/cognition.js?v=29"></script>
 <!-- NPC initiative (npc-initiative-plan.md Phase 3). Loads after cognition.js:
      scoreCandidates calls scoreOvertures, and evaluateDrives calls the writers
      here for the tick it wins. -->
-<script src="src/srcfiles/overture.js?v=15"></script>
+<script src="src/srcfiles/overture.js?v=16"></script>
 <script src="src/srcfiles/actions.js?v=34"></script>
 <script src="src/srcfiles/intent.js?v=18"></script>
 <script src="src/srcfiles/skills.js?v=19"></script>
 <script src="src/srcfiles/stealth.js?v=19"></script>
-<script src="src/srcfiles/time.js?v=29"></script>
-<script src="src/srcfiles/computer.js?v=60"></script>
+<script src="src/srcfiles/time.js?v=30"></script>
+<script src="src/srcfiles/computer.js?v=63"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
-<script src="src/srcfiles/tracker.js?v=15"></script>
+<script src="src/srcfiles/tracker.js?v=17"></script>
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
 <script src="src/srcfiles/phone.js?v=20"></script>
-<script src="src/srcfiles/npc.js?v=50"></script>
+<script src="src/srcfiles/npc.js?v=51"></script>
 <!-- Intimacy & Voyeurism Phase 9 (D13): the willingness gate — the ONLY door
      into any intimacy act. Pure function + tuning (willingness.js); reads
      npc.js's shared clothing reads at call time, consumed by cognition.js's
@@ -6194,13 +6494,13 @@ body {
      and called by sim.js at runtime only. -->
 <script src="src/srcfiles/rumination.js?v=15"></script>
 <script src="src/srcfiles/prompt.js?v=19"></script>
-<script src="src/srcfiles/llm.js?v=37"></script>
+<script src="src/srcfiles/llm.js?v=39"></script>
 <!-- Plan X-5 Phase 1: the wire for conversation consequences — parsing,
      clamping, windowing and ingestion for the Assessor and the Chronicler.
      After llm.js because the two passes' calls live there and are fired from
      ui.js; x5.js itself is pure and calls no model. -->
 <script src="src/srcfiles/x5.js?v=15"></script>
-<script src="src/srcfiles/interruption.js?v=22"></script>
+<script src="src/srcfiles/interruption.js?v=23"></script>
 <script src="src/srcfiles/image.js?v=32"></script>
 <!-- Intimacy & Voyeurism Phase 10 (D6/D7): the peek/listen hold — the timed
      real-time session loop (risk ramp, per-NPC caught outcomes, image budget)
@@ -6218,12 +6518,12 @@ body {
      render.js/ui.js which call its resolvers/applys at runtime only. -->
 <script src="src/srcfiles/boundary.js?v=1"></script>
 <script src="src/srcfiles/pregnancy.js?v=1"></script>
-<script src="src/srcfiles/render.js?v=74"></script>
-<script src="src/srcfiles/render.computer.js?v=47"></script>
+<script src="src/srcfiles/render.js?v=75"></script>
+<script src="src/srcfiles/render.computer.js?v=51"></script>
 <script src="src/srcfiles/render.desktop.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
-<script src="src/srcfiles/render.phone.js?v=23"></script>
+<script src="src/srcfiles/render.phone.js?v=24"></script>
 <!-- Asks & attachments (asks-and-attachments-plan.md Phase 1 + Phase 3 +
      Phase 4 + Phase 5 + Phase 6 + Phase 7 + Phase 8 + Phase 9): the ask
      spine — parse/decide/
@@ -6251,7 +6551,7 @@ body {
      pipeline at runtime). Every dependency is a call-time one, so this slot
      is flexible within that range. -->
 <script src="src/srcfiles/asks.js?v=11"></script>
-<script src="src/srcfiles/ui.js?v=115"></script>
+<script src="src/srcfiles/ui.js?v=127"></script>
 <script src="src/srcfiles/ui.computer.js?v=47"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
@@ -6268,12 +6568,12 @@ body {
      invokes boot() — anything loading after that runs once boot has already
      started, which is a race nobody should have to reason about. Calls into
      SIM/IMAGE/STATE at runtime only, so it needs nothing at load time. -->
-<script src="src/srcfiles/studio.js?v=16"></script>
+<script src="src/srcfiles/studio.js?v=19"></script>
 
 <!-- Menu overhaul Phase 10: the main-menu component — after ui.js (calls
      resumeFromRecord/openSaveMenu/startAutosave and the data-action chain
      at runtime). Loads LAST: the bottom of menu.js invokes boot(), which
      ui.js can no longer call itself because boot() reaches into MENU/IMAGE
      functions defined after UI. -->
-<script src="src/srcfiles/menu.js?v=24"></script>
+<script src="src/srcfiles/menu.js?v=35"></script>
 <!-- ===== /SECTION: SCRIPTS ===== -->

@@ -146,8 +146,17 @@ function rollAge(rng) {
 
 // --- Clock functions ---
 
+// Weekday index for a calendar day: 0=Mon .. 6=Sun. Day 1 is a Sunday
+// (index 6), and stays one forever — see the D2 note below.
+//
+// D2 (seasonal-calendar-and-sandbox-plan): the base shift is (day + 5) % 7,
+// NOT a reorder of WEEKDAY_NAMES. Reordering the array would silently move
+// every persisted maid contract's schedule[].weekday (a raw 0-6 index) by
+// one day, with no error and no migration hook. The shift changes which
+// CALENDAR day a given weekday falls on — the intended change — while index
+// 2 keeps meaning Wednesday.
 function getWeekday(day) {
-  return ((day - 1) % 7); // 0=Mon, 6=Sun
+  return ((day + 5) % 7);
 }
 
 function isWeekend(day) {
@@ -181,34 +190,48 @@ function workingDaysBetween(from, to) {
 }
 
 // --- Calendar helpers (Phase 1) ---
-// Layered on top of getWeekday — day-of-week is unchanged; the year is a
-// 360-day cycle of 4 quarters/seasons. All are pure functions of `day`,
-// so callers never need to hold a separate calendar object.
+// Layered on top of getWeekday — day-of-week and the season/year cycles are
+// all pure functions of `day`, so callers never need to hold a separate
+// calendar object. The season period (35 days) and the tax period (70 days)
+// are deliberately separate constants (design invariant 7) — they were the
+// same number for the life of the economy plan, and every formula that read
+// `daysPerQuarter` meant one of the two without saying which.
 
-// Quarter index 0-3 for a given day. Days are 1-indexed, so day 1 is in
-// quarter 0; day 90 is the last day of quarter 0; day 91 starts quarter 1.
-function getQuarter(day) {
-  return Math.floor((day - 1) / CALENDAR.daysPerQuarter) % 4;
+// Tax period index 0-1 for a given day. Days are 1-indexed, so day 1 is in
+// tax period 0; day 70 is the last day of tax period 0 (end of Summer);
+// day 71 starts tax period 1 (end of Winter is day 140). Taxes bill here.
+function getTaxPeriod(day) {
+  return Math.floor((day - 1) / CALENDAR.daysPerTaxPeriod) % 2;
 }
 
-// True on the last day of each quarter (days 90, 180, 270, 360/0 mod year).
-// Taxes bill here.
-function isQuarterEnd(day) {
-  return ((day % CALENDAR.daysPerQuarter) === 0);
+// True on the last day of each tax period (days 70, 140, 210, ...).
+function isTaxPeriodEnd(day) {
+  return ((day % CALENDAR.daysPerTaxPeriod) === 0);
 }
 
-// Day index within the current quarter, 1-90.
-function getQuarterDay(day) {
-  return ((day - 1) % CALENDAR.daysPerQuarter) + 1;
+// Day index within the current tax period, 1-70.
+function getTaxPeriodDay(day) {
+  return ((day - 1) % CALENDAR.daysPerTaxPeriod) + 1;
 }
 
-// Season aligned 1:1 with quarters: spring/summer/autumn/winter.
+// Season index 0-3 for a given day. Days are 1-indexed, so day 1 is in
+// season 0 (spring); day 35 is the last day of spring; day 36 starts summer.
+function getSeasonIndex(day) {
+  return Math.floor((day - 1) / CALENDAR.daysPerSeason) % 4;
+}
+
+// True on the last day of each season (days 35, 70, 105, 140, ...).
+function isSeasonEnd(day) {
+  return ((day % CALENDAR.daysPerSeason) === 0);
+}
+
+// Season for a given day: spring/summer/autumn/winter.
 function getSeason(day) {
-  return CALENDAR.seasons[getQuarter(day)];
+  return CALENDAR.seasons[getSeasonIndex(day)];
 }
 
 // Year number since the start of the game — day 1 is year 1. Mostly so
-// quarterly taxes and seasonal utilities carry a long-run count.
+// tax and seasonal utilities carry a long-run count.
 function getYear(day) {
   return Math.floor((day - 1) / CALENDAR.daysPerYear) + 1;
 }
@@ -258,19 +281,28 @@ function formatHour12(hour) {
   return `${h12}:00 ${ampm}`;
 }
 
+function ordinalSuffix(n) {
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return 'th';
+  switch (n % 10) { case 1: return 'st'; case 2: return 'nd'; case 3: return 'rd'; default: return 'th'; }
+}
+
+// "Sunday, 1st of Spring, Year 1". The long form — every call site takes
+// this except the two space-constrained ones below, which use
+// formatDateShort (the HUD `hdr-day` readout and the phone lock screen).
 function formatDate(day) {
-  // Abbreviated from the shared WEEKDAY_NAMES (config) so the maid's
-  // schedule grid and this date line can never disagree about day order.
-  const weekdays = WEEKDAY_NAMES.map(n => n.slice(0, 3));
-  // Render a real in-fiction date: weekday + month + day-of-month +
-  // year. The month/day cycle is cosmetic (30-day months), so this is
-  // "Wed Mar 24, Year 1" instead of "Wed Day 84". Keeps the weekday
-  // prefix (schedules read it) while giving the year a shape.
-  const doy = ((day - 1) % CALENDAR.daysPerYear);          // 0-359
-  const monthIdx = Math.floor(doy / CALENDAR.daysPerMonth);
-  const dom = (doy % CALENDAR.daysPerMonth) + 1;
-  const year = getYear(day);
-  return `${weekdays[getWeekday(day)]} ${CALENDAR.monthNames[monthIdx]} ${dom}, Year ${year}`;
+  const weekday = WEEKDAY_NAMES[getWeekday(day)];
+  const dom = ((day - 1) % CALENDAR.daysPerSeason) + 1;
+  const season = CALENDAR.seasonNames[getSeason(day)];
+  return `${weekday}, ${dom}${ordinalSuffix(dom)} of ${season}, Year ${getYear(day)}`;
+}
+
+// "Sun 12 Autumn" — the HUD day readout and the phone lock screen. The long
+// form is ~30 chars against the old ~18 and overflows both.
+function formatDateShort(day) {
+  const weekday = WEEKDAY_NAMES[getWeekday(day)].slice(0, 3);
+  const dom = ((day - 1) % CALENDAR.daysPerSeason) + 1;
+  return `${weekday} ${dom} ${CALENDAR.seasonNames[getSeason(day)]}`;
 }
 
 function advanceClock(clock, ticks) {
@@ -377,6 +409,129 @@ function npcDisinhibition(npc) {
   const baked = npc?.bible?.deviantLevel;
   if (typeof baked === 'number') return Math.max(0, Math.min(1, baked));
   return disinhibitionFromTemperament(npc?.bible?.temperament);
+}
+
+// --- Occupation affinity (vocation-and-lifestyle plan D7/D9) ---------------
+// How well an occupation fits a temperament, as a WEIGHT for weightedPick.
+//
+// There is no `baseWeight` to multiply: OCCUPATION_POOL entries have never
+// carried a `weight` field, so weightedPick has always fallen through to
+// `item.weight || 1` and every job was equally likely. Affinity IS the weight,
+// and an entry with no `affinity` block scores exactly 1.0 — which is what
+// lets the pool grow one annotated row at a time instead of in a flag day.
+//
+// TWO KINDS OF NUMBER, deliberately (D9):
+//
+//   disinhibitionFloor — a HARD gate, and the only one in the system. Below
+//     it the occupation scores ZERO and cannot be drawn. It exists for the
+//     adult-industry entries: a reserved, rule-bound character being handed
+//     that work by an unlucky roll is the exact failure this coupling was
+//     built to prevent. Reuses npcDisinhibition's model (D8) rather than
+//     inventing a modesty axis — the signal already exists, is already shared
+//     between the roommate cast and Hot Singles, and is already tuned.
+//
+//   temperament weights — SOFT. Each multiplies by `1 + w * axis` over an
+//     axis in [-1,1], and the product is clamped into
+//     [affinityFloor, affinityCeiling] with a floor that is deliberately NOT
+//     zero. A shy accountant and a gregarious accountant are both real
+//     people; a system that forbids one of them is a caricature generator.
+//
+// Pure. Returns a non-negative number.
+function occupationAffinity(occ, temperament) {
+  const a = occ && occ.affinity;
+  if (!a) return 1.0;
+  if (a.disinhibitionFloor != null
+      && disinhibitionFromTemperament(temperament) < a.disinhibitionFloor) {
+    return 0;
+  }
+  let w = 1.0;
+  for (const axis in (a.temperament || {})) {
+    w *= 1 + a.temperament[axis] * (temperament?.[axis] || 0);
+  }
+  return Math.max(VOCATION_TUNING.affinityFloor,
+         Math.min(VOCATION_TUNING.affinityCeiling, w));
+}
+
+// The other direction of the same coupling (D7). Occupation is drawn FROM
+// temperament above; personality traits are then drawn with a lean toward the
+// occupation's own — so a Cam Model tends to come out brazen and a Bookkeeper
+// meticulous, without either being required.
+//
+// It has to work this way round because traits are rolled late in
+// rollCastSlot, long after the occupation; gating the occupation on traits
+// would mean hoisting the trait draw too, for a coupling that reads better as
+// a lean than as a gate. An absent multiplier is 1.0, so an un-annotated
+// occupation draws traits exactly as before.
+function traitAffinityFor(occ, trait) {
+  const t = occ && occ.traitAffinity;
+  if (!t) return 1;
+  return t[trait] != null ? t[trait] : 1;
+}
+
+// --- The offsite predicate (vocation-and-lifestyle plan D12) ---------------
+// The ONE answer to "is this NPC out of the flat right now."
+//
+// Before this plan, nine sites across six files each asked it for themselves
+// with a bare `block === 'work' || block === 'commute' || ...` string
+// comparison — sim.js's two location branches and the resolveTick decision
+// loop, cognition.js's held-record mirror and its work-commitment branch,
+// interruption.js's eligibility gate, npc.js's outfit selection (via
+// WORK_BLOCKS), and the partner-visit bind. That was correct exactly as long
+// as work ALWAYS meant offscreen. The moment one occupation works from home
+// it stops being correct in nine places at once, and two of those nine carry
+// consequences nobody would have looked for: a remote worker becomes newly
+// eligible for interruption.js's roll (D13), and would otherwise wear the
+// office outfit at home all day (D14).
+//
+// So the question gets one asker. `block` is still the trigger — a non-work
+// block is never offsite — but the ANSWER now depends on the occupation's
+// workMode. Design invariant 2: a tenth caller that tests the block name
+// inline is the bug this exists to prevent.
+//
+// `npcId` is optional and used only to seed the self-employed gig-day roll;
+// callers that have it should pass it, and the fallback to the bible name
+// keeps the predicate callable from the few sites that only hold the record.
+//
+// Pure: reads the bible and the clock, writes nothing.
+function npcIsOffsite(npc, block, clock, npcId) {
+  if (block !== 'work' && block !== 'commute' && block !== 'commute_home') return false;
+  const mode = npc?.bible?.occupation?.workMode || 'on_site';
+  switch (mode) {
+    // D3/D21: no job at all. `SCHEDULES.standard` has no work block, so this
+    // is defensive — an unemployed NPC should never reach here with a work
+    // block — but a mis-templated NPC stays home rather than vanishing.
+    case 'none':          return false;
+    case 'remote':        return false;
+    case 'self_employed': return isGigDay(npc, clock, npcId);
+    case 'hybrid':        return isOfficeDay(npc, clock);
+    default:              return true;   // on_site — the pre-plan behavior
+  }
+}
+
+// D4: which days a hybrid worker is in the office. The set is rolled once per
+// NPC in rollCastSlot and stored on the occupation, because SCHEDULES only
+// distinguishes weekday from weekend and day-of-week variance cannot live
+// there without inventing seven-day templates.
+//
+// `officeDays` holds getWeekday indices (0=Mon .. 6=Sun), so the pool is
+// 0-4. An empty set means the roll has not happened (a pre-plan save, or a
+// hand-authored NPC): treat them as fully on-site, which is what they were.
+function isOfficeDay(npc, clock) {
+  const days = npc?.bible?.occupation?.officeDays;
+  if (!Array.isArray(days) || days.length === 0) return true;
+  return days.includes(getWeekday(clock?.day ?? 1));
+}
+
+// D2: a self-employed NPC mostly works at home, but some days the work is
+// somewhere else — a shoot, a client, a venue. Seeded per NPC per day so a
+// given save reproduces a given week (C6), and deliberately NOT stored: it is
+// a pure function of identity and date, so it needs no field and no migration.
+function isGigDay(npc, clock, npcId) {
+  if (isWeekend(clock?.day ?? 1)) return false;
+  const rate = VOCATION_TUNING.selfEmployedGigDayChance;
+  if (!(rate > 0)) return false;
+  const who = npcId || npc?.bible?.name || 'anon';
+  return seededRng(`gigday_${who}`, `d${clock?.day ?? 1}`)() < rate;
 }
 
 // The NPC counterpart of getPlayerPerception (perception plan Phase 1, D8) —
@@ -1009,6 +1164,63 @@ function resolveScheduleActivity(npc, clock, gameState, npcId) {
     }
   }
 
+  // Phase 7 Dimension 3 (sleepRhythm) — the greenfield reader. A schedule
+  // template fixes a single `sleep` span for every holder; this is the per-NPC
+  // variation over it, derived (rolled per day, stored nowhere — D4/D21's
+  // shape). Nothing leaves the closed block vocabulary (D1): the block is still
+  // `sleep`; the NPC just occupies it for a different SPAN, and the player sees
+  // it as who is up in `morning` and who is still going in `wind_down`. The
+  // leading `sleep` block is truncated (early) / extended (late) / jittered
+  // (erratic) at its END — the boundary the schedule itself puts on the wake —
+  // leaving every other block to its own template range. `regular` (the default,
+  // and every legacy NPC) is the identity: the template's own span, byte-for-
+  // byte the pre-phase block. Player sleep is off-limits (SLEEP / the alarm
+  // system is the player's; this touches only the template sleep block).
+  const sleepRhythm = npc?.bible?.occupation?.sleepRhythm;
+  const sleepEntry = sched.sleep && sched.sleep[0];
+  let effectiveSleepEnd = null;
+  if (sleepRhythm && sleepRhythm !== 'regular' && sleepEntry) {
+    const [sleepStart, sleepBaseEnd] = sleepEntry;
+    if (sleepRhythm === 'early') {
+      effectiveSleepEnd = Math.max(sleepStart, sleepBaseEnd - SLEEP_RHYTHM.earlyTicks);
+    } else if (sleepRhythm === 'late') {
+      effectiveSleepEnd = sleepBaseEnd + SLEEP_RHYTHM.lateTicks;
+    } else if (sleepRhythm === 'erratic') {
+      // per-day jitter of the wake boundary, derived (rolled per day, stored
+      // nowhere). rounded to a whole tick, seeded by (npc id + day) so it is
+      // stable for the whole day and differs across days and people.
+      const jitterSeed = String(npc.id ?? 'npc') + '|' + (clock?.day ?? 0);
+      const j = (hashStr(jitterSeed) % (SLEEP_RHYTHM.erraticTicks * 2 + 1)) - SLEEP_RHYTHM.erraticTicks;
+      effectiveSleepEnd = Math.max(sleepStart, sleepBaseEnd + j);
+    }
+  }
+  // For every rhythm the sleep span is just [sleepStart, effectiveSleepEnd): an early
+  // riser wakes early (the tail of the span falls to whatever block the template put
+  // there), a late riser keeps sleeping past the template end, an erratic jitter
+  // clips or extends it. When a tick is outside that span the template loop already
+  // assigned the right block above, so only the in-span case is overridden. The
+  // `regular`/absent case leaves effectiveSleepEnd null and is the template,
+  // byte-for-byte.
+  if (effectiveSleepEnd !== null) {
+    const sleepStart = sleepEntry[0];
+    const sleepBaseEnd = sleepEntry[1];
+    if (tick >= sleepStart && tick < effectiveSleepEnd) {
+      currentBlock = 'sleep';
+      currentWeight = sleepEntry[2] ?? currentWeight;
+    } else if (effectiveSleepEnd < sleepBaseEnd && tick >= effectiveSleepEnd && tick < sleepBaseEnd) {
+      // early riser (or a negative erratic jitter): woke BEFORE the template
+      // wake — they are UP, in the block that follows sleep (their morning),
+      // not still asleep.
+      const follow = Object.entries(sched)
+        .filter(e => e[0] !== 'sleep' && e[1][0][0] >= sleepBaseEnd)
+        .sort((a, b) => a[1][0][0] - b[1][0][0])[0];
+      if (follow) {
+        currentBlock = follow[0];
+        currentWeight = follow[1][0][2] ?? 0.5;
+      }
+    }
+  }
+
   // Intimacy & Voyeurism Phase 14 (D14): a resident whose outside partner is
   // over is bound to their OWN bedroom for the visit window — the boyfriend
   // comes over and disappears to her room. Same shape as the commitment bind
@@ -1023,7 +1235,10 @@ function resolveScheduleActivity(npc, clock, gameState, npcId) {
   // are exempt (a host mid-shift is not pulled home; the partner waits in the
   // booked room, their person's bedroom), and a real commitment still wins
   // because it returns before this check runs.
-  if (gameState && npcId && currentBlock !== 'work' && currentBlock !== 'commute' && currentBlock !== 'commute_home') {
+  // D12: the exemption is "the host is OUT", not "the host's block is called
+  // work". A remote host mid-shift is standing in the flat, so the partner
+  // visit binds them exactly as any other at-home block would.
+  if (gameState && npcId && !npcIsOffsite(npc, currentBlock, clock, npcId)) {
     const partnerVisit = getActiveVisits(gameState).find(v => v.purpose === 'partner' && v.hostNpcId === npcId);
     if (partnerVisit) {
       return {
@@ -1074,13 +1289,79 @@ function resolveScheduleActivity(npc, clock, gameState, npcId) {
 // the NPC to the preferred room for that activity. Falls back to
 // crowd-avoidance random pick among all common rooms.
 // Returns { location, activity } — the activity is picked here so the
+// --- Where an at-home workday happens (vocation plan D5) -------------------
+// The occupation names its workspace as an ORDERED preference list
+// (`workRoom`, e.g. ['study', 'bedroom']); 'bedroom' resolves to the NPC's
+// own assigned room. Resolution walks the list and takes the first room that
+// is not already at capacity, then falls back to the NPC's bedroom, and only
+// then to the ordinary common-room wander.
+//
+// The capacity walk is the point, not a nicety. `study` holds 2. With three
+// remote workers in the flat, one of them is displaced into their bedroom
+// every day — which is exactly the contention worth having: the study
+// becomes a thing roommates share badly, and where somebody works stops
+// being a constant.
+//
+// The activity string comes from the occupation's own table so a developer
+// is "on a video call" and a designer is "sketching" — ACTIVITY_TABLES.work
+// holds the single string 'at work', which is right for someone who is GONE
+// and useless for someone at a desk in the next room.
+function resolveHomeWorkPlacement(npc, npcId, npcs, rng, gameState) {
+  const occ = npc?.bible?.occupation || {};
+  const activity = pickHomeWorkActivity(occ, rng);
+
+  const prefs = Array.isArray(occ.workRoom) && occ.workRoom.length
+    ? occ.workRoom
+    : ['study', 'bedroom'];
+  const own = npc?.residency?.room || null;
+
+  for (const raw of prefs) {
+    const roomId = raw === 'bedroom' ? own : raw;
+    if (!roomId || !ROOMS[roomId]) continue;
+    if (roomId === 'bedroom_player') continue;
+    // Somebody else's bedroom is never a workspace.
+    if (ROOMS[roomId].type === 'bedroom' && roomId !== own) continue;
+    const occupants = getPresentNpcIds(npcs, roomId).filter(id => id !== npcId).length;
+    if (occupants >= (ROOMS[roomId].capacity || 1)) continue;
+    return { location: roomId, activity };
+  }
+
+  if (own && ROOMS[own]) return { location: own, activity };
+
+  const candidates = COMMON_ROOMS.map(roomId => {
+    const occCount = getPresentNpcIds(npcs, roomId).length;
+    const weight = occCount >= ROOMS[roomId].capacity ? 1 / SCENE.crowdAvoidanceWeight : 1;
+    return { roomId, weight };
+  });
+  return { location: weightedPick(rng, candidates, c => c.weight).roomId, activity };
+}
+
+// The at-home work activity string. Per-occupation `workActivities` wins;
+// otherwise the category's table; otherwise a neutral default. Kept beside
+// the placement so the room and the phrase are chosen in one place and
+// cannot disagree — the same reason resolveRoomForActivity picks its
+// activity before routing.
+function pickHomeWorkActivity(occ, rng) {
+  const pool = (Array.isArray(occ.workActivities) && occ.workActivities.length)
+    ? occ.workActivities
+    : (HOME_WORK_ACTIVITIES[occ.category] || HOME_WORK_ACTIVITIES._default);
+  return pool[Math.floor(rng() * pool.length)];
+}
+
 // room preference and activity string can't disagree.
-function resolveRoomForActivity(block, npcId, npcs, rng) {
+function resolveRoomForActivity(block, npcId, npcs, rng, clock, gameState) {
   if (block === 'sleep') {
     return { location: null, activity: 'sleeping' };
   }
+  // D12: work no longer means offscreen by definition. An on-site worker
+  // still leaves; a remote/hybrid-home/self-employed one stays and gets a
+  // real room and a real activity (D5 / Phase 3).
   if (block === 'work' || block === 'commute' || block === 'commute_home') {
-    return { location: null, activity: ACTIVITY_TABLES[block] ? ACTIVITY_TABLES[block][0] : block };
+    const npc = npcs?.[npcId];
+    if (npcIsOffsite(npc, block, clock, npcId)) {
+      return { location: null, activity: ACTIVITY_TABLES[block] ? ACTIVITY_TABLES[block][0] : block };
+    }
+    return resolveHomeWorkPlacement(npc, npcId, npcs, rng, gameState);
   }
 
   // Pick the activity string first so we can route by it
@@ -1426,14 +1707,24 @@ function resolveTick(gameState) {
       activity = 'sleeping';
       transit = null;
     } else if (block === 'work' || block === 'commute' || block === 'commute_home') {
-      location = null; // off-screen
-      activity = ACTIVITY_TABLES[block] ? ACTIVITY_TABLES[block][0] : block;
-      transit = null;
+      // D12: the work block no longer implies off-screen. `npcIsOffsite` is
+      // the only thing that decides it, so an at-home worker falls through to
+      // the ordinary placement path with a real room and a real activity.
+      if (npcIsOffsite(npc, block, meta.clock, id)) {
+        location = null; // off-screen
+        activity = ACTIVITY_TABLES[block] ? ACTIVITY_TABLES[block][0] : block;
+        transit = null;
+      } else {
+        const home = resolveHomeWorkPlacement(npc, id, npcs, rng, gameState);
+        location = home.location;
+        activity = home.activity;
+        transit = null;
+      }
     } else {
       // If already in transit, keep heading to the same destination rather
       // than picking a new random activity/room each tick (which would make
       // the NPC forever restart their journey and never arrive).
-      const { location: target, activity: pickedActivity } = resolveRoomForActivity(block, id, npcs, rng);
+      const { location: target, activity: pickedActivity } = resolveRoomForActivity(block, id, npcs, rng, meta.clock, gameState);
       if (npc.transit) {
         // Continue toward the existing destination
         const existingTarget = npc.transit.destination;
@@ -1632,7 +1923,7 @@ function resolveTick(gameState) {
       npc, block, activity, npc.clothing || 'dressed',
       seededRng(meta.seed, `nude_${id}_${meta.clock.day * 1440 + Math.floor(meta.clock.minutes)}`)
     );
-    const outfit = npcOutfitForContext(npc, gameState, block, activity);
+    const outfit = npcOutfitForContext(npc, gameState, block, activity, id);
 
     npcUpdates[id] = {
       location,
@@ -1784,7 +2075,15 @@ function resolveTick(gameState) {
     // record with one completion time. Block 'commute_home' is deliberately
     // not here: that window only arrives while a work commitment already
     // holds, and a resident reading it without one is already home.
-    if (resolved[id].block === 'work' || resolved[id].block === 'commute') {
+    //
+    // D15: gated on npcIsOffsite, not on the block name. An at-home worker
+    // must NOT open this commitment — openWorkCommitment plans a walk to the
+    // front door and movement.js lands it by setting pos/location to null,
+    // which would strand a remote worker off-map for the whole shift with no
+    // return path. They fall through to the ordinary scorer instead, which is
+    // what makes an at-home workday a real, drive-driven day.
+    if ((resolved[id].block === 'work' || resolved[id].block === 'commute')
+        && npcIsOffsite(gameState.npcs[id], resolved[id].block, gameState.meta.clock, id)) {
       const workCommitted = openWorkCommitment(gameState, id);
       if (workCommitted) {
         const post = gameState.npcs[id];
@@ -1798,6 +2097,56 @@ function resolveTick(gameState) {
         npcUpdates[id].activity = workCommitted.arrived ? 'at work' : 'heading to work';
       }
       continue;
+    }
+
+    // The at-home shift (D5/D16). Its own commitment, because the first cut
+    // of this simply let an at-home worker fall through to the drive scorer
+    // — and a week of remote workers then spent their shifts in the laundry
+    // room, never once at a desk. Working from home has to be something they
+    // are DOING, held the way any other pursuit is held, or "remote" just
+    // means "unemployed with extra steps".
+    //
+    // Only the 'work' block binds. A remote worker has no commute, so the
+    // template's commute windows are ordinary free time for them — which is
+    // truthful and gives them a natural gap at each end of the day.
+    if (resolved[id].block === 'work') {
+      // Code-review fix (efficiency, partial): `resolved[id]` was already
+      // computed a few dozen lines up (the block === 'work' branch above,
+      // when the NPC isn't offsite), and since the offsite case already
+      // `continue`d out at the openWorkCommitment branch just above this one,
+      // reaching here guarantees resolved[id] is that real at-home placement.
+      // openHomeWorkCommitment now reuses it for its yield-to-content-work
+      // candidacy check (scoring against the room the NPC is actually in this
+      // tick, not last tick's stale npc.location).
+      //
+      // It deliberately does NOT reuse it for the actual room COMMIT, though
+      // an earlier draft of this fix did. resolveHomeWorkPlacement's capacity
+      // check reads live npc.location via getPresentNpcIds, and this loop
+      // commits NPCs one at a time, writing npc.location as each one lands —
+      // so NPC B's commit correctly sees NPC A already seated when it
+      // recomputes fresh, sequentially, right here. Pass 1's precomputed
+      // placements were each checked against the tick's PRE-loop snapshot
+      // instead, with no visibility into each other, so reusing one for the
+      // commit let multiple home workers all independently "win" the same
+      // under-capacity room in the same tick (measured: 0 over-capacity study
+      // ticks before that reuse, 14 after). openHomeWorkCommitment still
+      // recomputes the placement fresh for the actual commit.
+      const homeWork = openHomeWorkCommitment(gameState, id, resolved[id]);
+      if (homeWork) {
+        const post = gameState.npcs[id];
+        if (post) {
+          npcUpdates[id].commitment = post.commitment;
+          npcUpdates[id].pos = post.pos;
+          npcUpdates[id].walk = post.walk;
+        }
+        npcUpdates[id].location = homeWork.anchor?.roomId || post?.location || null;
+        npcUpdates[id].transit = null;
+        npcUpdates[id].activity = homeWork.activity;
+        continue;
+      }
+      // No shift could be opened (no work window today, or it has already
+      // ended) — fall through to the ordinary scorer rather than stranding
+      // them in a block with nothing in it.
     }
 
     // Visitors (external-world plan Phase 1) pass their status through so
@@ -2969,6 +3318,52 @@ function describeSleep(hours, energyOnWaking) {
 // fully restored apartment at 30% a head breaks even around four roommates
 // and turns a profit by seven. Callers must handle a negative share as
 // income rather than clamping it to zero.
+// What fraction of the rent a roommate carries before any negotiated agreement,
+// derived from income (vocation plan Phase 8). incomeBand says HOW MUCH,
+// incomeSource says from WHERE — the two together pick a cell in
+// ECONOMY.rent.incomeShare (config.js). 'none' contributes nothing (money is
+// running out), 'self' sits a touch under the wage curve (variable income),
+// 'means' covers a wage earner's share of the same band. Pure and null-safe: an
+// NPC without a readable occupation falls back to defaultRoommateShare, exactly what
+// every resident paid before this phase.
+function incomeRentShare(npc) {
+  const occ = npc?.bible?.occupation || npc?.occupation || {};
+  const source = occ.incomeSource || 'wage';
+  const band = occ.incomeBand || 'mid';
+  const v = ECONOMY.rent.incomeShare?.[source]?.[band];
+  return typeof v === 'number' ? v : ECONOMY.rent.defaultRoommateShare;
+}
+
+// The fraction computeRent actually uses. residency.rentShare is the future
+// agreement system's seam and is NOT set at move-in anymore (it used to be
+// pre-populated with the flat 0.15, which is why every resident paid the same).
+// The stored-default test matters: an old save's stored 0.15 was the uniform
+// default, not a deliberate negotiation — so it is ignored and the share derives
+// from income, which is how old saves pick up income-driven rent too. Only a
+// value that actually differs from that default (something a real negotiation would
+// set) is honored. A value equal to the default is indistinguishable from legacy
+// and simply derives — a corner only an agreement system is ever close to, and when
+// one lands it will want its own precedent anyway.
+// Code-review note (not fixed, deliberately — see below): 0.15 is not just
+// the legacy sentinel, it is ALSO the live derived value for
+// ECONOMY.rent.incomeShare.wage.mid and .means.mid (config.js), so a real
+// future negotiation landing on exactly 0.15 would be silently treated as
+// "never negotiated" and re-derived, discarding the agreement. No fix ships
+// here because there is currently no writer that can ever produce that
+// collision — both places that set residency.rentShare (sim.js) write `null`
+// unconditionally, and null already always derives, bypassing this check
+// entirely. The only way to close this cleanly is a marker distinct from the
+// value itself (e.g. a `residency.rentNegotiatedDay` stamp only a real
+// negotiation system would ever write) — inventing that field now, with no
+// writer or reader, would be the exact `stressProfile` mistake D23 exists to
+// prevent. Whoever builds the negotiation system should read this comment
+// before reusing the value-equality check below for anything real.
+function negotiatedOrDerived(npc) {
+  const stored = npc?.residency?.rentShare;
+  if (typeof stored === 'number' && stored !== ECONOMY.rent.defaultRoommateShare) return stored;
+  return incomeRentShare(npc);
+}
+
 function computeRent(npcs, gameState) {
   const quality = gameState ? getApartmentQuality(gameState) : undefined;
   const ceiling = roommateShareCeiling(quality);
@@ -2988,7 +3383,7 @@ function computeRent(npcs, gameState) {
   let covered = 0;
   const shares = {};
   for (const [id, npc] of contributors) {
-    let share = clamp(npc.residency.rentShare ?? ECONOMY.rent.defaultRoommateShare, 0, ceiling);
+    let share = clamp(negotiatedOrDerived(npc), 0, ceiling);
     // Sharing a bedroom is worth less than a private one. Without this a
     // full house all pays the private rate, which is the difference
     // between the apartment clearing ~$5.6k/mo and ~$9k/mo.
@@ -3088,11 +3483,12 @@ function changeResidencyStatus(npc, status, opts) {
       since: opts?.since ?? npc.residency.since,
       partnerOf: opts?.partnerOf ?? npc.residency.partnerOf,
       contributesRent,
-      // Someone moving in without a negotiated agreement contributes the
-      // default. opts.rentShare is the seam the future agreement system
-      // writes through when a move-in is the result of an actual
-      // negotiation rather than a bare status change.
-      rentShare: opts?.rentShare ?? npc.residency.rentShare ?? ECONOMY.rent.defaultRoommateShare,
+      // Someone moving in without a negotiated agreement contributes what their
+      // income says (Phase 8). rentShare: null means "derive from income" —
+      // computeRent's negotiatedOrDerived. opts.rentShare is the seam the
+      // future agreement system writes through when a move-in is the result of an
+      // actual negotiation rather than a bare status change.
+      rentShare: (opts?.rentShare != null) ? opts.rentShare : null,
     },
   };
 }
@@ -3300,35 +3696,50 @@ function generatePlayerAppearance(seed, authored) {
   physical.intimate = generateIntimate(rng, gender);
   appendFacialHairDraw(physical, rng);
 
-  if (a.physical) {
-    // A shallow per-group merge, not a wholesale replace: creation may author
-    // only hair colour, and the rest must stay rolled rather than vanish.
-    for (const [group, val] of Object.entries(a.physical)) {
-      if (group === 'intimate') continue;   // handled below — it nests deeper
-      physical[group] = (val && typeof val === 'object' && !Array.isArray(val))
-        ? { ...physical[group], ...val }
-        : val;
-    }
-    // `intimate` is the one group with a level BELOW the per-group merge, so
-    // the generic pass above would flatten it: authoring only `breasts.size`
-    // would replace the whole breasts object and drop the rolled shape,
-    // areola and nipples. Merge its object half a level deeper, and REPLACE
-    // its array half — a genitals list the player built is the complete list,
-    // and unioning it with a rolled one would hand them parts they removed.
-    const ai = a.physical.intimate;
-    if (ai) {
-      if (ai.breasts) physical.intimate.breasts = { ...physical.intimate.breasts, ...ai.breasts };
-      if (Array.isArray(ai.genitals)) physical.intimate.genitals = normalizeGenitals(ai.genitals);
-      if (typeof ai.bodyHair === 'string') physical.intimate.bodyHair = ai.bodyHair;
-    }
-    // `heightBuild` is a DERIVED field that generatePhysical composes at roll
-    // time, and getPhysicalDescriptionForPrompt prefers it over the height/
-    // build pair. Recompose it after the merge or an authored build lands in
-    // the data and never reaches the prose — the player picks "athletic" and
-    // every prompt still calls them lean.
-    physical.heightBuild = `${physical.height} and ${physical.build}`;
-  }
+  // Merge any authored subset over the rolled base. This is the shared merge
+  // (D14) — rollCastSlot uses the SAME function for partial.physical, so the
+  // two appearance-authoring paths are one implementation, not two.
+  applyAuthoredPhysical(physical, a);
   return { age, gender, physical };
+}
+
+// The merge half of appearance authoring, extracted from generatePlayerAppearance
+// (D14): a player-authored physical subset is merged over a rolled base.
+//
+// This draws NO randomness — it is safely applied after every roll in the
+// sequence (design invariant 4), so a seed's cast is byte-identical whether
+// or not a `physical` partial was supplied.
+//
+// Three bug-fixes the earlier inline form recorded, preserved here:
+//  * A shallow per-group merge, not a wholesale replace: creation may author
+//    only hair colour, and the rest must stay rolled rather than vanish.
+//  * `intimate` is the one group with a level BELOW the per-group merge, so
+//    the generic pass above would flatten it: authoring only `breasts.size`
+//    would replace the whole breasts object and drop the rolled shape, areola
+//    and nipples. Merge its object half a level deeper, and REPLACE its array
+//    half — a genitals list the player built is the complete list, and
+//    unioning it with a rolled one would hand them parts they removed.
+//  * `heightBuild` is a DERIVED field that generatePhysical composes at roll
+//    time, and getPhysicalDescriptionForPrompt prefers it over the height/build
+//    pair. Recompose it after the merge or an authored build lands in the data
+//    and never reaches the prose.
+function applyAuthoredPhysical(rolledPhysical, authored) {
+  const a = authored || {};
+  if (!a.physical) return rolledPhysical;
+  for (const [group, val] of Object.entries(a.physical)) {
+    if (group === 'intimate') continue;   // handled below — it nests deeper
+    rolledPhysical[group] = (val && typeof val === 'object' && !Array.isArray(val))
+      ? { ...rolledPhysical[group], ...val }
+      : val;
+  }
+  const ai = a.physical.intimate;
+  if (ai) {
+    if (ai.breasts) rolledPhysical.intimate.breasts = { ...rolledPhysical.intimate.breasts, ...ai.breasts };
+    if (Array.isArray(ai.genitals)) rolledPhysical.intimate.genitals = normalizeGenitals(ai.genitals);
+    if (typeof ai.bodyHair === 'string') rolledPhysical.intimate.bodyHair = ai.bodyHair;
+  }
+  rolledPhysical.heightBuild = `${rolledPhysical.height} and ${rolledPhysical.build}`;
+  return rolledPhysical;
 }
 
 // Surnames. The cast has never needed one (a roommate is "Mira", not "Mira
@@ -3383,7 +3794,18 @@ function rollPlayerName(seed, gender, authored) {
 // generatePlayerAppearance untouched — it reads only what it knows — and are
 // picked off separately by buildGameState. Callers passing the old narrower
 // shape still work and simply author no name.
-function SIM_generateHouse(seed, residentCount, partials, playerDraft) {
+// `economyCfg` (Sandbox Pre-Game Editor Overhaul audit, 2026-08-23) is the
+// sandbox's cfg.economy, or undefined for every non-sandbox path (solo /
+// random / guided), which then gets ECONOMY's own tuned defaults exactly as
+// before. It exists so a sandbox's authored rentGraceDays/billsStartDay are
+// BORN into the opening's day fields here, rather than written over them
+// afterwards in applySandboxPreset — D19's guard (see
+// snapshotSandboxDayFields) forbids rebasing an already-stamped day field,
+// and rightly so: the failure it catches is a game opening on a wall of
+// retroactively-overdue bills. Generating a different opening is not
+// rebasing one, so this seam satisfies D19 by construction and leaves the
+// guard fully armed rather than amending it.
+function SIM_generateHouse(seed, residentCount, partials, playerDraft, economyCfg) {
   const actualSeed = seed || genSeed();
   const clock = { day: 1, weekday: 0, minutes: CLOCK.startMinutes, phase: getPhase(CLOCK.startMinutes) };
 
@@ -3392,7 +3814,7 @@ function SIM_generateHouse(seed, residentCount, partials, playerDraft) {
   // empty apartment. Roommates are recruited later via the Classifieds app.
   if (ECONOMY.opening?.soloStart && residentCount === 0) {
     const emptyCast = { npcs: {}, npcIds: [], castWeb: {}, playerDraft };
-    return buildGameState(actualSeed, emptyCast, clock, []);
+    return buildGameState(actualSeed, emptyCast, clock, [], economyCfg);
   }
 
   // Generate residents
@@ -3415,7 +3837,7 @@ function SIM_generateHouse(seed, residentCount, partials, playerDraft) {
   }
 
   // Build game state from best cast
-  return buildGameState(actualSeed, { ...bestCast, playerDraft }, clock, droppedConstraints);
+  return buildGameState(actualSeed, { ...bestCast, playerDraft }, clock, droppedConstraints, economyCfg);
 }
 
 function getQualityThreshold(residentCount) {
@@ -3432,7 +3854,9 @@ function getQualityThreshold(residentCount) {
 //
 // `partial` (optional) is any subset of: occupationCategory, temperament
 // (per-axis), interests (array of names), values (array of 2 names),
-// baggage, wound, want, blindSpot, boundary, name. Whatever is supplied is
+// baggage, wound, want, blindSpot, boundary, name, physical (D15 — an
+// authored appearance subset, merged by applyAuthoredPhysical AFTER the roll so
+// the RNG order is untouched). Whatever is supplied is
 // held fixed; everything else is rolled — this is the mechanism behind
 // authorCharacter: "full random" is authorCharacter with partial={}, and
 // "manual" is authorCharacter with everything filled. Same function either
@@ -3456,20 +3880,21 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
   for (let rollAttempt = 1; rollAttempt <= CHAR_GEN.maxAttempts; rollAttempt++) {
     const charRng = seededRng(seed, `char_${slotIndex}_${attempt}_${rollAttempt}`);
 
-    // Occupation: forced to the authored category if given, else no
-    // shared categories across the cast.
-    let occ;
-    if (partial.occupationCategory) {
-      const forced = OCCUPATION_POOL.filter(o => o.category === partial.occupationCategory);
-      occ = weightedPick(charRng, forced.length > 0 ? forced : OCCUPATION_POOL);
-    } else {
-      const availableOccs = OCCUPATION_POOL.filter(o => !usedOccupationCats.has(o.category));
-      occ = weightedPick(charRng, availableOccs.length > 0 ? availableOccs : OCCUPATION_POOL);
-    }
-
     // Temperament axes, per-axis override. Whether the resulting cast
     // spans a meaningful range is a cast-level property, checked in
     // scoreCast.
+    //
+    // D6 — THIS MOVED ABOVE THE OCCUPATION ROLL. Occupation used to be drawn
+    // first, before a temperament existed, which made personality coupling
+    // not merely absent but structurally impossible: nothing about the person
+    // could inform the job because the person had not been rolled yet.
+    //
+    // The cost is that the charRng stream is consumed in a different order,
+    // so a given seed produces a different cast than it did before this plan.
+    // That is NOT save-breaking — generateCast runs at new-game only and the
+    // result is persisted in gameState.npcs — and it matters only if
+    // cross-version seed reproducibility were promised, which it is not.
+    // Determinism WITHIN a version is untouched and still asserted.
     const pt = partial.temperament || {};
     const temperament = {
       warmth:            pt.warmth            ?? rollAxis(charRng),
@@ -3479,6 +3904,43 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
       assertiveness:     pt.assertiveness     ?? rollAxis(charRng),
       selfAwareness:     pt.selfAwareness     ?? rollAxis(charRng),
     };
+
+    // Occupation: forced to the authored category if given, else no shared
+    // categories across the cast — both now weighted BY the temperament
+    // above (D7), through weightedPick's existing optional weightFn.
+    //
+    // D11 — the fallback. occupationAffinity's disinhibitionFloor is the
+    // first thing in cast generation capable of scoring a candidate at
+    // literally zero, which makes it the first thing capable of emptying a
+    // pool: a low-disinhibition character offered only adult work has no
+    // legal draw at all. rollCastSlot's contract is that character creation
+    // NEVER hard-fails, so when every candidate scores zero the affinity
+    // weighting is dropped for that draw and the pick is uniform. A cast with
+    // no adult worker in it is a correct outcome, not a retry condition.
+    const affinityOf = (o) => occupationAffinity(o, temperament);
+    const pickOcc = (pool) => {
+      const anyViable = pool.some(o => affinityOf(o) > 0);
+      return weightedPick(charRng, pool, anyViable ? affinityOf : null);
+    };
+    let occ;
+    if (partial.occupationCategory) {
+      const forced = OCCUPATION_POOL.filter(o => o.category === partial.occupationCategory);
+      occ = pickOcc(forced.length > 0 ? forced : OCCUPATION_POOL);
+    } else {
+      const availableOccs = OCCUPATION_POOL.filter(o => !usedOccupationCats.has(o.category));
+      occ = pickOcc(availableOccs.length > 0 ? availableOccs : OCCUPATION_POOL);
+    }
+
+    // D4 — which days a hybrid worker is in the office. Rolled here, once,
+    // and stored on the occupation record: SCHEDULES only knows weekday from
+    // weekend, so day-of-week variance cannot live in a template without
+    // inventing seven-day ones. Indices are getWeekday's (0=Mon .. 6=Sun).
+    let officeDays = [];
+    if (occ.workMode === 'hybrid') {
+      const [lo, hi] = VOCATION_TUNING.hybridOfficeDayCount;
+      const count = lo + Math.floor(charRng() * (hi - lo + 1));
+      officeDays = pickUnique(charRng, VOCATION_TUNING.hybridOfficeDayPool, count).sort((a, b) => a - b);
+    }
 
     // Interests (2-3): authored list if given, else prefer entries fully
     // disjoint from every already-committed castmate's tags — steering
@@ -3534,7 +3996,12 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
     // author directly).
     // NPC Overhaul Phase 5: Personality generation — seeded from charRng, weighted by temperament
     const numTraits = 3 + Math.floor(charRng() * 3); // 3-5 traits
-    const traits = pickUnique(charRng, PERSONALITY_TRAITS_POOL, numTraits);
+    // D7, the second half of the coupling: the occupation was drawn FROM the
+    // temperament above, and now leans the trait draw back toward itself, so
+    // a Cam Model tends to come out brazen and a Bookkeeper meticulous. A
+    // LEAN, not a gate — the multipliers shift odds and forbid nothing, and
+    // an occupation with no traitAffinity draws exactly as it did before.
+    const traits = pickUnique(charRng, PERSONALITY_TRAITS_POOL, numTraits, t => traitAffinityFor(occ, t));
     const coreTrait = traits[Math.floor(charRng() * traits.length)];
     // hiddenTrait: something NOT in traits — they suppress or don't show it
     const hiddenPool = PERSONALITY_TRAITS_POOL.filter(t => !traits.includes(t));
@@ -3558,7 +4025,40 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
       history: '',
       temperament,
       personality,                                           // NPC Overhaul Phase 5
-      occupation: occ,
+      // The bible carries the occupation's RUNTIME fields, not the pool entry
+      // wholesale. `affinity` and `traitAffinity` are roll-time tuning: they
+      // are consumed above and have no reader after generation, so persisting
+      // them onto every NPC — and into every save — would be six copies of a
+      // tuning table with nothing to read them. That is the `stressProfile`
+      // mistake with extra steps (D23).
+      //
+      // Code-review fix: this used to be a hand-maintained ALLOWLIST of which
+      // fields to copy, and it silently fell behind — styleLean, foodLean,
+      // sleepRhythm and spendingLean were all authored on every one of the 59
+      // OCCUPATION_POOL entries, all had real readers shipped alongside them,
+      // and NONE of them ever reached a real NPC's bible, because nobody
+      // remembered to add four more lines here when they were added. That is
+      // a bigger version of the exact mistake D23 exists to prevent — a
+      // one-line reader-registration step is exactly the kind of thing that
+      // gets forgotten under time pressure, the same as the doc comment right
+      // above this one already knew about `stressProfile`.
+      //
+      // A DENYLIST can't have that failure mode the same way: it copies
+      // every field on the pool entry through by default and only excludes
+      // the two known roll-time-only keys by name, so a fifth/sixth/seventh
+      // lifestyle dimension added later reaches the bible automatically —
+      // the reader still has to be written (D23 isn't optional), but the
+      // wiring between "authored in the pool" and "present on the NPC" can no
+      // longer silently drop a field.
+      occupation: (() => {
+        const { affinity, traitAffinity, ...runtime } = occ;
+        return {
+          ...runtime,
+          workMode: occ.workMode || 'on_site',
+          incomeSource: occ.incomeSource || 'wage',
+          ...(officeDays.length ? { officeDays } : {}),
+        };
+      })(),
       interests: interests.map(x => ({ name: x.name, tags: x.tags, skill: Math.floor(charRng() * 40) })), // NPC Overhaul: +skill
       values: values.map(v => ({ name: v.name, opposition: v.opposition })),
       baggage,
@@ -3577,6 +4077,14 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
     // pre-existing draw so no seed's household changes (see generatePhysical).
     structured.physical.intimate = generateIntimate(charRng, structured.gender);
     appendFacialHairDraw(structured.physical, charRng);
+
+    // Sandbox (D15): partial.physical is the authored appearance subset,
+    // merged over the rolled base by the SAME applyAuthoredPhysical the player
+    // studio calls, applied AFTER generateIntimate and appendFacialHairDraw
+    // so the RNG draw order is untouched (design invariant 4). The merge
+    // draws no randomness, so one seed's household is byte-identical whether
+    // or not a physical partial was supplied.
+    applyAuthoredPhysical(structured.physical, partial);
 
     // Settings & Pause Overhaul Phase 6 (D13): species, drawn AFTER every
     // pre-existing draw in the sequence — the append-at-end rule that keeps
@@ -3873,8 +4381,23 @@ function shareKeywords(a, b) {
 }
 
 // --- Build full game state from cast ---
-function buildGameState(seed, cast, clock, droppedConstraints) {
+function buildGameState(seed, cast, clock, droppedConstraints, economyCfg) {
   const { npcs, npcIds, castWeb } = cast;
+  // The opening's two day-shaped economy knobs, resolved once here. Undefined
+  // economyCfg (every non-sandbox path) falls back to ECONOMY's own numbers,
+  // so a solo/random/guided start is byte-identical to before this param
+  // existed. Both are floored so a sandbox can never author an opening that
+  // is already overdue on day 1 — grace 0 would put rent due ON day 1, which
+  // is the exact "wall of bills" state D19 exists to prevent.
+  const openingGraceDays = Math.max(1, Number.isFinite(economyCfg?.rentGraceDays)
+    ? economyCfg.rentGraceDays
+    : (ECONOMY.opening?.rentGraceDays || ECONOMY.payPeriodDays));
+  // billsStartDay is authored as a DAY (day 8 = today's default); initBillState
+  // and ECONOMY.opening speak in DELAY (7). The -1 is that one conversion, kept
+  // here beside its sibling rather than repeated at each use.
+  const openingBillDelay = Math.max(0, Number.isFinite(economyCfg?.billsStartDay)
+    ? economyCfg.billsStartDay - 1
+    : (ECONOMY.opening?.firstBillDelay || 0));
 
   // Room shell state (cleanliness/lastEvent). Presence is never stored here
   // — it's derived live from npc.location via getPresentNpcIds, and (as of
@@ -3912,7 +4435,7 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
   for (const id of npcIds) {
     const npc = npcs[id];
     const block = npc.schedule?.currentBlock || 'morning';
-    npc.outfit = npcOutfitForContext(npc, { objects }, block, null);
+    npc.outfit = npcOutfitForContext(npc, { objects }, block, null, id);
     if (!npc.clothing) npc.clothing = 'dressed';
   }
 
@@ -4045,7 +4568,7 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
     // ECONOMY.opening.rentGraceDays so the player has time to orient
     // and start earning before the first charge lands.
     rentOwed: 0,
-    rentDueDay: 1 + (ECONOMY.opening?.rentGraceDays || ECONOMY.payPeriodDays),
+    rentDueDay: 1 + openingGraceDays,
   };
 
   const state = {
@@ -4141,15 +4664,18 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
       // src/ref/complete/contractor-tutorial-overhaul-plan.md.
       flags: {},
       rent,
-      // Phase 6 taxes: quarterly estimated tax. quarterGross accumulates
-      // each quarter's gross gig income; the bill lands at quarter end.
-      // lastQuarterBilled is the last fully-billed quarter index, so a
-      // save reloaded mid-quarter doesn't rebill. unpaid carries penalties
-      // forward (compounding). autoReserve is the opt-in skim toggle.
-      // quarterDeductions accumulates deductible spending this quarter
-      // (Nile tech, internet share, classes). lastQuarterOwed/lastQuarterPaid
-      // record the most recent bill for display. reserve is the auto-reserve
-      // balance the player can draw on to pay the tax bill.
+      // Phase 6 taxes: estimated tax on a 70-day period (calendar plan D3 —
+      // end of Summer and end of Winter). quarterGross accumulates each
+      // period's gross gig income; the bill lands at the period's end.
+      // lastQuarterBilled is the last fully-billed tax-period index (0-1),
+      // so a save reloaded mid-period doesn't rebill; the key keeps its
+      // quarter-era name by plan (renaming it would need a save migration).
+      // unpaid carries penalties forward (compounding). autoReserve is the
+      // opt-in skim toggle. quarterDeductions accumulates deductible
+      // spending this period (Nile tech, internet share, classes).
+      // lastQuarterOwed/lastQuarterPaid record the most recent bill for
+      // display. reserve is the auto-reserve balance the player can draw on
+      // to pay the tax bill.
       taxes: { quarterGross: 0, lastQuarterBilled: -1, unpaid: 0, autoReserve: false, reserve: 0, quarterDeductions: 0, lastQuarterOwed: 0, lastQuarterPaid: 0 },
       // Phase 3 bills: one entry per BILL_DEFS. `dueDay` is the next day a
       // charge posts; `balance` is the currently-owed amount (0 when paid);
@@ -4159,7 +4685,7 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
       // First due days are staggered so the player isn't hit with every
       // bill on day 8 — rent first (day 8), then utilities spread across
       // the first month. Initialized by initBillState below.
-      bills: initBillState(),
+      bills: initBillState(openingGraceDays, openingBillDelay),
       // Phase 4 upgrades: one entry per FACILITY_DEFS. `tier` is the
       // facility's current condition ('broken'/'functional'/'upgraded').
       // The apartment starts in disrepair — see src/ref/complete/game-opening-plan.md.
@@ -4215,16 +4741,35 @@ function buildGameState(seed, cast, clock, droppedConstraints) {
 }
 
 // Initialize per-bill state for a new game. Rent is due first (day 8),
-// utilities stagger across the first 30 days so the opening isn't a wall
+// utilities stagger across the first ~month so the opening isn't a wall
 // of bills, phone/insurance land at the end of the first month. Stagger
 // offsets are relative to day 1.
-function initBillState() {
+// Both params are optional and default to ECONOMY's own numbers, so every
+// existing caller (the WORLD_KEY_FALLBACKS factory and the pre-bills save
+// fallback, both in state.js) is unchanged. buildGameState passes a
+// sandbox's authored values through when it has them — see the economyCfg
+// note on SIM_generateHouse. The per-utility stagger below is NOT rescaled
+// by either: it is shifted wholesale by `delay`, exactly as before, so the
+// deliberate spread the calendar plan's D6 insists on ("do not tidy these
+// onto day 35") survives whatever opening the player authors.
+function initBillState(graceDays, billDelay) {
   // Phase 7: utility bills start after ECONOMY.opening.firstBillDelay
   // so the opening isn't a wall of bills on day one. Rent is deferred
   // separately via rentDueDay in the player state.
-  const delay = ECONOMY.opening?.firstBillDelay || 0;
+  const delay = Number.isFinite(billDelay) ? billDelay : (ECONOMY.opening?.firstBillDelay || 0);
+  const grace = Number.isFinite(graceDays) ? graceDays : (ECONOMY.opening?.rentGraceDays || ECONOMY.payPeriodDays);
+  // D6: the first-due stagger is DELIBERATELY unchanged by the 30→35-day
+  // cadence change. "Once per season" is a statement about the period, not
+  // the phase — collapsing all six bills onto the season boundary would
+  // build a ~$600 wall on day 35 (with taxes beside it on every second
+  // one). Keep these offsets exactly as they are; do not "tidy" them onto
+  // day 35. (Two consequences follow from keeping them, both accepted: the
+  // phone bill lands on day 35 / the season boundary, because its offset
+  // is 28 + 7 = 35; and insurance's first four postings are 37/72/107/142,
+  // so within any 140-day window the phase can cost or grant it a posting.
+  // See verify-cal-p2.js.)
   const firstDue = {
-    rent: 1 + (ECONOMY.opening?.rentGraceDays || ECONOMY.payPeriodDays),
+    rent: 1 + grace,
     electric: 14 + delay, water: 18 + delay, gas: 22 + delay,
     internet: 12 + delay, phone: 28 + delay, insurance: 30 + delay,
   };
@@ -4263,6 +4808,207 @@ function initUpgradesState() {
     };
   }
   return upgrades;
+}
+
+// A completed renovation writes the object states its facility OWNS
+// (FACILITY_DEFS' `completionStates`, keyed by OBJECT_DEFS id and applied to
+// every instance in the facility's room). The pool is the case that needed
+// it: `swimming_pool.water` was a state the def described, the tier-0 copy
+// promised ("It holds no water") and nothing ever wrote — so a dry basin
+// with a torn liner emitted the smell of stagnant green water for the whole
+// game. Declared on the facility rather than branched on here, so the next
+// renovation that owns a state adds a line of data, not a special case.
+// Lives here (sim.js) rather than ui.js so the sandbox preset can call it —
+// see the Seasonal Calendar & Sandbox plan B3 residency note (the loadgame
+// harness ORDER stops before the ui/js layer).
+function applyFacilityCompletionStates(gameState, facilityId) {
+  const def = FACILITY_DEFS[facilityId];
+  if (!def?.completionStates) return;
+  const bucket = gameState.objects?.[`room_${def.room}`];
+  if (!bucket) return;
+  for (const obj of Object.values(bucket)) {
+    const states = def.completionStates[obj.defId];
+    if (states) obj.state = { ...obj.state, ...states };
+  }
+  refreshRoomCleanliness(gameState, def.room);
+}
+
+// Sandbox mode preset application (Seasonal Calendar & Sandbox plan, B3/D16-D19).
+// A pure-ish patch applied BETWEEN SIM_generateHouse and writeGeneratedGameState:
+// mutates `gameState` in place, returns it. The ordered steps are load-bearing
+// (D18) — structural flags must be written and the live graph rebuilt BEFORE
+// residency is assigned (converting the study adds a fourth bedroom to the picker),
+// and applyFacilityCompletionStates must run after each facility tier lands (the
+// pool's completionStates are what stop a "restored" house from still smelling of
+// stagnant water). meta.clock is never touched and NO absolute day field is ever
+// rewritten (D19) — sandbox is always day 1; the advanced thing is the house.
+// B5 (D21): the auto-assign target for roomless sandbox roommates — the
+// first bedroom with a free bed, over the same room set the sandbox config
+// screen offers (bedroom_1/2/3, plus 'study' when the study→bedroom
+// structural flag is set; bedroom_player is never an NPC room — D16).
+// Capacity is the room's habitability facility's residentCapacity at its
+// current tier, defaulting to 1 when the facility declares none — the same
+// arithmetic sandboxRoomCapacity (menu.js) previews and verify-sbx-p3
+// asserts against a started state. moveToRoom resolves the bed to the first
+// free A/B slot, so this stays consistent with the explicit moves in
+// applySandboxPreset step 5.
+function firstFreeBedroom(gameState) {
+  const upgrades = gameState.world?.upgrades || {};
+  const flags = gameState.world?.flags || {};
+  const roomIds = Object.keys(ROOMS).filter(id => ROOMS[id].type === 'bedroom' && id !== 'bedroom_player');
+  if (flags.structural_study_to_bedroom && !roomIds.includes('study')) roomIds.push('study');
+  const occupants = {};
+  for (const npc of Object.values(gameState.npcs || {})) {
+    const r = npc.residency;
+    if (r && r.room && r.status !== 'former') occupants[r.room] = (occupants[r.room] || 0) + 1;
+  }
+  for (const roomId of roomIds) {
+    const defId = (ROOM_FACILITIES[roomId] || [])[0];
+    const def = defId && FACILITY_DEFS[defId];
+    const tier = upgrades[defId]?.tier;
+    const t = def && def.tiers && tier && def.tiers.find(x => x.tier === tier);
+    const capacity = (t && t.residentCapacity) || 1;
+    if ((occupants[roomId] || 0) < capacity) return roomId;
+  }
+  return null;
+}
+
+function snapshotSandboxDayFields(gameState) {
+// D19 (Seasonal Calendar & Sandbox plan): the day-shaped fields that must be
+// byte-identical to a fresh SIM_generateHouse. Sandbox is always day 1 — the
+// advanced thing is the house, never the calendar, and no absolute day field is
+// ever rebased. Returns a map of path → value so applySandboxPreset's guard can
+// diff the state before against the state after. The set of these paths is OPEN by
+// design (any future system that stamps a day joins it silently), which is exactly
+// why the guard records whatever these fields hold at entry rather than only checking a
+// hand-written list — see the D19 block in applySandboxPreset.
+  const gs = gameState;
+  const snap = {};
+  if (gs && gs.player && gs.player.rentDueDay != null) snap['player.rentDueDay'] = gs.player.rentDueDay;
+  if (gs && gs.world && gs.world.bills) {
+    for (const id of Object.keys(gs.world.bills)) {
+      const b = gs.world.bills[id];
+      if (b && b.dueDay != null) snap['world.bills.' + id + '.dueDay'] = b.dueDay;
+    }
+  }
+  if (gs && gs.world && gs.world.taxes && gs.world.taxes.lastQuarterBilled != null) snap['world.taxes.lastQuarterBilled'] = gs.world.taxes.lastQuarterBilled;
+  if (gs && gs.world && gs.world.computer && gs.world.computer.apps && gs.world.computer.apps.gigs && gs.world.computer.apps.gigs.lastRefreshDay != null) snap['gigs.lastRefreshDay'] = gs.world.computer.apps.gigs.lastRefreshDay;
+  return snap;
+}
+
+function applySandboxPreset(gameState, cfg) {
+  cfg = cfg || {};
+  const house = cfg.house || {};
+  const upgrades = gameState.world.upgrades || (gameState.world.upgrades = initUpgradesState());
+
+  // D19 (assert, don't rebase): capture the day-shaped fields exactly as
+  // SIM_generateHouse produced them, before any sandbox side-effect runs.
+  // applySandboxPreset runs immediately after generation, so these ARE the fresh
+  // factory values. The guard at the end throws if any has moved.
+  const dayGuard = snapshotSandboxDayFields(gameState);
+
+  // 1. house.structural → world.flags.structural_<id>
+  const structural = house.structural || {};
+  gameState.world.flags = gameState.world.flags || {};
+  for (const [id, on] of Object.entries(structural)) {
+    if (STRUCTURAL_UPGRADES[id] && on) gameState.world.flags[`structural_${id}`] = 1;
+    else delete gameState.world.flags[`structural_${id}`];
+  }
+
+  // 2. rebuild the live graph (D18) — MUST precede the residency step.
+  applyStructuralUpgrades(gameState);
+
+  // 3. house.preset/facilities → world.upgrades[id] = { tier, condition }
+  const preset = SANDBOX_HOUSE_PRESETS[house.preset];
+  const customFacilities = house.facilities || {};
+  for (const def of FACILITY_LIST) {
+    if (preset && !preset.useStartingTiers) {
+      const s = preset.condition !== undefined ? { tier: preset.tier, condition: preset.condition } : { tier: preset.tier };
+      upgrades[def.id] = { ...upgrades[def.id], ...s };
+    }
+    if (customFacilities[def.id]) upgrades[def.id] = { ...upgrades[def.id], ...customFacilities[def.id] };
+  }
+
+  // 4. applyFacilityCompletionStates for every facility (D18) — the pool's
+  // completionStates (water filled/clear) are what separate a renovated pool from
+  // one that merely has the tier labels stamped on.
+  for (const def of FACILITY_LIST) applyFacilityCompletionStates(gameState, def.id);
+
+  // 5. roommate residency → the shared moveToRoom pass (D16). cfg.roommates is
+  // index-aligned with the cast slots (SIM_generateHouse's partials array), so
+  // gameState.npcIds[i] is the i-th roommate. moveToRoom assigns bed from the
+  // live occupancy of the target room, so the generated cast's starting
+  // room/bed claims must be cleared first — otherwise not-yet-moved roommates
+  // still count as occupants and the 'A'/'B' slot logic collides.
+  const roommates = cfg.roommates || [];
+  for (const id of gameState.npcIds || []) {
+    const n = gameState.npcs && gameState.npcs[id];
+    if (n && n.residency) { n.residency = { ...n.residency, room: null, bed: null }; n.location = null; }
+  }
+  for (let i = 0; i < roommates.length; i++) {
+    const r = roommates[i];
+    if (!r?.residency || !r.residency.room) continue;
+    const npcId = gameState.npcIds?.[i];
+    const npc = npcId ? gameState.npcs?.[npcId] : null;
+    if (!npc) continue;
+    gameState.npcs[npcId] = moveToRoom(npcId, npc, r.residency.room, gameState.npcs, r.residency.bed ?? null);
+  }
+  // 5b. roomless roommates → first free bed. The B5 config screen lets a
+  // roommate be added with no room at all; without this such a roommate
+  // would stay homeless (empty residency.room/location) for the whole run.
+  // firstFreeBedroom walks the same bedroom set the config screen offers,
+  // skipping any room already at its tier's residentCapacity.
+  for (let i = 0; i < roommates.length; i++) {
+    const r = roommates[i];
+    if (!r?.residency || r.residency.room) continue;
+    const npcId = gameState.npcIds?.[i];
+    const npc = npcId ? gameState.npcs?.[npcId] : null;
+    if (!npc) continue;
+    const room = firstFreeBedroom(gameState);
+    if (room) gameState.npcs[npcId] = moveToRoom(npcId, npc, room, gameState.npcs, null);
+  }
+
+  // 6. economy.money / taxReserve → player.money, world.taxes.reserve
+  const economy = cfg.economy || {};
+  if (economy.money !== undefined) gameState.player.money = economy.money;
+  if (gameState.world.taxes && economy.taxReserve !== undefined) gameState.world.taxes.reserve = economy.taxReserve;
+
+  // 7. flags.suppressTutorial → world.flags.tutorial_* + contractor milestones (D20).
+  // A suppressTutorial sandbox (default on) starts at apartment quality >= the
+  // milestone threshold, so without pre-firing the one-shot flags the tutorial
+  // beats would fire the moment quality is checked on day 1 — a tutorial that
+  // makes no sense for a house the player just restored. Del himself still exists
+  // as an NPC; only the tutorial *beats* are suppressed. Milestone ids are
+  // derived from the ONE table that owns them (CONTRACTOR_TUTORIAL_MILESTONES
+  // keys — the same table fireContractorMilestone reads), not an enumerated list
+  // here, so a future milestone is covered automatically; the one non-milestone
+  // one-shot guard read (world.flags.tutorial_qualityThreshold, in ui.js's
+  // maybeFireContractorQualityMilestone) is itself a milestone id and is covered.
+  if (cfg.flags && cfg.flags.suppressTutorial) {
+    for (const id of Object.keys(CONTRACTOR_TUTORIAL_MILESTONES)) {
+      gameState.world.flags['tutorial_' + id] = true;
+    }
+  }
+
+  // D19 guard — assert, don't rebase. Sandbox is always day 1; no absolute
+  // day field may ever be rewritten (player.rentDueDay, world.bills[id].dueDay,
+  // world.taxes.lastQuarterBilled, gigs.lastRefreshDay). If a day-shaped field
+  // has moved off the fresh-factory values captured at the top, a sandbox
+  // convenience rebased a day stamp and the game would open on a wall of overdue
+  // bills — throw loudly rather than let the erosion be silent. There is NO step 8.
+  // SIM_generateHouse returns the clock at top-level gameState.clock (it only
+  // becomes meta.clock at write/load — see writeGeneratedGameState), so read it
+  // there, with meta as a fallback. The value is the same; only its home moves.
+  const startDay = (gameState && gameState.clock && gameState.clock.day != null) ? gameState.clock.day : (gameState && gameState.meta && gameState.meta.clock ? gameState.meta.clock.day : undefined);
+  if (startDay !== 1) {
+    throw new Error('D19: sandbox must start on day 1 (day=' + startDay + '). No absolute day field may be rebased — see the Seasonal Calendar & Sandbox plan D19.');
+  }
+  for (const [path, v] of Object.entries(snapshotSandboxDayFields(gameState))) {
+    if (v !== dayGuard[path]) {
+      throw new Error('D19: applySandboxPreset rebased ' + path + ' (' + dayGuard[path] + ' → ' + v + ') — no absolute day field may be written. See the Seasonal Calendar & Sandbox plan D19.');
+    }
+  }
+  return gameState;
 }
 
 
@@ -4361,7 +5107,10 @@ function createNpcFromBible(bible, residencyStatus) {
       partnerOf: null,
       since: 1,
       contributesRent: residencyStatus === 'resident' || residencyStatus === undefined,
-      rentShare: ECONOMY.rent.defaultRoommateShare,
+      // Phase 8 (vocation plan): not pre-populated with the flat default anymore.
+      // null = "derive from income" in computeRent's negotiatedOrDerived. A
+      // negotiated value (the future agreement system) is written here explicitly.
+      rentShare: null,
     },
     location: null,
     activity: '',

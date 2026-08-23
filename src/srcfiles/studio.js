@@ -22,13 +22,16 @@
 // promised; generatePlayerAppearance (SIM) fills every unauthored field from
 // the cast's own pools. Never a full appearance record — only what the player
 // actually chose.
-let playerStudioDraft = null;
+let studioSubject = null;   // { draft, kind: 'player'|'npc', title, confirmLabel, cancelLabel, portraitUrl, busy, onConfirm, onCancel }
 let playerStudioTab = 'identity';
 let studioFullBodyLink = false;
-let playerStudioPortraitUrl = null;
-let playerStudioBusy = false;
 
-function blankPlayerDraft() {
+function blankStudioDraft(kind) {
+  // An NPC subject has no surname (the cast never used one - "Mira", not
+  // "Mira Vance") and no portrait record (NPC looks are derived from the
+  // bible, never authored in this surface). name is carried so Roll
+  // Everything and the header note behave like the player studio's.
+  if (kind === 'npc') return { name: '', age: null, gender: '', physical: {} };
   return {
     name: '',
     surname: '',
@@ -37,6 +40,10 @@ function blankPlayerDraft() {
     physical: {},
     portrait: { prompt: '', seed: 0, promptDirty: false },
   };
+}
+
+function blankPlayerDraft() {
+  return blankStudioDraft('player');
 }
 
 // --- The one table ---
@@ -128,8 +135,8 @@ const PLAYER_STUDIO_TABS = [
 
   { id: 'intimate', label: 'Intimate', sections: [
     { label: 'Breasts (tissue)', hint: 'Breast tissue — the undressed layer. Your frame\'s pectoral size is on the Body tab under "Chest (frame)".', fields: [
-      { path: 'physical.intimate.breasts.size',        label: 'Size',        kind: 'select', schemaPath: 'bible.physical.intimate.breasts.size',        pool: () => breastPoolForGender(playerStudioDraft.gender).size },
-      { path: 'physical.intimate.breasts.shape',       label: 'Shape',       kind: 'select', schemaPath: 'bible.physical.intimate.breasts.shape',       pool: () => breastPoolForGender(playerStudioDraft.gender).shape },
+      { path: 'physical.intimate.breasts.size',        label: 'Size',        kind: 'select', schemaPath: 'bible.physical.intimate.breasts.size',        pool: () => breastPoolForGender(studioSubject?.draft?.gender).size },
+      { path: 'physical.intimate.breasts.shape',       label: 'Shape',       kind: 'select', schemaPath: 'bible.physical.intimate.breasts.shape',       pool: () => breastPoolForGender(studioSubject?.draft?.gender).shape },
       { path: 'physical.intimate.breasts.nipples',     label: 'Nipples',     kind: 'select', schemaPath: 'bible.physical.intimate.breasts.nipples',     pool: () => PHYS_POOL_BREAST_NIPPLES },
       { path: 'physical.intimate.breasts.areola',      label: 'Areolae',     kind: 'select', schemaPath: 'bible.physical.intimate.breasts.areola',      pool: () => PHYS_POOL_BREAST_AREOLA },
       { path: 'physical.intimate.breasts.sensitivity', label: 'Sensitivity', kind: 'select', schemaPath: 'bible.physical.intimate.breasts.sensitivity', pool: () => PHYS_POOL_SENSITIVITY },
@@ -205,7 +212,7 @@ function studioRowFields(group, row) {
 
 // --- Draft path access ---
 function studioGet(path) {
-  let cur = playerStudioDraft;
+  let cur = studioSubject && studioSubject.draft;
   for (const seg of String(path).split('.')) {
     if (cur == null || typeof cur !== 'object') return undefined;
     cur = cur[seg];
@@ -215,7 +222,7 @@ function studioGet(path) {
 
 function studioSet(path, value) {
   const segs = String(path).split('.');
-  let node = playerStudioDraft;
+  let node = studioSubject && studioSubject.draft;
   for (const seg of segs.slice(0, -1)) node = (node[seg] = node[seg] || {});
   const key = segs[segs.length - 1];
   // An empty value DELETES rather than storing '' — the draft's contract is
@@ -262,16 +269,21 @@ function applyStudioBuildLink(build) {
     if (sel) sel.value = val;
     changed = true;
   }
-  if (changed && !playerStudioDraft.portrait.promptDirty) playerStudioDraft.portrait.prompt = '';
+  if (changed && studioSubject?.draft?.portrait && !studioSubject.draft.portrait.promptDirty) studioSubject.draft.portrait.prompt = '';
 }
 
 // --- Surface ---
-function openPlayerStudio() {
-  playerStudioDraft = blankPlayerDraft();
-  playerStudioTab = 'identity';
-  playerStudioPortraitUrl = null;
-  playerStudioBusy = false;
+// One entry for every subject. The subject is WHAT is being designed; the
+// draft it carries is the authored record the tab table reads and writes.
+// `kind` decides which tabs appear (an NPC subject is appearance-only, the
+// Identity and Portrait tabs belong to the player) and which confirm/cancel
+// handlers fire. openStudio is deliberately NOT a big options object — the
+// callers below show the full set, and the fallback paths keep working if a
+// handler is omitted.
+function openStudio(subject) {
+  studioSubject = subject;
   studioFullBodyLink = false;
+  playerStudioTab = studioTabs()[0]?.id || 'identity';
   const el = document.getElementById('player-studio');
   if (!el) return;
   // Idempotent (guards on data-wired), so this is the honest place for it:
@@ -280,18 +292,40 @@ function openPlayerStudio() {
   wirePlayerStudioInputs();
   el.hidden = false;
   // Deliberately does NOT close the main menu: the studio opens OVER the
-  // title screen, so pressing New Game never blanks the backdrop the player
-  // is looking at. Cancel just hides this again and the menu is still there.
+  // title screen (or the sandbox config screen), so entering it never blanks
+  // the backdrop the player is looking at. Cancel just hides this again.
   renderPlayerStudio();
 }
 
-function closePlayerStudio() {
+function openPlayerStudio() {
+  openStudio({
+    draft: blankPlayerDraft(),
+    kind: 'player',
+    title: 'Who are you?',
+    confirmLabel: 'Begin',
+    cancelLabel: 'Back to menu',
+    onConfirm: doStudioPlayerConfirm,
+    onCancel: () => {},
+  });
+}
+
+function closeStudio() {
   const el = document.getElementById('player-studio');
   if (el) el.hidden = true;
-  if (playerStudioPortraitUrl) {
-    URL.revokeObjectURL(playerStudioPortraitUrl);
-    playerStudioPortraitUrl = null;
+  if (studioSubject?.portraitUrl) {
+    URL.revokeObjectURL(studioSubject.portraitUrl);
+    studioSubject.portraitUrl = null;
   }
+}
+
+// The tabs a subject actually gets: the player gets the whole table, an NPC
+// subject is appearance-only (identity + portrait live elsewhere for them).
+// The TABLE is still one table (D13) — this is a view filter, not a second
+// hand-written form, and the populate/read walk below still covers exactly
+// the fields it renders.
+function studioTabs() {
+  if (studioSubject?.kind === 'npc') return PLAYER_STUDIO_TABS.filter(t => t.id !== 'identity' && t.id !== 'portrait');
+  return PLAYER_STUDIO_TABS;
 }
 
 function renderPlayerStudio() {
@@ -299,8 +333,15 @@ function renderPlayerStudio() {
   const bodyEl = document.getElementById('ps-body');
   if (!tabsEl || !bodyEl) return;
 
+  const titleEl = document.getElementById('ps-title');
+  if (titleEl) titleEl.textContent = studioSubject?.title || 'Who are you?';
+  const confirmEl = document.getElementById('ps-confirm-btn');
+  if (confirmEl) confirmEl.textContent = studioSubject?.confirmLabel || 'Begin';
+  const cancelEl = document.getElementById('ps-cancel-btn');
+  if (cancelEl) cancelEl.textContent = studioSubject?.cancelLabel || 'Back to menu';
+
   tabsEl.innerHTML = '';
-  for (const tab of PLAYER_STUDIO_TABS) {
+  for (const tab of studioTabs()) {
     const btn = document.createElement('button');
     btn.className = 'ps-tab' + (tab.id === playerStudioTab ? ' active' : '');
     btn.setAttribute('data-action', 'studio.tab');
@@ -310,10 +351,10 @@ function renderPlayerStudio() {
   }
 
   bodyEl.innerHTML = '';
-  const tab = PLAYER_STUDIO_TABS.find(t => t.id === playerStudioTab) || PLAYER_STUDIO_TABS[0];
-  if (tab.id === 'portrait') {
+  const tab = studioTabs().find(t => t.id === playerStudioTab) || studioTabs()[0];
+  if (tab && tab.id === 'portrait') {
     renderStudioPortraitTab(bodyEl);
-  } else {
+  } else if (tab) {
     for (const section of tab.sections) bodyEl.appendChild(buildStudioSection(section));
   }
 
@@ -327,8 +368,9 @@ function renderPlayerStudio() {
 function updateStudioNameNote() {
   const nameNote = document.getElementById('ps-name-note');
   if (!nameNote) return;
-  const n = (playerStudioDraft.name || '').trim();
-  const s = (playerStudioDraft.surname || '').trim();
+  const d = studioSubject?.draft || {};
+  const n = (d.name || '').trim();
+  const s = (d.surname || '').trim();
   nameNote.textContent = n || s
     ? `${n || '(rolled)'} ${s || '(rolled)'}`
     : 'Everything unset will be rolled for you.';
@@ -616,7 +658,7 @@ function studioPrettify(v) {
 
 // --- Actions ---
 function doStudioTab(tabId) {
-  if (!PLAYER_STUDIO_TABS.some(t => t.id === tabId)) return;
+  if (!studioTabs().some(t => t.id === tabId)) return;
   playerStudioTab = tabId;
   renderPlayerStudio();
 }
@@ -685,12 +727,14 @@ function findStudioField(path) {
 // generator new-game will use, which is the point — nothing here can produce
 // a body the game would not have rolled on its own.
 function doStudioRollAll() {
+  const d = studioSubject?.draft;
+  if (!d) return;
   const seed = genSeed();
   // The Mark toggles' None/Custom sentinels are studio-only; strip them from
   // the authored object before the roller sees it (an unset features field is
   // what triggers the roll), then restore the toggle state on the result so
   // the player's None/Custom choice survives Roll Everything.
-  const authoredPhysical = JSON.parse(JSON.stringify(playerStudioDraft.physical || {}));
+  const authoredPhysical = JSON.parse(JSON.stringify(d.physical || {}));
   const featuresState = {
     none: (authoredPhysical.distinguishingFeatures || []).includes(FEATURES_NONE),
     custom: (authoredPhysical.distinguishingFeatures || []).includes(FEATURES_CUSTOM),
@@ -700,55 +744,73 @@ function doStudioRollAll() {
   const rolled = generatePlayerAppearance(seed, {
     // Anything already authored is preserved: Roll Everything fills the
     // blanks, it does not overwrite the player's choices.
-    age: playerStudioDraft.age ?? undefined,
-    gender: playerStudioDraft.gender || undefined,
+    age: d.age ?? undefined,
+    gender: d.gender || undefined,
     physical: authoredPhysical,
   });
-  const names = rollPlayerName(seed, rolled.gender, playerStudioDraft);
-  playerStudioDraft.name = playerStudioDraft.name || names.name;
-  playerStudioDraft.surname = playerStudioDraft.surname || names.surname;
-  playerStudioDraft.age = rolled.age;
-  playerStudioDraft.gender = rolled.gender;
+  // The name is only rolled for the player: an NPC's name lives in the
+  // roommate identity form, and this surface would otherwise fill in a
+  // name the player never wrote, fighting the form's blank-means-roll.
+  if (studioSubject?.kind === 'player') {
+    const names = rollPlayerName(seed, rolled.gender, d);
+    d.name = d.name || names.name;
+    d.surname = d.surname || names.surname;
+  }
+  d.age = rolled.age;
+  d.gender = rolled.gender;
   if (featuresState.none) rolled.physical.distinguishingFeatures = [FEATURES_NONE];
   else if (featuresState.custom) rolled.physical.distinguishingFeatures = [FEATURES_CUSTOM, ...rolled.physical.distinguishingFeatures];
   rolled.physical.distinguishingFeaturesCustom = featuresState.customText;
-  playerStudioDraft.physical = rolled.physical;
+  d.physical = rolled.physical;
   // The portrait prompt is derived from the fields, so a full reroll
   // invalidates it — UNLESS the player hand-edited it, which is permanent
-  // (see the Portrait tab).
-  if (!playerStudioDraft.portrait.promptDirty) playerStudioDraft.portrait.prompt = '';
+  // (see the Portrait tab). Only the player subject carries a portrait.
+  if (d.portrait && !d.portrait.promptDirty) d.portrait.prompt = '';
   renderPlayerStudio();
 }
 
 function doStudioClearAll() {
-  const portrait = playerStudioDraft.portrait;
-  playerStudioDraft = blankPlayerDraft();
+  const kind = studioSubject?.kind;
+  const portrait = studioSubject?.draft?.portrait;
+  const next = blankStudioDraft(kind);
   // A hand-edited prompt survives Clear — it is authored content, and the
   // whole promise of the edit is that nothing overwrites it.
-  if (portrait.promptDirty) playerStudioDraft.portrait = portrait;
+  if (portrait?.promptDirty) next.portrait = portrait;
+  if (studioSubject) studioSubject.draft = next;
   renderPlayerStudio();
 }
 
+// Cancel = discard. The draft is thrown away (it was a copy of the authored
+// record, or the player's session draft); the subject's onCancel re-surfaces
+// whatever we came from (the title, or the sandbox config screen).
 function doStudioCancel() {
-  closePlayerStudio();
-  playerStudioDraft = null;
+  const subject = studioSubject;
+  closeStudio();
+  studioSubject = null;
+  if (subject?.onCancel) subject.onCancel();
 }
 
-// The handoff. Everything the studio knows becomes the draft
+// The solo-path handoff. Everything the studio knows becomes the draft
 // SIM_generateHouse takes; the cutscene plays; startSoloGame writes the game.
-function doStudioConfirm() {
-  if (playerStudioBusy) return;
+function doStudioPlayerConfirm() {
+  if (studioSubject?.busy) return;
   const draft = buildPlayerDraftForNewGame();
-  closePlayerStudio();
-  playerStudioDraft = null;
+  closeStudio();
+  studioSubject = null;
   playIntroCutscene(draft);
+}
+
+function doStudioConfirm() {
+  if (studioSubject?.busy) return;
+  if (studioSubject?.onConfirm) { studioSubject.onConfirm(); return; }
+  doStudioPlayerConfirm();
 }
 
 // Draft → the shape SIM_generateHouse's 4th parameter expects. Genital rows
 // are normalized here (rather than at every edit) so a row whose type changed
 // mid-edit cannot carry the previous type's keys into the save.
 function buildPlayerDraftForNewGame() {
-  const d = playerStudioDraft || blankPlayerDraft();
+  const d = (studioSubject?.kind === 'player' ? studioSubject.draft : null) || blankPlayerDraft();
   const physical = JSON.parse(JSON.stringify(d.physical || {}));
   if (physical.intimate && Array.isArray(physical.intimate.genitals)) {
     physical.intimate.genitals = normalizeGenitals(physical.intimate.genitals);
@@ -808,14 +870,14 @@ function renderStudioPortraitTab(bodyEl) {
   img.className = 'ps-portrait-img';
   img.id = 'ps-portrait-img';
   img.alt = '';
-  if (playerStudioPortraitUrl) img.src = playerStudioPortraitUrl;
+  if (studioSubject?.portraitUrl) img.src = studioSubject.portraitUrl;
   else img.hidden = true;
   pane.appendChild(img);
-  if (!playerStudioPortraitUrl) {
+  if (!studioSubject?.portraitUrl) {
     const ph = document.createElement('div');
     ph.className = 'ps-portrait-placeholder';
     ph.id = 'ps-portrait-placeholder';
-    ph.textContent = playerStudioBusy ? 'Generating…' : 'No portrait yet.';
+    ph.textContent = studioSubject?.busy ? 'Generating…' : 'No portrait yet.';
     pane.appendChild(ph);
   }
   layout.appendChild(pane);
@@ -833,13 +895,13 @@ function renderStudioPortraitTab(bodyEl) {
   ta.className = 'ps-control ps-prompt';
   ta.id = 'ps-prompt';
   ta.rows = 8;
-  ta.value = playerStudioDraft.portrait.prompt || buildPlayerPortraitPrompt(buildPlayerDraftForNewGame());
+  ta.value = (studioSubject?.draft?.portrait?.prompt) || buildPlayerPortraitPrompt(buildPlayerDraftForNewGame());
   side.appendChild(ta);
 
   const state = document.createElement('div');
   state.className = 'ps-field-hint';
   state.id = 'ps-prompt-state';
-  state.textContent = playerStudioDraft.portrait.promptDirty
+  state.textContent = studioSubject?.draft?.portrait?.promptDirty
     ? 'Edited by you — this prompt is now yours and will not be rebuilt.'
     : 'Built from your fields. It will refresh as you change them.';
   side.appendChild(state);
@@ -849,14 +911,14 @@ function renderStudioPortraitTab(bodyEl) {
   const gen = document.createElement('button');
   gen.className = 'ps-btn';
   gen.setAttribute('data-action', 'studio.portrait-generate');
-  gen.textContent = playerStudioPortraitUrl ? 'Regenerate' : 'Generate portrait';
-  gen.disabled = playerStudioBusy;
+  gen.textContent = studioSubject?.portraitUrl ? 'Regenerate' : 'Generate portrait';
+  gen.disabled = studioSubject?.busy;
   btns.appendChild(gen);
   const reset = document.createElement('button');
   reset.className = 'ps-btn ps-btn-secondary';
   reset.setAttribute('data-action', 'studio.portrait-reset');
   reset.textContent = 'Rebuild from fields';
-  reset.disabled = !playerStudioDraft.portrait.promptDirty;
+  reset.disabled = !studioSubject?.draft?.portrait?.promptDirty;
   btns.appendChild(reset);
   side.appendChild(btns);
 
@@ -866,35 +928,132 @@ function renderStudioPortraitTab(bodyEl) {
 }
 
 async function doStudioPortraitGenerate() {
-  if (playerStudioBusy) return;
+  if (studioSubject?.kind !== 'player' || studioSubject.busy) return;
   const ta = document.getElementById('ps-prompt');
   const prompt = (ta?.value || '').trim();
   if (!prompt) return;
-  playerStudioDraft.portrait.prompt = prompt;
+  studioSubject.draft.portrait.prompt = prompt;
   // A stable seed per prompt, so regenerating an unchanged prompt reproduces
   // the same face rather than rerolling it — the contract getCharacterImage
   // already relies on for NPC portraits.
-  playerStudioDraft.portrait.seed = hashStr(prompt);
-  playerStudioBusy = true;
+  studioSubject.draft.portrait.seed = hashStr(prompt);
+  studioSubject.busy = true;
   renderPlayerStudio();
   try {
-    const res = await getPlayerPortraitImage(playerStudioDraft.portrait);
+    const res = await getPlayerPortraitImage(studioSubject.draft.portrait);
     if (res.url) {
-      if (playerStudioPortraitUrl) URL.revokeObjectURL(playerStudioPortraitUrl);
-      playerStudioPortraitUrl = res.url;
+      if (studioSubject.portraitUrl) URL.revokeObjectURL(studioSubject.portraitUrl);
+      studioSubject.portraitUrl = res.url;
     }
   } catch (e) {
     console.warn('Portrait generation failed:', e);
   } finally {
-    playerStudioBusy = false;
+    studioSubject.busy = false;
     renderPlayerStudio();
   }
 }
 
 function doStudioPortraitReset() {
-  playerStudioDraft.portrait.promptDirty = false;
-  playerStudioDraft.portrait.prompt = '';
+  if (studioSubject?.kind !== 'player') return;
+  studioSubject.draft.portrait.promptDirty = false;
+  studioSubject.draft.portrait.prompt = '';
   renderPlayerStudio();
+}
+
+// --- Sandbox subjects (Seasonal Calendar & Sandbox plan, B5/D13) ---
+// The sandbox config screen reuses the SAME studio for two more subjects:
+// your own player (writing back into pendingSandboxConfig.player) and each
+// roommate's appearance (writing back into the roommate partial's physical).
+// The roommate and the player draft are the single source of truth — the
+// studio edits a copy and confirms write it back, so a field can never
+// exist in one surface and not the other.
+
+// A saved player record (pendingSandboxConfig.player's shape) back into a
+// studio draft, so reopening the sandbox player studio starts from the last
+// authored state rather than a blank sheet.
+function studioDraftFromPlayerRecord(prev) {
+  prev = prev || {};
+  return {
+    name: prev.name || '',
+    surname: prev.surname || '',
+    age: prev.age ?? null,
+    gender: prev.gender || '',
+    physical: JSON.parse(JSON.stringify(prev.physical || {})),
+    portrait: { prompt: prev.portrait?.prompt || '', seed: prev.portrait?.seed || 0, promptDirty: !!prev.portrait?.promptDirty },
+  };
+}
+
+// The sandbox config screen's "Design" button for your own player. Same
+// studio, sandbox confirm: the draft lands in pendingSandboxConfig.player
+// and the config screen re-renders — no cutscene, no game start.
+function openSandboxPlayerStudio() {
+  const cfg = (typeof pendingSandboxConfig !== 'undefined' && pendingSandboxConfig) || {};
+  openStudio({
+    draft: studioDraftFromPlayerRecord(cfg.player),
+    kind: 'player',
+    title: 'Who are you?',
+    confirmLabel: 'Save player',
+    cancelLabel: 'Cancel',
+    onConfirm: doSandboxPlayerStudioConfirm,
+    // Sandbox Pre-Game Editor Overhaul Phase 3: the Player tab now lives in
+    // the tab shell (renderSandboxUi), not the pre-overhaul whole-screen
+    // renderSandboxScreen (dormant — see menu.js).
+    onCancel: () => { if (typeof renderSandboxUi === 'function') renderSandboxUi(); },
+  });
+}
+
+function doSandboxPlayerStudioConfirm() {
+  if (studioSubject?.busy) return;
+  const draft = buildPlayerDraftForNewGame();
+  if (typeof pendingSandboxConfig !== 'undefined' && pendingSandboxConfig) pendingSandboxConfig.player = draft;
+  closeStudio();
+  studioSubject = null;
+  if (typeof renderSandboxUi === 'function') renderSandboxUi();
+}
+
+// The roommate's "Design appearance" entry. The draft is built from the
+// roommate's partial (the SAME shape rollCastSlot accepts) and confirm
+// writes the authored subset back through the same flatten/normalize pass
+// the player draft uses, so no studio sentinel ever reaches the partial.
+function openRoommateStudio(roommate) {
+  const partial = (roommate && roommate.partial) || {};
+  openStudio({
+    draft: {
+      name: partial.name || '',
+      age: partial.age ?? null,
+      gender: partial.gender || '',
+      physical: JSON.parse(JSON.stringify(partial.physical || {})),
+    },
+    kind: 'npc',
+    title: partial.name ? `Design ${partial.name}` : 'Design a roommate',
+    confirmLabel: 'Save appearance',
+    cancelLabel: 'Cancel',
+    onConfirm: () => doRoommateStudioConfirm(roommate),
+    // Sandbox Pre-Game Editor Overhaul Phase 5: the Roommates tab now lives
+    // in the tab shell (renderSandboxUi), not the pre-overhaul
+    // renderSandboxScreen (dormant — see menu.js).
+    onCancel: () => { if (typeof renderSandboxUi === 'function') renderSandboxUi(); },
+  });
+}
+
+function doRoommateStudioConfirm(roommate) {
+  if (!studioSubject || !roommate) return;
+  const d = studioSubject.draft;
+  const partial = roommate.partial = roommate.partial || {};
+  const physical = JSON.parse(JSON.stringify(d.physical || {}));
+  if (physical.intimate && Array.isArray(physical.intimate.genitals)) {
+    physical.intimate.genitals = normalizeGenitals(physical.intimate.genitals);
+  }
+  flattenStudioFeatures(physical);
+  if (Object.keys(physical).length > 0) partial.physical = physical;
+  else delete partial.physical;
+  const name = (d.name || '').trim();
+  if (name) partial.name = name; else delete partial.name;
+  if (Number.isFinite(d.age)) partial.age = d.age; else delete partial.age;
+  if (d.gender) partial.gender = d.gender; else delete partial.gender;
+  closeStudio();
+  studioSubject = null;
+  if (typeof renderSandboxUi === 'function') renderSandboxUi();
 }
 
 // --- Input wiring ---
@@ -910,14 +1069,15 @@ function wirePlayerStudioInputs() {
 
   const handle = (e) => {
     const el = e.target;
-    if (!playerStudioDraft) return;
+    const d = studioSubject?.draft;
+    if (!d) return;
 
     // The Custom free-text field for distinguishing features — a sibling
     // store to the toggles array, flattened away at draft exit.
     if (el.getAttribute?.('data-studio-features-custom') != null) {
-      if (!playerStudioDraft.physical) playerStudioDraft.physical = {};
-      playerStudioDraft.physical.distinguishingFeaturesCustom = el.value;
-      if (!playerStudioDraft.portrait.promptDirty) playerStudioDraft.portrait.prompt = '';
+      if (!d.physical) d.physical = {};
+      d.physical.distinguishingFeaturesCustom = el.value;
+      if (d.portrait && !d.portrait.promptDirty) d.portrait.prompt = '';
       return;
     }
 
@@ -969,8 +1129,9 @@ function wirePlayerStudioInputs() {
     // body field that has an equivalent option.
     if (path === 'physical.build' && studioFullBodyLink) applyStudioBuildLink(res.value);
     // The portrait prompt is derived from these fields; a change invalidates
-    // a machine-built one. A hand-edited one is never touched (D6).
-    if (!playerStudioDraft.portrait.promptDirty) playerStudioDraft.portrait.prompt = '';
+    // a machine-built one. A hand-edited one is never touched (D6). Only the
+    // player subject carries a portrait.
+    if (d.portrait && !d.portrait.promptDirty) d.portrait.prompt = '';
     const note = document.getElementById('ps-name-note');
     if (note && (path === 'name' || path === 'surname')) updateStudioNameNote();
   };
@@ -984,8 +1145,9 @@ function wirePlayerStudioInputs() {
       // THE latch (D6). The moment the player types in the prompt box it
       // becomes theirs: no field change, no reroll, and no confirm rebuilds
       // it. Only "Rebuild from fields" clears this, explicitly.
-      playerStudioDraft.portrait.promptDirty = true;
-      playerStudioDraft.portrait.prompt = e.target.value;
+      if (!studioSubject?.draft?.portrait) return;
+      studioSubject.draft.portrait.promptDirty = true;
+      studioSubject.draft.portrait.prompt = e.target.value;
       const state = document.getElementById('ps-prompt-state');
       if (state) state.textContent = 'Edited by you — this prompt is now yours and will not be rebuilt.';
       const reset = document.querySelector('[data-action="studio.portrait-reset"]');

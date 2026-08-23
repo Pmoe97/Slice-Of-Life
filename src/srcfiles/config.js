@@ -398,9 +398,31 @@ const ECONOMY = {
     minRoommateShare: 0.08,  // apartment in disrepair
     maxRoommateShare: 0.30,  // fully restored, every amenity working
     // What a roommate contributes before any negotiated agreement exists.
-    // Placeholder for the rent-agreement system (variable per roommate,
-    // driven by relationship, income and personality) — see the plan doc.
+    // Phase 8 (vocation plan): replaced as the per-roommate default by
+    // `incomeShare` below — a roommate now contributes what their income (band ×
+    // source) says they can, so income finally shows up in the rent the
+    // economy-and-rent-plan calls the placeholder. defaultRoommateShare survives
+    // as the fallback for an NPC with no readable occupation, and as the value
+    // the true rent-agreement system (variable per roommate, driven by
+    // relationship, income and personality) will override — see the plan doc.
     defaultRoommateShare: 0.15,
+    // The per-roommate contribution fraction, derived from incomeBand ×
+    // incomeSource (SIM's incomeRentShare). incomeBand says HOW MUCH, incomeSource
+    // says from WHERE. The curve is centered on defaultRoommateShare for the
+    // archetype (wage/mid) so a typical cast lands in the same pressure band as
+    // the old flat 0.15; a broke roommate ('none' — Recently Laid Off,
+    // Between Things) contributes nothing and pushes MORE onto the player, which is
+    // exactly "money is running out"; 'self' (variable income) sits a touch
+    // under the wage curve; 'means' covers what a wage earner of the same band
+    // covers. Every value is still clamped to [0, ceiling] in computeRent, and
+    // the ceiling (a property of the building, invariant 7) is unchanged — the
+    // pressure that keeps solo living unsustainable is untouched.
+    incomeShare: {
+      wage:  { low: 0.10, mid: 0.15, high: 0.20 },
+      self:  { low: 0.08, mid: 0.13, high: 0.18 },
+      means: { low: 0.10, mid: 0.15, high: 0.20 },
+      none:  { low: 0.00, mid: 0.00, high: 0.00 },
+    },
     // Sharing a bedroom pays this fraction of what a private room commands.
     // Four bedrooms of two beds means a full house of 7 is entirely shared,
     // so this multiplier is what decides the end-state profit: at 0.8 a
@@ -456,9 +478,17 @@ const ECONOMY = {
 // shrink), you sell when you need the money for upgrades. The "skill"
 // is patience and risk tolerance, not market timing.
 const INVESTING = {
+  // D8 — the financial year is DELIBERATELY NOT CALENDAR.daysPerYear. The
+  // game year just shrank from 360 to 140 days (four 35-day seasons); tying
+  // daily return to it would silently triple fund earnings (a $10k Index
+  // position would earn ~$6.43/day instead of ~$2.50/day) — a 2.57x buff to
+  // the upgrade-accelerator system, not a re-tune. 360 holds per-day returns
+  // byte-identical to the pre-calendar-change game and keeps the real-world
+  // return anchors (S&P, T-bills) legible. See the plan's D8.
+  daysPerFinancialYear: 360,
   // Funds available to buy. `expectedReturn` is annual; daily return is
-  // `expectedReturn / 360 * (1 + noise)`. `volatility` is the std dev
-  // of the daily noise term (0.01 = ±1% daily swing is common).
+  // `expectedReturn / daysPerFinancialYear * (1 + noise)`. `volatility` is
+  // the std dev of the daily noise term (0.01 = ±1% daily swing is common).
   funds: [
     {
       id: 'tbill', label: 'T-Bill Fund', desc: 'Government bonds. Slow, steady, boring. Your money is safe.',
@@ -479,10 +509,11 @@ const INVESTING = {
       minInvest: 1000,
     },
   ],
-  // Day-rollover growth: for each fund, daily return = annual/360 ± noise.
-  // The noise is seeded per-day per-fund so it's deterministic for a
-  // given save (no cheating by reloading). Uses mulberry32 for a proper
-  // uniform PRNG, then Box-Muller for a normal distribution.
+  // Day-rollover growth: for each fund, daily return =
+  // annual / daysPerFinancialYear ± noise. The noise is seeded per-day
+  // per-fund so it's deterministic for a given save (no cheating by
+  // reloading). Uses mulberry32 for a proper uniform PRNG, then Box-Muller
+  // for a normal distribution.
   dailyReturn: function(annualReturn, volatility, day, fundId) {
     // Hash the fund+day into a 32-bit seed, then run mulberry32 for
     // two uniform samples. The previous version used modular arithmetic
@@ -505,7 +536,7 @@ const INVESTING = {
     const u1 = Math.max(1e-10, rng());
     const u2 = rng();
     const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-    return (annualReturn / 360) + z * volatility;
+    return (annualReturn / INVESTING.daysPerFinancialYear) + z * volatility;
   },
   // Transaction fee — discourages rapid in-and-out.
   fee: 0.005, // 0.5% per buy/sell
@@ -524,7 +555,9 @@ const INVESTING = {
 // service costs, so letting something lapse is a real setback rather
 // than a free loan.
 //
-// cadenceDays: how often the bill posts. 7=weekly, 30=monthly, 90=quarterly.
+// cadenceDays: how often the bill posts. 7=weekly, 35=seasonal (once per
+// season — every utility posts exactly twice per tax period, which is what
+// keeps the internet deduction exact; see D5). Rent stays weekly.
 // split: 'lease' (rent only — cap per roommate, player carries the gap),
 //        'even' (split evenly among residents),
 //        'personal' (player pays the whole thing — phone, insurance, taxes).
@@ -538,23 +571,25 @@ const BILL_DEFS = {
     graceDays: 7, reconnectionFee: 0, cutoff: 'rent',
   },
   electric: {
-    id: 'electric', label: 'Electric', cadenceDays: 30, split: 'even', amount: 260,
+    // D7: 260 → 303 (×7/6 for the 30→35-day cycle — per-day parity, not a
+    // difficulty change). cadenceDays 30→35 (D5): once per season.
+    id: 'electric', label: 'Electric', cadenceDays: 35, split: 'even', amount: 303,
     graceDays: 5, reconnectionFee: 40, cutoff: 'power',
   },
   water: {
-    id: 'water', label: 'Water / Sewer', cadenceDays: 30, split: 'even', amount: 130,
+    id: 'water', label: 'Water / Sewer', cadenceDays: 35, split: 'even', amount: 152,
     graceDays: 5, reconnectionFee: 35, cutoff: 'water',
   },
   gas: {
-    id: 'gas', label: 'Gas / Heat', cadenceDays: 30, split: 'even', amount: 140,
+    id: 'gas', label: 'Gas / Heat', cadenceDays: 35, split: 'even', amount: 163,
     graceDays: 5, reconnectionFee: 35, cutoff: 'gas',
   },
   internet: {
-    id: 'internet', label: 'Internet', cadenceDays: 30, split: 'even', amount: 80,
+    id: 'internet', label: 'Internet', cadenceDays: 35, split: 'even', amount: 93,
     graceDays: 3, reconnectionFee: 25, cutoff: 'internet',
   },
   phone: {
-    id: 'phone', label: 'Phone', cadenceDays: 30, split: 'personal', amount: 65,
+    id: 'phone', label: 'Phone', cadenceDays: 35, split: 'personal', amount: 76,
     // Phase 5 (decision F): the phone bill now has a real cutoff — unpaid
     // past grace kills the phone's cellular service. The phone still works
     // on home wifi while the internet is up (degraded but survivable);
@@ -562,7 +597,7 @@ const BILL_DEFS = {
     graceDays: 10, reconnectionFee: 0, cutoff: 'phone',
   },
   insurance: {
-    id: 'insurance', label: 'Renters Insurance', cadenceDays: 30, split: 'personal', amount: 25,
+    id: 'insurance', label: 'Renters Insurance', cadenceDays: 35, split: 'personal', amount: 29,
     graceDays: 15, reconnectionFee: 0, cutoff: null,
   },
 };
@@ -583,7 +618,8 @@ const AUTOPAY = {
 
 // --- Taxes (Phase 6) ---
 // Quarterly estimated taxes — the highest-value mechanic in the economy
-// plan. A large lumpy obligation every 90 days that forces saving. See
+// plan. A large lumpy obligation every 70 days — end of Summer and end of
+// Winter (D3 of the calendar plan) — that forces saving. See
 // src/ref/complete/economy-and-rent-plan.md §Quarterly estimated taxes.
 //
 // The blended rate is one number (self-employment 15.3% + effective
@@ -594,11 +630,20 @@ const AUTOPAY = {
 const TAX_CONFIG = {
   rate: 0.27,              // blended self-employment + federal rate
   // Penalty for underpayment (owing more than was reserved/paid when the
-  // quarter bills). Compounds — rolled into `unpaid` and accrues interest
-  // each subsequent quarter, so ignoring taxes is a spiral, not a flat
-  // fee. Interest applies to carried-forward unpaid balances.
-  underpaymentPenalty: 0.08,   // 8% of the unpaid shortfall, one-time per quarter
-  interestRate: 0.02,         // 2% per quarter on carried-forward unpaid balance
+  // tax period bills). Compounds — rolled into `unpaid` and accrues
+  // interest each subsequent period, so ignoring taxes is a spiral, not a
+  // flat fee. Interest applies to carried-forward unpaid balances.
+  // Stays 0.08 (D4): it is a fraction of the SHORTFALL, which shrinks in
+  // proportion to the period, so shorter periods net out to the same
+  // dollars per day. Self-normalising — do not scale it.
+  underpaymentPenalty: 0.08,   // 8% of the unpaid shortfall, one-time per period
+  // Scaled 0.02 → 0.015 (D4): interest is a fraction of the CARRIED
+  // BALANCE, which does not shrink with the period, so billing 1.286x
+  // more often in playtime would compound 1.286x faster per day of play.
+  // 0.02 × 70/90 = 0.0156, rounded to three decimals. The A3 harness
+  // asserts the compounded total over three periods lands within 2% of
+  // the old rate over the same number of days.
+  interestRate: 0.015,        // 1.5% per 70-day tax period on carried-forward unpaid balance
   // How much of the internet bill is deductible each quarter (a
   // freelancer's home-office internet share). Applied automatically.
   internetDeductibleFraction: 0.5,
@@ -688,12 +733,14 @@ const UTILITY_HVAC_SEASONAL = [
 // plan); for now it's a fixed baseline that the meter reads.
 const UTILITY_THERMOSTAT = 1.0;
 
-// Base costs — the fixed monthly floor on each utility bill (the
+// Base costs — the fixed per-cycle floor on each utility bill (the
 // connection charge / infrastructure cost), added to the metered total.
+// D7: scaled ×7/6 (25→29, 15→18, 12→14) for the 30→35-day cycle. These are
+// posted per cycle, so NOT scaling them would be a silent per-day discount.
 const UTILITY_BASE = {
-  electric: 25,
-  water: 15,
-  gas: 12,
+  electric: 29,
+  water: 18,
+  gas: 14,
 };
 
 // --- Facilities / Apartment upgrades (Phase 4) ---
@@ -751,6 +798,12 @@ const MAINTENANCE = {
     // pool the same way shower is gated on plumbing, and using it wears it
     // out — the pool is expensive to keep, which is the point.
     'swim': ['pool_systems'],
+    // Vocation plan D17: the late-night pool session is facility-gated by
+    // the same route rather than by a bespoke check in its candidacy —
+    // scoreDrive already refuses any drive whose npcDecayActions facility
+    // is not functional, so this one line IS the gate, and using the pool
+    // for a shoot wears it out exactly as swimming does.
+    'content_pool_session': ['pool_systems'],
     // NOTE: the old 'cook' drive (→ kitchen_stove) became Phase 8's 'eat'
     // drive, which deliberately does NOT map to a facility: a hungry NPC
     // raids the fridge/pantry/own bag, which needs no working stove, and
@@ -1270,6 +1323,22 @@ const COMMITMENT_KINDS = {
     slots: [{ id: 'evening', startMinute: 1140, endMinute: 1260 }],  // 19:00-21:00
     // Today and tomorrow. Further out than that and the player has forgotten
     // by the time the window opens.
+    maxAheadDays: 2,
+  },
+  // Vocation plan D18 (Phase 6): what accepting a creator's ask books.
+  //
+  // `roomId: 'own_bedroom'` is a sentinel resolved by OVERTURE's proposeTerms
+  // to the PROPOSER's own room — the other two kinds name a fixed common room,
+  // which is right for a dinner and wrong for this. One late slot, because
+  // that is when this happens and a kind that could land at four different
+  // times is a scheduling UI rather than a beat (the same reasoning `hangout`
+  // records above).
+  content_collab: {
+    block: 'leisure',
+    label: 'helping with a shoot',
+    boundActivity: 'filming together',
+    roomId: 'own_bedroom',
+    slots: [{ id: 'late', startMinute: 1290, endMinute: 1410 }],  // 21:30-23:30
     maxAheadDays: 2,
   },
 };
@@ -1985,6 +2054,74 @@ const FACILITY_STARTING_TIERS = {
   hallway_a_upkeep: 'broken',
   hallway_b_upkeep: 'broken',
 };
+
+// Sandbox mode house presets (Seasonal Calendar & Sandbox plan, D17). Data,
+// not branches — a preset is just the { tier, condition } a sandbox start stamps
+// onto every facility in `world.upgrades`. Three presets plus a per-facility
+// custom override (defined in the UI, not here). `wreck` is today's baseline
+// expressed as a special marker `useStartingTiers` — applySandboxPreset treats
+// it as "leave each facility at FACILITY_STARTING_TIERS", never as a copy of
+// that table, so the two can never drift. Structural upgrades are NOT part of any
+// preset (five independent booleans; presets set none of them).
+const SANDBOX_HOUSE_PRESETS = {
+  wreck: { useStartingTiers: true },
+  lived_in: { tier: 'functional', condition: 70 },
+  restored: { tier: 'upgraded', condition: 100 },
+};
+
+// Sandbox Pre-Game Editor Overhaul Phase 4 (D7/D9): named economy bundles
+// over four fields that already existed in the data model but had never had
+// UI (defaultSandboxConfig, menu.js). Same shape and same file as
+// SANDBOX_HOUSE_PRESETS above — data, not branches. "Custom" is never an
+// entry here; it's the state SANDBOX_TABS.economy's presetRow shows when
+// cfg.economy matches none of these (D8's live derivation,
+// sandboxActiveDifficultyPreset in menu.js — never a stored flag).
+// standard reproduces defaultSandboxConfig's own numbers exactly, so a fresh
+// sandbox config shows "Standard" selected, not "Custom" the moment the
+// screen opens. comfortable/tight are tuned relative to it: comfortable
+// roughly 1.6x the starting money with a 50%-longer grace period and a paid
+// tax reserve; tight roughly 0.6x the money with half the grace period and
+// bills landing almost immediately — meaningfully tighter than the game's
+// own default opening, not an arbitrary offset (see the plan's Open
+// questions, now resolved here).
+const SANDBOX_DIFFICULTY_PRESETS = {
+  comfortable: { money: 6000, rentGraceDays: 21, billsStartDay: 14, taxReserve: 500 },
+  standard: { money: ECONOMY.startingMoney, rentGraceDays: ECONOMY.opening.rentGraceDays, billsStartDay: ECONOMY.opening.firstBillDelay + 1, taxReserve: 0 },
+  tight: { money: 2200, rentGraceDays: 7, billsStartDay: 3, taxReserve: 0 },
+};
+
+// Sandbox Pre-Game Editor Overhaul, Phase 1 (D1/D4): the tab table the whole
+// screen renders from — Pattern B (SETTINGS_TABS' shape), extended with an
+// optional `subtabs` array per top-level entry. A tab without `subtabs`
+// renders its own `sections`/`rows` directly; one with `subtabs` renders a
+// second-level strip and delegates to the active sub-tab's `sections`/
+// `rows`. Player and Roommates carry no `sections` at all — both are bespoke
+// content (D5), dispatched by id/`dynamicInstances` in menu.js rather than
+// forced through the generic row shape. House's two sub-tabs stay empty
+// stubs (bespoke content, filled by Phase 2's dispatch, not by data here).
+// Economy's sections were filled in by Phase 4.
+const SANDBOX_TABS = [
+  { id: 'player', label: 'Player', icon: '🧍' },
+  { id: 'roommates', label: 'Roommates', icon: '👥', dynamicInstances: true },
+  { id: 'house', label: 'House', icon: '🏠',
+    subtabs: [
+      { id: 'layout', label: 'Layout', sections: [] },
+      { id: 'facilities', label: 'Facilities', sections: [] },
+    ] },
+  { id: 'economy', label: 'Economy & Difficulty', icon: '💰',
+    sections: [
+      { title: 'Difficulty', rows: [
+        { id: 'difficultyPreset', kind: 'presetRow', presets: 'SANDBOX_DIFFICULTY_PRESETS',
+          label: 'Preset', desc: 'Stamps all four fields below at once. Edit any one by hand to go Custom.' },
+      ] },
+      { title: 'Starting conditions', rows: [
+        { id: 'money', kind: 'number', field: 'economy.money', label: 'Starting money', min: 0, max: 20000 },
+        { id: 'rentGraceDays', kind: 'slider', field: 'economy.rentGraceDays', label: 'Rent grace period (days)', min: 0, max: 30 },
+        { id: 'billsStartDay', kind: 'slider', field: 'economy.billsStartDay', label: 'Bills start (day)', min: 1, max: 30 },
+        { id: 'taxReserve', kind: 'number', field: 'economy.taxReserve', label: 'Starting tax reserve', min: 0, max: 20000 },
+      ] },
+    ] },
+];
 
 // --- Daily goals (quests), sourced from resident wants/wounds/interests ---
 const QUEST_TEMPLATES = [
@@ -3151,26 +3288,25 @@ const ENERGY = {
 };
 
 // --- Calendar ---
-// A 360-day year so quarters, seasons and billing all divide cleanly.
-// 4 quarters of 90 days, 4 seasons aligned 1:1 to quarters. Weekday
-// numbering is unchanged (still 7-day weeks via getWeekday), so nothing
-// that reads getWeekday shifts — the year is just a longer cycle layered
-// on top. Days are 1-indexed throughout the codebase, so day 1 is the
-// first day of spring, quarter 1, year 1.
+// Four 35-day seasons: five 7-day weeks each, 140 days to the year, 20 weeks
+// to the year. 35 % 7 === 0, so every season AND every year begins on the
+// same weekday forever — the property the old 360-day year never had (its
+// weekday drifted 3 days a year). Day 1 is a Sunday; see getWeekday.
+//
+// daysPerTaxPeriod is DELIBERATELY NOT daysPerSeason. Taxes bill twice a
+// year — end of Summer (day 70) and end of Winter (day 140) — because a
+// per-season lump is 2.57x smaller and 2.57x more frequent, which dissolves
+// the saving-forcing function the mechanic exists for. See D3.
 const CALENDAR = {
-  daysPerYear: 360,
-  daysPerQuarter: 90,
-  daysPerSeason: 90,
-  // Seasons align to quarters. Order matters for getSeason below.
+  daysPerSeason: 35,
+  daysPerYear: 140,
+  daysPerTaxPeriod: 70,
   seasons: ['spring', 'summer', 'autumn', 'winter'],
   seasonNames: { spring: 'Spring', summer: 'Summer', autumn: 'Autumn', winter: 'Winter' },
-  // Months for formatDate — 12 months × 30 days, purely cosmetic so a
-  // date reads as a real date rather than "Day 147". Each month maps to
-  // a third of a quarter.
-  monthsPerYear: 12,
-  daysPerMonth: 30,
-  monthNames: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
 };
+// DELETED: monthsPerYear, daysPerMonth, monthNames — a 35-day season has no
+// months, and formatDate was their only reader.
+// UNCHANGED: WEEKDAY_NAMES stays Monday-first. See D2.
 
 // Weekday labels, indexed by getWeekday(day) (0=Mon .. 6=Sun). Promoted out
 // of a local array inside formatDate when the maid's schedule grid needed
@@ -4093,6 +4229,15 @@ const CLOTHING_STATE_SCENE_TEXT = {
 // wears swim gear, someone on the treadmill wears workout gear. Everything
 // else dresses for the schedule block (NPC's outfitTypeForContext).
 const ACTIVITY_OUTFIT_TYPES = {
+  // Vocation plan D16 — content work is D14's stated exception: an at-home
+  // work block normally resolves to 'daily', but this particular job does not
+  // happen in a jumper. Activity wins over block in outfitTypeForContext, so
+  // naming the activity here is the whole mechanism. The pool session dresses
+  // as swimming does, and the deviancy/nude question stays where every other
+  // nudity decision in the game is made (resolveTick pass 2).
+  'filming': 'sexy',
+  'filming by the pool': 'swim',
+  'filming together': 'sexy',
   'exercising': 'workout',
   'working out': 'workout',
   'doing yoga': 'workout',
@@ -4305,7 +4450,14 @@ const WILLINGNESS = {
   // `photo` (asks plan Phase 8) is the photo ask's bar — a selfie of
   // themselves is more intimate than a cuddle but far less than sex, so it
   // sits between them (0.35 < 0.4 < 0.45 default).
-  thresholds: { default: 0.45, masturbate: 0, quickie: 0.5, sex: 0.6, share_shower: 0.45, cuddle: 0.35, photo: 0.4 },
+  thresholds: { default: 0.45, masturbate: 0, quickie: 0.5, sex: 0.6, share_shower: 0.45, cuddle: 0.35, photo: 0.4,
+    // Code-review fix: content_collab's own `act` (config.js's content_collab
+    // DRIVE_DEFS entry) needs a real threshold to be checked against — it
+    // used to fall through to 'sex''s 0.6 because it had no act of its own.
+    // Set between quickie and sex: being filmed together is a genuine,
+    // significant ask, not a casual one, but it carries none of sex's
+    // physical stakes, so it sits a notch under it.
+    content: 0.55 },
   // The utility.willingness scoring bias (Phase 9) — utility.desire's bias
   // partner, declared on the SAME desire-motive overtures. `weight` scales
   // willingness() into scoreDrive appeal when the desire motive is live,
@@ -4386,6 +4538,35 @@ const INTIMACY = {
 const NPC_INTIMACY = {
   masturbate: { desireThreshold: 30 },
   intimate:   { desireThreshold: 40, act: 'sex' },
+};
+
+// --- Content-creation work (vocation-and-lifestyle plan D17/D19) ----------
+// The two dials the Phase 5/6 content drives read. Kept beside NPC_INTIMACY
+// because they answer the same shape of question and should be tuned in view
+// of each other.
+const CONTENT_WORK_TUNING = {
+  // D17. Who films by the pool at 11pm. Scored on npcDisinhibition — the same
+  // [0,1] the adult-occupation floor uses (D8) — and set ABOVE that floor on
+  // purpose: clearing the bar to do this work at all does not mean you are
+  // the one who does it in a shared room where anyone could walk in. This is
+  // the exhibitionist end of a population that is already selected.
+  poolDisinhibitionFloor: 0.72,
+
+  // D19. What a partner has to clear to be filmed WITH. Deliberately lower
+  // than the pool floor: being in someone else's shoot in a private room is a
+  // smaller step than filming yourself in a common one. It is a floor on top
+  // of the willingness gate, never instead of it — design invariant 5.
+  collabDisinhibitionFloor: 0.60,
+
+  // D18. How warm the player's relationship must be before a creator asks for
+  // help. High on purpose: the beat is worth something because it is a person
+  // asking YOU, and it is worth nothing if it fires at acquaintance. Read
+  // against relPlayer.affection, on the same [-1,1] scale the overture
+  // scorer's other motive readers use.
+  collabAskAffection: 0.55,
+  // ...and they have to actually be comfortable, not merely fond. Tension
+  // above this cancels the ask however high affection climbs.
+  collabAskMaxTension: 0.2,
 };
 
 // --- Boundary acts (Intimacy & Voyeurism Phase 17, D13/D14) ----------------
@@ -5178,6 +5359,15 @@ const CHARACTER_SCHEMA = {
   bible: {
     name:          { type: 'string', required: true, default: '', maxLength: 60 },
     visual:        { type: 'string', required: false, default: '', maxLength: 400 }, // cached paragraph derived from physical (legacy)
+    // Seasonal Calendar & Sandbox Plan (B1/D12): dotted paths the player
+    // wrote by hand — 'name', 'physical', 'physical.hair.color', 'visual',
+    // … mergeProseIntoBible (llm.js) skips any path it covers (a prefix
+    // match: 'physical' protects every key under it). MUST be declared here,
+    // in CHARACTER_SCHEMA, or validateCharacter strips it on the way in and
+    // the lock is a no-op that looks like it works (the castWeb scar —
+    // design invariant 3). Persisted with the bible: a later Character
+    // Studio edit or prose re-expansion must honour it too.
+    authoredFields: { type: 'array', required: false, default: [], maxItems: 20 },
     genSeed:       { type: 'number', required: true, default: 0 },                  // stable seed for image gen
     age:           { type: 'number', required: true, default: 25, range: [18, 60] },   // Phase 0: first-class age field for filtering/stubs
     gender:        { type: 'string', required: true, default: 'female', enum: ['male','female','futanari','trans_male','trans_female'] }, // Phase 0: filterable identity field
@@ -5301,6 +5491,33 @@ const CHARACTER_SCHEMA = {
         scheduleTemplate: { type: 'string', required: true },  // key into SCHEDULES
         incomeBand:       { type: 'string', required: true },   // low|mid|high
         hours:            { type: 'string', required: true },
+        // --- vocation-and-lifestyle plan. Every one of these has a reader,
+        // named beside it — RI6, and the stressProfile note directly below.
+        // Defaults reproduce pre-plan behaviour exactly, which is why no save
+        // migration is needed: an un-migrated NPC is on_site and waged, which
+        // is what they already were.
+        workMode:     { type: 'string', required: false, default: 'on_site' },  // D2  → SIM's npcIsOffsite
+        incomeSource: { type: 'string', required: false, default: 'wage' },     // D20 → LLM's persona block
+        officeDays:   { type: 'array',  required: false, default: [] },         // D4  → SIM's isOfficeDay
+        workRoom:     { type: 'array',  required: false, default: [] },         // D5  → SIM's resolveHomeWorkPlacement
+        workActivities: { type: 'array', required: false, default: [] },        // D5  → SIM's pickHomeWorkActivity
+        contentWork:  { type: 'boolean', required: false, default: false },     // D16 → COGNITION's content drive candidacy
+        // Phase 7 (lifestyle derivation): the idle pastimes this job's holder
+        // reaches for in free time — drive ids from the isIdlePastime set
+        // (read_book / watch_tv / scroll_phone). Empty = no lean, which is
+        // the legacy/hand-authored default. → COGNITION's idlePastimePreferred
+        // (the pastime term in scoreDrive). Field and reader ship together,
+        // per RI6 and the stressProfile note directly below.
+        idlePastimes: { type: 'array',  required: false, default: [] },
+        // Phase 7 captured dimensions (spec'd in the vocation plan's "other
+        // lifestyle dimensions" section). Each ships WITH its reader, per RI6 and
+        // the stressProfile note — a field with no consumer is the one scar this
+        // plan must not repeat. Defaults reproduce pre-plan behaviour exactly,
+        // so no migration is needed.
+        styleLean:    { type: 'array',  required: false, default: [] },   // styleTags (CLOTHING_DEFS vocab) → ITEMS composeOutfit's style-tag term (via NPC's npcOutfitForContext)
+        foodLean:     { type: 'array',  required: false, default: [] },   // TASTE_TUNING.pool keys → TASTE's deriveNpcTaste (pushed through the same guarded `likes` slots as trait anchors)
+        sleepRhythm: { type: 'string', required: false, default: 'regular' }, // early|regular|late|erratic → SIM's derived sleep-span adjustment (resolveScheduleActivity)
+        spendingLean:{ type: 'string', required: false, default: 'neutral' }, // frugal|neutral|free_spender → LLM's occupationLivingClause (persona line only)
         // `stressProfile` was here, set on all 20 OCCUPATION_POOL entries and
         // read by nothing (correctness plan Phase 5). resolveTick's random-
         // event roll carries a comment claiming to be "weighted by stress +
@@ -5352,10 +5569,13 @@ const CHARACTER_SCHEMA = {
         since:         { type: 'number', default: 1 },
         contributesRent: { type: 'boolean', default: true },
         // Fraction of the TOTAL rent this roommate has agreed to cover,
-        // clamped to ECONOMY.rent.maxRoommateShare by computeRent. Per
-        // roommate because agreements are meant to vary — see
-        // src/ref/complete/economy-and-rent-plan.md.
-        rentShare:     { type: 'number', range: [0, 1], default: 0.15 },
+        // clamped to ECONOMY.rent.maxRoommateShare by computeRent. Phase 8
+        // (vocation plan): default is now null = "derive from income" via
+        // SIM's incomeRentShare — a roommate pays what their incomeBand ×
+        // incomeSource says, not a flat 0.15. A negotiated value (the future
+        // agreement system) is written here explicitly and overrides the derivation.
+        // See src/ref/complete/economy-and-rent-plan.md.
+        rentShare:     { type: 'number', range: [0, 1], default: null, nullable: true },
       }
     },
     location:       { type: 'string', nullable: true },
@@ -5463,28 +5683,247 @@ const TEMPERAMENT_POOL = [
   // Values drawn per-axis, not per-label; these are reference distributions
 ];
 
+// --- Vocation tuning (vocation-and-lifestyle plan D2/D4/D7/D9) ------------
+// The dials behind the work-mode model and the personality↔occupation draw.
+//
+// The affinity numbers are a FIRST PASS set by arithmetic against the pool's
+// authored weights, not by measurement — the same honesty COGNITION's header
+// carries. `adultDisinhibitionFloor` is the one hard gate in the whole roll
+// (D9): below it an adult occupation scores weight 0 and cannot be drawn at
+// all. Every other affinity is a multiplier clamped into
+// [affinityFloor, affinityCeiling], so a mismatched draw is unlikely and
+// never impossible — a shy accountant and a gregarious accountant are both
+// real people, and a system that forbids one of them is a caricature
+// generator.
+const VOCATION_TUNING = {
+  // D9. npcDisinhibition is [0,1] with 0.5 the perfectly average temperament,
+  // so 0.62 is "meaningfully more forward than average" — roughly the top
+  // third of a uniform cast. Per-occupation `affinity.disinhibitionFloor`
+  // overrides this where a title wants to be stricter or looser.
+  adultDisinhibitionFloor: 0.62,
+
+  // Soft weights clamp here. The floor is deliberately NOT 0 (D9): a soft
+  // affinity shifts odds, it does not forbid, and a 0 would quietly turn
+  // every temperament weight into a second hard gate.
+  affinityFloor: 0.15,
+  affinityCeiling: 3.0,
+
+  // D4. How many days a hybrid worker is in the office, and which days are
+  // eligible. Indices are getWeekday's (0=Mon .. 6=Sun), so the pool is the
+  // working week. Rolled once per NPC in rollCastSlot and stored on the
+  // occupation — SCHEDULES only knows weekday/weekend and cannot express it.
+  hybridOfficeDayCount: [2, 3],
+  hybridOfficeDayPool: [0, 1, 2, 3, 4],
+
+  // D2. A self-employed NPC is mostly home, but some weekdays the work is
+  // elsewhere — a shoot, a client, a venue. Derived per NPC per day rather
+  // than stored (pure function of identity and date, so no field, no
+  // migration). ~1 gig day a week.
+  selfEmployedGigDayChance: 0.2,
+};
+
 // --- Occupation pool with schedule templates, income, stress, hours ---
+// Every entry is {category, title, scheduleTemplate, incomeBand, hours} as
+// before, plus the vocation plan's fields. All of the new ones are OPTIONAL
+// and every one of them has a reader — D23, and the `stressProfile` scar the
+// bible schema still carries a note about:
+//
+//   workMode       (D2)  → npcIsOffsite            — on_site|hybrid|remote|self_employed|none
+//   incomeSource   (D20) → the persona block       — wage|self|means|none
+//   workRoom       (D5)  → resolveHomeWorkPlacement — ordered room preference
+//   workActivities (D5)  → pickHomeWorkActivity     — overrides HOME_WORK_ACTIVITIES
+//   affinity       (D7)  → occupationAffinity       — temperament weights + the D9 floor
+//   traitAffinity  (D7)  → the personality draw     — multipliers on PERSONALITY_TRAITS_POOL
+//
+// An entry with none of them behaves exactly as it did before this plan,
+// which is what let the pool grow one row at a time instead of in a flag day.
+//
+// ON THE AFFINITY NUMBERS. A temperament weight `w` on an axis multiplies the
+// draw by `1 + w * axis`, and the axis is [-1,1] — so 0.5 means "half again as
+// likely at the top of the range, half as likely at the bottom". They are
+// authored to make a cast read as people, not to make any job unreachable:
+// the ONLY hard gate in the whole system is `disinhibitionFloor` (D9), which
+// exists so that a reserved, rule-bound character cannot be handed
+// adult-industry work by a dice roll. Everything else is a lean.
 const OCCUPATION_POOL = [
-  { category: 'tech',       title: 'Software Developer',       scheduleTemplate: 'day_shift', incomeBand: 'high', hours: '9-17' },
-  { category: 'tech',       title: 'QA Tester',                scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '9-17' },
-  { category: 'food',       title: 'Line Cook',                scheduleTemplate: 'evening_shift', incomeBand: 'low', hours: '16-23' },
-  { category: 'food',       title: 'Barista',                  scheduleTemplate: 'morning_shift', incomeBand: 'low', hours: '6-14' },
-  { category: 'health',     title: 'Nurse',                    scheduleTemplate: 'night_shift', incomeBand: 'mid', hours: '19-07' },
-  { category: 'health',     title: 'Therapist',                 scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '9-17' },
-  { category: 'arts',       title: 'Freelance Designer',        scheduleTemplate: 'irregular', incomeBand: 'mid', hours: 'flexible' },
-  { category: 'arts',       title: 'Musician',                  scheduleTemplate: 'evening_shift', incomeBand: 'low', hours: 'flexible' },
-  { category: 'service',    title: 'Retail Manager',           scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '10-19' },
-  { category: 'service',    title: 'Bartender',                 scheduleTemplate: 'night_shift', incomeBand: 'mid', hours: '18-02' },
-  { category: 'education',  title: 'Teacher',                  scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '8-16' },
-  { category: 'education',  title: 'Grad Student',             scheduleTemplate: 'irregular', incomeBand: 'low', hours: 'flexible' },
-  { category: 'finance',    title: 'Accountant',                scheduleTemplate: 'day_shift', incomeBand: 'high', hours: '9-17' },
-  { category: 'finance',    title: 'Barista-Entrepreneur',      scheduleTemplate: 'morning_shift', incomeBand: 'low', hours: '6-14' },
-  { category: 'trades',     title: 'Electrician',              scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '7-15' },
-  { category: 'trades',     title: 'Plumber',                  scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '8-16' },
-  { category: 'media',      title: 'Journalist',                scheduleTemplate: 'irregular', incomeBand: 'mid', hours: 'flexible' },
-  { category: 'media',      title: 'Podcaster',                 scheduleTemplate: 'irregular', incomeBand: 'low', hours: 'flexible' },
-  { category: 'legal',      title: 'Paralegal',                 scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '9-18' },
-  { category: 'science',    title: 'Lab Researcher',            scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '9-17' },
+  // --- ON SITE ------------------------------------------------------------
+  // The shift work, the trades, the jobs that are somewhere else by
+  // definition. These are the pre-plan pool, mostly unchanged: an empty
+  // flat during the day is still the common case, and it has to stay that
+  // way or the whole "catch someone home" beat stops being worth anything.
+  { category: 'tech',       title: 'QA Tester',                 scheduleTemplate: 'day_shift',     incomeBand: 'mid',  hours: '9-17',  workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['watch_tv', 'scroll_phone'], styleLean: ["casual","plain"], foodLean: ["pasta","bread"], sleepRhythm: 'regular', spendingLean: 'neutral',
+    affinity: { temperament: { conscientiousness: 0.45, openness: 0.1 } }, traitAffinity: { meticulous: 1.6, methodical: 1.5, perfectionist: 1.4 } },
+  { category: 'food',       title: 'Line Cook',                 scheduleTemplate: 'evening_shift', incomeBand: 'low',  hours: '16-23', workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['watch_tv', 'scroll_phone'], styleLean: ["sturdy","plain"], foodLean: ["bacon","beef","pasta"], sleepRhythm: 'late', spendingLean: 'frugal',
+    affinity: { temperament: { volatility: 0.25, assertiveness: 0.2, conscientiousness: 0.15 } }, traitAffinity: { intense: 1.5, blunt: 1.4, 'thick-skinned': 1.4 } },
+  { category: 'food',       title: 'Barista',                   scheduleTemplate: 'morning_shift', incomeBand: 'low',  hours: '6-14',  workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['scroll_phone', 'watch_tv'], styleLean: ["casual"], foodLean: ["eggs","dairy"], sleepRhythm: 'early', spendingLean: 'neutral',
+    affinity: { temperament: { warmth: 0.4, openness: 0.15 } }, traitAffinity: { easygoing: 1.5, playful: 1.4, warm: 1.4 } },
+  { category: 'food',       title: 'Pastry Chef',               scheduleTemplate: 'morning_shift', incomeBand: 'mid',  hours: '5-13',  workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['read_book', 'watch_tv'], styleLean: ["cozy"], foodLean: ["sweets","dairy"], sleepRhythm: 'early', spendingLean: 'neutral',
+    affinity: { temperament: { conscientiousness: 0.5, warmth: 0.2 } }, traitAffinity: { perfectionist: 1.6, meticulous: 1.5, patient: 1.4 } },
+  { category: 'health',     title: 'Nurse',                     scheduleTemplate: 'night_shift',   incomeBand: 'mid',  hours: '19-07', workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['read_book', 'watch_tv'], styleLean: ["soft","cozy"], foodLean: ["cheese","bread"], sleepRhythm: 'erratic', spendingLean: 'neutral',
+    affinity: { temperament: { warmth: 0.5, conscientiousness: 0.4 } }, traitAffinity: { nurturing: 1.7, reliable: 1.5, 'thick-skinned': 1.3 } },
+  { category: 'health',     title: 'Paramedic',                 scheduleTemplate: 'night_shift',   incomeBand: 'mid',  hours: '19-07', workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['watch_tv', 'scroll_phone'], styleLean: ["sturdy","plain"], foodLean: ["beef","potatoes"], sleepRhythm: 'erratic', spendingLean: 'frugal',
+    affinity: { temperament: { assertiveness: 0.45, volatility: -0.2, warmth: 0.25 } }, traitAffinity: { 'thick-skinned': 1.6, protective: 1.5, stoic: 1.4 } },
+  { category: 'service',    title: 'Retail Manager',            scheduleTemplate: 'day_shift',     incomeBand: 'mid',  hours: '10-19', workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['watch_tv', 'scroll_phone'], styleLean: ["professional","neutral"], foodLean: ["cheese","pasta"], sleepRhythm: 'regular', spendingLean: 'neutral',
+    affinity: { temperament: { assertiveness: 0.4, conscientiousness: 0.3 } }, traitAffinity: { diplomatic: 1.4, ambitious: 1.4, patient: 1.3 } },
+  { category: 'service',    title: 'Bartender',                 scheduleTemplate: 'night_shift',   incomeBand: 'mid',  hours: '18-02', workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['scroll_phone', 'watch_tv'], styleLean: ["sharp","edgy"], foodLean: ["bacon","cheese"], sleepRhythm: 'late', spendingLean: 'free_spender',
+    affinity: { temperament: { warmth: 0.4, assertiveness: 0.3, openness: 0.25 } }, traitAffinity: { flirtatious: 1.5, playful: 1.5, sarcastic: 1.3 } },
+  { category: 'education',  title: 'Teacher',                   scheduleTemplate: 'day_shift',     incomeBand: 'mid',  hours: '8-16',  workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['read_book', 'watch_tv'], styleLean: ["collared","soft"], foodLean: ["rice","vegetables"], sleepRhythm: 'early', spendingLean: 'neutral',
+    affinity: { temperament: { warmth: 0.45, conscientiousness: 0.4 } }, traitAffinity: { patient: 1.6, nurturing: 1.5, idealistic: 1.3 } },
+  { category: 'trades',     title: 'Electrician',               scheduleTemplate: 'day_shift',     incomeBand: 'mid',  hours: '7-15',  workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['watch_tv', 'scroll_phone'], styleLean: ["boots","sturdy"], foodLean: ["beef","potatoes"], sleepRhythm: 'early', spendingLean: 'frugal',
+    affinity: { temperament: { conscientiousness: 0.45, volatility: -0.25 } }, traitAffinity: { practical: 1.7, methodical: 1.5, reliable: 1.4 } },
+  { category: 'trades',     title: 'Plumber',                   scheduleTemplate: 'day_shift',     incomeBand: 'mid',  hours: '8-16',  workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['watch_tv', 'scroll_phone'], styleLean: ["sturdy","practical"], foodLean: ["beef","bread"], sleepRhythm: 'early', spendingLean: 'frugal',
+    affinity: { temperament: { conscientiousness: 0.4, warmth: 0.15 } }, traitAffinity: { practical: 1.7, blunt: 1.4, reliable: 1.4 } },
+  { category: 'trades',     title: 'Carpenter',                 scheduleTemplate: 'day_shift',     incomeBand: 'mid',  hours: '7-15',  workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['watch_tv', 'read_book'], styleLean: ["plaid","sturdy"], foodLean: ["beef","bread"], sleepRhythm: 'early', spendingLean: 'frugal',
+    affinity: { temperament: { conscientiousness: 0.4, openness: 0.15 } }, traitAffinity: { practical: 1.6, patient: 1.4, understated: 1.3 } },
+  { category: 'science',    title: 'Lab Researcher',            scheduleTemplate: 'day_shift',     incomeBand: 'mid',  hours: '9-17',  workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['read_book', 'scroll_phone'], styleLean: ["studious","neutral"], foodLean: ["vegetables","rice"], sleepRhythm: 'early', spendingLean: 'neutral',
+    affinity: { temperament: { conscientiousness: 0.5, openness: 0.35, assertiveness: -0.15 } }, traitAffinity: { curious: 1.6, meticulous: 1.6, methodical: 1.4 } },
+  { category: 'fitness',    title: 'Personal Trainer',          scheduleTemplate: 'morning_shift', incomeBand: 'mid',  hours: '6-14',  workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['scroll_phone', 'watch_tv'], styleLean: ["sporty","practical"], foodLean: ["chicken","eggs","beef"], sleepRhythm: 'early', spendingLean: 'neutral',
+    affinity: { temperament: { assertiveness: 0.45, warmth: 0.3, conscientiousness: 0.25 } }, traitAffinity: { competitive: 1.6, confident: 1.5, intense: 1.3 } },
+  { category: 'hospitality', title: 'Hotel Concierge',          scheduleTemplate: 'evening_shift', incomeBand: 'low',  hours: '15-23', workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['read_book', 'scroll_phone'], styleLean: ["elegant","sharp"], foodLean: ["bread","cheese"], sleepRhythm: 'late', spendingLean: 'neutral',
+    affinity: { temperament: { warmth: 0.4, conscientiousness: 0.35 } }, traitAffinity: { diplomatic: 1.6, patient: 1.4, secretive: 1.2 } },
+  { category: 'security',   title: 'Night Security',            scheduleTemplate: 'night_shift',   incomeBand: 'low',  hours: '22-06', workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['read_book', 'watch_tv'], styleLean: ["sturdy","plain"], foodLean: ["eggs","potatoes"], sleepRhythm: 'late', spendingLean: 'frugal',
+    affinity: { temperament: { warmth: -0.2, volatility: -0.3, assertiveness: 0.2 } }, traitAffinity: { stoic: 1.7, guarded: 1.5, independent: 1.4 } },
+
+  // --- HYBRID -------------------------------------------------------------
+  // In two or three days a week, home the rest (D4 rolls WHICH days per NPC).
+  // These are the jobs where you learn a roommate's rhythm: they are reliably
+  // gone on the same days and reliably underfoot on the others.
+  { category: 'tech',       title: 'Software Developer',        scheduleTemplate: 'day_shift', incomeBand: 'high', hours: '9-17', workMode: 'hybrid', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'scroll_phone'], styleLean: ["minimal","plain"], foodLean: ["rice","pasta"], sleepRhythm: 'late', spendingLean: 'neutral',
+    affinity: { temperament: { conscientiousness: 0.35, openness: 0.3, assertiveness: -0.1 } }, traitAffinity: { methodical: 1.5, curious: 1.4, independent: 1.3 } },
+  { category: 'tech',       title: 'Product Manager',           scheduleTemplate: 'day_shift', incomeBand: 'high', hours: '9-18', workMode: 'hybrid', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['watch_tv', 'scroll_phone'], styleLean: ["minimal","collared"], foodLean: ["beef","rice"], sleepRhythm: 'regular', spendingLean: 'neutral',
+    affinity: { temperament: { assertiveness: 0.45, conscientiousness: 0.3, warmth: 0.2 } }, traitAffinity: { ambitious: 1.6, diplomatic: 1.4, competitive: 1.3 } },
+  { category: 'finance',    title: 'Accountant',                scheduleTemplate: 'day_shift', incomeBand: 'high', hours: '9-17', workMode: 'hybrid', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'watch_tv'], styleLean: ["neutral","plain"], foodLean: ["potatoes","cheese"], sleepRhythm: 'regular', spendingLean: 'frugal',
+    affinity: { temperament: { conscientiousness: 0.6, volatility: -0.3 } }, traitAffinity: { meticulous: 1.7, methodical: 1.6, cautious: 1.4 } },
+  { category: 'finance',    title: 'Financial Analyst',         scheduleTemplate: 'day_shift', incomeBand: 'high', hours: '8-18', workMode: 'hybrid', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['scroll_phone', 'read_book'], styleLean: ["sharp","crisp"], foodLean: ["beef","rice"], sleepRhythm: 'regular', spendingLean: 'frugal',
+    affinity: { temperament: { conscientiousness: 0.45, assertiveness: 0.35 } }, traitAffinity: { ambitious: 1.6, competitive: 1.5, materialistic: 1.3 } },
+  { category: 'legal',      title: 'Paralegal',                 scheduleTemplate: 'day_shift', incomeBand: 'mid',  hours: '9-18', workMode: 'hybrid', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'watch_tv'], styleLean: ["collared","neutral"], foodLean: ["cheese","bread"], sleepRhythm: 'regular', spendingLean: 'neutral',
+    affinity: { temperament: { conscientiousness: 0.55, volatility: -0.2 } }, traitAffinity: { meticulous: 1.6, reliable: 1.4, patient: 1.3 } },
+  { category: 'media',      title: 'Journalist',                scheduleTemplate: 'irregular', incomeBand: 'mid', hours: 'flexible', workMode: 'hybrid', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'scroll_phone'], styleLean: ["neutral","plain"], foodLean: ["rice","pasta"], sleepRhythm: 'erratic', spendingLean: 'neutral',
+    affinity: { temperament: { openness: 0.45, assertiveness: 0.35, warmth: -0.1 } }, traitAffinity: { curious: 1.7, cynical: 1.4, blunt: 1.3 } },
+  { category: 'health',     title: 'Therapist',                 scheduleTemplate: 'day_shift', incomeBand: 'mid',  hours: '9-17', workMode: 'hybrid', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'watch_tv'], styleLean: ["knit","soft"], foodLean: ["vegetables","rice"], sleepRhythm: 'regular', spendingLean: 'neutral',
+    affinity: { temperament: { warmth: 0.5, selfAwareness: 0.55, volatility: -0.25 } }, traitAffinity: { patient: 1.6, nurturing: 1.4, diplomatic: 1.4 } },
+  { category: 'science',    title: 'Data Scientist',            scheduleTemplate: 'day_shift', incomeBand: 'high', hours: '9-17', workMode: 'hybrid', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'scroll_phone'], styleLean: ["plain","minimal"], foodLean: ["rice","pasta"], sleepRhythm: 'late', spendingLean: 'neutral',
+    affinity: { temperament: { conscientiousness: 0.4, openness: 0.4, warmth: -0.1 } }, traitAffinity: { curious: 1.6, methodical: 1.5, understated: 1.3 } },
+  { category: 'arts',       title: 'Art Director',              scheduleTemplate: 'day_shift', incomeBand: 'mid',  hours: '10-18', workMode: 'hybrid', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'watch_tv'], styleLean: ["minimal","bold"], foodLean: ["rice","vegetables"], sleepRhythm: 'regular', spendingLean: 'neutral',
+    affinity: { temperament: { openness: 0.5, assertiveness: 0.3 } }, traitAffinity: { creative: 1.7, perfectionist: 1.4, dramatic: 1.3 } },
+  { category: 'education',  title: 'Grad Student',              scheduleTemplate: 'irregular', incomeBand: 'low', hours: 'flexible', workMode: 'hybrid', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'scroll_phone'], styleLean: ["studious","plain"], foodLean: ["pasta","starches"], sleepRhythm: 'erratic', spendingLean: 'frugal',
+    affinity: { temperament: { openness: 0.45, conscientiousness: 0.2, volatility: 0.15 } }, traitAffinity: { curious: 1.6, anxious: 1.4, idealistic: 1.3 } },
+
+  // --- REMOTE -------------------------------------------------------------
+  // Never leave. These are the roommates who are simply THERE all day, which
+  // is the largest single behavioural change this plan makes to the flat.
+  { category: 'tech',       title: 'Backend Engineer',          scheduleTemplate: 'day_shift', incomeBand: 'high', hours: '10-18', workMode: 'remote', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'scroll_phone'], styleLean: ["plain","minimal"], foodLean: ["rice","pasta"], sleepRhythm: 'late', spendingLean: 'neutral',
+    affinity: { temperament: { conscientiousness: 0.35, openness: 0.25, warmth: -0.25, assertiveness: -0.2 } }, traitAffinity: { independent: 1.6, guarded: 1.4, methodical: 1.4 } },
+  { category: 'tech',       title: 'Cybersecurity Analyst',     scheduleTemplate: 'day_shift', incomeBand: 'high', hours: '9-17', workMode: 'remote', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'watch_tv'], styleLean: ["plain","edgy"], foodLean: ["beef","rice"], sleepRhythm: 'erratic', spendingLean: 'neutral',
+    affinity: { temperament: { conscientiousness: 0.45, warmth: -0.3, openness: 0.2 } }, traitAffinity: { secretive: 1.7, guarded: 1.6, cautious: 1.4 } },
+  { category: 'media',      title: 'Technical Writer',          scheduleTemplate: 'day_shift', incomeBand: 'mid',  hours: '9-17', workMode: 'remote', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'watch_tv'], styleLean: ["soft","neutral"], foodLean: ["bread","cheese"], sleepRhythm: 'regular', spendingLean: 'neutral',
+    affinity: { temperament: { conscientiousness: 0.5, assertiveness: -0.25 } }, traitAffinity: { meticulous: 1.6, understated: 1.5, patient: 1.3 } },
+  { category: 'service',    title: 'Customer Support Rep',      scheduleTemplate: 'day_shift', incomeBand: 'low',  hours: '9-17', workMode: 'remote', incomeSource: 'wage', workRoom: ['bedroom', 'study'], idlePastimes: ['watch_tv', 'scroll_phone'], styleLean: ["casual","plain"], foodLean: ["eggs","bread"], sleepRhythm: 'regular', spendingLean: 'frugal',
+    affinity: { temperament: { warmth: 0.35, volatility: -0.3 } }, traitAffinity: { patient: 1.7, 'thick-skinned': 1.4, easygoing: 1.3 } },
+  { category: 'finance',    title: 'Bookkeeper',                scheduleTemplate: 'day_shift', incomeBand: 'mid',  hours: '9-16', workMode: 'remote', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'watch_tv'], styleLean: ["neutral","plain"], foodLean: ["potatoes","bread"], sleepRhythm: 'regular', spendingLean: 'frugal',
+    affinity: { temperament: { conscientiousness: 0.6, openness: -0.15 } }, traitAffinity: { meticulous: 1.7, methodical: 1.5, reliable: 1.4 } },
+  { category: 'education',  title: 'Online Tutor',              scheduleTemplate: 'evening_shift', incomeBand: 'low', hours: '15-22', workMode: 'remote', incomeSource: 'wage', workRoom: ['bedroom', 'study'], idlePastimes: ['read_book', 'watch_tv'], styleLean: ["casual","soft"], foodLean: ["eggs","rice"], sleepRhythm: 'regular', spendingLean: 'neutral',
+    affinity: { temperament: { warmth: 0.45, conscientiousness: 0.25 } }, traitAffinity: { patient: 1.6, nurturing: 1.5, generous: 1.3 } },
+  { category: 'health',     title: 'Telehealth Counsellor',     scheduleTemplate: 'day_shift', incomeBand: 'mid',  hours: '9-17', workMode: 'remote', incomeSource: 'wage', workRoom: ['bedroom', 'study'], idlePastimes: ['read_book', 'watch_tv'], styleLean: ["soft","cozy"], foodLean: ["vegetables","rice"], sleepRhythm: 'regular', spendingLean: 'neutral',
+    affinity: { temperament: { warmth: 0.5, selfAwareness: 0.45 } }, traitAffinity: { nurturing: 1.6, patient: 1.5, sensitive: 1.3 } },
+  { category: 'legal',      title: 'Contract Reviewer',         scheduleTemplate: 'day_shift', incomeBand: 'mid',  hours: '9-17', workMode: 'remote', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'watch_tv'], styleLean: ["neutral","collared"], foodLean: ["cheese","potatoes"], sleepRhythm: 'regular', spendingLean: 'neutral',
+    affinity: { temperament: { conscientiousness: 0.55, warmth: -0.2 } }, traitAffinity: { meticulous: 1.7, cautious: 1.5, guarded: 1.3 } },
+  { category: 'arts',       title: 'UX Designer',               scheduleTemplate: 'day_shift', incomeBand: 'mid',  hours: '10-18', workMode: 'remote', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['scroll_phone', 'read_book'], styleLean: ["minimal","bold"], foodLean: ["rice","vegetables"], sleepRhythm: 'late', spendingLean: 'neutral',
+    affinity: { temperament: { openness: 0.45, conscientiousness: 0.25 } }, traitAffinity: { creative: 1.6, curious: 1.4, perfectionist: 1.3 } },
+  { category: 'science',    title: 'Research Assistant',        scheduleTemplate: 'day_shift', incomeBand: 'low',  hours: '9-17', workMode: 'remote', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'scroll_phone'], styleLean: ["studious","plain"], foodLean: ["rice","pasta"], sleepRhythm: 'early', spendingLean: 'frugal',
+    affinity: { temperament: { openness: 0.4, conscientiousness: 0.3, assertiveness: -0.2 } }, traitAffinity: { curious: 1.6, anxious: 1.3, methodical: 1.3 } },
+  { category: 'media',      title: 'Copy Editor',               scheduleTemplate: 'irregular', incomeBand: 'mid', hours: 'flexible', workMode: 'remote', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'watch_tv'], styleLean: ["soft","neutral"], foodLean: ["pasta","potatoes"], sleepRhythm: 'regular', spendingLean: 'neutral',
+    affinity: { temperament: { conscientiousness: 0.5, openness: 0.25, assertiveness: -0.2 } }, traitAffinity: { meticulous: 1.7, perfectionist: 1.5, understated: 1.3 } },
+  { category: 'wellness',   title: 'Translator',                scheduleTemplate: 'irregular', incomeBand: 'mid', hours: 'flexible', workMode: 'remote', incomeSource: 'wage', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'watch_tv'], styleLean: ["minimal","soft"], foodLean: ["rice","vegetables"], sleepRhythm: 'regular', spendingLean: 'neutral',
+    affinity: { temperament: { openness: 0.45, conscientiousness: 0.35, assertiveness: -0.15 } }, traitAffinity: { meticulous: 1.5, curious: 1.4, independent: 1.3 } },
+
+  // --- SELF EMPLOYED ------------------------------------------------------
+  // Mostly home, some days out on a shoot or at a client (D2's gig days).
+  // Their hours are their own, which makes them the least predictable
+  // presence in the flat.
+  { category: 'arts',       title: 'Freelance Illustrator',     scheduleTemplate: 'irregular', incomeBand: 'low', hours: 'flexible', workMode: 'self_employed', incomeSource: 'self', workRoom: ['study', 'bedroom'], idlePastimes: ['read_book', 'scroll_phone'], styleLean: ["edgy","bold"], foodLean: ["rice","pasta"], sleepRhythm: 'erratic', spendingLean: 'free_spender',
+    affinity: { temperament: { openness: 0.55, conscientiousness: -0.15 } }, traitAffinity: { creative: 1.8, independent: 1.4, restless: 1.3 } },
+  { category: 'arts',       title: 'Freelance Designer',        scheduleTemplate: 'irregular', incomeBand: 'mid', hours: 'flexible', workMode: 'self_employed', incomeSource: 'self', workRoom: ['study', 'bedroom'], idlePastimes: ['scroll_phone', 'read_book'], styleLean: ["minimal","bold"], foodLean: ["rice","pasta"], sleepRhythm: 'erratic', spendingLean: 'free_spender',
+    affinity: { temperament: { openness: 0.5, assertiveness: 0.2 } }, traitAffinity: { creative: 1.7, independent: 1.4, perfectionist: 1.3 } },
+  { category: 'media',      title: 'Podcaster',                 scheduleTemplate: 'irregular', incomeBand: 'low', hours: 'flexible', workMode: 'self_employed', incomeSource: 'self', workRoom: ['bedroom', 'study'], idlePastimes: ['scroll_phone', 'watch_tv'], styleLean: ["casual","plain"], foodLean: ["pasta","bread"], sleepRhythm: 'late', spendingLean: 'neutral',
+    affinity: { temperament: { openness: 0.45, assertiveness: 0.35, warmth: 0.2 } }, traitAffinity: { expressive: 1.7, curious: 1.4, dramatic: 1.3 } },
+  { category: 'media',      title: 'Streamer',                  scheduleTemplate: 'evening_shift', incomeBand: 'low', hours: 'flexible', workMode: 'self_employed', incomeSource: 'self', workRoom: ['bedroom'], idlePastimes: ['scroll_phone', 'watch_tv'], styleLean: ["street","bold"], foodLean: ["starches","pasta"], sleepRhythm: 'late', spendingLean: 'free_spender',
+    affinity: { temperament: { openness: 0.45, assertiveness: 0.35, volatility: 0.25 } }, traitAffinity: { expressive: 1.7, playful: 1.5, restless: 1.3 } },
+  { category: 'music',      title: 'Musician',                  scheduleTemplate: 'evening_shift', incomeBand: 'low', hours: 'flexible', workMode: 'self_employed', incomeSource: 'self', workRoom: ['bedroom'], idlePastimes: ['scroll_phone', 'watch_tv'], styleLean: ["edgy","street"], foodLean: ["starches","rice"], sleepRhythm: 'erratic', spendingLean: 'free_spender',
+    affinity: { temperament: { openness: 0.55, conscientiousness: -0.3, volatility: 0.2 } }, traitAffinity: { creative: 1.7, dramatic: 1.4, chaotic: 1.3 } },
+  { category: 'music',      title: 'Music Producer',            scheduleTemplate: 'irregular', incomeBand: 'mid', hours: 'flexible', workMode: 'self_employed', incomeSource: 'self', workRoom: ['bedroom', 'study'], idlePastimes: ['scroll_phone', 'read_book'], styleLean: ["edgy","street"], foodLean: ["rice","starches"], sleepRhythm: 'erratic', spendingLean: 'free_spender',
+    affinity: { temperament: { openness: 0.5, conscientiousness: 0.2 } }, traitAffinity: { creative: 1.6, perfectionist: 1.4, intense: 1.3 } },
+  { category: 'fitness',    title: 'Yoga Instructor',           scheduleTemplate: 'morning_shift', incomeBand: 'low', hours: '6-13', workMode: 'self_employed', incomeSource: 'self', workRoom: ['gym', 'bedroom'], idlePastimes: ['read_book', 'scroll_phone'], styleLean: ["sporty","soft"], foodLean: ["rice","vegetables"], sleepRhythm: 'early', spendingLean: 'neutral',
+    affinity: { temperament: { warmth: 0.45, selfAwareness: 0.45, volatility: -0.3 } }, traitAffinity: { spiritual: 1.7, patient: 1.5, easygoing: 1.4 } },
+  { category: 'service',    title: 'Photographer',              scheduleTemplate: 'irregular', incomeBand: 'mid', hours: 'flexible', workMode: 'self_employed', incomeSource: 'self', workRoom: ['study', 'bedroom'], idlePastimes: ['scroll_phone', 'read_book'], styleLean: ["edgy","minimal"], foodLean: ["rice","vegetables"], sleepRhythm: 'erratic', spendingLean: 'neutral',
+    affinity: { temperament: { openness: 0.5, warmth: 0.15 } }, traitAffinity: { creative: 1.6, curious: 1.4, patient: 1.3 } },
+  { category: 'hospitality', title: 'Small Business Owner',     scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: 'flexible', workMode: 'self_employed', incomeSource: 'self', workRoom: ['study', 'bedroom'], idlePastimes: ['scroll_phone', 'watch_tv'], styleLean: ["collared","neutral"], foodLean: ["beef","potatoes"], sleepRhythm: 'early', spendingLean: 'neutral',
+    affinity: { temperament: { assertiveness: 0.5, conscientiousness: 0.35 } }, traitAffinity: { ambitious: 1.7, stubborn: 1.4, practical: 1.3 } },
+  { category: 'wellness',   title: 'Massage Therapist',         scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: 'flexible', workMode: 'self_employed', incomeSource: 'self', workRoom: ['bedroom'], idlePastimes: ['read_book', 'watch_tv'], styleLean: ["soft","cozy"], foodLean: ["rice","vegetables"], sleepRhythm: 'regular', spendingLean: 'neutral',
+    affinity: { temperament: { warmth: 0.5, selfAwareness: 0.35, volatility: -0.25 } }, traitAffinity: { nurturing: 1.6, patient: 1.5, sensual: 1.3 } },
+
+  // --- ADULT (one category, several titles — D10) -------------------------
+  // `contentWork: true` (D16) marks the titles whose work is FILMED, AT HOME
+  // — the ones the Phase 5 content drives fire for. It resolves the plan's
+  // parked question in favour of a flag rather than `category === 'adult'`,
+  // because the two are not the same set: an Exotic Dancer works a club, an
+  // Escort works elsewhere, and a boutique owner works a shop. All three are
+  // adult-industry and none of them films in the flat. A flag also leaves the
+  // door open for a non-adult streamer later without widening a category
+  // check into something it never meant.
+  // Splitting these across adult_cam / adult_performance / adult_service
+  // would eat three slots of the cast's category-uniqueness budget AND let
+  // one draw lock out the others. One category, several titles, each with
+  // its own floor.
+  //
+  // `disinhibitionFloor` is the D9 hard gate and the reason this block reads
+  // the way it does: npcDisinhibition is a [0,1] derived from volatility,
+  // openness and assertiveness, and below the floor these entries score
+  // weight ZERO. A guarded, modest, rule-bound character cannot be handed
+  // this work by an unlucky roll — which was the whole point of coupling
+  // occupation to personality in the first place.
+  { category: 'adult',      title: 'Cam Model',                 scheduleTemplate: 'irregular', incomeBand: 'mid', hours: 'flexible', workMode: 'self_employed', incomeSource: 'self', workRoom: ['bedroom'], contentWork: true, idlePastimes: ['scroll_phone', 'watch_tv'], styleLean: ["evening","bold"], foodLean: ["starches","rice"], sleepRhythm: 'late', spendingLean: 'free_spender',
+    affinity: { disinhibitionFloor: 0.62, temperament: { openness: 0.5, assertiveness: 0.4, warmth: 0.2 } },
+    traitAffinity: { brazen: 3.2, teasing: 3.0, magnetic: 2.6, flirtatious: 2.6, sensual: 2.2, confident: 2.0, guarded: 0.2, conformist: 0.2, insecure: 0.4 } },
+  { category: 'adult',      title: 'Adult Film Performer',      scheduleTemplate: 'irregular', incomeBand: 'mid', hours: 'flexible', workMode: 'self_employed', incomeSource: 'self', workRoom: ['bedroom'], contentWork: true, idlePastimes: ['scroll_phone', 'watch_tv'], styleLean: ["bold","edgy"], foodLean: ["starches","beef"], sleepRhythm: 'erratic', spendingLean: 'free_spender',
+    affinity: { disinhibitionFloor: 0.68, temperament: { openness: 0.55, assertiveness: 0.45, volatility: 0.2 } },
+    traitAffinity: { brazen: 3.2, daring: 3.0, forward: 2.8, sensual: 2.4, confident: 2.2, magnetic: 2.0, guarded: 0.2, cautious: 0.25 } },
+  { category: 'adult',      title: 'Exotic Dancer',             scheduleTemplate: 'night_shift', incomeBand: 'mid', hours: '20-04', workMode: 'on_site', incomeSource: 'wage', idlePastimes: ['scroll_phone', 'watch_tv'], styleLean: ["bold","evening"], foodLean: ["lettuce","vegetables"], sleepRhythm: 'late', spendingLean: 'free_spender',
+    affinity: { disinhibitionFloor: 0.60, temperament: { openness: 0.4, assertiveness: 0.45, warmth: 0.15 } },
+    traitAffinity: { magnetic: 3.0, brazen: 2.8, confident: 2.4, teasing: 2.4, sensual: 2.0, 'thick-skinned': 1.6, guarded: 0.25 } },
+  { category: 'adult',      title: 'Escort',                    scheduleTemplate: 'evening_shift', incomeBand: 'high', hours: 'flexible', workMode: 'self_employed', incomeSource: 'self', idlePastimes: ['scroll_phone', 'read_book'], styleLean: ["elegant","bold"], foodLean: ["lettuce","rice"], sleepRhythm: 'late', spendingLean: 'free_spender',
+    affinity: { disinhibitionFloor: 0.66, temperament: { assertiveness: 0.45, selfAwareness: 0.35, openness: 0.35 } },
+    traitAffinity: { magnetic: 3.0, forward: 2.8, sensual: 2.2, secretive: 2.0, confident: 2.0, diplomatic: 1.4, insecure: 0.3 } },
+  { category: 'adult',      title: 'Premium Content Creator',   scheduleTemplate: 'irregular', incomeBand: 'mid', hours: 'flexible', workMode: 'self_employed', incomeSource: 'self', workRoom: ['bedroom'], contentWork: true, idlePastimes: ['scroll_phone', 'watch_tv'], styleLean: ["evening","bold"], foodLean: ["starches","rice"], sleepRhythm: 'erratic', spendingLean: 'free_spender',
+    affinity: { disinhibitionFloor: 0.58, temperament: { openness: 0.45, assertiveness: 0.3 } },
+    traitAffinity: { teasing: 3.0, flirtatious: 2.8, sensual: 2.4, expressive: 2.0, playful: 1.8, guarded: 0.25 } },
+  { category: 'adult',      title: 'Adult Boutique Owner',      scheduleTemplate: 'day_shift', incomeBand: 'mid', hours: '11-19', workMode: 'on_site', incomeSource: 'self', idlePastimes: ['scroll_phone', 'watch_tv'], styleLean: ["bold","edgy"], foodLean: ["starches","pasta"], sleepRhythm: 'regular', spendingLean: 'neutral',
+    affinity: { disinhibitionFloor: 0.52, temperament: { openness: 0.45, assertiveness: 0.3, warmth: 0.25 } },
+    traitAffinity: { brazen: 2.2, playful: 1.9, blunt: 1.7, confident: 1.7, sensual: 1.6, practical: 1.3 } },
+
+  // --- NO JOB (D3/D20/D21) -------------------------------------------------
+  // Not an absent occupation — a workMode. The record stays fully populated
+  // so every existing consumer (persona prompt, browse filter, the cast's
+  // category-uniqueness rule) keeps working with no null handling.
+  //
+  // All five use `standard`, which already has NO work block, so nothing
+  // opens a shift and the whole day is available to the drive scorer. That
+  // makes an unemployed roommate the MOST present person in the flat, which
+  // is the interesting half of the idea.
+  //
+  // `incomeSource` is what separates them: `means` has money arriving without
+  // work, `none` is running out. Same empty calendar, completely different
+  // person, and the persona block says which (Phase 4).
+  { category: 'none',       title: 'Family Money',              scheduleTemplate: 'standard', incomeBand: 'high', hours: 'none', workMode: 'none', incomeSource: 'means', idlePastimes: ['scroll_phone', 'watch_tv'], styleLean: ["elegant","classic"], foodLean: ["starches","beef"], sleepRhythm: 'late', spendingLean: 'free_spender',
+    affinity: { temperament: { conscientiousness: -0.3, openness: 0.25, assertiveness: 0.2 } }, traitAffinity: { lazy: 1.6, materialistic: 1.5, easygoing: 1.4, 'passive-aggressive': 1.2 } },
+  { category: 'none',       title: 'Living Off The Settlement', scheduleTemplate: 'standard', incomeBand: 'mid', hours: 'none', workMode: 'none', incomeSource: 'means', idlePastimes: ['watch_tv', 'scroll_phone'], styleLean: ["plain","neutral"], foodLean: ["starches","pasta"], sleepRhythm: 'erratic', spendingLean: 'frugal',
+    affinity: { temperament: { volatility: 0.3, selfAwareness: 0.2, warmth: -0.15 } }, traitAffinity: { guarded: 1.6, cynical: 1.5, vulnerable: 1.4, restless: 1.3 } },
+  { category: 'none',       title: 'Taking A Year',             scheduleTemplate: 'standard', incomeBand: 'mid', hours: 'none', workMode: 'none', incomeSource: 'means', idlePastimes: ['read_book', 'scroll_phone'], styleLean: ["soft","plain"], foodLean: ["starches","rice"], sleepRhythm: 'late', spendingLean: 'free_spender',
+    affinity: { temperament: { openness: 0.5, selfAwareness: 0.35, conscientiousness: -0.2 } }, traitAffinity: { adventurous: 1.7, spiritual: 1.5, curious: 1.4, restless: 1.3 } },
+  { category: 'none',       title: 'Recently Laid Off',         scheduleTemplate: 'standard', incomeBand: 'low', hours: 'none', workMode: 'none', incomeSource: 'none', idlePastimes: ['scroll_phone', 'watch_tv'], styleLean: ["plain","cozy"], foodLean: ["pasta","starches"], sleepRhythm: 'erratic', spendingLean: 'frugal',
+    affinity: { temperament: { volatility: 0.35, selfAwareness: -0.15, assertiveness: -0.2 } }, traitAffinity: { anxious: 1.7, insecure: 1.5, restless: 1.4, cynical: 1.3 } },
+  { category: 'none',       title: 'Between Things',            scheduleTemplate: 'standard', incomeBand: 'low', hours: 'none', workMode: 'none', incomeSource: 'none', idlePastimes: ['watch_tv', 'scroll_phone'], styleLean: ["plain","cozy"], foodLean: ["starches","bread"], sleepRhythm: 'erratic', spendingLean: 'frugal',
+    affinity: { temperament: { conscientiousness: -0.35, volatility: 0.2 } }, traitAffinity: { lazy: 1.6, easygoing: 1.4, chaotic: 1.3, restless: 1.3 } },
 ];
 
 // --- Schedule templates: [weekday/weekend] → tick → activity weight table ---
@@ -5579,6 +6018,17 @@ const SCHEDULES = {
   },
 };
 
+// --- Sleep-rhythm tuning (vocation plan's captured Dimension 3). The unit is
+// sim ticks (30 min). Early/late shift the END of this NPC's template sleep
+// window; erratic jitters it per day. The block name stays `sleep` (D1) — the
+// NPC just occupies it for a different span, and the whole adjustment lives on the
+// game's own clock, never the player's alarm system (that path is off-limits).
+const SLEEP_RHYTHM = {
+  earlyTicks: 2,      // 'early' wakes this many ticks before the template wake
+  lateTicks: 2,       // 'late' sleeps this many ticks past the template wake
+  erraticTicks: 2,    // 'erratic' jitters the wake boundary ±this many ticks/day
+};
+
 // --- Block time-of-day windows (continuous-behavior-engine Phase 3, D4) ---
 // The canonical minutes-from-midnight ranges each schedule block occupies —
 // the table the routine weight curve (COGNITION's driveTimeOfDayWeight) keys
@@ -5624,6 +6074,31 @@ const ACTIVITY_TABLES = {
   commute_home: ['commuting home'],
   prep:     ['getting ready'],
   morning_shift: ['getting ready for work'],
+};
+
+// --- At-home work activities (vocation-and-lifestyle plan D5, Phase 3) -----
+// ACTIVITY_TABLES.work is the single string 'at work', which is correct for
+// someone who is GONE and says nothing about someone sitting at a desk in the
+// next room. These are what a work block looks like when the worker never
+// left: keyed by occupation category, overridable per occupation via
+// `workActivities`.
+//
+// Every string here needs a PEEK_VIEW_ACT row too — a phrase the peek
+// pipeline cannot name falls through to `_default` ("just in there"), which
+// is how a whole new class of visible behaviour arrives invisible.
+const HOME_WORK_ACTIVITIES = {
+  tech:      ['on a video call', 'debugging something', 'in a standup', 'staring at a terminal', 'reviewing code'],
+  arts:      ['sketching', 'on a video call', 'editing a draft', 'colour-matching something', 'at the drawing tablet'],
+  media:     ['recording a take', 'editing audio', 'on a call with a source', 'writing up notes', 'chasing a quote'],
+  finance:   ['on a video call', 'buried in a spreadsheet', 'reconciling something', 'on a client call'],
+  education: ['marking papers', 'on a video call', 'reading a paper', 'writing lecture notes', 'buried in a chapter'],
+  science:   ['reading a paper', 'crunching numbers', 'on a video call', 'writing up results'],
+  legal:     ['reading a filing', 'drafting something', 'on a client call', 'buried in a contract'],
+  health:    ['on a video call', 'writing up notes', 'on a client call'],
+  service:   ['on a video call', 'answering emails', 'on the phone with a supplier'],
+  music:     ['mixing a track', 'laying down a take', 'on headphones at the desk', 'writing something'],
+  adult:     ['on a call', 'editing something', 'answering messages', 'planning a shoot'],
+  _default:  ['on a video call', 'answering emails', 'at the laptop', 'on a call', 'working'],
 };
 
 // Map activity strings to preferred rooms. When an NPC's activity matches
@@ -6309,10 +6784,63 @@ const PEEK_VIEW_ACT = {
   sleeping: { safe: 'asleep in bed', explicit: 'asleep in bed' },
   napping: { safe: 'dozing', explicit: 'dozing' },
   'watching TV': { safe: 'watching TV', explicit: 'watching TV' },
+  'reading': { safe: 'reading', explicit: 'reading' },
   'reading in bed': { safe: 'reading in bed', explicit: 'reading in bed' },
+  'scrolling social media': { safe: 'on their phone', explicit: 'on their phone' },
   'playing games': { safe: 'playing games', explicit: 'playing games' },
   'doing yoga': { safe: 'doing yoga', explicit: 'doing yoga' },
   exercising: { safe: 'working out', explicit: 'working out' },
+  // Vocation plan D16/D17 — content work. safe/explicit genuinely diverge
+  // here, which is the whole reason PEEK_VIEW_ACT has two columns: at a
+  // glance through a gap in a door this reads as someone set up with a light
+  // and a camera, and only a real look tells you what is being filmed.
+  filming:                  { safe: 'set up with a camera', explicit: 'filming themselves' },
+  'filming by the pool':    { safe: 'by the pool with a camera set up', explicit: 'filming themselves at the pool' },
+  'filming together':       { safe: 'in there with someone, a camera set up', explicit: 'filming with someone' },
+
+  // Vocation plan D5/Phase 3 — the at-home workday. Every string in
+  // HOME_WORK_ACTIVITIES needs a row here or peeking at a remote worker
+  // returns `_default` ("just in there"), which is how a whole new class of
+  // visible behaviour arrives invisible. Work is not a private act, so safe
+  // and explicit read the same: there is nothing to soften.
+  'on a video call':        { safe: 'on a video call', explicit: 'on a video call' },
+  'debugging something':    { safe: 'hunched over a laptop', explicit: 'hunched over a laptop' },
+  'in a standup':           { safe: 'on a call with their team', explicit: 'on a call with their team' },
+  'staring at a terminal':  { safe: 'staring at a screen', explicit: 'staring at a screen' },
+  'reviewing code':         { safe: 'reading something on a laptop', explicit: 'reading something on a laptop' },
+  'sketching':              { safe: 'sketching', explicit: 'sketching' },
+  'editing a draft':        { safe: 'editing something', explicit: 'editing something' },
+  'colour-matching something': { safe: 'squinting at colour swatches', explicit: 'squinting at colour swatches' },
+  'at the drawing tablet':  { safe: 'at a drawing tablet', explicit: 'at a drawing tablet' },
+  'recording a take':       { safe: 'recording something', explicit: 'recording something' },
+  'editing audio':          { safe: 'in headphones at a laptop', explicit: 'in headphones at a laptop' },
+  'on a call with a source': { safe: 'on the phone', explicit: 'on the phone' },
+  'writing up notes':       { safe: 'writing something up', explicit: 'writing something up' },
+  'chasing a quote':        { safe: 'on the phone', explicit: 'on the phone' },
+  'buried in a spreadsheet': { safe: 'buried in a spreadsheet', explicit: 'buried in a spreadsheet' },
+  'reconciling something':  { safe: 'working through paperwork', explicit: 'working through paperwork' },
+  'on a client call':       { safe: 'on a client call', explicit: 'on a client call' },
+  'marking papers':         { safe: 'marking papers', explicit: 'marking papers' },
+  'reading a paper':        { safe: 'reading a paper', explicit: 'reading a paper' },
+  'writing lecture notes':  { safe: 'writing notes', explicit: 'writing notes' },
+  'buried in a chapter':    { safe: 'buried in a book', explicit: 'buried in a book' },
+  'crunching numbers':      { safe: 'working through numbers', explicit: 'working through numbers' },
+  'writing up results':     { safe: 'writing something up', explicit: 'writing something up' },
+  'reading a filing':       { safe: 'reading through documents', explicit: 'reading through documents' },
+  'drafting something':     { safe: 'drafting something', explicit: 'drafting something' },
+  'buried in a contract':   { safe: 'buried in paperwork', explicit: 'buried in paperwork' },
+  'answering emails':       { safe: 'answering emails', explicit: 'answering emails' },
+  'on the phone with a supplier': { safe: 'on the phone', explicit: 'on the phone' },
+  'mixing a track':         { safe: 'mixing a track', explicit: 'mixing a track' },
+  'laying down a take':     { safe: 'recording something', explicit: 'recording something' },
+  'on headphones at the desk': { safe: 'in headphones at a desk', explicit: 'in headphones at a desk' },
+  'writing something':      { safe: 'writing something', explicit: 'writing something' },
+  'on a call':              { safe: 'on a call', explicit: 'on a call' },
+  'editing something':      { safe: 'editing something', explicit: 'editing something' },
+  'answering messages':     { safe: 'answering messages', explicit: 'answering messages' },
+  'planning a shoot':       { safe: 'making notes on a laptop', explicit: 'making notes on a laptop' },
+  'at the laptop':          { safe: 'at a laptop', explicit: 'at a laptop' },
+  working:                  { safe: 'working', explicit: 'working' },
   _default: { safe: 'just in there', explicit: 'just in there' },
 };
 
@@ -6923,6 +7451,17 @@ const INTERRUPTION = {
     evening: 1.0, wind_down: 0.8, sleep: 0.1, work: 0,
     midday: 1.0, afternoon: 1.0, prep: 0.8,
   },
+  // Vocation plan D13: the multiplier for an NPC who is home DURING their
+  // work block (remote, hybrid-home, self-employed off a gig day). It stands
+  // in for scheduleMultiplier.work, which is 0 because before this plan a
+  // work block always meant the flat was empty of that person.
+  //
+  // 0.4 is a first pass, deliberately below the 1.2 of `leisure`: someone on
+  // a call is present but occupied. Phase 3's verification measures the
+  // event's overall rate against the pre-plan baseline and this is the dial
+  // that holds it in band — if remote roommates make interruptions feel
+  // constant, this number is the one to move.
+  workingFromHomeMultiplier: 0.4,
   relationshipMultiplier: {
     highTension: 1.3, highAffection: 1.1, lowBoth: 0.8,
   },
@@ -7821,6 +8360,154 @@ const DRIVE_DEFS = {
     },
   },
 
+  // --- Content-creation work (vocation-and-lifestyle plan D16, Phase 5) ----
+  // The shift an adult-industry creator actually works. A DRIVE, not a
+  // schedule block: it is authored in exactly the shape `masturbate` and
+  // `swim` are, so it inherits the private-room gate, the peek pipeline, the
+  // commitment hold and the event log without any of them learning a new
+  // concept. D1's rule — the block vocabulary is closed — is why this is not
+  // a `content` block, and it costs nothing to obey.
+  //
+  // It fires DURING the occupation's work block (that is what the blockAppeal
+  // says), which is what makes it work rather than a hobby. openHomeWorkCommitment
+  // holds the ordinary at-home shift; this out-scores it when the conditions
+  // are right, because the at-home shift is interruptible by design.
+  //
+  // NUDITY IS NOT SET HERE, and that is deliberate. resolveTick pass 2's
+  // npcClothingForContext owns every nudity decision in the game through the
+  // deviancyThreshold x nudeSwimChance gate; the `swim` drive's comment
+  // records that a second gate was consciously not built because it would let
+  // a drive bypass the first. `setsClothing: 'undressed'` states the working
+  // state of a shoot, and the nude question stays where it lives.
+  //
+  // The event line is ambiguous on purpose — the off-screen log never states
+  // an intimate act outright (the same rule `masturbate` follows). What you
+  // get is a closed door and a light under it; the peek is where you learn
+  // what is actually happening.
+  content_session: {
+    gates: [], weight: 0.30,
+    isContentWorkDrive: true,
+    timeOfDay: ['work', 'leisure', 'evening', 'wind_down'],
+    effects: [
+      { type: 'ADJUST_NEED', params: { who: 'self', need: 'desire', delta: -DESIRE.release.masturbate } },
+      { type: 'MOOD_DELTA', params: { who: 'self', delta: 0.06 } },
+    ],
+    activityOverride: 'filming',
+    setsClothing: 'undressed',
+    emitsSignal: { signal: 'moaning', intensity: SIGNALS_EMIT.moaningLow },
+    eventTemplate: '{name} shut the door and put a light on in there.',
+    eventMood: 0.04,
+    cooldownMinutes: 600,
+    utility: {
+      // Above masturbate's 0.34 because this is their JOB — it should beat an
+      // ordinary at-home work tick during the work block rather than being a
+      // rare mood. Desire feeds it (DESIRE.scoring) but is not required: the
+      // candidacy door is the occupation, not the need.
+      baseAppeal: 0.42,
+      desire: DESIRE.scoring,
+      holdMinutes: 90,
+      blockAppeal: { work: 1.5, evening: 1.15, wind_down: 1.1, leisure: 1.0 },
+    },
+  },
+
+  // D17 — the rare one. "A late-night pool session you might catch."
+  //
+  // Everything about the numbers here serves RARITY. Catching this has to
+  // read as luck, or it stops being a thing you caught and becomes a thing
+  // that happens. Base appeal sits just over COGNITION.actionThreshold (0.40)
+  // so it needs its block bonus to clear the bar at all, and the 4-day
+  // cooldown puts it at roughly once a fortnight per eligible NPC even when
+  // conditions are perfect.
+  //
+  // Facility-gated exactly as `swim` is — same actionId, same meters, so the
+  // pool must be functional and using it wears it out and shows on the bills.
+  // Candidacy (COGNITION's DRIVE_CANDIDACY) adds the rest: content work, high
+  // disinhibition, and an EMPTY pool room. The empty-room condition is what
+  // makes it a private act in a common space, which is the whole appeal of
+  // the beat and the reason it is worth walking in on.
+  content_pool_session: {
+    gates: [], weight: 0.08,
+    isContentWorkDrive: true,
+    actionId: 'self.swim',
+    timeOfDay: ['wind_down', 'evening'],
+    effects: [
+      { type: 'ADJUST_NEED', params: { who: 'self', need: 'desire', delta: -DESIRE.release.masturbate } },
+      { type: 'MOOD_DELTA', params: { who: 'self', delta: 0.09 } },
+    ],
+    activityOverride: 'filming by the pool',
+    emitsSignal: { signal: 'splashing', intensity: SIGNALS_EMIT.moaningLow },
+    eventTemplate: '{name} was down by the pool late, with the lights low.',
+    eventMood: 0.06,
+    cooldownMinutes: 20160,  // 14 days — THE rarity dial. Measured at 5760 this fired
+                             // 1.25x per npc-week under ideal conditions, which is not a
+                             // thing you catch, it is a thing that happens. See the plan.
+    meters: [['devices', 1.5], ['waterHeating', 1]],
+    utility: {
+      baseAppeal: 0.30,
+      desire: DESIRE.scoring,
+      holdMinutes: 60,
+      blockAppeal: { wind_down: 1.45, evening: 1.15 },
+    },
+  },
+
+  // D19 — the couple session. Two people who work together, working.
+  //
+  // A VARIANT of `intimate`, not a new pair mechanism: `isIntimateDrive` sends
+  // it through the identical resolver, which means it goes through
+  // findIntimatePartner and resolveWillingnessGate exactly as the ordinary
+  // pair act does. That is the whole design and it is design invariant 5 —
+  // the willingness gate is never bypassed, extended, or special-cased. The
+  // content conditions are added ON TOP of it in DRIVE_CANDIDACY, never
+  // instead of it, and Phase 6's most important test is the one that forces
+  // an unwilling partner into the room and asserts this stays non-candidate.
+  //
+  // Everything else it inherits for free: effects on both parties, castWeb
+  // warmed both ways, both participants pinned by a commitment, the moan the
+  // neighbours hear, the infidelity footprint if it contradicts a record.
+  //
+  // Code-review fixes (all in this entry, all consumed by tryIntimatePair):
+  //   act — was previously absent, which meant tryIntimatePair fell back to
+  //     NPC_INTIMACY.intimate.act ('sex') for this drive too: a filmed
+  //     shoot triggered the same pregnancy roll and 'first_sex' relationship
+  //     history as literal intercourse. 'content' is not in
+  //     PREGNANCY.qualifyingActs, so neither consequence fires for it now —
+  //     and it gets its own WILLINGNESS.thresholds entry rather than sex's.
+  //   pairDeltas — was absent despite the comment above claiming castWeb
+  //     warming was "inherited for free"; it wasn't, because
+  //     tryIntimatePair's warming block is itself gated on `drive.pairDeltas`
+  //     being present. Smaller than `intimate`'s across the board: this is a
+  //     working collaboration, not a sexual encounter, so it earns real trust
+  //     (the biggest single term) without the desire release full sex gets.
+  //   leaves — `intimate` unmakes the bed it used (design invariant 7, "an
+  //     act leaves a trace"); this drive borrows the same self.nap anchor
+  //     (actionId) and left the same trace unset.
+  content_collab: {
+    gates: [], weight: 0.14,
+    isIntimateDrive: true,
+    isContentWorkDrive: true,
+    act: 'content',
+    actionId: 'self.nap',
+    timeOfDay: ['work', 'evening', 'wind_down'],
+    effects: [
+      { type: 'ADJUST_NEED', params: { who: 'self', need: 'desire', delta: -DESIRE.release.sex } },
+      { type: 'MOOD_DELTA', params: { who: 'self', delta: 0.1 } },
+    ],
+    pairDeltas: { affection: 0.06, comfort: 0.05, trust: 0.06, desire: -0.15, tension: -0.05 },
+    leaves: { bed: { made: 1 } },
+    activityOverride: 'filming together',
+    setsClothing: 'undressed',
+    emitsSignal: { signal: 'moaning', intensity: SIGNALS_EMIT.moaningHigh },
+    eventTemplate: '{name} and someone else shut themselves in for a while.',
+    eventMood: 0.05,
+    cooldownMinutes: 2880,   // two days
+    utility: {
+      baseAppeal: 0.36,
+      desire: DESIRE.scoring,
+      holdMinutes: 90,
+      blockAppeal: { work: 1.3, evening: 1.15, wind_down: 1.2 },
+    },
+  },
+
   // Intimacy & Voyeurism Phase 13 (D3/D13): the pair-act half. Custom
   // resolver (tryIntimatePair, drives.js), because a pair act touches TWO
   // NPCs — its effects run on both, its deltas are castWeb both ways, both
@@ -7840,6 +8527,16 @@ const DRIVE_DEFS = {
   intimate: {
     gates: [], weight: 0.2,
     isIntimateDrive: true,
+    // Code-review fix: `act` now lives on the DRIVE_DEFS entry itself,
+    // alongside activityOverride/pairDeltas, and is what tryIntimatePair
+    // (drives.js) reads for the willingness-gate check, the pregnancy roll,
+    // and the relationship-history write — the same three consequences a
+    // real "did these two have sex" question needs to answer consistently.
+    // Before this field existed, tryIntimatePair hardcoded
+    // NPC_INTIMACY.intimate.act for EVERY isIntimateDrive entry regardless
+    // of which one fired, which is how content_collab (below) ended up
+    // triggering real pregnancies from a filming session.
+    act: 'sex',
     actionId: 'self.nap',
     timeOfDay: ['leisure', 'evening', 'wind_down'],
     // Applied to BOTH participants (who: 'self' = each) by tryIntimatePair.
@@ -7935,6 +8632,98 @@ const DRIVE_DEFS = {
       desire: DESIRE.scoring,
       holdMinutes: CLOCK.tickMinutes,
       blockAppeal: { evening: 1.1, wind_down: 1.3 },
+    },
+  },
+
+  // --- Idle pastimes (vocation-and-lifestyle plan Phase 7) -----------------
+  // The measured fix for the empty afternoon. The drive table had nothing
+  // that appealed WITHOUT a need behind it, so once every need was met the
+  // best candidate on an idle tick scored ~0.356 against
+  // COGNITION.actionThreshold and the back half of a free day was nothing.
+  // These clear the bar on APPEAL — deliberately, with no `utility.need` —
+  // and their cooldowns bound the rate, so an at-home NPC fills the day
+  // with visible life instead of staring at a wall. All three restore a
+  // little stimulation and mood: they are the SOURCE of an idle afternoon,
+  // not a response to an empty one (that response already exists — it is
+  // seek_stimulation).
+  //
+  // Which one a person reaches for is the occupation's `idlePastimes` list
+  // (D23: the field and this reader — COGNITION's idlePastimePreferred, the
+  // `utility.pastimeWeight` term in scoreDrive — ship in the same phase). A
+  // listed drive scores +pastimeWeight; an unlisted one still clears the
+  // bar, so the lean tints without ever re-opening the empty afternoon. An
+  // absent list scores every idle drive flat.
+  //
+  // No temperamentWeights, and that is a decision, not an absence: base ×
+  // the personality multiplier at the wrong end of an axis would drop one of
+  // these BELOW the bar and re-create the hole for half a cast. Personality
+  // reaches idle behaviour through Phase 2's occupation affinity — a curious
+  // draw is likelier to land a job whose pastimes suit it — not through a
+  // second weight set here.
+  read_book: {
+    gates: [], weight: 0.3,
+    isIdlePastime: true,
+    timeOfDay: ['midday', 'leisure', 'evening', 'wind_down'],
+    effects: [
+      { type: 'ADJUST_NEED', params: { who: 'self', need: 'stimulation', delta: 12 } },
+      { type: 'MOOD_DELTA', params: { who: 'self', delta: 0.02 } },
+    ],
+    activityOverride: 'reading',
+    // Same rooms the schedule routes 'reading' to (ACTIVITY_ROOM_PREFERENCES).
+    moveToRoom: ['study', 'living_room', 'balcony'],
+    eventTemplate: '{name} curled up with a book for a while.',
+    eventMood: 0.03,
+    cooldownMinutes: 420,
+    utility: {
+      baseAppeal: 0.42,
+      holdMinutes: 90,
+      blockAppeal: { leisure: 1.1, wind_down: 1.2 },
+      pastimeWeight: 0.06,
+    },
+  },
+
+  watch_tv: {
+    gates: [], weight: 0.3,
+    isIdlePastime: true,
+    timeOfDay: ['leisure', 'midday', 'evening', 'wind_down'],
+    effects: [
+      { type: 'ADJUST_NEED', params: { who: 'self', need: 'stimulation', delta: 12 } },
+      { type: 'MOOD_DELTA', params: { who: 'self', delta: 0.02 } },
+    ],
+    activityOverride: 'watching TV',
+    moveToRoom: ['living_room'],
+    eventTemplate: '{name} put the TV on and sprawled across the couch.',
+    eventMood: 0.03,
+    cooldownMinutes: 420,
+    // A screen on shows up on the bills, the same way a shower or a load of
+    // laundry does (UTILITY_METER.devices — electric, per-hour).
+    meters: [['devices', 0.5]],
+    utility: {
+      baseAppeal: 0.42,
+      holdMinutes: 90,
+      blockAppeal: { leisure: 1.1, evening: 1.1 },
+      pastimeWeight: 0.06,
+    },
+  },
+
+  scroll_phone: {
+    gates: [], weight: 0.3,
+    isIdlePastime: true,
+    timeOfDay: ['leisure', 'midday', 'evening', 'wind_down'],
+    effects: [
+      { type: 'ADJUST_NEED', params: { who: 'self', need: 'stimulation', delta: 10 } },
+      { type: 'MOOD_DELTA', params: { who: 'self', delta: 0.01 } },
+    ],
+    activityOverride: 'scrolling social media',
+    moveToRoom: ['living_room', 'balcony', 'bedroom'],
+    eventTemplate: '{name} scrolled through their phone for a while.',
+    eventMood: 0.02,
+    cooldownMinutes: 360,
+    utility: {
+      baseAppeal: 0.42,
+      holdMinutes: 60,
+      blockAppeal: { leisure: 1.1 },
+      pastimeWeight: 0.06,
     },
   },
 };
@@ -8242,6 +9031,26 @@ const OVERTURE_PROPOSE_TEMPLATES = {
 const OVERTURE_PROPOSE_REFUSAL_FACTS = {
   warm: 'You said no when {name} asked to spend some time together.',
 };
+
+// Vocation plan D18 — the collab ask. Written as someone raising work with a
+// person they trust, not as a proposition: the candidacy already required real
+// affection and low tension, so by the time this is spoken the relationship
+// has done the persuading and the line does not have to. `{when}` and
+// `{where}` come from the proposal terms exactly as the hangout's do.
+const OVERTURE_COLLAB_TEMPLATES = {
+  warm: [
+    '{name} finds you, a little more carefully than usual. "So — work thing. I could use another pair of hands {when}. Nothing you would not be comfortable with, and you can say no and we never mention it again."',
+    '{name} leans in the doorway. "Can I ask you something work-related and weird? {when}, the {where}. I need someone I actually trust behind the camera."',
+    '"Okay," {name} says, "hear me out." A pause. "{when}. I am shooting. It goes better with someone there, and I would rather it was you than anyone I would have to hire."',
+  ],
+  charged: [
+    '{name} catches your eye and holds it. "{when}. I am working. You could be in it, if you wanted — or just there. Your call, and I mean that."',
+  ],
+};
+const OVERTURE_COLLAB_REFUSAL_FACTS = {
+  warm: 'You turned {name} down when they asked for help with their work — they took it well, but they asked once and have not since.',
+  charged: 'You turned down what {name} offered. They have not brought it up again.',
+};
 const OVERTURE_KNOCK_REFUSAL_FACTS = {
   warm: 'You did not open the door when {name} knocked.',
   charged: 'You left {name} standing at your door.',
@@ -8434,6 +9243,51 @@ const OVERTURE_DEFS = {
       motive: { weight: OVERTURE.motiveWeight },
       holdTicks: OVERTURE.lapseTicks,
       temperamentWeights: { assertiveness: 0.25, warmth: 0.15 },
+    },
+  },
+
+  // --- Vocation plan D18 (Phase 6): the collab ask -------------------------
+  // A creator asks the player to help with their work. A FIFTH ROW, not a
+  // fifth channel: it rides `propose` because it is structurally a proposal —
+  // stand in front of you, name a day and a room, wait for an answer, book a
+  // commitment if you say yes — and everything channel-keyed (proximity, the
+  // do-not-disturb registry, the waiting behaviour) already does the right
+  // thing for it. What differs is what is being asked, and that is carried by
+  // `arrivalTemplates` and `proposes`.
+  //
+  // The gate that matters is not here but in OVERTURE's OVERTURE_CANDIDACY:
+  // content work, real affection, low tension. Motives are affection-only
+  // deliberately — the other channels list desire and curiosity and grievance,
+  // and NONE of those should be able to produce this ask. Being wanted is not
+  // a reason to be asked to help at work, and being resented certainly is not.
+  //
+  // The long cooldown is the other half of the design. Asked once and turned
+  // down, they take the refusal and let it lie (the refusal fact says exactly
+  // that); the standard refusal economy then diminishes the motive on top.
+  collab_ask: {
+    channel: 'propose',
+    motives: ['affection'],
+    blockFilter: ['evening', 'wind_down'],
+    cooldownMinutes: 4320,   // three days — this is not a thing you get asked twice a week
+    proximity: 'adjacent',
+    doNotDisturb: ['sleeping', 'showering', 'masturbating', 'in_conversation', 'locked_door'],
+    awaitsAnswer: true,
+    waitAt: 'player',
+    activityOverride: 'waiting on your answer',
+    proposes: { kind: 'content_collab' },
+    arrivalTemplates: OVERTURE_COLLAB_TEMPLATES,
+    respond: { accept: 'Tell {name} you are in', decline: 'Turn {name} down' },
+    refusalFacts: OVERTURE_COLLAB_REFUSAL_FACTS,
+    utility: {
+      // Above propose_player's 0.34: by the time this is a candidate at all
+      // the candidacy has already required a close, untroubled relationship
+      // and the right job, so when the conditions are met it should actually
+      // happen rather than lose every tick to an ordinary hangout proposal.
+      baseAppeal: 0.40,
+      motive: { weight: OVERTURE.motiveWeight },
+      holdTicks: OVERTURE.lapseTicks,
+      // Asking this takes nerve, and an unguarded person asks sooner.
+      temperamentWeights: { assertiveness: 0.3, openness: 0.2 },
     },
   },
 

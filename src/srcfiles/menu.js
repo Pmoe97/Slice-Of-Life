@@ -85,11 +85,13 @@ function showMenuScreen(which) {
   const options = document.getElementById('menu-options-screen');
   const settings = document.getElementById('menu-settings-screen');
   const pause = document.getElementById('menu-pause-screen');
+  const sandbox = document.getElementById('menu-sandbox-screen');
   const arrows = document.getElementById('menu-arrows');
   if (title) title.hidden = which !== 'title';
   if (options) options.hidden = which !== 'options';
   if (settings) settings.hidden = which !== 'settings';
   if (pause) pause.hidden = which !== 'pause';
+  if (sandbox) sandbox.hidden = which !== 'sandbox';
   if (arrows) arrows.hidden = which !== 'title';
   fitMenuScale();
 }
@@ -298,6 +300,1383 @@ async function doToggleBgArt() {
 function refreshMenuOptionsUi() {
   const bgBtn = document.getElementById('opt-bg-art-btn');
   if (bgBtn) bgBtn.textContent = menuOptionsCache.bgArt ? 'On' : 'Off';
+}
+
+// --- Sandbox setup sub-screen (Seasonal Calendar & Sandbox plan, Phase B4+) ---
+// The config surface holds ONE module-level cfg object (pendingSandboxConfig) that
+// the sub-editors mutate and Start consumes — a fresh screen never discards the
+// player's edits, and Start always sees exactly what the rows show. Phase B4 is
+// the shell: defaults + a Start path. Roommates (B5) and house state (B6)
+// grow the rows from this same render function.
+// Sandbox Pre-Game Editor Overhaul (D12): tab/sub-tab/instance state is
+// module-level and session-scoped, matching settingsActiveTab's own
+// precedent above — none of this is written to any persisted store.
+let sandboxActiveTab = 'player';        // top-level SANDBOX_TABS id
+let sandboxActiveSubtab = {};           // { <tabId>: <subtabId> }, House only for now (D6)
+let sandboxActiveRoommate = null;       // index into cfg.roommates, or null (rail view)
+let sandboxRoommateSubtab = 'identity'; // which of the 5 sub-tabs, shared across roommates
+
+function defaultSandboxConfig() {
+  return {
+    version: 1,
+    // Builds the same shape SIM_generateHouse takes for the player (the studio's
+    // own buildPlayerDraftForNewGame). Unopened studio = the blank draft, which
+    // the engine rolls into a full appearance — identical to a solo start.
+    player: buildPlayerDraftForNewGame(),
+    roommates: [],
+    house: {
+      preset: 'wreck',
+      facilities: {},
+      structural: {
+        kitchen_hall_door: false, pool_window: false,
+        study_to_bedroom: false, ensuite: false, dining_doors: false,
+      },
+    },
+    // D19: there is deliberately NO startDay here. Sandbox is always day 1; the
+    // advanced thing is the house, never the calendar.
+    economy: {
+      money: ECONOMY.startingMoney,
+      rentGraceDays: ECONOMY.opening?.rentGraceDays ?? 14,
+      billsStartDay: (ECONOMY.opening?.firstBillDelay ?? 7) + 1,
+      taxReserve: 0,
+    },
+    flags: { suppressTutorial: true },
+  };
+}
+
+function doMenuSandbox() {
+  if (!pendingSandboxConfig) pendingSandboxConfig = defaultSandboxConfig();
+  renderSandboxUi();
+  showMenuScreen('sandbox');
+  wireSandboxConfigInputs();
+}
+
+// --- Sandbox Pre-Game Editor Overhaul: the tab shell (Phase 1) ---
+// Extends Pattern B (SETTINGS_TABS' data-driven tab→section→row shape, D1)
+// rather than reinventing one — mirrors renderSettingsUi/renderTabPanes/
+// renderSettingsRow below. Bespoke content (Player's summary+Design button,
+// the Roommates rail, House's facility/structural panels) is dispatched by
+// id/dynamicInstances rather than forced through the generic row shape
+// (D5); renderSandboxTabPanes is the one place that decides bespoke vs.
+// generic per tab/sub-tab. Player and Roommates render a placeholder pane
+// until Phase 3/5 replace that branch with their real bespoke renderers.
+
+function renderSandboxUi() {
+  const rail = document.getElementById('sandbox-tab-rail');
+  const panes = document.getElementById('sandbox-panes');
+  const content = document.getElementById('sandbox-content');
+  if (!rail || !panes) return;
+  if (!pendingSandboxConfig) pendingSandboxConfig = defaultSandboxConfig();
+  if (!SANDBOX_TABS.some((t) => t.id === sandboxActiveTab)) sandboxActiveTab = SANDBOX_TABS[0].id;
+  const prevScroll = content ? content.scrollTop : 0;
+
+  rail.innerHTML = '';
+  for (const tab of SANDBOX_TABS) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'sbx-tab-btn' + (tab.id === sandboxActiveTab ? ' active' : '');
+    btn.setAttribute('data-action', 'sandbox.tab');
+    btn.setAttribute('data-tab', tab.id);
+    btn.setAttribute('aria-pressed', tab.id === sandboxActiveTab ? 'true' : 'false');
+    const icon = document.createElement('span');
+    icon.className = 'sbx-tab-icon';
+    icon.textContent = tab.icon || '';
+    const label = document.createElement('span');
+    label.className = 'sbx-tab-label';
+    label.textContent = tab.label;
+    btn.appendChild(icon);
+    btn.appendChild(label);
+    rail.appendChild(btn);
+  }
+
+  panes.innerHTML = '';
+  renderSandboxTabPanes(panes);
+  renderSandboxSummaryStrip();
+
+  if (content) content.scrollTop = prevScroll;
+}
+
+// Phase 6 (polish): a persistent readout — roommate count, house quality,
+// active difficulty preset (or "Custom") — shown regardless of which tab is
+// active. Cheap: recomputed from pendingSandboxConfig on every render, never
+// its own stored state.
+function renderSandboxSummaryStrip() {
+  const el = document.getElementById('sandbox-summary-strip');
+  if (!el) return;
+  const cfg = pendingSandboxConfig;
+  if (!cfg) { el.textContent = ''; return; }
+  const q = sandboxQualityPreview(cfg);
+  const activePreset = sandboxActiveDifficultyPreset();
+  const presetLabel = activePreset ? activePreset.charAt(0).toUpperCase() + activePreset.slice(1) : 'Custom';
+  el.textContent = `${cfg.roommates.length}/7 roommates · House ${Math.round(q * 100)}% — ${sandboxQualityLabel(q)} · ${presetLabel}`;
+}
+
+function renderSandboxTabPanes(panes) {
+  const tab = SANDBOX_TABS.find((t) => t.id === sandboxActiveTab);
+  const strip = document.getElementById('sandbox-subtab-strip');
+  if (!tab) return;
+
+  if (tab.subtabs && tab.subtabs.length) {
+    if (!sandboxActiveSubtab[tab.id] || !tab.subtabs.some((s) => s.id === sandboxActiveSubtab[tab.id])) {
+      sandboxActiveSubtab[tab.id] = tab.subtabs[0].id;
+    }
+    if (strip) {
+      strip.hidden = false;
+      strip.innerHTML = '';
+      for (const sub of tab.subtabs) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'sbx-subtab-btn' + (sub.id === sandboxActiveSubtab[tab.id] ? ' active' : '');
+        btn.setAttribute('data-action', 'sandbox.subtab');
+        btn.setAttribute('data-tab', sub.id);
+        btn.textContent = sub.label;
+        strip.appendChild(btn);
+      }
+    }
+    const sub = tab.subtabs.find((s) => s.id === sandboxActiveSubtab[tab.id]) || tab.subtabs[0];
+    // Phase 2 (D5): House's two sub-tabs are bespoke content (the preset/
+    // structural rows and the per-facility list), not the generic row
+    // system — SANDBOX_TABS.house.subtabs[].sections stay empty stubs.
+    if (tab.id === 'house') {
+      const cfg = pendingSandboxConfig;
+      panes.appendChild(sub.id === 'facilities' ? renderSandboxHouseFacilities(cfg) : renderSandboxHouseLayout(cfg));
+      return;
+    }
+    renderSandboxSections(panes, sub.sections, tab.icon);
+    return;
+  }
+
+  // Bespoke content (D5): Player and Roommates aren't a list of rows.
+  if (tab.id === 'player') {
+    if (strip) { strip.hidden = true; strip.innerHTML = ''; }
+    panes.appendChild(renderSandboxPlayerPane(pendingSandboxConfig));
+    return;
+  }
+  if (tab.dynamicInstances) {
+    // Phase 5 (D3/D4): Roommates' sub-tabs are PER-INSTANCE, not a static
+    // array on the tab entry — renderSandboxRoommatesPane owns the strip
+    // itself (shown only once a roommate is selected off the rail) rather
+    // than the static-subtabs branch above.
+    renderSandboxRoommatesPane(panes, strip, pendingSandboxConfig);
+    return;
+  }
+
+  if (strip) { strip.hidden = true; strip.innerHTML = ''; }
+  renderSandboxSections(panes, tab.sections, tab.icon);
+}
+
+// Sandbox Pre-Game Editor Overhaul Phase 3 (D2): the Player tab's content —
+// a summary row + the existing Design button, relocated unchanged in logic
+// from the pre-overhaul screen (openSandboxPlayerStudio, studio.js). Bespoke
+// (D5): one row, no generic row shape needed.
+function renderSandboxPlayerPane(cfg) {
+  const frag = document.createDocumentFragment();
+  const playerName = cfg.player && (cfg.player.name || cfg.player.surname)
+    ? `${cfg.player.name || '(rolled)'}${cfg.player.surname ? ' ' + cfg.player.surname : ''}`
+    : 'Rolled for you';
+  const playerRow = sandboxRowEl('You', 'Design who you play as. Every field you leave blank is rolled.');
+  const playerVal = document.createElement('div');
+  playerVal.className = 'menu-option-value';
+  playerVal.textContent = playerName;
+  playerRow.appendChild(playerVal);
+  playerRow.appendChild(sbxActionBtn('Design', 'sandbox.player-design'));
+  frag.appendChild(playerRow);
+  return frag;
+}
+
+// Sandbox Pre-Game Editor Overhaul Phase 5 (D3/D4): the per-roommate
+// sub-tab table. NOT part of SANDBOX_TABS (D4's note) because it applies
+// once per cfg.roommates[i], not once per screen — the same five panes are
+// re-rendered against whichever roommate is currently selected. Content is
+// bespoke (renderSandboxRoommateSubtabContent's dispatch below), not a
+// `sections`/`rows` array — this table only drives the strip.
+const SANDBOX_ROOMMATE_SUBTABS = [
+  { id: 'identity', label: 'Identity' },
+  { id: 'personality', label: 'Personality' },
+  { id: 'interests', label: 'Interests & Values' },
+  { id: 'backstory', label: 'Backstory' },
+  { id: 'placement', label: 'Placement & Prose' },
+];
+
+// Roommates' top-level content: the rail (sandboxActiveRoommate === null) or
+// a selected roommate's sub-tab strip + content. Owns the shared subtab
+// strip element itself (unlike House's static subtabs, handled one level up
+// in renderSandboxTabPanes) because whether the strip shows at all depends
+// on instance selection, not just which top-level tab is active.
+function renderSandboxRoommatesPane(panes, strip, cfg) {
+  const roommates = cfg.roommates || [];
+  // Phase 5 top-of-phase blocker (D12): if the roommate this index pointed
+  // at was removed or reordered away, fall back to the rail rather than
+  // silently showing whoever now occupies the old index.
+  if (sandboxActiveRoommate !== null && (sandboxActiveRoommate < 0 || sandboxActiveRoommate >= roommates.length)) {
+    sandboxActiveRoommate = null;
+  }
+
+  if (sandboxActiveRoommate === null) {
+    if (strip) { strip.hidden = true; strip.innerHTML = ''; }
+    panes.appendChild(renderSandboxRoommateRail(cfg));
+    return;
+  }
+
+  if (strip) {
+    strip.hidden = false;
+    strip.innerHTML = '';
+    if (!SANDBOX_ROOMMATE_SUBTABS.some((s) => s.id === sandboxRoommateSubtab)) sandboxRoommateSubtab = SANDBOX_ROOMMATE_SUBTABS[0].id;
+    for (const sub of SANDBOX_ROOMMATE_SUBTABS) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'sbx-subtab-btn' + (sub.id === sandboxRoommateSubtab ? ' active' : '');
+      btn.setAttribute('data-action', 'sandbox.roommate-subtab');
+      btn.setAttribute('data-tab', sub.id);
+      btn.textContent = sub.label;
+      strip.appendChild(btn);
+    }
+  }
+
+  const i = sandboxActiveRoommate;
+  const r = roommates[i];
+  panes.appendChild(renderSandboxRoommateDetailHead(r, i, cfg));
+  panes.appendChild(renderSandboxRoommateSubtabContent(sandboxRoommateSubtab, r, i, cfg));
+}
+
+// The rail: a vertical list of compact cards (name/summary/reorder/remove),
+// replacing the old always-expandable accordion. Clicking a card's name/
+// summary opens its five sub-tabs (renderSandboxRoommatesPane above); the
+// reorder/remove controls stay here since D3's rail is where they belong.
+function renderSandboxRoommateRail(cfg) {
+  const frag = document.createDocumentFragment();
+  frag.appendChild(sandboxSectionTitle(`Roommates (${cfg.roommates.length}/7)`));
+  const addRow = sandboxRowEl('Add a roommate', 'Identity, appearance and room — authored outright. Each roommate costs one AI prose call at start unless you flip their Prose toggle.');
+  const addBtn = sbxActionBtn('+ Add', 'sandbox.roommate-add');
+  addBtn.disabled = cfg.roommates.length >= 7;
+  addRow.appendChild(addBtn);
+  frag.appendChild(addRow);
+  if (cfg.roommates.length === 0) {
+    frag.appendChild(sandboxSectionHint('No roommates yet — the apartment starts empty, exactly like a solo run.'));
+  }
+  cfg.roommates.forEach((r, i) => frag.appendChild(renderSandboxRoommateRailCard(r, i, cfg)));
+  return frag;
+}
+
+function renderSandboxRoommateRailCard(r, i, cfg) {
+  const card = document.createElement('div');
+  card.className = 'sbx-roommate-rail-card';
+  card.setAttribute('data-sbx-index', i);
+
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'sbx-roommate-rail-open';
+  open.setAttribute('data-action', 'sandbox.roommate-select');
+  open.setAttribute('data-index', i);
+  const nm = document.createElement('div');
+  nm.className = 'sbx-card-name';
+  nm.textContent = `Roommate ${i + 1}`;
+  const sub = document.createElement('div');
+  sub.className = 'sbx-card-sub';
+  sub.textContent = sbxRoommateSub(r, i, cfg);
+  open.appendChild(nm);
+  open.appendChild(sub);
+  // D11: .sbx-badge/.sbx-badge-on wired to a real at-a-glance chip — the
+  // authored occupation category, shown only once actually authored (an
+  // empty rail shouldn't carry a chip for every rolled field).
+  if (r.partial?.occupationCategory) {
+    const badges = document.createElement('div');
+    badges.className = 'sbx-badges';
+    const chip = document.createElement('span');
+    chip.className = 'sbx-badge sbx-badge-on';
+    chip.textContent = r.partial.occupationCategory;
+    badges.appendChild(chip);
+    open.appendChild(badges);
+  }
+  card.appendChild(open);
+
+  const btns = document.createElement('div');
+  btns.className = 'sbx-card-btns';
+  if (i > 0) {
+    const up = document.createElement('button');
+    up.className = 'sbx-btn';
+    up.setAttribute('data-action', 'sandbox.roommate-move');
+    up.setAttribute('data-index', i);
+    up.setAttribute('data-direction', '-1');
+    up.textContent = '▲';
+    btns.appendChild(up);
+  }
+  if (i < cfg.roommates.length - 1) {
+    const down = document.createElement('button');
+    down.className = 'sbx-btn';
+    down.setAttribute('data-action', 'sandbox.roommate-move');
+    down.setAttribute('data-index', i);
+    down.setAttribute('data-direction', '1');
+    down.textContent = '▼';
+    btns.appendChild(down);
+  }
+  const del = document.createElement('button');
+  del.className = 'sbx-btn sbx-btn-danger';
+  del.setAttribute('data-action', 'sandbox.roommate-remove');
+  del.setAttribute('data-index', i);
+  del.textContent = '✕';
+  btns.appendChild(del);
+  card.appendChild(btns);
+
+  return card;
+}
+
+// The detail header shown above a selected roommate's sub-tabs: a way back
+// to the rail plus the same name/summary line the rail card shows (kept in
+// sync live by sandboxRefreshRoommateSubline, called from the roommate-form
+// field handler below).
+function renderSandboxRoommateDetailHead(r, i, cfg) {
+  const row = document.createElement('div');
+  row.className = 'sbx-roommate-detail-head';
+  row.appendChild(sbxActionBtn('← All roommates', 'sandbox.roommate-select', { index: -1 }));
+  const info = document.createElement('div');
+  const nm = document.createElement('div');
+  nm.className = 'sbx-card-name';
+  nm.textContent = `Roommate ${i + 1}`;
+  const sub = document.createElement('div');
+  sub.className = 'sbx-card-sub';
+  sub.textContent = sbxRoommateSub(r, i, cfg);
+  info.appendChild(nm);
+  info.appendChild(sub);
+  row.appendChild(info);
+  return row;
+}
+
+// Live-patches whichever visible summary line describes roommate `idx` (the
+// rail card's, the detail header's, or both if somehow present) — mirrors
+// the temperament-slider readout pattern rather than forcing a full
+// re-render on every keystroke in a name field.
+function sandboxRefreshRoommateSubline(r, idx) {
+  const railSub = document.querySelector(`.sbx-roommate-rail-card[data-sbx-index="${idx}"] .sbx-card-sub`);
+  if (railSub) railSub.textContent = sbxRoommateSub(r, idx, pendingSandboxConfig);
+  if (sandboxActiveRoommate === idx) {
+    const detailSub = document.querySelector('.sbx-roommate-detail-head .sbx-card-sub');
+    if (detailSub) detailSub.textContent = sbxRoommateSub(r, idx, pendingSandboxConfig);
+  }
+}
+
+// D3's five sub-tabs, split out of the old flat buildSandboxRoommateForm.
+// Every field keeps its exact partial.<path> write target — this is a
+// re-grouping of existing controls into named panes, not a new field set.
+function renderSandboxRoommateSubtabContent(subId, r, i, cfg) {
+  if (subId === 'personality') return renderSandboxRoommatePersonality(r, i);
+  if (subId === 'interests') return renderSandboxRoommateInterests(r, i);
+  if (subId === 'backstory') return renderSandboxRoommateBackstory(r, i);
+  if (subId === 'placement') return renderSandboxRoommatePlacement(r, i, cfg);
+  return renderSandboxRoommateIdentity(r, i);
+}
+
+function renderSandboxRoommateIdentity(r, i) {
+  const form = document.createElement('div');
+  form.className = 'sbx-form';
+  const partial = r.partial = r.partial || {};
+
+  form.appendChild(sbxField('First name', sbxTextControl(`${i}|name`, partial.name, 'Rolled if blank')));
+  form.appendChild(sbxField('Age', sbxNumberControl(`${i}|age`, partial.age, 'Roll')));
+  form.appendChild(sbxField('Gender', sbxSelectControl(`${i}|gender`, Object.keys(CHAR_GEN.genderWeights), partial.gender, 'Roll')));
+  const speciesEnum = (CHARACTER_SCHEMA.bible.species.enum) || ['human'];
+  form.appendChild(sbxField('Species', sbxSelectControl(`${i}|species`, speciesEnum, partial.species, 'Roll')));
+  const occCats = [...new Set(OCCUPATION_POOL.map(o => o.category))];
+  form.appendChild(sbxField('Occupation', sbxSelectControl(`${i}|occupationCategory`, occCats, partial.occupationCategory, 'Roll')));
+
+  // Appearance studio entry.
+  const pickers = document.createElement('div');
+  pickers.className = 'sbx-field sbx-full';
+  const pickRow = document.createElement('div');
+  pickRow.className = 'sbx-row';
+  const design = document.createElement('button');
+  design.className = 'sbx-btn sbx-btn-accent';
+  design.setAttribute('data-action', 'sandbox.roommate-design');
+  design.setAttribute('data-index', i);
+  design.textContent = 'Design appearance';
+  const appearanceNote = document.createElement('span');
+  appearanceNote.className = 'sbx-skip-hint';
+  const authoredCount = partial.physical ? Object.keys(partial.physical).length : 0;
+  appearanceNote.textContent = authoredCount > 0
+    ? 'You authored their looks — prose will default to templated.'
+    : 'Nothing authored — their looks are rolled.';
+  pickRow.appendChild(design);
+  pickRow.appendChild(appearanceNote);
+  pickers.appendChild(pickRow);
+  form.appendChild(pickers);
+
+  return form;
+}
+
+function renderSandboxRoommatePersonality(r, i) {
+  const form = document.createElement('div');
+  form.className = 'sbx-form';
+  const partial = r.partial = r.partial || {};
+
+  for (const axis of ['warmth', 'volatility', 'openness', 'conscientiousness', 'assertiveness']) {
+    const cur = partial.temperament?.[axis];
+    const row = document.createElement('div');
+    row.className = 'sbx-row';
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.min = -1; slider.max = 1; slider.step = 0.1;
+    slider.className = 'sbx-control sbx-slider';
+    slider.value = String(cur ?? 0);
+    slider.setAttribute('data-sbx-field', `${i}|temperament.${axis}`);
+    const val = document.createElement('span');
+    val.className = 'sbx-slider-val';
+    val.setAttribute('data-sbx-slider-val', `${i}|${axis}`);
+    val.textContent = cur !== undefined ? cur.toFixed(1) : 'rolled';
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.className = 'sbx-slider-reset';
+    reset.title = 'Roll this axis';
+    reset.textContent = '×';
+    reset.setAttribute('data-sbx-field', `${i}|temperament.${axis}|reset`);
+    row.appendChild(slider);
+    row.appendChild(val);
+    row.appendChild(reset);
+    form.appendChild(sbxField(`Temperament — ${axis}`, row));
+  }
+
+  return form;
+}
+
+function renderSandboxRoommateInterests(r, i) {
+  const form = document.createElement('div');
+  form.className = 'sbx-form';
+  const partial = r.partial = r.partial || {};
+
+  const interests = partial.interests || [];
+  for (let n = 0; n < 3; n++) {
+    form.appendChild(sbxField(`Interest ${n + 1}`, sbxSelectControl(`${i}|interests.${n}`, INTEREST_POOL.map(x => x.name), interests[n] || '', 'Roll')));
+  }
+  const values = partial.values || [];
+  for (let n = 0; n < 2; n++) {
+    form.appendChild(sbxField(`Value ${n + 1}`, sbxSelectControl(`${i}|values.${n}`, VALUES_POOL.map(v => v.name), values[n] || '', 'Roll')));
+  }
+
+  return form;
+}
+
+function renderSandboxRoommateBackstory(r, i) {
+  const form = document.createElement('div');
+  form.className = 'sbx-form';
+  const partial = r.partial = r.partial || {};
+
+  form.appendChild(sbxField('Baggage', sbxSelectControl(`${i}|baggage`, BAGGAGE_POOL, partial.baggage, 'Roll')));
+  form.appendChild(sbxField('Wound', sbxSelectControl(`${i}|wound`, WOUND_POOL, partial.wound, 'Roll')));
+  form.appendChild(sbxField('Want', sbxSelectControl(`${i}|want`, WANT_POOL, partial.want, 'Roll')));
+  form.appendChild(sbxField('Blind spot', sbxSelectControl(`${i}|blindSpot`, BLINDSPOT_POOL, partial.blindSpot, 'Roll')));
+  form.appendChild(sbxField('Boundary', sbxSelectControl(`${i}|boundary`, BOUNDARY_POOL.map(b => b.text), partial.boundary, 'Roll')));
+
+  return form;
+}
+
+function renderSandboxRoommatePlacement(r, i, cfg) {
+  const form = document.createElement('div');
+  form.className = 'sbx-form';
+
+  // Room + bed. Bed options beyond the room's tier capacity are disabled;
+  // already-taken beds are too. The room change resets the bed to "first
+  // free" so the started game's moveToRoom pass (applySandboxPreset step 5)
+  // can never double-book.
+  const bedroomIds = sandboxBedroomIds(cfg.house && cfg.house.structural);
+  const roomOptions = [{ value: '', label: 'First free room' }];
+  for (const id of bedroomIds) {
+    const cap = sandboxRoomCapacity(cfg, id);
+    const claims = (pendingSandboxConfig.roommates || []).filter((rr, ii) => ii !== i && rr.residency?.room === id).length;
+    roomOptions.push({ value: id, label: `${ROOMS[id].name} (${claims}/${cap})`, disabled: claims >= cap });
+  }
+  form.appendChild(sbxField('Room', sbxSelectControl(`${i}|room`, roomOptions, r.residency?.room || '', ''), true));
+
+  const taken = r.residency?.room ? sandboxClaimedBeds(r.residency.room, i) : [];
+  const bedOptions = [
+    { value: '', label: 'First free bed' },
+    { value: 'A', label: `Bed A${taken.includes('A') ? ' (taken)' : ''}`, disabled: taken.includes('A') },
+    { value: 'B', label: `Bed B${taken.includes('B') ? ' (taken)' : ''}`, disabled: taken.includes('B') },
+  ];
+  form.appendChild(sbxField('Bed', sbxSelectControl(`${i}|bed`, bedOptions, r.residency?.bed || '', ''), true));
+
+  // The Prose templated/AI-written toggle — moved here from card level (D3).
+  const skipRow = document.createElement('div');
+  skipRow.className = 'sbx-skip-row sbx-full';
+  const skipLabel = document.createElement('span');
+  skipLabel.className = 'sbx-skip-label';
+  skipLabel.textContent = 'Prose';
+  const skipHint = document.createElement('span');
+  skipHint.className = 'sbx-skip-hint';
+  const effective = roommateEffectiveSkipProse(r);
+  skipHint.textContent = effective
+    ? 'Templated, instant — no AI call at start.'
+    : 'AI-written flavour prose — one call per roommate at start.';
+  const skipToggle = document.createElement('button');
+  skipToggle.className = 'sbx-btn' + (effective ? ' sbx-btn-accent' : '');
+  skipToggle.setAttribute('data-action', 'sandbox.roommate-skip');
+  skipToggle.setAttribute('data-index', i);
+  skipToggle.textContent = effective ? 'Templated' : 'AI-written';
+  skipRow.appendChild(skipLabel);
+  skipRow.appendChild(skipHint);
+  skipRow.appendChild(skipToggle);
+  form.appendChild(skipRow);
+
+  return form;
+}
+
+function renderSandboxSections(panes, sections, icon) {
+  if (!sections || sections.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'sbx-empty';
+    const iconEl = document.createElement('div');
+    iconEl.className = 'sbx-empty-icon';
+    iconEl.textContent = icon || '🧭';
+    const p = document.createElement('p');
+    p.textContent = 'Nothing here yet — this tab arrives in a later phase.';
+    empty.appendChild(iconEl);
+    empty.appendChild(p);
+    panes.appendChild(empty);
+    return;
+  }
+  for (const section of sections) {
+    const secEl = document.createElement('div');
+    secEl.className = 'sbx-section-wrap';
+    if (section.title) secEl.appendChild(sandboxSectionTitle(section.title));
+    const rows = section.rows || [];
+    if (!rows.length) {
+      secEl.appendChild(sandboxSectionHint(section.emptyText || 'Nothing here yet.'));
+      panes.appendChild(secEl);
+      continue;
+    }
+    if (section.desc) secEl.appendChild(sandboxSectionHint(section.desc));
+    for (const row of rows) secEl.appendChild(renderSandboxRow(row));
+    panes.appendChild(secEl);
+  }
+}
+
+// Row kinds: text/number/select adapt the existing bespoke sbx*Controls
+// (D5) with the generic bare dot-path field contract (getSandboxValue/
+// setSandboxValue below); toggle/button reuse sbxActionBtn exactly as the
+// house preset/structural rows already do. slider is new (D5) — a single
+// labeled range input with a live readout, no reset button (unlike the
+// per-axis temperament sliders, which keep their bespoke ×-reset markup).
+function renderSandboxRow(row) {
+  const el = sandboxRowEl(row.label, row.desc);
+  el.appendChild(renderSandboxRowControl(row));
+  return el;
+}
+
+function renderSandboxRowControl(row) {
+  if (row.kind === 'slider') return renderSandboxSliderRow(row);
+  if (row.kind === 'presetRow') return renderSandboxPresetRow(row);
+  if (row.kind === 'toggle') {
+    const on = !!getSandboxValue(row.field);
+    return sbxActionBtn(on ? 'On' : 'Off', 'sandbox.row-toggle', { field: row.field }, on ? 'sbx-btn-accent' : '');
+  }
+  if (row.kind === 'button') {
+    return sbxActionBtn(row.buttonLabel || row.label, row.action, row.field ? { field: row.field } : {}, row.danger ? 'sbx-btn-danger' : '');
+  }
+  if (row.kind === 'text') return sbxTextControl(row.field, getSandboxValue(row.field), row.placeholder);
+  if (row.kind === 'number') return sbxGenericNumberControl(row.field, getSandboxValue(row.field), row);
+  if (row.kind === 'select') return sbxSelectControl(row.field, row.options || [], getSandboxValue(row.field), row.emptyLabel);
+  // Unknown/unbuilt kind ('sliders' — no concrete row needs the proportional
+  // grid anywhere in this plan) — a quiet placeholder, never a control that
+  // looks wired but does nothing (mirrors renderSettingsControl's own
+  // fallback below).
+  const span = document.createElement('span');
+  span.className = 'sbx-row-placeholder';
+  span.textContent = '—';
+  return span;
+}
+
+function renderSandboxSliderRow(row) {
+  const wrap = document.createElement('div');
+  wrap.className = 'sbx-row';
+  const value = getSandboxValue(row.field);
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = row.min ?? 0;
+  slider.max = row.max ?? 100;
+  if (row.step !== undefined) slider.step = row.step;
+  slider.className = 'sbx-control sbx-slider';
+  slider.value = Number.isFinite(value) ? value : (row.min ?? 0);
+  slider.setAttribute('data-sbx-field', row.field);
+  const val = document.createElement('span');
+  val.className = 'sbx-slider-val';
+  val.setAttribute('data-sbx-row-readout', row.field);
+  val.textContent = String(slider.value);
+  wrap.appendChild(slider);
+  wrap.appendChild(val);
+  return wrap;
+}
+
+// Sandbox Pre-Game Editor Overhaul Phase 4 (D7/D8): the difficulty preset
+// row — a tag/button choice over SANDBOX_DIFFICULTY_PRESETS, styled like
+// the existing house-preset row (.sbx-preset-row, reused as-is). Not a form
+// field: clicking a tag stamps every field in that preset at once
+// (doSandboxDifficultyPreset) rather than writing through data-sbx-field.
+// The active tag is a live readout (sandboxActiveDifficultyPreset, D8) —
+// "Custom" is never a button, only what shows when nothing matches.
+function renderSandboxPresetRow(row) {
+  const wrap = document.createElement('div');
+  // The marker class is what refreshSandboxPresetRow targets. It is NOT
+  // .sbx-preset-row: the House Layout sub-tab's own starting-condition picker
+  // reuses that class, so a bare '.sbx-preset-row' lookup matches whichever
+  // renders first and would append a stray "Custom" chip to the house picker.
+  wrap.className = 'sbx-row sbx-preset-row sbx-difficulty-row';
+  const active = sandboxActiveDifficultyPreset();
+  for (const id of Object.keys(SANDBOX_DIFFICULTY_PRESETS)) {
+    const label = id.charAt(0).toUpperCase() + id.slice(1);
+    wrap.appendChild(sbxActionBtn(label, 'sandbox.difficulty-preset', { id }, id === active ? 'sbx-btn-accent' : ''));
+  }
+  if (!active) {
+    const custom = document.createElement('span');
+    custom.className = 'sbx-slider-val';
+    custom.textContent = 'Custom';
+    wrap.appendChild(custom);
+  }
+  return wrap;
+}
+
+// D8: cfg.economy matches a preset only if all four fields are byte-equal
+// to it. Never stored — recomputed on every render, the same non-stored-
+// derivation discipline SANDBOX_HOUSE_PRESETS' own wreck/lived_in/restored
+// already keep relative to cfg.house.facilities' override map.
+function sandboxActiveDifficultyPreset() {
+  const econ = pendingSandboxConfig && pendingSandboxConfig.economy;
+  if (!econ) return null;
+  for (const [id, preset] of Object.entries(SANDBOX_DIFFICULTY_PRESETS)) {
+    if (preset.money === econ.money && preset.rentGraceDays === econ.rentGraceDays &&
+        preset.billsStartDay === econ.billsStartDay && preset.taxReserve === econ.taxReserve) {
+      return id;
+    }
+  }
+  return null;
+}
+
+// Patches the preset row's active button + "Custom" readout in place —
+// never rebuilds, so an in-progress edit elsewhere on the pane keeps its
+// focus (see the call site in wireSandboxConfigInputs above). A no-op
+// (querySelector miss) whenever the Economy tab isn't the one on screen.
+function refreshSandboxPresetRow() {
+  const wrap = document.querySelector('.sbx-difficulty-row');
+  if (!wrap) return;
+  const active = sandboxActiveDifficultyPreset();
+  for (const btn of wrap.querySelectorAll('button[data-action="sandbox.difficulty-preset"]')) {
+    btn.classList.toggle('sbx-btn-accent', btn.getAttribute('data-id') === active);
+  }
+  let custom = wrap.querySelector('.sbx-slider-val');
+  if (!active) {
+    if (!custom) {
+      custom = document.createElement('span');
+      custom.className = 'sbx-slider-val';
+      wrap.appendChild(custom);
+    }
+    custom.textContent = 'Custom';
+  } else if (custom) {
+    custom.remove();
+  }
+  renderSandboxSummaryStrip();
+}
+
+function doSandboxDifficultyPreset(id) {
+  const preset = SANDBOX_DIFFICULTY_PRESETS[id];
+  if (!preset || !pendingSandboxConfig) return;
+  Object.assign(pendingSandboxConfig.economy, preset);
+  renderSandboxUi();
+}
+
+function sbxGenericNumberControl(fieldPath, value, opts) {
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.className = 'sbx-control';
+  if (opts && opts.min !== undefined) input.min = opts.min;
+  if (opts && opts.max !== undefined) input.max = opts.max;
+  input.value = value ?? '';
+  input.setAttribute('data-sbx-field', fieldPath);
+  return input;
+}
+
+// Bare dot-path reads/writes against pendingSandboxConfig directly — the
+// generic row kinds' field contract (D5), distinct from the roommate
+// partial's <index>|<path> convention wireSandboxConfigInputs also owns
+// (it tells the two apart by the presence of '|' — a roommate index is
+// never a dotted path, and a top-level cfg field never starts with a bare
+// integer).
+function getSandboxValue(field) {
+  return field.split('.').reduce((cur, part) => (cur == null ? undefined : cur[part]), pendingSandboxConfig);
+}
+
+function setSandboxValue(field, value) {
+  const parts = field.split('.');
+  const last = parts.pop();
+  let obj = pendingSandboxConfig;
+  for (const p of parts) { obj[p] = obj[p] || {}; obj = obj[p]; }
+  obj[last] = value;
+}
+
+function doSandboxSubtab(subId) {
+  const tab = SANDBOX_TABS.find((t) => t.id === sandboxActiveTab);
+  if (!tab || !tab.subtabs || !tab.subtabs.some((s) => s.id === subId)) return;
+  sandboxActiveSubtab[tab.id] = subId;
+  renderSandboxUi();
+}
+
+function doSandboxRowToggle(field) {
+  if (!field || !pendingSandboxConfig) return;
+  setSandboxValue(field, !getSandboxValue(field));
+  renderSandboxUi();
+}
+
+// Dormant during the Sandbox Pre-Game Editor Overhaul migration (Phases
+// 1-5): #sandbox-config-body no longer exists in the DOM (replaced by the
+// tab shell's #sandbox-panes above), so every call below this guard is a
+// no-op until the phase that owns each section — House (Phase 2), Player
+// (Phase 3), Roommates (Phase 5) — migrates its content into the new shell
+// and repoints its own trigger functions at a scoped re-render instead of
+// this whole-screen rebuild. Left in place rather than deleted so nothing
+// below (doSandboxHousePreset, doSandboxRoommateAdd, etc.) needs touching
+// until its own phase.
+function renderSandboxScreen() {
+  const body = document.getElementById('sandbox-config-body');
+  if (!body) return;
+  const cfg = pendingSandboxConfig || (pendingSandboxConfig = defaultSandboxConfig());
+  body.innerHTML = '';
+
+  // Your player — the same studio the solo path uses, sandbox confirm.
+  body.appendChild(sandboxSectionTitle('Your player'));
+  body.appendChild(renderSandboxPlayerPane(cfg));
+
+  // Roommates (B5, reshelled Phase 5): the rail is a reasonable stand-in for
+  // this guaranteed-dead path (see the guard at the top of this function) —
+  // a selected roommate's sub-tabs never show here regardless of
+  // sandboxActiveRoommate, since nothing re-renders through this function
+  // any more.
+  body.appendChild(renderSandboxRoommateRail(cfg));
+
+  // House — the B6 state editor.
+  body.appendChild(sandboxSectionTitle('House'));
+  body.appendChild(renderSandboxHousePanel(cfg));
+
+  // Economy.
+  body.appendChild(sandboxSectionTitle('Economy'));
+  body.appendChild(sandboxSummaryRow('Starting money', `$${cfg.economy.money.toLocaleString()}`, 'Applied to your wallet on day 1.'));
+}
+
+function sandboxSectionTitle(text) {
+  const h = document.createElement('div');
+  h.className = 'sbx-section-title';
+  h.textContent = text;
+  return h;
+}
+
+function sandboxRowEl(name, desc) {
+  const row = document.createElement('div');
+  row.className = 'menu-option-row';
+  const text = document.createElement('div');
+  const nm = document.createElement('div');
+  nm.className = 'menu-option-name';
+  nm.textContent = name;
+  const d = document.createElement('div');
+  d.className = 'menu-option-desc';
+  d.textContent = desc || '';
+  text.appendChild(nm);
+  text.appendChild(d);
+  row.appendChild(text);
+  return row;
+}
+
+function sandboxSummaryRow(name, value, desc) {
+  const row = sandboxRowEl(name, desc);
+  const val = document.createElement('div');
+  val.className = 'menu-option-value';
+  val.textContent = value;
+  row.appendChild(val);
+  return row;
+}
+
+// --- B6: house-state editor ---
+// Three preset buttons (SANDBOX_HOUSE_PRESETS), the five structural toggles
+// (STRUCTURAL_UPGRADES), and a per-facility tier/condition override list grouped
+// by room — all rendered from the config tables, never retyped. The player sees
+// the derived apartment quality live so a preset choice reads as a number before it
+// becomes a state.
+
+// The effective tier/condition a facility would start at, given the preset plus any
+// per-facility override in cfg.house.facilities — the same derivation
+// applySandboxPreset + normalizeUpgrades stamp into world.upgrades. "Empty
+// deletes": an override key is removed when its control is cleared, so that
+// presence in cfg.house.facilities IS the authored set.
+function sandboxFacilityState(cfg, defId) {
+  const custom = cfg?.house?.facilities?.[defId] || {};
+  const preset = SANDBOX_HOUSE_PRESETS[cfg?.house?.preset];
+  let tier, condition;
+  if (custom.tier) tier = custom.tier;
+  else if (preset && !preset.useStartingTiers) tier = preset.tier;
+  else tier = FACILITY_STARTING_TIERS[defId] || 'broken';
+  if (custom.condition !== undefined) condition = custom.condition;
+  else if (preset && preset.condition !== undefined) condition = preset.condition;
+  else condition = (tier === 'broken' ? 0 : MAINTENANCE.startingCondition);
+  return { tier, condition };
+}
+
+function sandboxQualityLabel(q) {
+  if (q < 0.25) return 'In disrepair';
+  if (q < 0.5) return 'Run-down';
+  if (q < 0.75) return 'Lived-in';
+  return 'Restored';
+}
+
+// Live quality preview from cfg.house alone — feeds getApartmentQuality (sim.js)
+// the upgrades a started game would hold, so the number seen here is the number
+// on the moved-in day.
+function sandboxQualityPreview(cfg) {
+  const upgrades = {};
+  for (const def of FACILITY_LIST) upgrades[def.id] = sandboxFacilityState(cfg, def.id);
+  return getApartmentQuality({ world: { upgrades } });
+}
+
+// Sandbox Pre-Game Editor Overhaul Phase 2 (D6): House's Layout sub-tab —
+// the starting-condition preset, the quality readout it (plus Facilities'
+// overrides) drives, and the five structural toggles. Bespoke content (D5),
+// not the generic row system — the preset/structural rows have a live
+// cross-cutting side effect (feeding the roommate room picker in Phase 5)
+// that the generic toggle kind isn't built for.
+function renderSandboxHouseLayout(cfg) {
+  const frag = document.createDocumentFragment();
+
+  const q = sandboxQualityPreview(cfg);
+  frag.appendChild(sandboxSummaryRow('Quality', `${Math.round(q * 100)}% — ${sandboxQualityLabel(q)}`, 'Live from the preset, the toggles and any overrides below.'));
+
+  // Preset picker — the three SANDBOX_HOUSE_PRESETS.
+  const presetRow = sandboxRowEl('Starting condition', 'Today\u2019s wreck, a lived-in flat, or the apartment already restored.');
+  const presetBtns = document.createElement('div');
+  presetBtns.className = 'sbx-row sbx-preset-row';
+  for (const id of Object.keys(SANDBOX_HOUSE_PRESETS)) {
+    presetBtns.appendChild(sbxActionBtn(id.replace(/_/g, ' '), 'sandbox.house-preset', { id }, cfg.house.preset === id ? 'sbx-btn-accent' : ''));
+  }
+  presetRow.appendChild(presetBtns);
+  frag.appendChild(presetRow);
+
+  // Structural upgrades — rendered from STRUCTURAL_UPGRADES, labels and
+  // descriptions from the data. Toggling must feed the roommate room picker, so
+  // doSandboxHouseStructural re-renders the whole shell (the B5/B6 link).
+  frag.appendChild(sandboxSectionTitle('Structural upgrades'));
+  for (const up of Object.values(STRUCTURAL_UPGRADES)) {
+    const on = !!(cfg.house.structural && cfg.house.structural[up.id]);
+    const row = sandboxRowEl(up.label, up.desc);
+    row.appendChild(sbxActionBtn(on ? 'On' : 'Off', 'sandbox.house-structural', { id: up.id }, on ? 'sbx-btn-accent' : ''));
+    frag.appendChild(row);
+  }
+
+  return frag;
+}
+
+// Phase 2 (D6): House's Facilities sub-tab — the per-room, per-facility
+// tier+condition override list. Bespoke content (D5): one row per
+// FACILITY_LIST entry grouped by ROOM_FACILITIES, not a generic row shape.
+function renderSandboxHouseFacilities(cfg) {
+  const frag = document.createDocumentFragment();
+  frag.appendChild(sandboxSectionHint('Per-facility overrides beat the preset. "Preset default" restores a room to its preset tier.'));
+  for (const roomId of Object.keys(ROOM_FACILITIES)) {
+    const facIds = ROOM_FACILITIES[roomId];
+    const roomName = ROOMS[roomId]?.name || roomId;
+    let added = false;
+    for (const defId of facIds) {
+      const def = FACILITY_DEFS[defId];
+      if (!def) continue;
+      if (!added) { frag.appendChild(sandboxFacilityRoomLabel(roomName)); added = true; }
+      frag.appendChild(renderSandboxFacilityRow(cfg, def));
+    }
+  }
+  return frag;
+}
+
+// Dormant along with renderSandboxScreen (see the comment above it) — kept
+// as a thin wrapper over the two Phase 2 split functions above so that
+// dormant path never references a function that no longer exists.
+function renderSandboxHousePanel(cfg) {
+  const frag = document.createDocumentFragment();
+  frag.appendChild(renderSandboxHouseLayout(cfg));
+  frag.appendChild(sandboxSectionTitle('Facilities'));
+  frag.appendChild(renderSandboxHouseFacilities(cfg));
+  return frag;
+}
+
+function sandboxSectionHint(text) {
+  const d = document.createElement('div');
+  d.className = 'sbx-section-hint';
+  d.textContent = text;
+  return d;
+}
+
+function sandboxFacilityRoomLabel(name) {
+  const d = document.createElement('div');
+  d.className = 'sbx-facility-room';
+  d.textContent = name;
+  return d;
+}
+
+function renderSandboxFacilityRow(cfg, def) {
+  const st = sandboxFacilityState(cfg, def.id);
+  const row = sandboxRowEl(def.label, 'Tier + condition on moving day.');
+  const ctl = document.createElement('div');
+  ctl.className = 'sbx-facility-ctl';
+
+  const tierSel = document.createElement('select');
+  tierSel.className = 'sbx-control';
+  tierSel.setAttribute('data-hse-field', `${def.id}|tier`);
+  const presetOpt = document.createElement('option');
+  presetOpt.value = '';
+  presetOpt.textContent = 'Preset default';
+  tierSel.appendChild(presetOpt);
+  for (const t of def.tiers) {
+    const opt = document.createElement('option');
+    opt.value = t.tier;
+    opt.textContent = t.label;
+    tierSel.appendChild(opt);
+  }
+  tierSel.value = st.tier;
+
+  const condInput = document.createElement('input');
+  condInput.type = 'number';
+  condInput.min = 0;
+  condInput.max = 100;
+  condInput.className = 'sbx-control sbx-cond';
+  condInput.setAttribute('data-hse-field', `${def.id}|condition`);
+  condInput.value = st.condition;
+
+  ctl.appendChild(tierSel);
+  ctl.appendChild(condInput);
+  row.appendChild(ctl);
+  return row;
+}
+
+function doSandboxHousePreset(id) {
+  const cfg = pendingSandboxConfig || (pendingSandboxConfig = defaultSandboxConfig());
+  if (SANDBOX_HOUSE_PRESETS[id]) cfg.house.preset = id;
+  renderSandboxUi();
+}
+
+function doSandboxHouseStructural(id) {
+  const cfg = pendingSandboxConfig || (pendingSandboxConfig = defaultSandboxConfig());
+  if (!STRUCTURAL_UPGRADES[id]) return;
+  cfg.house.structural = cfg.house.structural || {};
+  if (cfg.house.structural[id]) delete cfg.house.structural[id];
+  else cfg.house.structural[id] = true;
+  // The B5/B6 link: the roommate room picker reads cfg.house.structural live,
+  // so this re-render is what makes study↔bedroom appear/leave immediately.
+  renderSandboxUi();
+}
+
+// A data-action button in the value slot of a sandbox row. `extra` becomes
+// data-* attributes (data-index, data-direction...), collected by ui.js's
+// global delegation exactly like every other action button in the game.
+function sbxActionBtn(label, action, extra = {}, extraClass = '') {
+  const btn = document.createElement('button');
+  btn.className = 'title-btn menu-option-toggle' + (extraClass ? ` ${extraClass}` : '');
+  btn.setAttribute('data-action', action);
+  for (const [k, v] of Object.entries(extra)) btn.setAttribute(`data-${k}`, String(v));
+  btn.textContent = label;
+  return btn;
+}
+
+// The bedrooms a sandbox start can put someone in: every room whose live
+// ROOMS type is 'bedroom' (the base-layout tables) plus the study once
+// study_to_bedroom is set. Derived, never a hardcoded list — the started
+// game's graph is the same derivation via applyStructuralUpgrades (D18), and
+// the picker must agree with what a started game will hold. Never includes
+// the player's own room (that spare bed is a partner moving in, not a
+// roommate slot — findEmptyBed's ordering in computer.js).
+function sandboxBedroomIds(structural) {
+  const ids = Object.keys(ROOMS).filter(id => ROOMS[id].type === 'bedroom' && id !== 'bedroom_player');
+  if (structural && structural.study_to_bedroom && !ids.includes('study')) ids.push('study');
+  return ids;
+}
+
+// The facility tier a room's habitability would start at, given the house
+// preset + custom overrides in cfg.house — the same derivation
+// applySandboxPreset uses to stamp world.upgrades. B6's house panel feeds
+// the same cfg, so this always reflects what a started game will hold.
+function sandboxRoomTier(cfg, roomId) {
+  const defId = (ROOM_FACILITIES[roomId] || [])[0];
+  if (!defId || !FACILITY_DEFS[defId]) return null;
+  const custom = cfg?.house?.facilities?.[defId];
+  if (custom && custom.tier) return custom.tier;
+  const preset = SANDBOX_HOUSE_PRESETS[cfg?.house?.preset];
+  if (preset && !preset.useStartingTiers) return preset.tier;
+  return FACILITY_STARTING_TIERS[defId] || 'broken';
+}
+
+// Bedroom capacity by tier (D16): the residentCapacity declared on the room's
+// habitability facility, defaulting to 1 — the same arithmetic verify-sbx-p3
+// asserts against a started state. In a wreck house every auxiliary bedroom
+// is 'broken', so a sandbox holds at most one roommate per bedroom there; a
+// restored house doubles every bed.
+function sandboxRoomCapacity(cfg, roomId) {
+  const defId = (ROOM_FACILITIES[roomId] || [])[0];
+  const def = defId && FACILITY_DEFS[defId];
+  const t = def && def.tiers && def.tiers.find(x => x.tier === sandboxRoomTier(cfg, roomId));
+  return (t && t.residentCapacity) || 1;
+}
+
+// Beds already claimed in a room by OTHER roommates in the config.
+function sandboxClaimedBeds(roomId, excludeIndex) {
+  const cfg = pendingSandboxConfig;
+  const taken = [];
+  (cfg?.roommates || []).forEach((r, i) => {
+    if (i === excludeIndex || !r?.residency) return;
+    if (r.residency.room === roomId && r.residency.bed) taken.push(r.residency.bed);
+  });
+  return taken;
+}
+
+function sbxRoommateSub(r, i, cfg) {
+  const p = r.partial || {};
+  const bits = [];
+  if (p.name) bits.push(p.name);
+  if (p.gender) bits.push(studioPrettify(p.gender));
+  if (Number.isFinite(p.age)) bits.push(`${p.age}yo`);
+  const room = r.residency?.room;
+  if (room) bits.push(ROOMS[room]?.name || room);
+  if (bits.length === 0) return 'Unassigned identity — everything will be rolled.';
+  return bits.join(' · ');
+}
+
+function sbxField(label, control, full) {
+  const field = document.createElement('div');
+  field.className = 'sbx-field' + (full ? ' sbx-full' : '');
+  const lab = document.createElement('label');
+  lab.className = 'sbx-label';
+  lab.textContent = label;
+  field.appendChild(lab);
+  field.appendChild(control);
+  return field;
+}
+
+function sbxTextControl(fieldPath, value, placeholder) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'sbx-control';
+  input.maxLength = 60;
+  input.placeholder = placeholder || '';
+  input.value = value || '';
+  input.setAttribute('data-sbx-field', fieldPath);
+  return input;
+}
+
+function sbxNumberControl(fieldPath, value, placeholder) {
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.className = 'sbx-control';
+  input.min = 18; input.max = 60;
+  input.placeholder = placeholder || '';
+  input.value = value ?? '';
+  input.setAttribute('data-sbx-field', fieldPath);
+  return input;
+}
+
+// options: strings, or { value, label, disabled }. The empty value is the
+// standing "Roll it" promise — a cleared field deletes from the partial.
+function sbxSelectControl(fieldPath, options, value, emptyLabel) {
+  const sel = document.createElement('select');
+  sel.className = 'sbx-control';
+  sel.setAttribute('data-sbx-field', fieldPath);
+  const rollOpt = document.createElement('option');
+  rollOpt.value = '';
+  rollOpt.textContent = emptyLabel || '—';
+  sel.appendChild(rollOpt);
+  for (const o of options) {
+    const opt = document.createElement('option');
+    opt.value = typeof o === 'object' ? o.value : o;
+    opt.textContent = typeof o === 'object' ? o.label : o;
+    if (typeof o === 'object' && o.disabled) opt.disabled = true;
+    sel.appendChild(opt);
+  }
+  sel.value = value || '';
+  return sel;
+}
+
+// --- Sandbox config form wiring ---
+// Form controls report through change/input events on #sandbox-content (the
+// tab shell's stable content wrapper — Overhaul Phase 1 retargeted this from
+// the old #sandbox-config-body), not through ui.js's data-action click
+// chain (the same split the studio documents). Each roommate-form control
+// carries data-sbx-field="<index>|<path>"; the path names the partial key,
+// with the <axis>|<index> conventions the temperaments/interests/values use
+// below. A bare dot-path with no index prefix (e.g. "economy.money") is the
+// generic row kinds' contract instead (getSandboxValue/setSandboxValue).
+function wireSandboxConfigInputs() {
+  // Sandbox Pre-Game Editor Overhaul Phase 1: retargeted from the old
+  // #sandbox-config-body (removed with the single-scroll layout) to the new
+  // shell's stable content wrapper — panes rebuild on every tab switch,
+  // #sandbox-content does not, so the delegation survives re-renders.
+  const root = document.getElementById('sandbox-content');
+  if (!root || root.hasAttribute('data-sbx-wired')) return;
+  root.setAttribute('data-sbx-wired', '');
+
+  const handle = (e) => {
+    const el = e.target;
+    const attr = el.getAttribute?.('data-sbx-field');
+    if (!attr || !pendingSandboxConfig) return;
+    // Phase 1 (D5): a bare dot-path with no roommate-index prefix targets
+    // pendingSandboxConfig directly — the generic toggle/slider/number/
+    // select row kinds' write path (getSandboxValue/setSandboxValue above).
+    if (!attr.includes('|')) {
+      const isNumeric = el.type === 'range' || el.type === 'number';
+      let v;
+      if (isNumeric) {
+        // A half-typed or cleared number box is NOT a value. Number('') is 0,
+        // so writing through unguarded would silently stamp 0 into the config
+        // while the field still LOOKS empty — and for economy.money that 0
+        // reaches player.money verbatim (applySandboxPreset step 6). Mid-edit
+        // ('input') we leave the config alone; once the edit settles
+        // ('change', which fires on blur) we repaint the box from the config
+        // so the field and the config can never disagree.
+        if (el.value === '') {
+          if (e.type === 'change') el.value = getSandboxValue(attr) ?? '';
+          return;
+        }
+        const n = Number(el.value);
+        if (!Number.isFinite(n)) return;
+        // Clamp to the row's own declared bounds. min/max are read off the
+        // element (where the row config already wrote them) rather than
+        // re-looked-up from SANDBOX_TABS, so there is one source of truth for
+        // a row's range. Typing into a number input bypasses min/max entirely
+        // — they only constrain the spinner — so without this an authored
+        // -5000 tax reserve or a nine-digit balance reaches the started game.
+        const lo = el.min === '' ? -Infinity : Number(el.min);
+        const hi = el.max === '' ? Infinity : Number(el.max);
+        v = clamp(n, lo, hi);
+        if (v !== n && e.type === 'change') el.value = v;
+      } else {
+        v = el.value;
+      }
+      setSandboxValue(attr, v);
+      const readout = document.querySelector(`[data-sbx-row-readout="${CSS.escape(attr)}"]`);
+      if (readout) readout.textContent = String(v);
+      // Phase 4 (D8): an economy field edited by hand may have just walked
+      // cfg.economy away from (or into) a difficulty preset — patch the
+      // preset row's active state in place rather than re-rendering the
+      // whole pane, which would drop focus from whatever input the player
+      // is still typing in (same reasoning as Settings' 'text' row kind).
+      refreshSandboxPresetRow();
+      return;
+    }
+    const parts = attr.split('|');
+    const idx = Number(parts[0]);
+    const fieldPath = parts[1];
+    const resetFlag = parts[2];
+    const r = pendingSandboxConfig.roommates?.[idx];
+    if (!r) return;
+
+    if (resetFlag === 'reset') {
+      delete r.partial.temperament?.[fieldPath];
+      renderSandboxUi();
+      return;
+    }
+
+    const v = el.value;
+    if (fieldPath === 'name') {
+      const trimmed = v.trim();
+      if (trimmed) r.partial.name = trimmed; else delete r.partial.name;
+      sandboxRefreshRoommateSubline(r, idx);
+      return;
+    }
+    if (fieldPath === 'age') {
+      const n = parseInt(v, 10);
+      if (v === '') delete r.partial.age;
+      else if (Number.isFinite(n)) r.partial.age = clamp(n, 18, 60);
+      return;
+    }
+    if (fieldPath.startsWith('temperament.')) {
+      const axis = fieldPath.slice('temperament.'.length);
+      r.partial.temperament = r.partial.temperament || {};
+      const n = parseFloat(v);
+      if (!Number.isFinite(n)) delete r.partial.temperament[axis];
+      else r.partial.temperament[axis] = clamp(n, -1, 1);
+      const valEl = document.querySelector(`[data-sbx-slider-val="${idx}|${axis}"]`);
+      if (valEl) valEl.textContent = n.toFixed(1);
+      return;
+    }
+    if (fieldPath.startsWith('interests.')) { sbxWriteMultiSelect(r, 'interests', idx); return; }
+    if (fieldPath.startsWith('values.')) { sbxWriteMultiSelect(r, 'values', idx); return; }
+    if (fieldPath === 'gender' || fieldPath === 'species' || fieldPath === 'occupationCategory' ||
+        fieldPath === 'baggage' || fieldPath === 'wound' || fieldPath === 'want' ||
+        fieldPath === 'blindSpot' || fieldPath === 'boundary') {
+      if (v) r.partial[fieldPath] = v; else delete r.partial[fieldPath];
+      sandboxRefreshRoommateSubline(r, idx);
+      return;
+    }
+    if (fieldPath === 'room') {
+      r.residency = r.residency || {};
+      r.residency.room = v || null;
+      r.residency.bed = null;
+      renderSandboxUi();
+      return;
+    }
+    if (fieldPath === 'bed') {
+      r.residency = r.residency || {};
+      r.residency.bed = v || null;
+      renderSandboxUi();
+      return;
+    }
+  };
+
+  root.addEventListener('change', handle);
+  root.addEventListener('input', (e) => {
+    if (e.target?.getAttribute?.('data-sbx-field')) handle(e);
+  });
+
+  // B6: house-state editor wiring — one table walked the same way. A facility
+  // override lives under cfg.house.facilities[<defId>]; "empty deletes",
+  // so presence = authored (mirrors the roommate partial contract).
+  root.addEventListener('change', (e) => {
+    const el = e.target;
+    const attr = el.getAttribute?.('data-hse-field');
+    if (!attr || !pendingSandboxConfig) return;
+    const parts = attr.split('|');
+    const [defId, kind] = parts;
+    if (!FACILITY_DEFS[defId]) return;
+    const cur = pendingSandboxConfig.house.facilities[defId] || {};
+    if (kind === 'tier') {
+      if (el.value) cur.tier = el.value; else delete cur.tier;
+    } else if (kind === 'condition') {
+      if (el.value === '') delete cur.condition;
+      else cur.condition = clamp(Number(el.value), 0, 100);
+    }
+    if (Object.keys(cur).length) pendingSandboxConfig.house.facilities[defId] = cur;
+    else delete pendingSandboxConfig.house.facilities[defId];
+    if (kind === 'tier') renderSandboxUi(); // refresh quality + bedroom capacities
+  });
+}
+
+// Read every sibling <select> of one group (interests.0/1/2, values.0/1)
+// into the partial as the authored list. Values need BOTH picks — a single
+// value alone cannot author a pair, so it rolls both.
+function sbxWriteMultiSelect(r, key, idx) {
+  const selects = [...document.querySelectorAll(`[data-sbx-field^="${idx}|${key}."]`)];
+  const values = selects.map(s => s.value).filter(Boolean);
+  if (key === 'values') {
+    if (values.length === 2) r.partial.values = values;
+    else delete r.partial.values;
+  } else {
+    if (values.length > 0) r.partial.interests = values;
+    else delete r.partial.interests;
+  }
+}
+
+// --- Sandbox roommate actions ---
+function doSandboxRoommateAdd() {
+  const cfg = pendingSandboxConfig || (pendingSandboxConfig = defaultSandboxConfig());
+  if (!Array.isArray(cfg.roommates)) cfg.roommates = [];
+  if (cfg.roommates.length >= 7) return;
+  cfg.roommates.push({
+    partial: {},
+    authoredFields: [],
+    residency: { room: null, bed: null },
+    relPlayer: null,
+    // null = auto (D21): skipProse turns on once the appearance is authored,
+    // stays off for a fully rolled roommate. The Prose toggle commits an
+    // explicit boolean on first click.
+    skipProse: null,
+  });
+  // Phase 5: jump straight into the new roommate's Identity sub-tab, same
+  // as the old accordion auto-expanding the slot you just added.
+  sandboxActiveRoommate = cfg.roommates.length - 1;
+  sandboxRoommateSubtab = 'identity';
+  renderSandboxUi();
+}
+
+function doSandboxRoommateRemove(index) {
+  const cfg = pendingSandboxConfig;
+  if (!cfg || !Array.isArray(cfg.roommates)) return;
+  if (index < 0 || index >= cfg.roommates.length) return;
+  cfg.roommates.splice(index, 1);
+  // D12 blocker: their detail view can't survive being removed.
+  if (sandboxActiveRoommate === index) sandboxActiveRoommate = null;
+  else if (sandboxActiveRoommate !== null && sandboxActiveRoommate > index) sandboxActiveRoommate--;
+  renderSandboxUi();
+}
+
+function doSandboxRoommateMove(index, direction) {
+  const cfg = pendingSandboxConfig;
+  if (!cfg || !Array.isArray(cfg.roommates)) return;
+  const target = index + direction;
+  if (target < 0 || target >= cfg.roommates.length) return;
+  const [r] = cfg.roommates.splice(index, 1);
+  cfg.roommates.splice(target, 0, r);
+  // D12 blocker: a ±1 move (the only kind the ▲▼ buttons ever request) is a
+  // true swap between index and target — follow EITHER position's open
+  // detail view to its new slot, not just the one that was clicked, or
+  // whoever got displaced into the old index would silently show as if
+  // their own sub-tab were open.
+  if (sandboxActiveRoommate === index) sandboxActiveRoommate = target;
+  else if (sandboxActiveRoommate === target) sandboxActiveRoommate = index;
+  renderSandboxUi();
+}
+
+function doSandboxRoommateSelect(index) {
+  const cfg = pendingSandboxConfig;
+  if (!cfg || !Array.isArray(cfg.roommates)) return;
+  sandboxActiveRoommate = (Number.isInteger(index) && index >= 0 && index < cfg.roommates.length) ? index : null;
+  renderSandboxUi();
+}
+
+function doSandboxRoommateSubtab(subId) {
+  if (!SANDBOX_ROOMMATE_SUBTABS.some((s) => s.id === subId)) return;
+  sandboxRoommateSubtab = subId;
+  renderSandboxUi();
+}
+
+function doSandboxRoommateDesign(index) {
+  const r = pendingSandboxConfig?.roommates?.[index];
+  if (!r) return;
+  openRoommateStudio(r);
+}
+
+// D21: the effective skipProse flag. null on the config means "auto" — on
+// once the appearance is authored, off for a rolled roommate. The toggle
+// commits an explicit boolean on first click so the auto rule can never
+// fight a choice the player actually made.
+function roommateEffectiveSkipProse(r) {
+  if (r && (r.skipProse === true || r.skipProse === false)) return r.skipProse;
+  return roommateDefaultSkipProse(r && r.partial);
+}
+
+function roommateDefaultSkipProse(partial) {
+  const p = partial || {};
+  return !!(p.physical && typeof p.physical === 'object' && Object.keys(p.physical).length > 0);
+}
+
+function doSandboxRoommateSkip(index) {
+  const r = pendingSandboxConfig?.roommates?.[index];
+  if (!r) return;
+  r.skipProse = !roommateEffectiveSkipProse(r);
+  renderSandboxUi();
+}
+
+// partial → the bible's authoredFields (B1/D12): dotted paths the player
+// filled in by hand. An untouched field is ABSENT from the partial by
+// construction (the form's "empty deletes" contract), so presence here IS
+// the authored set. 'physical' protects the whole appearance subtree via
+// mergeProseIntoBible's prefix match; 'occupation' covers the whole
+// occupation object the category pick fills.
+function roommateAuthoredFields(partial) {
+  const p = partial || {};
+  const out = [];
+  const touched = (v) => v !== undefined && v !== null && v !== '' &&
+    !(Array.isArray(v) && v.length === 0) &&
+    !(typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0);
+  if (touched(p.name)) out.push('name');
+  if (touched(p.age)) out.push('age');
+  if (touched(p.gender)) out.push('gender');
+  if (touched(p.species)) out.push('species');
+  if (touched(p.occupationCategory)) out.push('occupation');
+  if (p.temperament && typeof p.temperament === 'object' && Object.keys(p.temperament).length > 0) out.push('temperament');
+  if (Array.isArray(p.interests) && p.interests.length > 0) out.push('interests');
+  if (Array.isArray(p.values) && p.values.length > 0) out.push('values');
+  if (touched(p.baggage)) out.push('baggage');
+  if (touched(p.wound)) out.push('wound');
+  if (touched(p.want)) out.push('want');
+  if (touched(p.blindSpot)) out.push('blindSpot');
+  if (touched(p.boundary)) out.push('boundary');
+  if (p.physical && typeof p.physical === 'object' && Object.keys(p.physical).length > 0) out.push('physical');
+  return out;
 }
 
 // --- Settings sub-screen (Settings & Pause Overhaul Phase 2, D2) ---

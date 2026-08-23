@@ -527,7 +527,15 @@ function narrateOvertureArrivals(before) {
   for (const [id, npc] of Object.entries(currentGameState.npcs || {})) {
     if (!isOverturePending(npc) || before.has(id)) continue;
     if (!overtureArrivalVisible(npc)) continue;
-    const byTone = OVERTURE_ARRIVAL_TEMPLATES[npc.overture.channel];
+    // Vocation plan D18: a def may bring its OWN arrival lines. The channel
+    // map is right for the four original entries — a proposal sounds like a
+    // proposal whoever makes it — but the collab ask rides the propose channel
+    // while being an entirely different thing to say, and giving it a fifth
+    // channel would mean teaching proximity, do-not-disturb and every other
+    // channel-keyed table about a channel that behaves exactly like propose.
+    // An optional per-def override is the smaller change.
+    const ovDef = OVERTURE_DEFS[npc.overture.overtureId];
+    const byTone = (ovDef && ovDef.arrivalTemplates) || OVERTURE_ARRIVAL_TEMPLATES[npc.overture.channel];
     if (!byTone) continue;
     const lines = byTone[npc.overture.tone] || byTone.warm;
     if (!lines || lines.length === 0) continue;
@@ -1283,20 +1291,21 @@ function processAutopayForDayUi(day) {
   }
 }
 
-// Phase 6: quarterly taxes bill at quarter end. Unlike utility bills
-// (which post on a cadence and have cutoffs), taxes are a single lump
-// obligation every 90 days. The player owes rate × (quarterGross −
-// deductions). The auto-reserve pays down what it can; any shortfall
-// carries forward with penalty + interest. No cutoff — taxes just
-// accumulate debt, which compounds if ignored.
+// Phase 6: taxes bill at tax-period end — days 70 and 140 and every 70
+// days thereafter (end of Summer and end of Winter, per D3). Unlike
+// utility bills (which post on a cadence and have cutoffs), taxes are a
+// single lump obligation every 70 days. The player owes rate ×
+// (quarterGross − deductions). The auto-reserve pays down what it can; any
+// shortfall carries forward with penalty + interest. No cutoff — taxes
+// just accumulate debt, which compounds if ignored.
 function processTaxesForDayUi(day) {
   if (!currentGameState.world.taxes) return;
-  if (!isQuarterEnd(day)) return;
+  if (!isTaxPeriodEnd(day)) return;
   const result = processQuarterlyTaxes(currentGameState, day);
   if (!result) return;
-  const q = result.quarter + 1;
+  const q = result.taxPeriod + 1;
   if (result.owed > 0 || result.carriedForward > 0) {
-    let msg = `Quarter ${q} taxes: ${result.owed} owed on ${result.gross} gross`;
+    let msg = `Tax period ${q} taxes: ${result.owed} owed on ${result.gross} gross`;
     if (result.deductions > 0) msg += ` (−${result.deductions} deductions)`;
     msg += '.';
     if (result.fromReserve > 0) msg += ` Reserve covered ${result.fromReserve}.`;
@@ -1307,7 +1316,7 @@ function processTaxesForDayUi(day) {
     else msg += ` Tax bill settled.`;
     addLogEntry('system', msg);
   } else if (result.carriedForward === 0 && (result.fromReserve > 0)) {
-    addLogEntry('system', `Quarter ${q} taxes settled. No tax owed this quarter (reserve: ${currentGameState.world.taxes.reserve}).`);
+    addLogEntry('system', `Tax period ${q} taxes settled. No tax owed this period (reserve: ${currentGameState.world.taxes.reserve}).`);
   }
 }
 
@@ -1399,26 +1408,6 @@ function processRenovationJobsForDay(day) {
       `I finished the ${def ? def.label : job.facilityId} ${job.jobType} on day ${day} — ${job.toTier === 'upgraded' ? 'upgraded and ready' : 'repaired and ready'}.`,
       day);
   }
-}
-
-// A completed renovation writes the object states its facility OWNS
-// (FACILITY_DEFS' `completionStates`, keyed by OBJECT_DEFS id and applied to
-// every instance in the facility's room). The pool is the case that needed
-// it: `swimming_pool.water` was a state the def described, the tier-0 copy
-// promised ("It holds no water") and nothing ever wrote — so a dry basin
-// with a torn liner emitted the smell of stagnant green water for the whole
-// game. Declared on the facility rather than branched on here, so the next
-// renovation that owns a state adds a line of data, not a special case.
-function applyFacilityCompletionStates(gameState, facilityId) {
-  const def = FACILITY_DEFS[facilityId];
-  if (!def?.completionStates) return;
-  const bucket = gameState.objects?.[`room_${def.room}`];
-  if (!bucket) return;
-  for (const obj of Object.values(bucket)) {
-    const states = def.completionStates[obj.defId];
-    if (states) obj.state = { ...obj.state, ...states };
-  }
-  refreshRoomCleanliness(gameState, def.room);
 }
 
 // Contractor tutorial (contractor doc Phase 3): one-shot apartment-quality
@@ -3167,6 +3156,31 @@ const MENU_ACTIONS = ['menu', 'new-game-solo', 'new-game-random', 'new-game-guid
   'menu.continue', 'menu.new-game', 'menu.load', 'menu.options',
   'menu.resume', 'menu.exit', 'menu.back', 'menu.prev', 'menu.next',
   'menu.debug', 'options.bg-art',
+  // Sandbox mode (Seasonal Calendar & Sandbox plan B4/B5): title-screen route into
+  // the config sub-screen, its Start/Back verbs, and the B5 roommate-builder verbs
+  // (add/remove/reorder/design-appearance/skipProse) plus the player-design
+  // entry — all pre-game meta, so they must be reachable with currentGameState null.
+  // 'sandbox.roommate-toggle' (the old accordion expand/collapse) was retired
+  // by the Sandbox Pre-Game Editor Overhaul Phase 5 — 'sandbox.roommate-select'
+  // below replaced it with rail-select semantics (an open question the plan
+  // left for this phase to resolve either way; this is the "retire outright"
+  // branch, not a reuse).
+  'menu.sandbox', 'sandbox.start', 'sandbox.back',
+  'sandbox.player-design', 'sandbox.roommate-add', 'sandbox.roommate-remove',
+  'sandbox.roommate-move', 'sandbox.roommate-design',
+  'sandbox.roommate-skip',
+  'sandbox.house-preset', 'sandbox.house-structural',
+  // Sandbox Pre-Game Editor Overhaul Phase 1 (D4/D5): the tab shell's own
+  // verbs — switching the top-level tab, switching a static sub-tab strip
+  // (House's Layout/Facilities), and the generic toggle row kind's write.
+  'sandbox.tab', 'sandbox.subtab', 'sandbox.row-toggle',
+  // Sandbox Pre-Game Editor Overhaul Phase 4 (D7): the Economy & Difficulty
+  // tab's preset row — stamps all four economy fields at once.
+  'sandbox.difficulty-preset',
+  // Sandbox Pre-Game Editor Overhaul Phase 5 (D3): the Roommates rail's own
+  // verbs — opening/leaving a roommate's five sub-tabs and switching which
+  // one is shown.
+  'sandbox.roommate-select', 'sandbox.roommate-subtab',
   // Settings & Pause Overhaul Phase 2 (D2): the tabbed settings sub-screen's
   // verbs — meta, reachable from the boot options row and the pause context
   // alike, free at any energy. Rows carry their target as data-field and
@@ -3245,6 +3259,24 @@ const ENERGY_GATE_EXEMPT = new Set([
   'menu', 'menu.continue', 'menu.new-game', 'menu.load', 'menu.options',
   'menu.resume', 'menu.exit', 'menu.back', 'menu.prev', 'menu.next',
   'menu.debug', 'options.bg-art',
+  // Sandbox mode (B4/B5): the config sub-screen and the roommate builder are
+  // pre-game meta — free at any energy, reachable with no game.
+  // 'sandbox.roommate-toggle' retired in favor of 'sandbox.roommate-select'
+  // below — see the matching MENU_ACTIONS comment.
+  'menu.sandbox', 'sandbox.start', 'sandbox.back',
+  'sandbox.player-design', 'sandbox.roommate-add', 'sandbox.roommate-remove',
+  'sandbox.roommate-move', 'sandbox.roommate-design',
+  'sandbox.roommate-skip',
+  // D11 fix (Sandbox Pre-Game Editor Overhaul plan): these two were the only
+  // sandbox verbs missing from this list, alongside the other nine above.
+  'sandbox.house-preset', 'sandbox.house-structural',
+  // Sandbox Pre-Game Editor Overhaul Phase 1: the tab shell's own verbs.
+  'sandbox.tab', 'sandbox.subtab', 'sandbox.row-toggle',
+  // Sandbox Pre-Game Editor Overhaul Phase 4: the Economy & Difficulty
+  // preset row — pre-game meta, free at any energy like the rest.
+  'sandbox.difficulty-preset',
+  // Sandbox Pre-Game Editor Overhaul Phase 5: the Roommates rail's own verbs.
+  'sandbox.roommate-select', 'sandbox.roommate-subtab',
   'settings.open', 'settings.tab', 'settings.back',
   'settings.toggle', 'settings.cycle', 'set.population-dist',
   'set.image-style', 'set.custom-style', 'images.clear-cache',
@@ -3963,6 +3995,62 @@ async function handleAction(action, npcId, extra) {
       // genuinely useful for testing.
       openPlayerStudio();
       break;
+    case 'menu.sandbox':
+      // Sandbox mode (B4): opens the config sub-screen directly — the studio,
+      // the cutscene and startSoloGame's solo path are all bypassed. The
+      // config screen stays a sibling of the title; Start (sandbox.start) is the
+      // single route into startSandboxGame, which calls closeMainMenu itself.
+      doMenuSandbox();
+      break;
+    case 'sandbox.start':
+      await startSandboxGame(pendingSandboxConfig);
+      break;
+    case 'sandbox.back':
+      showMenuScreen('title');
+      break;
+    case 'sandbox.player-design':
+      openSandboxPlayerStudio();
+      break;
+    case 'sandbox.roommate-add':
+      doSandboxRoommateAdd();
+      break;
+    case 'sandbox.roommate-remove':
+      doSandboxRoommateRemove(extra.index);
+      break;
+    case 'sandbox.roommate-move':
+      doSandboxRoommateMove(extra.index, extra.direction ?? 1);
+      break;
+    case 'sandbox.roommate-select':
+      doSandboxRoommateSelect(extra.index);
+      break;
+    case 'sandbox.roommate-subtab':
+      doSandboxRoommateSubtab(extra.tab);
+      break;
+    case 'sandbox.roommate-design':
+      doSandboxRoommateDesign(extra.index);
+      break;
+    case 'sandbox.roommate-skip':
+      doSandboxRoommateSkip(extra.index);
+      break;
+    case 'sandbox.house-preset':
+      doSandboxHousePreset(extra.id);
+      break;
+    case 'sandbox.house-structural':
+      doSandboxHouseStructural(extra.id);
+      break;
+    case 'sandbox.tab':
+      if (extra.tab && SANDBOX_TABS.some((t) => t.id === extra.tab)) sandboxActiveTab = extra.tab;
+      renderSandboxUi();
+      break;
+    case 'sandbox.subtab':
+      doSandboxSubtab(extra.tab);
+      break;
+    case 'sandbox.row-toggle':
+      doSandboxRowToggle(extra.field);
+      break;
+    case 'sandbox.difficulty-preset':
+      doSandboxDifficultyPreset(extra.id);
+      break;
     case 'menu.load':
       openSaveMenu('load');
       break;
@@ -4274,7 +4362,15 @@ function surfaceRoomEvidence(roomId, maxItems) {
     // (the other party named), so the codex's Confront verb can say "I saw
     // you with X". seenByPlayer marks it once, so the write happens exactly
     // once per event.
-    if (evt.type === 'intimate' && currentGameState.npcs[evt.npcId]) {
+    //
+    // Code-review fix: also accepts 'content_collab' now that tryIntimatePair
+    // stamps event.type with the real driveId instead of always 'intimate'
+    // (vocation plan D19) — walking in on a collab shoot is still a real "I
+    // saw you with X" moment worth the same witnessed-knowledge entry, and
+    // now that the two event types are distinguishable, this is the one
+    // place that deliberately treats them the same on purpose rather than by
+    // accident.
+    if ((evt.type === 'intimate' || evt.type === 'content_collab') && currentGameState.npcs[evt.npcId]) {
       const other = evt.data && evt.data.other;
       const day = typeof evt.day === 'number' ? evt.day : currentGameState.meta.clock.day;
       notePlayerWitnessedEntry(currentGameState, evt.npcId, 'saw_with_X', day, roomId, {
@@ -5643,6 +5739,10 @@ async function doMove(targetRoomId) {
 // want/wound/blind spot) with a per-character reroll, before prose
 // expansion or any kv write happens.
 let pendingCast = null;         // rolled cast, not yet written to kv
+// Sandbox mode (Seasonal Calendar & Sandbox plan): the held SANDBOX_CONFIG the
+// menu sub-screen edits and startSandboxGame consumes. Never persisted — consumed
+// once at start. defaultSandboxConfig() (menu.js) produces the working defaults.
+let pendingSandboxConfig = null;
 let pendingRerollCounters = {}; // npcId -> reroll attempt counter, for RNG variety
 
 function showCharCreationModal(mode) {
@@ -5965,6 +6065,138 @@ async function startSoloGame(draft) {
   }
 }
 
+// Sandbox mode start (Seasonal Calendar & Sandbox plan, B4/D16-D19). Mirrors
+// startSoloGame beat for beat — same races, same closing order — but builds a cast
+// of authored roommates (SIM_generateHouse's partials) and then applies the
+// sandbox house/economy preset between generation and the state write. The two
+// stop* calls at the top are the same race-startup defence startSoloGame and
+// approveCastAndStartGame document: a stale autosave timer or clock loop from a
+// previous game must never keep advancing the outgoing state while the new one is
+// being written. closeMainMenu is the single uncovering point — it is NOT called
+// from the config screen, only here at the moment of actually starting, so backing
+// out of the config never leaves a half-started game behind a blank screen.
+async function startSandboxGame(cfg) {
+  stopAutosave();
+  stopClockLoop();
+  closeModal();
+  // B5 (D21): roommates with prose enabled add one LLM call each at start —
+  // say so in the loading message, or a 7-roommate house looks frozen behind
+  // a static 'Moving in...' for a minute.
+  const needsLLM = (cfg || (typeof pendingSandboxConfig !== 'undefined' ? pendingSandboxConfig : null) || {}).roommates
+    ? ((cfg || (typeof pendingSandboxConfig !== 'undefined' ? pendingSandboxConfig : null) || {}).roommates || []).some(r => !roommateEffectiveSkipProse(r))
+    : false;
+  closeMainMenu();
+  showLoading(needsLLM ? 'Writing your household\u2019s story...' : 'Moving in...');
+  try {
+    cfg = cfg || (pendingSandboxConfig = (typeof defaultSandboxConfig === 'function' ? defaultSandboxConfig() : {}));
+    const seed = genSeed();
+    // cfg.player is buildPlayerDraftForNewGame()'s shape; an empty/stale draft
+    // falls back to a fresh one so the player is always fully rolled, exactly as a
+    // solo start does. cfg.roommates' `partial` entries go to rollCastSlot
+    // untouched, index-aligned with the generated residency pass in applySandboxPreset.
+    const roommates = cfg.roommates || [];
+    const partials = roommates.map(r => r && r.partial);
+    const playerDraft = (cfg.player && Object.keys(cfg.player).length) ? cfg.player : (typeof buildPlayerDraftForNewGame === 'function' ? buildPlayerDraftForNewGame() : undefined);
+    // cfg.economy's two DAY-shaped fields (rentGraceDays/billsStartDay) are
+    // consumed here, at generation, not by applySandboxPreset below — they
+    // shape the opening the factory builds rather than overwriting day stamps
+    // it already made, which is what D19's guard forbids. money/taxReserve are
+    // NOT day-shaped and are still applied by applySandboxPreset's step 6.
+    pendingCast = SIM_generateHouse(seed, roommates.length, partials, playerDraft, cfg.economy);
+    // Same contentConfig seeding as startSoloGame (the solo path bypasses the
+    // cast-approval step where it is normally built) — bake the current mode in
+    // before the state write.
+    pendingCast.contentConfig = { tone: CONTENT_CONFIG.tone, contentPrefs: [], contentFlags: { ...CONTENT_CONFIG.contentFlags } };
+    applySfwMode(pendingCast);
+    // B5 (D21): per-roommate prose — authoredFields stamped from the config's
+    // partial, then each roommate's prose is either LLM-expanded (skipProse off)
+    // or templated from the fallback* family (skipProse on). The authored-field
+    // stamp must precede the merge so a player-authored name/appearance survives.
+    await applySandboxRoommateProse(pendingCast, cfg.roommates);
+    // D18/D19: the sandbox patch lands between generation and the write. It never
+    // touches meta.clock or rebases any day field — sandbox is always day 1; the
+    // advanced thing is the house.
+    applySandboxPreset(pendingCast, cfg);
+    await writeGeneratedGameState(pendingCast);
+    pendingCast = null;
+    await syncGameStateFromKv();
+    currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
+    addLogEntry('system', 'Sandbox up. The apartment opens on day 1, wherever you left it — the calendar never moved.');
+    if (currentGameState.world.computer?.apps?.gigs) {
+      currentGameState.world.computer.apps.gigs.lastRefreshDay = 0;
+      generateGigsForDay(currentGameState, 1);
+    }
+    render(currentGameState, currentSceneState);
+    startAutosave(() => currentGameState);
+    startClockLoop();
+  } catch (e) {
+    console.error('Sandbox start failed:', e);
+    showError('Failed to start sandbox game: ' + e.message);
+  } finally {
+    hideLoading();
+  }
+}
+
+// B5 (D21): per-roommate prose pass for the sandbox path.
+// approveCastAndStartGame expands prose for every NPC in the cast, but
+// startSandboxGame mirrors startSoloGame, which skips that step (the solo
+// path casts the player only, and the player's prose comes from the studio
+// cutscene). Roommates would therefore ship with name='' (rollCastSlot
+// leaves it empty for the prose pass to fill) and empty visual/history/
+// sketch/sampleLines — the fields the portrait generator and the scene
+// prompts read. The authored-field stamp comes from the config partial
+// (roommateAuthoredFields), not the bible's own list, because the partial
+// is the player's intent and the structured draw has nothing to say about
+// it. skipProse roommates skip the LLM call entirely and get the
+// fallback* family instead, so their bibles are just as complete.
+// Mirrors approveCastAndStartGame's re-entry through validateCharacter:
+// a prose failure keeps the structured draw rather than shipping prose
+// that failed the single gate every character construction path returns
+// through.
+async function applySandboxRoommateProse(pendingCast, roommates) {
+  const list = roommates || [];
+  const npcIds = pendingCast?.npcIds || [];
+  const fillFallback = (b) => ({
+    ...b,
+    name: b.name || fallbackName(b),
+    visual: fallbackVisual(b),
+    history: fallbackHistory(b),
+    sketch: fallbackSketch(b),
+    sampleLines: fallbackSampleLines(b),
+  });
+  await Promise.all(npcIds.map(async (id, i) => {
+    const npc = pendingCast.npcs?.[id];
+    if (!npc) return;
+    const r = list[i];
+    // D12: the config record carries the derived set too (SANDBOX_CONFIG's
+    // authoredFields field), so the plan's data model stays true even though
+    // the partial is the source it is derived from.
+    const authoredFields = roommateAuthoredFields(r && r.partial);
+    if (r && Array.isArray(r.authoredFields)) r.authoredFields = authoredFields;
+    const bible = { ...npc.bible, authoredFields };
+    if (roommateEffectiveSkipProse(r)) {
+      npc.bible = fillFallback(bible);
+      return;
+    }
+    try {
+      const prose = await expandCharacterProse(bible);
+      const candidateBible = mergeProseIntoBible(bible, prose, authoredFields);
+      const { valid, errors, normalized } = validateCharacter({
+        bible: candidateBible,
+        bibleRevision: npc.bibleRevision,
+        bibleChanges: npc.bibleChanges,
+      });
+      if (valid) {
+        npc.bible = normalized.bible;
+      } else {
+        console.warn(`Sandbox prose for ${id} failed validation, keeping structured draw`, errors);
+      }
+    } catch (e) {
+      console.warn(`Sandbox prose for ${id} failed, keeping structured draw: ${e.message}`);
+    }
+  }));
+}
+
 async function approveCastAndStartGame() {
   if (!pendingCast) return;
   // Stop any previous game's autosave timer before the (potentially long)
@@ -5992,15 +6224,13 @@ async function approveCastAndStartGame() {
       // prose-expansion pass from regenerating their identity.
       if (id === CONTRACTOR_ID) return;
       const prose = await expandCharacterProse(npc.bible);
-      const candidateBible = {
-        ...npc.bible,
-        name: npc.bible.name || prose.name,
-        visual: prose.visual,
-        physical: { ...npc.bible.physical, ...prose.physical },  // NPC Overhaul Phase 1: merge LLM-filled physical
-        history: prose.history,
-        sketch: prose.sketch,
-        sampleLines: prose.sampleLines,
-      };
+      // B1/D12 authored-field lock: mergeProseIntoBible skips any path the
+      // bible's own authoredFields covers, so a player-authored name,
+      // appearance or visual survives prose expansion by declaration rather
+      // than by luck (physical used to survive only because
+      // expandCharacterProse returns the same object it was handed; visual
+      // was always clobbered). Empty authoredFields = the old merge, exactly.
+      const candidateBible = mergeProseIntoBible(npc.bible, prose, npc.bible.authoredFields);
       const { valid, errors, normalized } = validateCharacter({
         bible: candidateBible,
         bibleRevision: npc.bibleRevision,
