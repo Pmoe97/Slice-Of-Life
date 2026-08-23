@@ -216,12 +216,23 @@ function renderWindows(gs) {
     renderWindowScreenNav(gs, appId, app);
 
     const body = node.querySelector('.win-body');
-    body.innerHTML = '';
-    const screen = app.screens[win.screenId];
-    if (!screen) { body.innerHTML = '<p class="dim">Unknown screen.</p>'; continue; }
-    const renderer = COMPUTER_RENDERERS[screen.renderer];
-    if (renderer) renderer(body, gs, app, screen);
-    else body.innerHTML = `<p class="dim">No renderer for "${screen.renderer}".</p>`;
+    // Mirrors UI.WINDOWMANAGER's onShellViewportChange guard, for the OTHER
+    // trigger that rebuilds this body: a periodic re-render (sim checkpoint,
+    // needs heartbeat, any discrete action elsewhere) fires render() while
+    // this window just sits open, and body.innerHTML='' below would destroy
+    // whatever input/textarea the player is mid-keystroke in — the viewport
+    // guard only covers the resize/orientationchange path, not this one.
+    const active = document.activeElement;
+    const typingHere = active && body.contains(active)
+      && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable);
+    if (!typingHere) {
+      body.innerHTML = '';
+      const screen = app.screens[win.screenId];
+      if (!screen) { body.innerHTML = '<p class="dim">Unknown screen.</p>'; continue; }
+      const renderer = COMPUTER_RENDERERS[screen.renderer];
+      if (renderer) renderer(body, gs, app, screen);
+      else body.innerHTML = `<p class="dim">No renderer for "${screen.renderer}".</p>`;
+    }
   }
 }
 

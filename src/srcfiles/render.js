@@ -3012,6 +3012,57 @@ function openIntimacyPicker({ title, rows }) {
   });
 }
 
+// --- Action-moment photo modal (B6, Discord feedback 2026-08-23) ---
+// Pops the freshly captured photo (actions.js's executeAction →
+// captureActionMoment) up in front of the player right when the action
+// resolves. Fire-and-forget from the caller — this doesn't block the
+// action's own render/save/hideLoading. The record is already sitting in
+// the camera roll by the time this runs, so a reroll or later revisit via
+// the Photos app is the same photo, not a second generation.
+async function showActionMomentModal(photo) {
+  const overlay = document.getElementById('modal-overlay');
+  const title = document.getElementById('modal-title');
+  const body = document.getElementById('modal-body');
+  const actions = document.getElementById('modal-actions');
+  if (!overlay || !title || !body || !actions || !photo) return;
+
+  title.textContent = photo.caption || 'A moment, captured';
+  body.innerHTML = '';
+  const wrap = document.createElement('div');
+  wrap.className = 'action-moment-photo';
+  const img = document.createElement('img');
+  img.className = 'action-moment-img';
+  img.alt = photo.caption || 'Generated moment photo';
+  wrap.appendChild(img);
+  body.appendChild(wrap);
+
+  actions.innerHTML = '';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'btn btn-secondary';
+  close.textContent = 'Close';
+  close.addEventListener('click', () => overlay.removeAttribute('data-open'));
+  actions.appendChild(close);
+  overlay.setAttribute('data-open', '');
+
+  try {
+    const result = await getPhotoImage(photo);
+    if (!overlay.hasAttribute('data-open')) return; // dismissed while generating
+    if (result?.url) {
+      img.src = result.url;
+      setImageMeta(img, {
+        label: photo.caption || 'Moment photo',
+        prompt: applyImageStyle(photo.prompt),
+        seed: photo.seed,
+        negativePrompt: photo.negativePrompt || IMAGE_NEGATIVE.photo,
+        reroll: (fields) => rerollPhotoImage(photo, img, fields),
+      });
+    }
+  } catch (e) {
+    console.warn('Action moment photo failed:', e);
+  }
+}
+
 // --- Room-search modal (inventory overhaul Phase 8, D8) ---
 // Searching a roommate's room surfaces their possessions. One row per
 // owned stack, each with a Take button — disabled for key items (no one

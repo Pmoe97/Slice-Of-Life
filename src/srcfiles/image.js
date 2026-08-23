@@ -236,7 +236,7 @@ function buildPhotoPrompt(roomId, phase, activeNpcs, roomObjects, opts = {}) {
     ? 'Wide composition, the room filling the frame, subjects in the upper two-thirds, facing the camera. '
     : 'Tall vertical composition, the room filling the frame, subjects in the middle of the frame, facing the camera. ';
 
-  prompt += 'Anime-inspired illustration style, warm tones, detailed background, slice-of-life atmosphere.';
+  prompt += 'Warm tones, detailed background, slice-of-life atmosphere.';
   return prompt;
 }
 
@@ -433,7 +433,7 @@ function fallbackRoomPhrase(roomId, roomType) {
 
 function buildCharacterPrompt(npc, expression, pose) {
   const v = buildVisualCharacterClause(npc);
-  return `${v}, ${expression || 'neutral expression'}, ${pose || 'standing casually'}, anime-inspired illustration style, full body, clean background, character sheet pose, warm lighting.`;
+  return `${v}, ${expression || 'neutral expression'}, ${pose || 'standing casually'}, full body, clean background, character sheet pose, warm lighting.`;
 }
 
 // --- The player's portrait (player creation + intro plan, Phase 4) ---
@@ -453,7 +453,7 @@ function buildPlayerPortraitPrompt(draft) {
   const shim = { name: draft?.name, appearance: { age: draft?.age, gender: draft?.gender, physical: draft?.physical || {} } };
   const desc = buildVisualCharacterClause(shim, { name: shim.name });
   return `${desc}, neutral confident expression, standing casually, `
-    + 'anime-inspired illustration style, upper body portrait, clean simple background, warm lighting.';
+    + 'upper body portrait, clean simple background, warm lighting.';
 }
 
 // Keyed on the portrait's own seed rather than on the draft's contents: the
@@ -772,7 +772,7 @@ function buildCutoutPrompt(who, pose, expression, opts = {}) {
     : expression === 'talking' ? 'talking, mouth slightly open'
     : 'neutral expression';
   return `${clause}, ${exprWord}, ${poseWord}, full body, isolated on solid pure white background, `
-    + 'simple studio background, clean studio lighting, character sprite, anime-inspired illustration style.';
+    + 'simple studio background, clean studio lighting, character sprite.';
 }
 
 // persona-realm's negPrompt() (Stage 0): ban anything that would read as
@@ -1193,6 +1193,49 @@ function takePhoto(gameState, tags) {
   roll.unshift(photo); // newest first
   if (roll.length > CAMERA.rollCap) roll.length = CAMERA.rollCap; // 8.2: oldest evicted
   return photo;
+}
+
+// B6 (Discord feedback, 2026-08-23): the action-triggered counterpart to
+// takePhoto — same frozen prompt+seed record shape (so it drops straight
+// into the existing camera roll and reuses getPhotoImage/the Photos app's
+// reroll & info UI for free), just built from the ACTING player and the
+// action definition instead of the current room's cast. actionId/slot key
+// the id so repeat uses of the same action the same tick still get unique,
+// individually addressable records, matching takePhoto's contract.
+function captureActionMoment(gameState, def, actionId, actor, ctx) {
+  const roomId = ctx?.roomId || gameState.player.location;
+  const day = gameState.meta.clock.day;
+  const tick = getTickIndex(gameState.meta.clock.minutes);
+  const roll = gameState.world.phone.camera.roll;
+  const slot = roll.length;
+  const id = `photo_${hashStr(`${gameState.meta.seed}|moment|${actionId}|${day}|${tick}|${slot}`).toString(36)}`;
+  const seed = hashStr(`${gameState.meta.seed}|photo_seed|${id}`);
+  const prompt = buildActionMomentPrompt(actor, def, { roomId, gameState });
+
+  const photo = {
+    id, day, tick, roomId, subjectNpcIds: [],
+    caption: def.momentCaption || `A private moment, Day ${day}`,
+    prompt, seed, tags: ['moment'],
+  };
+  roll.unshift(photo);
+  if (roll.length > CAMERA.rollCap) roll.length = CAMERA.rollCap;
+  return photo;
+}
+
+// The prompt for a captureActionMoment record: the acting player, described
+// through the same visual-clause composer as every other generated image,
+// opted into the intimate layer (peek's own gate, intimateAllowed, still
+// applies — sfwMode off means this stays a clothed/neutral description).
+// def.transientClothing is passed as the clause's clothing state directly,
+// not read off the live actor, for the timing reason captureActionMoment's
+// caller documents.
+function buildActionMomentPrompt(actor, def, ctx) {
+  const who = { ...actor, clothing: def.transientClothing || actor.clothing };
+  const clause = buildVisualCharacterClause(who, { gameState: ctx.gameState, isPlayer: true, intimate: true });
+  const room = ROOMS[ctx.roomId]?.name || ctx.roomId || '';
+  return `${clause}, ${def.momentPhrase || 'in a private, intimate moment, alone'}, in the ${String(room).toLowerCase()}, `
+    + 'soft intimate lighting, '
+    + (sceneOrientation() === 'landscape' ? 'wide composition, subject centered.' : 'tall vertical composition, subject centered.');
 }
 
 // Regenerate (or fetch from cache) the image for a photo record. Keyed by
