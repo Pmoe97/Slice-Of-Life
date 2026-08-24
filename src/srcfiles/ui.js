@@ -2717,6 +2717,131 @@ function renderCheatWorldPane() {
   return wrap;
 }
 
+// Troubleshooting export log pane (Discord feedback, 2026-08-24): read-only
+// filters over gameState.world.debugLog (debuglog.js), then a plain-text/
+// JSON export via showLogExportModal below. Unlike the other cheat panes,
+// nothing here edits live state, so filter changes never re-render the pane
+// or call saveAtBoundary — that's why this doesn't reuse cheatSlider()
+// (ui.js), whose change handler always does both.
+function renderCheatLogPane() {
+  const wrap = document.createElement('div');
+  wrap.className = 'sbx-section-wrap';
+  const log = currentGameState.world.debugLog || [];
+
+  wrap.appendChild(sandboxSectionTitle('Troubleshooting Export'));
+  wrap.appendChild(sandboxSectionHint(`${log.length} entr${log.length === 1 ? 'y' : 'ies'} recorded on this device. Filter below, then export a readable slice to paste into a chat.`));
+
+  const days = log.map((e) => e.day);
+  const minDay = days.length ? Math.min(...days) : currentGameState.meta.clock.day;
+  const maxDay = days.length ? Math.max(...days) : currentGameState.meta.clock.day;
+
+  wrap.appendChild(sandboxSectionTitle('Day range'));
+  const dayRow = sandboxRowEl('From / to', `Entries span day ${minDay}–${maxDay}.`);
+  const dayFromInput = document.createElement('input');
+  dayFromInput.type = 'number';
+  dayFromInput.className = 'sbx-control';
+  dayFromInput.value = minDay;
+  dayFromInput.style.width = '70px';
+  const dayToInput = document.createElement('input');
+  dayToInput.type = 'number';
+  dayToInput.className = 'sbx-control';
+  dayToInput.value = maxDay;
+  dayToInput.style.width = '70px';
+  dayRow.appendChild(dayFromInput);
+  dayRow.appendChild(document.createTextNode(' to '));
+  dayRow.appendChild(dayToInput);
+  wrap.appendChild(dayRow);
+
+  wrap.appendChild(sandboxSectionTitle('NPCs'));
+  wrap.appendChild(sandboxSectionHint('Leave "All NPCs" selected to include everyone.'));
+  const pickedNpcIds = new Set();
+  const npcPicker = document.createElement('div');
+  npcPicker.className = 'cheat-npc-picker';
+  const npcChips = [];
+  const refreshNpcChips = () => {
+    for (const { id, chip } of npcChips) {
+      chip.classList.toggle('active', id === null ? pickedNpcIds.size === 0 : pickedNpcIds.has(id));
+    }
+  };
+  const allChip = document.createElement('button');
+  allChip.type = 'button';
+  allChip.className = 'cheat-npc-chip';
+  allChip.textContent = 'All NPCs';
+  allChip.addEventListener('click', () => { pickedNpcIds.clear(); refreshNpcChips(); });
+  npcChips.push({ id: null, chip: allChip });
+  npcPicker.appendChild(allChip);
+  for (const id of Object.keys(currentGameState.npcs)) {
+    const n = currentGameState.npcs[id];
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'cheat-npc-chip';
+    chip.textContent = fullName(n.bible) || id;
+    chip.addEventListener('click', () => {
+      if (pickedNpcIds.has(id)) pickedNpcIds.delete(id); else pickedNpcIds.add(id);
+      refreshNpcChips();
+    });
+    npcChips.push({ id, chip });
+    npcPicker.appendChild(chip);
+  }
+  refreshNpcChips();
+  wrap.appendChild(npcPicker);
+
+  wrap.appendChild(sandboxSectionTitle('Categories'));
+  const catList = document.createElement('div');
+  catList.className = 'cheat-log-categories';
+  const catInputs = [];
+  for (const cat of DEBUG_LOG_CATEGORIES) {
+    const label = document.createElement('label');
+    label.className = 'cheat-log-category-row';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.className = 'cheat-log-category';
+    input.dataset.category = cat.id;
+    // Raw prompts default off — heavy, and this checkbox doubles as the
+    // live capture toggle (llm.js's callLLM/callImLLM hooks read it).
+    input.checked = cat.id !== 'prompt';
+    if (cat.id === 'prompt') {
+      DEBUG_LOG_TUNING.promptCaptureEnabled = input.checked;
+      input.addEventListener('change', () => { DEBUG_LOG_TUNING.promptCaptureEnabled = input.checked; });
+    }
+    const text = document.createElement('span');
+    text.innerHTML = `<strong>${cat.label}</strong><br><span class="dim tiny">${cat.desc}</span>`;
+    label.appendChild(input);
+    label.appendChild(text);
+    catList.appendChild(label);
+    catInputs.push(input);
+  }
+  wrap.appendChild(catList);
+
+  wrap.appendChild(sandboxSectionTitle('Format'));
+  const formatSelect = document.createElement('select');
+  formatSelect.className = 'sbx-control';
+  formatSelect.innerHTML = '<option value="text">Plain text (recommended for chat)</option><option value="json">JSON</option>';
+  wrap.appendChild(cheatRow('Export as', '', formatSelect));
+
+  wrap.appendChild(cheatButton('Generate Export', () => {
+    const dayFrom = parseInt(dayFromInput.value, 10);
+    const dayTo = parseInt(dayToInput.value, 10);
+    const filters = {
+      dayFrom: Number.isFinite(dayFrom) ? dayFrom : undefined,
+      dayTo: Number.isFinite(dayTo) ? dayTo : undefined,
+      npcIds: [...pickedNpcIds],
+      categories: catInputs.filter((i) => i.checked).map((i) => i.dataset.category),
+    };
+    const entries = queryDebugLog(currentGameState, filters);
+    const format = formatSelect.value;
+    const text = format === 'json'
+      ? formatDebugLogJson(entries, currentGameState, filters)
+      : formatDebugLogText(entries, currentGameState);
+    const ext = format === 'json' ? 'json' : 'txt';
+    const fromLabel = filters.dayFrom ?? minDay;
+    const toLabel = filters.dayTo ?? maxDay;
+    showLogExportModal(text, `slice-of-life-debug-log-day${fromLabel}-${toLabel}.${ext}`);
+  }, 'sbx-btn-accent'));
+
+  return wrap;
+}
+
 // Peep: observe an NPC in a private state from the hallway. The npcId
 // parameter here is actually the roomId (the chip passes the room, not
 // the NPC — the player targets a door, not a person). resolvePeep
@@ -3471,6 +3596,17 @@ function appendWorldEvents(events) {
   if (!currentGameState || !events || events.length === 0) return;
   const combined = [...(currentGameState.world.events || []), ...events];
   currentGameState.world.events = combined.slice(-MAX_WORLD_EVENTS);
+  // Troubleshooting export log: this is the one chokepoint every world-event
+  // writer already funnels through (drives.js's npc_chat and generic
+  // eventTemplate events, relationships.js's cheating event, npc.js's
+  // relDelta/moodDelta/moveInOffer, etc.) — mirroring here covers the
+  // "ambient conversations" and "world events" categories with zero
+  // per-writer instrumentation, and stays in sync with future writers too.
+  // npc_chat never carries dialogue text (drives.js's ambient-chat path is
+  // deterministic, zero-LLM) — only who talked, where, and what transferred.
+  for (const evt of events) {
+    logDebugEvent(currentGameState, evt.type === 'npc_chat' ? 'conversation_ambient' : 'world_event', evt.npcId, { ...evt });
+  }
 }
 
 // Piggyback memory-summary compaction onto player-contact LLM calls only
@@ -7179,6 +7315,84 @@ function handleDownloadExport() {
   const a = document.createElement('a');
   a.href = url;
   a.download = `slice-of-life-save-${new Date().toISOString().slice(0, 10)}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+// ===== Troubleshooting export log: modal (Discord feedback, 2026-08-24) =====
+// Parallel to the save-export modal above, but deliberately separate — own
+// pending vars, own handlers — and never touches exportSaveRecord/gzipBytes/
+// bytesToBase64. The whole point of this one is that the output is already
+// plain, readable text/JSON: paste-ready, not a blob to decode first.
+
+let pendingLogExportText = null;
+let pendingLogExportFilename = null;
+
+function showLogExportModal(text, filename) {
+  const overlay = document.getElementById('modal-overlay');
+  const title = document.getElementById('modal-title');
+  const body = document.getElementById('modal-body');
+  const actions = document.getElementById('modal-actions');
+  if (!overlay || !title || !body || !actions) return;
+  pendingLogExportText = text;
+  pendingLogExportFilename = filename;
+  title.textContent = 'Export Debug Log';
+  body.innerHTML = '';
+  const p = document.createElement('p');
+  p.className = 'dim tiny';
+  p.textContent = 'Plain, readable text — copy or download it, then paste it straight into a chat.';
+  body.appendChild(p);
+  const ta = document.createElement('textarea');
+  ta.id = 'log-export-text';
+  ta.className = 'svp-import-text';
+  ta.readOnly = true;
+  ta.value = text;
+  body.appendChild(ta);
+  actions.innerHTML = '';
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'btn';
+  copy.textContent = 'Copy';
+  copy.addEventListener('click', () => handleCopyLogExport());
+  const dl = document.createElement('button');
+  dl.type = 'button';
+  dl.className = 'btn btn-secondary';
+  dl.textContent = 'Download';
+  dl.addEventListener('click', () => handleDownloadLogExport());
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'btn btn-secondary';
+  close.textContent = 'Close';
+  close.addEventListener('click', () => overlay.removeAttribute('data-open'));
+  actions.appendChild(copy);
+  actions.appendChild(dl);
+  actions.appendChild(close);
+  overlay.setAttribute('data-open', '');
+}
+
+async function handleCopyLogExport() {
+  if (!pendingLogExportText) return;
+  try {
+    await navigator.clipboard.writeText(pendingLogExportText);
+  } catch (e) {
+    const ta = document.getElementById('log-export-text');
+    if (ta) { ta.focus(); ta.select(); }
+    return;
+  }
+  addLogEntry('system', 'Debug log copied to clipboard.');
+  closeModal();
+}
+
+function handleDownloadLogExport() {
+  if (!pendingLogExportText) return;
+  const mime = (pendingLogExportFilename || '').endsWith('.json') ? 'application/json' : 'text/plain';
+  const blob = new Blob([pendingLogExportText], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = pendingLogExportFilename || 'slice-of-life-debug-log.txt';
   document.body.appendChild(a);
   a.click();
   a.remove();

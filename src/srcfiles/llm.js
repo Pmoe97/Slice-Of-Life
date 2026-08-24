@@ -909,6 +909,13 @@ async function callChronicler(gameState, npcId, win) {
 // --- Call LLM and parse response ---
 async function callLLM(context, playerAction) {
   const prompt = buildScenePrompt(context, playerAction);
+  // Troubleshooting export log, raw-prompt category: opt-in and off by
+  // default (DEBUG_LOG_TUNING.promptCaptureEnabled, flipped by the cheat
+  // pane's checkbox) since a full prompt is several KB. context.gameState
+  // is already the same object every other read in this function uses.
+  if (DEBUG_LOG_TUNING.promptCaptureEnabled && context.gameState) {
+    logDebugEvent(context.gameState, 'prompt', (context.activeNpcs || []).map(n => n.id), { channel: 'scene', prompt });
+  }
   // Tracks which tier of the degradation ladder this call landed on, for
   // LLM_TELEMETRY (EFFECTS section) — surfaced in the debug panel. 1=clean
   // JSON.parse, 2=brace-matched substring, 3=regex extraction, 4=nothing
@@ -1018,6 +1025,12 @@ async function callLLM(context, playerAction) {
 // one-npc context with no room.
 async function callImLLM(context, message) {
   const prompt = buildImPrompt(context, message);
+  // See callLLM's matching hook above — same opt-in raw-prompt capture.
+  // assembleImContext (npc.js) puts the one NPC this thread is with at
+  // activeNpcs[0] — there's no separate context.npcId field.
+  if (DEBUG_LOG_TUNING.promptCaptureEnabled && context.gameState) {
+    logDebugEvent(context.gameState, 'prompt', (context.activeNpcs || []).map(n => n.id), { channel: 'im', prompt });
+  }
   try {
     const response = await root.generateText({ instruction: prompt, startWith: '{' });
     let jsonStr = response.trim();

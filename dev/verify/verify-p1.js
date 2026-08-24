@@ -16,7 +16,11 @@ vm.runInContext(`
   function mulberry32(seed){ let a = seed >>> 0; return function(){ a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 `, ctx);
 
-for (const f of ['config.js', 'npc.js']) {
+// debuglog.js added alongside npc.js: applyProposal now mirrors each
+// dialogue line into the troubleshooting export log (logDebugEvent), so
+// this minimal harness needs it loaded too — same reasoning as the
+// existing two, just one file bigger.
+for (const f of ['config.js', 'debuglog.js', 'npc.js']) {
   try {
     vm.runInContext(fs.readFileSync(path.join(SRC, f), 'utf8'), ctx, { filename: f });
   } catch (e) {

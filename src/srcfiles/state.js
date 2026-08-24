@@ -63,6 +63,10 @@ const SAVE_KEYS = [
     // default on the very next load. Caught by an actual New Game →
     // save/load run in a browser, not by reading the code.
     'gameplayOptions',
+    // Troubleshooting export log (Cheat menu, Discord feedback 2026-08-24):
+    // per-machine debug history (debuglog.js). Deliberately excluded from
+    // exportSaveRecord/importSaveRecord below — see the scrub there.
+    'debugLog',
   ] },
   { folder: 'npcs', all: true },
   { folder: 'objects', all: true },
@@ -135,6 +139,9 @@ const WORLD_KEY_FALLBACKS = {
   // is exactly what a save from before this existed should read as, so no
   // migration is needed — same precedent as world.computer.
   signals: () => [],
+  // Troubleshooting export log: empty for saves written before this existed
+  // — no migration, same additive-default precedent as relationships/signals.
+  debugLog: () => [],
 };
 
 // --- Migration functions (per folder). Stubbed for day-one; iterate here. ---
@@ -1176,6 +1183,11 @@ async function loadGameState() {
   // options. Empty for saves written before this existed — same
   // additive-default pattern as autoCookCleared/relationships above.
   const gameplayOptions = await getWorld('gameplayOptions') || WORLD_KEY_FALLBACKS.gameplayOptions();
+  // Troubleshooting export log — SAVE_KEYS governs what gets WRITTEN;
+  // this hand-list governs what gets READ BACK. Both must list the key or
+  // it writes fine all session and silently reads back empty next load —
+  // the exact failure gameplayOptions' own comment above warns about.
+  const debugLog = await getWorld('debugLog') || WORLD_KEY_FALLBACKS.debugLog();
 
   const gameState = {
     meta,
@@ -1189,7 +1201,7 @@ async function loadGameState() {
     npcIds: Object.keys(npcs).filter(id => id.startsWith('npc_')),
     // droppedConstraints is persisted in meta by writeGeneratedGameState.
     droppedConstraints: meta.droppedConstraints || [],
-    world: { rooms, castWeb, relationships, quests, events, deliveries, renovationJobs, visits, commitments, foodOrders, groceryOrders, externalStubs, escortRoster, escortBookings, moveInOffers, rent, computer, taxes, bills, upgrades, utilities, phone, afterHours, hotSinglesRoster, flags, outsidePartners, pregnancies, autoCookCleared, gameplayOptions },
+    world: { rooms, castWeb, relationships, quests, events, deliveries, renovationJobs, visits, commitments, foodOrders, groceryOrders, externalStubs, escortRoster, escortBookings, moveInOffers, rent, computer, taxes, bills, upgrades, utilities, phone, afterHours, hotSinglesRoster, flags, outsidePartners, pregnancies, autoCookCleared, gameplayOptions, debugLog },
   };
   // Rebuild the live room graph from base + whichever structural upgrades
   // this save has built (floorplan plan Phase 6). MUST run before anything
@@ -1920,14 +1932,22 @@ async function gunzipBytes(bytes) {
   return new Uint8Array(await new Response(ds.readable).arrayBuffer());
 }
 
-// Compressed base64 export of a full record.
+// Compressed base64 export of a full record. The troubleshooting export log
+// (world.debugLog, debuglog.js) is stripped before it leaves the device —
+// it's per-machine debug history, same rationale as the meta.imageIndex
+// scrub below, and there's no reason to bloat a save handed to someone else
+// with it. Shallow-cloned so the caller's own `record` (still read for the
+// save-slot summary in the export modal) is never mutated.
 async function exportSaveRecord(record) {
+  const payload = record.payload && record.payload.world
+    ? { ...record.payload, world: { ...record.payload.world, debugLog: undefined } }
+    : record.payload;
   const json = JSON.stringify({
     type: SAVE_EXPORT_TYPE,
     version: SAVE_EXPORT_VERSION,
     gameVersion: GAME_VERSION,
     exportedAt: Date.now(),
-    record,
+    record: { ...record, payload },
   });
   const bytes = new TextEncoder().encode(json);
   const compressed = await gzipBytes(bytes);
@@ -1939,6 +1959,10 @@ async function exportSaveRecord(record) {
 // .gameVersion for the UI's version-mismatch warning; the imported record's
 // meta.imageIndex is scrubbed because the LRU index is local-browser state —
 // a stale index would evict real cached images before their blobs ever load.
+// world.debugLog is reset the same way: an export never carries one (see
+// exportSaveRecord above), but restoreSave only WRITES keys present in the
+// incoming payload, so importing into a slot that already has this device's
+// own debug log would otherwise leave that stale log sitting there.
 async function importSaveRecord(text) {
   let parsed;
   try {
@@ -1958,6 +1982,9 @@ async function importSaveRecord(text) {
   if (!record || !record.payload) throw new Error('That save is missing its payload and cannot be loaded.');
   if (record.payload.meta?.meta) {
     record.payload.meta.meta.imageIndex = {};
+  }
+  if (record.payload.world) {
+    record.payload.world.debugLog = [];
   }
   record._importedGameVersion = parsed.gameVersion || 'unknown';
   return record;

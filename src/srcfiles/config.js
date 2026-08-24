@@ -2165,6 +2165,10 @@ const CHEAT_TABS = [
   { id: 'time', label: 'Time', icon: '🕐' },
   { id: 'npcs', label: 'NPCs', icon: '👥' },
   { id: 'world', label: 'World', icon: '🏠' },
+  // Troubleshooting export log (Discord feedback, 2026-08-24): read-only —
+  // renderCheatLogPane (ui.js) filters/exports gameState.world.debugLog
+  // (debuglog.js), it doesn't edit live state like the other four tabs do.
+  { id: 'log', label: 'Debug Log', icon: '🪲' },
 ];
 
 // F1 (Discord feedback, 2026-08-23): the SAME array reference SANDBOX_TABS'

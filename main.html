@@ -3474,6 +3474,18 @@ body {
 .cheat-npc-chip.active { background: rgba(217, 184, 113, 0.22); color: var(--color-text); border-color: rgba(217, 184, 113, 0.6); }
 .cheat-inline-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
 .cheat-readout { font-size: calc(12px * var(--text-scale)); color: var(--color-text-dim); margin: 0 0 10px; }
+.cheat-log-categories { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.cheat-log-category-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(217, 184, 113, 0.2);
+  background: rgba(217, 184, 113, 0.04);
+  cursor: pointer;
+}
+.cheat-log-category-row input { margin-top: 3px; }
 
 /* F1 (Discord feedback, 2026-08-23): New Game's options step. A top-level
    overlay sibling of #player-studio/#intro-cutscene (not nested in
@@ -6647,7 +6659,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/srcfiles/config.js?v=149"></script>
+<script src="src/srcfiles/config.js?v=150"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -6673,8 +6685,8 @@ body {
 <!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/srcfiles/orbital.js?v=12"></script>
-<script src="src/srcfiles/state.js?v=61"></script>
-<script src="src/srcfiles/sim.js?v=86"></script>
+<script src="src/srcfiles/state.js?v=62"></script>
+<script src="src/srcfiles/sim.js?v=87"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
@@ -6694,7 +6706,7 @@ body {
      functions are called at runtime by defs.actions.js and render.js. -->
 <script src="src/srcfiles/cooking.js?v=4"></script>
 <script src="src/srcfiles/taste.js?v=1"></script>
-<script src="src/srcfiles/drives.js?v=42"></script>
+<script src="src/srcfiles/drives.js?v=43"></script>
 <!-- NPC utility scoring (npc-cognition-plan.md). Loads after drives.js: it
      reuses driveGateValue / isOnCooldown / DRIVE_COOLDOWN_KEY from it. -->
 <script src="src/srcfiles/cognition.js?v=29"></script>
@@ -6712,10 +6724,11 @@ body {
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
 <script src="src/srcfiles/tracker.js?v=17"></script>
+<script src="src/srcfiles/debuglog.js?v=1"></script>
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
 <script src="src/srcfiles/phone.js?v=20"></script>
-<script src="src/srcfiles/npc.js?v=51"></script>
+<script src="src/srcfiles/npc.js?v=52"></script>
 <!-- Intimacy & Voyeurism Phase 9 (D13): the willingness gate — the ONLY door
      into any intimacy act. Pure function + tuning (willingness.js); reads
      npc.js's shared clothing reads at call time, consumed by cognition.js's
@@ -6741,7 +6754,7 @@ body {
      and called by sim.js at runtime only. -->
 <script src="src/srcfiles/rumination.js?v=15"></script>
 <script src="src/srcfiles/prompt.js?v=19"></script>
-<script src="src/srcfiles/llm.js?v=39"></script>
+<script src="src/srcfiles/llm.js?v=40"></script>
 <!-- Plan X-5 Phase 1: the wire for conversation consequences — parsing,
      clamping, windowing and ingestion for the Assessor and the Chronicler.
      After llm.js because the two passes' calls live there and are fired from
@@ -6798,7 +6811,7 @@ body {
      pipeline at runtime). Every dependency is a call-time one, so this slot
      is flexible within that range. -->
 <script src="src/srcfiles/asks.js?v=11"></script>
-<script src="src/srcfiles/ui.js?v=128"></script>
+<script src="src/srcfiles/ui.js?v=129"></script>
 <script src="src/srcfiles/ui.computer.js?v=47"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
@@ -6822,5 +6835,5 @@ body {
      at runtime). Loads LAST: the bottom of menu.js invokes boot(), which
      ui.js can no longer call itself because boot() reaches into MENU/IMAGE
      functions defined after UI. -->
-<script src="src/srcfiles/menu.js?v=35"></script>
+<script src="src/srcfiles/menu.js?v=36"></script>
 <!-- ===== /SECTION: SCRIPTS ===== -->

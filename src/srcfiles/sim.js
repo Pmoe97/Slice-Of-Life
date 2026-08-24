@@ -1862,6 +1862,21 @@ function resolveTick(gameState) {
     }
 
     resolved[id] = { block, location, activity, transit };
+
+    // Troubleshooting export log: a schedule-driven room change, tagged with
+    // which branch above decided it. Drive-driven overrides (sneak_into_bed
+    // etc.) log separately from evaluateDrives (drives.js) since those run
+    // later, in pass 3, and can override what this pass resolved.
+    if (location && npc.location && location !== npc.location) {
+      logDebugEvent(gameState, 'movement', id, {
+        from: npc.location, to: location, block, activity,
+        branch: scheduleResult.commitmentRoomId ? 'commitment'
+          : block === 'sleep' ? 'sleep'
+          : (block === 'work' || block === 'commute' || block === 'commute_home') ? 'work'
+          : 'wander',
+        commitmentKind: scheduleResult.commitmentKind || null,
+      });
+    }
   }
 
   // Pass 2: needs, events, mood — using this tick's resolved locations.

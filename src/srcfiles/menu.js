@@ -1862,6 +1862,7 @@ function renderCheatMenuUi() {
     time: renderCheatTimePane,
     npcs: renderCheatNpcsPane,
     world: renderCheatWorldPane,
+    log: renderCheatLogPane,
   };
   panes.appendChild(renderers[cheatActiveTab]());
 

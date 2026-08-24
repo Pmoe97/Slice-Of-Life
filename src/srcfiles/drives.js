@@ -438,6 +438,20 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
     });
   }
 
+  // Troubleshooting export log: a drive that actually moved the NPC,
+  // including the sneak_into_bed risk-attempt (isBoundarySneakDrive branch
+  // above) — the entry the motivating "why is this NPC in my room" case
+  // needs. terms/candidates[1] come straight from scoreDrive/choosePursuit
+  // (cognition.js) unmodified, so this is the same breakdown the offline
+  // tuning instrument reads, just also kept for the player to see.
+  if (acted && locationOverride && locationOverride !== location) {
+    logDebugEvent(gameState, 'movement', npcId, {
+      from: location, to: locationOverride, branch: 'drive',
+      driveId, score: choice.score, terms: choice.terms,
+      runnerUp: candidates[1] ? { driveId: candidates[1].driveId, score: candidates[1].score } : null,
+    });
+  }
+
   return result();
 }
 

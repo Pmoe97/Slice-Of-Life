@@ -19,7 +19,7 @@ const ORDER = [
   'signals.js', 'scene.js',
   'items.js', 'inventory.js', 'effects.js', 'cooking.js', 'taste.js', 'drives.js', 'cognition.js', 'overture.js',
   'actions.js', 'intent.js',
-  'skills.js', 'stealth.js', 'time.js', 'computer.js', 'tracker.js', 'phone.js',
+  'skills.js', 'stealth.js', 'time.js', 'computer.js', 'tracker.js', 'debuglog.js', 'phone.js',
   'npc.js', 'willingness.js', 'relationships.js', 'rumination.js', 'prompt.js', 'llm.js', 'x5.js', 'interruption.js',
   // codex.js (intimacy-voyeurism Phase 15, D8) sits after relationships.js
   // in index.html; its whole surface (ledger readers, the three spendable

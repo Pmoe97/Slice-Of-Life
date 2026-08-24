@@ -2182,11 +2182,17 @@ async function applyProposal(proposal, context, gameState, playerAction, opts = 
   // synthetic scene 0 currentScene returns for a save written before Plan 2.
   const recentScene = gameState.meta?.scene?.id ?? 0;
 
+  // Troubleshooting export log: mirror what just got written to
+  // memory.recent above into the durable, filterable debug log too — same
+  // day/tick/channel/sceneId, just kept longer and queryable by day range.
+  const debugLogSpeakerIds = (context.activeNpcs || []).map(n => n.id).filter(Boolean);
+
   if (playerAction) {
     for (const npcCtx of context.activeNpcs) {
       const npc = gameState.npcs[npcCtx.id];
       if (npc) gameState.npcs[npcCtx.id] = addRecentExchange(npc, 'player', playerAction, 'player_input', recentDay, recentTick, channel, recentScene);
     }
+    logDebugEvent(gameState, 'conversation', debugLogSpeakerIds, { channel, sceneId: recentScene, speaker: 'player', text: playerAction });
   }
 
   if (proposal.dialogue) {
@@ -2196,6 +2202,7 @@ async function applyProposal(proposal, context, gameState, playerAction, opts = 
         const npc = gameState.npcs[npcMatch.id];
         if (npc) gameState.npcs[npcMatch.id] = addRecentExchange(npc, d.speaker, d.text, 'dialogue', recentDay, recentTick, channel, recentScene);
       }
+      logDebugEvent(gameState, 'conversation', npcMatch ? [npcMatch.id] : debugLogSpeakerIds, { channel, sceneId: recentScene, speaker: d.speaker, text: d.text });
     }
   }
 
