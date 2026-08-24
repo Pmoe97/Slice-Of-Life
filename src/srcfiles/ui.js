@@ -3166,6 +3166,9 @@ const MENU_ACTIONS = ['menu', 'new-game-solo', 'new-game-random', 'new-game-guid
   // left for this phase to resolve either way; this is the "retire outright"
   // branch, not a reuse).
   'menu.sandbox', 'sandbox.start', 'sandbox.back',
+  // F1 (Discord feedback, 2026-08-23): New Game's gameplay-options step —
+  // pre-game meta, same reachability as the Sandbox verbs right above.
+  'newgame-options.start', 'newgame-options.back',
   'sandbox.player-design', 'sandbox.roommate-add', 'sandbox.roommate-remove',
   'sandbox.roommate-move', 'sandbox.roommate-design',
   'sandbox.roommate-skip',
@@ -3264,6 +3267,9 @@ const ENERGY_GATE_EXEMPT = new Set([
   // 'sandbox.roommate-toggle' retired in favor of 'sandbox.roommate-select'
   // below — see the matching MENU_ACTIONS comment.
   'menu.sandbox', 'sandbox.start', 'sandbox.back',
+  // F1 (Discord feedback, 2026-08-23): New Game's gameplay-options step —
+  // pre-game meta, same reachability as the Sandbox verbs right above.
+  'newgame-options.start', 'newgame-options.back',
   'sandbox.player-design', 'sandbox.roommate-add', 'sandbox.roommate-remove',
   'sandbox.roommate-move', 'sandbox.roommate-design',
   'sandbox.roommate-skip',
@@ -4007,6 +4013,18 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'sandbox.back':
       showMenuScreen('title');
+      break;
+    // F1 (Discord feedback, 2026-08-23): New Game's gameplay-options step.
+    // A standalone overlay sibling of #player-studio (see main.html), not
+    // part of showMenuScreen's managed set — the title screen underneath
+    // was never hidden for this flow (closeMainMenu doesn't fire until
+    // startSoloGame actually begins), so Back only needs to close this
+    // screen, same as the Studio's own Cancel.
+    case 'newgame-options.start':
+      doNewGameOptionsStart();
+      break;
+    case 'newgame-options.back':
+      doNewGameOptionsBack();
       break;
     case 'sandbox.player-design':
       openSandboxPlayerStudio();
@@ -6065,7 +6083,14 @@ async function startSoloGame(draft) {
   showLoading('Moving in...');
   try {
     const seed = genSeed();
-    pendingCast = SIM_generateHouse(seed, 0, [], draft);
+    // F1 (Discord feedback, 2026-08-23): the gameplay-options screen
+    // (menu.js's openNewGameOptions) stamps this before the cutscene ran;
+    // read once and clear it here so a later New Game (or the studio's
+    // "Back to menu" path skipping the options screen entirely) never
+    // reuses a stale options object.
+    const gameplayOptions = pendingNewGameOptions?.economy;
+    pendingNewGameOptions = null;
+    pendingCast = SIM_generateHouse(seed, 0, [], draft, gameplayOptions);
     // Settings & Pause Overhaul Phase 4 (D5): the solo path bypasses the
     // cast-approval step where pendingCast.contentConfig is normally built
     // (handleGenerateCast), so seed it from defaults and apply the SFW

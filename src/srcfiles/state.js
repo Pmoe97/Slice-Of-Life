@@ -56,6 +56,13 @@ const SAVE_KEYS = [
     'phone', 'afterHours', 'signals', 'outsidePartners',
     'pregnancies',
     'autoCookCleared',
+    // F1 (Discord feedback, 2026-08-23): without this, gameplayOptions is
+    // correctly stamped into the in-memory state by buildGameState but is
+    // never actually written to KV — writeGeneratedGameState only persists
+    // keys listed here — so it silently reverts to WORLD_KEY_FALLBACKS'
+    // default on the very next load. Caught by an actual New Game →
+    // save/load run in a browser, not by reading the code.
+    'gameplayOptions',
   ] },
   { folder: 'npcs', all: true },
   { folder: 'objects', all: true },
@@ -1165,6 +1172,10 @@ async function loadGameState() {
   // written before Phase 6 — lazy-init by defaultAfterHoursState, filled as
   // the player browses, so no migration.
   const afterHours = normalizeAfterHoursState(await getWorld('afterHours'));
+  // F1 (Discord feedback, 2026-08-23): New Game/Sandbox's per-save gameplay
+  // options. Empty for saves written before this existed — same
+  // additive-default pattern as autoCookCleared/relationships above.
+  const gameplayOptions = await getWorld('gameplayOptions') || WORLD_KEY_FALLBACKS.gameplayOptions();
 
   const gameState = {
     meta,
@@ -1178,7 +1189,7 @@ async function loadGameState() {
     npcIds: Object.keys(npcs).filter(id => id.startsWith('npc_')),
     // droppedConstraints is persisted in meta by writeGeneratedGameState.
     droppedConstraints: meta.droppedConstraints || [],
-    world: { rooms, castWeb, relationships, quests, events, deliveries, renovationJobs, visits, commitments, foodOrders, groceryOrders, externalStubs, escortRoster, escortBookings, moveInOffers, rent, computer, taxes, bills, upgrades, utilities, phone, afterHours, hotSinglesRoster, flags, outsidePartners, pregnancies, autoCookCleared },
+    world: { rooms, castWeb, relationships, quests, events, deliveries, renovationJobs, visits, commitments, foodOrders, groceryOrders, externalStubs, escortRoster, escortBookings, moveInOffers, rent, computer, taxes, bills, upgrades, utilities, phone, afterHours, hotSinglesRoster, flags, outsidePartners, pregnancies, autoCookCleared, gameplayOptions },
   };
   // Rebuild the live room graph from base + whichever structural upgrades
   // this save has built (floorplan plan Phase 6). MUST run before anything
