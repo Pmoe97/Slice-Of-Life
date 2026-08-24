@@ -108,7 +108,7 @@ const WORLD_KEY_FALLBACKS = {
   // default (scale 1, disabled false, baseline 0) is a total no-op, so a
   // save from before this existed plays exactly as it always did — the same
   // additive-default precedent as relationships/pregnancies above.
-  gameplayOptions: () => ({ needDecayScale: 1, needDecayDisabled: false, willingnessBaseline: 0 }),
+  gameplayOptions: () => ({ needDecayScale: 1, needDecayDisabled: false, willingnessBaseline: 0, phoneBatteryScale: 1, phoneBatteryAlwaysCharged: false }),
   events: () => [],
   deliveries: () => [],
   renovationJobs: () => [],

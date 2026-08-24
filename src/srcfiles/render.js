@@ -3785,6 +3785,10 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
     const owner = gs.npcs[roomOwner];
     if (owner && owner.residency?.status === 'resident') {
       hereChips.push({ label: `Search ${owner.bible.name || 'Their'} Room`, action: 'search-room', npcId: roomOwner });
+      // F6 (Discord feedback, 2026-08-24): mirrors Search Room's own chip
+      // exactly — same gate, same "owner doesn't have to be absent" shape
+      // (doSearchPhone scores witnessed-vs-not itself, same as doTakeFromRoom).
+      hereChips.push({ label: `Check ${owner.bible.name || 'Their'} Phone`, action: 'search-phone', npcId: roomOwner });
     }
   }
   // Group by likeness and render groups before flat actions.

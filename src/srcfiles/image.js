@@ -1257,6 +1257,35 @@ function buildConversationScenePrompt(gameState, npc) {
     + (sceneOrientation() === 'landscape' ? 'wide composition, both figures visible.' : 'tall vertical composition, both figures visible.');
 }
 
+// ===== F6 — phone-snoop photo finding (Discord feedback, 2026-08-24) =====
+// A dedicated one-off, same uncached/fresh-seed pattern as
+// generateConversationSceneImage — a single discovered photo, not
+// something meant to reproduce identically on a later view. Deliberately
+// SFW/candid (the asks.js buildAskPhotoRecord selfie style, not the
+// intimate-layer opt-in buildActionMomentPrompt uses) — keeps the "found
+// a photo on their phone" beat as a light discovery, not automatically
+// an explicit find on its own.
+function buildPhoneSnoopPhotoPrompt(npc) {
+  const clause = buildVisualCharacterClause(npc, { npcId: npc.id });
+  return `${clause}, a candid selfie, soft natural light, casual clothing, relaxed, `
+    + (sceneOrientation() === 'landscape' ? 'wide composition.' : 'tall vertical composition, upper-body framing.');
+}
+
+async function generatePhoneSnoopPhotoImage(npc) {
+  const prompt = buildPhoneSnoopPhotoPrompt(npc);
+  try {
+    const result = await root.generateImage(applyImageStyle(prompt), {
+      resolution: IMAGE_CACHE.resolutions.char,
+      seed: Math.floor(Math.random() * 2147483647),
+      negativePrompt: 'blurry, distorted, extra limbs, low quality, text, watermark',
+    });
+    const blob = await canvasToBlob(result.canvas);
+    return { url: URL.createObjectURL(blob), prompt, error: null };
+  } catch (e) {
+    return { url: null, prompt, error: e.message };
+  }
+}
+
 async function generateConversationSceneImage(gameState, npc) {
   const prompt = buildConversationScenePrompt(gameState, npc);
   try {

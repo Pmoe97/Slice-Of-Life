@@ -2135,7 +2135,28 @@ const SANDBOX_TABS = [
         { id: 'willingnessBaseline', kind: 'slider', field: 'economy.willingnessBaseline', label: 'NPC receptivity', min: -1, max: 1, step: 0.1,
           desc: 'A soft bias on how readily NPCs say yes to intimacy. Asleep, hostile, a stranger, or an active refusal always still blocks it, regardless of this slider.' },
       ] },
+      // F5 (Discord feedback, 2026-08-24): same shared-array trick as Needs
+      // above — this section is also sliced into GAMEPLAY_OPTIONS_SECTIONS,
+      // so it's one row set for both Sandbox and New Game.
+      { title: 'Phone battery', desc: 'How fast the phone drains on its own.', rows: [
+        { id: 'phoneBatteryScale', kind: 'slider', field: 'economy.phoneBatteryScale', label: 'Battery drain speed', min: 0, max: 3, step: 0.1,
+          desc: '1× is the default pace. Lower drains slower, higher drains faster. Ignored if Always Charged is on below.' },
+        { id: 'phoneBatteryAlwaysCharged', kind: 'toggle', field: 'economy.phoneBatteryAlwaysCharged', label: 'Always Charged',
+          desc: 'The phone never runs out of battery, plugged in or not. Overrides the drain slider above.' },
+      ] },
     ] },
+];
+
+// F4 (Discord feedback, 2026-08-24): the cheat menu's tab rail. Unlike
+// SANDBOX_TABS/SETTINGS_TABS this carries no `sections`/rows — every tab's
+// content is live gameplay state (currentGameState.player/meta.clock/npcs/
+// world), not a flat pre-game draft object, so each pane is bespoke-rendered
+// in ui.js rather than run through the generic dot-path row system.
+const CHEAT_TABS = [
+  { id: 'player', label: 'Player', icon: '🧍' },
+  { id: 'time', label: 'Time', icon: '🕐' },
+  { id: 'npcs', label: 'NPCs', icon: '👥' },
+  { id: 'world', label: 'World', icon: '🏠' },
 ];
 
 // F1 (Discord feedback, 2026-08-23): the SAME array reference SANDBOX_TABS'
@@ -2146,7 +2167,7 @@ const SANDBOX_TABS = [
 // above is automatically also a New Game option, with nothing to remember
 // to update twice.
 const GAMEPLAY_OPTIONS_SECTIONS = SANDBOX_TABS.find((t) => t.id === 'economy').sections
-  .filter((s) => s.title === 'Needs' || s.title === 'Cast disposition');
+  .filter((s) => s.title === 'Needs' || s.title === 'Cast disposition' || s.title === 'Phone battery');
 
 // --- Daily goals (quests), sourced from resident wants/wounds/interests ---
 const QUEST_TEMPLATES = [
@@ -3355,7 +3376,7 @@ const TIME_DILATION = {
     idle: 20,           // standing around, menu navigation — 1 gm / 3 real-sec
     browsing: 10,       // computer browser, AfterHours grid — 1 gm / 6 real-sec
     masturbating: 3,    // slow, intimate — time crawls — 1 gm / 20 real-sec
-    conversation: 1 / 60, // talking to an NPC — one game-second per real second
+    conversation: 1,    // talking to an NPC — one game-second per real second
     working: 25,        // work blocks — time flies — 1 gm / 2.4 real-sec
     sleeping: 0,        // special: skip-to-morning, not continuous
     // Intimacy & Voyeurism Phase 10 (D7): the peek/listen hold — one game-
@@ -6668,6 +6689,28 @@ const STEALTH_TUNING = {
   searchTimeMinutes: 5,
   takeTimeMinutes: 1,
   possessionTakeSuspicionDelta: 0.2,
+};
+
+// F6 (Discord feedback, 2026-08-23/24): the player-side mirror of
+// DRIVE_DEFS.snoop_phone (drives.js) — same witnessed-vs-not consequence
+// shape as STEALTH_TUNING's room-search deltas above, since going through
+// someone's phone is the same class of boundary violation as taking their
+// stuff. sensitiveContentMultiplier scales it up for a boundary/photo find
+// specifically — reading someone's stated hard limit or a private photo is
+// a bigger violation than an aspirational want.
+const PHONE_SNOOP_TUNING = {
+  searchTimeMinutes: 5,
+  // Unwitnessed path: a flat suspicion bump, same shape as room-search's
+  // possessionTakeSuspicionDelta.
+  unwitnessedSuspicionDelta: 0.2,
+  sensitiveContentMultiplier: 1.5,
+  // Witnessed path reuses npc.js's resolveShamingReaction/SHAMING tiers
+  // wholesale (the same "caught doing something invasive" consequence
+  // bundle boundary.js's caught-in-bed path uses) rather than a second
+  // deltas table — sensitiveExtraTension is the one content-dependent
+  // knob layered on top, mirroring BOUNDARY.sleepRoom.caughtTensionSpike's
+  // own extra-tension-on-top-of-the-tier pattern.
+  sensitiveExtraTension: 0.1,
 };
 
 // --- Peeping (P7 adult content). Tuning for the spy/peep action that lets

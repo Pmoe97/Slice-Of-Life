@@ -3444,6 +3444,37 @@ body {
   padding: clamp(8px, 2vh, 28px);
 }
 
+/* F4 (Discord feedback, 2026-08-24): the cheat menu — a #main-menu
+   sub-screen exactly like #menu-sandbox-screen/#menu-settings-screen above
+   (same absolute/inset/z-index/[hidden] treatment, same .sbx-* classes),
+   reachable only from the in-play pause screen since every control here
+   edits the live currentGameState. */
+#cheat-menu-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 6, 16, 0.8);
+  backdrop-filter: blur(3px);
+  padding: clamp(8px, 2vh, 28px);
+}
+#cheat-menu-screen[hidden] { display: none !important; }
+.cheat-npc-picker { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.cheat-npc-chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(217, 184, 113, 0.3);
+  background: rgba(217, 184, 113, 0.06);
+  color: var(--color-text-dim);
+  font-size: calc(12px * var(--text-scale));
+  cursor: pointer;
+}
+.cheat-npc-chip.active { background: rgba(217, 184, 113, 0.22); color: var(--color-text); border-color: rgba(217, 184, 113, 0.6); }
+.cheat-inline-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.cheat-readout { font-size: calc(12px * var(--text-scale)); color: var(--color-text-dim); margin: 0 0 10px; }
+
 /* F1 (Discord feedback, 2026-08-23): New Game's options step. A top-level
    overlay sibling of #player-studio/#intro-cutscene (not nested in
    #main-menu), so it mirrors .player-studio's fixed/inset positioning
@@ -5869,6 +5900,7 @@ body {
       <button class="title-btn" data-action="save">Save</button>
       <button class="title-btn" data-action="load-menu">Load</button>
       <button class="title-btn" data-action="menu.options">Options</button>
+      <button class="title-btn" data-action="menu.cheats">Cheats</button>
       <a class="title-btn" href="https://discord.com/invite/E6N9WKpGPA" target="_blank" rel="noopener noreferrer" title="Join our Discord community!">Discord</a>
       <button class="title-btn" data-action="menu.exit">Quit to Menu</button>
     </div>
@@ -5933,6 +5965,35 @@ body {
       <footer class="sbx-footer">
         <button class="title-btn" data-action="sandbox.start">Start Sandbox</button>
         <button class="title-btn" data-action="sandbox.back">← Back</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- F4 (Discord feedback, 2026-08-24): the cheat menu. Same shell as
+       #menu-sandbox-screen above (tab rail + content pane); every tab's
+       content is bespoke-rendered against currentGameState by
+       renderCheatPlayerPane/renderCheatTimePane/renderCheatNpcsPane/
+       renderCheatWorldPane (ui.js), dispatched by menu.js's
+       renderCheatMenuUi() the same way Sandbox's Player/Roommates tabs are
+       bespoke-dispatched. Only reachable from the pause screen (see
+       #menu-pause-screen's Cheats button) — every control here needs a live
+       game, so there's nothing useful to show at the boot title screen. -->
+  <div id="cheat-menu-screen" hidden>
+    <div class="sbx-frame">
+      <header class="sbx-header">
+        <div>
+          <h2 class="sbx-title">Cheats</h2>
+          <p class="sbx-sub">Edits the current save directly and takes effect immediately.</p>
+        </div>
+      </header>
+      <div class="sbx-body">
+        <nav id="cheat-tab-rail" class="sbx-tab-rail" aria-label="Cheat menu tabs"></nav>
+        <div class="sbx-content" id="cheat-menu-content">
+          <div id="cheat-menu-panes" class="sbx-panes"></div>
+        </div>
+      </div>
+      <footer class="sbx-footer">
+        <button class="title-btn" data-action="cheats.back">← Back</button>
       </footer>
     </div>
   </div>

@@ -2300,6 +2300,423 @@ async function doAskToLeave(npcId) {
   }
 }
 
+// ===== SECTION: CHEAT MENU (F4, Discord feedback 2026-08-24) =====
+// Every control here edits currentGameState directly and, on commit
+// (slider release or button click), re-renders the game and saves —
+// exactly the same render+saveAtBoundary pattern every other do* function
+// in this file follows, so a cheat-menu edit is never lost if the tab
+// closes right after. The four pane renderers (dispatched by menu.js's
+// renderCheatMenuUi via CHEAT_TABS) are bespoke rather than routed through
+// Sandbox/Settings' generic dot-path row system — that system targets one
+// fixed pre-game draft object with plain fields; currentGameState is a live
+// simulation object graph with derived fields (hunger, NPC intimacyLevel)
+// and a dynamic per-NPC sub-target the generic system was never built for.
+
+function cheatFormatNum(v) {
+  return Number.isInteger(v) ? String(v) : v.toFixed(2);
+}
+
+// A labeled slider that live-updates its own readout on drag and commits
+// (calls onInput, then re-renders + saves) only on release — dragging
+// through intermediate values never spams a kv write per frame.
+function cheatSlider(value, min, max, step, onInput) {
+  const wrap = document.createElement('div');
+  wrap.className = 'sbx-row';
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = min;
+  slider.max = max;
+  if (step !== undefined) slider.step = step;
+  slider.className = 'sbx-control sbx-slider';
+  slider.value = value;
+  const val = document.createElement('span');
+  val.className = 'sbx-slider-val';
+  val.textContent = cheatFormatNum(value);
+  slider.addEventListener('input', () => { val.textContent = cheatFormatNum(parseFloat(slider.value)); });
+  slider.addEventListener('change', () => {
+    onInput(parseFloat(slider.value));
+    render(currentGameState, currentSceneState);
+    saveAtBoundary('cheat-menu', currentGameState);
+  });
+  wrap.appendChild(slider);
+  wrap.appendChild(val);
+  return wrap;
+}
+
+function cheatRow(label, desc, control) {
+  const row = sandboxRowEl(label, desc);
+  row.appendChild(control);
+  return row;
+}
+
+function cheatButton(label, onClick, cls) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'title-btn menu-option-toggle' + (cls ? ` ${cls}` : '');
+  btn.textContent = label;
+  btn.addEventListener('click', onClick);
+  return btn;
+}
+
+function renderCheatPlayerPane() {
+  const wrap = document.createElement('div');
+  wrap.className = 'sbx-section-wrap';
+  const player = currentGameState.player;
+
+  wrap.appendChild(sandboxSectionTitle('Needs'));
+  wrap.appendChild(cheatRow('Energy', '', cheatSlider(player.energy, 0, 100, 1, (v) => {
+    currentGameState.player.energy = v;
+  })));
+  wrap.appendChild(cheatRow('Energy cap', 'The ceiling energy restores up to — normally grows slowly from good sleep and workouts.',
+    cheatSlider(player.energyMax ?? ENERGY.startingMax, 0, ENERGY.absoluteMax, 1, (v) => {
+      currentGameState.player.energyMax = v;
+    })));
+  wrap.appendChild(cheatRow('Hygiene', '', cheatSlider(player.hygiene, 0, 100, 1, (v) => {
+    currentGameState.player.hygiene = v;
+  })));
+  wrap.appendChild(cheatRow('Desire', '', cheatSlider(player.desire ?? 0, 0, DESIRE.player.max, 1, (v) => {
+    currentGameState.player.desire = v;
+  })));
+  const fullnessHours = typeof player.fullnessRemainingHours === 'number' ? player.fullnessRemainingHours : METABOLISM.fullnessCapHours;
+  wrap.appendChild(cheatRow('Fullness (hours remaining)', `Hunger is derived from this, not set directly. Currently reads as ${Math.round(player.hunger)}/100.`,
+    cheatSlider(fullnessHours, 0, METABOLISM.fullnessCapHours, 0.5, (v) => {
+      currentGameState.player.fullnessRemainingHours = v;
+      currentGameState.player.hunger = satietyFrom(v, currentGameState.player.fullnessWindowHours);
+    })));
+
+  wrap.appendChild(sandboxSectionTitle('Money'));
+  const moneyRow = sandboxRowEl('Money', 'Your current cash on hand.');
+  const moneyInput = document.createElement('input');
+  moneyInput.type = 'number';
+  moneyInput.className = 'sbx-control';
+  moneyInput.value = Math.round(player.money);
+  moneyInput.addEventListener('change', () => {
+    const v = parseFloat(moneyInput.value);
+    if (!Number.isFinite(v)) return;
+    currentGameState.player.money = v;
+    render(currentGameState, currentSceneState);
+    saveAtBoundary('cheat-menu', currentGameState);
+  });
+  moneyRow.appendChild(moneyInput);
+  wrap.appendChild(moneyRow);
+  const moneyBtns = document.createElement('div');
+  moneyBtns.className = 'cheat-inline-actions';
+  for (const amt of [100, 1000, -100]) {
+    moneyBtns.appendChild(cheatButton(amt > 0 ? `+$${amt}` : `-$${Math.abs(amt)}`, () => {
+      currentGameState.player.money += amt;
+      render(currentGameState, currentSceneState);
+      saveAtBoundary('cheat-menu', currentGameState);
+      renderCheatMenuUi();
+    }));
+  }
+  wrap.appendChild(moneyBtns);
+
+  wrap.appendChild(sandboxSectionTitle('Mood'));
+  wrap.appendChild(sandboxSectionHint(`Current mood: ${(player.mood ?? 0).toFixed(2)} (-1 to 1). Mood eases toward its target every tick — there's no permanent direct set, so these apply a mood swing that fades over about a day, same as any in-fiction mood event.`));
+  const moodBtns = document.createElement('div');
+  moodBtns.className = 'cheat-inline-actions';
+  for (const [label, delta] of [['Ecstatic', 1], ['Good', 0.4], ['Bad', -0.4], ['Miserable', -1]]) {
+    moodBtns.appendChild(cheatButton(label, () => {
+      pushMoodImpulse(currentGameState.player, delta, currentGameState.meta.clock.day);
+      render(currentGameState, currentSceneState);
+      saveAtBoundary('cheat-menu', currentGameState);
+    }));
+  }
+  wrap.appendChild(moodBtns);
+
+  return wrap;
+}
+
+function renderCheatTimePane() {
+  const wrap = document.createElement('div');
+  wrap.className = 'sbx-section-wrap';
+  const clock = currentGameState.meta.clock;
+
+  wrap.appendChild(sandboxSectionTitle('Now'));
+  const hh = String(Math.floor(clock.minutes / 60)).padStart(2, '0');
+  const mm = String(Math.floor(clock.minutes % 60)).padStart(2, '0');
+  const readout = document.createElement('p');
+  readout.className = 'cheat-readout';
+  readout.textContent = `Day ${clock.day} · ${WEEKDAY_NAMES[clock.weekday]} · ${hh}:${mm} · ${clock.phase.replace(/_/g, ' ')}`;
+  wrap.appendChild(readout);
+
+  const runCheatJump = async (minutes) => {
+    if (minutes <= 0) return;
+    showLoading('Skipping ahead...');
+    try {
+      await advanceAndResolveMinutes(minutes);
+    } finally {
+      hideLoading();
+    }
+    render(currentGameState, currentSceneState);
+    await saveAtBoundary('cheat-menu', currentGameState);
+    renderCheatMenuUi();
+  };
+
+  wrap.appendChild(sandboxSectionTitle('Jump to a time'));
+  const jumpRow = sandboxRowEl('Day / time', 'Forward only — the sim resolves everything in between exactly like it naturally would.');
+  const dayInput = document.createElement('input');
+  dayInput.type = 'number';
+  dayInput.className = 'sbx-control';
+  dayInput.min = clock.day;
+  dayInput.value = clock.day;
+  dayInput.style.width = '70px';
+  const timeInput = document.createElement('input');
+  timeInput.type = 'time';
+  timeInput.className = 'sbx-control';
+  timeInput.value = `${hh}:${mm}`;
+  jumpRow.appendChild(dayInput);
+  jumpRow.appendChild(timeInput);
+  wrap.appendChild(jumpRow);
+  wrap.appendChild(cheatButton('Jump', async () => {
+    const targetDay = parseInt(dayInput.value, 10);
+    const [th, tm] = (timeInput.value || '00:00').split(':').map(Number);
+    if (!Number.isFinite(targetDay) || !Number.isFinite(th) || !Number.isFinite(tm)) return;
+    const targetAbs = clockToAbsolute({ day: targetDay, minutes: th * 60 + tm });
+    const startAbs = clockToAbsolute(currentGameState.meta.clock);
+    await runCheatJump(targetAbs - startAbs);
+  }));
+
+  wrap.appendChild(sandboxSectionTitle('Shortcuts'));
+  const shortcuts = document.createElement('div');
+  shortcuts.className = 'cheat-inline-actions';
+  shortcuts.appendChild(cheatButton('Skip to next midnight', async () => {
+    const startAbs = clockToAbsolute(currentGameState.meta.clock);
+    await runCheatJump((currentGameState.meta.clock.day + 1) * 1440 - startAbs);
+  }));
+  shortcuts.appendChild(cheatButton('+1 hour', () => runCheatJump(60)));
+  shortcuts.appendChild(cheatButton(clockLoopRunning ? 'Freeze clock' : 'Resume clock', () => {
+    if (clockLoopRunning) pauseClockLoop(); else resumeClockLoop();
+    renderCheatMenuUi();
+  }));
+  wrap.appendChild(shortcuts);
+
+  wrap.appendChild(sandboxSectionTitle('Game speed'));
+  wrap.appendChild(sandboxSectionHint('The same ×0/×1/×20/×100 control as the header — shown here too so every time control lives in one place.'));
+  const speedRow = document.createElement('div');
+  speedRow.className = 'cheat-inline-actions';
+  for (const preset of SPEED_PRESETS) {
+    const active = currentSpeed().id === preset.id;
+    speedRow.appendChild(cheatButton(preset.label || preset.id, () => {
+      setSpeed(preset.id);
+      renderSpeedButtons();
+      renderCheatMenuUi();
+    }, active ? 'sbx-btn-accent' : ''));
+  }
+  wrap.appendChild(speedRow);
+
+  return wrap;
+}
+
+function renderCheatNpcsPane() {
+  const wrap = document.createElement('div');
+  wrap.className = 'sbx-section-wrap';
+  const npcIds = Object.keys(currentGameState.npcs);
+  if (!npcIds.includes(cheatActiveNpcId)) cheatActiveNpcId = npcIds[0] || null;
+
+  const picker = document.createElement('div');
+  picker.className = 'cheat-npc-picker';
+  for (const id of npcIds) {
+    const n = currentGameState.npcs[id];
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'cheat-npc-chip' + (id === cheatActiveNpcId ? ' active' : '');
+    chip.textContent = `${n.bible?.name || id} (${n.residency?.status || '?'})`;
+    chip.addEventListener('click', () => { cheatActiveNpcId = id; renderCheatMenuUi(); });
+    picker.appendChild(chip);
+  }
+  wrap.appendChild(picker);
+
+  if (!cheatActiveNpcId) {
+    wrap.appendChild(sandboxSectionHint('No NPCs exist in this save yet.'));
+    return wrap;
+  }
+  const npc = currentGameState.npcs[cheatActiveNpcId];
+
+  wrap.appendChild(sandboxSectionTitle('Relationship'));
+  const relAxes = [
+    ['trust', 'Trust', -1, 1], ['affection', 'Affection', -1, 1], ['tension', 'Tension', -1, 1],
+    ['respect', 'Respect', -1, 1], ['comfort', 'Comfort', 0, 1], ['desire', 'Desire', -1, 1],
+  ];
+  for (const [key, label, min, max] of relAxes) {
+    wrap.appendChild(cheatRow(label, '', cheatSlider(npc.relPlayer?.[key] ?? 0, min, max, 0.05, (v) => {
+      const n = currentGameState.npcs[cheatActiveNpcId];
+      const delta = v - (n.relPlayer?.[key] ?? 0);
+      currentGameState.npcs[cheatActiveNpcId] = applyRelDelta(n, { [key]: delta }, currentGameState.meta.clock.day);
+    })));
+  }
+
+  wrap.appendChild(sandboxSectionTitle('Mood & suspicion'));
+  wrap.appendChild(cheatRow('Mood', '', cheatSlider(npc.mood ?? 0, -1, 1, 0.05, (v) => {
+    currentGameState.npcs[cheatActiveNpcId].mood = v;
+  })));
+  wrap.appendChild(cheatRow('Suspicion (boundary violations)', '', cheatSlider(npc.suspicion?.boundary_violation ?? 0, 0, 1, 0.05, (v) => {
+    const n = currentGameState.npcs[cheatActiveNpcId];
+    n.suspicion = n.suspicion || {};
+    n.suspicion.boundary_violation = v;
+  })));
+
+  wrap.appendChild(sandboxSectionTitle('Temperament'));
+  wrap.appendChild(sandboxSectionHint('Personality axes rolled at generation — editing these live genuinely changes behavior (compatibility, drive weighting, work affinity).'));
+  for (const key of ['warmth', 'volatility', 'openness', 'conscientiousness', 'assertiveness', 'selfAwareness']) {
+    wrap.appendChild(cheatRow(key.charAt(0).toUpperCase() + key.slice(1), '', cheatSlider(npc.bible?.temperament?.[key] ?? 0, -1, 1, 0.05, (v) => {
+      const n = currentGameState.npcs[cheatActiveNpcId];
+      n.bible = n.bible || {};
+      n.bible.temperament = n.bible.temperament || {};
+      n.bible.temperament[key] = v;
+    })));
+  }
+
+  wrap.appendChild(sandboxSectionTitle('Location'));
+  const locRow = sandboxRowEl('Teleport', `Currently in: ${ROOMS[npc.location]?.name || npc.location || 'off-map'}`);
+  const locSelect = document.createElement('select');
+  locSelect.className = 'sbx-control';
+  for (const roomId of ALL_ROOMS) {
+    const opt = document.createElement('option');
+    opt.value = roomId;
+    opt.textContent = ROOMS[roomId].name;
+    if (roomId === npc.location) opt.selected = true;
+    locSelect.appendChild(opt);
+  }
+  locRow.appendChild(locSelect);
+  wrap.appendChild(locRow);
+  wrap.appendChild(cheatButton('Teleport', () => {
+    const n = currentGameState.npcs[cheatActiveNpcId];
+    // Clearing pos/walk lets reconcileNpcPos (movement.js) snap pos to the
+    // new room next tick — leaving a stale walk record would otherwise keep
+    // animating the NPC back toward their old destination.
+    n.location = locSelect.value;
+    n.pos = null;
+    n.walk = null;
+    render(currentGameState, currentSceneState);
+    saveAtBoundary('cheat-menu', currentGameState);
+    renderCheatMenuUi();
+  }));
+
+  wrap.appendChild(sandboxSectionTitle('Residency'));
+  wrap.appendChild(sandboxSectionHint(`Status: ${npc.residency?.status || 'unknown'}${npc.residency?.room ? ` — ${ROOMS[npc.residency.room]?.name || npc.residency.room}` : ''}`));
+  const residencyActions = document.createElement('div');
+  residencyActions.className = 'cheat-inline-actions';
+  if (npc.residency?.status === 'resident') {
+    residencyActions.appendChild(cheatButton('Move out', async () => {
+      await doAskToLeave(cheatActiveNpcId);
+      renderCheatMenuUi();
+    }, 'sbx-btn-danger'));
+  } else {
+    const roomSelect = document.createElement('select');
+    roomSelect.className = 'sbx-control';
+    for (const roomId of ALL_ROOMS.filter((id) => ROOMS[id].type === 'bedroom' && !ROOMS[id].isPlayer)) {
+      const opt = document.createElement('option');
+      opt.value = roomId;
+      opt.textContent = ROOMS[roomId].name;
+      roomSelect.appendChild(opt);
+    }
+    residencyActions.appendChild(roomSelect);
+    residencyActions.appendChild(cheatButton('Move in', () => {
+      // acceptApplicant enforces its normal eligibility/room-capacity rules
+      // (this is the same function the Classifieds move-in flow uses) — a
+      // rejection is surfaced rather than silently forced, since bypassing
+      // room-capacity/couple bookkeeping here would desync castWeb/rent.
+      const result = acceptApplicant(currentGameState, cheatActiveNpcId, roomSelect.value);
+      if (!result.ok) addLogEntry('system', `Move-in failed: ${result.reason}`);
+      render(currentGameState, currentSceneState);
+      saveAtBoundary('cheat-menu', currentGameState);
+      renderCheatMenuUi();
+    }));
+  }
+  wrap.appendChild(residencyActions);
+
+  return wrap;
+}
+
+function renderCheatWorldPane() {
+  const wrap = document.createElement('div');
+  wrap.className = 'sbx-section-wrap';
+  const world = currentGameState.world;
+
+  wrap.appendChild(sandboxSectionTitle('Rent & bills'));
+  const rentRow = sandboxRowEl('Rent owed', `$${Math.round(currentGameState.player.rentOwed || 0)}`);
+  rentRow.appendChild(cheatButton('Clear rent', () => {
+    currentGameState.player.rentOwed = 0;
+    render(currentGameState, currentSceneState);
+    saveAtBoundary('cheat-menu', currentGameState);
+    renderCheatMenuUi();
+  }));
+  wrap.appendChild(rentRow);
+  for (const billId of Object.keys(BILL_DEFS).filter((id) => id !== 'rent')) {
+    const bill = world.bills?.[billId];
+    if (!bill) continue;
+    const def = BILL_DEFS[billId];
+    const row = sandboxRowEl(def.label, `Balance: $${Math.round(bill.balance || 0)}${bill.cutoffActive ? ' — SERVICE CUT OFF' : ''}`);
+    row.appendChild(cheatButton('Clear', () => {
+      const b = currentGameState.world.bills[billId];
+      b.balance = 0; b.status = 'paid'; b.overdueDays = 0; b.cutoffActive = false;
+      render(currentGameState, currentSceneState);
+      saveAtBoundary('cheat-menu', currentGameState);
+      renderCheatMenuUi();
+    }));
+    wrap.appendChild(row);
+  }
+
+  wrap.appendChild(sandboxSectionTitle('Doors'));
+  wrap.appendChild(cheatButton('Unlock every door', () => {
+    for (const key of Object.keys(currentGameState.objects)) {
+      if (!key.startsWith('room_')) continue;
+      for (const obj of Object.values(currentGameState.objects[key])) {
+        if (obj.defId === 'bedroom_door' || obj.defId === 'bathroom_door') {
+          obj.state = { ...obj.state, lock: 'unlocked' };
+        }
+      }
+    }
+    render(currentGameState, currentSceneState);
+    saveAtBoundary('cheat-menu', currentGameState);
+  }));
+
+  wrap.appendChild(sandboxSectionTitle('Phone battery'));
+  const batteryFound = findPhoneObject(currentGameState);
+  wrap.appendChild(cheatRow('Battery %', '', cheatSlider(batteryFound?.obj?.flags?.battery ?? 0, 0, 100, 1, (v) => {
+    const found = findPhoneObject(currentGameState);
+    if (found) { found.obj.flags = found.obj.flags || {}; found.obj.flags.battery = v; }
+  })));
+  const alwaysCharged = !!currentGameState.world.gameplayOptions?.phoneBatteryAlwaysCharged;
+  const chargedBtn = cheatButton(alwaysCharged ? 'On' : 'Off', () => {
+    currentGameState.world.gameplayOptions = currentGameState.world.gameplayOptions || {};
+    currentGameState.world.gameplayOptions.phoneBatteryAlwaysCharged = !currentGameState.world.gameplayOptions.phoneBatteryAlwaysCharged;
+    render(currentGameState, currentSceneState);
+    saveAtBoundary('cheat-menu', currentGameState);
+    renderCheatMenuUi();
+  }, alwaysCharged ? 'sbx-btn-accent' : '');
+  wrap.appendChild(cheatRow('Always Charged', 'Overrides the drain rate above for the rest of this save.', chargedBtn));
+
+  wrap.appendChild(sandboxSectionTitle('Give item'));
+  const itemRow = sandboxRowEl('Item', '');
+  const itemSelect = document.createElement('select');
+  itemSelect.className = 'sbx-control';
+  for (const defId of Object.keys(ITEM_DEFS).filter((id) => id !== '_unknown').sort()) {
+    const opt = document.createElement('option');
+    opt.value = defId;
+    opt.textContent = ITEM_DEFS[defId].label || defId;
+    itemSelect.appendChild(opt);
+  }
+  itemRow.appendChild(itemSelect);
+  const qtyInput = document.createElement('input');
+  qtyInput.type = 'number';
+  qtyInput.className = 'sbx-control';
+  qtyInput.value = 1;
+  qtyInput.min = 1;
+  qtyInput.style.width = '60px';
+  itemRow.appendChild(qtyInput);
+  wrap.appendChild(itemRow);
+  wrap.appendChild(cheatButton('Give item', () => {
+    const qty = Math.max(1, parseInt(qtyInput.value, 10) || 1);
+    currentGameState.player.inventory = addStack(currentGameState.player.inventory, itemSelect.value, qty, 'player', {}, currentGameState.meta.clock.day);
+    render(currentGameState, currentSceneState);
+    saveAtBoundary('cheat-menu', currentGameState);
+  }));
+
+  return wrap;
+}
+
 // Peep: observe an NPC in a private state from the hallway. The npcId
 // parameter here is actually the roomId (the chip passes the room, not
 // the NPC — the player targets a door, not a person). resolvePeep
@@ -2477,6 +2894,112 @@ async function doTakeFromRoom(ownerId, defId, qty) {
     : `You take ${name}'s ${label}${qty > 1 ? ` ×${qty}` : ''}. They're none the wiser.`);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('room-take', currentGameState);
+}
+
+// --- Phone snoop (F6, Discord feedback 2026-08-24) ---
+// The player-side mirror of drives.js's snoop_phone drive. Same room-owner
+// gate as Search Room; unlike Search Room's flat suspicion delta, the
+// witnessed path reuses npc.js's resolveShamingReaction/SHAMING tiers
+// wholesale (the same consequence bundle boundary.js's caught-in-bed path
+// uses) so the reaction genuinely depends on the NPC's own disposition
+// toward the player, not a fixed number.
+async function doSearchPhone(ownerId) {
+  if (!currentGameState) return;
+  const npc = currentGameState.npcs[ownerId];
+  if (!npc) return;
+  if (roomOwnerId(currentGameState.player.location, currentGameState.npcs) !== ownerId) {
+    addLogEntry('system', "You're not in their room.");
+    return;
+  }
+  const finding = composePhoneFind(npc, currentGameState);
+  if (!finding) {
+    addLogEntry('system', `Nothing new on ${npc.bible.name || 'their'} phone.`);
+    return;
+  }
+
+  const roomId = currentGameState.player.location;
+  const presentIds = getPresentNpcIds(currentGameState.npcs, roomId);
+  const ownerPresent = presentIds.includes(ownerId);
+  const day = currentGameState.meta.clock.day;
+
+  npc.flags = npc.flags || {};
+  npc.flags._phoneFindsSeen = [...(npc.flags._phoneFindsSeen || []), finding.kind];
+
+  let narration;
+  if (ownerPresent) {
+    const shaming = resolveShamingReaction(currentGameState, npc, { cause: 'phone_snoop', day });
+    applyShamingReactionLines(currentGameState, ownerId, shaming, finding.sensitive ? PHONE_SNOOP_TUNING.sensitiveExtraTension : 0);
+    if (shaming.coldShoulderSeverity > 0) {
+      noteColdShoulder(currentGameState.npcs[ownerId], shaming.coldShoulderSeverity, day, 'caught_boundary');
+    }
+    narration = shaming.prose || `${npc.bible.name} catches you going through their phone.`;
+  } else {
+    const delta = PHONE_SNOOP_TUNING.unwitnessedSuspicionDelta * (finding.sensitive ? PHONE_SNOOP_TUNING.sensitiveContentMultiplier : 1);
+    const roomObjects = currentGameState.objects[`room_${roomId}`] || {};
+    const effCtx = buildEffectContext(currentGameState, [], presentIds, roomObjects, currentGameState.player.inventory || []);
+    applyEffects([parseEffectDSL(`ADJUST_SUSPICION ${ownerId} boundary_violation +${delta}`)[0]].filter(Boolean), effCtx);
+    narration = `You go through ${npc.bible.name}'s phone. They're none the wiser — for now.`;
+  }
+
+  await advanceAndResolveMinutes(PHONE_SNOOP_TUNING.searchTimeMinutes);
+  addLogEntry('narration', narration);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('phone-snoop', currentGameState);
+  await showPhoneFindModal(npc, finding);
+}
+
+// The found-content popup — text findings show immediately; a photo
+// finding generates on the spot (uncached, per generatePhoneSnoopPhotoImage)
+// with a loading state, same shell as showActionMomentModal.
+async function showPhoneFindModal(npc, finding) {
+  const overlay = document.getElementById('modal-overlay');
+  const title = document.getElementById('modal-title');
+  const body = document.getElementById('modal-body');
+  const actions = document.getElementById('modal-actions');
+  if (!overlay || !title || !body || !actions) return;
+
+  title.textContent = `${npc.bible?.name || 'Their'}'s phone`;
+  body.innerHTML = '';
+  actions.innerHTML = '';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'btn btn-secondary';
+  close.textContent = 'Close';
+  close.addEventListener('click', () => overlay.removeAttribute('data-open'));
+  actions.appendChild(close);
+
+  if (!finding.isPhoto) {
+    const p = document.createElement('p');
+    p.textContent = finding.text;
+    body.appendChild(p);
+    overlay.setAttribute('data-open', '');
+    return;
+  }
+
+  const wrap = document.createElement('div');
+  wrap.className = 'action-moment-photo';
+  const img = document.createElement('img');
+  img.className = 'action-moment-img';
+  img.alt = finding.caption || 'Phone photo';
+  wrap.appendChild(img);
+  body.appendChild(wrap);
+  overlay.setAttribute('data-open', '');
+
+  try {
+    const result = await generatePhoneSnoopPhotoImage(npc);
+    if (!overlay.hasAttribute('data-open')) return; // dismissed while generating
+    if (result?.url) {
+      img.src = result.url;
+      setImageMeta(img, {
+        label: finding.caption || 'Phone photo',
+        prompt: applyImageStyle(result.prompt),
+        seed: null,
+        negativePrompt: 'blurry, distorted, extra limbs, low quality, text, watermark',
+      });
+    }
+  } catch (e) {
+    console.warn('Phone snoop photo failed:', e);
+  }
 }
 
 // Give item: gives a meal/food/gift item from inventory to an NPC.
@@ -3226,6 +3749,12 @@ const MENU_ACTIONS = ['menu', 'new-game-solo', 'new-game-random', 'new-game-guid
 // observation. Menu/save/debug actions are meta, not in-world actions.
 const ENERGY_GATE_EXEMPT = new Set([
   'move', 'sleep', 'look', 'pay-bills',
+  // Bug report (2026-08-24): nap restores energy exactly like sleep does
+  // (self.nap's effects include ADJUST_NEED player energy), so gating it
+  // behind energy > 0 was a soft-lock — at 0 energy the ONLY escape hatch
+  // was full Sleep, even though Nap exists specifically as its quicker
+  // alternative. Same reasoning as 'sleep' above.
+  'self.nap',
   // Door handling is a one-minute mechanical act, not exertion — and the
   // unlock from outside must always be reachable, or an exhausted player
   // who locked their own door at 0 energy could never get back in to sleep.
@@ -3866,6 +4395,9 @@ async function handleAction(action, npcId, extra) {
     case 'search-room':
       if (npcId) await doSearchRoom(npcId);
       break;
+    case 'search-phone':
+      if (npcId) await doSearchPhone(npcId);
+      break;
     case 'write-note':
       openWriteNoteModal();
       break;
@@ -4117,6 +4649,15 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'menu.debug':
       toggleDebugPanel();
+      break;
+    case 'menu.cheats':
+      doMenuCheats();
+      break;
+    case 'cheats.back':
+      doCheatsBack();
+      break;
+    case 'cheats.tab':
+      doCheatsTab(extra.tab);
       break;
     case 'options.bg-art':
       await doToggleBgArt();
@@ -5157,7 +5698,13 @@ async function doConvSend(forcedText, giftDefId) {
   convSetStatus('typing…');
 
   try {
-    await advanceAndResolve(1);
+    // Conversation runs on the continuous real-time clock (pushTimeContext
+    // 'conversation', 1 game-second per real-second) for the life of the
+    // overlay — the rAF loop keeps NPC resolution, phone battery and player
+    // needs moving at that pace in the background for free. A discrete jump
+    // here would double that up; ticks=0 is a no-op batch kept only to
+    // preserve the ordering resolveAsk's seed relies on (D1/D6 below).
+    await advanceAndResolve(0);
     const context = assembleContext(currentGameState, currentSceneState);
 
     // Ask turns decide BEFORE the LLM runs (invariant 1): resolveAsk is
@@ -5258,7 +5805,10 @@ async function doConvSend(forcedText, giftDefId) {
       if (sceneNpc) maybeShowConversationScene(sceneNpc);
     }
 
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
+    // Player needs already ride the continuous clock's own heartbeat while
+    // 'conversation' context is active (real elapsed seconds, not a flat
+    // per-message tick) — a second decay call here was stacking a 30-minute
+    // hit on top of that for every single message sent.
     convSetStatus('In conversation');
     render(currentGameState, currentSceneState);
     // D2's early flush — the reply is already painted into the overlay, so
@@ -5540,7 +6090,8 @@ async function doConvSharePhoto(photoId) {
   const removeTyping = convShowTyping();
   convSetStatus('typing…');
   try {
-    await advanceAndResolve(1);
+    // Same real-time conversation clock as doConvSend — see its comment.
+    await advanceAndResolve(0);
     const context = assembleContext(currentGameState, currentSceneState);
     const result = await callLLM(context, text);
     removeTyping();
@@ -5555,7 +6106,6 @@ async function doConvSharePhoto(photoId) {
     } else {
       convAddBeat(`They seem distracted and don't respond.`);
     }
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
     convSetStatus('In conversation');
     render(currentGameState, currentSceneState);
     if (await assessSceneIfFull()) render(currentGameState, currentSceneState);
