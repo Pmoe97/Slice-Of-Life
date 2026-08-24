@@ -1191,6 +1191,11 @@ function generateApplicantStubsForDay(gameState, day) {
   }
 
   const stubs = [];
+  // Built once, not per-stub — a same-day collision between two of these 30
+  // browse cards would be just as confusing as a collision with a resident
+  // (Discord feedback, 2026-08-24), and none of them are in gameState.npcs
+  // yet to self-exclude, so each accepted name is added below as it's rolled.
+  const usedNames = usedNpcNames(gameState);
   for (let i = 0; i < STUBS_PER_DAY; i++) {
     const stubId = `stub_${day}_${i}`;
     const subRng = seededRng(gameState.meta.seed, `stub_${day}_${i}`);
@@ -1203,13 +1208,11 @@ function generateApplicantStubsForDay(gameState, day) {
     const traits = pickUnique(subRng, PERSONALITY_TRAITS_POOL, numTraits);
     const coreTrait = traits[Math.floor(subRng() * traits.length)] || 'easygoing';
 
-    // Name from the gender-appropriate pool (same logic as fallbackName)
-    const useNeutral = subRng() < 0.2;
-    let namePool;
-    if (useNeutral) namePool = CHAR_GEN.namePools.first_n;
-    else if (gender === 'male' || gender === 'trans_male') namePool = CHAR_GEN.namePools.first_m;
-    else namePool = CHAR_GEN.namePools.first_f;
-    const name = namePool[Math.floor(subRng() * namePool.length)];
+    // Name from the gender-appropriate pool (same logic as fallbackName),
+    // rerolling against every name already claimed today or in the world.
+    const name = rollUniqueName(subRng, gender, usedNames);
+    usedNames.add(name.toLowerCase());
+    const surname = SURNAME_POOL[Math.floor(subRng() * SURNAME_POOL.length)];
 
     // Temperament subset (just enough for filtering — the full 6-axis
     // roll happens later when the NPC is actually created)
@@ -1232,6 +1235,7 @@ function generateApplicantStubsForDay(gameState, day) {
       seed: gameState.meta.seed,
       slot: 2000 + day * 100 + i,  // offset clear of real cast + old applicant slots
       name,
+      surname,
       age,
       gender,
       species,
@@ -1306,6 +1310,7 @@ function createNpcFromStub(gameState, stub, residencyStatus, tag) {
   // Build a partial from the stub's pre-determined fields
   const partial = {
     name: stub.name,
+    surname: stub.surname,
     age: stub.age,
     gender: stub.gender,
     species: stub.species,          // Phase 6 (D13): pinned so the full NPC matches the card
@@ -1331,6 +1336,7 @@ function createNpcFromStub(gameState, stub, residencyStatus, tag) {
   const bible = {
     ...structured,
     name: structured.name || stub.name,
+    surname: structured.surname || stub.surname,
     age: stub.age,
     gender: stub.gender,
     visual: fallbackVisual({ ...structured, age: stub.age, gender: stub.gender }),
@@ -1626,7 +1632,8 @@ function generateApplicantsForDay(gameState, day) {
   const structured = rolled.normalized.bible;
   const bible = {
     ...structured,
-    name: structured.name || fallbackName(structured),
+    name: structured.name || fallbackName(structured, usedNpcNames(gameState)),
+    surname: structured.surname || fallbackSurname(structured),
     visual: fallbackVisual(structured),
     history: fallbackHistory(structured),
     sketch: fallbackSketch(structured),
@@ -2482,11 +2489,8 @@ function createExternalNpc(gameState, npcId, seedKey, occupationTitle, opts = {}
   const rng = seededRng(seed, seedKey);
   const gender = rollGender(rng);
   const age = rollAge(rng);
-  const useNeutral = rng() < 0.2;
-  const namePool = useNeutral ? CHAR_GEN.namePools.first_n
-    : (gender === 'male' || gender === 'trans_male') ? CHAR_GEN.namePools.first_m
-    : CHAR_GEN.namePools.first_f;
-  const name = namePool[Math.floor(rng() * namePool.length)];
+  const name = rollUniqueName(rng, gender, usedNpcNames(gameState));
+  const surname = SURNAME_POOL[Math.floor(rng() * SURNAME_POOL.length)];
   // Hot Single skew: at least one trait comes from the adult-leaning pool
   // (the rest from the general pool minus the adult entries, so the trait
   // set stays unique and canonical).
@@ -2521,6 +2525,7 @@ function createExternalNpc(gameState, npcId, seedKey, occupationTitle, opts = {}
   const deviantLevel = disinhibitionFromTemperament(temperament);
   const bible = {
     name,
+    surname,
     genSeed: Math.floor(rng() * 1e9),
     age,
     gender,
@@ -2602,16 +2607,16 @@ function generateFriendStub(gameState, hostNpcId, index) {
   const occ = weightedPick(rng, OCCUPATION_POOL);
   const traits = pickUnique(rng, PERSONALITY_TRAITS_POOL, 2 + Math.floor(rng() * 2));
   const coreTrait = traits[Math.floor(rng() * traits.length)] || 'easygoing';
-  const useNeutral = rng() < 0.2;
-  const namePool = useNeutral ? CHAR_GEN.namePools.first_n
-    : (gender === 'male' || gender === 'trans_male') ? CHAR_GEN.namePools.first_m
-    : CHAR_GEN.namePools.first_f;
-  const name = namePool[Math.floor(rng() * namePool.length)];
+  const name = rollUniqueName(rng, gender, usedNpcNames(gameState));
   const warmth = rollAxis(rng);
   // Settings & Pause Overhaul Phase 6 (D13): species — APPENDED at the end
   // of the stub's draw sequence (same rule as the applicant stubs), so the
   // default human-100% distribution reproduces every seed's friends exactly.
   const species = rollSpecies(rng);
+  // Discord feedback (2026-08-24): surname, appended after species for the
+  // same reason — an existing seed's friend stubs keep every earlier draw
+  // exactly where it was.
+  const surname = SURNAME_POOL[Math.floor(rng() * SURNAME_POOL.length)];
 
   const stub = {
     stubId,
@@ -2619,6 +2624,7 @@ function generateFriendStub(gameState, hostNpcId, index) {
     seed,
     slot: FRIEND_STUB_SLOT_BASE + Object.keys(stubs).length,
     name,
+    surname,
     age,
     gender,
     species,

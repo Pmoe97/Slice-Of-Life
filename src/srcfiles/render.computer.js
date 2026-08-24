@@ -2397,7 +2397,7 @@ function renderRoomListBrowse(body, gs, app, screen) {
     const star = isFav ? ' <span class="rl-card-star">★</span>' : '';
     card.innerHTML = `
       <div class="rl-card-avatar" style="background: ${hashToColor(stub.name)};">${stub.name.charAt(0)}</div>
-      <div class="rl-card-name">${stub.name}${statusBadge}${star}</div>
+      <div class="rl-card-name">${fullName(stub)}${statusBadge}${star}</div>
       <div class="dim tiny">${stub.age} · ${genderLabel} · ${stub.occupation.title}</div>
       <div class="dim tiny" style="margin-top:2px;">${stub.coreTrait} · ${stub.occupation.incomeBand} income</div>
     `;
@@ -2918,7 +2918,7 @@ function renderStudioProfileMode(body, gs, studio, npc) {
     <div class="rl-profile-header">
       <div class="rl-card-avatar rl-profile-avatar" style="background: ${hashToColor(b.name)};">${(b.name || '?').charAt(0)}</div>
       <div>
-        <div class="rl-profile-name">${b.name || 'Unnamed'}</div>
+        <div class="rl-profile-name">${fullName(b) || 'Unnamed'}</div>
         <div class="dim tiny">${b.age ?? '—'} · ${b.gender || '—'} · ${b.occupation?.title || '—'}</div>
         <div class="dim tiny">${statusLabel} · ${b.sketch ? `“${b.sketch}”` : ''}</div>
       </div>

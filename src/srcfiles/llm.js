@@ -1076,6 +1076,7 @@ async function expandCharacterProse(structured) {
 
     return {
       name: prose.name || fallbackName(structured),
+      surname: prose.surname || fallbackSurname(structured),
       visual: prose.visual || fallbackVisual(structured),
       age: structured.age,                                // Phase 0: preserve first-class age
       gender: structured.gender,                          // Phase 0: preserve first-class gender
@@ -1088,6 +1089,7 @@ async function expandCharacterProse(structured) {
     console.warn('Prose expansion failed, using fallback:', e.message);
     return {
       name: fallbackName(structured),
+      surname: fallbackSurname(structured),
       visual: fallbackVisual(structured),
       age: structured.age,                                // Phase 0
       gender: structured.gender,                          // Phase 0
@@ -1154,6 +1156,10 @@ function mergeProseIntoBible(bible, prose, authoredFields = []) {
   if (!pathIsAuthored(authoredFields, 'name')) {
     out.name = bible.name || prose.name;
   }
+  // surname — same guard, same rule (Discord feedback, 2026-08-24).
+  if (!pathIsAuthored(authoredFields, 'surname')) {
+    out.surname = bible.surname || prose.surname;
+  }
 
   // The four unconditional fields — overwritten unless the player authored
   // them (visual is the one the old merge clobbered even when present).
@@ -1203,7 +1209,8 @@ Speech: verbosity ${structured.speech.verbosity}, formality ${structured.speech.
 [INSTRUCTIONS]
 Write JSON only:
 {
-  "name": "a believable first name (no surname needed) that fits the character",
+  "name": "a believable first name that fits the character",
+  "surname": "a believable last name that fits the character",
   "visual": "2-3 sentences of physical description. Be specific enough to generate consistent images. Incorporate the pre-determined physical traits above and add: age (22-34), distinguishing features, typical attire, and any details not already specified.",
   "fashion": "one phrase describing their typical fashion style beyond what's listed",
   "accessories": "jewelry, watches, bags, or other accessories they typically wear",
@@ -1216,19 +1223,26 @@ Respond with JSON only, no markdown.`;
 }
 
 // --- Fallback prose (templated from structured draw) ---
-function fallbackName(structured) {
+// `usedNames` (optional, a lowercased Set) rerolls against SIM's
+// rollUniqueName instead of the old unguarded single draw — see that
+// function's comment for why. Omitted, this reproduces the old behavior
+// exactly.
+function fallbackName(structured, usedNames) {
   const rng = mulberry32(structured.genSeed || hashStr(JSON.stringify(structured)));
-  let pool;
   // Phase 0: use the first-class gender field rather than a blind seed
   // split. Trans_male/trans_female align name choice with gender; futanari
   // leans female. Neutral pool (first_n) is used ~20% of the time for any
   // gender so names stay varied.
   const gender = structured.gender || 'female';
-  const useNeutral = rng() < 0.2;
-  if (useNeutral) pool = CHAR_GEN.namePools.first_n;
-  else if (gender === 'male' || gender === 'trans_male') pool = CHAR_GEN.namePools.first_m;
-  else pool = CHAR_GEN.namePools.first_f; // female, futanari, trans_female
-  return pool[Math.floor(rng() * pool.length)];
+  return rollUniqueName(rng, gender, usedNames);
+}
+
+// Surname counterpart to fallbackName (Discord feedback, 2026-08-24) — a
+// second, independent mulberry32 stream (offset +1) so a structured draw's
+// name and surname never move in lockstep with each other.
+function fallbackSurname(structured) {
+  const rng = mulberry32((structured.genSeed || hashStr(JSON.stringify(structured))) + 1);
+  return SURNAME_POOL[Math.floor(rng() * SURNAME_POOL.length)];
 }
 
 function fallbackVisual(structured) {
