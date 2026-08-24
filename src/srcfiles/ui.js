@@ -3226,6 +3226,12 @@ const MENU_ACTIONS = ['menu', 'new-game-solo', 'new-game-random', 'new-game-guid
 // observation. Menu/save/debug actions are meta, not in-world actions.
 const ENERGY_GATE_EXEMPT = new Set([
   'move', 'sleep', 'look', 'pay-bills',
+  // Bug report (2026-08-24): nap restores energy exactly like sleep does
+  // (self.nap's effects include ADJUST_NEED player energy), so gating it
+  // behind energy > 0 was a soft-lock — at 0 energy the ONLY escape hatch
+  // was full Sleep, even though Nap exists specifically as its quicker
+  // alternative. Same reasoning as 'sleep' above.
+  'self.nap',
   // Door handling is a one-minute mechanical act, not exertion — and the
   // unlock from outside must always be reachable, or an exhausted player
   // who locked their own door at 0 energy could never get back in to sleep.
