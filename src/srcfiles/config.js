@@ -3355,7 +3355,7 @@ const TIME_DILATION = {
     idle: 20,           // standing around, menu navigation — 1 gm / 3 real-sec
     browsing: 10,       // computer browser, AfterHours grid — 1 gm / 6 real-sec
     masturbating: 3,    // slow, intimate — time crawls — 1 gm / 20 real-sec
-    conversation: 1 / 60, // talking to an NPC — one game-second per real second
+    conversation: 1,    // talking to an NPC — one game-second per real second
     working: 25,        // work blocks — time flies — 1 gm / 2.4 real-sec
     sleeping: 0,        // special: skip-to-morning, not continuous
     // Intimacy & Voyeurism Phase 10 (D7): the peek/listen hold — one game-

@@ -5272,7 +5272,13 @@ async function doConvSend(forcedText, giftDefId) {
   convSetStatus('typing…');
 
   try {
-    await advanceAndResolve(1);
+    // Conversation runs on the continuous real-time clock (pushTimeContext
+    // 'conversation', 1 game-second per real-second) for the life of the
+    // overlay — the rAF loop keeps NPC resolution, phone battery and player
+    // needs moving at that pace in the background for free. A discrete jump
+    // here would double that up; ticks=0 is a no-op batch kept only to
+    // preserve the ordering resolveAsk's seed relies on (D1/D6 below).
+    await advanceAndResolve(0);
     const context = assembleContext(currentGameState, currentSceneState);
 
     // Ask turns decide BEFORE the LLM runs (invariant 1): resolveAsk is
@@ -5373,7 +5379,10 @@ async function doConvSend(forcedText, giftDefId) {
       if (sceneNpc) maybeShowConversationScene(sceneNpc);
     }
 
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
+    // Player needs already ride the continuous clock's own heartbeat while
+    // 'conversation' context is active (real elapsed seconds, not a flat
+    // per-message tick) — a second decay call here was stacking a 30-minute
+    // hit on top of that for every single message sent.
     convSetStatus('In conversation');
     render(currentGameState, currentSceneState);
     // D2's early flush — the reply is already painted into the overlay, so
@@ -5655,7 +5664,8 @@ async function doConvSharePhoto(photoId) {
   const removeTyping = convShowTyping();
   convSetStatus('typing…');
   try {
-    await advanceAndResolve(1);
+    // Same real-time conversation clock as doConvSend — see its comment.
+    await advanceAndResolve(0);
     const context = assembleContext(currentGameState, currentSceneState);
     const result = await callLLM(context, text);
     removeTyping();
@@ -5670,7 +5680,6 @@ async function doConvSharePhoto(photoId) {
     } else {
       convAddBeat(`They seem distracted and don't respond.`);
     }
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
     convSetStatus('In conversation');
     render(currentGameState, currentSceneState);
     if (await assessSceneIfFull()) render(currentGameState, currentSceneState);
