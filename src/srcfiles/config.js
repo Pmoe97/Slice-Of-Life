@@ -6670,6 +6670,28 @@ const STEALTH_TUNING = {
   possessionTakeSuspicionDelta: 0.2,
 };
 
+// F6 (Discord feedback, 2026-08-23/24): the player-side mirror of
+// DRIVE_DEFS.snoop_phone (drives.js) — same witnessed-vs-not consequence
+// shape as STEALTH_TUNING's room-search deltas above, since going through
+// someone's phone is the same class of boundary violation as taking their
+// stuff. sensitiveContentMultiplier scales it up for a boundary/photo find
+// specifically — reading someone's stated hard limit or a private photo is
+// a bigger violation than an aspirational want.
+const PHONE_SNOOP_TUNING = {
+  searchTimeMinutes: 5,
+  // Unwitnessed path: a flat suspicion bump, same shape as room-search's
+  // possessionTakeSuspicionDelta.
+  unwitnessedSuspicionDelta: 0.2,
+  sensitiveContentMultiplier: 1.5,
+  // Witnessed path reuses npc.js's resolveShamingReaction/SHAMING tiers
+  // wholesale (the same "caught doing something invasive" consequence
+  // bundle boundary.js's caught-in-bed path uses) rather than a second
+  // deltas table — sensitiveExtraTension is the one content-dependent
+  // knob layered on top, mirroring BOUNDARY.sleepRoom.caughtTensionSpike's
+  // own extra-tension-on-top-of-the-tier pattern.
+  sensitiveExtraTension: 0.1,
+};
+
 // --- Peeping (P7 adult content). Tuning for the spy/peep action that lets
 // the player observe NPCs in private states (showering, sleeping,
 // undressed). This is a boundary-crossing action with its own suspicion

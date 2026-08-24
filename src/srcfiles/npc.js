@@ -1345,6 +1345,62 @@ function resolveShamingReaction(gameState, npc, ctx = {}) {
   };
 }
 
+// ===== SECTION: PHONE SNOOP FINDINGS (F6, Discord feedback 2026-08-24) =====
+// The player-side mirror of drives.js's snoop_phone: what's actually ON an
+// NPC's phone when the player looks. NPCs have no camera-roll/IM-thread
+// data of their own the way the player does (drives.js's resolveSnoopPhone
+// only ever scores the PLAYER's real data for exactly that reason), so this
+// draws on the narrative fields the game already treats as true about the
+// character — want/wound/blindSpot/boundary, plus a relationship-flavored
+// note and a candid photo — rather than inventing a second, parallel
+// "npc.phone.contents" data model. One new finding per call (D1: reveal
+// incrementally, not everything at once); npc.flags._phoneFindsSeen tracks
+// what's already been found so a repeat search surfaces something new.
+const PHONE_FIND_KINDS = ['want', 'wound', 'blindSpot', 'boundary', 'relationship', 'photo'];
+
+// PURE — no rng, no state reads beyond the npc/gameState handed in, so the
+// same (npc, day) always offers the same next finding regardless of when
+// it's called; only npc.flags._phoneFindsSeen (mutated by the caller once
+// the find is actually taken) advances the cycle.
+function composePhoneFind(npc, gameState) {
+  const seen = new Set((npc.flags && npc.flags._phoneFindsSeen) || []);
+  const b = npc.bible || {};
+  const name = b.name || 'They';
+  for (const kind of PHONE_FIND_KINDS) {
+    if (seen.has(kind)) continue;
+    if (kind === 'want' && b.want) {
+      return { kind, sensitive: false, text: `A note in their Notes app, unsent: "${b.want}"` };
+    }
+    if (kind === 'wound' && b.wound) {
+      return { kind, sensitive: false, text: `A draft text, written and never sent. Reading between the lines: ${b.wound}` };
+    }
+    if (kind === 'blindSpot' && b.blindSpot) {
+      return { kind, sensitive: false, text: `A half-visible text thread — somebody once told them, plainly: ${b.blindSpot}` };
+    }
+    if (kind === 'boundary' && b.boundary) {
+      return { kind, sensitive: true, text: `A text where they laid out a hard line to someone, no room for argument: ${b.boundary}` };
+    }
+    if (kind === 'relationship') {
+      return { kind, sensitive: false, text: relationshipFindLine(npc, name) };
+    }
+    if (kind === 'photo') {
+      return { kind, sensitive: true, isPhoto: true, caption: `A photo saved on ${name}'s phone.` };
+    }
+  }
+  return null; // every kind already found (or the fields behind them are all empty)
+}
+
+// The relationship finding's text, toned by the same relPlayer axes
+// willingness.js/SHAMING already read — never a system judgment, just a
+// plausible unsent draft that matches how things actually stand.
+function relationshipFindLine(npc, name) {
+  const rel = npc.relPlayer || {};
+  const tension = rel.tension || 0, affection = rel.affection || 0, trust = rel.trust || 0;
+  if (tension > 0.4) return `A draft text about you, never sent: something sharp, still being chewed on.`;
+  if (affection > 0.5 && trust > 0.4) return `A draft text about you, never sent: warmer than ${name} would ever say to your face.`;
+  return `A draft text about you, never sent: a few careful, noncommittal words.`;
+}
+
 // --- Scene participation: active vs ambient ---
 // sceneState.engagement[npcId] tracks turns-since-addressed-or-spoke for
 // each currently active NPC (see advanceEngagement below) — this is what

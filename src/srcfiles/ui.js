@@ -2479,6 +2479,112 @@ async function doTakeFromRoom(ownerId, defId, qty) {
   await saveAtBoundary('room-take', currentGameState);
 }
 
+// --- Phone snoop (F6, Discord feedback 2026-08-24) ---
+// The player-side mirror of drives.js's snoop_phone drive. Same room-owner
+// gate as Search Room; unlike Search Room's flat suspicion delta, the
+// witnessed path reuses npc.js's resolveShamingReaction/SHAMING tiers
+// wholesale (the same consequence bundle boundary.js's caught-in-bed path
+// uses) so the reaction genuinely depends on the NPC's own disposition
+// toward the player, not a fixed number.
+async function doSearchPhone(ownerId) {
+  if (!currentGameState) return;
+  const npc = currentGameState.npcs[ownerId];
+  if (!npc) return;
+  if (roomOwnerId(currentGameState.player.location, currentGameState.npcs) !== ownerId) {
+    addLogEntry('system', "You're not in their room.");
+    return;
+  }
+  const finding = composePhoneFind(npc, currentGameState);
+  if (!finding) {
+    addLogEntry('system', `Nothing new on ${npc.bible.name || 'their'} phone.`);
+    return;
+  }
+
+  const roomId = currentGameState.player.location;
+  const presentIds = getPresentNpcIds(currentGameState.npcs, roomId);
+  const ownerPresent = presentIds.includes(ownerId);
+  const day = currentGameState.meta.clock.day;
+
+  npc.flags = npc.flags || {};
+  npc.flags._phoneFindsSeen = [...(npc.flags._phoneFindsSeen || []), finding.kind];
+
+  let narration;
+  if (ownerPresent) {
+    const shaming = resolveShamingReaction(currentGameState, npc, { cause: 'phone_snoop', day });
+    applyShamingReactionLines(currentGameState, ownerId, shaming, finding.sensitive ? PHONE_SNOOP_TUNING.sensitiveExtraTension : 0);
+    if (shaming.coldShoulderSeverity > 0) {
+      noteColdShoulder(currentGameState.npcs[ownerId], shaming.coldShoulderSeverity, day, 'caught_boundary');
+    }
+    narration = shaming.prose || `${npc.bible.name} catches you going through their phone.`;
+  } else {
+    const delta = PHONE_SNOOP_TUNING.unwitnessedSuspicionDelta * (finding.sensitive ? PHONE_SNOOP_TUNING.sensitiveContentMultiplier : 1);
+    const roomObjects = currentGameState.objects[`room_${roomId}`] || {};
+    const effCtx = buildEffectContext(currentGameState, [], presentIds, roomObjects, currentGameState.player.inventory || []);
+    applyEffects([parseEffectDSL(`ADJUST_SUSPICION ${ownerId} boundary_violation +${delta}`)[0]].filter(Boolean), effCtx);
+    narration = `You go through ${npc.bible.name}'s phone. They're none the wiser — for now.`;
+  }
+
+  await advanceAndResolveMinutes(PHONE_SNOOP_TUNING.searchTimeMinutes);
+  addLogEntry('narration', narration);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('phone-snoop', currentGameState);
+  await showPhoneFindModal(npc, finding);
+}
+
+// The found-content popup — text findings show immediately; a photo
+// finding generates on the spot (uncached, per generatePhoneSnoopPhotoImage)
+// with a loading state, same shell as showActionMomentModal.
+async function showPhoneFindModal(npc, finding) {
+  const overlay = document.getElementById('modal-overlay');
+  const title = document.getElementById('modal-title');
+  const body = document.getElementById('modal-body');
+  const actions = document.getElementById('modal-actions');
+  if (!overlay || !title || !body || !actions) return;
+
+  title.textContent = `${npc.bible?.name || 'Their'}'s phone`;
+  body.innerHTML = '';
+  actions.innerHTML = '';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'btn btn-secondary';
+  close.textContent = 'Close';
+  close.addEventListener('click', () => overlay.removeAttribute('data-open'));
+  actions.appendChild(close);
+
+  if (!finding.isPhoto) {
+    const p = document.createElement('p');
+    p.textContent = finding.text;
+    body.appendChild(p);
+    overlay.setAttribute('data-open', '');
+    return;
+  }
+
+  const wrap = document.createElement('div');
+  wrap.className = 'action-moment-photo';
+  const img = document.createElement('img');
+  img.className = 'action-moment-img';
+  img.alt = finding.caption || 'Phone photo';
+  wrap.appendChild(img);
+  body.appendChild(wrap);
+  overlay.setAttribute('data-open', '');
+
+  try {
+    const result = await generatePhoneSnoopPhotoImage(npc);
+    if (!overlay.hasAttribute('data-open')) return; // dismissed while generating
+    if (result?.url) {
+      img.src = result.url;
+      setImageMeta(img, {
+        label: finding.caption || 'Phone photo',
+        prompt: applyImageStyle(result.prompt),
+        seed: null,
+        negativePrompt: 'blurry, distorted, extra limbs, low quality, text, watermark',
+      });
+    }
+  } catch (e) {
+    console.warn('Phone snoop photo failed:', e);
+  }
+}
+
 // Give item: gives a meal/food/gift item from inventory to an NPC.
 // Used to complete chain quest 'give_item' steps. The first matching
 // item in the player's inventory is consumed. Intimacy & Voyeurism Phase 16
@@ -3871,6 +3977,9 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'search-room':
       if (npcId) await doSearchRoom(npcId);
+      break;
+    case 'search-phone':
+      if (npcId) await doSearchPhone(npcId);
       break;
     case 'write-note':
       openWriteNoteModal();
