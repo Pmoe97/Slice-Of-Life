@@ -96,6 +96,12 @@ const WORLD_KEY_FALLBACKS = {
   // best grade cooked). Empty for saves written before this existed — no
   // migration, the same additive-default precedent as relationships.
   autoCookCleared: () => ({}),
+  // F1 (Discord feedback, 2026-08-23): New Game/Sandbox's per-save gameplay
+  // options (need-decay scale/disable, willingness baseline). Empty-shaped
+  // default (scale 1, disabled false, baseline 0) is a total no-op, so a
+  // save from before this existed plays exactly as it always did — the same
+  // additive-default precedent as relationships/pregnancies above.
+  gameplayOptions: () => ({ needDecayScale: 1, needDecayDisabled: false, willingnessBaseline: 0 }),
   events: () => [],
   deliveries: () => [],
   renovationJobs: () => [],

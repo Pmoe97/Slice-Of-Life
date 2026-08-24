@@ -339,6 +339,15 @@ function defaultSandboxConfig() {
       rentGraceDays: ECONOMY.opening?.rentGraceDays ?? 14,
       billsStartDay: (ECONOMY.opening?.firstBillDelay ?? 7) + 1,
       taxReserve: 0,
+      // F1 (Discord feedback, 2026-08-23): gameplay options, not economy —
+      // kept on this same object rather than a new cfg.gameplayOptions
+      // because economy IS the bag startSandboxGame already threads
+      // straight into SIM_generateHouse as economyCfg (see buildGameState/
+      // rollCastSlot's reads of these same field names).
+      needDecayScale: 1,
+      needDecayDisabled: false,
+      dispositionSkew: 0,
+      willingnessBaseline: 0,
     },
     flags: { suppressTutorial: true },
   };

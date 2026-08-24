@@ -2120,8 +2120,33 @@ const SANDBOX_TABS = [
         { id: 'billsStartDay', kind: 'slider', field: 'economy.billsStartDay', label: 'Bills start (day)', min: 1, max: 30 },
         { id: 'taxReserve', kind: 'number', field: 'economy.taxReserve', label: 'Starting tax reserve', min: 0, max: 20000 },
       ] },
+      // F1 (Discord feedback, 2026-08-23): survival-pacing and cast-feel
+      // sliders. Shared verbatim with New Game via GAMEPLAY_OPTIONS_SECTIONS
+      // below — this array IS that constant, not a copy of it.
+      { title: 'Needs', desc: 'How much day-to-day upkeep (energy, hygiene, hunger, mood) the game asks of you.', rows: [
+        { id: 'needDecayScale', kind: 'slider', field: 'economy.needDecayScale', label: 'Need decay speed', min: 0, max: 2, step: 0.1,
+          desc: '1× is the default pace. Lower is more forgiving, higher is harder. Ignored if decay is disabled below.' },
+        { id: 'needDecayDisabled', kind: 'toggle', field: 'economy.needDecayDisabled', label: 'Disable need decay entirely',
+          desc: 'Energy, hygiene, hunger and mood stay exactly where they start. Overrides the speed slider above.' },
+      ] },
+      { title: 'Cast disposition', desc: 'Soft biases on the people you live with — never override a hard no.', rows: [
+        { id: 'dispositionSkew', kind: 'slider', field: 'economy.dispositionSkew', label: 'Cast warmth', min: -1, max: 1, step: 0.1,
+          desc: 'Biases rolled roommates’ temperament — negative for a harsher cast, positive for a friendlier one. Hand-authored roommates are never overridden.' },
+        { id: 'willingnessBaseline', kind: 'slider', field: 'economy.willingnessBaseline', label: 'NPC receptivity', min: -1, max: 1, step: 0.1,
+          desc: 'A soft bias on how readily NPCs say yes to intimacy. Asleep, hostile, a stranger, or an active refusal always still blocks it, regardless of this slider.' },
+      ] },
     ] },
 ];
+
+// F1 (Discord feedback, 2026-08-23): the SAME array reference SANDBOX_TABS'
+// economy tab uses for its last two sections — New Game's options screen
+// (studio.js) renders these exact sections too, so the two flows can never
+// drift on what "gameplay options" means. Sliced by title rather than
+// hand-duplicated so adding a new gameplay-options row to the Sandbox tab
+// above is automatically also a New Game option, with nothing to remember
+// to update twice.
+const GAMEPLAY_OPTIONS_SECTIONS = SANDBOX_TABS.find((t) => t.id === 'economy').sections
+  .filter((s) => s.title === 'Needs' || s.title === 'Cast disposition');
 
 // --- Daily goals (quests), sourced from resident wants/wounds/interests ---
 const QUEST_TEMPLATES = [
@@ -4423,6 +4448,14 @@ const WILLINGNESS = {
     personality: 0.2,  // openness + deviancy (both [0,1])
     context: 0.25,     // privacy: room class × door lock − people present
     history: 0.1,      // recency of last intimacy (sated) + recent refusals (cold)
+    // F1 (Discord feedback, 2026-08-23): the New Game/Sandbox "receptivity"
+    // slider — a per-save soft bias, [-1,1] via world.gameplayOptions.
+    // willingnessBaseline. A term like every other one above: summed into
+    // the score AFTER willingnessFloor's hard gate already ran, so it can
+    // never make a floored NPC (asleep/hostile/stranger/lockout/cold-
+    // shoulder) participate. Default weight keeps a baseline of 0 a total
+    // no-op — existing saves/tests are unaffected until a player sets it.
+    disposition: 0.3,
   },
   // Attraction composition: the relational "want them" axis — the desire
   // axis toward the initiator (relPlayer.desire for the player, castWeb

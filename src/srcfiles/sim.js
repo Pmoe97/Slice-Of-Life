@@ -2634,7 +2634,16 @@ function applyNeedsHeartbeat(gameState, minutes, options = {}) {
 // minutes count at NEEDS.idleDecayMultiplier. Every action path (the other
 // 12 call sites) leaves it false.
 function decayPlayerNeeds(player, minutes, gameState, options = {}) {
-  const mult = options.idle ? NEEDS.idleDecayMultiplier : 1;
+  // F1 (Discord feedback, 2026-08-23): the New Game/Sandbox need-decay
+  // slider. Folded into the SAME mult the idle multiplier already scales
+  // effectiveMinutes by, so every downstream bar (energy, hygiene, hunger's
+  // fullness window, mood's easing, desire) respects it for free — one
+  // choke point, no per-bar changes. Missing world.gameplayOptions (a save
+  // from before this existed, or a bare test harness object) reads as
+  // scale 1 / disabled false, i.e. today's behavior exactly.
+  const gpo = gameState?.world?.gameplayOptions;
+  const decayScale = gpo?.needDecayDisabled ? 0 : (typeof gpo?.needDecayScale === 'number' ? gpo.needDecayScale : 1);
+  const mult = (options.idle ? NEEDS.idleDecayMultiplier : 1) * decayScale;
   // Phase 3 (D4): `minutes` is GAME-minutes now, not ticks — the closed
   // form's elapsed_minutes x rate multiplier, generalized from the old ticks
   // param (every caller used to pass minutes/30 anyway). The idle multiplier
@@ -3824,9 +3833,15 @@ function SIM_generateHouse(seed, residentCount, partials, playerDraft, economyCf
   const maxAttempts = CHAR_GEN.maxAttempts;
   let droppedConstraints = [];
 
+  // F1 (Discord feedback, 2026-08-23): read alongside the existing economy
+  // knobs rather than adding a new parameter — economyCfg is already the
+  // "options this opening was configured with" bag threaded from both
+  // startSoloGame and startSandboxGame.
+  const dispositionSkew = Number.isFinite(economyCfg?.dispositionSkew) ? economyCfg.dispositionSkew : 0;
+
   while (attempts < maxAttempts) {
     attempts++;
-    const cast = generateCast(actualSeed, residentCount, attempts, partials);
+    const cast = generateCast(actualSeed, residentCount, attempts, partials, dispositionSkew);
     const score = scoreCast(cast, residentCount);
     if (score.quality > bestScore) {
       bestScore = score.quality;
@@ -3872,7 +3887,11 @@ function getQualityThreshold(residentCount) {
 // prefers a tag-compliant draw but falls back to the best schema-valid
 // draw seen rather than asserting. A player's explicitly-authored
 // interests are never second-guessed by this heuristic.
-function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, priorTagSets, partial) {
+// dispositionSkew (default 0): F1's "friendlier/harsher cast" slider,
+// [-1,1]. Applied to warmth only — the single most legible axis for that
+// framing — and only when the axis isn't already authored (pt.warmth ??
+// ...), so a hand-set roommate temperament is never second-guessed by it.
+function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, priorTagSets, partial, dispositionSkew = 0) {
   partial = partial || {};
   let fallbackNormalized = null;
   let fallbackOccCategory = null;
@@ -3897,7 +3916,7 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
     // Determinism WITHIN a version is untouched and still asserted.
     const pt = partial.temperament || {};
     const temperament = {
-      warmth:            pt.warmth            ?? rollAxis(charRng),
+      warmth:            pt.warmth            ?? rollAxis(charRng, dispositionSkew),
       volatility:        pt.volatility        ?? rollAxis(charRng),
       openness:          pt.openness          ?? rollAxis(charRng),
       conscientiousness: pt.conscientiousness ?? rollAxis(charRng),
@@ -4140,7 +4159,7 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
 // Occupation-category exclusion is only committed to the shared tracker
 // once a slot's draw is accepted, so a rejected attempt for slot i never
 // wrongly excludes a category from slot i's own retry or from later slots.
-function generateCast(seed, count, attempt, partials) {
+function generateCast(seed, count, attempt, partials, dispositionSkew = 0) {
   const npcs = {};
   const usedOccupationCats = new Set();
   const npcIds = [];
@@ -4150,7 +4169,7 @@ function generateCast(seed, count, attempt, partials) {
     const priorTagSets = npcIds.map(id => new Set(npcs[id].bible.interests.flatMap(x => x.tags)));
     const partial = (partials && partials[i]) || {};
 
-    const rolled = rollCastSlot(seed, i, npcId, attempt, usedOccupationCats, priorTagSets, partial);
+    const rolled = rollCastSlot(seed, i, npcId, attempt, usedOccupationCats, priorTagSets, partial, dispositionSkew);
     if (!rolled) continue; // best-effort: this slot stays empty; scoreCast rates the cast accordingly
 
     usedOccupationCats.add(rolled.occCategory);
@@ -4197,8 +4216,13 @@ function rerollCastSlot(seed, slotIndex, npcs, npcIds, rerollAttempt, partial) {
 // the resulting cast actually spans a meaningful range across all its
 // members is a cast-level property, checked in scoreCast via the
 // temperamentSpread requirement — a single axis roll can't guarantee it.
-function rollAxis(rng) {
-  return Math.max(-1, Math.min(1, rng() * 2 - 1));
+// skew (default 0, backward-compatible with every existing caller) shifts
+// the roll before clamping — same affine-pull shape as skewAxisTowardHigh
+// elsewhere in the file, just linear rather than multiplicative since this
+// needs to be able to push toward EITHER end (F1's disposition slider),
+// not just skew high.
+function rollAxis(rng, skew = 0) {
+  return Math.max(-1, Math.min(1, rng() * 2 - 1 + skew));
 }
 
 // --- Cast web generation (relational pass) ---
@@ -4583,6 +4607,16 @@ function buildGameState(seed, cast, clock, droppedConstraints, economyCfg) {
     world: {
       rooms,
       castWeb,
+      // F1 (Discord feedback, 2026-08-23): stamped from economyCfg exactly
+      // like the two day-shaped economy fields above — undefined/malformed
+      // input falls back to the same no-op defaults WORLD_KEY_FALLBACKS
+      // gives an old save, so a non-sandbox/non-configured opening is
+      // byte-identical to before this existed.
+      gameplayOptions: {
+        needDecayScale: Number.isFinite(economyCfg?.needDecayScale) ? economyCfg.needDecayScale : 1,
+        needDecayDisabled: !!economyCfg?.needDecayDisabled,
+        willingnessBaseline: Number.isFinite(economyCfg?.willingnessBaseline) ? economyCfg.willingnessBaseline : 0,
+      },
       // Intimacy & Voyeurism Phase 12 (D12): the NPC↔NPC relationship store
       // (see relationships.js). One record per pair, keyed by pairKey(a,b) —
       // the same canonical form castWeb uses. Lazy: stays empty until a pair
