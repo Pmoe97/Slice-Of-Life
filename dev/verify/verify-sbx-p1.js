@@ -43,6 +43,7 @@ const validateCharacter = api('validateCharacter');
 // sentinel overwrite is distinguishable from a keep.
 const AUTH_BIBLE = {
   name: 'Alice',
+  surname: 'Ashworth',
   visual: 'Authored visual paragraph',
   age: 26,
   gender: 'female',
@@ -62,6 +63,7 @@ const AUTH_BIBLE = {
 // to a sentinel, so a kept field is a keep and a merged field is a sentinel.
 const SENTINEL_PROSE = {
   name: 'PROSE_NAME',
+  surname: 'PROSE_SURNAME',
   visual: 'PROSE_VISUAL',
   age: 99,
   gender: 'PROSE_GENDER',
@@ -81,6 +83,7 @@ console.log('\n1. The lock: authored name/physical/visual survive a sentinel pro
 {
   const out = merge(AUTH_BIBLE, SENTINEL_PROSE, ['name', 'physical', 'visual']);
   check('authored name kept', out.name === 'Alice', `got "${out.name}"`);
+  check('surname (Discord feedback, 2026-08-24) wins even unlocked, same rule as name', out.surname === 'Ashworth', `got "${out.surname}"`);
   check('authored visual kept', out.visual === 'Authored visual paragraph', `got "${out.visual}"`);
   check('authored physical kept whole (hair.color is the bible\'s, not PROSE_HAIR_COLOR)',
         out.physical.hair.color === 'red' && out.physical.eyes.color === 'green' && out.physical.build === 'lean');
@@ -130,6 +133,11 @@ console.log('\n3. No-regression: empty authoredFields is byte-identical to the o
   const old = {
     ...AUTH_BIBLE,
     name: AUTH_BIBLE.name || SENTINEL_PROSE.name,
+    // surname (Discord feedback, 2026-08-24): the ONE intentional shape
+    // change since this pin was written — a bible never carried one before.
+    // Same guarded rule as name, so it belongs in the "old" comparison
+    // object exactly like name does, not as a regression.
+    surname: AUTH_BIBLE.surname || SENTINEL_PROSE.surname,
     visual: SENTINEL_PROSE.visual,
     physical: { ...AUTH_BIBLE.physical, ...SENTINEL_PROSE.physical },
     history: SENTINEL_PROSE.history,
@@ -144,6 +152,8 @@ console.log('\n3. No-regression: empty authoredFields is byte-identical to the o
   // The old guarded-name rule is unchanged without the lock: bible.name wins.
   const out2 = merge({ ...AUTH_BIBLE, name: '' }, SENTINEL_PROSE, []);
   check('empty bible name falls through to prose.name without the lock', out2.name === 'PROSE_NAME', `got "${out2.name}"`);
+  const out2b = merge({ ...AUTH_BIBLE, surname: '' }, SENTINEL_PROSE, []);
+  check('empty bible surname falls through to prose.surname without the lock', out2b.surname === 'PROSE_SURNAME', `got "${out2b.surname}"`);
 
   // The old unconditional-visual rule is unchanged without the lock: a
   // present bible.visual is still clobbered (that was the pre-lock bug D12
@@ -197,6 +207,8 @@ console.log('\n4. The lock is not a no-op: auth claims survive the single constr
   // is empty — an authored-but-blank name is not overwritten.
   const blankName = merge({ ...AUTH_BIBLE, name: '' }, SENTINEL_PROSE, ['name']);
   check('authored blank name stays blank (not replaced by prose)', blankName.name === '', `got "${blankName.name}"`);
+  const blankSurname = merge({ ...AUTH_BIBLE, surname: '' }, SENTINEL_PROSE, ['surname']);
+  check('authored blank surname stays blank (not replaced by prose)', blankSurname.surname === '', `got "${blankSurname.surname}"`);
 }
 
 // ---------------------------------------------------------------- 5

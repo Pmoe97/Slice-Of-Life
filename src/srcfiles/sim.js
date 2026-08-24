@@ -597,6 +597,96 @@ function getPresentNpcIds(npcs, roomId) {
   });
 }
 
+// --- Name uniqueness (Discord feedback, 2026-08-24) ---
+// Every UI surface shows only bible.name, never the internal npcs-dict key —
+// two genuinely distinct NPCs sharing a first name read to the player as one
+// person split across rooms (reported: the same name "in the bathroom AND
+// the living room", sharing a conversation, offered twice in a threesome
+// picker — three symptoms that all fall out of nothing ever disambiguating
+// two same-named-but-different npcIds). The name pools are small (26 entries
+// per gender bucket, config.js CHAR_GEN.namePools) and shared by every
+// generator in the game — cast, Classifieds applicants, friend stubs,
+// escorts, hot singles, outside partners — so collisions are close to
+// guaranteed over a real playthrough. Occupation and interests already get
+// an explicit no-repeat guard in rollCastSlot (usedOccupationCats/
+// priorTagSets); names never did. usedNpcNames/rollUniqueName close that gap
+// for every deterministic name roll; dedupeCastNames (below) covers the one
+// case those two can't see — parallel LLM prose calls in the same batch,
+// which can't know what name a sibling call is about to invent mid-flight.
+function usedNpcNames(gameState) {
+  const names = new Set();
+  for (const npc of Object.values(gameState.npcs || {})) {
+    if (npc?.bible?.name) names.add(npc.bible.name.toLowerCase());
+  }
+  for (const stub of Object.values(gameState.world?.externalStubs || {})) {
+    if (stub?.name) names.add(stub.name.toLowerCase());
+  }
+  if (gameState.player?.name) names.add(gameState.player.name.toLowerCase());
+  return names;
+}
+
+// Picks a first name from the gender-appropriate pool (the same 20%-neutral
+// split every caller already rolled inline), rerolling against `usedNames`.
+// Bounded and never hard-fails (character creation's standing rule — see
+// rollCastSlot's occupation-fallback comment): the last draw wins if every
+// reachable pool name is somehow already taken. Omitting `usedNames`
+// reproduces the old unguarded single draw exactly, byte-for-byte.
+function rollUniqueName(rng, gender, usedNames) {
+  const maxAttempts = CHAR_GEN.maxAttempts || 20;
+  let name;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const useNeutral = rng() < 0.2;
+    const pool = useNeutral ? CHAR_GEN.namePools.first_n
+      : (gender === 'male' || gender === 'trans_male') ? CHAR_GEN.namePools.first_m
+      : CHAR_GEN.namePools.first_f;
+    name = pool[Math.floor(rng() * pool.length)];
+    if (!usedNames || !usedNames.has(name.toLowerCase())) break;
+  }
+  return name;
+}
+
+// Post-generation safety net for the one collision source rollUniqueName
+// can't see: approveCastAndStartGame/applySandboxRoommateProse expand every
+// npc's prose (name included) via PARALLEL LLM calls (Promise.all) — none of
+// them can see a sibling call's freshly-invented name until every promise
+// has settled. Run once after that batch resolves: first claim (generation
+// order) wins, any later duplicate gets a fresh deterministic name via
+// fallbackName rather than overwriting whichever bible got there first.
+// First + last, for identity-listing contexts (a roster, a picker, an
+// applicant browse card) where two people might share a first name and the
+// player needs to tell them apart — casual in-scene text (chat bubbles,
+// action chips, floor-plan labels, narration) stays first-name-only, same
+// as every real person is addressed day to day. Graceful on an old save's
+// or a legacy bible's missing surname: reads as first-name-only, exactly
+// like before this field existed.
+function fullName(bible) {
+  if (!bible) return '';
+  return bible.surname ? `${bible.name} ${bible.surname}` : (bible.name || '');
+}
+
+function dedupeCastNames(npcs, extraUsedName) {
+  const seen = new Set();
+  if (extraUsedName) seen.add(extraUsedName.toLowerCase());
+  // A hand-authored name (the contractor, or a player-authored roommate)
+  // always keeps its slot — process those first so a same-named rolled
+  // sibling is the one that gets renamed, never the authored one.
+  const all = Object.values(npcs);
+  const authored = all.filter(npc => pathIsAuthored(npc?.bible?.authoredFields, 'name'));
+  const rest = all.filter(npc => !pathIsAuthored(npc?.bible?.authoredFields, 'name'));
+  for (const npc of [...authored, ...rest]) {
+    const name = npc?.bible?.name;
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) {
+      const fresh = fallbackName(npc.bible, seen);
+      npc.bible = { ...npc.bible, name: fresh };
+      seen.add(fresh.toLowerCase());
+    } else {
+      seen.add(key);
+    }
+  }
+}
+
 // --- Visits (src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 1) ---
 // world.visits[] is the single source of truth for "who is onsite and why".
 // A visit is the presence window of an external NPC: their location and
@@ -3751,19 +3841,6 @@ function applyAuthoredPhysical(rolledPhysical, authored) {
   return rolledPhysical;
 }
 
-// Surnames. The cast has never needed one (a roommate is "Mira", not "Mira
-// Vance") so CHAR_GEN.namePools carries first names only — but the player's
-// surname is load-bearing: the intro's will names `Julius <surname>`, which
-// is how the grandfather gets an identity at all without a second authoring
-// step. Kept here beside the name pools it complements rather than in
-// CHAR_GEN, which is the cast's table.
-const PLAYER_SURNAME_POOL = [
-  'Ashford', 'Beckett', 'Calloway', 'Doyle', 'Ellery', 'Fairbanks', 'Grieves',
-  'Hollis', 'Ives', 'Jarrow', 'Keating', 'Lockhart', 'Marchetti', 'Novak',
-  'Oakes', 'Pemberton', 'Quimby', 'Rademacher', 'Sinclair', 'Thorne',
-  'Underhill', 'Vance', 'Whitlock', 'Yarrow', 'Zeller',
-];
-
 // A blank name rolls, exactly like a blank appearance field does — the
 // studio's standing "Roll it" promise applies to identity too. First names
 // come from CHAR_GEN.namePools matched to gender, the same table the cast
@@ -3782,7 +3859,7 @@ function rollPlayerName(seed, gender, authored) {
     pools.first_n;
   return {
     name: (a.name || '').trim() || pick(firstPool),
-    surname: (a.surname || '').trim() || pick(PLAYER_SURNAME_POOL),
+    surname: (a.surname || '').trim() || pick(SURNAME_POOL),
   };
 }
 
@@ -4036,6 +4113,7 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
     const structured = {
       npcId,
       name: partial.name || '',
+      surname: partial.surname || '',
       visual: '',
       genSeed: Math.floor(charRng() * 1000000),
       age: partial.age ?? rollAge(charRng),           // Phase 0: first-class age, authorable via partial

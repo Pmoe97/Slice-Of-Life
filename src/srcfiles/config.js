@@ -1004,7 +1004,15 @@ const RENOVATION_PROGRESS_TEMPLATES = {
 const CONTRACTOR_ID = 'contractor';
 const CONTRACTOR_WELCOME_MESSAGE = "Hey — you're the one who inherited the old place. I looked after it for your grandfather for years, so I know every creak and leak in it. I do the RenoFix work now — text me whenever something needs looking at.";
 const CONTRACTOR_BIBLE = {
-  name: 'Del Connors',
+  name: 'Del',
+  // Discord feedback (2026-08-24): split out of the old single 'Del
+  // Connors' string now that every bible carries a real surname field.
+  // authoredFields protects both halves — approveCastAndStartGame already
+  // skips prose expansion for CONTRACTOR_ID entirely, but this also keeps
+  // dedupeCastNames from ever renaming Del out of a same-first-name
+  // collision with a rolled cast member.
+  surname: 'Connors',
+  authoredFields: ['name', 'surname'],
   visual: '',
   genSeed: 20260804,
   age: 54,
@@ -5400,18 +5408,41 @@ const CHAR_GEN = {
   // pools (their name choice aligns with their gender, not birth sex);
   // futanari leans on the female pool.
   genderWeights: { female: 0.40, male: 0.40, futanari: 0.08, trans_male: 0.06, trans_female: 0.06 },
+  // Discord feedback (2026-08-24): dramatically expanded from the original
+  // 26-per-bucket pools (one name per letter) after a player hit two
+  // genuinely distinct NPCs rolling the same first name and reading it as
+  // one person split across rooms. rollUniqueName/dedupeCastNames (SIM) stop
+  // that from reaching the player at all now, but a bigger pool matters
+  // independently — the old pool made a collision likely with well under
+  // the sqrt(26)~5 people the birthday paradox predicts, and Classifieds
+  // applicants alone can roll dozens over a long playthrough.
   namePools: {
-    first_f: ['Ava','Bianca','Camille','Daria','Elena','Fiona','Grace','Hana','Ivy','Jade','Kira','Lena','Mira','Nora','Olive','Priya','Quinn','Rosa','Sage','Tara','Uma','Vera','Willow','Xena','Yuki','Zara'],
-    first_m: ['Aiden','Bruno','Cole','Dexter','Eli','Felix','Gus','Hugo','Ian','Jonah','Kai','Leo','Marcus','Nico','Oscar','Pierce','Quinn','Rex','Sam','Theo','Umar','Victor','Wes','Xavier','Yusuf','Zane'],
-    first_n: ['Alex','Blake','Casey','Devin','Ellis','Finley','Grey','Harper','Indigo','Jordan','Kit','Lane','Max','Noel','Orien','Phoenix','Quinn','River','Sky','Taylor','Unknown','Vex','Wren','Xio','Yves','Zion'],
+    first_f: ['Ava','Bianca','Camille','Daria','Elena','Fiona','Grace','Hana','Ivy','Jade','Kira','Lena','Mira','Nora','Olive','Priya','Quinn','Rosa','Sage','Tara','Uma','Vera','Willow','Xena','Yuki','Zara','Aisha','Beatrice','Chloe','Delphine','Esme','Freya','Giselle','Harriet','Imani','Jasmine','Keiko','Lucia','Maya','Naomi','Odette','Paloma','Renee','Selene','Talia','Ursula','Valentina','Winona','Ximena','Yasmin','Zoya','Adele','Bridget','Celeste','Dahlia','Eliza','Farrah','Georgia','Hazel','Inez','Juniper','Kendra','Liana','Marisol','Nadia','Opal','Petra','Queenie','Renata','Simone','Thea','Unity','Valeria','Wren','Xiomara','Yolanda','Zelda','Amara','Bettina','Cassia','Daphne','Emiko','Fatima','Gwendolyn','Helena','Ingrid','Juno','Kalinda','Liliana','Meredith','Nia','Ophelia','Perla','Rowena','Serafina','Tatum','Umeko','Vesper','Wilhelmina','Xandra','Yara','Zinnia','Alessandra','Belen','Chidinma','Dominika','Esperanza','Francesca','Guadalupe','Hyunwoo','Isadora','Josefina','Katarzyna','Larissa','Mabel','Noor','Ottilie','Pilar','Rin','Solveig','Toula','Uzoma','Vasilisa','Xochitl','Yevgenia','Zsofia','Anwen','Bree','Consuela','Dagny','Enid','Faustine','Gioia','Honora','Ilse','Jocasta','Kalani','Leilani','Muriel','Nkechi','Oriana','Perdita','Rosalind','Sunniva','Thandiwe','Undine','Viridiana','Wisteria','Xylia','Yumiko','Zephyrine','Anastasia','Brielle','Carmela','Diondra','Etta','Flora','Gemma','Henrietta','Ines','Jia','Kamilah','Leontyne','Marguerite','Neve','Octavia','Precious','Roisin','Saoirse','Trinh','Ulyana','Verity','Winifred','Xanthe','Yasemin','Zainab','Adaeze','Bilqis','Chiara','Delia','Esther','Fabienne','Genevieve','Hollis','Idalia','Jovana','Karolina','Liesl','Malaika','Nkem','Onome','Palesa','Ren','Sachiko','Thuy','Utako','Viola','Whitney','Yamileth','Zawadi'],
+    first_m: ['Aiden','Bruno','Cole','Dexter','Eli','Felix','Gus','Hugo','Ian','Jonah','Kai','Leo','Marcus','Nico','Oscar','Pierce','Quinn','Rex','Sam','Theo','Umar','Victor','Wes','Xavier','Yusuf','Zane','Andres','Bertrand','Cedric','Damian','Ezra','Fernando','Gareth','Hendrik','Ignacio','Jasper','Kofi','Lachlan','Milo','Nasir','Omar','Percy','Rafael','Silas','Tobias','Uche','Vincenzo','Wyatt','Xiomar','Yannick','Zaid','Alessandro','Baptiste','Chike','Dimitri','Emeka','Farid','Gunnar','Hiroshi','Idris','Jamal','Kenji','Leandro','Mateo','Naoki','Osamu','Pablo','Quang','Ronan','Sten','Tarek','Ulrich','Valentin','Wilhelm','Xander','Yosef','Zoltan','Anders','Boris','Callum','Dashiell','Elias','Franco','Giorgio','Hamish','Ismail','Jerome','Kwame','Lorenzo','Magnus','Niall','Oisin','Petros','Ravi','Sebastian','Tomasz','Ulysses','Vidal','Wolfgang','Xiang','Yeshua','Zachariah','Adebayo','Basim','Cormac','Domenico','Eoin','Fyodor','Gustavo','Haruto','Ivo','Julen','Kiran','Lukas','Miroslav','Nnamdi','Otieno','Peio','Quentin','Rustam','Salvatore','Tao','Uwe','Vasco','Waylon','Xylander','Yaw','Zephyr','Amadou','Balthazar','Ciaran','Dermot','Erasmus','Ferran','Georges','Hakeem','Iwan','Januzaj','Kaito','Lennart','Mustafa','Nikolai','Obadiah','Prosper','Quinlan','Reza','Soren','Tarquin','Ulf','Vittorio','Waldemar','Xerxes','Yusufu','Zephaniah','Anton','Bram','Corwin','Declan','Emrys','Florin','Gideon','Han','Iker','Jarrah','Kasimir','Lior','Matteo','Nazir','Orlando','Pavel','Rohan','Roque','Stellan','Taro','Umberto','Viggo','Wendell','Xochitl','Yorick','Zephyros','Ansel','Byron','Caius','Diego','Ellery','Farouk','Godfrey','Hemi','Idowu','Javon','Kenzo','Laszlo','Mikael','Ngozi','Orion','Phineas','Raul','Stavros','Taavi','Uriel','Vitomir','Weston','Xolani','Yaakov','Zephyrin'],
+    first_n: ['Alex','Blake','Casey','Devin','Ellis','Finley','Grey','Harper','Indigo','Jordan','Kit','Lane','Max','Noel','Orien','Phoenix','Quinn','River','Sky','Taylor','Val','Vex','Wren','Xio','Yves','Zion','Arden','Briar','Cypress','Dallas','Emery','Frankie','Gray','Hollis','Iris','Jules','Kai','Landry','Marlowe','Nova','Ocean','Peyton','Reese','Sage','Tatum','Ariel','Vesper','Winter','Xen','Yael','Zephyr','Ainsley','Bay','Clay','Dakota','Elliot','Fen','Glen','Haven','Ira','Jem','Kestrel','Lark','Merit','Nile','Onyx','Perry','Quill','Robin','Story','Tegan','Umi','Vale','Wilder','Xiomara','Yarrow','Zuri','Aspen','Brooks','Cove','Denali','Echo','Fable','Glade','Haze','Ily','Journey','Keo','Linden','Marsh','Nix','Ora','Pax','Quest','Ridge','Slate','Thorn','Ulani','Vesta','Wynn','Xylo','Yuki','Zaan','Arley','Berlin','Corey','Dune','Ember','Fallon','Gem','Halo','Ivory','Jaylen','Kerry','Lex','Milan','Nyx','Osiris','Palmer','Quinby','Remy','Sailor','True','Umber','Vega','Waverly','Xander','Yates','Zeal','Auden','Bexley','Cai','Dylan','Elm','Frey','Gale','Harlow','Indy','Jonquil','Kaylin','Larkin','Merritt','North','Oakley','Pilot','Reverie','Rune','Sable','Tarn','Urban','Vail','Wynter','Xiao','Yun','Zephyrine'],
   },
 };
+
+// Surnames. Shared by NPCs and the player alike (Discord feedback,
+// 2026-08-24 — NPCs never had one before; "a roommate is 'Mira', not 'Mira
+// Vance'" was the original design call, but the collision report above
+// argues for real full identities, not just a bigger first-name pool).
+// Kept beside CHAR_GEN rather than inside it: the player's roll
+// (rollPlayerName, SIM) and the cast's both read this same table, and
+// SURNAME_POOL predates CHAR_GEN.namePools existing for anything but first
+// names, so it stays its own top-level constant rather than nested in.
+const SURNAME_POOL = ['Ashford','Beckett','Calloway','Doyle','Ellery','Fairbanks','Grieves','Hollis','Ives','Jarrow','Keating','Lockhart','Marchetti','Novak','Oakes','Pemberton','Quimby','Rademacher','Sinclair','Thorne','Underhill','Vance','Whitlock','Yarrow','Zeller','Alvarez','Bishop','Castillo','Delacroix','Ekwueme','Fontaine','Garrity','Hargrove','Ishikawa','Jacoby','Kowalski','Lindqvist','Mercer','Nakamura','Okafor','Pruitt','Quintana','Rourke','Sorensen','Tremblay','Uzoma','Valdez','Winslow','Xu','Yamamoto','Zimmerman','Abernathy','Blackwood','Cassidy','Duarte','Espinoza','Fitzgerald','Greenwood','Halloran','Ionescu','Jimenez','Kirkland','Larsen','Montague','Nkemdirim','Oduya','Patterson','Quintero','Robledo','Suleiman','Trudeau','Utterback','Villareal','Wexford','Yeboah','Zaharia','Amundsen','Barrington','Chen','Delgado','Eriksson','Ferreira','Gallagher','Higgins','Iwata','Johansson','Kwan','Levesque','Marchand','Nowak','Ozturk','Pellegrini','Quijano','Rasmussen','Sato','Tanaka','Uwimana','Vasquez','Whitfield','Xiong','Yilmaz','Zubairi','Adeyemi','Baptiste','Chadwick','Devereux','Eldridge','Farrow','Gustafsson','Hendricks','Iyer','Jansen','Kimura','Leclerc','Malinowski','Neal','Ochoa','Petrov','Qadir','Reyes','Schneider','Tsang','Ubeda','Voss','Whitmore','Xuan','Yoon','Zamora','Ainsworth','Beaumont','Castellanos','Drummond','Ekstrom','Falkner','Giordano','Hartley','Isakov','Juarez','Kaplan','Lefebvre','Moreau','Nishimura','Oyelaran','Prescott','Quiroz','Radcliffe','Steranko','Torvik','Uddin','Verhoeven','Wiley','Xochitl','Yankova','Zawadzki','Albright','Blackburn','Cheung','Dovek','Eaton','Faulkner','Gibbons','Haaland','Ibsen','Jelinek','Kaczmarek','Landry','Meinhardt','Nilsson','Obrien','Palacios','Quach','Reinholt','Sundberg','Trask','Ulloa','Vandenberg','Whitaker','Xavier','Yeltsin','Zolnowski','Aoki','Bergstrom','Coelho','Diallo','Ehrlich','Feliciano','Gervais','Holloway','Ibarra','Jaramillo','Kessler','Laurent','Marchetto','Nagata','Ostrowski','Padgett','Quintanilla','Renner','Stavros','Templeton','Uwais','Vukovic','Wahlberg','Xiang','Yancey','Zellweger'];
 
 // --- Canonical character schema ---
 // Single authority. Every construction path returns through validateCharacter.
 const CHARACTER_SCHEMA = {
   bible: {
     name:          { type: 'string', required: true, default: '', maxLength: 60 },
+    // Discord feedback (2026-08-24): NPCs never had a surname before — only
+    // the player did (rollPlayerName, SIM). Not required: an old save's NPCs
+    // read as '' (rendered as first-name-only, same as before this existed)
+    // rather than needing a migration pass.
+    surname:       { type: 'string', required: false, default: '', maxLength: 60 },
     visual:        { type: 'string', required: false, default: '', maxLength: 400 }, // cached paragraph derived from physical (legacy)
     // Seasonal Calendar & Sandbox Plan (B1/D12): dotted paths the player
     // wrote by hand — 'name', 'physical', 'physical.hair.color', 'visual',

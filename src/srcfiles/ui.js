@@ -2521,7 +2521,7 @@ function renderCheatNpcsPane() {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'cheat-npc-chip' + (id === cheatActiveNpcId ? ' active' : '');
-    chip.textContent = `${n.bible?.name || id} (${n.residency?.status || '?'})`;
+    chip.textContent = `${fullName(n.bible) || id} (${n.residency?.status || '?'})`;
     chip.addEventListener('click', () => { cheatActiveNpcId = id; renderCheatMenuUi(); });
     picker.appendChild(chip);
   }
@@ -6803,6 +6803,10 @@ async function applySandboxRoommateProse(pendingCast, roommates) {
       console.warn(`Sandbox prose for ${id} failed, keeping structured draw: ${e.message}`);
     }
   }));
+
+  // Same collision window as approveCastAndStartGame's parallel prose pass
+  // — see dedupeCastNames.
+  dedupeCastNames(pendingCast.npcs, pendingCast.player?.name);
 }
 
 async function approveCastAndStartGame() {
@@ -6850,6 +6854,11 @@ async function approveCastAndStartGame() {
         console.warn(`Prose expansion for ${id} failed validation, keeping structured draw`, errors);
       }
     }));
+
+    // Discord feedback (2026-08-24): the parallel prose calls above can't
+    // see each other's freshly-invented name mid-flight — one pass now that
+    // every promise has settled catches any collision (see dedupeCastNames).
+    dedupeCastNames(pendingCast.npcs, pendingCast.player?.name);
 
     // Settings & Pause Overhaul Phase 4 (D5): apply the SFW flag to the
     // approved cast's contentConfig BEFORE the state write, so the new
