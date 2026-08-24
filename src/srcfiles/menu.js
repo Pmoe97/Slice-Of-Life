@@ -86,12 +86,14 @@ function showMenuScreen(which) {
   const settings = document.getElementById('menu-settings-screen');
   const pause = document.getElementById('menu-pause-screen');
   const sandbox = document.getElementById('menu-sandbox-screen');
+  const cheats = document.getElementById('cheat-menu-screen');
   const arrows = document.getElementById('menu-arrows');
   if (title) title.hidden = which !== 'title';
   if (options) options.hidden = which !== 'options';
   if (settings) settings.hidden = which !== 'settings';
   if (pause) pause.hidden = which !== 'pause';
   if (sandbox) sandbox.hidden = which !== 'sandbox';
+  if (cheats) cheats.hidden = which !== 'cheats';
   if (arrows) arrows.hidden = which !== 'title';
   fitMenuScale();
 }
@@ -348,6 +350,8 @@ function defaultSandboxConfig() {
       needDecayDisabled: false,
       dispositionSkew: 0,
       willingnessBaseline: 0,
+      phoneBatteryScale: 1,
+      phoneBatteryAlwaysCharged: false,
     },
     flags: { suppressTutorial: true },
   };
@@ -367,7 +371,7 @@ function openNewGameOptions(draft) {
   // paths verbatim ('economy.needDecayScale', ...) — those rows are the
   // exact same objects Sandbox's Economy tab renders, so they carry
   // Sandbox's field paths regardless of which screen is showing them.
-  pendingNewGameOptions = { economy: { needDecayScale: 1, needDecayDisabled: false, dispositionSkew: 0, willingnessBaseline: 0 } };
+  pendingNewGameOptions = { economy: { needDecayScale: 1, needDecayDisabled: false, dispositionSkew: 0, willingnessBaseline: 0, phoneBatteryScale: 1, phoneBatteryAlwaysCharged: false } };
   sbxActiveTarget = pendingNewGameOptions;
   renderNewGameOptionsUi();
   const el = document.getElementById('newgame-options-screen');
@@ -1798,6 +1802,70 @@ function openSettingsScreen(tab) {
 
 function closeSettingsScreen() {
   showMenuScreen(settingsOrigin || 'options');
+}
+
+// F4 (Discord feedback, 2026-08-24): the cheat menu — reachable only from
+// the pause screen (see main.html), so unlike Settings there is no second
+// origin to remember; Back always returns to 'pause'.
+let cheatActiveTab = 'player';
+// The NPC tab's picker selection — shared across renders so switching tabs
+// and back doesn't lose your place, cleared to whichever NPC still exists
+// each render (renderCheatNpcsPane) rather than trusted blindly, since a
+// cheat-menu move-out can make a previously-selected id stale.
+let cheatActiveNpcId = null;
+
+function doMenuCheats() {
+  if (!currentGameState) return;
+  renderCheatMenuUi();
+  showMenuScreen('cheats');
+}
+
+function doCheatsBack() {
+  showMenuScreen('pause');
+}
+
+function doCheatsTab(tabId) {
+  if (tabId && CHEAT_TABS.some((t) => t.id === tabId)) cheatActiveTab = tabId;
+  renderCheatMenuUi();
+}
+
+function renderCheatMenuUi() {
+  const rail = document.getElementById('cheat-tab-rail');
+  const panes = document.getElementById('cheat-menu-panes');
+  const content = document.getElementById('cheat-menu-content');
+  if (!rail || !panes || !currentGameState) return;
+  if (!CHEAT_TABS.some((t) => t.id === cheatActiveTab)) cheatActiveTab = CHEAT_TABS[0].id;
+  const prevScroll = content ? content.scrollTop : 0;
+
+  rail.innerHTML = '';
+  for (const tab of CHEAT_TABS) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'sbx-tab-btn' + (tab.id === cheatActiveTab ? ' active' : '');
+    btn.setAttribute('data-action', 'cheats.tab');
+    btn.setAttribute('data-tab', tab.id);
+    btn.setAttribute('aria-pressed', tab.id === cheatActiveTab ? 'true' : 'false');
+    const icon = document.createElement('span');
+    icon.className = 'sbx-tab-icon';
+    icon.textContent = tab.icon || '';
+    const label = document.createElement('span');
+    label.className = 'sbx-tab-label';
+    label.textContent = tab.label;
+    btn.appendChild(icon);
+    btn.appendChild(label);
+    rail.appendChild(btn);
+  }
+
+  panes.innerHTML = '';
+  const renderers = {
+    player: renderCheatPlayerPane,
+    time: renderCheatTimePane,
+    npcs: renderCheatNpcsPane,
+    world: renderCheatWorldPane,
+  };
+  panes.appendChild(renderers[cheatActiveTab]());
+
+  if (content) content.scrollTop = prevScroll;
 }
 
 // The last-opened tab is remembered per session (D2). Called from the

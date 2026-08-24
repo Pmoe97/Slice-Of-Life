@@ -575,12 +575,22 @@ function advancePhoneBattery(gameState, minutes) {
   if (!found) return;
   const phone = found.obj;
   phone.flags = phone.flags || {};
+  // F5 (Discord feedback, 2026-08-24): same gameplayOptions bag F1's need-
+  // decay slider reads — Always Charged pins the battery and skips drain
+  // and charge-meter usage alike; the scale only ever touches drain, so a
+  // slow-draining phone still charges at the normal rate when plugged in.
+  const gpo = gameState?.world?.gameplayOptions;
+  if (gpo?.phoneBatteryAlwaysCharged) {
+    phone.flags.battery = 100;
+    return;
+  }
+  const drainScale = typeof gpo?.phoneBatteryScale === 'number' ? gpo.phoneBatteryScale : 1;
   const battery = phone.flags.battery == null ? PHONE.startingBattery : phone.flags.battery;
   if (isPhoneCharging(gameState, phone, found.bucket)) {
     phone.flags.battery = clamp(battery + PHONE.batteryChargePerMinute * minutes, 0, 100);
     recordUtilityUsage(gameState, 'devices', PHONE.chargeMeterDevicesPerMinute * minutes);
   } else {
-    phone.flags.battery = clamp(battery - PHONE.batteryDrainPerMinute * minutes, 0, 100);
+    phone.flags.battery = clamp(battery - PHONE.batteryDrainPerMinute * minutes * drainScale, 0, 100);
   }
 }
 

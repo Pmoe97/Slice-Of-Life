@@ -4616,6 +4616,12 @@ function buildGameState(seed, cast, clock, droppedConstraints, economyCfg) {
         needDecayScale: Number.isFinite(economyCfg?.needDecayScale) ? economyCfg.needDecayScale : 1,
         needDecayDisabled: !!economyCfg?.needDecayDisabled,
         willingnessBaseline: Number.isFinite(economyCfg?.willingnessBaseline) ? economyCfg.willingnessBaseline : 0,
+        // F5 (Discord feedback, 2026-08-24): same treatment as the two
+        // fields above — an ongoing effect (read every advancePhoneBattery
+        // call), not a generation-time-only skew like dispositionSkew, so it
+        // belongs in the persisted bag.
+        phoneBatteryScale: Number.isFinite(economyCfg?.phoneBatteryScale) ? economyCfg.phoneBatteryScale : 1,
+        phoneBatteryAlwaysCharged: !!economyCfg?.phoneBatteryAlwaysCharged,
       },
       // Intimacy & Voyeurism Phase 12 (D12): the NPC↔NPC relationship store
       // (see relationships.js). One record per pair, keyed by pairKey(a,b) —

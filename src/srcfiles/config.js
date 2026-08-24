@@ -2135,7 +2135,28 @@ const SANDBOX_TABS = [
         { id: 'willingnessBaseline', kind: 'slider', field: 'economy.willingnessBaseline', label: 'NPC receptivity', min: -1, max: 1, step: 0.1,
           desc: 'A soft bias on how readily NPCs say yes to intimacy. Asleep, hostile, a stranger, or an active refusal always still blocks it, regardless of this slider.' },
       ] },
+      // F5 (Discord feedback, 2026-08-24): same shared-array trick as Needs
+      // above — this section is also sliced into GAMEPLAY_OPTIONS_SECTIONS,
+      // so it's one row set for both Sandbox and New Game.
+      { title: 'Phone battery', desc: 'How fast the phone drains on its own.', rows: [
+        { id: 'phoneBatteryScale', kind: 'slider', field: 'economy.phoneBatteryScale', label: 'Battery drain speed', min: 0, max: 3, step: 0.1,
+          desc: '1× is the default pace. Lower drains slower, higher drains faster. Ignored if Always Charged is on below.' },
+        { id: 'phoneBatteryAlwaysCharged', kind: 'toggle', field: 'economy.phoneBatteryAlwaysCharged', label: 'Always Charged',
+          desc: 'The phone never runs out of battery, plugged in or not. Overrides the drain slider above.' },
+      ] },
     ] },
+];
+
+// F4 (Discord feedback, 2026-08-24): the cheat menu's tab rail. Unlike
+// SANDBOX_TABS/SETTINGS_TABS this carries no `sections`/rows — every tab's
+// content is live gameplay state (currentGameState.player/meta.clock/npcs/
+// world), not a flat pre-game draft object, so each pane is bespoke-rendered
+// in ui.js rather than run through the generic dot-path row system.
+const CHEAT_TABS = [
+  { id: 'player', label: 'Player', icon: '🧍' },
+  { id: 'time', label: 'Time', icon: '🕐' },
+  { id: 'npcs', label: 'NPCs', icon: '👥' },
+  { id: 'world', label: 'World', icon: '🏠' },
 ];
 
 // F1 (Discord feedback, 2026-08-23): the SAME array reference SANDBOX_TABS'
@@ -2146,7 +2167,7 @@ const SANDBOX_TABS = [
 // above is automatically also a New Game option, with nothing to remember
 // to update twice.
 const GAMEPLAY_OPTIONS_SECTIONS = SANDBOX_TABS.find((t) => t.id === 'economy').sections
-  .filter((s) => s.title === 'Needs' || s.title === 'Cast disposition');
+  .filter((s) => s.title === 'Needs' || s.title === 'Cast disposition' || s.title === 'Phone battery');
 
 // --- Daily goals (quests), sourced from resident wants/wounds/interests ---
 const QUEST_TEMPLATES = [
