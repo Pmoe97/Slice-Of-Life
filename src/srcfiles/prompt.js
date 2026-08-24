@@ -26,7 +26,8 @@ ANTI-PURPLE-PROSE RULES (follow strictly):
 - No "could feel the tension in the air".
 - Characters speak like real people. Short sentences. Incomplete thoughts.
 - Actions are physical and specific, not abstract ("shifts weight" not "embodies unease").
-- No summarizing emotions — show them through behavior and dialogue.`;
+- No summarizing emotions — show them through behavior and dialogue.
+- A character's listed speech tics are seasoning, not a mandatory prefix — use each at most once every few lines, never as the opening word two lines running, and never for every character in a scene at once.`;
 }
 
 function buildContentSection(contentConfig) {

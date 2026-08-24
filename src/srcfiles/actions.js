@@ -222,6 +222,18 @@ async function executeAction(actionId, gameState, actorId, opts) {
     });
   }
 
+  // B6 (Discord feedback, 2026-08-23): a declarative opt-in for actions
+  // that should freeze a "moment" photo into the camera roll when they
+  // resolve — same frozen-prompt-and-seed contract takePhoto uses, just
+  // captured on action completion instead of an explicit camera tap.
+  // def.transientClothing feeds the prompt directly (not live actor.clothing)
+  // because withVulnerableState below hasn't run yet at this point in the
+  // function, and by the time it has, it's already reverted to afterClothing.
+  let momentPhoto = null;
+  if (def.generatesImage && live.world?.phone?.camera) {
+    momentPhoto = captureActionMoment(live, def, actionId, actor, ctx);
+  }
+
   // Phase 9: decay facility condition for gated actions. Find which
   // facility this action requires and decay it. A tier drop is rare
   // (condition starts at 100, decays 1.5/use) but when it happens the
@@ -300,7 +312,7 @@ async function executeAction(actionId, gameState, actorId, opts) {
     resolvePairedAct(live, def, ctx, minutes);
   }
 
-  return { ok: true, ticksSpent: ticks, minutesSpent: minutes, shared, narration: narrateAction(def, ctx, prepared, shared) };
+  return { ok: true, ticksSpent: ticks, minutesSpent: minutes, shared, narration: narrateAction(def, ctx, prepared, shared), momentPhoto };
 }
 
 // Runs `fn` with gameState.player.flags._vulnerableState set, restoring
@@ -811,6 +823,9 @@ async function runRegisteredAction(actionId, opts) {
       return;
     }
     addLogEntry('narration', result.narration);
+    // B6: fire-and-forget — the modal generates/shows the photo on its own
+    // time and shouldn't hold up this action's render/save/hideLoading.
+    if (result.momentPhoto) showActionMomentModal(result.momentPhoto);
     if (actionId === 'set_meal') {
       for (const c of mealCommitments) c.status = 'held';
     }

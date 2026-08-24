@@ -2721,6 +2721,15 @@ function studioSliderField(label, field, value, min, max, step, checked) {
     const valEl = wrap.querySelector(`#${id}-val`);
     if (valEl) valEl.textContent = parseFloat(e.target.value).toFixed(1);
   });
+  // The checkbox gates whether this axis is set at all (unchecked = not
+  // authored, save omits it) — nothing previously toggled the slider's own
+  // disabled state when the checkbox changed, so it stayed stuck disabled
+  // even after checking it.
+  cb.addEventListener('change', () => {
+    slider.disabled = !cb.checked;
+    const valEl = wrap.querySelector(`#${id}-val`);
+    if (valEl) valEl.textContent = cb.checked ? parseFloat(slider.value).toFixed(1) : '—';
+  });
   row.appendChild(cb);
   row.appendChild(slider);
   wrap.appendChild(row);

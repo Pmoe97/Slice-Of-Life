@@ -239,6 +239,18 @@ function willingnessFloor(gs, npc, initiatorId, ctx) {
 // --- The willingness function ---------------------------------------------
 // The plan's signature and shape, exactly: base + Σ(term × weight), with
 // the hard floors returning -1 before any term is evaluated. Pure.
+// F1 (Discord feedback, 2026-08-23): the New Game/Sandbox "receptivity"
+// slider, [-1,1] via world.gameplayOptions.willingnessBaseline. A soft term
+// like every other one in willingness() below — summed in AFTER
+// willingnessFloor's hard gate already ran (this function is never called
+// unless the floor already passed), so it cannot make a floored NPC
+// participate. Missing/malformed input reads as 0 — a total no-op, same
+// as every other gameplayOptions field. Pure.
+function willingnessDisposition(gs) {
+  const v = gs?.world?.gameplayOptions?.willingnessBaseline;
+  return typeof v === 'number' ? wlClamp(v, -1, 1) : 0;
+}
+
 function willingness(gs, npc, initiatorId, act, ctx) {
   ctx = ctx || {};
   if (willingnessFloor(gs, npc, initiatorId, ctx)) return -1;
@@ -251,7 +263,8 @@ function willingness(gs, npc, initiatorId, act, ctx) {
     + willingnessPhase(gs, npc, initiatorId, ctx) * c.phase
     + willingnessPersonality(npc) * c.personality
     + willingnessContext(gs, npc, ctx) * c.context
-    - willingnessHistory(gs, npc, day) * c.history;
+    - willingnessHistory(gs, npc, day) * c.history
+    + willingnessDisposition(gs) * c.disposition;
   return wlClamp(w, -1, 1);
 }
 

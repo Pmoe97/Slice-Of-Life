@@ -789,8 +789,8 @@ function buildAskPhotoRecord(gs, npc, npcId, flavor, day, count) {
   const ask = flavorBrief(flavor, 140);
   const name = (npc.bible && npc.bible.name) || 'them';
   const prompt = ask
-    ? `${desc}, ${ask}, a candid selfie taken on a smartphone, soft natural light, casual clothing, at ease in their own space, anime-inspired illustration style, warm tones, selfie framing, upper-body portrait.`
-    : `${desc}, taking a candid selfie on a smartphone, soft natural light, casual clothing, at ease in their own space, anime-inspired illustration style, warm tones, selfie framing, upper-body portrait.`;
+    ? `${desc}, ${ask}, a candid selfie taken on a smartphone, soft natural light, casual clothing, at ease in their own space, warm tones, selfie framing, upper-body portrait.`
+    : `${desc}, taking a candid selfie on a smartphone, soft natural light, casual clothing, at ease in their own space, warm tones, selfie framing, upper-body portrait.`;
   return { id, prompt, seed, caption: `Selfie from ${name}${ask ? ` — ${ask}` : ''}` };
 }
 

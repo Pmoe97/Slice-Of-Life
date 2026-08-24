@@ -797,7 +797,10 @@ function doStudioPlayerConfirm() {
   const draft = buildPlayerDraftForNewGame();
   closeStudio();
   studioSubject = null;
-  playIntroCutscene(draft);
+  // F1 (Discord feedback, 2026-08-23): New Game now takes a gameplay-options
+  // step here, before the cutscene — openNewGameOptions carries the draft
+  // through to playIntroCutscene itself once that screen confirms.
+  openNewGameOptions(draft);
 }
 
 function doStudioConfirm() {

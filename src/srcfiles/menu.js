@@ -339,9 +339,71 @@ function defaultSandboxConfig() {
       rentGraceDays: ECONOMY.opening?.rentGraceDays ?? 14,
       billsStartDay: (ECONOMY.opening?.firstBillDelay ?? 7) + 1,
       taxReserve: 0,
+      // F1 (Discord feedback, 2026-08-23): gameplay options, not economy —
+      // kept on this same object rather than a new cfg.gameplayOptions
+      // because economy IS the bag startSandboxGame already threads
+      // straight into SIM_generateHouse as economyCfg (see buildGameState/
+      // rollCastSlot's reads of these same field names).
+      needDecayScale: 1,
+      needDecayDisabled: false,
+      dispositionSkew: 0,
+      willingnessBaseline: 0,
     },
     flags: { suppressTutorial: true },
   };
+}
+
+// F1 (Discord feedback, 2026-08-23): New Game's gameplay-options step,
+// shown after the Player Studio and before the intro cutscene. Holds
+// exactly the four fields GAMEPLAY_OPTIONS_SECTIONS' rows write to — a
+// draft-scale version of pendingSandboxConfig.economy's new fields, not a
+// second definition of what they mean.
+let pendingNewGameOptions = null;
+let newGameOptionsDraft = null; // the player draft to carry into the cutscene once this screen confirms
+
+function openNewGameOptions(draft) {
+  newGameOptionsDraft = draft;
+  // Nested under .economy to match GAMEPLAY_OPTIONS_SECTIONS' row field
+  // paths verbatim ('economy.needDecayScale', ...) — those rows are the
+  // exact same objects Sandbox's Economy tab renders, so they carry
+  // Sandbox's field paths regardless of which screen is showing them.
+  pendingNewGameOptions = { economy: { needDecayScale: 1, needDecayDisabled: false, dispositionSkew: 0, willingnessBaseline: 0 } };
+  sbxActiveTarget = pendingNewGameOptions;
+  renderNewGameOptionsUi();
+  const el = document.getElementById('newgame-options-screen');
+  if (el) el.hidden = false;
+  wireNewGameOptionsInputs();
+}
+
+function closeNewGameOptions() {
+  sbxActiveTarget = null;
+  const el = document.getElementById('newgame-options-screen');
+  if (el) el.hidden = true;
+}
+
+function renderNewGameOptionsUi() {
+  const panes = document.getElementById('newgame-options-panes');
+  if (!panes) return;
+  panes.innerHTML = '';
+  renderSandboxSections(panes, GAMEPLAY_OPTIONS_SECTIONS, '⚙️');
+}
+
+function doNewGameOptionsStart() {
+  const draft = newGameOptionsDraft;
+  closeNewGameOptions();
+  newGameOptionsDraft = null;
+  // pendingNewGameOptions deliberately stays set — startSoloGame (ui.js)
+  // reads it directly at the point it calls SIM_generateHouse, the same
+  // module-global-read pattern startSandboxGame already uses for
+  // pendingSandboxConfig, rather than threading a second parameter through
+  // playIntroCutscene/introState/finishIntro.
+  playIntroCutscene(draft);
+}
+
+function doNewGameOptionsBack() {
+  closeNewGameOptions();
+  newGameOptionsDraft = null;
+  pendingNewGameOptions = null;
 }
 
 function doMenuSandbox() {
@@ -997,14 +1059,21 @@ function sbxGenericNumberControl(fieldPath, value, opts) {
 // (it tells the two apart by the presence of '|' — a roommate index is
 // never a dotted path, and a top-level cfg field never starts with a bare
 // integer).
+// F1 (Discord feedback, 2026-08-23): New Game's options screen (its own
+// pendingNewGameOptions, not a Sandbox draft) reuses every bit of this row
+// system by pointing sbxActiveTarget at it while its screen is open —
+// null the rest of the time, which is exactly Sandbox's original behavior.
+let sbxActiveTarget = null;
+
 function getSandboxValue(field) {
-  return field.split('.').reduce((cur, part) => (cur == null ? undefined : cur[part]), pendingSandboxConfig);
+  const target = sbxActiveTarget || pendingSandboxConfig;
+  return field.split('.').reduce((cur, part) => (cur == null ? undefined : cur[part]), target);
 }
 
 function setSandboxValue(field, value) {
   const parts = field.split('.');
   const last = parts.pop();
-  let obj = pendingSandboxConfig;
+  let obj = sbxActiveTarget || pendingSandboxConfig;
   for (const p of parts) { obj[p] = obj[p] || {}; obj = obj[p]; }
   obj[last] = value;
 }
@@ -1017,9 +1086,11 @@ function doSandboxSubtab(subId) {
 }
 
 function doSandboxRowToggle(field) {
-  if (!field || !pendingSandboxConfig) return;
+  if (!field || !(sbxActiveTarget || pendingSandboxConfig)) return;
   setSandboxValue(field, !getSandboxValue(field));
-  renderSandboxUi();
+  // F1: whichever screen actually owns sbxActiveTarget right now re-renders
+  // itself — the two are mutually exclusive (never both open at once).
+  (sbxActiveTarget ? renderNewGameOptionsUi : renderSandboxUi)();
 }
 
 // Dormant during the Sandbox Pre-Game Editor Overhaul migration (Phases
@@ -1400,19 +1471,21 @@ function sbxSelectControl(fieldPath, options, value, emptyLabel) {
 // with the <axis>|<index> conventions the temperaments/interests/values use
 // below. A bare dot-path with no index prefix (e.g. "economy.money") is the
 // generic row kinds' contract instead (getSandboxValue/setSandboxValue).
-function wireSandboxConfigInputs() {
-  // Sandbox Pre-Game Editor Overhaul Phase 1: retargeted from the old
-  // #sandbox-config-body (removed with the single-scroll layout) to the new
-  // shell's stable content wrapper — panes rebuild on every tab switch,
-  // #sandbox-content does not, so the delegation survives re-renders.
-  const root = document.getElementById('sandbox-content');
-  if (!root || root.hasAttribute('data-sbx-wired')) return;
-  root.setAttribute('data-sbx-wired', '');
-
-  const handle = (e) => {
+// F1 (Discord feedback, 2026-08-23): extracted from wireSandboxConfigInputs
+// so New Game's options screen (wireNewGameOptionsInputs) can wire the same
+// bare-dot-path row logic onto its own container instead of a second copy.
+// The roommate-indexed branch below (attr.includes('|')) is unreachable
+// from New Game — its rows never emit that shape — so it's left untouched,
+// still targeting pendingSandboxConfig.roommates directly rather than
+// sbxActiveTarget.
+function handleSandboxFieldEvent(e) {
     const el = e.target;
     const attr = el.getAttribute?.('data-sbx-field');
-    if (!attr || !pendingSandboxConfig) return;
+    // sbxActiveTarget (set only while New Game's options screen is open)
+    // redirects getSandboxValue/setSandboxValue below at Sandbox itself —
+    // see those functions' own comment.
+    const target = sbxActiveTarget || pendingSandboxConfig;
+    if (!attr || !target) return;
     // Phase 1 (D5): a bare dot-path with no roommate-index prefix targets
     // pendingSandboxConfig directly — the generic toggle/slider/number/
     // select row kinds' write path (getSandboxValue/setSandboxValue above).
@@ -1457,6 +1530,7 @@ function wireSandboxConfigInputs() {
       refreshSandboxPresetRow();
       return;
     }
+    if (!pendingSandboxConfig) return; // this branch always targets Sandbox's own config
     const parts = attr.split('|');
     const idx = Number(parts[0]);
     const fieldPath = parts[1];
@@ -1515,11 +1589,20 @@ function wireSandboxConfigInputs() {
       renderSandboxUi();
       return;
     }
-  };
+}
 
-  root.addEventListener('change', handle);
+function wireSandboxConfigInputs() {
+  // Sandbox Pre-Game Editor Overhaul Phase 1: retargeted from the old
+  // #sandbox-config-body (removed with the single-scroll layout) to the new
+  // shell's stable content wrapper — panes rebuild on every tab switch,
+  // #sandbox-content does not, so the delegation survives re-renders.
+  const root = document.getElementById('sandbox-content');
+  if (!root || root.hasAttribute('data-sbx-wired')) return;
+  root.setAttribute('data-sbx-wired', '');
+
+  root.addEventListener('change', handleSandboxFieldEvent);
   root.addEventListener('input', (e) => {
-    if (e.target?.getAttribute?.('data-sbx-field')) handle(e);
+    if (e.target?.getAttribute?.('data-sbx-field')) handleSandboxFieldEvent(e);
   });
 
   // B6: house-state editor wiring — one table walked the same way. A facility
@@ -1542,6 +1625,21 @@ function wireSandboxConfigInputs() {
     if (Object.keys(cur).length) pendingSandboxConfig.house.facilities[defId] = cur;
     else delete pendingSandboxConfig.house.facilities[defId];
     if (kind === 'tier') renderSandboxUi(); // refresh quality + bedroom capacities
+  });
+}
+
+// F1 (Discord feedback, 2026-08-23): New Game's options screen reuses
+// handleSandboxFieldEvent on its own container — only the bare-dot-path
+// branch is reachable here (its rows never emit the roommate-indexed
+// 'idx|path' shape), and that branch is already target-aware via
+// sbxActiveTarget.
+function wireNewGameOptionsInputs() {
+  const root = document.getElementById('newgame-options-content');
+  if (!root || root.hasAttribute('data-sbx-wired')) return;
+  root.setAttribute('data-sbx-wired', '');
+  root.addEventListener('change', handleSandboxFieldEvent);
+  root.addEventListener('input', (e) => {
+    if (e.target?.getAttribute?.('data-sbx-field')) handleSandboxFieldEvent(e);
   });
 }
 

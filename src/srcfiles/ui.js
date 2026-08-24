@@ -3166,6 +3166,9 @@ const MENU_ACTIONS = ['menu', 'new-game-solo', 'new-game-random', 'new-game-guid
   // left for this phase to resolve either way; this is the "retire outright"
   // branch, not a reuse).
   'menu.sandbox', 'sandbox.start', 'sandbox.back',
+  // F1 (Discord feedback, 2026-08-23): New Game's gameplay-options step —
+  // pre-game meta, same reachability as the Sandbox verbs right above.
+  'newgame-options.start', 'newgame-options.back',
   'sandbox.player-design', 'sandbox.roommate-add', 'sandbox.roommate-remove',
   'sandbox.roommate-move', 'sandbox.roommate-design',
   'sandbox.roommate-skip',
@@ -3264,6 +3267,9 @@ const ENERGY_GATE_EXEMPT = new Set([
   // 'sandbox.roommate-toggle' retired in favor of 'sandbox.roommate-select'
   // below — see the matching MENU_ACTIONS comment.
   'menu.sandbox', 'sandbox.start', 'sandbox.back',
+  // F1 (Discord feedback, 2026-08-23): New Game's gameplay-options step —
+  // pre-game meta, same reachability as the Sandbox verbs right above.
+  'newgame-options.start', 'newgame-options.back',
   'sandbox.player-design', 'sandbox.roommate-add', 'sandbox.roommate-remove',
   'sandbox.roommate-move', 'sandbox.roommate-design',
   'sandbox.roommate-skip',
@@ -4008,6 +4014,18 @@ async function handleAction(action, npcId, extra) {
     case 'sandbox.back':
       showMenuScreen('title');
       break;
+    // F1 (Discord feedback, 2026-08-23): New Game's gameplay-options step.
+    // A standalone overlay sibling of #player-studio (see main.html), not
+    // part of showMenuScreen's managed set — the title screen underneath
+    // was never hidden for this flow (closeMainMenu doesn't fire until
+    // startSoloGame actually begins), so Back only needs to close this
+    // screen, same as the Studio's own Cancel.
+    case 'newgame-options.start':
+      doNewGameOptionsStart();
+      break;
+    case 'newgame-options.back':
+      doNewGameOptionsBack();
+      break;
     case 'sandbox.player-design':
       openSandboxPlayerStudio();
       break;
@@ -4623,6 +4641,32 @@ function convAddBubble(from, text, tag) {
 // pattern from render.computer.js (a resolved promise writing to a since-
 // removed <img> is a harmless no-op). textContent, never innerHTML, for
 // anything that can carry player/LLM-derived text.
+// F3 (Discord feedback, 2026-08-23): decides whether this turn earns a new
+// illustrated panel, per the player's chosen cadence, then generates and
+// paints it in. Fire-and-forget from doConvSend, like showActionMomentModal
+// — a slow/failed generation should never hold up the conversation itself.
+async function maybeShowConversationScene(npc) {
+  const mode = settingsCache?.sceneVisualizerMode || 'off';
+  if (mode === 'off' || !convState || !npc) return;
+  let due = false;
+  if (mode === 'everyMessage') {
+    due = true;
+  } else if (mode === 'everyN') {
+    convState.sceneVisCount = (convState.sceneVisCount || 0) + 1;
+    const opt = SCENE_VIS_EVERY_N_OPTIONS.find((o) => o.id === settingsCache.sceneVisualizerEveryN);
+    const n = opt ? opt.n : 3;
+    if (convState.sceneVisCount >= n) { due = true; convState.sceneVisCount = 0; }
+  } else if (mode === 'mood') {
+    const label = moodLabel(npc.mood);
+    if (label !== convState.sceneVisLastMood) { due = true; convState.sceneVisLastMood = label; }
+  }
+  if (!due) return;
+  const npcId = npc.id;
+  const result = await generateConversationSceneImage(currentGameState, npc);
+  if (!convState || convState.npcId !== npcId) return; // conversation closed/switched mid-generation
+  if (result.url) convAddImageBubble('npc', result.url, '', '🎨 Scene');
+}
+
 function convAddImageBubble(from, url, text, tag) {
   const log = document.getElementById('conv-log');
   if (!log) return null;
@@ -5021,7 +5065,10 @@ async function doTalk(npcId) {
 
   // Open the conversation overlay before any LLM call so the player sees
   // the interface immediately, not a loading screen.
-  convState = { npcId, sending: false };
+  // sceneVisCount/sceneVisLastMood: F3's cadence trackers — per-conversation,
+  // reset on every open so a later 'everyN'/'mood' setting change or a new
+  // conversation with someone else starts counting fresh.
+  convState = { npcId, sending: false, sceneVisCount: 0, sceneVisLastMood: null };
   openConversationOverlay(npcId);
 
   // Deterministic confrontation, before the LLM ever runs — a suspicion
@@ -5205,6 +5252,10 @@ async function doConvSend(forcedText, giftDefId) {
         ? resolveSpeakerIds(result.proposal.dialogue, context.activeNpcs)
         : [convState.npcId];
       currentSceneState = advanceEngagement(currentSceneState, speakerIds);
+      // F3: fire-and-forget, after the turn's own dialogue/beats are already
+      // painted in — never blocks the reply the player is waiting on.
+      const sceneNpc = currentGameState.npcs?.[convState.npcId];
+      if (sceneNpc) maybeShowConversationScene(sceneNpc);
     }
 
     currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
@@ -6032,7 +6083,14 @@ async function startSoloGame(draft) {
   showLoading('Moving in...');
   try {
     const seed = genSeed();
-    pendingCast = SIM_generateHouse(seed, 0, [], draft);
+    // F1 (Discord feedback, 2026-08-23): the gameplay-options screen
+    // (menu.js's openNewGameOptions) stamps this before the cutscene ran;
+    // read once and clear it here so a later New Game (or the studio's
+    // "Back to menu" path skipping the options screen entirely) never
+    // reuses a stale options object.
+    const gameplayOptions = pendingNewGameOptions?.economy;
+    pendingNewGameOptions = null;
+    pendingCast = SIM_generateHouse(seed, 0, [], draft, gameplayOptions);
     // Settings & Pause Overhaul Phase 4 (D5): the solo path bypasses the
     // cast-approval step where pendingCast.contentConfig is normally built
     // (handleGenerateCast), so seed it from defaults and apply the SFW

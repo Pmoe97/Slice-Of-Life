@@ -28,7 +28,38 @@ const SETTINGS_DEFAULTS = {
                                   // already does this on its own; this is the
                                   // in-game override for players whose OS is not
                                   // set but who still want the movement stopped.
+  // F3 (Discord feedback, 2026-08-23): the in-conversation illustrated-panel
+  // system. Flat fields (not nested) — doSettingsCycle (menu.js) reads/writes
+  // 'cycle' rows by flat field name, unlike doSettingsToggle's dot-path
+  // support, so every other cycle row (autosaveInterval, textSize, ...) is
+  // flat too; matching that instead of adding dot-path handling for one pair.
+  sceneVisualizerMode: 'off',     // id from SCENE_VIS_MODES
+  sceneVisualizerEveryN: '3',     // id from SCENE_VIS_EVERY_N_OPTIONS, read
+                                  // only when sceneVisualizerMode === 'everyN'
 };
+
+// F3: how often a conversation's illustrated panel regenerates. 'off' draws
+// nothing (today's plain text-only chat). 'mood' regenerates on a mood-label
+// change rather than a raw count — see moodLabel(npc.mood) in ui.js's
+// maybeShowConversationScene.
+const SCENE_VIS_MODES = [
+  { id: 'off', label: 'Off' },
+  { id: 'everyMessage', label: 'Every reply' },
+  { id: 'everyN', label: 'Every few messages' },
+  { id: 'mood', label: 'On mood shifts' },
+];
+
+// Only consulted when sceneVisualizer.mode === 'everyN'. Each option's `n`
+// is the real count maybeShowConversationScene counts against; `.id` is what
+// actually persists in settings (same string-id-over-number convention as
+// AUTOSAVE_INTERVALS).
+const SCENE_VIS_EVERY_N_OPTIONS = [
+  { id: '2', label: 'Every 2', n: 2 },
+  { id: '3', label: 'Every 3', n: 3 },
+  { id: '4', label: 'Every 4', n: 4 },
+  { id: '5', label: 'Every 5', n: 5 },
+  { id: '8', label: 'Every 8', n: 8 },
+];
 
 // Phase 7 (D9): the image style presets — ONE global style across every
 // generated image (scenes, characters, portraits, keyhole peeks, photos, and
@@ -670,6 +701,30 @@ const SETTINGS_TABS = [
             label: 'Custom style phrase',
             desc: 'Typing here switches the style to Custom and appends your phrase verbatim to every image prompt.',
             placeholder: 'e.g. watercolor wash, loose strokes',
+          },
+        ],
+      },
+      {
+        title: 'Scene visualizer',
+        desc: 'An illustrated panel of the conversation, drawn into the chat log as you talk to a character. A separate system from the character cutouts — this is its own generated image, not a reused portrait.',
+        rows: [
+          {
+            id: 'scene-visualizer-mode',
+            kind: 'cycle',
+            field: 'sceneVisualizerMode',
+            action: 'settings.cycle',
+            label: 'Frequency',
+            desc: 'How often a new panel is drawn. Off keeps conversations text-only.',
+            options: SCENE_VIS_MODES,
+          },
+          {
+            id: 'scene-visualizer-every-n',
+            kind: 'cycle',
+            field: 'sceneVisualizerEveryN',
+            action: 'settings.cycle',
+            label: 'Message cadence',
+            desc: 'Only used when Frequency is set to "Every few messages".',
+            options: SCENE_VIS_EVERY_N_OPTIONS,
           },
         ],
       },

@@ -369,6 +369,14 @@ const ACTION_DEFS = {
     transientClothing: 'nude',
     afterClothing: 'dressed',
     emitsSignal: { signal: 'moaning', intensity: SIGNALS_EMIT.moaningLow },
+    // B6 (Discord feedback, 2026-08-23): freezes a moment photo into the
+    // camera roll on completion (image.js's captureActionMoment/
+    // buildActionMomentPrompt) — the community-fork feature players asked
+    // for. momentPhrase/momentCaption are this action's own copy for that
+    // generic hook; nothing else reads them.
+    generatesImage: true,
+    momentPhrase: 'mid-masturbation, eyes closed, lost in the feeling',
+    momentCaption: 'Alone with your thoughts',
     timeCost: { base: INTIMACY.durationMinutes.masturbate },
     effects: [
       `ADJUST_NEED player desire -${DESIRE.release.masturbate}`,
