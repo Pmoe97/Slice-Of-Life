@@ -602,6 +602,23 @@ function renderSandboxRoommatesPane(panes, strip, cfg) {
   const i = sandboxActiveRoommate;
   const r = roommates[i];
   panes.appendChild(renderSandboxRoommateDetailHead(r, i, cfg));
+
+  // Describe & Generate (AI-Assisted Character Generation Phase 5). Sits
+  // between the header and the sub-tab content, above ALL five sub-tabs,
+  // because one description fills every one of them — a section inside a
+  // sub-tab would misrepresent its own reach.
+  if (!r.concept) r.concept = defaultConceptState();
+  const conceptEl = renderConceptSection(r.concept, {
+    key: 'sandbox-roommate',
+    scope: 'npcFull',
+    toggleAction: 'sandbox.concept-toggle',
+    generateAction: 'sandbox.concept-generate',
+  });
+  if (conceptEl) {
+    conceptEl.classList.add('sbx-concept');
+    panes.appendChild(conceptEl);
+  }
+
   panes.appendChild(renderSandboxRoommateSubtabContent(sandboxRoommateSubtab, r, i, cfg));
 }
 
@@ -742,8 +759,11 @@ function renderSandboxRoommateIdentity(r, i) {
   form.appendChild(sbxField('Gender', sbxSelectControl(`${i}|gender`, Object.keys(CHAR_GEN.genderWeights), partial.gender, 'Roll')));
   const speciesEnum = (CHARACTER_SCHEMA.bible.species.enum) || ['human'];
   form.appendChild(sbxField('Species', sbxSelectControl(`${i}|species`, speciesEnum, partial.species, 'Roll')));
+  // Free-typed (D1/D2): the categories are suggestions, and a typed job
+  // title is kept verbatim and backed by derived payload at roll time
+  // (D4's resolveOccupation, Phase 2) rather than being dropped.
   const occCats = [...new Set(OCCUPATION_POOL.map(o => o.category))];
-  form.appendChild(sbxField('Occupation', sbxSelectControl(`${i}|occupationCategory`, occCats, partial.occupationCategory, 'Roll')));
+  form.appendChild(sbxField('Occupation', sbxSelectControl(`${i}|occupationCategory`, occCats, partial.occupationCategory, 'Roll, or type a job', true)));
 
   // Appearance studio entry.
   const pickers = document.createElement('div');
@@ -808,13 +828,17 @@ function renderSandboxRoommateInterests(r, i) {
   form.className = 'sbx-form';
   const partial = r.partial = r.partial || {};
 
+  // Free-typed (D1/D2). An off-pool interest carries no `tags`, which costs
+  // only cast-variety pressure — a preference rollCastSlot already treats as
+  // soft, never a gate. An off-pool value gets its schema-required
+  // `opposition` from D4's resolveValues.
   const interests = partial.interests || [];
   for (let n = 0; n < 3; n++) {
-    form.appendChild(sbxField(`Interest ${n + 1}`, sbxSelectControl(`${i}|interests.${n}`, INTEREST_POOL.map(x => x.name), interests[n] || '', 'Roll')));
+    form.appendChild(sbxField(`Interest ${n + 1}`, sbxSelectControl(`${i}|interests.${n}`, INTEREST_POOL.map(x => x.name), interests[n] || '', 'Roll, or type one', true)));
   }
   const values = partial.values || [];
   for (let n = 0; n < 2; n++) {
-    form.appendChild(sbxField(`Value ${n + 1}`, sbxSelectControl(`${i}|values.${n}`, VALUES_POOL.map(v => v.name), values[n] || '', 'Roll')));
+    form.appendChild(sbxField(`Value ${n + 1}`, sbxSelectControl(`${i}|values.${n}`, VALUES_POOL.map(v => v.name), values[n] || '', 'Roll, or type one', true)));
   }
 
   return form;
@@ -825,11 +849,14 @@ function renderSandboxRoommateBackstory(r, i) {
   form.className = 'sbx-form';
   const partial = r.partial = r.partial || {};
 
-  form.appendChild(sbxField('Baggage', sbxSelectControl(`${i}|baggage`, BAGGAGE_POOL, partial.baggage, 'Roll')));
-  form.appendChild(sbxField('Wound', sbxSelectControl(`${i}|wound`, WOUND_POOL, partial.wound, 'Roll')));
-  form.appendChild(sbxField('Want', sbxSelectControl(`${i}|want`, WANT_POOL, partial.want, 'Roll')));
-  form.appendChild(sbxField('Blind spot', sbxSelectControl(`${i}|blindSpot`, BLINDSPOT_POOL, partial.blindSpot, 'Roll')));
-  form.appendChild(sbxField('Boundary', sbxSelectControl(`${i}|boundary`, BOUNDARY_POOL.map(b => b.text), partial.boundary, 'Roll')));
+  // All five free-typed (D1/D2): these are plain `maxLength: 300` strings in
+  // CHARACTER_SCHEMA with no enum, read as prose by the persona block, so a
+  // hand-written wound is worth strictly more than the nearest pool entry.
+  form.appendChild(sbxField('Baggage', sbxSelectControl(`${i}|baggage`, BAGGAGE_POOL, partial.baggage, 'Roll, or write your own', true)));
+  form.appendChild(sbxField('Wound', sbxSelectControl(`${i}|wound`, WOUND_POOL, partial.wound, 'Roll, or write your own', true)));
+  form.appendChild(sbxField('Want', sbxSelectControl(`${i}|want`, WANT_POOL, partial.want, 'Roll, or write your own', true)));
+  form.appendChild(sbxField('Blind spot', sbxSelectControl(`${i}|blindSpot`, BLINDSPOT_POOL, partial.blindSpot, 'Roll, or write your own', true)));
+  form.appendChild(sbxField('Boundary', sbxSelectControl(`${i}|boundary`, BOUNDARY_POOL.map(b => b.text), partial.boundary, 'Roll, or write your own', true)));
 
   return form;
 }
@@ -1447,7 +1474,29 @@ function sbxNumberControl(fieldPath, value, placeholder) {
 
 // options: strings, or { value, label, disabled }. The empty value is the
 // standing "Roll it" promise — a cleared field deletes from the partial.
-function sbxSelectControl(fieldPath, options, value, emptyLabel) {
+// `free` (AI-Assisted Character Generation Phase 1, D1/D2) turns the control
+// into a type-or-pick combo: the option list becomes native suggestions and
+// anything typed is kept verbatim. The returned node is still harvested by
+// `.value` off `data-sbx-field`, so handleSandboxFieldEvent and
+// sbxWriteMultiSelect need no change at all — that compatibility is the
+// entire reason comboControl returns a bare <input> rather than a wrapper.
+//
+// Callers pass `free` for every vocabulary field and omit it for the four D2
+// categories. Here that means gender/species (schema enums — a free-typed
+// value fails validateNpcScalar and would be silently dropped) and the
+// room/bed pickers (their options carry `disabled` state that a datalist
+// cannot express, and a typed room id double-books a bed).
+function sbxSelectControl(fieldPath, options, value, emptyLabel, free) {
+  if (free) {
+    return comboControl({
+      value,
+      pool: options.map(o => (typeof o === 'object' && o !== null ? o.value : o)).filter(Boolean),
+      placeholder: emptyLabel || 'Roll it',
+      className: 'sbx-control',
+      maxLength: 300,
+      attrs: { 'data-sbx-field': fieldPath },
+    });
+  }
   const sel = document.createElement('select');
   sel.className = 'sbx-control';
   sel.setAttribute('data-sbx-field', fieldPath);
@@ -1745,6 +1794,71 @@ function roommateDefaultSkipProse(partial) {
   return !!(p.physical && typeof p.physical === 'object' && Object.keys(p.physical).length > 0);
 }
 
+// --- Describe & Generate on a roommate (AI-Assisted Character Generation
+// Phase 5) ---
+// One description fills all five sub-tabs at once. The state lives on the
+// ROOMMATE record (r.concept), not module-level, so switching roommates and
+// back keeps each one's description rather than showing them someone else's.
+function doSandboxConceptToggle() {
+  const r = pendingSandboxConfig?.roommates?.[sandboxActiveRoommate];
+  if (!r) return;
+  if (!r.concept) r.concept = defaultConceptState();
+  const live = readConceptControls('sandbox-roommate');
+  if (live) { r.concept.text = live.text; r.concept.replace = live.replace; }
+  r.concept.open = !r.concept.open;
+  renderSandboxUi();
+}
+
+async function doSandboxConceptGenerate() {
+  const idx = sandboxActiveRoommate;
+  const r = pendingSandboxConfig?.roommates?.[idx];
+  if (!r) return;
+  if (!r.concept) r.concept = defaultConceptState();
+  const live = readConceptControls('sandbox-roommate');
+  if (!live) return;
+  r.concept.text = live.text;
+  r.concept.replace = live.replace;
+  r.concept.lastError = '';
+  if (!live.text) {
+    r.concept.lastError = 'Describe them first.';
+    renderSandboxUi();
+    return;
+  }
+
+  r.concept.busy = true;
+  renderSandboxUi();
+  try {
+    const partial = r.partial || (r.partial = {});
+    const result = await fillFromConcept(live.text, 'npcFull', {
+      authored: {
+        name: partial.name, age: partial.age, gender: partial.gender,
+        species: partial.species, occupationCategory: partial.occupationCategory,
+      },
+      // Names already spoken for elsewhere in the house, so the model doesn't
+      // hand you two Miras — the same duplicate the surname work fixed on the
+      // rolled path.
+      usedNames: (pendingSandboxConfig.roommates || [])
+        .map((rr, ii) => (ii === idx ? null : rr.partial?.name))
+        .filter(Boolean),
+    });
+    if (!result.ok) { r.concept.lastError = result.reason; return; }
+
+    r.partial = conceptMergeInto(partial, conceptToPartial(result.draft), live.replace);
+
+    // D9: the fill wrote name/history/sketch/sampleLines, so the start-of-game
+    // prose call for this roommate has nothing left to add. Flip them to
+    // templated — one AI call at fill time REPLACES one at start time rather
+    // than adding to it. Only when the player hasn't set the toggle by hand
+    // (skipProse === null is "auto"; an explicit boolean is their call).
+    if (r.skipProse === null && conceptWroteProse(result.draft)) r.skipProse = true;
+  } catch (e) {
+    r.concept.lastError = `Something went wrong applying that: ${(e && e.message) || 'unknown error'}`;
+  } finally {
+    r.concept.busy = false;
+    renderSandboxUi();
+  }
+}
+
 function doSandboxRoommateSkip(index) {
   const r = pendingSandboxConfig?.roommates?.[index];
   if (!r) return;
@@ -1778,6 +1892,16 @@ function roommateAuthoredFields(partial) {
   if (touched(p.blindSpot)) out.push('blindSpot');
   if (touched(p.boundary)) out.push('boundary');
   if (p.physical && typeof p.physical === 'object' && Object.keys(p.physical).length > 0) out.push('physical');
+  // AI-Assisted Character Generation Phase 5. The rule is unchanged —
+  // presence in the partial IS the authored set — these keys simply had no
+  // producer before: nothing in the sandbox form could author a personality,
+  // a speech profile or prose, so the list never needed to name them. A
+  // concept fill writes all of them, and without these lines the prose pass
+  // would overwrite an AI-written history with a templated one.
+  if (p.personality && typeof p.personality === 'object' && Object.keys(p.personality).length > 0) out.push('personality');
+  if (p.speech && typeof p.speech === 'object' && Object.keys(p.speech).length > 0) out.push('speech');
+  for (const k of ['history', 'sketch', 'visual']) if (touched(p[k])) out.push(k);
+  if (Array.isArray(p.sampleLines) && p.sampleLines.length > 0) out.push('sampleLines');
   return out;
 }
 

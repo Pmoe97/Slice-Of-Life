@@ -1527,7 +1527,13 @@ function drawOffscreenEvent(rng, npcId, npc, otherNpcIds) {
     }
   }
   return {
-    day: null, tick: null, roomId: null, // filled by caller
+    day: null, tick: null,
+    // The room is the EVENT's, not the NPC's. Most of this table is genuinely
+    // off-screen — a date, a rough day at work, a grocery run — and those
+    // carry no room at all; the handful whose own text names one ("broke a
+    // {item} in the kitchen", "a long nap on the couch") declare it as data.
+    // Guarded against a layout that has no such room.
+    roomId: (evt.roomId && ROOMS[evt.roomId]) ? evt.roomId : null,
     npcId,
     type: evt.type,
     moodDelta: evt.moodDelta,
@@ -1932,16 +1938,29 @@ function resolveTick(gameState) {
       const evt = drawOffscreenEvent(rng, id, npc, otherIds);
       evt.day = meta.clock.day;
       evt.tick = getTickIndex(meta.clock.minutes);
-      evt.roomId = location; // null for off-screen (work/commute) events
+      // roomId is drawOffscreenEvent's now, and comes from the EVENT's own
+      // definition. It used to be assigned `location` here — the room the NPC
+      // happened to be standing in — under a comment claiming it would be
+      // "null for off-screen (work/commute) events". The only guard is on the
+      // BLOCK, so a resident who was simply home and idle got their date,
+      // their package and their grocery run stamped with their current room,
+      // and surfaceRoomEvidence (ui.js) then read those back as "here is what
+      // happened in this room". That is how a save ends up narrating that
+      // somebody cooked dinner in the player's bedroom.
       newEvents.push(evt);
       moodDelta = evt.moodDelta;
       // Perception plan Phase 3: an event that makes a noise or a smell
       // becomes something the household can actually sense, not just a line
       // in the log. EVENT_SIGNALS is the table; an event with no entry is
       // silent, which is most of them.
+      // The signal comes from where the EVENT was, not from where the NPC is
+      // standing — all three signalled types (breakage, burnt_food, cooking)
+      // declare `kitchen`, and a smoke alarm that followed the cook around the
+      // flat was the same category of wrongness as the roomId above. An event
+      // with no room is genuinely off-screen and makes no noise in here.
       const sig = EVENT_SIGNALS[evt.type];
-      if (sig && location) {
-        emitTransient(gameState, { id: sig.signal, roomId: location, intensity: sig.intensity, sourceId: id });
+      if (sig && evt.roomId) {
+        emitTransient(gameState, { id: sig.signal, roomId: evt.roomId, intensity: sig.intensity, sourceId: id });
       }
     }
 
@@ -3953,6 +3972,158 @@ function getQualityThreshold(residentCount) {
   return CAST_CONSTRAINTS.tier3.qualityThreshold;
 }
 
+// --- Free-typed authored values (AI-Assisted Character Generation, D4) ---
+// Three partial fields carry MECHANICAL PAYLOAD behind their label, and were
+// the only three that could not simply be taken at face value once Phase 1
+// let a player (or an AI fill) type their own: `occupationCategory` keys a
+// whole occupation record including a SCHEDULES template, `interests` carry
+// the `tags` the cast-variety pass reads, and `values` carry a schema-REQUIRED
+// `opposition`.
+//
+// Before this, all three did `POOL.find(exact name)` + `.filter(Boolean)`, so
+// an off-pool value was dropped silently and the field rolled instead. That is
+// the invisible-value failure one layer below the UI: the sandbox form stores
+// and redisplays "restoring dead synthesizers" perfectly, and then the started
+// game hands you a character who likes cooking, with no error anywhere. Caught
+// by Phase 1's own end-to-end verification.
+//
+// The rule (D4) is: keep what was typed, back it with derived payload. Never
+// reject, never silently substitute.
+//
+// All four functions are PURE — no rng — so they cannot perturb a seed's draw
+// order (design invariant 4, the byte-identical-household guarantee).
+
+function normalizeMatchText(s) {
+  return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Words carrying no identifying signal, plus anything under three characters.
+// Dropped before scoring so "night shift ER nurse" is compared on {night,
+// shift, nurse} rather than being diluted by "er".
+const MATCH_STOPWORDS = new Set([
+  'a', 'an', 'the', 'of', 'and', 'or', 'in', 'on', 'at', 'to', 'for', 'with',
+  'my', 'her', 'his', 'their', 'who', 'that', 'is', 'was', 'as', 'by',
+]);
+
+function matchTokens(s) {
+  return new Set(
+    normalizeMatchText(s).split(' ').filter(t => t.length >= 3 && !MATCH_STOPWORDS.has(t))
+  );
+}
+
+// Nearest pool entry to a free-typed string, or null. Exact → substring
+// either direction → weighted token overlap above a floor.
+//
+// The metric is the OVERLAP COEFFICIENT (shared / smaller set), not Jaccard.
+// Jaccard divides by the union, which punishes a long phrase for being long:
+// "night shift ER nurse" against the pool's "health Nurse" scored 1/5 = 0.2
+// and fell under the floor, so a described ER nurse got a randomly-drawn job's
+// schedule. Overlap coefficient scores the same pair 1/2 = 0.5, which is the
+// honest reading — one of the two words that matter matched.
+//
+// Both guards are load-bearing. The floor stops a single incidental word from
+// carrying a match; the "shared token of length >= 4" rule stops short common
+// words from doing it, since a bad match is worse than no match — it silently
+// substitutes payload the player never asked for, where no match simply leaves
+// the draw unconstrained.
+function nearestPoolEntry(text, pool, keyFn) {
+  const want = normalizeMatchText(text);
+  if (!want || !Array.isArray(pool) || pool.length === 0) return null;
+  const key = keyFn || ((x) => (typeof x === 'string' ? x : x && x.name));
+  const wantTokens = matchTokens(want);
+
+  let best = null;
+  let bestScore = 0;
+  for (const entry of pool) {
+    const label = normalizeMatchText(key(entry));
+    if (!label) continue;
+    if (label === want) return entry;
+    if (label.includes(want) || want.includes(label)) {
+      // Substring beats any token score but not an exact hit, so keep looking
+      // for one. Longer shared text wins among substring matches.
+      const score = 0.5 + Math.min(label.length, want.length) / (2 * Math.max(label.length, want.length));
+      if (score > bestScore) { bestScore = score; best = entry; }
+      continue;
+    }
+    const labelTokens = matchTokens(label);
+    if (wantTokens.size === 0 || labelTokens.size === 0) continue;
+    let shared = 0;
+    let hasSubstantial = false;
+    for (const t of wantTokens) {
+      if (!labelTokens.has(t)) continue;
+      shared++;
+      if (t.length >= 4) hasSubstantial = true;
+    }
+    if (shared === 0 || !hasSubstantial) continue;
+    const score = shared / Math.min(wantTokens.size, labelTokens.size);
+    if (score > bestScore) { bestScore = score; best = entry; }
+  }
+  return bestScore >= 0.34 ? best : null;
+}
+
+// The candidate list rollCastSlot's occupation draw should pick from, given a
+// possibly-free-typed `occupationCategory`, plus the title to stamp on the
+// result. Returns { pool, title } — `title` is null when the text named a real
+// category (the pool entry's own title wins) and the typed text when it did
+// not (D4: keep what was typed).
+//
+// Deliberately returns a POOL rather than an entry, so the caller still makes
+// exactly one weightedPick draw either way. weightedPick consumes one rng()
+// regardless of list length, so resolving to a single candidate keeps a seed's
+// stream identical in shape to an exact-category match — which is what makes
+// this safe to add to a function whose determinism is asserted.
+function resolveAuthoredOccupationPool(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return { pool: null, title: null };
+
+  const byCategory = OCCUPATION_POOL.filter(o => normalizeMatchText(o.category) === normalizeMatchText(raw));
+  if (byCategory.length > 0) return { pool: byCategory, title: null };
+
+  const byTitle = OCCUPATION_POOL.find(o => normalizeMatchText(o.title) === normalizeMatchText(raw));
+  if (byTitle) return { pool: [byTitle], title: null };
+
+  // A job nobody enumerated. Borrow the closest entry's machinery — schedule,
+  // income band, hours, work mode — and keep the player's words for the label
+  // the fiction actually shows.
+  const near = nearestPoolEntry(raw, OCCUPATION_POOL, o => `${o.category} ${o.title}`);
+  if (near) return { pool: [near], title: raw };
+  return { pool: null, title: raw };
+}
+
+// Authored interest names → schema item objects. An off-pool name keeps its
+// text and borrows the nearest entry's tags; with no near match it carries an
+// empty tag set, which costs only cast-variety PRESSURE — rollCastSlot treats
+// tag overlap as a preference and never a gate, per its own comment.
+function resolveAuthoredInterests(names) {
+  const out = [];
+  for (const raw of names || []) {
+    const name = typeof raw === 'string' ? raw.trim() : (raw && raw.name);
+    if (!name) continue;
+    const exact = INTEREST_POOL.find(i => i.name === name);
+    if (exact) { out.push(exact); continue; }
+    const near = nearestPoolEntry(name, INTEREST_POOL, i => i.name);
+    out.push({ name, tags: near ? (near.tags || []) : [] });
+  }
+  return out;
+}
+
+// Authored value names → schema item objects. `opposition` is REQUIRED by
+// CHARACTER_SCHEMA, so it can never be left absent: the AI's own suggestion
+// (Phase 2) wins, then the nearest pool entry's, then a generic.
+function resolveAuthoredValues(names) {
+  const out = [];
+  for (const raw of names || []) {
+    const name = typeof raw === 'string' ? raw.trim() : (raw && raw.name);
+    if (!name) continue;
+    const exact = VALUES_POOL.find(v => v.name === name);
+    if (exact) { out.push(exact); continue; }
+    const given = typeof raw === 'object' && raw && raw.opposition ? String(raw.opposition) : '';
+    const near = nearestPoolEntry(name, VALUES_POOL, v => v.name);
+    out.push({ name, opposition: given || (near && near.opposition) || 'compromise' });
+  }
+  return out;
+}
+
 // --- Single-slot roll, with optional partial authoring ---
 // Rolls one character deterministically from `seed`/`slotIndex`/`attempt`,
 // with a bounded number of reroll attempts (CHAR_GEN.maxAttempts) — an
@@ -4034,9 +4205,27 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
       return weightedPick(charRng, pool, anyViable ? affinityOf : null);
     };
     let occ;
+    let authoredOccTitle = null;
+    // D4's aiHints half: a concept fill can propose a novel job's own income
+    // band, hours, work mode and income source, so "night-shift ER nurse"
+    // doesn't end up wearing a day-shift schedule just because Nurse was the
+    // nearest pool entry. Deliberately a NARROW allowlist — `scheduleTemplate`
+    // is excluded because it keys into SCHEDULES and a novel value breaks NPC
+    // scheduling with no visible error (D2b), and `category` is excluded
+    // because the cast-variety tracker and the drive system read it.
+    const authoredOccOverrides = {};
+    for (const k of ['incomeBand', 'hours', 'workMode', 'incomeSource']) {
+      const v = partial.occupationOverrides && partial.occupationOverrides[k];
+      if (typeof v === 'string' && v.trim()) authoredOccOverrides[k] = v.trim();
+    }
     if (partial.occupationCategory) {
-      const forced = OCCUPATION_POOL.filter(o => o.category === partial.occupationCategory);
-      occ = pickOcc(forced.length > 0 ? forced : OCCUPATION_POOL);
+      // D4: the authored text may be a category, a real job title, or
+      // something nobody enumerated. resolveAuthoredOccupationPool returns the
+      // candidate list either way, so this is still exactly one weightedPick
+      // draw and the seed's stream is unchanged in shape.
+      const resolved = resolveAuthoredOccupationPool(partial.occupationCategory);
+      authoredOccTitle = resolved.title;
+      occ = pickOcc(resolved.pool && resolved.pool.length > 0 ? resolved.pool : OCCUPATION_POOL);
     } else {
       const availableOccs = OCCUPATION_POOL.filter(o => !usedOccupationCats.has(o.category));
       occ = pickOcc(availableOccs.length > 0 ? availableOccs : OCCUPATION_POOL);
@@ -4057,9 +4246,10 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
     // disjoint from every already-committed castmate's tags — steering
     // toward compliance up front catches far more casts than blind
     // resampling alone would, given how concentrated the pool is.
-    const authoredInterests = (partial.interests || [])
-      .map(name => INTEREST_POOL.find(i => i.name === name))
-      .filter(Boolean);
+    // D4: an off-pool name keeps its text and borrows the nearest entry's
+    // tags, instead of being dropped by a `.filter(Boolean)` that made the
+    // whole authored list vanish if ONE name was unrecognised.
+    const authoredInterests = resolveAuthoredInterests(partial.interests);
     let interests;
     if (authoredInterests.length > 0) {
       interests = authoredInterests;
@@ -4071,9 +4261,10 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
     }
 
     // Values (2, with opposition)
-    const authoredValues = (partial.values || [])
-      .map(name => VALUES_POOL.find(v => v.name === name))
-      .filter(Boolean);
+    // D4: same treatment. The "both or neither" rule is kept deliberately —
+    // a values PAIR is the unit the fiction reads, and one authored value
+    // alone still cannot author it.
+    const authoredValues = resolveAuthoredValues(partial.values);
     const values = authoredValues.length === 2 ? authoredValues : pickUnique(charRng, VALUES_POOL, 2);
 
     // Baggage, wound, want, blindSpot, boundary — authored value if given
@@ -4098,6 +4289,14 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
       // nothing. Filling it for rolled characters is roadmap Plan 4's job.
       catchphrases: [],
     };
+    // Same treatment as personality above, and for the same reason.
+    if (partial.speech && typeof partial.speech === 'object') {
+      for (const [k, v] of Object.entries(partial.speech)) {
+        if (v === undefined || v === null || v === '') continue;
+        if (Array.isArray(v) && v.length === 0) continue;
+        speech[k] = v;
+      }
+    }
 
     // NPC Overhaul Phase 1: Physical description — seeded from charRng
     const physical = generatePhysical(charRng);
@@ -4123,18 +4322,38 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
     const likes = pickUnique(charRng, LIKES_POOL, numLikes);
     const numDislikes = 3 + Math.floor(charRng() * 3); // 3-5 dislikes
     const dislikes = pickUnique(charRng, DISLIKES_POOL, numDislikes);
+    // AI-Assisted Character Generation Phase 5: an authored personality is
+    // merged OVER the rolled one, per key. The rolls above still happen, so
+    // the rng stream is untouched (design invariant 4) — this only decides
+    // which values survive. Previously `partial.personality` was ignored here
+    // and buildStudioNpc patched it on after the fact, which worked only for
+    // the one surface that remembered to; the sandbox path goes straight
+    // through generateCast and had no such seam, so a described character's
+    // quirks were silently dropped on the way into a started game.
     const personality = { traits, coreTrait, hiddenTrait, quirks, likes, dislikes }; // NPC Overhaul Phase 5
+    if (partial.personality && typeof partial.personality === 'object') {
+      for (const [k, v] of Object.entries(partial.personality)) {
+        if (v === undefined || v === null || v === '') continue;
+        if (Array.isArray(v) && v.length === 0) continue;
+        personality[k] = v;
+      }
+    }
 
     const structured = {
       npcId,
       name: partial.name || '',
       surname: partial.surname || '',
-      visual: '',
+      // AI-Assisted Character Generation Phase 5: the prose fields follow the
+      // same "supplied is held fixed" rule as `name`, which already worked
+      // this way. Before this they were hardcoded empty for the prose pass to
+      // fill, so a concept fill's history/sketch/sampleLines had no way into a
+      // sandbox-started game at all.
+      visual: partial.visual || '',
       genSeed: Math.floor(charRng() * 1000000),
       age: partial.age ?? rollAge(charRng),           // Phase 0: first-class age, authorable via partial
       gender: partial.gender || rollGender(charRng),  // Phase 0: first-class gender, authorable via partial
       physical,                                           // NPC Overhaul Phase 1 (+ .intimate attached below)
-      history: '',
+      history: partial.history || '',
       temperament,
       personality,                                           // NPC Overhaul Phase 5
       // The bible carries the occupation's RUNTIME fields, not the pool entry
@@ -4169,6 +4388,13 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
           workMode: occ.workMode || 'on_site',
           incomeSource: occ.incomeSource || 'wage',
           ...(officeDays.length ? { officeDays } : {}),
+          // D4: a job title nobody enumerated keeps the player's words while
+          // wearing the nearest entry's machinery. `category` deliberately
+          // stays the resolved entry's — it is what the cast-variety tracker
+          // and the drive system read, and a one-off category would exclude
+          // nothing and match nothing.
+          ...(authoredOccTitle ? { title: authoredOccTitle } : {}),
+          ...authoredOccOverrides,
         };
       })(),
       interests: interests.map(x => ({ name: x.name, tags: x.tags, skill: Math.floor(charRng() * 40) })), // NPC Overhaul: +skill
@@ -4180,8 +4406,8 @@ function rollCastSlot(seed, slotIndex, npcId, attempt, usedOccupationCats, prior
       boundary,
       speech,
       scheduleTemplate: occ.scheduleTemplate,
-      sketch: '',
-      sampleLines: [],
+      sketch: partial.sketch || '',
+      sampleLines: Array.isArray(partial.sampleLines) && partial.sampleLines.length > 0 ? partial.sampleLines : [],
     };
 
     // The undressed layer, attached once `gender` above has actually been

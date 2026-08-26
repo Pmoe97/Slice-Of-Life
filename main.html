@@ -3146,6 +3146,14 @@ body {
   margin: 4px 0 0;
 }
 .ps-header-btns { display: flex; gap: var(--space-2); }
+/* The Describe & Generate host inside the Player Design studio. Empty until
+   renderPlayerStudio fills it, and :empty keeps it at zero height so the tab
+   strip does not float on a phantom gap before the first render. */
+.ps-concept { padding: 0 var(--space-5) var(--space-3); }
+/* The same section inside the sandbox roommate pane, which lays its own
+   children out edge to edge. */
+.sbx-concept { margin: 8px 0 12px; }
+.ps-concept:empty { display: none; }
 .ps-tabs {
   display: flex;
   gap: 2px;
@@ -3216,6 +3224,32 @@ body {
   padding: 7px 9px;
 }
 .ps-control:focus { outline: none; border-color: #6f5cc4; }
+
+/* FIELDS — the shared free-text controls from src/srcfiles/fields.js.
+   AI-Assisted Character Generation Phase 1 (D1): a combo input REPLACES a
+   <select> in place, so it deliberately has no box styling of its own — it
+   inherits whichever surface class its caller passed (.ps-control,
+   .sbx-control, .rl-studio-input) and adds only the affordance that says
+   "there is a list behind this", which a bare text input otherwise hides. */
+.combo-input::-webkit-calendar-picker-indicator {
+  opacity: 0.4;
+  cursor: pointer;
+  filter: invert(0.75);
+}
+.combo-input::-webkit-calendar-picker-indicator:hover { opacity: 0.95; }
+/* The datalist host is markup-only; it must never occupy layout. `hidden` is
+   set on the node too — this is the belt to that braces, because a stray
+   `display: block` from a descendant selector would drop an invisible column
+   of <option> text into whichever surface happened to be open. */
+#fields-datalist-host { display: none !important; }
+.fields-custom-row { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+.fields-custom-row input { flex: 1; min-width: 0; }
+/* Off-pool chips — a selected value the pool does not contain, rendered so it
+   can be SEEN and removed rather than silently dropped (plan design invariant
+   6). Marked rather than hidden: the dashed edge is the tell that this one was
+   written or generated instead of chosen. */
+.rl-studio-pool-offpool,
+.ps-toggle-offpool { border-style: dashed !important; }
 .ps-field-hint { font-size: 10px; color: #625a80; line-height: 1.4; }
 .ps-fullbody {
   display: inline-flex;
@@ -5545,7 +5579,47 @@ body {
 .rl-studio-field { margin-bottom: var(--space-2); }
 .rl-studio-label { display: block; margin-bottom: 2px; font-weight: 600; }
 .rl-studio-input { width: 100%; box-sizing: border-box; padding: 4px 8px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-bg); color: var(--color-text); font-size: var(--fs-sm); }
-.rl-studio-ai-input { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-bg); color: var(--color-text); font-size: var(--fs-sm); margin-bottom: var(--space-2); resize: vertical; }
+/* CONCEPT — the shared "Describe & Generate" section (src/srcfiles/concept.js).
+   AI-Assisted Character Generation Phase 3. This one block serves four
+   surfaces with three different palettes (the computer UI's CSS variables,
+   and the pre-game studio/sandbox screens' hardcoded dark values), so it is
+   built from TRANSLUCENT overlays and `color: inherit` rather than any
+   surface's own colours — it tints whatever it is dropped onto instead of
+   fighting it. Replaces .rl-studio-ai-input, which died with the old AI box. */
+.concept-section {
+  margin: 0 0 10px;
+  border: 1px solid rgba(140, 120, 220, 0.28);
+  border-radius: 6px;
+  background: rgba(120, 100, 200, 0.07);
+  overflow: hidden;
+}
+.concept-toggle {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 8px 10px;
+  background: transparent; border: 0; color: inherit;
+  font: inherit; text-align: left; cursor: pointer;
+}
+.concept-toggle:hover { background: rgba(140, 120, 220, 0.10); }
+.concept-caret { opacity: 0.7; width: 10px; flex: none; }
+.concept-title { font-weight: 600; letter-spacing: 0.2px; }
+.concept-body { padding: 0 10px 10px; display: flex; flex-direction: column; gap: 8px; }
+.concept-hint { margin: 0; font-size: 11px; line-height: 1.45; opacity: 0.72; }
+.concept-input {
+  width: 100%; box-sizing: border-box;
+  padding: 7px 9px;
+  border: 1px solid rgba(140, 120, 220, 0.30);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.22);
+  color: inherit;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  resize: vertical;
+}
+.concept-input:focus { outline: none; border-color: #6f5cc4; }
+.concept-input:disabled { opacity: 0.6; }
+.concept-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.concept-replace { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; opacity: 0.8; cursor: pointer; }
+.concept-error { font-size: 11px; color: #ff9a9a; line-height: 1.4; }
 .rl-studio-slider-row { display: flex; align-items: center; gap: var(--space-2); }
 .rl-studio-slider { flex: 1; }
 .rl-studio-slider-val { font-weight: 600; }
@@ -6364,6 +6438,12 @@ body {
         <button class="ps-btn ps-btn-secondary" data-action="studio.clear-all">Clear</button>
       </div>
     </header>
+    <!-- Describe & Generate (AI-Assisted Character Generation Phase 4).
+         ABOVE the tab strip on purpose: one description fills fields across
+         every tab, so a section living on one of them would misrepresent its
+         own reach. renderPlayerStudio fills this host; it is empty and
+         zero-height until then. -->
+    <div class="ps-concept" id="ps-concept"></div>
     <nav class="ps-tabs" id="ps-tabs"></nav>
     <div class="ps-body" id="ps-body"></div>
     <p class="ps-note" id="ps-note" hidden></p>
@@ -6989,7 +7069,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/srcfiles/config.js?v=150"></script>
+<script src="src/srcfiles/config.js?v=151"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -6998,6 +7078,11 @@ body {
 <script src="src/srcfiles/defs.settings.js?v=10"></script>
 <script src="src/srcfiles/settings.js?v=8"></script>
 <script src="src/srcfiles/icons.js?v=31"></script>
+<!-- FIELDS — shared form-control builders (comboControl / customChipInput).
+     AI-Assisted Character Generation Phase 1: must load before menu.js,
+     render.computer.js and studio.js, all of which build controls with it.
+     Registered in dev/verify/loadgame.js's ORDER in the same commit. -->
+<script src="src/srcfiles/fields.js?v=1"></script>
 <script src="src/srcfiles/defs.world.js?v=44"></script>
 <script src="src/srcfiles/defs.actions.js?v=45"></script>
 <script src="src/srcfiles/defs.computer.js?v=32"></script>
@@ -7024,7 +7109,7 @@ body {
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/srcfiles/orbital.js?v=12"></script>
 <script src="src/srcfiles/state.js?v=63"></script>
-<script src="src/srcfiles/sim.js?v=88"></script>
+<script src="src/srcfiles/sim.js?v=91"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
@@ -7044,7 +7129,7 @@ body {
      functions are called at runtime by defs.actions.js and render.js. -->
 <script src="src/srcfiles/cooking.js?v=4"></script>
 <script src="src/srcfiles/taste.js?v=1"></script>
-<script src="src/srcfiles/drives.js?v=43"></script>
+<script src="src/srcfiles/drives.js?v=44"></script>
 <!-- NPC utility scoring (npc-cognition-plan.md). Loads after drives.js: it
      reuses driveGateValue / isOnCooldown / DRIVE_COOLDOWN_KEY from it. -->
 <script src="src/srcfiles/cognition.js?v=29"></script>
@@ -7057,7 +7142,7 @@ body {
 <script src="src/srcfiles/skills.js?v=19"></script>
 <script src="src/srcfiles/stealth.js?v=20"></script>
 <script src="src/srcfiles/time.js?v=30"></script>
-<script src="src/srcfiles/computer.js?v=64"></script>
+<script src="src/srcfiles/computer.js?v=65"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -7093,6 +7178,12 @@ body {
 <script src="src/srcfiles/rumination.js?v=15"></script>
 <script src="src/srcfiles/prompt.js?v=19"></script>
 <script src="src/srcfiles/llm.js?v=42"></script>
+<!-- CONCEPT — the character-concept engine (description -> validated draft).
+     AI-Assisted Character Generation Phase 2. Sits after llm.js (whose prompt
+     conventions it follows) and before the UI layer that calls it. Reads
+     sim.js's D4 resolvers and state.js's validateNpcField, both already
+     loaded. Registered in dev/verify/loadgame.js's ORDER in the same commit. -->
+<script src="src/srcfiles/concept.js?v=3"></script>
 <!-- Plan X-5 Phase 1: the wire for conversation consequences — parsing,
      clamping, windowing and ingestion for the Assessor and the Chronicler.
      After llm.js because the two passes' calls live there and are fired from
@@ -7106,7 +7197,7 @@ body {
      (calls composePeekKey/getPeekImage at runtime) and before render.js/ui.js,
      which call renderPeekOverlay/startPeekSession at runtime only. Phase 15
      writes the 'witnessed' ledger entries via codex.js at session end. -->
-<script src="src/srcfiles/peek.js?v=4"></script>
+<script src="src/srcfiles/peek.js?v=5"></script>
 <!-- Dream Engine Phase 1 (dreams.js): the dream compiler, writer, renderer
      and viewer. After image.js because every panel goes through a cached
      getter there (getDreamPanelImage) — root.generateImage is never called
@@ -7140,7 +7231,7 @@ body {
 <script src="src/srcfiles/boundary.js?v=2"></script>
 <script src="src/srcfiles/pregnancy.js?v=1"></script>
 <script src="src/srcfiles/render.js?v=79"></script>
-<script src="src/srcfiles/render.computer.js?v=52"></script>
+<script src="src/srcfiles/render.computer.js?v=54"></script>
 <script src="src/srcfiles/render.desktop.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
@@ -7172,8 +7263,8 @@ body {
      pipeline at runtime). Every dependency is a call-time one, so this slot
      is flexible within that range. -->
 <script src="src/srcfiles/asks.js?v=11"></script>
-<script src="src/srcfiles/ui.js?v=135"></script>
-<script src="src/srcfiles/ui.computer.js?v=48"></script>
+<script src="src/srcfiles/ui.js?v=139"></script>
+<script src="src/srcfiles/ui.computer.js?v=51"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
      site header with fake address bar + internal back/forward, footer, 404,
@@ -7189,12 +7280,12 @@ body {
      invokes boot() — anything loading after that runs once boot has already
      started, which is a race nobody should have to reason about. Calls into
      SIM/IMAGE/STATE at runtime only, so it needs nothing at load time. -->
-<script src="src/srcfiles/studio.js?v=19"></script>
+<script src="src/srcfiles/studio.js?v=21"></script>
 
 <!-- Menu overhaul Phase 10: the main-menu component — after ui.js (calls
      resumeFromRecord/openSaveMenu/startAutosave and the data-action chain
      at runtime). Loads LAST: the bottom of menu.js invokes boot(), which
      ui.js can no longer call itself because boot() reaches into MENU/IMAGE
      functions defined after UI. -->
-<script src="src/srcfiles/menu.js?v=36"></script>
+<script src="src/srcfiles/menu.js?v=38"></script>
 <!-- ===== /SECTION: SCRIPTS ===== -->

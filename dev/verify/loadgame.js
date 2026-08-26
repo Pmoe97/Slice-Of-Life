@@ -13,14 +13,31 @@ const SRC = path.join(__dirname, '..', '..', 'src', 'srcfiles');
 // loads after pregnancy.js). No load-time dependencies, so either position is
 // safe — the divergence is deliberate, not drift.
 const ORDER = [
-  'config.js', 'defs.settings.js', 'settings.js', 'icons.js', 'defs.world.js', 'defs.actions.js', 'defs.computer.js',
+  'config.js', 'defs.settings.js', 'settings.js', 'icons.js',
+  // fields.js (AI-Assisted Character Generation Phase 1) sits directly after
+  // icons.js in main.html — it must load before the three surfaces that build
+  // controls with it (menu.js, render.computer.js, studio.js). Every document
+  // touch in it is guarded on `typeof document`, so it loads cleanly in the
+  // bare vm and its pure halves (fieldsPoolHash, offPoolValues) are directly
+  // testable here. Registered in BOTH lists in the same commit: shipping a
+  // file to only one of the two is the rumination.js scar.
+  'fields.js',
+  'defs.world.js', 'defs.actions.js', 'defs.computer.js',
   'defs.menu.js', 'defs.intro.js', 'defs.design.js', 'defs.dreams.js',
   'orbital.js', 'state.js', 'sim.js', 'commitments.js', 'world.js', 'movement.js',
   'signals.js', 'scene.js',
   'items.js', 'inventory.js', 'effects.js', 'cooking.js', 'taste.js', 'drives.js', 'cognition.js', 'overture.js',
   'actions.js', 'intent.js',
   'skills.js', 'stealth.js', 'time.js', 'computer.js', 'tracker.js', 'debuglog.js', 'phone.js',
-  'npc.js', 'willingness.js', 'relationships.js', 'rumination.js', 'prompt.js', 'llm.js', 'x5.js', 'interruption.js',
+  'npc.js', 'willingness.js', 'relationships.js', 'rumination.js', 'prompt.js', 'llm.js',
+  // concept.js (AI-Assisted Character Generation Phase 2) sits directly after
+  // llm.js in main.html. Everything in it is pure except fillFromConcept,
+  // which reaches for root.generateText inside the function body only — so the
+  // whole file loads in the bare vm and the half worth testing (the tolerant
+  // parser, the schema-driven normalizer, the three adapters) is directly
+  // testable here. Registered in BOTH lists in the same commit.
+  'concept.js',
+  'x5.js', 'interruption.js',
   // codex.js (intimacy-voyeurism Phase 15, D8) sits after relationships.js
   // in index.html; its whole surface (ledger readers, the three spendable
   // verbs, the witnessed-entry writer) is pure/domain logic with no DOM

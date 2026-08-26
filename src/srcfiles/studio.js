@@ -350,6 +350,22 @@ function renderPlayerStudio() {
     tabsEl.appendChild(btn);
   }
 
+  // Describe & Generate (AI-Assisted Character Generation Phase 4). Rendered
+  // above the tab strip because one description fills fields across every
+  // tab — a section sitting on one of them would misrepresent its own reach.
+  const conceptHost = document.getElementById('ps-concept');
+  if (conceptHost && studioSubject) {
+    conceptHost.innerHTML = '';
+    if (!studioSubject.concept) studioSubject.concept = defaultConceptState();
+    const el = renderConceptSection(studioSubject.concept, {
+      key: 'player-studio',
+      scope: studioConceptScope(),
+      toggleAction: 'studio.concept-toggle',
+      generateAction: 'studio.concept-generate',
+    });
+    if (el) conceptHost.appendChild(el);
+  }
+
   bodyEl.innerHTML = '';
   const tab = studioTabs().find(t => t.id === playerStudioTab) || studioTabs()[0];
   if (tab && tab.id === 'portrait') {
@@ -406,6 +422,26 @@ function buildStudioSection(section) {
   return wrap;
 }
 
+// Whether a pool-backed field accepts free text (AI-Assisted Character
+// Generation Phase 1, D1/D2 — plan design invariant 1). The line is drawn by
+// the VALIDATOR, not by taste: `enum` is the only vocabulary gate
+// validateNpcScalar applies, so a field with one must stay a picker (a typed
+// value would fail validation and be silently dropped, which is worse than
+// not offering it) and every other field is already free by schema.
+//
+// Deriving it here rather than flagging each row in PLAYER_STUDIO_TABS means
+// a field that GAINS an enum later automatically becomes a picker, and one
+// that loses it automatically becomes free — the table cannot drift out of
+// step with the schema, because it never restates it.
+function studioFieldIsFreeText(field) {
+  if (!field || !field.pool) return false;
+  if (!field.schemaPath) return true;
+  if (typeof resolveNpcFieldSpec !== 'function') return false;
+  const r = resolveNpcFieldSpec(field.schemaPath);
+  if (!r || r.error || !r.spec) return false;
+  return !Array.isArray(r.spec.enum);
+}
+
 function buildStudioField(field) {
   const wrap = document.createElement('div');
   wrap.className = 'ps-field';
@@ -416,7 +452,20 @@ function buildStudioField(field) {
 
   const current = studioGet(field.path);
   let control;
-  if (field.kind === 'select') {
+  if (field.kind === 'select' && studioFieldIsFreeText(field)) {
+    // AI-Assisted Character Generation Phase 1 (D1): a pool-backed field with
+    // no schema `enum` becomes type-or-pick. The pool survives as native
+    // suggestions, and the "blank rolls it" promise moves from an empty
+    // <option> to the placeholder — studioSet's "empty deletes" contract is
+    // what actually implements that promise, and it is unchanged.
+    control = comboControl({
+      value: current ?? '',
+      pool: field.pool,
+      placeholder: field.placeholder || 'Roll it',
+      className: 'ps-control',
+      maxLength: field.maxLength || 200,
+    });
+  } else if (field.kind === 'select') {
     control = document.createElement('select');
     // Empty value = "Roll it", and it is the default: the form's standing
     // promise, carried over from the old PLAYER_LOOK_FIELDS block, is that a
@@ -520,6 +569,24 @@ function buildStudioToggles(field) {
     btn.disabled = selected.has(FEATURES_NONE);
     grid.appendChild(btn);
   }
+
+  // Off-pool selections render as extra active chips rather than vanishing
+  // (AI-Assisted Character Generation Phase 1, plan design invariant 6). A
+  // grid only draws its pool, so a value outside it — from an AI fill, an
+  // imported character, or a hand-edited save — was previously invisible AND
+  // unremovable while still counting against the cap. The two sentinels are
+  // excluded: they are studio-local markers with their own controls above,
+  // not features, and are flattened away at draft exit.
+  for (const val of offPoolValues([...selected], field.pool())) {
+    if (val === FEATURES_NONE || val === FEATURES_CUSTOM) continue;
+    const btn = document.createElement('button');
+    btn.className = 'ps-toggle active ps-toggle-offpool';
+    btn.setAttribute('data-action', 'studio.toggle');
+    btn.setAttribute('data-row-id', `${field.path}|${val}`);
+    btn.textContent = studioPrettify(val);
+    btn.disabled = selected.has(FEATURES_NONE);
+    grid.appendChild(btn);
+  }
   wrap.appendChild(grid);
 
   if (isFeatures && selected.has(FEATURES_CUSTOM)) {
@@ -585,11 +652,13 @@ function buildStudioRows(field) {
     // The type selector comes first for a typed group — changing it rebuilds
     // the rest of the row, since a different type shows different fields.
     if (group.typeKey) {
+      // The ONE picker left in a row group (D2a): `genitals[].type` carries a
+      // schema enum, and a typed value there fails validateNpcItemObject.
       grid.appendChild(buildStudioRowControl(
-        field.path, idx, group.typeKey, 'Type', group.typePool(), row[group.typeKey]));
+        field.path, idx, group.typeKey, 'Type', group.typePool(), row[group.typeKey], false));
     }
     for (const [key, spec] of Object.entries(studioRowFields(group, row))) {
-      grid.appendChild(buildStudioRowControl(field.path, idx, key, spec.label, spec.pool ? spec.pool() : null, row[key]));
+      grid.appendChild(buildStudioRowControl(field.path, idx, key, spec.label, spec.pool ? spec.pool() : null, row[key], true));
     }
     card.appendChild(grid);
 
@@ -624,7 +693,7 @@ function buildStudioRows(field) {
   return wrap;
 }
 
-function buildStudioRowControl(arrayPath, idx, key, label, pool, value) {
+function buildStudioRowControl(arrayPath, idx, key, label, pool, value, free) {
   const wrap = document.createElement('div');
   wrap.className = 'ps-field';
   const lab = document.createElement('label');
@@ -632,7 +701,19 @@ function buildStudioRowControl(arrayPath, idx, key, label, pool, value) {
   lab.textContent = label;
   wrap.appendChild(lab);
   let control;
-  if (pool) {
+  if (pool && free) {
+    // Free-typed (D1). Row fields are written straight through
+    // (`rows[idx][key] = el.value` in wirePlayerStudioInputs) with no
+    // validator in the path, and the item schemas declare no enum on any of
+    // these keys, so a typed piercing location or tattoo style is already
+    // legal — it simply had no way in until now.
+    control = comboControl({
+      value: value ?? pool[0] ?? '',
+      pool,
+      className: 'ps-control',
+      maxLength: 120,
+    });
+  } else if (pool) {
     control = document.createElement('select');
     for (const val of pool) {
       const opt = document.createElement('option');
@@ -654,6 +735,109 @@ function buildStudioRowControl(arrayPath, idx, key, label, pool, value) {
 
 function studioPrettify(v) {
   return String(v).replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
+}
+
+// --- Describe & Generate (AI-Assisted Character Generation Phase 4) ---
+// Two subjects, two scopes. An NPC subject here is the sandbox's "Design
+// appearance" button, which owns ONLY the appearance — its name, age and
+// personality belong to the roommate form behind it, so filling them from
+// here would silently overwrite choices made on another screen.
+function studioConceptScope() {
+  return studioSubject?.kind === 'npc' ? 'npcAppearance' : 'player';
+}
+
+function doStudioConceptToggle() {
+  if (!studioSubject) return;
+  if (!studioSubject.concept) studioSubject.concept = defaultConceptState();
+  // Keep the typed text when the section collapses — closing it must not be a
+  // way to lose a paragraph you just wrote.
+  const live = readConceptControls('player-studio');
+  if (live) { studioSubject.concept.text = live.text; studioSubject.concept.replace = live.replace; }
+  studioSubject.concept.open = !studioSubject.concept.open;
+  renderPlayerStudio();
+}
+
+async function doStudioConceptGenerate() {
+  if (!studioSubject) return;
+  if (!studioSubject.concept) studioSubject.concept = defaultConceptState();
+  const state = studioSubject.concept;
+  const live = readConceptControls('player-studio');
+  if (!live) return;
+  state.text = live.text;
+  state.replace = live.replace;
+  state.lastError = '';
+  if (!live.text) {
+    state.lastError = 'Describe them first.';
+    renderPlayerStudio();
+    return;
+  }
+
+  state.busy = true;
+  renderPlayerStudio();
+  try {
+    const d = studioSubject.draft || {};
+    const result = await fillFromConcept(live.text, studioConceptScope(), {
+      authored: {
+        name: d.name, surname: d.surname, age: d.age, gender: d.gender,
+      },
+    });
+    if (!result.ok) { state.lastError = result.reason; return; }
+    applyConceptToStudioDraft(result.draft, live.replace);
+  } catch (e) {
+    // fillFromConcept already swallows model failures; this is the belt for
+    // anything the apply path itself throws, so a bad fill can never leave the
+    // studio stuck on "Generating…" with no way out.
+    state.lastError = `Something went wrong applying that: ${(e && e.message) || 'unknown error'}`;
+  } finally {
+    state.busy = false;
+    renderPlayerStudio();
+  }
+}
+
+// Write a concept draft into the studio draft through studioSet — the same
+// path-aware writer the form controls use, so a filled field is
+// indistinguishable from a typed one (including for studioSet's "empty
+// deletes" contract, blankStudioDraft's authored-means-present rule, and
+// Roll Everything, which fills only what is still unset).
+//
+// D10: an existing value wins unless the player ticked Replace.
+function applyConceptToStudioDraft(concept, replace) {
+  if (!concept) return;
+  const write = (path, val) => {
+    if (val === undefined || val === null || val === '') return;
+    if (Array.isArray(val) && val.length === 0) return;
+    if (!replace && conceptHasValue(studioGet(path))) return;
+    studioSet(path, val);
+  };
+
+  for (const key of ['name', 'surname', 'age', 'gender']) write(key, concept[key]);
+
+  // Appearance, leaf by leaf. Arrays (features, piercings, tattoos) are LEAVES
+  // — half-merging two lists of piercings produces a body nobody authored.
+  const walk = (obj, prefix) => {
+    for (const [k, v] of Object.entries(obj)) {
+      const path = `${prefix}.${k}`;
+      if (v && typeof v === 'object' && !Array.isArray(v)) walk(v, path);
+      else write(path, v);
+    }
+  };
+  if (concept.physical) walk(concept.physical, 'physical');
+
+  // The portrait prompt, for the player subject only (an NPC subject carries
+  // no portrait record at all — see blankStudioDraft).
+  //
+  // `promptDirty` is set deliberately. Left clear, the very next appearance
+  // edit would wipe this prompt via wirePlayerStudioInputs' derived-field
+  // reset, which is exactly wrong for a prompt written FOR this description.
+  // The player keeps an explicit escape hatch either way: "Rebuild from
+  // fields" clears the latch and regenerates from the fields below.
+  if (concept.portraitPrompt && studioSubject?.draft?.portrait) {
+    const p = studioSubject.draft.portrait;
+    if (replace || !p.prompt) {
+      p.prompt = concept.portraitPrompt;
+      p.promptDirty = true;
+    }
+  }
 }
 
 // --- Actions ---

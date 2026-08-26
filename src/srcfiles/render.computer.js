@@ -2507,7 +2507,7 @@ function renderRoomListStudio(body, gs, app, screen) {
 // Phase 5 profile keys (normalizeComputerState replaces the whole studio
 // object, so the defaults live here too, read-side).
 function studioDefaultState() {
-  return { draft: {}, aiBusy: false, aiPrompt: '', preview: null, mode: 'create', viewingNpcId: null, tab: 'personal', editMode: false, editSelections: {} };
+  return { draft: {}, concept: defaultConceptState(), preview: null, mode: 'create', viewingNpcId: null, tab: 'personal', editMode: false, editSelections: {} };
 }
 
 // Mode-switch bar: "New Character" (create) and "Characters" (list), shown on
@@ -2541,24 +2541,18 @@ function renderStudioCreateMode(body, gs, studio) {
   hero.innerHTML = '<div class="rl-hero-title">Character Studio</div><div class="dim tiny">Build a character from scratch. Leave fields empty to let them be rolled randomly.</div>';
   body.appendChild(hero);
 
-  // --- AI Generation section (Phase 5) ---
-  const aiSection = document.createElement('div');
-  aiSection.className = 'rl-studio-section';
-  aiSection.innerHTML = '<div class="rl-studio-section-title">AI Generate</div>';
-  const aiInput = document.createElement('textarea');
-  aiInput.className = 'rl-studio-ai-input';
-  aiInput.id = 'studio-ai-input';
-  aiInput.placeholder = 'Describe a character... e.g. "A shy 25-year-old barista who collects vinyl records and is afraid of commitment"';
-  aiInput.value = studio.aiPrompt || '';
-  aiInput.rows = 2;
-  aiSection.appendChild(aiInput);
-  const aiBtn = document.createElement('button');
-  aiBtn.className = 'btn tiny';
-  aiBtn.setAttribute('data-action', 'classifieds.studio-ai-generate');
-  aiBtn.textContent = studio.aiBusy ? 'Generating…' : 'Generate with AI';
-  if (studio.aiBusy) aiBtn.disabled = true;
-  aiSection.appendChild(aiBtn);
-  body.appendChild(aiSection);
+  // --- Describe & Generate (AI-Assisted Character Generation Phase 3) ---
+  // Replaces the old bespoke "AI Generate" box, which asked for no appearance
+  // at all and hard-filtered its reply against four inlined pools. This is the
+  // shared section (concept.js), collapsed by default per D7.
+  if (!studio.concept) studio.concept = defaultConceptState();
+  const conceptEl = renderConceptSection(studio.concept, {
+    key: 'studio-create',
+    scope: 'npcFull',
+    toggleAction: 'classifieds.studio-concept-toggle',
+    generateAction: 'classifieds.studio-concept-generate',
+  });
+  if (conceptEl) body.appendChild(conceptEl);
 
   // --- Identity section ---
   const idSection = document.createElement('div');
@@ -2584,7 +2578,7 @@ function renderStudioCreateMode(body, gs, studio) {
   for (const cat of [...new Set(OCCUPATION_POOL.map(o => o.category))]) {
     occCats.push({ val: cat, label: cat.charAt(0).toUpperCase() + cat.slice(1) });
   }
-  idSection.appendChild(studioSelectField('Occupation', 'occupationCategory', d.occupationCategory || '', occCats));
+  idSection.appendChild(studioSelectField('Occupation', 'occupationCategory', d.occupationCategory || '', occCats, true));
   body.appendChild(idSection);
 
   // --- Temperament section ---
@@ -2622,6 +2616,14 @@ function renderStudioCreateMode(body, gs, studio) {
   narSection.appendChild(studioTextArea('Boundary', 'boundary', d.boundary || '', 'Hard boundary they enforce', 300));
   body.appendChild(narSection);
 
+  // --- Appearance (AI-Assisted Character Generation Phase 3) ---
+  // The create surface had NO appearance fields at all before this — you could
+  // build a whole character here and never say what they looked like, and a
+  // generated appearance had nowhere to display (plan design invariant 6).
+  // Built by walking PLAYER_STUDIO_TABS rather than authoring a third
+  // appearance form, so the two surfaces cannot offer different vocabularies.
+  body.appendChild(renderStudioCreateAppearance(d));
+
   // --- Prose section ---
   const proseSection = document.createElement('div');
   proseSection.className = 'rl-studio-section';
@@ -2644,6 +2646,70 @@ function renderStudioCreateMode(body, gs, studio) {
   clearBtn.textContent = 'Clear Draft';
   actionRow.appendChild(clearBtn);
   body.appendChild(actionRow);
+}
+
+// The create surface's appearance block (AI-Assisted Character Generation
+// Phase 3). Walks PLAYER_STUDIO_TABS — the Player Design studio's one table —
+// and renders its scalar fields here, so a field added there appears here too
+// and the two surfaces can never drift into offering different vocabularies.
+//
+// SCOPE, deliberately: scalar fields only. The `toggles` and `rows` groups
+// (marks, piercings, tattoos, anatomy) need the full studio's own add/remove
+// machinery and stay there. That is safe rather than lossy only because
+// collectStudioDraft now PRESERVES draft.physical keys with no control on
+// screen — without that, opening this surface would quietly delete a
+// generated set of piercings (plan design invariant 6).
+const STUDIO_CREATE_APPEARANCE_TABS = ['body', 'face', 'style'];
+
+function renderStudioCreateAppearance(draft) {
+  const section = document.createElement('div');
+  section.className = 'rl-studio-section';
+  section.innerHTML = '<div class="rl-studio-section-title">Appearance</div>';
+  if (typeof PLAYER_STUDIO_TABS === 'undefined') return section;
+
+  const read = (path) => {
+    let cur = draft;
+    for (const seg of path.split('.')) {
+      if (cur == null || typeof cur !== 'object') return '';
+      cur = cur[seg];
+    }
+    return cur == null ? '' : cur;
+  };
+
+  for (const tab of PLAYER_STUDIO_TABS) {
+    if (!STUDIO_CREATE_APPEARANCE_TABS.includes(tab.id)) continue;
+    for (const group of tab.sections || []) {
+      for (const field of group.fields || []) {
+        if (field.kind !== 'select' && field.kind !== 'text') continue;
+        const wrap = document.createElement('div');
+        wrap.className = 'rl-studio-field';
+        wrap.innerHTML = `<label class="rl-studio-label tiny">${group.label} — ${field.label}</label>`;
+        const free = typeof studioFieldIsFreeText === 'function' ? studioFieldIsFreeText(field) : !!field.pool;
+        let control;
+        if (free && field.pool) {
+          control = comboControl({
+            value: read(field.path),
+            pool: field.pool,
+            placeholder: field.placeholder || 'Rolled if blank',
+            className: 'rl-studio-input',
+            maxLength: field.maxLength || 200,
+            attrs: { 'data-studio-field': field.path },
+          });
+        } else {
+          control = document.createElement('input');
+          control.type = 'text';
+          control.className = 'rl-studio-input';
+          control.value = read(field.path);
+          control.placeholder = field.placeholder || 'Rolled if blank';
+          if (field.maxLength) control.maxLength = field.maxLength;
+          control.setAttribute('data-studio-field', field.path);
+        }
+        wrap.appendChild(control);
+        section.appendChild(wrap);
+      }
+    }
+  }
+  return section;
 }
 
 // Studio field helpers
@@ -2676,10 +2742,28 @@ function studioNumberField(label, field, value, min, max) {
   return wrap;
 }
 
-function studioSelectField(label, field, value, options) {
+// `free` (AI-Assisted Character Generation Phase 1, D1/D2) makes this a
+// type-or-pick combo. Passed for occupation; withheld for gender, which
+// carries a schema enum (D2a). The returned wrapper is unchanged and the
+// control is still harvested by `.value` off `data-studio-field`, so
+// collectStudioDraft needs no change.
+function studioSelectField(label, field, value, options, free) {
   const wrap = document.createElement('div');
   wrap.className = 'rl-studio-field';
   wrap.innerHTML = `<label class="rl-studio-label tiny">${label}</label>`;
+  if (free) {
+    wrap.appendChild(comboControl({
+      value,
+      // The leading '— Random —' entry is a <select> affordance, not a real
+      // value; a combo says the same thing with its placeholder.
+      pool: options.map(o => o.val).filter(Boolean),
+      placeholder: 'Random, or type your own',
+      className: 'rl-studio-input',
+      maxLength: 120,
+      attrs: { 'data-studio-field': field },
+    }));
+    return wrap;
+  }
   const select = document.createElement('select');
   select.className = 'rl-studio-input';
   select.setAttribute('data-studio-field', field);
@@ -2844,7 +2928,36 @@ function studioPoolPickerFor(label, field, pool, selected, max, action) {
     btn.textContent = name;
     grid.appendChild(btn);
   }
+
+  // AI-Assisted Character Generation Phase 1 (D1, plan design invariant 6).
+  // A grid only draws its pool, so a selected value from outside it — an AI
+  // fill, an imported character, a hand-edited save — rendered as nothing at
+  // all, then died on the next harvest with no error shown. These chips are
+  // active by construction (they are only here because they ARE selected) and
+  // carry the same toggle verb, so removing one works exactly like removing a
+  // pool chip.
+  for (const name of offPoolValues([...selectedSet], pool)) {
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny rl-filter-btn rl-studio-pool-btn active rl-studio-pool-offpool';
+    btn.setAttribute('data-action', action);
+    btn.setAttribute('data-row-id', `${field}:${name}`);
+    btn.textContent = name;
+    grid.appendChild(btn);
+  }
   wrap.appendChild(grid);
+
+  // "Add your own" — the grid's counterpart to comboControl. Routed to a
+  // wrapper verb per surface that reads the box and then calls the SAME
+  // toggle handler the chips use, so there is one selection code path rather
+  // than a second one that can drift.
+  wrap.appendChild(customChipInput({
+    field,
+    addAction: action === 'classifieds.studio-edit-pool'
+      ? 'classifieds.studio-edit-add-custom'
+      : 'classifieds.studio-add-custom',
+    placeholder: 'Add your own…',
+    className: 'rl-studio-input',
+  }));
   return wrap;
 }
 
@@ -3019,12 +3132,29 @@ function studioFieldRow(spec, path, value, editMode) {
       }
       wrap.appendChild(sel);
     } else {
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.className = 'rl-studio-input';
-      input.value = value || '';
-      if (spec.maxLength) input.maxLength = spec.maxLength;
-      input.setAttribute('data-studio-edit-path', path);
+      // Already free text before this plan — the Edit Mode was the one
+      // surface that got D1 right by accident, because it renders from the
+      // schema rather than from a pool table. All Phase 1 adds is the pool as
+      // native SUGGESTIONS, so the appearance tab stops being the only place
+      // you have to remember the vocabulary from memory.
+      const pool = studioScalarPoolFor(path);
+      const input = pool
+        ? comboControl({
+            value: value || '',
+            pool,
+            className: 'rl-studio-input',
+            maxLength: spec.maxLength,
+            attrs: { 'data-studio-edit-path': path },
+          })
+        : (() => {
+            const el = document.createElement('input');
+            el.type = 'text';
+            el.className = 'rl-studio-input';
+            el.value = value || '';
+            if (spec.maxLength) el.maxLength = spec.maxLength;
+            el.setAttribute('data-studio-edit-path', path);
+            return el;
+          })();
       wrap.appendChild(input);
     }
   } else if (spec.type === 'number') {
@@ -3114,6 +3244,39 @@ function renderStudioSections(content, gs, studio, npc, groups) {
 }
 
 // Which pool a field edits against, when one exists.
+// Suggestion pool for a SCALAR schema path (AI-Assisted Character Generation
+// Phase 1). Indexed lazily out of PLAYER_STUDIO_TABS rather than restated
+// here: that table already binds every appearance field to its pool by
+// `schemaPath`, and a second hand-written map is exactly how one surface ends
+// up offering a vocabulary the other doesn't. Built on first use because the
+// PHYS_POOL_* consts and PLAYER_STUDIO_TABS both resolve at call time, never
+// at definition time (the load-order reason that table uses pool thunks).
+let _studioScalarPoolIndex = null;
+function studioScalarPoolFor(schemaPath) {
+  if (!_studioScalarPoolIndex) {
+    _studioScalarPoolIndex = new Map();
+    if (typeof PLAYER_STUDIO_TABS !== 'undefined') {
+      for (const tab of PLAYER_STUDIO_TABS) {
+        for (const section of tab.sections || []) {
+          for (const field of section.fields || []) {
+            if (field.schemaPath && typeof field.pool === 'function') {
+              _studioScalarPoolIndex.set(field.schemaPath, field.pool);
+            }
+          }
+        }
+      }
+    }
+  }
+  const thunk = _studioScalarPoolIndex.get(schemaPath);
+  if (!thunk) return null;
+  try {
+    const pool = thunk();
+    return Array.isArray(pool) && pool.length > 0 ? pool : null;
+  } catch (e) {
+    return null;   // a pool whose gender-dependent thunk has no subject open
+  }
+}
+
 function studioPoolFor(path) {
   switch (path) {
     case 'bible.personality.traits': return PERSONALITY_TRAITS_POOL;

@@ -122,9 +122,12 @@ function defaultComputerState() {
         },
         // Phase 4 Character Studio: the in-progress draft bible built by
         // the player in the Studio screen. `draft` is a partial bible
-        // object (all fields optional; undefined = "roll it"). `aiBusy`
-        // flags AI generation in progress (Phase 5). `aiPrompt` holds the
-        // free-text description the player typed for AI generation.
+        // object (all fields optional; undefined = "roll it"). `concept` is
+        // the Describe & Generate section's own state (concept.js's
+        // defaultConceptState) — open/text/busy/replace/lastError. It replaced
+        // the flat `aiBusy`/`aiPrompt` pair when that surface was rebuilt;
+        // an old save carrying those two keys simply ignores them, and
+        // renderStudioCreateMode seeds `concept` on first render.
         // Phase 5 (D12/D16/D17): the same screen also hosts the per-character
         // profile. Navigation state lives HERE, never the DOM (the house
         // pattern) — `mode` is 'create' (the draft builder) | 'list' (pick a
@@ -136,8 +139,7 @@ function defaultComputerState() {
         // not share a struct (the top-of-phase check).
         studio: {
           draft: {},
-          aiBusy: false,
-          aiPrompt: '',
+          concept: { open: false, text: '', busy: false, replace: false, lastError: '' },
           preview: null,       // cached preview NPC bible (Phase 4 live preview)
           mode: 'create',
           viewingNpcId: null,
@@ -1394,6 +1396,14 @@ function buildStudioNpc(gameState, draft) {
   // against RACES so a bad pin fails the partial, not every roll attempt.
   if (draft.species && RACES.some(r => r.id === draft.species)) partial.species = draft.species;
   if (draft.occupationCategory) partial.occupationCategory = draft.occupationCategory;
+  // AI-Assisted Character Generation Phase 3: appearance goes in through the
+  // PARTIAL now, not as a post-roll spread. rollCastSlot runs it through
+  // applyAuthoredPhysical, which recomputes the derived `heightBuild` — the
+  // old spread bypassed that, so an authored height/build left heightBuild
+  // reading whatever the roll had produced and the two contradicted each other
+  // in every prompt that printed them.
+  if (draft.physical && Object.keys(draft.physical).length > 0) partial.physical = draft.physical;
+  if (draft.occupationOverrides) partial.occupationOverrides = draft.occupationOverrides;
   if (draft.temperament) partial.temperament = draft.temperament;
   if (draft.interests && draft.interests.length > 0) partial.interests = draft.interests;
   if (draft.values && draft.values.length > 0) partial.values = draft.values;
@@ -1426,9 +1436,6 @@ function buildStudioNpc(gameState, draft) {
     if (draft.personality.likes) structured.personality.likes = draft.personality.likes;
     if (draft.personality.dislikes) structured.personality.dislikes = draft.personality.dislikes;
   }
-  if (draft.physical) {
-    structured.physical = { ...structured.physical, ...draft.physical };
-  }
   if (draft.speech) {
     structured.speech = { ...structured.speech, ...draft.speech };
   }
@@ -1457,133 +1464,13 @@ function buildStudioNpc(gameState, draft) {
   return { ok: true, npcId };
 }
 
-// Phase 5: AI-assisted character generation. Takes a free-text description
-// from the player, asks the LLM to produce a full bible (structured JSON),
-// then validates and populates the studio draft. Returns { ok, draft } or
-// { ok:false, reason }.
-async function generateCharacterWithAI(gameState, prompt) {
-  const aiPrompt = buildAIGenerationPrompt(prompt);
-  try {
-    const response = await root.generateText({
-      instruction: aiPrompt,
-      startWith: '{',
-      stopSequences: ['}\n'],
-    });
-
-    let jsonStr = response.trim();
-    const start = jsonStr.indexOf('{');
-    const end = jsonStr.lastIndexOf('}');
-    if (start >= 0 && end > start) jsonStr = jsonStr.substring(start, end + 1);
-    const parsed = JSON.parse(jsonStr);
-
-    // Normalize LLM output into a studio draft (partial bible)
-    const draft = {};
-    if (parsed.name) draft.name = String(parsed.name).substring(0, 60);
-    if (typeof parsed.age === 'number') draft.age = Math.max(18, Math.min(60, Math.round(parsed.age)));
-    if (parsed.gender && ['male','female','futanari','trans_male','trans_female'].includes(parsed.gender)) draft.gender = parsed.gender;
-    if (parsed.occupationCategory) {
-      const valid = OCCUPATION_POOL.find(o => o.category === parsed.occupationCategory);
-      if (valid) draft.occupationCategory = parsed.occupationCategory;
-    }
-    if (parsed.temperament && typeof parsed.temperament === 'object') {
-      const t = {};
-      for (const axis of ['warmth','volatility','openness','conscientiousness','assertiveness','selfAwareness']) {
-        if (typeof parsed.temperament[axis] === 'number') {
-          t[axis] = Math.max(-1, Math.min(1, parsed.temperament[axis]));
-        }
-      }
-      if (Object.keys(t).length > 0) draft.temperament = t;
-    }
-    if (Array.isArray(parsed.interests)) {
-      draft.interests = parsed.interests.map(i => typeof i === 'string' ? i : i.name).filter(n =>
-        INTEREST_POOL.some(ip => ip.name === n)
-      ).slice(0, 3);
-    }
-    if (Array.isArray(parsed.values)) {
-      draft.values = parsed.values.map(v => typeof v === 'string' ? v : v.name).filter(n =>
-        VALUES_POOL.some(vp => vp.name === n)
-      ).slice(0, 2);
-    }
-    if (parsed.baggage) draft.baggage = String(parsed.baggage).substring(0, 300);
-    if (parsed.wound) draft.wound = String(parsed.wound).substring(0, 300);
-    if (parsed.want) draft.want = String(parsed.want).substring(0, 300);
-    if (parsed.blindSpot) draft.blindSpot = String(parsed.blindSpot).substring(0, 300);
-    if (parsed.boundary) draft.boundary = String(parsed.boundary).substring(0, 300);
-    if (parsed.personality && typeof parsed.personality === 'object') {
-      const p = {};
-      if (Array.isArray(parsed.personality.traits)) {
-        p.traits = parsed.personality.traits.filter(t => PERSONALITY_TRAITS_POOL.includes(t)).slice(0, 5);
-      }
-      if (parsed.personality.coreTrait && PERSONALITY_TRAITS_POOL.includes(parsed.personality.coreTrait)) p.coreTrait = parsed.personality.coreTrait;
-      if (parsed.personality.hiddenTrait && PERSONALITY_TRAITS_POOL.includes(parsed.personality.hiddenTrait)) p.hiddenTrait = parsed.personality.hiddenTrait;
-      if (Array.isArray(parsed.personality.quirks)) {
-        p.quirks = parsed.personality.quirks.filter(q => QUIRKS_POOL.includes(q)).slice(0, 4);
-      }
-      if (Array.isArray(parsed.personality.likes)) {
-        p.likes = parsed.personality.likes.filter(l => LIKES_POOL.includes(l)).slice(0, 5);
-      }
-      if (Array.isArray(parsed.personality.dislikes)) {
-        p.dislikes = parsed.personality.dislikes.filter(d => DISLIKES_POOL.includes(d)).slice(0, 5);
-      }
-      if (Object.keys(p).length > 0) draft.personality = p;
-    }
-    if (parsed.history) draft.history = String(parsed.history).substring(0, 600);
-    if (parsed.sketch) draft.sketch = String(parsed.sketch).substring(0, 120);
-    if (Array.isArray(parsed.sampleLines)) {
-      draft.sampleLines = parsed.sampleLines.map(s => String(s)).slice(0, 5);
-    }
-
-    return { ok: true, draft };
-  } catch (e) {
-    console.warn('AI character generation failed:', e.message);
-    return { ok: false, reason: 'AI generation failed: ' + e.message };
-  }
-}
-
-// Phase 5: Build the LLM prompt for AI-assisted character generation.
-// Describes the full bible schema so the LLM knows what shape to produce.
-function buildAIGenerationPrompt(userPrompt) {
-  return `You are creating a character for a slice-of-life apartment sim. The player has described what they want. Generate a complete character "bible" as JSON.
-
-Player's description: "${userPrompt}"
-
-Generate a character that fits the description. Use ONLY values from the provided pools where specified. Respond with JSON only, no markdown.
-
-{
-  "name": "a believable first name (no surname)",
-  "age": 18-60,
-  "gender": "one of: male, female, futanari, trans_male, trans_female",
-  "occupationCategory": "one of: tech, food, health, arts, service, education, finance, trades, media, legal, science",
-  "temperament": {
-    "warmth": -1 to 1,
-    "volatility": -1 to 1,
-    "openness": -1 to 1,
-    "conscientiousness": -1 to 1,
-    "assertiveness": -1 to 1,
-    "selfAwareness": -1 to 1
-  },
-  "interests": ["1-3 from: gaming, cooking, music, fitness, reading, art, politics, film, gardening, hiking, writing, yoga, partying, coding, fashion, astrology, photography, comedy, volunteering, true crime, crafting, travel"],
-  "values": ["1-2 from: honesty, harmony, independence, connection, ambition, contentment, order, spontaneity, loyalty, freedom, tradition, progress, privacy, transparency, kindness, justice"],
-  "baggage": "1-2 sentences about their past burden",
-  "wound": "1 sentence about their deepest emotional wound",
-  "want": "1 sentence about what they want right now",
-  "blindSpot": "1 sentence about what they believe about themselves that isn't true",
-  "boundary": "1 sentence about a hard boundary they enforce",
-  "personality": {
-    "traits": ["3-5 from: reliable, sarcastic, anxious, ambitious, nurturing, guarded, impulsive, methodical, flirtatious, stubborn, curious, cynical, idealistic, territorial, clingy, independent, meticulous, chaotic, diplomatic, blunt, secretive, expressive, stoic, needy, competitive, lazy, perfectionist, easygoing, intense, passive-aggressive, protective, manipulative, vulnerable, confident, insecure, generous, selfish, patient, restless, nostalgic, adventurous, cautious, rebellious, conformist, creative, practical, spiritual, materialistic, sensitive, thick-skinned, loyal, fickle, honest, deceptive, warm, cold, playful, serious, dramatic, understated"],
-    "coreTrait": "one trait from the list above",
-    "hiddenTrait": "one trait from the list above (NOT in traits)",
-    "quirks": ["2-4 from: always hums while cooking, can't sleep without socks, collects mismatched mugs, talks to plants, names their electronics, always late by exactly 7 minutes, has strong opinions about pizza toppings, saves cardboard boxes, rereads the same book annually, pees with the bathroom door open, organizes the spice rack alphabetically, keeps a journal but only writes in it at 3am, uses a vintage flip phone, always has headphones in but nothing playing, refuses to use umbrellas, sniffs food before eating it, makes lists for everything but never follows them, sleeps with a fan on even in winter, has a playlist for every mood, collects interesting rocks, always reads the terms and conditions, keeps expired condiments in the fridge, talks in their sleep, never throws away gift bags, has a lucky pen they never use, counts stairs when walking up them, always smells books before reading them, keeps a running tally of how many coffees they have had, memorizes license plates out of habit, wears mismatched socks on purpose, apologizes to inanimate objects, narrates their actions under their breath, eats cereal dry, always sits with their back to the wall, never buys matching towel sets, can quote entire movies from memory, keeps every receipt in a shoebox, has a specific alarm for every day of the week, always checks if the stove is off twice, prefers to eat standing up"],
-    "likes": ["3-5 from: rainy mornings, the smell of fresh laundry, bad puns, thrift stores, loud music, quiet mornings, fermented food, horror movies, gardening, deep conversations at 2am, the sound of a kettle boiling, walking barefoot on grass, old bookstores, vinyl records, spicy food, stargazing, swimming at night, making lists, cooking for other people, the smell of rain on concrete, arranging flowers, bike rides at dusk, board games, sketching strangers, singing in the shower, the first sip of coffee, rewatching comfort shows, collecting sea glass, sleeping with the window open, lighting candles for no reason"],
-    "dislikes": ["3-5 from: small talk, the sound of chewing, being touched unexpectedly, loud chewers, condescension, wasting food, being interrupted, cold coffee, sticky counters, passive-aggressive notes, when the toilet paper roll is empty, people who are late, the sound of nails on chalkboard, being asked how they are doing, crowded grocery stores, small fonts, when someone eats their food, unexpected visitors, the smell of boiled eggs, being told to calm down, when the wifi is slow, people who do not use turn signals, the word moist, overcooked pasta, being photographed, when a book adaptation gets it wrong, empty fridge shelves, loud commercials, dishonesty disguised as politeness"]
-  },
-  "history": "one paragraph (3-5 sentences) about how they ended up in this apartment",
-  "sketch": "a one-line summary of their vibe (max 120 chars)",
-  "sampleLines": ["3-5 example dialogue lines reflecting their personality"]
-}
-
-Respond with JSON only, no markdown.`;
-}
+// AI-Assisted Character Generation Phase 3: generateCharacterWithAI and
+// buildAIGenerationPrompt lived here and are DELETED, not extended. They
+// generated no appearance at all, inlined PERSONALITY_TRAITS_POOL /
+// QUIRKS_POOL / LIKES_POOL / DISLIKES_POOL verbatim into the prompt, and
+// then hard-filtered the reply with `POOL.includes(x)` so every near-miss
+// was silently dropped. Their replacement is src/srcfiles/concept.js,
+// driven from the shared Describe & Generate section on all four surfaces.
 
 function postRoommateAd(gameState) {
   const classifieds = gameState.world.computer.apps.classifieds;

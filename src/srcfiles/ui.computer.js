@@ -896,6 +896,41 @@ function doClassifiedsAssignRoom(npcId) {
 // Phase 4: Studio — collect all form field values from the DOM into the
 // draft object. Called on any studio action (create, clear, AI generate)
 // to harvest the current form state before acting.
+// Dotted-path writers for the studio draft (AI-Assisted Character Generation
+// Phase 3). The harvest used to do a flat `draft[field] = val`, which was
+// correct only because every field on this surface was single-segment. The
+// appearance fields are 'physical.hair.color' shaped, and a flat write would
+// have produced a literal "physical.hair.color" KEY that buildStudioNpc never
+// reads — the value stored, looked stored, and did nothing.
+function setStudioDraftPath(obj, path, value) {
+  const segs = String(path).split('.');
+  let node = obj;
+  for (const s of segs.slice(0, -1)) {
+    if (!node[s] || typeof node[s] !== 'object') node[s] = {};
+    node = node[s];
+  }
+  node[segs[segs.length - 1]] = value;
+}
+
+// Clearing a control clears the draft. Prunes the parent objects it empties on
+// the way out, so a fully-cleared appearance leaves `{}` rather than a husk of
+// empty groups — the same "empty deletes" contract studioSet keeps.
+function deleteStudioDraftPath(obj, path) {
+  const segs = String(path).split('.');
+  const chain = [obj];
+  let node = obj;
+  for (const s of segs.slice(0, -1)) {
+    if (!node[s] || typeof node[s] !== 'object') return;
+    node = node[s];
+    chain.push(node);
+  }
+  delete node[segs[segs.length - 1]];
+  for (let i = chain.length - 1; i > 0; i--) {
+    if (Object.keys(chain[i]).length > 0) break;
+    delete chain[i - 1][segs[i - 1]];
+  }
+}
+
 function collectStudioDraft() {
   const studio = studioState(currentGameState);
   // Start from existing draft so pool-toggled arrays (personality.traits,
@@ -903,6 +938,21 @@ function collectStudioDraft() {
   // handler directly on studio.draft, not via form inputs.
   const existing = studio.draft || {};
   const draft = {};
+
+  // AI-Assisted Character Generation Phase 3: seed physical from the existing
+  // draft BEFORE reading the form. This surface shows only the SCALAR
+  // appearance fields (renderStudioCreateAppearance's documented scope), so a
+  // generated sub-field with no control on screen — piercings, tattoos,
+  // distinguishing features — would otherwise be deleted by the next harvest
+  // and the player would watch their character silently revert (plan design
+  // invariant 6). Same reasoning as the personality preservation below.
+  //
+  // "Absent from the form" and "cleared by the player" stay distinguishable:
+  // the loop DELETES the path when a control exists and is empty, and leaves
+  // the seeded value alone when no control exists at all.
+  if (existing.physical && typeof existing.physical === 'object') {
+    draft.physical = JSON.parse(JSON.stringify(existing.physical));
+  }
 
   // Text, number, select, textarea fields
   const fields = document.querySelectorAll('[data-studio-field]');
@@ -917,7 +967,8 @@ function collectStudioDraft() {
     } else if (el.tagName === 'TEXTAREA' || el.type === 'text') {
       val = val.trim() || undefined;
     }
-    if (val !== undefined) draft[field] = val;
+    if (val !== undefined) setStudioDraftPath(draft, field, val);
+    else deleteStudioDraftPath(draft, field);
   }
 
   // Preserve pool-toggled arrays and scalar personality fields from
@@ -946,6 +997,26 @@ function collectStudioDraft() {
     if (existing.personality.hiddenTrait && !draft.personality.hiddenTrait) draft.personality.hiddenTrait = existing.personality.hiddenTrait;
   }
 
+  // AI-Assisted Character Generation Phase 3 — the GENERAL form of the two
+  // special cases above. This surface renders a SUBSET of the draft, and a
+  // harvest must never read "absent from the form" as "the player cleared it".
+  // The two hand-written preservations above were each added after a specific
+  // field was found being destroyed; a concept fill writes several more
+  // (`speech`, `sampleLines`, `occupationOverrides`), and the next surface to
+  // gain a field would have hit it again.
+  //
+  // So the rule is derived instead of listed: any top-level key that NO
+  // control on screen covers is carried over untouched. Keys the form does
+  // cover stay authoritative, so clearing a control still clears the draft.
+  const coveredKeys = new Set(['temperament', ...poolFields.map(pf => pf.split('.')[0])]);
+  for (const el of document.querySelectorAll('[data-studio-field]')) {
+    coveredKeys.add(String(el.getAttribute('data-studio-field')).split('.')[0]);
+  }
+  for (const [key, val] of Object.entries(existing)) {
+    if (coveredKeys.has(key) || draft[key] !== undefined) continue;
+    draft[key] = val;
+  }
+
   // Temperament sliders + checkboxes
   const temperament = {};
   const axes = ['warmth', 'volatility', 'openness', 'conscientiousness', 'assertiveness', 'selfAwareness'];
@@ -958,10 +1029,9 @@ function collectStudioDraft() {
   }
   if (Object.keys(temperament).length > 0) draft.temperament = temperament;
 
-  // AI prompt textarea
-  const aiInput = document.getElementById('studio-ai-input');
-  if (aiInput) studio.aiPrompt = aiInput.value;
-
+  // The Describe & Generate box keeps its own state (studio.concept), read
+  // through readConceptControls at the moment it is used rather than harvested
+  // here — it is not part of the character draft and must not ride along in it.
   studio.draft = draft;
   return draft;
 }
@@ -969,7 +1039,15 @@ function collectStudioDraft() {
 // Phase 4: Toggle a pool item in the draft (add/remove from array)
 function doClassifiedsStudioTogglePool(rowId) {
   if (!rowId) return;
-  const [field, name] = rowId.split(':');
+  // Split on the FIRST colon only. This was `rowId.split(':')` with a
+  // destructure, which silently truncated any name containing a colon — fine
+  // while every name came from a pool, a live bug the moment Phase 1 let
+  // players and AI fills write their own ("3am thoughts: the playlist").
+  // doClassifiedsStudioEditPool, the sibling handler, already did it this way.
+  const sep = rowId.indexOf(':');
+  if (sep < 0) return;
+  const field = rowId.slice(0, sep);
+  const name = rowId.slice(sep + 1);
   if (!field || !name) return;
   const studio = studioState(currentGameState);
   const draft = studio.draft || (studio.draft = {});
@@ -1064,40 +1142,74 @@ function doClassifiedsToggleFavFilter() {
   renderComputerScreen(currentGameState);
 }
 
-// Phase 5: AI-assisted generation — harvest the AI prompt, call LLM,
-// populate the draft, re-render
-async function doClassifiedsStudioAIGenerate() {
-  const studio = studioState(currentGameState);
-  // First harvest current form state (so manual edits aren't lost)
-  collectStudioDraft();
-  const prompt = studio.aiPrompt || '';
-  if (!prompt.trim()) { addLogEntry('system', 'Describe a character first.'); return; }
+// --- Describe & Generate (AI-Assisted Character Generation Phase 3) ---
+// Replaces the old generateCharacterWithAI path, which asked for no appearance
+// and hard-filtered its reply against four inlined pools. Everything below is
+// surface plumbing; the engine is concept.js.
 
-  studio.aiBusy = true;
+function doClassifiedsStudioConceptToggle() {
+  const studio = studioState(currentGameState);
+  if (!studio.concept) studio.concept = defaultConceptState();
+  // Keep whatever is in the box when it closes, so collapsing the section is
+  // not a way to silently lose a paragraph the player just typed.
+  const live = readConceptControls('studio-create');
+  if (live) { studio.concept.text = live.text; studio.concept.replace = live.replace; }
+  studio.concept.open = !studio.concept.open;
   rerenderStudio();
-  showLoading('AI is generating a character…');
-  try {
-    const result = await generateCharacterWithAI(currentGameState, prompt.trim());
-    if (!result.ok) { addLogEntry('system', result.reason); return; }
-    // Merge AI-generated draft over existing draft (AI fills empty fields,
-    // overrides nothing the player explicitly set unless AI provides it)
-    const existing = studio.draft || {};
-    studio.draft = { ...existing, ...result.draft };
-    // Merge nested personality/temperament if present
-    if (result.draft.personality) {
-      studio.draft.personality = { ...(existing.personality || {}), ...result.draft.personality };
-    }
-    if (result.draft.temperament) {
-      studio.draft.temperament = { ...(existing.temperament || {}), ...result.draft.temperament };
-    }
-    addLogEntry('system', 'AI generated a character draft. Review and adjust in the Studio, then Create.');
+}
+
+async function doClassifiedsStudioConceptGenerate() {
+  const gs = currentGameState;
+  const studio = studioState(gs);
+  if (!studio.concept) studio.concept = defaultConceptState();
+  const live = readConceptControls('studio-create');
+  if (!live) return;
+  studio.concept.text = live.text;
+  studio.concept.replace = live.replace;
+  studio.concept.lastError = '';
+  if (!live.text) {
+    studio.concept.lastError = 'Describe them first.';
     rerenderStudio();
-    await saveAtBoundary('classifieds-studio-ai', currentGameState);
+    return;
+  }
+
+  // Harvest the form BEFORE the call so manual edits are part of the context
+  // the model is told to stay consistent with, and so D10's merge has the real
+  // current draft to merge over.
+  const before = collectStudioDraft();
+
+  studio.concept.busy = true;
+  rerenderStudio();
+  showLoading('Building the character…');
+  try {
+    const result = await fillFromConcept(live.text, 'npcFull', {
+      authored: conceptAuthoredContext(before),
+      usedNames: usedNpcNames ? [...usedNpcNames(gs)] : [],
+    });
+    if (!result.ok) {
+      studio.concept.lastError = result.reason;
+      return;
+    }
+    studio.draft = conceptMergeInto(before, conceptToStudioDraft(result.draft), live.replace);
+    addLogEntry('system', 'Character drafted from your description — review it in the Studio, then Create.');
+    await saveAtBoundary('classifieds-studio-concept', gs);
   } finally {
-    studio.aiBusy = false;
+    studio.concept.busy = false;
     hideLoading();
     rerenderStudio();
   }
+}
+
+// The scalars worth telling the model about, so a fill on a half-filled form
+// stays consistent with what the player already chose rather than
+// contradicting it. Nested groups are deliberately omitted — an appearance
+// dump costs more prompt than it earns.
+function conceptAuthoredContext(draft) {
+  const out = {};
+  for (const key of ['name', 'age', 'gender', 'species', 'occupationCategory', 'baggage', 'wound', 'want', 'blindSpot', 'boundary']) {
+    if (draft && draft[key] !== undefined && draft[key] !== '') out[key] = draft[key];
+  }
+  return out;
 }
 
 // --- Phase 5 (D12/D16/D17) — the studio's profile surface handlers ---
@@ -1209,21 +1321,40 @@ function doClassifiedsStudioEditPool(rowId) {
   rerenderStudio();
 }
 
+// --- "Add your own" (AI-Assisted Character Generation Phase 1, D1) ---
+// Both verbs read the field's custom box and then delegate to the SAME
+// toggle handler the pool chips use. Deliberately not a second selection
+// path: a custom trait and a pool trait must be added, rendered and removed
+// by identical code, or the two drift and only one of them survives a save.
+// takeCustomChipValue clears the box, so a second Add cannot re-add the same
+// value by accident.
+function doClassifiedsStudioAddCustom(field) {
+  const value = takeCustomChipValue(field);
+  if (!value) return;
+  doClassifiedsStudioTogglePool(`${field}:${value}`);
+}
+
+function doClassifiedsStudioEditAddCustom(field) {
+  const value = takeCustomChipValue(field);
+  if (!value) return;
+  doClassifiedsStudioEditPool(`${field}:${value}`);
+}
+
 // Pool names → the schema item objects the validator expects. Interests carry
 // their pool tags (skill stays at the schema default 0 — INTEREST_POOL has no
 // authored skill); values carry their opposition pair.
+// AI-Assisted Character Generation Phase 1 (D4): routed through the SAME
+// resolvers rollCastSlot uses, so a custom trait typed here and one typed in
+// the sandbox get identical payload. The old inline `POOL.find(exact)` gave an
+// off-pool interest empty tags (harmless) but an off-pool value an EMPTY
+// `opposition` — which validates, since `required` only means present, and
+// then reads as a value with no opposing force anywhere the fiction uses it.
 function studioPoolNamesToValues(path, names) {
   if (path === 'bible.interests') {
-    return (names || []).map(n => {
-      const p = INTEREST_POOL.find(i => i.name === n);
-      return { name: n, tags: p ? (p.tags || []) : [], skill: 0 };
-    });
+    return resolveAuthoredInterests(names).map(i => ({ name: i.name, tags: i.tags || [], skill: 0 }));
   }
   if (path === 'bible.values') {
-    return (names || []).map(n => {
-      const p = VALUES_POOL.find(v => v.name === n);
-      return { name: n, opposition: p ? (p.opposition || '') : '' };
-    });
+    return resolveAuthoredValues(names).map(v => ({ name: v.name, opposition: v.opposition || '' }));
   }
   return names || [];
 }

@@ -4324,6 +4324,9 @@ const MENU_ACTIONS = ['menu', 'new-game-solo', 'new-game-random', 'new-game-guid
   // verbs — opening/leaving a roommate's five sub-tabs and switching which
   // one is shown.
   'sandbox.roommate-select', 'sandbox.roommate-subtab',
+  // AI-Assisted Character Generation Phase 5: the roommate's Describe &
+  // Generate section — pre-game meta like every sandbox verb above it.
+  'sandbox.concept-toggle', 'sandbox.concept-generate',
   // Settings & Pause Overhaul Phase 2 (D2): the tabbed settings sub-screen's
   // verbs — meta, reachable from the boot options row and the pause context
   // alike, free at any energy. Rows carry their target as data-field and
@@ -4357,6 +4360,9 @@ const MENU_ACTIONS = ['menu', 'new-game-solo', 'new-game-random', 'new-game-guid
   // every one of their verbs must be reachable with currentGameState null.
   'studio.tab', 'studio.toggle', 'studio.row-add', 'studio.row-remove',
   'studio.roll-all', 'studio.clear-all', 'studio.cancel', 'studio.confirm',
+  // AI-Assisted Character Generation Phase 4: the studio's Describe &
+  // Generate section, on both the player and appearance-only subjects.
+  'studio.concept-toggle', 'studio.concept-generate',
   'studio.portrait-generate', 'studio.portrait-reset',
   'intro.advance', 'intro.back', 'intro.skip'];
 
@@ -4429,6 +4435,9 @@ const ENERGY_GATE_EXEMPT = new Set([
   'sandbox.difficulty-preset',
   // Sandbox Pre-Game Editor Overhaul Phase 5: the Roommates rail's own verbs.
   'sandbox.roommate-select', 'sandbox.roommate-subtab',
+  // AI-Assisted Character Generation Phase 5: the roommate's Describe &
+  // Generate section — pre-game meta like every sandbox verb above it.
+  'sandbox.concept-toggle', 'sandbox.concept-generate',
   'settings.open', 'settings.tab', 'settings.back',
   'settings.toggle', 'settings.cycle', 'set.population-dist',
   'set.image-style', 'set.custom-style', 'images.clear-cache',
@@ -4444,6 +4453,9 @@ const ENERGY_GATE_EXEMPT = new Set([
   // currentGameState.player.energy, which is null on these surfaces.
   'studio.tab', 'studio.toggle', 'studio.row-add', 'studio.row-remove',
   'studio.roll-all', 'studio.clear-all', 'studio.cancel', 'studio.confirm',
+  // AI-Assisted Character Generation Phase 4: the studio's Describe &
+  // Generate section, on both the player and appearance-only subjects.
+  'studio.concept-toggle', 'studio.concept-generate',
   'studio.portrait-generate', 'studio.portrait-reset',
   'intro.advance', 'intro.back', 'intro.skip',
 ]);
@@ -4878,6 +4890,15 @@ async function handleAction(action, npcId, extra) {
     case 'classifieds.studio-edit-pool':
       doClassifiedsStudioEditPool(extra?.rowId);
       break;
+    // AI-Assisted Character Generation Phase 1 (D1): the "Add your own" box
+    // beside each pool grid. rowId is the field path alone; the typed value
+    // is read from the box at click time.
+    case 'classifieds.studio-add-custom':
+      doClassifiedsStudioAddCustom(extra?.rowId);
+      break;
+    case 'classifieds.studio-edit-add-custom':
+      doClassifiedsStudioEditAddCustom(extra?.rowId);
+      break;
     case 'classifieds.studio-set-mode':
       doClassifiedsStudioSetMode(extra?.rowId);
       break;
@@ -4899,8 +4920,13 @@ async function handleAction(action, npcId, extra) {
     case 'classifieds.studio-clear':
       doClassifiedsStudioClear();
       break;
-    case 'classifieds.studio-ai-generate':
-      await doClassifiedsStudioAIGenerate();
+    // AI-Assisted Character Generation Phase 3 — the Describe & Generate
+    // section, replacing the old 'classifieds.studio-ai-generate' verb.
+    case 'classifieds.studio-concept-toggle':
+      doClassifiedsStudioConceptToggle();
+      break;
+    case 'classifieds.studio-concept-generate':
+      await doClassifiedsStudioConceptGenerate();
       break;
     case 'classifieds.interview':
       doClassifiedsInterview(extra?.rowId);
@@ -5203,6 +5229,14 @@ async function handleAction(action, npcId, extra) {
     case 'sandbox.roommate-design':
       doSandboxRoommateDesign(extra.index);
       break;
+    // AI-Assisted Character Generation Phase 5 — one description fills all
+    // five of a roommate's sub-tabs.
+    case 'sandbox.concept-toggle':
+      doSandboxConceptToggle();
+      break;
+    case 'sandbox.concept-generate':
+      await doSandboxConceptGenerate();
+      break;
     case 'sandbox.roommate-skip':
       doSandboxRoommateSkip(extra.index);
       break;
@@ -5387,6 +5421,15 @@ async function handleAction(action, npcId, extra) {
       break;
 
     // --- Player Design studio (player creation + intro plan, Phases 3-4) ---
+    // AI-Assisted Character Generation Phase 4 — the Describe & Generate
+    // section on both openStudio subjects (the player, and the sandbox's
+    // appearance-only NPC subject).
+    case 'studio.concept-toggle':
+      doStudioConceptToggle();
+      break;
+    case 'studio.concept-generate':
+      await doStudioConceptGenerate();
+      break;
     case 'studio.tab':
       doStudioTab(extra.rowId);
       break;
@@ -7448,14 +7491,27 @@ async function startSandboxGame(cfg) {
 async function applySandboxRoommateProse(pendingCast, roommates) {
   const list = roommates || [];
   const npcIds = pendingCast?.npcIds || [];
-  const fillFallback = (b) => ({
-    ...b,
-    name: b.name || fallbackName(b),
-    visual: fallbackVisual(b),
-    history: fallbackHistory(b),
-    sketch: fallbackSketch(b),
-    sampleLines: fallbackSampleLines(b),
-  });
+  // AI-Assisted Character Generation Phase 5: this used to overwrite visual /
+  // history / sketch / sampleLines UNCONDITIONALLY, ignoring authoredFields.
+  // That was harmless while nothing in the sandbox could author them — and a
+  // silent data-loss bug the moment a concept fill could, since a filled
+  // roommate defaults to skipProse and would have had its written history
+  // replaced by a template on the way into the game. `name` already had the
+  // right shape (`b.name || ...`); the other four now match it.
+  const fillFallback = (b) => {
+    const authored = b.authoredFields || [];
+    const keep = (field, gen) => (pathIsAuthored(authored, field) && b[field] && (!Array.isArray(b[field]) || b[field].length > 0))
+      ? b[field]
+      : gen(b);
+    return {
+      ...b,
+      name: b.name || fallbackName(b),
+      visual: keep('visual', fallbackVisual),
+      history: keep('history', fallbackHistory),
+      sketch: keep('sketch', fallbackSketch),
+      sampleLines: keep('sampleLines', fallbackSampleLines),
+    };
+  };
   await Promise.all(npcIds.map(async (id, i) => {
     const npc = pendingCast.npcs?.[id];
     if (!npc) return;
