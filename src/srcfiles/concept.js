@@ -283,6 +283,30 @@ ${blocks.join(',\n')}
 // description, so this tries the cheap repairs before giving up — but it never
 // GUESSES at content, only at punctuation.
 
+// Bug fix (2026-08-27, live playtest): `fillFromConcept` calls
+// root.generateText with `startWith: '{'`, and every OTHER structured call
+// in this codebase (llm.js's expandCharacterProse etc.) assumes the returned
+// text already carries that seed character — none of them re-prepend it.
+// That assumption holds for a clean stream, but a live log caught the plugin
+// hitting a mid-stream "stream error: unknown_error" and recovering via its
+// own "Attempting continuation" path, and the text that recovery handed back
+// was missing the seed `{` entirely: it started `  "name": "Parker", ...`,
+// a bare object body with no wrapper.
+//
+// Without this, `indexOf('{')` below finds the WRONG brace — the first one
+// appearing anywhere in the text, which for a physical-heavy character is the
+// nested `"physical": {` — and slices from there, discarding name/surname/
+// age/gender and every field before it. A response that was otherwise
+// perfectly complete and valid (confirmed: it round-trips through a plain
+// `JSON.parse` once its own seed is restored) was thrown away and retried,
+// which is most of what turned "generate a character" into "roll the dice on
+// whether tonight's stream hiccups".
+//
+// The fix is narrow on purpose: only a bare object BODY — text beginning
+// immediately with `"key":` — gets the brace restored. Prose commentary
+// before a real `{` (the "Sure! Here you go:" case, already handled below by
+// indexOf) must NOT trigger this, or prepending `{` ahead of it would bury
+// the real opening brace under a fake one.
 function parseConceptResponse(text) {
   if (typeof text !== 'string') return null;
   let s = text.trim();
@@ -291,6 +315,8 @@ function parseConceptResponse(text) {
   // Strip a markdown fence even though the prompt forbids one — models emit
   // them anyway, and losing a whole character to three backticks is absurd.
   s = s.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+
+  if (/^"[^"\\]*(?:\\.[^"\\]*)*"\s*:/.test(s)) s = '{' + s;
 
   const start = s.indexOf('{');
   if (start < 0) return null;
@@ -842,13 +868,27 @@ async function fillFromConcept(description, scope, context) {
     // NO stopSequences — see conceptRepairJson's comment. `startWith: '{'`
     // matches every other structured call in the game (llm.js).
     const run = async () => parseConceptResponse(await root.generateText({ instruction, startWith: '{' }));
+    // Two retries (three attempts total), not the one every other structured
+    // call in this codebase uses (callAssessor/callChronicler). Bug fix
+    // (2026-08-27): a live playtest hit 6 straight failures, and a captured
+    // log showed why a single retry is thinner cover HERE than it is for
+    // those — this prompt's payload (name/appearance/personality/speech/
+    // narrative/full physical, all at once) is far larger, which means far
+    // more time mid-stream for the plugin's own "stream error, attempting
+    // continuation" recovery path to fire — and THAT path is what was
+    // dropping content (parseConceptResponse's fix above recovers a dropped
+    // seed brace; it cannot recover an outright missing name/surname). This
+    // call is also user-initiated and waited-on, not an ambient background
+    // judgment, so the extra latency on the rare double-failure costs a
+    // second or two of "still generating" — worth it against a failed
+    // character.
     let parsed = await run();
-    if (!parsed) {
-      console.warn('Concept reply unparseable; retrying once');
+    for (let attempt = 1; !parsed && attempt <= 2; attempt++) {
+      console.warn(`Concept reply unparseable; retrying (${attempt}/2)`);
       parsed = await run();
     }
     if (!parsed) {
-      return { ok: false, reason: 'That came back unreadable. Try again, or give a little more detail.' };
+      return { ok: false, reason: 'That came back unreadable after a few tries. Try again, or give a little more detail.' };
     }
     const draft = normalizeConceptDraft(parsed, scope);
     if (draft._touched.length === 0) {

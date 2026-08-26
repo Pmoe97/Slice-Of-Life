@@ -122,6 +122,46 @@ check('  ...and recovers the completed part of the truncated subtree',
 const cutMidString = pretty.slice(0, pretty.indexOf('badly grown out'));
 check('a reply cut mid-string still recovers an object', !!parseConceptResponse(cutMidString));
 
+// Bug fix (2026-08-27, live playtest): root.generateText's `startWith: '{'`
+// seed is not always present in the text handed back — a captured log showed
+// the plugin's own "stream error, attempting continuation" recovery path
+// dropping it, leaving a bare object BODY with no wrapper. Without this,
+// indexOf('{') below latches onto the first NESTED brace instead (here,
+// "physical": {) and discards every field before it — name, surname, age,
+// gender, all silently gone from an otherwise perfectly complete reply.
+const seedDropped = pretty.replace(/^\{\r?\n/, '');
+check('seedDropped fixture actually starts mid-object (sanity check on the fixture itself)',
+  /^\s*"name"\s*:/.test(seedDropped));
+const recoveredSeed = parseConceptResponse(seedDropped);
+check('a reply missing its startWith seed brace still recovers', !!recoveredSeed);
+check('  ...with EVERY field intact, not just the ones after the wrong brace',
+  recoveredSeed && recoveredSeed.name === 'Wren' && recoveredSeed.age === 29 && recoveredSeed.occupation?.title === 'night-shift ER nurse',
+  recoveredSeed ? JSON.stringify(Object.keys(recoveredSeed)) : 'null');
+check('a seed-restore does not fire on ordinary leading commentary (must not bury the real brace)',
+  !!parseConceptResponse('Sure! Here you go:\n' + pretty));
+check('a seed-restore does not fire on the normal seed-present case (no double brace)',
+  parseConceptResponse(pretty)?.name === 'Wren');
+// A restore ONLY fires on a clean "key": value prefix. Losing a partial key
+// name too (not just the wrapper brace — the actual shape a second live log
+// line showed: `",\n  "age": 28,...`, dropped mid-token rather than cleanly
+// at a key boundary) must fail CLEANLY rather than throw or fabricate content
+// to paper over the gap. `fillFromConcept`'s retry loop is what recovers this
+// case, not the parser.
+const midTokenDrop = '",\n  "age": 28,\n  "gender": "male"\n}';
+check('a drop mid-token (not at a key boundary) fails cleanly, no throw',
+  (() => { try { return parseConceptResponse(midTokenDrop) === null; } catch (e) { return false; } })());
+// A restore that only catches a LATER key (physical onward) is not a failure
+// — it is the SAME mechanism doing exactly its job on a shorter prefix, and
+// normalizeConceptDraft already degrades gracefully on a partial object.
+// GOOD has three keys AFTER physical (history/sketch/sampleLines), so slicing
+// from "physical" onward keeps all four — this is the restore doing exactly
+// its job on a shorter prefix, not a special case.
+const fromPhysicalOn = pretty.slice(pretty.indexOf('"physical"'));
+const restoredFromMidObject = parseConceptResponse(fromPhysicalOn);
+check('a restore starting mid-object still yields whatever keys survived',
+  !!restoredFromMidObject && !restoredFromMidObject.name && !!restoredFromMidObject.physical && !!restoredFromMidObject.sketch,
+  JSON.stringify(restoredFromMidObject && Object.keys(restoredFromMidObject)));
+
 console.log('\n--- 2. Normalizing a good reply (npcFull) ---');
 
 const draft = normalizeConceptDraft(GOOD, 'npcFull');
@@ -418,8 +458,67 @@ check('every resolved candidate carries a real SCHEDULES key',
 check('an empty occupation string resolves to nothing',
   resolveAuthoredOccupationPool('').pool === null && resolveAuthoredOccupationPool('').title === null);
 
-// run-all.js matches /^ {2}(\d+) passed, (\d+) failed$/m — the two leading
-// spaces are load-bearing. Without them the harness runs green standalone and
-// is silently counted as "errored" by the suite.
-console.log(`\n  ${pass} passed, ${fail} failed`);
-process.exitCode = fail > 0 ? 1 : 0;
+console.log('\n--- 11. fillFromConcept\'s retry contract (bug fix 2026-08-27) ---');
+
+// fillFromConcept is otherwise untested here — it is a thin wrapper around
+// root.generateText, and everything around it (the prompt, the parse, the
+// normalize) is covered directly above. But the RETRY COUNT is exactly the
+// kind of off-by-one a loop bound gets wrong silently, and a live playtest
+// (6 straight failures) is what motivated widening it from one retry to two
+// — worth pinning directly rather than trusting by inspection. `root` is a
+// real object in the vm context (loadgame.js's stub), mutable from out here
+// via `api(...)`, which is what makes this reachable at all.
+// `root.__queue`: an array of canned replies, one per call, consumed in
+// order; `root.__calls` counts how many were actually made. Set once here
+// rather than re-templating a function body as a string for each scenario.
+api(`
+  root.__calls = 0;
+  root.__queue = [];
+  root.generateText = async () => {
+    root.__calls++;
+    const next = root.__queue.shift();
+    return next === undefined ? 'no more queued replies' : next;
+  };
+`);
+function queueReplies(list) {
+  api('root.__calls = 0');
+  api(`root.__queue = ${JSON.stringify(list)}`);
+}
+
+async function verifyRetryContract() {
+  queueReplies(['not valid json, ever', 'still not valid json', 'nope, garbage again']);
+  const failResult = await api('fillFromConcept')('a person', 'npcFull', {});
+  check('a reply that never parses makes exactly 3 attempts (1 + 2 retries)', api('root.__calls') === 3,
+    `calls=${api('root.__calls')}`);
+  check('  ...and returns a clean failure, not a throw', failResult.ok === false && !!failResult.reason);
+
+  queueReplies(['garbage', 'still garbage', JSON.stringify({ name: 'Sana' })]);
+  const lateSuccess = await api('fillFromConcept')('a person', 'player', {});
+  check('success on the LAST allowed attempt is still a success (no early giveup)',
+    lateSuccess.ok === true && lateSuccess.draft?.name === 'Sana');
+  check('  ...and stops retrying once it succeeds (exactly 3 calls, not 4)', api('root.__calls') === 3, `calls=${api('root.__calls')}`);
+
+  queueReplies([JSON.stringify({ name: 'Quinn' })]);
+  const firstTry = await api('fillFromConcept')('a person', 'player', {});
+  check('success on the FIRST attempt makes exactly 1 call (no wasted retries)',
+    api('root.__calls') === 1 && firstTry.ok === true, `calls=${api('root.__calls')}`);
+
+  // The exact live-log failure, end to end through the real async wrapper: a
+  // stream hiccup drops the startWith seed on the FIRST attempt. The parser
+  // fix must recover it without needing the retry loop to bail it out —
+  // exactly 1 call, not 2.
+  const seedDroppedReply = JSON.stringify({ name: 'Marcus', age: 34, physical: { hair: { color: 'black' } } }).replace(/^\{/, '');
+  queueReplies([seedDroppedReply]);
+  const seedRecovered = await api('fillFromConcept')('a person', 'player', {});
+  check('the exact live-log failure (seed brace dropped) now succeeds on the FIRST call',
+    api('root.__calls') === 1 && seedRecovered.ok === true && seedRecovered.draft?.name === 'Marcus',
+    JSON.stringify(seedRecovered));
+}
+
+verifyRetryContract().then(() => {
+  // run-all.js matches /^ {2}(\d+) passed, (\d+) failed$/m — the two leading
+  // spaces are load-bearing. Without them the harness runs green standalone
+  // and is silently counted as "errored" by the suite.
+  console.log(`\n  ${pass} passed, ${fail} failed`);
+  process.exitCode = fail > 0 ? 1 : 0;
+});
