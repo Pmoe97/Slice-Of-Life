@@ -409,7 +409,7 @@ await check('an NPC\'s plate serving converts kcal→hunger and never touches th
 
 console.log('\n8. set_meal plate-aware spread');
 
-await check('a plate spread scores by the instance quality and feeds plate mood per attendee',
+await check('a plate spread scores by the instance quality and feeds plate mood per attendee (sit)',
   api(`(() => {
     const h = house('p3-meal', 2);
     const plate = makePlate(h, RECIPES.pasta, RECIPES.pasta.ingredients, 'boil', 'pot');
@@ -429,7 +429,7 @@ await check('a plate spread scores by the instance quality and feeds plate mood 
       fedNpcIds: [npcId],
       affection: 0, hasCommitment: false, diningTable: null,
     };
-    const lines = buildSetMealEffects(ctx, prepared);
+    const lines = buildSitEffects(ctx, prepared);
     const expectedMood = COMMITMENT_TUNING.attendeeMoodBonus + PLATE_TUNING.qualityMoodScale * plate.quality;
     const moodLine = lines.find(l => l.startsWith('MOOD_DELTA ' + npcId));
     const actualMood = moodLine ? parseFloat(moodLine.split(' ')[2]) : NaN;

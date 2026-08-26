@@ -131,7 +131,11 @@ function resolvePeep(gameState, roomId) {
   }
 
   const effects = lines.map(l => parseEffectDSL(l)[0]).filter(Boolean);
-  applyEffects(effects, effCtx);
+  // action-outcome-window-plan audit finding (2026-08-26 follow-up): capture
+  // applyEffects' own return so the caller's outcome window can read a real
+  // result (Design Invariant 1) — the one-off peep resolved with no window
+  // at all until this fix.
+  const peepEffResult = applyEffects(effects, effCtx);
 
   // Build narration
   let narration = desc;
@@ -148,7 +152,10 @@ function resolvePeep(gameState, roomId) {
     narration += ' ' + suspectTemplate.replace('{name}', owner.bible.name || 'They');
   }
 
-  return { ok: true, narration, caught, suspected, ownerId, clothing: descKey };
+  return {
+    ok: true, narration, caught, suspected, ownerId, clothing: descKey,
+    applied: (peepEffResult && peepEffResult.applied) || [],
+  };
 }
 
 // --- NPC peeping on the player (Phase 6): the mirror of resolvePeep.

@@ -1572,20 +1572,33 @@ function closeInventoryPanel() {
 let ctrObjId = null;
 let ctrSelected = null; // { side: 'container' | 'bag', defId }
 
-// --- Wardrobe panel (Intimacy & Voyeurism Phase 5, D11) ---
-// The Change Outfit picker, in the same family as openRecipePicker /
-// openSpreadPicker: a full overlay panel (like the container panel) with a
-// promise-resolved outcome. Left column = the current outfit, one row per
+// --- Wardrobe panel (Intimacy & Voyeurism Phase 5, D11; Tier D wrap by
+// action-outcome-window-plan audit finding #9) ---
+// The Change Outfit picker. Left column = the current outfit, one row per
 // CLOTHING_SLOT; clicking a row selects the slot and the right column shows
 // that slot's owned items as Wear buttons plus a Wear Nothing option. The
-// Apply button resolves the promise with the drafted OUTFIT ({ slot: itemId },
-// cleared slots absent) or null on Close/Escape. Rendered state is a working
-// draft, never written until Apply — cancelling is free.
+// Apply button resolves with the drafted OUTFIT ({ slot: itemId }, cleared
+// slots absent) or null on Close/Escape/backdrop. Rendered state is a
+// working draft, never written until Apply — cancelling is free.
+//
+// D2 names this picker by name as UI that belongs inside ActionWindow's
+// chrome, not its own untouched screen — so it now opens through
+// openActionWindow (Tier D, `body: 'wardrobe'`) instead of a bespoke
+// #wardrobe-panel overlay. Everything below this comment — the draft state,
+// the render functions, the slot/item click handlers — is UNCHANGED; only
+// open/close/apply now route through the shared session so the picker gets
+// the same one-window-at-a-time guarantee and clock pause every other Tier D
+// picker already has. actionwindow.js's renderActionWindow only shows/hides
+// #wardrobe-content (Design invariant 1 — it doesn't know what a clothing
+// slot is); this file still owns every pixel painted inside it.
 let _wardrobeObjId = null;
-let _wardrobeResolve = null;
 let _wardrobeDraft = {};
 let _wardrobeOriginal = {};
 let _wardrobeSlot = null;
+// The one-shot handoff for what Apply drafted, read by openWardrobePanel's
+// promise chain the instant dismissActionWindow('apply') resolves it — see
+// wardrobeApply below for why this exists instead of a direct resolve().
+let _wardrobeAppliedOutfit = null;
 
 const WARDROBE_SLOT_LABELS = {
   top: 'Top', bottom: 'Bottom', outerwear: 'Outerwear', shoes: 'Shoes',
@@ -1598,30 +1611,48 @@ function currentWardrobeObject(gs) {
 }
 
 function openWardrobePanel(gs, objId, currentOutfit) {
-  return new Promise((resolve) => {
-    const panel = document.getElementById('wardrobe-panel');
-    if (!panel || !gs) { resolve(null); return; }
-    _wardrobeObjId = objId;
-    _wardrobeDraft = { ...(currentOutfit || {}) };
-    _wardrobeOriginal = { ...(currentOutfit || {}) };
+  if (typeof openActionWindow !== 'function' || !gs) return Promise.resolve(null);
+  // This runs during prepare(), so the loading overlay is still up — same
+  // reason presentActionStep/openSpreadPicker take it down first, rather
+  // than leaving the spinner visible through the aw-overlay's translucent
+  // backdrop.
+  if (typeof hideLoading === 'function') hideLoading();
+  _wardrobeObjId = objId;
+  _wardrobeDraft = { ...(currentOutfit || {}) };
+  _wardrobeOriginal = { ...(currentOutfit || {}) };
+  _wardrobeSlot = null;
+  const opened = openActionWindow(gs, {
+    tier: 'D', trigger: 'player', body: 'wardrobe',
+    heading: 'Wardrobe', dismissal: 'tap', defaultChoice: 'cancel',
+    choices: null, image: null,
+  });
+  // openActionWindow's promise executor runs renderActionWindow(s)
+  // SYNCHRONOUSLY before returning — #wardrobe-content is already unhidden
+  // by the time this line runs (or the session was refused and this paints
+  // into hidden DOM harmlessly, same as a picker opened over a claimed
+  // overlay). Domain painting stays here, not in actionwindow.js, which has
+  // no `gs` to paint it with.
+  renderWardrobePanel(gs);
+  return opened.then((reason) => {
+    const outfit = reason === 'apply' ? _wardrobeAppliedOutfit : null;
+    _wardrobeObjId = null;
+    _wardrobeDraft = {};
+    _wardrobeOriginal = {};
     _wardrobeSlot = null;
-    _wardrobeResolve = resolve;
-    panel.hidden = false;
-    renderWardrobePanel(gs);
+    _wardrobeAppliedOutfit = null;
+    return outfit;
   });
 }
 
 // Returns whether the panel was actually open — lets the Escape handler
-// fall through to the other overlays when it wasn't.
+// fall through to the other overlays when it wasn't. Checked via the DOM
+// (#wardrobe-content's own hidden state) rather than reaching into
+// actionwindow.js's private session — this file doesn't need to know how
+// that module tracks "is a window open", only whether ITS content is showing.
 function closeWardrobePanel() {
-  const panel = document.getElementById('wardrobe-panel');
-  const wasOpen = panel && !panel.hidden;
-  if (panel) panel.hidden = true;
-  if (_wardrobeResolve) { _wardrobeResolve(null); _wardrobeResolve = null; }
-  _wardrobeObjId = null;
-  _wardrobeDraft = {};
-  _wardrobeOriginal = {};
-  _wardrobeSlot = null;
+  const content = document.getElementById('wardrobe-content');
+  const wasOpen = !!content && !content.hidden;
+  if (wasOpen && typeof dismissActionWindow === 'function') dismissActionWindow('cancel');
   return wasOpen;
 }
 
@@ -1647,26 +1678,27 @@ function wardrobeClearSlot() {
   renderWardrobePanel(currentGameState);
 }
 
+// Stashes the drafted outfit where openWardrobePanel's promise chain can
+// read it, then dismisses through the shared session — the SAME reason
+// closeWardrobePanel doesn't resolve its own promise directly any more
+// (D20's split: this file decides what "apply" means, actionwindow.js only
+// performs the close). openActionWindow's own onClick/onKey handlers already
+// call dismissActionWindow with the RIGHT reason for backdrop/Escape
+// (defaultChoice: 'cancel'), so only the Apply button needs its own call.
 function wardrobeApply() {
-  const panel = document.getElementById('wardrobe-panel');
-  if (!panel || panel.hidden) return;
-  const resolve = _wardrobeResolve;
+  const content = document.getElementById('wardrobe-content');
+  if (!content || content.hidden) return;
   const outfit = {};
   for (const slot of CLOTHING_SLOTS) {
     if (_wardrobeDraft[slot]) outfit[slot] = _wardrobeDraft[slot];
   }
-  panel.hidden = true;
-  _wardrobeObjId = null;
-  _wardrobeDraft = {};
-  _wardrobeOriginal = {};
-  _wardrobeSlot = null;
-  _wardrobeResolve = null;
-  if (resolve) resolve(outfit);
+  _wardrobeAppliedOutfit = outfit;
+  if (typeof dismissActionWindow === 'function') dismissActionWindow('apply');
 }
 
 function renderWardrobePanel(gs) {
-  const panel = document.getElementById('wardrobe-panel');
-  if (!panel || panel.hidden) return;
+  const content = document.getElementById('wardrobe-content');
+  if (!content || content.hidden) return;
   const obj = currentWardrobeObject(gs);
   if (!obj) { closeWardrobePanel(); return; }
   const sub = document.getElementById('wdb-subtitle');
@@ -1705,7 +1737,10 @@ function renderWardrobeOutfitColumn(gs, obj) {
       : (_wardrobeSlot === slot ? 'Wear nothing…' : '—');
     if (!defId && _wardrobeSlot === slot) val.classList.add('dim');
     row.append(name, val);
-    row.addEventListener('click', () => wardrobeSelectSlot(slot));
+    // stopPropagation: this button now lives inside #action-window-overlay,
+    // whose backdrop click is D1's dismiss target — without this every slot
+    // click would bubble up and cancel the whole picker (audit finding #9).
+    row.addEventListener('click', (e) => { e.stopPropagation(); wardrobeSelectSlot(slot); });
     listEl.appendChild(row);
   }
 }
@@ -1730,7 +1765,8 @@ function renderWardrobeItemsColumn(gs, obj) {
       btn.className = 'wdb-wear-btn';
       if (_wardrobeDraft[slot] === stack.defId) btn.setAttribute('data-worn', '');
       btn.textContent = CLOTHING_DEFS[stack.defId].label;
-      btn.addEventListener('click', () => wardrobeWearSlot(stack.defId));
+      // stopPropagation — see the note on the slot row above.
+      btn.addEventListener('click', (e) => { e.stopPropagation(); wardrobeWearSlot(stack.defId); });
       listEl.appendChild(btn);
     }
     if (candidates.length === 0) {
@@ -1743,7 +1779,8 @@ function renderWardrobeItemsColumn(gs, obj) {
     none.type = 'button';
     none.className = 'btn btn-secondary tiny wdb-none-btn';
     none.textContent = 'Wear nothing here';
-    none.addEventListener('click', wardrobeClearSlot);
+    // stopPropagation — see the note on the slot row above.
+    none.addEventListener('click', (e) => { e.stopPropagation(); wardrobeClearSlot(); });
     listEl.appendChild(none);
     return;
   }
@@ -2825,56 +2862,52 @@ function openSpreadPicker(options, { seats = 1, max = 6 } = {}) {
 // chip and the IM chat-header button). One button per day×meal-slot combo
 // (today's slots whose window already passed are omitted), resolving to
 // { startAbs, endAbs, slotId } or null on Cancel.
-function openDinnerInvitePicker(npcName) {
+// --- Shared scheduling picker (action-outcome-window Phase 5, D8) ------------
+// The one calendar both \"invite over\" (AfterHours Hot Singles) and \"invite to
+// dinner\" route through, replacing the old hardcoded \"they'll come by
+// tomorrow\" and the old meal-slot-only openDinnerInvitePicker. It is a
+// MUTUAL-availability picker: the windows shown are the NPC's genuinely free
+// ones (freeSlotsFor — the same resolveScheduleActivity/busyBlocks read
+// respondToCommitment uses), same-day slots included, so the player can never
+// pick a time the NPC is working/commuting/asleep. The windows are COMPUTED
+// here and only here; presentSchedulePicker (actionwindow.js) just paints them
+// (D2 — the picker runs inside the action window's chrome). Resolves to
+// { startAbs, endAbs } or null on Cancel / backdrop / Escape.
+//
+// With `mealLabels` (the dinner invite) a window overlapping a
+// COMMITMENT_TUNING.mealSlots window is labelled \"Breakfast\"/\"Lunch\"/
+// \"Dinner\" (mealLabelForWindow) instead of a bare time — the player sees what
+// they're about to book. freeSlotsFor / mealLabelForWindow are call-time deps
+// (asks.js loads after render.js), fine — this runs only when the player
+// invites someone. presentSchedulePicker is a call-time dep too (actionwindow.js
+// loads before render.js).
+function openSchedulePicker({ title, npcId, mealLabels }) {
   return new Promise((resolve) => {
-    const overlay = document.getElementById('modal-overlay');
-    const title = document.getElementById('modal-title');
-    const body = document.getElementById('modal-body');
-    const actions = document.getElementById('modal-actions');
-    if (!overlay || !title || !body || !actions) { resolve(null); return; }
-    if (typeof hideLoading === 'function') hideLoading();
-    const finish = (choice) => { overlay.removeAttribute('data-open'); resolve(choice); };
-    title.textContent = `Invite ${npcName || 'them'} to dinner`;
-    body.innerHTML = '';
-    const list = document.createElement('div');
-    list.className = 'recipe-pick-list';
-    const day = currentGameState?.meta?.clock?.day ?? 1;
-    const nowAbs = clockToAbsolute(currentGameState?.meta?.clock || { day, minutes: 0 });
+    const gs = currentGameState;
+    const npc = gs && gs.npcs && gs.npcs[npcId];
+    const clock = gs && gs.meta && gs.meta.clock;
+    if (!gs || !npc || !clock) { resolve(null); return; }
+    if (typeof presentSchedulePicker !== 'function') { resolve(null); return; }
+    const nowAbs = clockToAbsolute(clock);
+    const slots = [];
     for (let offset = 0; offset < COMMITMENT_TUNING.maxInviteAheadDays; offset++) {
-      const d = day + offset;
-      for (const slot of COMMITMENT_TUNING.mealSlots) {
-        const startAbs = d * 1440 + slot.startMinute;
-        const endAbs = d * 1440 + slot.endMinute;
-        if (endAbs <= nowAbs) continue; // today's window already passed
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn btn-block recipe-pick-btn';
-        const name = document.createElement('span');
-        name.className = 'recipe-pick-name';
-        name.textContent = offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow' : formatDate(d);
-        const meta = document.createElement('span');
-        meta.className = 'recipe-pick-ings';
-        meta.textContent = `${slot.label} · ${formatTime(slot.startMinute)}`;
-        btn.append(name, meta);
-        btn.addEventListener('click', () => finish({ startAbs, endAbs, slotId: slot.id }));
-        list.appendChild(btn);
+      const dayAbs = clock.day + offset;
+      const free = freeSlotsFor(npc, dayAbs, nowAbs);
+      if (!free || free.length === 0) continue;
+      const dayLabel = offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow' : formatDate(dayAbs);
+      for (const slot of free) {
+        const start = formatTime(slot.startAbs % 1440);
+        const end = formatTime(slot.endAbs % 1440);
+        const meal = mealLabels ? mealLabelForWindow(slot.startAbs % 1440, slot.endAbs % 1440) : null;
+        slots.push({
+          startAbs: slot.startAbs,
+          endAbs: slot.endAbs,
+          label: meal ? meal.label : `${start}–${end}`,
+          sublabel: `${dayLabel} · ${start}–${end}`,
+        });
       }
     }
-    if (list.childElementCount === 0) {
-      const none = document.createElement('p');
-      none.className = 'dim';
-      none.textContent = 'No meal windows left to schedule right now.';
-      list.appendChild(none);
-    }
-    body.appendChild(list);
-    actions.innerHTML = '';
-    const cancel = document.createElement('button');
-    cancel.type = 'button';
-    cancel.className = 'btn btn-secondary';
-    cancel.textContent = 'Cancel';
-    cancel.addEventListener('click', () => finish(null));
-    actions.appendChild(cancel);
-    overlay.setAttribute('data-open', '');
+    presentSchedulePicker(gs, { heading: title || 'Choose a time', slots }).then(resolve);
   });
 }
 
@@ -2887,8 +2920,8 @@ function openDinnerInvitePicker(npcName) {
 // respondToCommitment uses — work/commute/sleep windows never appear, so
 // the stage-2 recheck in doConvSend is belt-and-braces, not a second
 // negotiation). Resolves to { startAbs, endAbs } or null on Cancel. Reuses
-// #modal-overlay + the recipe-pick row chrome, mirroring
-// openDinnerInvitePicker. freeSlotsFor is a call-time dep (asks.js loads
+// #modal-overlay + the recipe-pick row chrome, sharing its slot-probe with
+// openSchedulePicker. freeSlotsFor is a call-time dep (asks.js loads
 // after render.js), which is fine — this runs only when the player sends a
 // scheduled ask.
 //
@@ -4054,44 +4087,6 @@ function renderSceneReader(gs, sceneState) {
   }
 
   return scene;
-}
-
-// --- The peek/listen lens (intimacy-voyeurism Phase 10, D6/D7) ----------
-// Projects the PEEK session onto the #peek-overlay DOM. Holds NO logic of
-// its own (the same split as the scene reader): every decision was already
-// made in peek.js's pure layer. Called once per session tick — never on a
-// full page render — so the lens and its risk meter move while the rest of
-// the page stays still.
-function renderPeekOverlay(gs, session, view) {
-  const overlay = document.getElementById('peek-overlay');
-  if (!overlay || !session) return;
-  overlay.removeAttribute('hidden');
-  overlay.setAttribute('data-mode', session.mode);
-
-  const heading = document.getElementById('peek-heading');
-  if (heading) heading.textContent = session.mode === 'peek' ? 'Peeking' : 'Listening';
-
-  const caption = document.getElementById('peek-caption');
-  if (caption) {
-    const line = session._viewLine || (session.mode === 'peek'
-      ? 'You peer through the keyhole…' : 'You listen at the door…');
-    caption.textContent = sentence(line);
-  }
-
-  const meta = document.getElementById('peek-meta');
-  if (meta) {
-    const secs = Math.round(session.ticksElapsed * PEEK.realTickMs / 1000);
-    meta.textContent = `held for ${secs}s`;
-  }
-
-  const riskFill = document.getElementById('peek-risk-fill');
-  if (riskFill) {
-    const bucket = Math.round(Math.max(0, Math.min(1, session.riskAccum / PEEK.maxRisk)) * 100 / 5) * 5;
-    riskFill.setAttribute('data-fill', bucket);
-  }
-
-  const stopBtn = document.getElementById('peek-stop-btn');
-  if (stopBtn) stopBtn.textContent = session.mode === 'peek' ? 'Stop Watching' : 'Stop Listening';
 }
 
 // --- The moodle strip (scene-reader plan Phase 3, D8) ---

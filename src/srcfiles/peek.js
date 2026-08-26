@@ -12,9 +12,9 @@
 // authored pools — no LLM call decides any boundary outcome (D15).
 //
 // The image half lives in image.js (composePeekKey / composePeekPrompt /
-// getPeekImage), the lens UI in index.html + render.js's renderPeekOverlay.
-// ui.js's handleAction intercepts door.keyhole / door.listen and calls
-// startPeekSession here. Everything sim-adjacent here is pure or a trusted
+// getPeekImage), the lens UI in index.html + actionwindow.js's openPeekHold /
+// renderPeekHold. ui.js's handleAction intercepts door.keyhole / door.listen and
+// calls startPeekSession here. Everything sim-adjacent here is pure or a trusted
 // producer (seeded rng only, no bare Math.random).
 
 // --- Module state ----------------------------------------------------------
@@ -221,7 +221,7 @@ async function startPeekSession(roomId, mode) {
   pushTimeContext('peeking');
 
   addLogEntry('narration', pickPeekProse(gs, s.mode === 'peek' ? 'openPeek' : 'openListen', s));
-  renderPeekOverlay(gs, s, { opening: true });
+  openPeekHold(gs, s);
   await _refreshView(s, focus);
 
   _peekTimer = setInterval(() => { _peekTick(); }, PEEK.realTickMs);
@@ -259,7 +259,7 @@ async function _peekTick() {
   if (rng() < chance) { await _resolvePeekCaught(s, gs); return; }
 
   if (s.ticksElapsed >= PEEK.maxHoldTicks) { _endPeekSession('cramp'); return; }
-  renderPeekOverlay(gs, s, null);
+  updatePeekHold(gs, s);
 }
 
 // Re-derive what the player sees/hears and repaint the overlay. The image is
@@ -279,17 +279,17 @@ async function _refreshView(s, focus) {
     s._viewLine = kept.length > 0
       ? kept.map((sig, i) => pickDoorCueText('sound', sig, s.roomId, s.ticksElapsed + i, gs.meta.clock.day).replace('{door}', s.doorName)).join(' ')
       : pickPeekProse(gs, 'listenSilent', s, focus.npc);
-    renderPeekOverlay(gs, s, null);
+    updatePeekHold(gs, s);
     return;
   }
 
   s._viewLine = composePeekViewLine(gs, s, focus);
-  if (!changed) { renderPeekOverlay(gs, s, null); return; }
+  if (!changed) { updatePeekHold(gs, s); return; }
 
   const img = document.getElementById('peek-img');
   const shimmer = document.getElementById('peek-shimmer');
   const key = composePeekKey(gs, s.roomId, focus.npc, desc.actKey);
-  if (key === s._peekImageKey) { renderPeekOverlay(gs, s, null); return; }
+  if (key === s._peekImageKey) { updatePeekHold(gs, s); return; }
 
   if (!peekImageBudgetAllows(gs, s)) {
     // Degraded frame: keep what we have, or fall to the shadows line.
@@ -297,7 +297,7 @@ async function _refreshView(s, focus) {
       if (shimmer) shimmer.removeAttribute('hidden');
       s._viewLine = pickPeekProse(gs, 'shadows', s, focus.npc);
     }
-    renderPeekOverlay(gs, s, null);
+    updatePeekHold(gs, s);
     return;
   }
 
@@ -326,7 +326,7 @@ async function _refreshView(s, focus) {
     if (shimmer) shimmer.setAttribute('hidden', '');
     s._viewLine = pickPeekProse(gs, 'shadows', s, focus.npc);
   }
-  renderPeekOverlay(gs, s, null);
+  updatePeekHold(gs, s);
 }
 
 // --- Caught resolution (D7/D15) --------------------------------------------
@@ -361,7 +361,8 @@ async function _resolvePeekCaught(s, gs) {
     if (def.suspicion) shLines.push(`ADJUST_SUSPICION ${s.focusNpcId} boundary_violation +${def.suspicion}`);
     if (def.playerMood) shLines.push(`ADJUST_NEED player mood ${def.playerMood < 0 ? '' : '+'}${def.playerMood}`);
     const shCtx = buildEffectContext(gs, [s.focusNpcId], [s.focusNpcId], {}, []);
-    applyEffects(shLines.map(l => parseEffectDSL(l)[0]).filter(Boolean), shCtx);
+    const shResult = applyEffects(shLines.map(l => parseEffectDSL(l)[0]).filter(Boolean), shCtx);
+    s._applied = (shResult && shResult.applied) || [];
     // The cold-shoulder onset (D14): uncalled-for perving at a cold dynamic
     // is the move-out-risk case — noteColdShoulder stamps the flag and the
     // day-rollover pass (ui.js) accumulates the actual move-out counter.
@@ -377,7 +378,8 @@ async function _resolvePeekCaught(s, gs) {
     if (cfg.suspicion) lines.push(`ADJUST_SUSPICION ${s.focusNpcId} boundary_violation +${cfg.suspicion}`);
     if (cfg.mood) lines.push(`ADJUST_NEED player mood +${cfg.mood}`);
     const effCtx = buildEffectContext(gs, [s.focusNpcId], [s.focusNpcId], {}, []);
-    applyEffects(lines.map(l => parseEffectDSL(l)[0]).filter(Boolean), effCtx);
+    const effResult = applyEffects(lines.map(l => parseEffectDSL(l)[0]).filter(Boolean), effCtx);
+    s._applied = (effResult && effResult.applied) || [];
   }
 
   // engage: the door opens. The occupant acknowledges the watcher — the
@@ -404,7 +406,47 @@ async function _resolvePeekCaught(s, gs) {
   // the shaming prose is the occupant's per-tier REACTION (a stranger's
   // mortification, a close dynamic's joke).
   if (s._shamingProse) addLogEntry('narration', s._shamingProse);
-  _endPeekSession('caught');
+  s._outcome = outcome;
+  // The caught window's narration is the act line for every outcome; the
+  // confront beat's reaction prose (the door flying open / the per-tier
+  // mortification or joke) is appended when it exists.
+  s._outcomeProse = pickPeekProse(gs, `${outcome}_${s.mode}`, s)
+    + (s._shamingProse ? ' ' + s._shamingProse : '');
+  await _endPeekSession('caught');
+  await presentPeekCaughtWindow(gs, s);
+}
+
+// --- Caught outcome window (Phase 4, D18) ---------------------------------
+// The caught resolution's beat renders inside the action window: narration +
+// the "what changed" strip derived from the SAME applied effects the resolve
+// already ran (Design invariant 1 — this window reads the result, it never
+// re-decides it). engage, and a warm-tier confront, hand off (D6) to the
+// conversation; a hostile/cold/neutral refusal closes with its own beat and no
+// handoff (D18) — branched on the outcome/tier the resolve produced, never on
+// the verb. D1 holds: the window goes away only on a deliberate tap.
+async function presentPeekCaughtWindow(gs, s) {
+  if (!s || typeof openActionWindow !== 'function') return;
+  const npc = gs && gs.npcs ? gs.npcs[s.focusNpcId] : null;
+  const name = (npc && npc.bible && npc.bible.name) || 'They';
+  const outcome = s._outcome;
+  const deltas = (typeof deriveActionDeltas === 'function')
+    ? deriveActionDeltas(s._applied || [], gs) : [];
+  const handoff = outcome === 'engage' || (outcome === 'confront' && s._shamingTier === 'warm');
+  await openActionWindow(gs, {
+    tier: 'B',
+    trigger: 'player',
+    heading: outcome === 'confront' || outcome === 'engage' ? name : 'Caught',
+    narration: s._outcomeProse || '',
+    deltas,
+    minutes: 0,
+    dismissal: handoff ? 'handoff' : 'tap',
+    defaultChoice: null,
+    choices: null,
+    image: null,
+  });
+  // A handoff's DESTINATION belongs to the caller (D20): peek.js knows who
+  // it hands off to, so the talk happens here, after the window resolves.
+  if (handoff && typeof doTalk === 'function') await doTalk(s.focusNpcId);
 }
 
 // --- Ending the hold -------------------------------------------------------
@@ -417,8 +459,7 @@ async function _endPeekSession(reason) {
   peekSession = null;
   popTimeContext();
 
-  const overlay = document.getElementById('peek-overlay');
-  if (overlay) overlay.setAttribute('hidden', '');
+  closeActionWindow();
 
   // Intimacy & Voyeurism Phase 15 (D8): a peek that showed an act becomes a
   // 'witnessed' ledger entry — the codex's fuel, written ONCE per session

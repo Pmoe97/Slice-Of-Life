@@ -208,6 +208,13 @@ const ICONS = {
     <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3Z"/>
     <circle cx="12" cy="13" r="3.5"/>
   `),
+  // Dream Engine Phase 8: Dream Diary app — a crescent moon with one small
+  // star, for the app icon/tile (the key must exist or the tile renders
+  // blank).
+  dreams: () => svgWrap(`
+    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/>
+    <path d="M12 4l1.4 3.9L17.3 9.3l-3.9 1.4L12 14.6l-1.4-3.9L6.7 9.3l3.9-1.4L12 4Z"/>
+  `),
 };
 
 function svgWrap(inner) {

@@ -1116,6 +1116,93 @@ async function getPeekImage(gs, roomId, npc, npcId) {
   }
 }
 
+// --- Action outcome window images (action-outcome-window-plan Phase 1, D5) --
+// D5 splits outcome-window art two ways, and the split is a choice of WHICH
+// KEY, not a second caching mechanism: both keys below go through the same
+// getCachedImage/setCachedImage LRU as every other surface in this file
+// (Design invariant 3 — actionwindow.js never calls generateImage itself).
+//
+//   ARCHETYPE — repetitive-motion verbs (showering, dishes, a gig block).
+//     ONE representative frame per (verb, room, who-you-are, variant),
+//     reused every time forever. Deliberately carries no clock/phase part:
+//     "representative" is the point, and a shower at 7am and one at
+//     midnight are the same picture.
+//   INSTANCE  — verbs where the SPECIFIC content is the point (a particular
+//     plate, an outfit, an intimate act, a dream). The caller's `subject`
+//     is the discriminator; a per-occurrence subject means a fresh frame per
+//     occurrence, while still living inside the cache so a re-render of the
+//     same open window never generates twice.
+//
+// Both fold the same things every other key here folds: the prompt version,
+// the player's identity token (a haircut must repaint the archetype), the
+// clothing state the prompt actually names, the intimate gate (a gate flip
+// changes the prompt, so it must change the key), the viewport orientation,
+// and the active image style.
+function actionWindowKeyBase(gs, plan, discriminator) {
+  const gate = (typeof intimateAllowed === 'function' && intimateAllowed(gs)) ? 'i1' : 'i0';
+  const clothing = plan.clothing || gs?.player?.clothing || 'dressed';
+  return `${IMAGE_PROMPT_VERSION}_${plan.verbId}_${plan.roomId || 'anywhere'}`
+    + `_${playerIdentityToken(gs?.player)}_${clothing}_${discriminator}_${gate}_${sceneOrientation()}`;
+}
+
+function composeActionArchetypeKey(gs, plan) {
+  const stylePart = imageStyleToken();
+  const base = `awa_${actionWindowKeyBase(gs, plan, plan.variant || 'base')}`;
+  return stylePart ? `${base}_${stylePart}` : base;
+}
+
+function composeActionInstanceKey(gs, plan) {
+  const stylePart = imageStyleToken();
+  const base = `awi_${actionWindowKeyBase(gs, plan, plan.subject || 'once')}`;
+  return stylePart ? `${base}_${stylePart}` : base;
+}
+
+// PURE. The window's prompt: the acting player through the same visual-clause
+// composer every other generated image uses (opted into the intimate layer,
+// so peek's own three-condition gate still governs how much it may name),
+// plus the verb's OWN declared phrase. The phrase is authored on the action
+// def — this file never invents what the verb looked like.
+function composeActionWindowPrompt(gs, plan) {
+  const player = gs?.player;
+  const who = plan.clothing ? { ...(player || {}), clothing: plan.clothing } : player;
+  const clause = buildVisualCharacterClause(who, { gameState: gs, isPlayer: true, intimate: true });
+  const roomName = ROOMS[plan.roomId]?.name || plan.roomId || 'apartment';
+  const light = phaseLighting(gs?.meta?.clock?.phase);
+  return `${clause}, ${plan.phrase}, in the ${String(roomName).toLowerCase()}, ${light}, `
+    + 'anime-inspired slice-of-life illustration, warm tones, cinematic composition, '
+    + (sceneOrientation() === 'landscape' ? 'wide composition, subject centered.' : 'tall vertical composition, subject centered.');
+}
+
+// Cache-then-generate under whichever key D5 picked. `prompt` rides back out
+// so the window can hand it to the shared info/reroll affordance without
+// recomposing it. Seed is the key's own hash, like plateKey/composePlateSeed
+// — same key, same picture.
+async function getActionWindowImage(gs, plan) {
+  if (!plan || !plan.phrase) return { url: null, cached: false, key: null, error: 'no image plan' };
+  const key = plan.kind === 'instance'
+    ? composeActionInstanceKey(gs, plan)
+    : composeActionArchetypeKey(gs, plan);
+  const prompt = applyImageStyle(composeActionWindowPrompt(gs, plan));
+
+  const cached = await getCachedImage(key);
+  if (cached) return { url: createObjectUrl(key, cached), cached: true, key, prompt };
+
+  try {
+    const result = await root.generateImage(prompt, {
+      resolution: IMAGE_CACHE.resolutions.scene[sceneOrientation()],
+      seed: hashStr(key),
+      negativePrompt: IMAGE_NEGATIVE.actionWindow,
+    });
+    const blob = await canvasToBlob(result.canvas);
+    if (!blob) return { url: null, cached: false, key, prompt, error: 'empty outcome frame' };
+    await setCachedImage(key, blob);
+    return { url: createObjectUrl(key, blob), cached: false, key, prompt };
+  } catch (e) {
+    console.warn('Action window image generation failed:', e.message);
+    return { url: null, cached: false, key, prompt, error: e.message };
+  }
+}
+
 // --- Canvas to Blob ---
 function canvasToBlob(canvas) {
   return new Promise((resolve) => {
@@ -1364,6 +1451,73 @@ async function getAskPhotoImage(record) {
   }
 }
 
+// --- Dream panels (dream-engine-plan Phase 6, D14/D21/D30) ----------------
+// A dream panel is a photo record. compileDream (dreams.js) froze its prompt
+// and its seed at compile time; the record persists both and never a blob, so
+// the Dream Diary can repaint a page long after the shared LRU has evicted
+// its pixels (D14 — the takePhoto discipline, rationale above takePhoto).
+// NOTHING here rebuilds the prompt from current state: the room, the cast and
+// the light a dream was compiled against are all allowed to have changed, and
+// a dream that repainted itself against today's apartment would stop being a
+// record of what was dreamt.
+//
+// D30 splits the cache key in two. composeDreamPanelKey (dreams.js) folds the
+// facts about the DREAM — IMAGE_PROMPT_VERSION, the dream id, the panel index
+// — and is hashed into the panel's frozen seed, so it can never move. The two
+// facts about the DEVICE are appended here, at the cache boundary, exactly as
+// getPhotoImage appends the style over a frozen record prompt: the viewport
+// orientation and the active image style. A panel drawn on a phone and one
+// drawn on a desktop are different pictures and must never share an entry.
+function dreamPanelCacheKey(dream, panelIndex) {
+  const stylePart = imageStyleToken();
+  const base = `${composeDreamPanelKey(dream, panelIndex)}_${sceneOrientation()}`;
+  return stylePart ? `${base}_${stylePart}` : base;
+}
+
+// The orientation clause DREAM_PROMPT_TAIL deliberately does not carry — see
+// the comment above that constant. Same split as composeActionWindowPrompt's
+// trailing clause, just applied at render time instead of compose time.
+function dreamPanelViewportClause() {
+  return sceneOrientation() === 'landscape'
+    ? 'wide cinematic composition, subject centered'
+    : 'tall vertical composition, subject centered';
+}
+
+// Cache-then-generate under the key above — the getActionWindowImage idiom,
+// and the same return shape, so the viewer (Phase 7) and the diary (Phase 8)
+// can hand `prompt` to the shared info/reroll affordance without recomposing
+// it.
+//
+// The SEED is the record's own frozen panel.seed rather than a hash of the
+// key, which is where this getter deliberately differs from every other
+// surface in this file. The key varies with the device (orientation, style);
+// the seed must not, because a diary entry is a memory of one specific
+// picture and rotating a phone is not an event in the dreamer's life.
+async function getDreamPanelImage(dream, panelIndex) {
+  const panel = dream?.panels?.[panelIndex];
+  if (!panel || !panel.prompt) return { url: null, cached: false, key: null, error: 'no dream panel' };
+  const key = dreamPanelCacheKey(dream, panelIndex);
+  const prompt = applyImageStyle(`${panel.prompt}, ${dreamPanelViewportClause()}`);
+
+  const cached = await getCachedImage(key);
+  if (cached) return { url: createObjectUrl(key, cached), cached: true, key, prompt };
+
+  try {
+    const result = await root.generateImage(prompt, {
+      resolution: IMAGE_CACHE.resolutions.scene[sceneOrientation()],
+      seed: panel.seed,
+      negativePrompt: IMAGE_NEGATIVE.dream,
+    });
+    const blob = await canvasToBlob(result.canvas);
+    if (!blob) return { url: null, cached: false, key, prompt, error: 'empty dream panel' };
+    await setCachedImage(key, blob);
+    return { url: createObjectUrl(key, blob), cached: false, key, prompt };
+  } catch (e) {
+    console.warn('Dream panel image generation failed:', e.message);
+    return { url: null, cached: false, key, prompt, error: e.message };
+  }
+}
+
 // --- Reroll helpers (D17.5/D17.6) ---
 // The shared info/reroll modal's regenerate paths for the non-scene
 // surfaces. Each reroll receives the modal's field values verbatim —
@@ -1379,6 +1533,22 @@ const IMAGE_NEGATIVE = {
   char: 'blurry, distorted, extra limbs, low quality, text, watermark',
   photo: 'blurry, distorted, extra limbs, low quality',
   peek: 'blurry, distorted, extra limbs, low quality, text, watermark, keyhole, door hardware',
+  // The outcome window (action-outcome-window-plan Phase 1): a single-subject
+  // moment, so a crowd is as wrong here as a watermark.
+  actionWindow: 'blurry, distorted, extra limbs, low quality, text, watermark, crowd, multiple people',
+  // A dream panel (dream-engine-plan Phase 6). Deliberately the shortest list
+  // here, and deliberately missing two words every other entry carries.
+  // 'distorted' and 'blurry' are struck because DREAM_DISTORTIONS and
+  // DREAM_LENSES put exactly those qualities in the POSITIVE prompt on
+  // purpose — a flooded, doubled, scale-wrong room under polaroid bleed is
+  // the brief, and negating it here would quietly cancel the two tables the
+  // abstraction slider drives. Anatomical failure is still failure, so
+  // 'extra limbs' stays. What is added instead is the multi-frame family:
+  // the word "dream" pulls diffusion models hard toward collages and comic
+  // strips, and a dream PANEL is one frame — the sequence is the form's job
+  // (D4), not the picture's.
+  dream: 'extra limbs, deformed hands, low quality, text, watermark, signature, caption, '
+    + 'speech bubble, comic panel, panel border, split screen, collage, grid of images',
 };
 
 // Photo reroll: re-freezes the memory — the edited prompt (verbatim,

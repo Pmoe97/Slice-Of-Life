@@ -181,6 +181,9 @@ async function advanceAndResolve(ticks, opts = {}) {
   // The clock loop's checkpoint path never touches the loading overlay, so
   // nothing else would flush the queue for peeps detected while idling.
   flushPendingPeepBubble();
+  // Phase 2 (D7): the same reasoning for an overture opened while the player
+  // was simply standing still — no action ran, so no hideLoading is coming.
+  flushPendingOvertureGate();
 
   return events; // the events objects are the same references stored in
                  // currentGameState.world.events, so a caller marking one
@@ -314,6 +317,14 @@ async function processDayRollover(day) {
   // deliberately here rather than on a player-contact path: rollover is
   // already a wait, which is the exception D6 names for this pass.
   await chronicleDayRollover();
+  // Dream Engine Phase 6: the second of the two top-up sites. A day turning
+  // is when the residue pool has actually changed, so it is the cheapest
+  // moment to compile ahead — and it covers the player who naps and never
+  // sleeps, whose wake hook would otherwise never fire. Un-awaited for the
+  // same reason as the one in doSleep, and last in the rollover so nothing
+  // after it is waiting on a background pass that will not be finished for
+  // another minute.
+  topUpDreamQueue(currentGameState).catch(() => {});
 }
 
 // Need consequences (P7): fires when player needs hit 0. Called after
@@ -539,7 +550,15 @@ function narrateOvertureArrivals(before) {
     if (!byTone) continue;
     const lines = byTone[npc.overture.tone] || byTone.warm;
     if (!lines || lines.length === 0) continue;
-    addLogEntry('narration', fillOvertureLine(lines[Math.floor(orbitalRandom() * lines.length)], npc, npc.overture));
+    const line = fillOvertureLine(lines[Math.floor(orbitalRandom() * lines.length)], npc, npc.overture);
+    addLogEntry('narration', line);
+    // action-outcome-window-plan Phase 2 (D7): the log keeps the transcript,
+    // but a line scrolling past in the feed is exactly the silent repaint this
+    // plan exists to stop — someone crossed a room to reach you and the game
+    // said so in passing. Queue the gate on the SAME line that was just
+    // narrated, so the window shows what happened rather than a second,
+    // differently-worded account of it.
+    queueOvertureGate(id, line);
   }
 }
 
@@ -649,6 +668,138 @@ function applyOvertureRefusal(npcId, record) {
   noteOvertureRefused(currentGameState, npcId, day);
 }
 
+// --- action-outcome-window-plan Phase 2 (D7): the world-initiated gate -----
+// An overture is the one thing in this game that happens TO the player without
+// them pressing anything, so it is the simplest honest test of a window the
+// world opens. The rules D7 fixes, and where each one is kept:
+//
+//   - It never interrupts. advanceAndResolve can be resolving eight hours of
+//     sleep behind a loading overlay when the record opens, so the arrival
+//     QUEUES here and flushes only once nothing is covering the screen — the
+//     same deferral (and the same one-at-a-time cap) the caught-peeping bubble
+//     has used since its Phase 6, for the same reason.
+//   - Ignoring costs nothing. The window's quiet answer leaves the record
+//     PENDING: the player is exactly where they were, and every existing
+//     ending is still reachable afterwards — the decline chip still spends
+//     D10's economy, walking out still refuses, and doing neither still lapses
+//     for free. This surface adds an offer; it removes no ending.
+//   - Engaging hands off (D6) — but only where engaging actually opens a
+//     conversation, which is a question about the record, not about overtures
+//     as a category. See overtureEngageOpensConversation.
+
+// The one rule for what "yes" does, read by the gate (to decide whether the
+// window owes a D6 handoff) and by doOvertureRespond (to decide what to
+// actually do). Two readers, one rule: a proposal is answered by the plan
+// existing and nobody says a word, so a gate that cross-faded into a
+// conversation there would be promising something that never arrives.
+function overtureEngageOpensConversation(def) {
+  if (!def) return false;
+  return !def.respond || def.waitAt === 'here';
+}
+
+// At most one. Several people opening on the player inside one batch is the
+// same absurdity the peep queue already rules out, and the extras lapse on
+// their own budget rather than stacking into a queue of modals.
+let pendingOvertureGate = null;
+let presentingOvertureGate = false;
+
+function queueOvertureGate(npcId, line) {
+  if (pendingOvertureGate) return;
+  pendingOvertureGate = { npcId, line };
+}
+
+// Is the screen the player's again? Every one of these is a thing that owns
+// the screen and would be either covered by or interrupted by a modal:
+// a running action (the loading overlay), an outcome window from the action
+// that just finished, a live conversation, a peek hold, or a gate already up.
+function overtureGateBlocked() {
+  if (presentingOvertureGate) return true;
+  if (document.querySelector('.loading-overlay:not(.hidden)')) return true;
+  if (typeof actionWindowActive === 'function' && actionWindowActive()) return true;
+  if (typeof peekSessionActive === 'function' && peekSessionActive()) return true;
+  if (convState) return true;
+  if (pendingPeepBubble) return true;
+  return false;
+}
+
+function flushPendingOvertureGate() {
+  if (!pendingOvertureGate) return;
+  if (overtureGateBlocked()) return; // leave it queued; the next flush retries
+  const npc = currentGameState && currentGameState.npcs
+    ? currentGameState.npcs[pendingOvertureGate.npcId] : null;
+  // It aged out, was answered by a chip, or was refused by the player walking
+  // off while it sat in the queue. A gate for a record that is over would be
+  // asking about a moment that already ended.
+  if (!isOverturePending(npc)) { pendingOvertureGate = null; return; }
+  const gate = pendingOvertureGate;
+  pendingOvertureGate = null;
+  presentingOvertureGate = true;
+  // setTimeout(0) for the same reason the peep bubble uses one: let the
+  // in-flight render finish before raising anything over it.
+  setTimeout(() => { void presentOvertureGate(gate.npcId, gate.line); }, 0);
+}
+
+// Build the gate, show it, act on the answer. The window decides nothing —
+// it is handed a heading, a line, two labelled answers and a flag saying
+// which of them cross-fades, all four computed here from the record.
+async function presentOvertureGate(npcId, line) {
+  try {
+    const npc = currentGameState && currentGameState.npcs ? currentGameState.npcs[npcId] : null;
+    if (!isOverturePending(npc)) return;
+    if (typeof presentWorldGate !== 'function') return;
+    const record = npc.overture;
+    const def = OVERTURE_DEFS[record.overtureId];
+    const name = npc.bible?.name || 'Someone';
+    // The def's own accept label where it has one — a proposal's "yes" and a
+    // knock's "yes" are different sentences and the defs already say so. The
+    // approach channel has no `respond` block (D8: it is answered by talking),
+    // so it gets the verb the player would otherwise have pressed.
+    const engageLabel = (def && def.respond && def.respond.accept)
+      ? def.respond.accept.replace('{name}', name)
+      : `Talk to ${name}`;
+    const answer = await presentWorldGate(currentGameState, {
+      tier: 'B',
+      heading: name,
+      // D7's line, kept as the fallback for a record whose channel had no
+      // arrival template to narrate.
+      narration: line || `You see ${name} — they look like they have something to say.`,
+      defaultChoice: 'ignore',
+      choices: [
+        { id: 'engage', label: engageLabel, tone: 'primary',
+          handoff: overtureEngageOpensConversation(def) },
+        { id: 'ignore', label: 'Not now', tone: 'quiet' },
+      ],
+    });
+    // null means the window could not open at all — something else claimed
+    // the overlay between the flush check and the open (a `sit` step raising
+    // its own window in the same turn of the loop is the real case). That is
+    // not an answer, so it must not be read as one: put the gate back and let
+    // the next flush site try again, rather than silently dropping a moment
+    // the player never saw.
+    if (answer === null) { queueOvertureGate(npcId, line); return; }
+    if (answer !== 'engage') return; // D7: ignoring costs nothing, and the
+                                     // record stays pending for every ending
+                                     // the player already had.
+    // Engaging routes through the paths that already exist rather than
+    // reimplementing either of them: a record with a `respond` block is
+    // answered by doOvertureRespond (which books the plan or opens the door,
+    // and resolves the record itself), and an approach is answered by talking.
+    if (def && def.respond) await doOvertureRespond(npcId, true);
+    else await doTalk(npcId);
+  } catch (e) {
+    console.warn('Overture gate failed:', e && e.message);
+  } finally {
+    presentingOvertureGate = false;
+    // A gate closing is itself a moment where the screen came back to the
+    // player, and it is the one such moment no other flush site covers: with
+    // the clock at 0x and no action running, a second queued gate would
+    // otherwise sit unshown until the player happened to do something. The
+    // flush is a no-op when engaging left a conversation open — that close
+    // has its own retry.
+    flushPendingOvertureGate();
+  }
+}
+
 // --- Phase 4: the channels that DO need a button ---------------------------
 // An approach is answered by doTalk and refused by doMove, which is why Phase 3
 // shipped without a surface (D8): both are things the player already does with
@@ -686,7 +837,11 @@ async function doOvertureRespond(npcId, accepted) {
   // it hands straight to doTalk — which resolves the record itself, on the
   // motive, exactly as it does for an approach. Moving them into the room first
   // is the door opening: they were held on their side of it by the tick.
-  if (def.waitAt === 'here') {
+  //
+  // Phase 2 (D6): this branch is now also read from the OTHER side, by the
+  // gate deciding whether its "yes" owes a handoff cross-fade — so the two
+  // cannot disagree about whether talking happens.
+  if (overtureEngageOpensConversation(def)) {
     currentGameState.npcs[npcId] = { ...npc, location: currentGameState.player.location };
     currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
     await doTalk(npcId);
@@ -839,6 +994,42 @@ async function doBoundarySleepRoom(actId, npcId) {
   }
   render(currentGameState, currentSceneState);
   await saveAtBoundary(`boundary-${actId}`, currentGameState);
+  // action-outcome-window-plan Phase 6 (D3): the boundary roll's outcome is
+  // a real, consequential beat — uncaught, refused, reciprocated, or caught.
+  // The strip reads the actual effects the outcome applied (D2's caught
+  // tension spike, the refusal's rel deltas, the uncaught need restore).
+  const boundaryApplied = [];
+  if (result && result.ok) {
+    if (result.outcome === 'uncaught') {
+      const cfg = BOUNDARY.sleepRoom[actId === 'sleep_with' ? 'sleepWith' : 'watch'];
+      for (const [need, delta] of Object.entries(cfg && cfg.playerMood ? { mood: cfg.playerMood } : {})) {
+        boundaryApplied.push({ type: 'ADJUST_NEED', params: { who: 'player', need, delta } });
+      }
+      if (actId === 'sleep_with') {
+        boundaryApplied.push({ type: 'ADJUST_NEED', params: { who: 'player', need: 'energy', delta: BOUNDARY.sleepRoom.sleepWith.playerEnergy } });
+      }
+    } else if (result.outcome === 'warm_refuse') {
+      for (const [axis, delta] of Object.entries(BOUNDARY.sleepRoom.warmRefuseDeltas || {})) {
+        boundaryApplied.push({ type: 'REL_DELTA', params: { npcId, axis, delta } });
+      }
+    } else if (result.outcome === 'caught') {
+      boundaryApplied.push({ type: 'ADJUST_SUSPICION', params: { npcId, subject: 'boundary_violation', delta: BOUNDARY.sleepRoom.caughtTensionSpike } });
+    } else if (result.outcome === 'reciprocated') {
+      // audit finding #12: the richest of the four outcomes — a completed
+      // paired act — was falling through to an empty strip. boundary.js's
+      // applyReciprocatedAct now returns its real applyEffects result plus
+      // the reciprocateDeltas rel write, so this reads a genuine return
+      // value rather than fabricating one.
+      boundaryApplied.push(...(result.applied || []));
+    }
+  }
+  await presentActionOutcome(currentGameState, {
+    id: `boundary.${actId}`, label: actId === 'sleep_with' ? 'Sleep With' : 'Watch Them Sleep',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'instance', phrase: actId === 'sleep_with' ? 'climbing quietly into a bed beside a sleeping person' : 'watching a sleeping person from the bedside, a tense private moment' },
+    },
+  }, { applied: boundaryApplied, narration: (result && result.prose) || '', minutesSpent: BOUNDARY.durationMinutes[actId] || 10 });
 }
 
 async function doBoundaryThrouple() {
@@ -907,6 +1098,19 @@ async function doBoundaryThrouple() {
   }
   render(currentGameState, currentSceneState);
   await saveAtBoundary('boundary-throuple', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3) / audit finding #12: previously
+  // hand-rebuilt only the rel-delta half from BOUNDARY.throuple.relDeltas,
+  // silently dropping every need/mood row the act's own applyEffects calls
+  // actually applied. applyBoundaryThrouple now returns the real combined
+  // list (Design Invariant 1's required source).
+  await presentActionOutcome(currentGameState, {
+    id: 'boundary.throuple', label: 'Throuple',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: 'Three of you',
+      image: { kind: 'instance', phrase: 'three people sharing a bed together, soft candlelight, intimate' },
+    },
+  }, { applied: (result && result.applied) || [], narration: `${nameFor(partnerA)} and ${nameFor(partnerB)} are both in it with you.`, minutesSpent: 0 });
 }
 
 // The paired acts available with `partnerId` in the player's current room —
@@ -964,6 +1168,20 @@ function doCodexOpenNpc(npcId, device) {
   else renderComputerScreen(currentGameState);
 }
 
+// --- Dream Diary (Dream Engine Phase 8, D42) -------------------------------
+// The single nav verb the diary app needs: open one filed dream's detail page
+// from a gallery row. Pure navigation — the entry screen repaints the panels
+// from the record's frozen prompt+seed (D14) via its own renderer; nothing
+// here reads or writes the dream systems. Mirrors doCodexOpenNpc exactly,
+// including the device-parameterised switchScreen for phone vs computer.
+
+function doDreamOpenEntry(dreamId, device) {
+  if (!currentGameState || !dreamId) return;
+  switchScreen(currentGameState, 'dreams', 'entry', { dreamId }, device === 'phone' ? 'phone' : 'computer');
+  if (device === 'phone') renderPhoneScreen(currentGameState);
+  else renderComputerScreen(currentGameState);
+}
+
 async function doConfrontNpc(npcId, index) {
   if (!currentGameState || !npcId || typeof index !== 'number') return;
   const npc = currentGameState.npcs[npcId];
@@ -994,6 +1212,31 @@ async function doConfrontNpc(npcId, index) {
   }
   render(currentGameState, currentSceneState);
   await saveAtBoundary('confront', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3) / audit finding #12: the
+  // comment above always said the strip should read the confrontation def's
+  // own deltas, but the code passed `applied: []` — this is that fix.
+  // applyConfrontNpc doesn't return its outcome def, but it doesn't need to:
+  // `result.outcome` is the same key CONFRONT.outcomes is keyed by
+  // (resolveConfrontOutcome, codex.js), so this reads the identical def the
+  // apply function already used, rather than recomputing anything.
+  const confrontDef = CONFRONT.outcomes[result.outcome];
+  const confrontApplied = [];
+  if (confrontDef) {
+    for (const [axis, delta] of Object.entries(confrontDef.relDeltas || {})) {
+      confrontApplied.push({ type: 'REL_DELTA', params: { npcId, axis, delta } });
+    }
+    if (confrontDef.npcMood) confrontApplied.push({ type: 'MOOD_DELTA', params: { who: npcId, delta: confrontDef.npcMood } });
+    if (confrontDef.suspicion) confrontApplied.push({ type: 'ADJUST_SUSPICION', params: { npcId, subject: 'boundary_violation', delta: confrontDef.suspicion } });
+    if (confrontDef.playerMood) confrontApplied.push({ type: 'ADJUST_NEED', params: { who: 'player', need: 'mood', delta: confrontDef.playerMood } });
+  }
+  await presentActionOutcome(currentGameState, {
+    id: 'codex.confront', label: 'Confront',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: 'Confrontation',
+      image: { kind: 'instance', phrase: 'confronting someone about what they did, tense eye contact' },
+    },
+  }, { applied: confrontApplied, narration: `You corner ${name}. "${playerLine}"`, minutesSpent: 0 });
 }
 
 async function doSpreadSecret(npcId, index) {
@@ -1040,6 +1283,17 @@ async function doSpreadSecret(npcId, index) {
   addLogEntry('narration', `"${result.fact.text}," you say. The words are out there now.`);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('spread-secret', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3): spreading a secret is a real
+  // narrative beat with fallout downstream. The frame is fresh (this telling,
+  // once); no direct numeric delta lands here.
+  await presentActionOutcome(currentGameState, {
+    id: 'codex.spread', label: 'Spread a Secret',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: 'A secret told',
+      image: { kind: 'instance', phrase: 'leaning in to whisper a secret to someone, conspiratorial' },
+    },
+  }, { applied: [], narration: `You tell ${result.receiverName} about ${name} and ${otherName}. The words are out there now.`, minutesSpent: 0 });
 }
 
 async function doMatchmakeNpc(npcId, index) {
@@ -1076,6 +1330,25 @@ async function doMatchmakeNpc(npcId, index) {
   }
   render(currentGameState, currentSceneState);
   await saveAtBoundary('matchmake', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3) / audit finding #12: the comment
+  // above always said the deltas exist, they just "land in the relationship
+  // records, not here" — but applyMatchmakeNpc applies MATCHMAKE.playerRelDeltas
+  // to BOTH parties unconditionally on every ok:true, so it's a known,
+  // fixed config constant, not something that needs recomputing here.
+  const matchmakeApplied = [];
+  for (const id of [npcId, targetId]) {
+    for (const [axis, delta] of Object.entries(MATCHMAKE.playerRelDeltas || {})) {
+      matchmakeApplied.push({ type: 'REL_DELTA', params: { npcId: id, axis, delta } });
+    }
+  }
+  await presentActionOutcome(currentGameState, {
+    id: 'codex.matchmake', label: 'Matchmake',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: 'Two of a kind',
+      image: { kind: 'instance', phrase: 'introducing two people who clearly click, an encouraging nod' },
+    },
+  }, { applied: matchmakeApplied, narration: `You make a point of getting ${npc.bible?.name || 'them'} and ${target?.bible?.name || 'them'} in the same room.`, minutesSpent: 0 });
 }
 
 // Track how long an NPC has been at high tension — if it persists, they
@@ -1647,6 +1920,17 @@ async function doEscortBook(npcId, device) {
   addLogEntry('narration', `Booked ${name} for ${formatTime(res.booking.startTick * 30)}${tonight ? ' tonight' : ' tomorrow'} — ${labels}. ${res.booking.price} paid up front.`);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('escort-book', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3): a booking is a real,
+  // paid commitment. The strip reads the price paid; the frame is fresh
+  // (this booking, once).
+  await presentActionOutcome(currentGameState, {
+    id: 'escorts.book', label: 'Escort Booked',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: 'Booked',
+      image: { kind: 'instance', phrase: 'a booking confirmation on screen, a date set for tonight' },
+    },
+  }, { applied: [{ type: 'SPEND_MONEY', params: { amount: res.booking.price || 0, reason: 'Escort' } }], narration: `Booked ${name} for ${formatTime(res.booking.startTick * 30)}${tonight ? ' tonight' : ' tomorrow'} — ${labels}. ${res.booking.price} paid up front.`, minutesSpent: 0 });
 }
 
 // The chip behind a booked service. The chip is only rendered from the live
@@ -1669,6 +1953,25 @@ async function doEscortRequestService(npcId, serviceId) {
     render(currentGameState, currentSceneState);
     return;
   }
+  // action-outcome-window-plan Phase 6 follow-up (audit finding #10):
+  // Appendix A calls this Tier C, fresh, "resolves like the intimacy act it
+  // redeems" — but the act itself is free-text/LLM-resolved through
+  // doPlayerAction below, which is the shared dispatcher for ALL unstructured
+  // play and has no return channel for what it narrated or applied. Rewiring
+  // that dispatcher to expose a result was judged too invasive for this fix
+  // (it would touch every free-text action in the game, not just this one).
+  // So this window acknowledges the REQUEST being made — a real beat, since
+  // the service and who it's asked of are both known here — rather than
+  // claiming to show an outcome it cannot see. `applied` stays honestly
+  // empty; the actual scene still narrates in the log exactly as before.
+  await presentActionOutcome(currentGameState, {
+    id: 'escort.request-service', label: 'Request Service',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: `You ask for ${(def?.label || 'a service').toLowerCase()}`,
+      image: { kind: 'instance', phrase: `asking ${name} for ${(def?.desc || 'a moment together').toLowerCase()}` },
+    },
+  }, { applied: [], narration: `You ask ${name} for ${(def?.label || 'a service').toLowerCase()}.`, minutesSpent: 0 });
   await doPlayerAction(`Ask ${name} for ${(def?.label || 'a service').toLowerCase()}`);
 }
 
@@ -1915,17 +2218,30 @@ async function doAskContact(npcId) {
   const ok = rapport >= required;
   npc.flags = npc.flags || {};
   npc.flags._askedContactDay = day;
+  let narration;
   if (ok) {
     npc.contactKnown = true;
     // Open the thread so the contact is immediately usable.
     if (currentGameState.world.computer) ensureImThread(currentGameState, npcId);
-    addLogEntry('narration', `${name} gives you their number. You can text them now.`);
+    narration = `${name} gives you their number. You can text them now.`;
   } else {
-    addLogEntry('narration', `${name} deflects — you don't know each other well enough for that yet.`);
+    narration = `${name} deflects — you don't know each other well enough for that yet.`;
   }
+  addLogEntry('narration', narration);
   await advanceAndResolve(1);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('ask-contact', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3/D5): asking for contact is a
+  // single consequential exchange — a fresh frame, this once. Whether it
+  // landed shows in the narration; nothing numeric changes.
+  await presentActionOutcome(currentGameState, {
+    id: 'ask-contact', label: 'Ask for a Number',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: ok ? 'New contact' : 'Turned down',
+      image: { kind: 'instance', phrase: ok ? 'holding out a phone to exchange numbers, both people smiling' : 'asking someone for their number, a hesitant moment' },
+    },
+  }, { applied: [], narration, minutesSpent: CLOCK.tickMinutes });
 }
 
 // Invitations (external-world plan Phase 2): invite a contact over. Writes a
@@ -1959,7 +2275,13 @@ async function doInviteOver(npcId, source) {
     addLogEntry('system', reason);
     return { ok: false, reason };
   }
-  const day = currentGameState.meta.clock.day + 1;
+  // Phase 5 (D8): the shared mutual-availability picker — the player picks a
+  // genuinely-free day+window (same-day included) instead of the old hardcoded
+  // "tomorrow during the contractor window". Null = they cancelled.
+  const choice = await openSchedulePicker({ title: `Invite ${name} over`, npcId, mealLabels: false });
+  if (!choice) return { ok: false, reason: null };
+  const day = Math.floor(choice.startAbs / 1440);
+  const clockDay = currentGameState.meta.clock.day;
   const existing = (currentGameState.world.visits || []).find(v =>
     v.npcId === npcId && visitDay(v) === day && v.status !== 'done' && v.status !== 'deferred');
   if (existing) {
@@ -1967,28 +2289,44 @@ async function doInviteOver(npcId, source) {
     addLogEntry('system', reason);
     return { ok: false, reason };
   }
+  const dayLabel = day === clockDay ? 'today' : day === (clockDay + 1) ? 'tomorrow' : formatDate(day);
+  const at = formatTime(absoluteToClock(choice.startAbs).minutes);
   const ahSource = source === 'ah';
-  const win = VISIT_TUNING.contractor; // shared daytime window
   scheduleVisit(currentGameState, ahSource ? `ah_${npcId}_${day}` : `invite_${npcId}_${day}`, day, {
     npcId,
     purpose: 'social',
-    startAbs: day * 1440 + win.startMinute,
-    endAbs: day * 1440 + win.endMinute,
+    startAbs: choice.startAbs,
+    endAbs: choice.endAbs,
     roomId: 'living_room',
     followPlayer: ahSource,
   });
-  addLogEntry('narration', ahSource
-    ? `${name} — the person you met on AfterHours — says they'll come by tomorrow.`
-    : `${name} says they'll come by tomorrow.`);
+  const narration = ahSource
+    ? `${name} — the person you met on AfterHours — says they'll come by ${dayLabel} at ${at}.`
+    : `${name} says they'll come by ${dayLabel} at ${at}.`;
+  addLogEntry('narration', narration);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('invite-over', currentGameState);
-  return { ok: true };
+  // action-outcome-window-plan Phase 5/6 follow-up (audit finding #11): the
+  // scheduling picker itself is now interactive (D8), but the picker's own
+  // RESULT was still landing as a log-only line — the same silent-repaint
+  // pattern this plan exists to fix, one step downstream. scheduleVisit never
+  // rolls a response (a non-resident invite is always a yes once a free slot
+  // is picked), so this is a plain confirmation, no fabricated deltas.
+  await presentActionOutcome(currentGameState, {
+    id: 'invite-over', label: 'Invite Over',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: `${name} is coming over`,
+      image: { kind: 'instance', phrase: 'texting to confirm plans to meet up, a warm reply' },
+    },
+  }, { applied: [], narration, minutesSpent: 0 });
+  return { ok: true, when: `${dayLabel} at ${at}` };
 }
 
 // Meal invitations (inventory overhaul Phase 7, D7): invite a RESIDENT to
 // a shared dinner — in person (the Social chip) or by IM (the chat-header
-// button). Picks a day + meal window (render.js's openDinnerInvitePicker),
-// creates the world.commitments record, and narrates the immediate yes/no:
+// button). Picks a day + meal window (render.js's openSchedulePicker with
+// meal labels), creates the world.commitments record, and narrates the immediate yes/no:
 // acceptance is decided AT INVITE TIME by COMMITMENTS.respondToCommitment,
 // so a roommate who dislikes you declines on the spot and a work-shift
 // conflict is a real, named reason. Costs a tick like any social action
@@ -2001,7 +2339,7 @@ async function doInviteDinner(npcId) {
     addLogEntry('system', `Only your housemates sit down for a shared dinner — ${name} lives elsewhere.`);
     return;
   }
-  const choice = await openDinnerInvitePicker(name);
+  const choice = await openSchedulePicker({ title: `Invite ${name} to dinner`, npcId, mealLabels: true });
   if (!choice) return;
   const { record, responses } = createCommitment(currentGameState, {
     startAbs: choice.startAbs, endAbs: choice.endAbs,
@@ -2015,23 +2353,44 @@ async function doInviteDinner(npcId) {
       ? 'tomorrow'
       : formatDate(choiceDay);
   const at = formatTime(absoluteToClock(choice.startAbs).minutes);
+  let narration;
   if (resp?.accept) {
-    addLogEntry('narration', `${name} says yes — dinner ${when} at ${at}. You'll set the table in the dining room.`);
+    narration = `${name} says yes — dinner ${when} at ${at}. You'll set the table in the dining room.`;
   } else if (resp?.reason === 'busy') {
     const busy = resp.block;
     const why = busy === 'sleep' ? "they'll be asleep then"
       : (busy === 'work' || busy === 'commute' || busy === 'commute_home') ? 'they have work around then'
         : "they're tied up";
-    addLogEntry('narration', `${name} can't make dinner ${when} at ${at} — ${why}. Maybe another time.`);
+    narration = `${name} can't make dinner ${when} at ${at} — ${why}. Maybe another time.`;
   } else {
-    addLogEntry('narration', `${name} gives a long look and declines the invitation. It hangs awkwardly in the air.`);
+    narration = `${name} gives a long look and declines the invitation. It hangs awkwardly in the air.`;
   }
+  addLogEntry('narration', narration);
   if (record.acceptedIds.length === 0 && record.declinedIds.length > 0) {
     addLogEntry('system', `${name} isn't coming — you can still set the table and eat alone, or pick a different time.`);
   }
   await advanceAndResolve(1);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('invite-dinner', currentGameState);
+  // action-outcome-window-plan Phase 5/6 follow-up (audit finding #11): the
+  // picker's own result (accepted / busy / declined) was landing as a
+  // log-only line — the exact silent-repaint pattern this plan exists to
+  // fix. respondToCommitment is a pure schedule decision with no rel/mood
+  // write of its own (createCommitment only ever mutates the commitment
+  // record), so `applied` is honestly empty rather than fabricated.
+  await presentActionOutcome(currentGameState, {
+    id: 'invite-dinner', label: 'Invite to Dinner',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: resp?.accept ? `${name} says yes` : `${name} isn't coming`,
+      image: {
+        kind: 'instance',
+        phrase: resp?.accept
+          ? 'asking someone to dinner, a warm yes'
+          : 'asking someone to dinner, a hesitant decline',
+      },
+    },
+  }, { applied: [], narration, minutesSpent: CLOCK.tickMinutes });
 }
 
 // Daily goals sourced from resident wants/wounds/interests (brief §Identity:
@@ -2295,6 +2654,17 @@ async function doAskToLeave(npcId) {
     currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
     render(currentGameState, currentSceneState);
     await saveAtBoundary('move-out', currentGameState);
+    // action-outcome-window-plan Phase 6 (D3): asking someone to leave is a
+    // real, consequential beat. Nothing numeric shifts here (the rent note is
+    // in the narration); the frame is fresh — this departure, once.
+    await presentActionOutcome(currentGameState, {
+      id: 'ask-to-leave', label: 'Moving Out',
+      outcomeWindow: {
+        tier: 'C', trigger: 'player', dismissal: 'tap',
+        heading: 'A goodbye',
+        image: { kind: 'instance', phrase: 'saying goodbye at the door, someone leaving with a bag, bittersweet' },
+      },
+    }, { applied: [], narration: `${npc.bible.name || 'They'} moves out. The room feels a little emptier — and the rent a little heavier.`, minutesSpent: 0 });
   } finally {
     hideLoading();
   }
@@ -2857,6 +3227,27 @@ async function doPeep(roomId) {
   currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('peep', currentGameState);
+  // action-outcome-window-plan audit finding (2026-08-26 follow-up): the
+  // one-off peep applies real mood/suspicion/rel effects every time but
+  // never showed them anywhere but the log. Tier B, not C: Appendix A's own
+  // proposal wanted "one frame if not caught", but getActionWindowImage's
+  // prompt composer always pictures the PLAYER (buildVisualCharacterClause
+  // with isPlayer:true) — it has no "of someone else" mode, unlike peek.js's
+  // separate composePeekPrompt/getPeekImage pipeline the timed hold uses.
+  // Shipping an image here would picture the wrong person. No D6 handoff
+  // either (Appendix A's other suggestion, "same D9 shape as keyhole") —
+  // resolvePeep's caught/suspected are a flat boolean pair, not peek.js's
+  // graduated PEEK_OUTCOMES, so there's no existing decision to read a
+  // handoff from without inventing new verb logic this fix isn't scoped for.
+  const owner = currentGameState.npcs[result.ownerId];
+  const ownerName = owner?.bible?.name || 'Someone';
+  await presentActionOutcome(currentGameState, {
+    id: 'peep', label: 'Peep',
+    outcomeWindow: {
+      tier: 'B', trigger: 'player', dismissal: 'tap',
+      heading: result.caught ? `Caught by ${ownerName}` : result.suspected ? `${ownerName} might have noticed` : 'A quick look',
+    },
+  }, { applied: result.applied || [], narration: result.narration, minutesSpent: CLOCK.tickMinutes });
 }
 
 // Knock on a bedroom door from the hallway. The npcId param is actually
@@ -2868,17 +3259,18 @@ async function doKnock(roomId) {
   const ownerId = roomOwnerId(roomId, currentGameState.npcs);
   const owner = ownerId ? currentGameState.npcs[ownerId] : null;
   const roomName = ROOMS[roomId]?.name || 'room';
+  let narration;
   if (!owner) {
-    addLogEntry('narration', `You knock on the ${roomName} door. No answer — nobody's home.`);
+    narration = `You knock on the ${roomName} door. No answer — nobody's home.`;
   } else if (owner.location !== roomId) {
-    addLogEntry('narration', `You knock on the ${roomName} door. No answer — it's empty.`);
+    narration = `You knock on the ${roomName} door. No answer — it's empty.`;
   } else {
     const activity = owner.activity || '';
     const name = owner.bible.name || 'Someone';
     if (activity === 'sleeping' || activity === 'napping') {
-      addLogEntry('narration', `You knock on the ${roomName} door. After a moment you hear groaning — ${name} is asleep. No response.`);
+      narration = `You knock on the ${roomName} door. After a moment you hear groaning — ${name} is asleep. No response.`;
     } else if (activity === 'showering') {
-      addLogEntry('narration', `You knock on the ${roomName} door. The shower keeps running inside.`);
+      narration = `You knock on the ${roomName} door. The shower keeps running inside.`;
     } else {
       const responses = [
         `${name}'s voice: "Yeah? What's up?"`,
@@ -2886,13 +3278,26 @@ async function doKnock(roomId) {
         `${name} calls out, "Come in!"`,
         `A pause, then footsteps. ${name} opens the door. "Oh, hey."`,
       ];
-      addLogEntry('narration', `You knock on the ${roomName} door. ${responses[Math.floor(orbitalRandom() * responses.length)]}`);
+      narration = `You knock on the ${roomName} door. ${responses[Math.floor(orbitalRandom() * responses.length)]}`;
     }
   }
+  addLogEntry('narration', narration);
   await advanceAndResolve(1);
   currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('knock', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3): knock is a real, time-costing
+  // social overture, so it earns a window. A knock changes nothing numeric —
+  // it's a doorway, not a deed — so the strip shows only the time; the frame
+  // is a reused "knocking" archetype (repetitive-motion verb, D5).
+  await presentActionOutcome(currentGameState, {
+    id: 'knock', label: 'Knock',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: owner && owner.location === roomId ? 'Knock' : 'No answer',
+      image: { kind: 'archetype', variant: 'knock', phrase: 'standing at a closed door with a hand raised to knock, waiting for an answer' },
+    },
+  }, { applied: [], narration, minutesSpent: CLOCK.tickMinutes });
 }
 
 // Unlock a locked door from the OUTSIDE. The only locks in the game are the
@@ -3011,14 +3416,31 @@ async function doTakeFromRoom(ownerId, defId, qty) {
     `MOVE_ITEM ${defId} ${qty} ${ownerId} player`,
     `ADJUST_SUSPICION ${ownerId} boundary_violation +${delta}`,
   ];
-  applyEffects(lines.map(l => parseEffectDSL(l)[0]).filter(Boolean), effCtx);
+  const takeEffects = lines.map(l => parseEffectDSL(l)[0]).filter(Boolean);
+  // audit finding #12: capture applyEffects' own returned list rather than
+  // handing the outcome window the pre-application request array — the two
+  // usually agree, but only the return value is the actual source of truth
+  // (Design Invariant 1).
+  const takeResult = applyEffects(takeEffects, effCtx);
   await advanceAndResolveMinutes(STEALTH_TUNING.searchTimeMinutes + STEALTH_TUNING.takeTimeMinutes);
   const label = def.label || stack.meta?.origName || defId;
-  addLogEntry('narration', ownerPresent
+  const takeNarration = ownerPresent
     ? `You pocket ${name}'s ${label}${qty > 1 ? ` ×${qty}` : ''} right in front of them. Their eyes narrow.`
-    : `You take ${name}'s ${label}${qty > 1 ? ` ×${qty}` : ''}. They're none the wiser.`);
+    : `You take ${name}'s ${label}${qty > 1 ? ` ×${qty}` : ''}. They're none the wiser.`;
+  addLogEntry('narration', takeNarration);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('room-take', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3): the take is the discovery
+  // beat of a room search. The strip reads the real suspicion effect it just
+  // applied; the frame is fresh (this search, once).
+  await presentActionOutcome(currentGameState, {
+    id: 'search-room', label: 'Search Room',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: ownerPresent ? 'Caught in the act' : 'Taken',
+      image: { kind: 'instance', phrase: ownerPresent ? 'caught reaching into a drawer by an angry roommate' : 'quietly taking something from a drawer in an empty room' },
+    },
+  }, { applied: (takeResult && takeResult.applied) || [], narration: takeNarration, minutesSpent: STEALTH_TUNING.searchTimeMinutes + STEALTH_TUNING.takeTimeMinutes });
 }
 
 // --- Phone snoop (F6, Discord feedback 2026-08-24) ---
@@ -3051,18 +3473,26 @@ async function doSearchPhone(ownerId) {
   npc.flags._phoneFindsSeen = [...(npc.flags._phoneFindsSeen || []), finding.kind];
 
   let narration;
+  let phoneApplied = [];
   if (ownerPresent) {
     const shaming = resolveShamingReaction(currentGameState, npc, { cause: 'phone_snoop', day });
     applyShamingReactionLines(currentGameState, ownerId, shaming, finding.sensitive ? PHONE_SNOOP_TUNING.sensitiveExtraTension : 0);
     if (shaming.coldShoulderSeverity > 0) {
       noteColdShoulder(currentGameState.npcs[ownerId], shaming.coldShoulderSeverity, day, 'caught_boundary');
     }
+    const snDelta = finding.sensitive ? PHONE_SNOOP_TUNING.sensitiveExtraTension : 0;
+    if (snDelta) phoneApplied.push({ type: 'ADJUST_SUSPICION', params: { npcId: ownerId, subject: 'boundary_violation', delta: snDelta } });
     narration = shaming.prose || `${npc.bible.name} catches you going through their phone.`;
   } else {
     const delta = PHONE_SNOOP_TUNING.unwitnessedSuspicionDelta * (finding.sensitive ? PHONE_SNOOP_TUNING.sensitiveContentMultiplier : 1);
     const roomObjects = currentGameState.objects[`room_${roomId}`] || {};
     const effCtx = buildEffectContext(currentGameState, [], presentIds, roomObjects, currentGameState.player.inventory || []);
-    applyEffects([parseEffectDSL(`ADJUST_SUSPICION ${ownerId} boundary_violation +${delta}`)[0]].filter(Boolean), effCtx);
+    const snoopEffects = [{ type: 'ADJUST_SUSPICION', params: { npcId: ownerId, subject: 'boundary_violation', delta } }];
+    // audit finding #12: read the returned list, not the pre-application
+    // request array, so a future validation/clamp change can't silently
+    // desync the strip from what actually applied (Design Invariant 1).
+    const snoopResult = applyEffects(snoopEffects, effCtx);
+    phoneApplied = (snoopResult && snoopResult.applied) || [];
     narration = `You go through ${npc.bible.name}'s phone. They're none the wiser — for now.`;
   }
 
@@ -3070,6 +3500,17 @@ async function doSearchPhone(ownerId) {
   addLogEntry('narration', narration);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('phone-snoop', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3): snooping is the discovery
+  // beat. The strip reads the real suspicion effect it applied; the frame is
+  // fresh (this search, once), then the find itself is shown as its own beat.
+  await presentActionOutcome(currentGameState, {
+    id: 'search-phone', label: 'Search Phone',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: ownerPresent ? 'Caught snooping' : 'Found something',
+      image: { kind: 'instance', phrase: ownerPresent ? 'caught reading a phone by its angry owner' : 'scrolling through a phone left lying around, a stolen glance' },
+    },
+  }, { applied: phoneApplied, narration, minutesSpent: PHONE_SNOOP_TUNING.searchTimeMinutes });
   await showPhoneFindModal(npc, finding);
 }
 
@@ -3175,6 +3616,7 @@ async function doGiveItem(npcId) {
   // Complete the step
   if (quest) checkChainQuestProgress('give_item', npcId, step.itemCategory);
   let npcOut = npc;
+  let windowNarration;
   if (cs.active) {
     // The reparation ratchet — one severity per landed gift (cooldown +
     // minDaysBeforeRepair enforced inside noteColdShoulderRepair).
@@ -3182,20 +3624,40 @@ async function doGiveItem(npcId) {
     if (res.repaired) {
       npcOut = applyRelDelta(npc, COLD_SHOULDER.repairRelDeltas, currentGameState.meta.clock.day);
       if (res.severity <= 0) {
-        addLogEntry('narration', `${npc.bible.name || 'They'} looks at you properly for the first time in days. The cold is gone.`);
+        windowNarration = `${npc.bible.name || 'They'} looks at you properly for the first time in days. The cold is gone.`;
       } else {
-        addLogEntry('narration', `${npc.bible.name || 'They'} takes the ${itemLabel}, looking at it for a long moment. "Thank you," they say, quietly.`);
+        windowNarration = `${npc.bible.name || 'They'} takes the ${itemLabel}, looking at it for a long moment. "Thank you," they say, quietly.`;
       }
     } else {
-      addLogEntry('narration', `${npc.bible.name || 'They'} leaves the ${itemLabel} where it is. Not yet.`);
+      windowNarration = `${npc.bible.name || 'They'} leaves the ${itemLabel} where it is. Not yet.`;
     }
   } else {
     npcOut = applyRelDelta(npc, { affection: 0.05 }, currentGameState.meta.clock.day);
-    addLogEntry('narration', 'They seem touched.');
+    windowNarration = 'They seem touched.';
   }
+  addLogEntry('narration', windowNarration);
   currentGameState.npcs[npcId] = npcOut;
   render(currentGameState, currentSceneState);
   await saveAtBoundary('give-item', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3): giving an item is a real
+  // relational beat. The strip reads the real effects — the gift consumed and
+  // the relationship axis the repair actually moved — and the frame is fresh
+  // (this exchange, this once, D5).
+  const applied = [
+    { type: 'CONSUME_ITEM', params: { defId: stack.defId, qty: 1 } },
+  ];
+  const deltas = cs.active ? COLD_SHOULDER.repairRelDeltas : { affection: 0.05 };
+  for (const [axis, delta] of Object.entries(deltas)) {
+    applied.push({ type: 'REL_DELTA', params: { npcId, axis, delta } });
+  }
+  await presentActionOutcome(currentGameState, {
+    id: 'give-item', label: 'Give',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: `You give ${itemLabel}`,
+      image: { kind: 'instance', phrase: `handing ${itemLabel.toLowerCase()} to someone, a soft moment` },
+    },
+  }, { applied, narration: windowNarration, minutesSpent: 0 });
 }
 
 // Intimacy & Voyeurism Phase 16 (D2/D14): the apology reparation act. A
@@ -3233,14 +3695,33 @@ async function doApologizeNpc(npcId) {
   }
   currentGameState.npcs[npcId] = applyRelDelta(npc, COLD_SHOULDER.repairRelDeltas, day);
   const them = currentGameState.npcs[npcId].bible?.name || 'They';
-  addLogEntry('narration', COLD_SHOULDER.apologyLines[Math.floor(orbitalRandom() * COLD_SHOULDER.apologyLines.length)].replace('{name}', them));
+  const apologyLine = COLD_SHOULDER.apologyLines[Math.floor(orbitalRandom() * COLD_SHOULDER.apologyLines.length)].replace('{name}', them);
+  addLogEntry('narration', apologyLine);
+  let apologyNarration = apologyLine;
   if (res.severity <= 0) {
-    addLogEntry('narration', `${them} looks at you for the first time in days. "Fine. I hear you."`);
+    apologyNarration = `${them} looks at you for the first time in days. "Fine. I hear you."`;
+    addLogEntry('narration', apologyNarration);
   } else if (res.severity === 1) {
-    addLogEntry('narration', `${them} is still wary — but the ice is cracking.`);
+    apologyNarration = `${them} is still wary — but the ice is cracking.`;
+    addLogEntry('narration', apologyNarration);
   }
   render(currentGameState, currentSceneState);
   await saveAtBoundary('apologize', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3): the landed apology is a real
+  // relational beat. The strip reads the repair deltas it actually applied; the
+  // frame is fresh (this apology, once).
+  const apologyApplied = [];
+  for (const [axis, delta] of Object.entries(COLD_SHOULDER.repairRelDeltas)) {
+    apologyApplied.push({ type: 'REL_DELTA', params: { npcId, axis, delta } });
+  }
+  await presentActionOutcome(currentGameState, {
+    id: 'apologize', label: 'Apologize',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: 'An apology',
+      image: { kind: 'instance', phrase: 'speaking sincerely to someone, making amends' },
+    },
+  }, { applied: apologyApplied, narration: apologyNarration, minutesSpent: 0 });
 }
 
 // --- Inventory panel verbs (overhaul Phase 1) ---
@@ -4192,6 +4673,13 @@ async function handleAction(action, npcId, extra) {
     case 'codex.matchmake':
       await doMatchmakeNpc(npcId, extra?.index);
       break;
+    // Dream Engine Phase 8 (D42): the dream diary app — open one filed dream's
+    // detail page from a gallery row. Phone/computer-shared like codex; the
+    // row's data-row-id carries the dream id and data-device comes from the
+    // shell that owns the node.
+    case 'dreams.open-entry':
+      doDreamOpenEntry(extra?.rowId, extra?.device);
+      break;
     case 'gig.accept':
       await doGigAccept(extra?.rowId);
       break;
@@ -5132,6 +5620,41 @@ async function doSetAlarm(hour) {
   await saveAtBoundary('alarm', currentGameState);
 }
 
+// Dream Engine Phase 7 (D12/D16): the sleep and nap hook, and the whole of
+// what the UI layer knows about dreaming. Everything that decides anything —
+// whether tonight dreams at all, which queued record is spent, what the tint
+// is worth — is dreams.js's; this writes the morning line to the log, repaints
+// and saves, because narration and the save boundary are the UI's.
+//
+// Returns null on the common path, which is not an error: the frequency dial
+// said no, the day already had its dream, the queue is empty (design invariant
+// 3 — an empty queue means no dream, silently), or what was in it no longer
+// validates. Never throws: this sits between the player's click and their
+// morning, and an exception here would strand the sleep path over a picture.
+//
+// Both callers reach it AFTER their own save, so a reload mid-dream loses the
+// dream and nothing else — the same rule the outcome window has followed since
+// its Phase 1 (dismissing is a close, never a commit).
+async function presentDreamForSleep(forSleep) {
+  if (!currentGameState || typeof playQueuedDream !== 'function') return null;
+  let played = null;
+  try {
+    played = await playQueuedDream(currentGameState, forSleep);
+  } catch (e) {
+    console.warn('Dream presentation failed:', e && e.message);
+    return null;
+  }
+  if (!played) return null;
+  // D12: the tint is already applied (through applyEffects, so it produced
+  // real `applied` rows); this is the line that makes it legible. It goes in
+  // AFTER the dream rather than being folded into the sleep narration above,
+  // because it describes waking up out of the thing the player just watched.
+  if (played.line) addLogEntry('narration', played.line);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('dream-shown', currentGameState);
+  return played;
+}
+
 async function doSleep() {
   showLoading();
   try {
@@ -5224,6 +5747,27 @@ async function doSleep() {
     popTimeContext();
     render(currentGameState, currentSceneState);
     await saveAtBoundary('sleep', currentGameState);
+    // Dream Engine Phase 7 (D3/D15): the night's dream, if there is one. This
+    // AWAITS, and that is not a contradiction of design invariant 3 — nothing
+    // is generated here. The panels were rendered into the image cache on a
+    // previous night and the record was written before it was allowed into the
+    // queue (D38), so what is being awaited is the PLAYER, tapping through
+    // panels at their own pace. An empty queue resolves instantly with no
+    // window and no wait.
+    //
+    // After the save above, deliberately: dismissing a dream is a close, never
+    // a commit, and the dream files itself (diary, motif, tint) and saves
+    // again on its own way out.
+    await presentDreamForSleep('night');
+    // Dream Engine Phase 6 (D19/D20, design invariant 3): top the dream queue
+    // back up for a FUTURE night, in the background. UN-AWAITED by contract —
+    // this is an LLM call plus up to three image generations, and awaiting it
+    // on the sleep path is exactly the hang the whole queue exists to avoid.
+    // It is single-flight inside topUpDreamQueue, it re-validates against the
+    // live currentGameState before it writes anything, and it returns false
+    // rather than throwing when there is nothing to do, so the .catch here is
+    // a belt on a belt.
+    topUpDreamQueue(currentGameState).catch(() => {});
   } finally {
     hideLoading();
   }
@@ -5530,6 +6074,10 @@ function closeConversationOverlay() {
   // every close path for the same reason getPlayerVulnerableState prefers a
   // flag over an inference — one writer on, one writer off.
   if (currentGameState?.player?.flags) delete currentGameState.player.flags._inConversation;
+  // Phase 2 (D7): a conversation is the one blocker that no hideLoading is
+  // guaranteed to follow — someone else's overture can sit queued for the
+  // whole length of a talk. Retry the moment the screen is the player's again.
+  if (typeof flushPendingOvertureGate === 'function') flushPendingOvertureGate();
 }
 
 // --- Asks plan Phase 2: the Request-tree menu. The tree renders from the
@@ -7513,6 +8061,11 @@ function hideLoading() {
   const overlay = document.querySelector('.loading-overlay');
   if (overlay) overlay.classList.add('hidden');
   flushPendingPeepBubble();
+  // D7's queueing rule, at the moment it is actually satisfied: the action the
+  // player was in the middle of has finished (its outcome window included —
+  // runRegisteredAction awaits that before this runs), so the gate can present
+  // without interrupting anything.
+  flushPendingOvertureGate();
 }
 
 // --- Deferred caught-peeping bubble (Phase 6) ---
@@ -8202,10 +8755,12 @@ function attachEventHandlers() {
   // Wardrobe panel (intimacy-voyeurism Phase 5): the two STATIC buttons. The
   // slot/wear/none rows rebuild with every render, so they attach their own
   // listeners inside renderWardrobePanel; these exist once at boot.
+  // stopPropagation (audit finding #9): both now live inside
+  // #action-window-overlay, whose backdrop click is D1's dismiss target.
   const wdbClose = document.getElementById('wdb-close-btn');
-  if (wdbClose) wdbClose.addEventListener('click', () => closeWardrobePanel());
+  if (wdbClose) wdbClose.addEventListener('click', (e) => { e.stopPropagation(); closeWardrobePanel(); });
   const wdbApply = document.getElementById('wdb-apply-btn');
-  if (wdbApply) wdbApply.addEventListener('click', () => wardrobeApply());
+  if (wdbApply) wdbApply.addEventListener('click', (e) => { e.stopPropagation(); wardrobeApply(); });
   // Peek/listen lens (intimacy-voyeurism Phase 10): the Stop button ends the
   // hold; Escape does too, ahead of the other overlays (a hold is the most
   // time-sensitive thing on screen).
@@ -8214,11 +8769,12 @@ function attachEventHandlers() {
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (typeof stopPeekSession === 'function' && peekSessionActive()) { stopPeekSession(); return; }
-    // Intimacy & Voyeurism Phase 5 (D11): the wardrobe panel (Change Outfit)
-    // closes on Escape like any other overlay, and resolves its promise null
-    // so the action cancels cleanly.
-    if (typeof closeWardrobePanel === 'function' && closeWardrobePanel());
-    else if (typeof closeContainerPanel === 'function' && closeContainerPanel());
+    // The wardrobe panel (Change Outfit) no longer needs a branch here
+    // (audit finding #9): it opens through openActionWindow now, whose own
+    // capture-phase Escape handler (actionwindow.js) already wins over this
+    // bubble-phase one and resolves the picker's promise null on its own —
+    // see the comment on that handler for why capture beats this chain.
+    if (typeof closeContainerPanel === 'function' && closeContainerPanel());
     else if (typeof closeInventoryPanel === 'function') closeInventoryPanel();
   });
 }

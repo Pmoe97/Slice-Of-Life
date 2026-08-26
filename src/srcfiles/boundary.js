@@ -383,9 +383,9 @@ function applyBoundarySleepRoom(gs, actId, targetId, ctx = {}) {
   }
 
   if (catchRes.reaction === 'reciprocate') {
-    applyReciprocatedAct(gs, targetId, { ...ctx, location: roomId });
+    const applied = applyReciprocatedAct(gs, targetId, { ...ctx, location: roomId });
     return {
-      ok: true, outcome: 'reciprocated', actId,
+      ok: true, outcome: 'reciprocated', actId, applied,
       prose: pickBoundaryProse(gs, 'reciprocate', targetId, roomId, day),
     };
   }
@@ -407,6 +407,14 @@ function applyBoundarySleepRoom(gs, actId, targetId, ctx = {}) {
 // resolvePairedAct's footprint (partner effects, rel deltas, intimacy
 // history, bed, moan, ledger) and Phase 14's infidelity pass — symmetric
 // with every other completed paired act (D3). MUTATES.
+// action-outcome-window-plan audit finding #12: this function's two
+// applyEffects calls plus the reciprocateDeltas rel write were previously
+// silent to any caller — the outcome window's delta strip had no way to know
+// what a reciprocated boundary act actually did, and fell through to an
+// empty strip on the single richest outcome of the four. Returns the applied
+// effect list (Design Invariant 1's required source), a hand-built REL_DELTA
+// row set for the one direct mutation below (reciprocateDeltas is a known
+// config constant, not something recomputed), never a fabricated number.
 function applyReciprocatedAct(gs, targetId, ctx = {}) {
   const roomId = ctx.location || gs.player.location;
   const day = gs.meta.clock.day;
@@ -414,12 +422,19 @@ function applyReciprocatedAct(gs, targetId, ctx = {}) {
 
   const effCtx = buildEffectContext(gs, [targetId], [targetId], roomObjects, []);
   const npcLines = BOUNDARY.throuple.npcEffects.map(l => l.replace('{target}', targetId));
-  applyEffects(npcLines.map(l => parseEffectDSL(l)[0]).filter(Boolean), effCtx);
-  applyEffects(BOUNDARY.throuple.playerEffects.map(l => parseEffectDSL(l)[0]).filter(Boolean),
+  const npcResult = applyEffects(npcLines.map(l => parseEffectDSL(l)[0]).filter(Boolean), effCtx);
+  const playerResult = applyEffects(BOUNDARY.throuple.playerEffects.map(l => parseEffectDSL(l)[0]).filter(Boolean),
     buildEffectContext(gs, [], [], roomObjects, []));
+  const applied = [
+    ...((npcResult && npcResult.applied) || []),
+    ...((playerResult && playerResult.applied) || []),
+  ];
 
   let npc = gs.npcs[targetId];
   npc = applyRelDelta(npc, BOUNDARY.sleepRoom.sleepWith.reciprocateDeltas, day);
+  for (const [axis, delta] of Object.entries(BOUNDARY.sleepRoom.sleepWith.reciprocateDeltas || {})) {
+    applied.push({ type: 'REL_DELTA', params: { npcId: targetId, axis, delta } });
+  }
   // The target is awake and IN it now — the scene must not keep showing them
   // asleep for the rest of the current state (the next tick re-derives
   // activity from the schedule, which may rightly put a groggy woken-up
@@ -449,28 +464,45 @@ function applyReciprocatedAct(gs, targetId, ctx = {}) {
       }
     }
   }
+  return applied;
 }
 
 // --- The three-way acts (throuple / cuck) ----------------------------------
 // Applies a completed three-way to the LIVE state. Both partners are already
 // gated willing (resolveBoundaryThroupleGate). MUTATES. Returns
-// { ok, config ('throuple'|'cuck'), events }.
+// { ok, config ('throuple'|'cuck'), events, applied }.
+//
+// action-outcome-window-plan audit finding #12: `applied` is new — the two
+// applyEffects calls plus the relDeltas rel write were previously silent to
+// any caller, so the outcome window's strip could only show what the CALLER
+// separately re-derived (just the rel deltas, missing every need/mood row
+// the act actually applied). This captures the real applyEffects returns
+// (Design Invariant 1's required source) and hand-builds REL_DELTA rows only
+// for the one direct mutation below, from the same config constant it uses.
 function applyBoundaryThrouple(gs, partnerA, partnerB, ctx = {}) {
   const config = boundaryThreeWayConfig(gs, partnerA, partnerB);
   const roomId = ctx.location || gs.player.location;
   const day = gs.meta.clock.day;
   const roomObjects = gs.objects?.[`room_${roomId}`] || {};
   const cfg = BOUNDARY.throuple;
+  const applied = [];
 
   const effCtx = buildEffectContext(gs, [partnerA, partnerB], [partnerA, partnerB], roomObjects, []);
   for (const id of [partnerA, partnerB]) {
     const lines = cfg.npcEffects.map(l => l.replace('{target}', id));
-    applyEffects(lines.map(l => parseEffectDSL(l)[0]).filter(Boolean), effCtx);
+    const res = applyEffects(lines.map(l => parseEffectDSL(l)[0]).filter(Boolean), effCtx);
+    applied.push(...((res && res.applied) || []));
   }
-  applyEffects(cfg.playerEffects.map(l => parseEffectDSL(l)[0]).filter(Boolean),
+  const playerRes = applyEffects(cfg.playerEffects.map(l => parseEffectDSL(l)[0]).filter(Boolean),
     buildEffectContext(gs, [], [], roomObjects, []));
+  applied.push(...((playerRes && playerRes.applied) || []));
 
-  for (const id of [partnerA, partnerB]) gs.npcs[id] = applyRelDelta(gs.npcs[id], cfg.relDeltas, day);
+  for (const id of [partnerA, partnerB]) {
+    gs.npcs[id] = applyRelDelta(gs.npcs[id], cfg.relDeltas, day);
+    for (const [axis, delta] of Object.entries(cfg.relDeltas || {})) {
+      applied.push({ type: 'REL_DELTA', params: { npcId: id, axis, delta } });
+    }
+  }
   gs.world.castWeb = applyNpcToNpcDelta(gs.world.castWeb || {}, partnerA, partnerB, cfg.pairDeltas);
   gs.world.castWeb = applyNpcToNpcDelta(gs.world.castWeb || {}, partnerB, partnerA, cfg.pairDeltas);
 
@@ -488,7 +520,7 @@ function applyBoundaryThrouple(gs, partnerA, partnerB, ctx = {}) {
   emitTransient(gs, { id: 'moaning', roomId, intensity: SIGNALS_EMIT.moaningHigh, sourceId: 'player' });
 
   const infidelity = applyThreeWayInfidelity(gs, ['player', partnerA, partnerB]);
-  return { ok: true, config, events: infidelity.events };
+  return { ok: true, config, events: infidelity.events, applied };
 }
 
 // The three-way infidelity pass: for each NPC participant, any committed/

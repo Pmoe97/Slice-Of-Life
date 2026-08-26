@@ -45,6 +45,20 @@ const ACTION_DEFS = {
     prepare: prepareEat,
     buildEffects: buildEatEffects,
     narration: { mode: 'dynamic', build: eatNarration },
+    // Action outcome window Phase 1 (D3/D5): the INSTANCE half of the image
+    // split. What you ate is the whole point of an eating frame — a plate of
+    // pasta and a cold slice out of the fridge are not the same picture — so
+    // the frame is composed per occurrence off prepare()'s pick
+    // (composeActionInstanceKey, image.js). Both fields are builders because
+    // both read that pick; see eatWindowSubject/eatWindowPhrase below.
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: {
+        kind: 'instance',
+        subject: eatWindowSubject,
+        phrase: eatWindowPhrase,
+      },
+    },
   },
   // Inventory overhaul Phase 7 (D7): Set Meal — the dining table becomes
   // the place the household gathers, on purpose. Invitations (IM or in
@@ -55,18 +69,71 @@ const ACTION_DEFS = {
   // "proper setting" mood bonus, NPC comfort/mood, and per-attendee
   // relationship deltas. If nobody committed, it's still a proper meal at
   // a set table. The table is left dirty — a shared dinner costs a chore.
+  // action-outcome-window-plan Phase 3 (D10): set_meal LAYS THE TABLE and
+  // stops there. It used to lay out AND resolve the whole meal — round-robin
+  // servings, attendee deltas, dishes — in one silent call; `sit` owns all of
+  // that now and is the sole trigger for the real meal event. The split is
+  // what makes an open invitation possible: there is a stretch of time when
+  // the food is on the table and nobody has sat down yet, which is exactly
+  // the window someone can walk into.
   'set_meal': {
-    id: 'set_meal', label: 'Set the Table & Eat', verbs: ['set the table', 'share a meal', 'sit down to dinner', 'eat together', 'have dinner'],
+    id: 'set_meal', label: 'Set the Table', verbs: ['set the table', 'lay the table', 'lay out dinner', 'put dinner out'],
     source: { kind: 'room', roomIds: ['dining', 'kitchen'] },
     group: 'kitchen', chipPriority: 35,
     requires: ['hasEdibleFood'],
-    // Phase 7 (D7): laying out and eating a proper shared meal takes a real
-    // stretch of clock (ACTION_TUNING.setMealMinutes) — longer than a solo
-    // bite, shorter than cooking.
-    timeCost: { base: ACTION_TUNING.setMealMinutes },
+    // Laying out is a fraction of what the whole meal used to cost — the
+    // stretch of clock the meal itself takes moved to `sit` (SIT_TUNING).
+    timeCost: { base: ACTION_TUNING.setTableMinutes },
+    // Laying food out is a smell in the room, and that smell is what gives a
+    // roommate two rooms away any way of knowing dinner is happening (D12's
+    // signal substrate). Reuses the existing 'cooking' signal rather than
+    // adding one: its phrases are already about food smelling good, and the
+    // plan says read signals.js, don't extend it.
+    emitsSignal: { signal: 'cooking', intensity: SIGNALS_EMIT.cookingDrive },
     prepare: prepareSetMeal,
     buildEffects: buildSetMealEffects,
     narration: { mode: 'dynamic', build: setMealNarration },
+    // D10: a plain Tier B confirmation of what got laid out. Nothing to
+    // picture beyond the strip — the table with people at it is `sit`'s image.
+    outcomeWindow: {
+      tier: 'B', trigger: 'player', dismissal: 'tap',
+      heading: 'The table is set',
+    },
+  },
+  // action-outcome-window-plan Phase 3 (D10/D12/D13). The real meal event.
+  // Gated by two questions resolved the INSTANT the player sits, in closed
+  // form — are there confirmed guests, and does anyone uninvited join.
+  'sit': {
+    id: 'sit', label: 'Sit Down to Eat', verbs: ['sit down', 'sit down to eat', 'eat at the table', 'have dinner', 'share a meal'],
+    source: { kind: 'room', roomIds: ['dining', 'kitchen'] },
+    group: 'kitchen', chipPriority: 36,
+    requires: ['tableIsLaid'],
+    timeCost: { base: SIT_TUNING.windowMinutes },
+    prepare: prepareSit,
+    buildEffects: buildSitEffects,
+    narration: { mode: 'dynamic', build: sitNarration },
+    // Tier is decided by the OUTCOME, not the verb (Design invariant 2 in the
+    // same shape D6 uses for dismissal): company makes this the shared-meal
+    // scene, an empty table makes it the quick solo beat.
+    outcomeWindow: {
+      tier: (view) => ((view.prepared && view.prepared.guests || []).length > 0 ? 'D' : 'C'),
+      trigger: 'player',
+      dismissal: 'tap',
+      heading: (view) => ((view.prepared && view.prepared.guests || []).length > 0
+        ? 'Dinner together' : 'Dinner'),
+      // D10's "freeform conversation via the D6 handoff", and it is
+      // OUTCOME-conditional in the way Design invariant 2 requires: the
+      // choices exist because people are at the table, not because the verb
+      // is `sit`. Eating alone resolves with a plain Continue.
+      choices: sitWindowChoices,
+      dismissal: 'tap',
+      onDismiss: sitWindowDismiss,
+      image: {
+        kind: 'instance',
+        phrase: sitWindowPhrase,
+        subject: sitWindowSubject,
+      },
+    },
   },
   'self.cook': {
     id: 'self.cook', label: 'Cook', verbs: ['cook', 'make food', 'prepare a meal'],
@@ -92,6 +159,13 @@ const ACTION_DEFS = {
     prepare: prepareCook,
     buildEffects: buildCookEffects,
     narration: { mode: 'dynamic', build: cookNarration },
+    // Action outcome window Phase 6 (D3/D5): the interactive engine is the
+    // D-phase; the frame here is the fresh plate itself. Instance (which dish),
+    // composed off prepare()'s pick exactly like self.eat.
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'instance', subject: cookWindowSubject, phrase: cookWindowPhrase },
+    },
   },
   // Food-overhaul Phase 3 (D26/D27/D29): the interim reheat (no microwave
   // until Phase 6 — a stove/oven reheat covers the meantime). Makes a
@@ -108,6 +182,12 @@ const ACTION_DEFS = {
     prepare: prepareReheat,
     buildEffects: buildReheatEffects,
     narration: { mode: 'dynamic', build: reheatNarration },
+    // Action outcome window Phase 6 (D3): the specific leftover, warmed
+    // through — an instance frame so each dish gets its own plate.
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'instance', subject: reheatWindowSubject, phrase: reheatWindowPhrase },
+    },
   },
   // Food-overhaul Phase 6 (D12): the proper fast reheat — the microwave,
   // upgrading Phase 3's interim stove touch. Same REHEAT_ITEM effect (and
@@ -126,6 +206,10 @@ const ACTION_DEFS = {
     prepare: prepareMicrowave,
     buildEffects: buildReheatEffects,
     narration: { mode: 'dynamic', build: microwaveNarration },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'instance', subject: reheatWindowSubject, phrase: microwaveWindowPhrase },
+    },
   },
   'self.shower': {
     id: 'self.shower', label: 'Shower', verbs: ['shower', 'wash up', 'bathe'],
@@ -150,6 +234,24 @@ const ACTION_DEFS = {
     effects: [`ADJUST_NEED player hygiene +${NEEDS.hygiene.washRestore}`],
     meters: [['showers', 1], ['waterHeating', 1]],
     narration: { mode: 'template', templates: ['You take a shower. Refreshed.'] },
+    // Action outcome window Phase 1 (D3/D5): the ARCHETYPE half of the image
+    // split. Showering is a repetitive-motion verb — the specific occurrence
+    // is never the point — so one representative "just showered" frame per
+    // bathroom is generated once and reused for every shower after it
+    // (composeActionArchetypeKey, image.js). Wholly declarative: no builder
+    // functions, because nothing about this frame varies per occurrence.
+    // `clothing` names the state the PROMPT describes, and is folded into the
+    // key: this is the outcome (afterClothing 'towel'), not the act, so it is
+    // deliberately not the transient 'nude' the moment-photo path would use.
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: {
+        kind: 'archetype',
+        variant: 'after',
+        clothing: 'towel',
+        phrase: 'freshly showered and wrapped in a towel, damp hair, steam still hanging in the air',
+      },
+    },
   },
   'self.watch_tv': {
     id: 'self.watch_tv', label: 'Watch TV', verbs: ['watch tv', 'watch television', 'put on a show'],
@@ -172,6 +274,12 @@ const ACTION_DEFS = {
     prepare: prepareSocialAction,
     buildEffects: buildWatchTvEffects,
     narration: { mode: 'template', templates: ['You watch some TV. Mindless, relaxing.'] },
+    // Action outcome window Phase 6 (D3/D5): a repetitive-motion verb — one
+    // representative "watching TV" frame, reused. Archetype.
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'tv', phrase: 'settled on the sofa watching television, the glow of the screen on their face' },
+    },
   },
   'self.relax': {
     id: 'self.relax', label: 'Relax', verbs: ['relax', 'unwind', 'chill', 'take a breather'],
@@ -192,6 +300,10 @@ const ACTION_DEFS = {
       ],
     },
     narration: { mode: 'template', templates: ['You take a moment to just breathe.'] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'relax', phrase: 'settled in and unwinding, a drink nearby, letting the tension out' },
+    },
   },
   'self.dishes': {
     id: 'self.dishes', label: 'Wash Dishes', verbs: ['wash dishes', 'do the dishes', 'clean up'],
@@ -208,6 +320,12 @@ const ACTION_DEFS = {
     prepare: prepareDishes,
     buildEffects: buildDishesEffects,
     narration: { mode: 'dynamic', build: dishesNarration },
+    // Action outcome window Phase 6 (D3/D5): the whole strip is the "how
+    // many done" — one cached "doing dishes" frame (D13's mess resolution).
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'dishes', phrase: 'washing dishes at the kitchen sink, sleeves rolled up, suds on the plates' },
+    },
   },
   // Food-overhaul Phase 4 (D11): the dishwasher — load it from the sink and
   // tables and start a cycle. The machine clears DISHWASH_TUNING.tiers'
@@ -227,6 +345,10 @@ const ACTION_DEFS = {
     prepare: prepareDishwasher,
     buildEffects: buildDishwasherEffects,
     narration: { mode: 'dynamic', build: dishwasherNarration },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'dishwasher', phrase: 'loading the dishwasher, stacking plates into the rack' },
+    },
   },
   'self.lock_door': {
     id: 'self.lock_door', label: 'Lock Door', verbs: ['lock the door', 'lock door'],
@@ -332,6 +454,22 @@ const ACTION_DEFS = {
     writesOutfit: true,
     prepare: prepareChangeOutfit,
     narration: { mode: 'dynamic', build: changeOutfitNarration },
+    // Action outcome window Phase 6 (D2/D3/D5): the picker is the D-phase
+    // (it runs inside the chrome's picker family, not this frame); the frame
+    // here is the freshly chosen fit, keyed per outfit so each one keeps its
+    // own picture (instance).
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: {
+        kind: 'instance',
+        subject: changeOutfitWindowSubject,
+        clothing: (view) => {
+          const o = view?.prepared?.outfit;
+          return actionWindowSlug((o && Object.values(o).filter(Boolean).join(' ')) || 'dressed') || 'dressed';
+        },
+        phrase: changeOutfitWindowPhrase,
+      },
+    },
   },
   'wardrobe.open': {
     id: 'wardrobe.open', label: 'Open the Wardrobe',
@@ -387,6 +525,12 @@ const ACTION_DEFS = {
       'You take a little time for yourself, alone.',
       'You give in to the feeling and take care of it yourself.',
     ] },
+    // Action outcome window Phase 6 (D3/D5): the player's solo act — an
+    // instance frame (the moment itself), keyed on the clock like self.eat.
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'instance', subject: intimacyWindowSubject, clothing: 'dressed', phrase: masturbateWindowPhrase },
+    },
   },
   'intimacy.quickie': {
     id: 'intimacy.quickie', label: 'Quickie',
@@ -420,6 +564,10 @@ const ACTION_DEFS = {
       'You and {name} find a quick moment together.',
       'It is fast and frantic and leaves you both breathless.',
     ] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'instance', subject: intimacyWindowSubject, clothing: 'undressed', phrase: quickieWindowPhrase },
+    },
   },
   'intimacy.sex': {
     id: 'intimacy.sex', label: 'Sex',
@@ -454,6 +602,10 @@ const ACTION_DEFS = {
       'There is a long, unselfconscious while before either of you says anything.',
       'The room is warm and messy by the time you are done.',
     ] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'instance', subject: intimacyWindowSubject, clothing: 'undressed', phrase: sexWindowPhrase },
+    },
   },
   'intimacy.cuddle': {
     id: 'intimacy.cuddle', label: 'Cuddle',
@@ -479,6 +631,10 @@ const ACTION_DEFS = {
       'You and {name} settle against each other and stay there.',
       'No words for a while — just holding on.',
     ] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'instance', subject: intimacyWindowSubject, phrase: cuddleWindowPhrase },
+    },
   },
   'intimacy.share_shower': {
     id: 'intimacy.share_shower', label: 'Share a Shower',
@@ -516,6 +672,10 @@ const ACTION_DEFS = {
       'You and {name} share the shower, taking turns under the water.',
       'Soapy hands and warm water — the shower is a lot smaller than usual.',
     ] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'instance', subject: intimacyWindowSubject, clothing: 'towel', phrase: shareShowerWindowPhrase },
+    },
   },
   // --- Intimacy & Voyeurism Overhaul Phase 17 (D13/D14): boundary acts ---
   // The sleeping-room verbs surface ONLY through the bed's "Bed ▸" submenu
@@ -605,6 +765,10 @@ const ACTION_DEFS = {
       ],
     },
     narration: { mode: 'template', templates: ['You get a good workout in. Winded but feeling sharp.'] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'workout', phrase: 'mid-workout at the gym, determined, slightly out of breath' },
+    },
   },
   'self.swim': {
     id: 'self.swim', label: 'Swim', verbs: ['swim', 'swim laps', 'take a dip', 'go for a swim'],
@@ -630,6 +794,10 @@ const ACTION_DEFS = {
       ],
     },
     narration: { mode: 'template', templates: ['You swim until your arms ache. The water is the quietest place in the apartment.'] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'swim', phrase: 'swimming laps in the pool, gliding through the water' },
+    },
   },
   'self.play_games': {
     id: 'self.play_games', label: 'Play Games', verbs: ['play games', 'game', 'play video games', 'play pool'],
@@ -651,6 +819,10 @@ const ACTION_DEFS = {
       ],
     },
     narration: { mode: 'template', templates: ['You lose track of time playing. Good distraction.'] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'games', phrase: 'focused on a game, controller in hand, into it' },
+    },
   },
   'self.laundry': {
     id: 'self.laundry', label: 'Do Laundry', verbs: ['do laundry', 'laundry', 'wash clothes'],
@@ -663,6 +835,10 @@ const ACTION_DEFS = {
     prepare: prepareLaundry,
     buildEffects: buildLaundryEffects,
     narration: { mode: 'dynamic', build: laundryNarration },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'laundry', phrase: 'loading clothes into the washing machine' },
+    },
   },
   'self.study': {
     id: 'self.study', label: 'Study', verbs: ['study', 'hit the books'],
@@ -682,6 +858,10 @@ const ACTION_DEFS = {
       ],
     },
     narration: { mode: 'template', templates: ['You settle in at the desk and focus. Quiet and productive.'] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'study', phrase: 'working at the desk, a book and notes spread out, focused' },
+    },
   },
   // --- Free ambient actions (inventory overhaul Phase 6, D13) ---
   // The ungated safety net: small mood, zero money/items/facilities, and
@@ -699,6 +879,19 @@ const ACTION_DEFS = {
       `ADJUST_NEED player mood +${ACTION_TUNING.napMoodGain}`,
     ],
     narration: { mode: 'template', templates: ['You lie down and nap. Twenty minutes later you surface, groggy but steadier.'] },
+    // Action outcome window Phase 6 (D11) left nap an unconditional Tier C
+    // window with no `image`, and called the empty field the Dream Engine's
+    // hook. Dream Engine Phase 7 fills it — through `onDismiss` rather than
+    // through `image`, and D41 records why: a dream panel cannot be an outcome
+    // frame. `image.phrase` is composed into a NEW prompt by
+    // getActionWindowImage (the player's visual clause, this room, this
+    // lighting) under an `awi_` key, which would generate a fresh picture on
+    // the nap click and throw away the frozen prompt, the frozen seed and the
+    // perspective the panel was composed under. So the nap's own window keeps
+    // reporting the nap — twenty minutes, energy, mood — and the dream is a
+    // second window behind it, showing the panel it actually rendered, with
+    // the prose the writer wrote for it (D13: no strip on that one).
+    outcomeWindow: { tier: 'C', trigger: 'player', dismissal: 'tap', onDismiss: napWindowDismiss },
   },
   'self.balcony_sit': {
     id: 'self.balcony_sit', label: 'Sit on the Balcony', verbs: ['sit on the balcony', 'sit outside', 'enjoy the balcony'],
@@ -718,6 +911,10 @@ const ACTION_DEFS = {
       ],
     },
     narration: { mode: 'template', templates: ['You sit on the balcony and watch the street below. The city hums on without you.'] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'balcony', phrase: 'sitting on the balcony looking out at the city, relaxed' },
+    },
   },
   'self.take_walk': {
     id: 'self.take_walk', label: 'Take a Walk', verbs: ['take a walk', 'go for a walk', 'stretch your legs'],
@@ -737,6 +934,10 @@ const ACTION_DEFS = {
       ],
     },
     narration: { mode: 'template', templates: ['You step out and walk around the block. Fresh air, sore legs, clearer head.'] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'walk', phrase: 'walking down the street, hands in pockets, head clear' },
+    },
   },
   'self.listen_music': {
     id: 'self.listen_music', label: 'Listen to Music', verbs: ['listen to music', 'put on headphones', 'zone out to music'],
@@ -756,6 +957,10 @@ const ACTION_DEFS = {
       ],
     },
     narration: { mode: 'template', templates: ['You put on music and let it carry you for a while.'] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'music', phrase: 'with headphones on, lost in the music, eyes half closed' },
+    },
   },
   'self.long_shower': {
     id: 'self.long_shower', label: 'Long Shower', verbs: ['take a long shower', 'luxuriate in the shower', 'long shower'],
@@ -771,6 +976,10 @@ const ACTION_DEFS = {
     ],
     meters: [['water', 2], ['waterHeating', 1.5]],
     narration: { mode: 'template', templates: ['You take your time under the hot water. Steam, quiet, no rush.'] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'long', clothing: 'towel', phrase: 'lingering under a long hot shower, steam everywhere, deeply relaxed' },
+    },
   },
   // --- Buyable hobby actions (inventory overhaul Phase 6, D13) ---
   // One per hobby OBJECT_DEFS entry, generated by createHobbyAction (below)
@@ -893,7 +1102,8 @@ const ACTION_DEFS = {
 // centroid — the resolver never needs this table to produce a valid anchor.
 const ACTION_ANCHOR_OBJS = {
   'self.eat': ['dining_table', 'kitchen_table', 'dining_chair'],
-  'set_meal': ['dining_table'],
+  'set_meal': ['dining_table', 'kitchen_table'],
+  'sit': ['dining_table', 'kitchen_table', 'dining_chair'],
   'self.cook': ['stove'],
   'self.shower': ['shower'],
   'self.long_shower': ['shower'],
@@ -967,6 +1177,19 @@ const ACTION_REQUIREMENT_CHECKERS = {
   // picks from.
   hasEdibleFood: (ctx) => {
     return edibleStacks(ctx.gameState, ctx).length > 0 || 'Nothing to eat around here — check your bag, the fridge, or the pantry.';
+  },
+  // action-outcome-window-plan Phase 3 (D10): `sit` needs a table that has
+  // actually been laid. The gate is the SAME pair of facts the scene art
+  // reads to draw a laid table (clutter 'cluttered' + a non-empty spread, via
+  // tableSpreadIds), so the chip cannot light up for a table the picture says
+  // is bare. buildSitEffects clears the spread when the meal is eaten, which
+  // is what stops `sit` from repeating on an empty table.
+  tableIsLaid: (ctx) => {
+    const roomObjects = ctx.gameState.objects?.[`room_${ctx.roomId}`] || {};
+    if (tableSpreadIds(roomObjects).length === 0) {
+      return 'Nothing is laid out — set the table first.';
+    }
+    return true;
   },
   // Intimacy & Voyeurism Phase 5 (D11): Change Outfit only lights up when the
   // wardrobe in this room actually holds something to wear — an empty closet
@@ -1567,6 +1790,13 @@ function createHobbyAction(objDef, label, verbs) {
       prepare,
       buildEffects: buildHobbyEffects,
       narration: { mode: 'dynamic', build: hobbyNarration },
+      // Action outcome window Phase 6 (D3/D5): one representative frame per
+      // hobby OBJECT (archetype, reused) — the point is the mood/delta, not
+      // "which song" or "which page".
+      outcomeWindow: {
+        tier: 'C', trigger: 'player', dismissal: 'tap',
+        image: { kind: 'archetype', variant: objDef, phrase: (view) => HOBBY_WINDOW_PHRASE[objDef] || 'engrossed in a hobby' },
+      },
     },
   };
 }
@@ -1604,6 +1834,18 @@ const HOBBY_NARRATION = {
   hobby_console: 'You game until your thumbs ache. Pointless, unproductive, excellent.',
   hobby_sketchpad: 'You sketch until the page stops being wrong. Half of it is terrible — the other half is you, getting better.',
   hobby_houseplant: "You water it, turn it toward the light, talk to it a little. It looks greener already, or maybe that's you.",
+};
+
+// Action outcome window Phase 6 (D3/D5): the phrase for each hobby's
+// reused (archetype) frame. Mirrors HOBBY_NARRATION — authored here in the
+// verb's file, never in actionwindow.js.
+const HOBBY_WINDOW_PHRASE = {
+  hobby_guitar: 'playing guitar, fingers on the strings, eyes on the instrument',
+  hobby_bookshelf: 'curled up reading, lost in a book',
+  hobby_record_player: 'with the needle down on a record, eyes closed, listening',
+  hobby_console: 'focused on a console, controller in hand',
+  hobby_sketchpad: 'sketching in a sketchpad, pencil moving across the page',
+  hobby_houseplant: 'tending a houseplant, watering it and turning it toward the light',
 };
 
 function hobbyNarration(ctx, prepared) {
@@ -1786,6 +2028,38 @@ function eatNarration(ctx, prepared) {
   return `You eat ${amount} ${label}.`;
 }
 
+// --- self.eat's outcome-window builders (action-outcome-window Phase 1, D5) ---
+// Both read prepare()'s pick, the same way buildEatEffects and eatNarration
+// already do, so the picture, the prose and the effects can't disagree about
+// what got eaten. `view` is actionwindow.js's resolve-time bundle
+// ({ gs, def, result, prepared, roomId }) — NOT the ACTIONS ctx, because the
+// window resolves after executeAction has already returned and the clock has
+// already moved.
+
+// The cache-key discriminator for the instance frame. The dish is what makes
+// the frame worth generating at all, and the clock stamp is what makes it THIS
+// occurrence rather than a shared entry for every pasta ever eaten — eating
+// costs at least 5 game-minutes (INVENTORY_TUNING.useTimeMinutes), so no two
+// meals can collide on it.
+function eatWindowSubject(view) {
+  const option = view?.prepared?.option;
+  const clock = view?.gs?.meta?.clock || {};
+  const label = option ? stackLabel(option.stack) : 'food';
+  const slug = String(label).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'food';
+  return `${slug}-d${clock.day || 0}m${Math.floor(clock.minutes || 0)}`;
+}
+
+// The verb's own phrase for the frame — image.js composes the player clause
+// and the room around it, but WHAT the player is doing is authored here, in
+// the verb's file, never in the window.
+function eatWindowPhrase(view) {
+  const option = view?.prepared?.option;
+  if (!option) return 'sitting at the table with nothing to eat';
+  const label = String(stackLabel(option.stack)).toLowerCase();
+  if (option.def?.category === 'drink') return `drinking ${label}, glass in hand`;
+  return `mid-meal, eating ${label}, a plate and cutlery on the table in front of them`;
+}
+
 // --- set_meal's runtime logic (inventory overhaul Phase 7, D7) ---
 // prepare() lays out the SPREAD once and snapshots the table (attendees,
 // commitment state, dining-table instance, who eats what); buildEffects and
@@ -1830,19 +2104,20 @@ async function prepareSetMeal(ctx) {
   if (spread.length === 0) return { options, spread: [], cancelled: true, affection };
 
   const hasCommitment = activeMealCommitmentsInRoom(ctx.gameState, ctx.roomId).length > 0;
-  // The table the mess lands on is resolved LIVE in buildSetMealEffects
+  // The table the spread lands on is resolved LIVE in buildSetMealEffects
   // against the room the meal actually happened in (dining table in the
   // dining room, kitchen table in the kitchen) — buildEffects must never
   // write through a pre-await object capture, and the room is known only at
   // apply time.
-
-  // Seat order is the player first, then present NPCs in presence order —
-  // the host serves themselves, then the table.
-  const eaters = ['player', ...attendees.map(a => a.npcId)];
-  const servings = allocateSpread(spread, eaters);
-  const fedNpcIds = servings.filter(s => s.who !== 'player').map(s => s.who);
+  //
+  // Phase 3 (D10): NO servings are allocated here and nobody eats. Laying the
+  // table records WHAT is out (the table's flags.spread, which the scene art
+  // already reads) and consumes nothing — the stacks stay where they are and
+  // `sit` re-resolves them when someone actually sits down. That is what
+  // leaves a real interval during which the food is out and the meal has not
+  // happened yet, which is the interval an uninvited roommate walks into.
   return {
-    options, spread, servings, affection, attendees, hasCommitment, fedNpcIds,
+    options, spread, affection, attendees, hasCommitment,
     seats, totalServings: spreadServings(spread),
   };
 }
@@ -1944,89 +2219,25 @@ function mealRelDelta(quality, npc, fed) {
 function buildSetMealEffects(ctx, prepared) {
   const spread = prepared?.spread || [];
   if (spread.length === 0) return [];
-  const attendees = prepared?.attendees || [];
-  const servings = prepared?.servings || [];
-  const fedNpcIds = prepared?.fedNpcIds || [];
   const lines = [];
 
-  // One EAT_ITEM per serving actually served, naming BOTH the dish and the
-  // eater. EAT_ITEM's Phase 7 `who` routes the restore to their needs — an
-  // NPC who eats genuinely eats, out of the real stack, at the real dish's
-  // per-serving value; nothing is restored from nowhere and nobody is fed
-  // from a dish that ran out.
-  for (const s of servings) {
-    lines.push(`EAT_ITEM ${s.defId} 1 ${s.from} ${s.who}`);
-  }
-
-  // Quality is the table's, not one dish's — computed once here and passed
-  // to every delta, so the "was this a good dinner" judgement is made in one
-  // place (spreadQuality) rather than per-attendee.
-  const quality = spreadQuality(spread);
-  // What each fed attendee's own serving does for their mood, from the dish
-  // they actually got rather than an average of dishes they didn't.
-  // Food-overhaul Phase 3: a plate's serving mood is its instance's
-  // plateMoodPerServing (quality-scaled), not the carrier def's placeholder.
-  const moodByEater = new Map(servings.map(s => {
-    const plate = s.stack?.meta?.plate;
-    const mood = plate ? (plateMoodPerServing(s.stack) ?? 0) : (perServingConsumable(s.def).mood || 0);
-    return [s.who, mood];
-  }));
-  // Food-overhaul Phase 7 (D23): each fed attendee's own serving is rated
-  // against their taste (love/like/neutral/dislike/hate), and the deltas
-  // scale by the band — feeding a roommate the thing they love bonds you
-  // ~6× more than feeding them the thing they hate, and the mood from the
-  // meal scales the same way. A serving's band is a pure function of (the
-  // plate instance, the NPC), so it is computed once here and reused by the
-  // narration.
-  const bandByEater = new Map(servings.map(s => [s.who, tasteBandForStack(s.stack, npcTaste(aOf(s.who)))]));
-  function aOf(who) { return attendees.find(x => x.npcId === who)?.npc || ctx.gameState.npcs[who]; }
-  for (const a of attendees) {
-    const isFed = fedNpcIds.includes(a.npcId);
-    const band = isFed ? (bandByEater.get(a.npcId) || 'neutral') : 'neutral';
-    const bandRow = tasteBandRow(band);
-    const moodBoost = (COMMITMENT_TUNING.attendeeMoodBonus + (isFed ? (moodByEater.get(a.npcId) || 0) : 0)) * bandRow.moodMult;
-    if (moodBoost > 0) lines.push(`MOOD_DELTA ${a.npcId} +${Math.round(moodBoost * 100) / 100}`);
-    // A properly set meal restores comfort for everyone who sat down.
-    lines.push(`ADJUST_NEED ${a.npcId} comfort +${COMMITMENT_TUNING.attendeeComfortRestore}`);
-    // Relationship: scaled by the spread's quality, attendance, existing rel,
-    // and — for the fed — how much they actually liked what they got.
-    const delta = Math.round(mealRelDelta(quality, a.npc, isFed) * bandRow.relMult * 1000) / 1000;
-    if (delta > 0) lines.push(`REL_DELTA ${a.npcId} affection +${delta}`);
-    if (isFed && COMMITMENT_TUNING.relationshipTensionRelief > 0) {
-      lines.push(`REL_DELTA ${a.npcId} tension -${COMMITMENT_TUNING.relationshipTensionRelief}`);
-    }
-  }
-
-  // The player side: the "proper setting" bonus when a commitment was
-  // scheduled here (D7 — even if nobody else showed), plus the Phase 6
-  // shared-meal social bonus scaled by present-resident affection.
-  const commitmentBonus = prepared?.hasCommitment ? COMMITMENT_TUNING.settingBonusMood : 0;
-  const affection = prepared?.affection ?? 0;
-  const socialBonus = affection > 0 ? Math.round(affection * MOOD_TARGET.social.activityScale * 100) / 100 : 0;
-  const playerBonus = Math.round((commitmentBonus + socialBonus) * 100) / 100;
-  if (playerBonus > 0) lines.push(`ADJUST_NEED player mood +${playerBonus}`);
-
-  // The table is left with plates and crumbs — meals at the table leave a
-  // mess, feeding the EXISTING cleanliness machinery (dining_table's
-  // dirtyWhen clutter), which the maid's cleanRoomObjects clears. The spread
-  // itself is recorded alongside it so the scene art can draw what is
-  // actually on the table (IMAGE's tableSpreadPhrase); it is READ only while
-  // clutter is 'cluttered', so clearing the table clears the spread with no
-  // second cleanup path to forget.
-  // Food-overhaul Phase 4 (D9): on top of the clutter/spread, each SERVED
-  // eater (the player included) leaves their plate/cup/fork — real dish
-  // units in a dish map on the table the meal happened at (dining table in
-  // the dining room, kitchen table in the kitchen). Resolved against the
-  // LIVE state so the effect writes the meal's actual room.
+  // Phase 3 (D10): laying the table is a WORLD WRITE and nothing else. No
+  // EAT_ITEM, no attendee deltas, no dishes — `sit` owns every one of those
+  // now, because every one of them is about the meal happening rather than
+  // about the food being out. What this leaves behind is a laid table:
+  // `clutter: cluttered` plus the spread's def ids, which is the pair
+  // IMAGE's tableSpreadIds already reads to draw what is on the table, and
+  // which `sit` now reads to know what there is to eat.
+  //
+  // Nothing is consumed. The stacks stay in the fridge/bag they came from
+  // and `sit` re-resolves them at eat time — so a spread that gets raided or
+  // goes off between laying and sitting is genuinely gone, rather than having
+  // been teleported into an invisible holding pen at lay-out time.
   const gs = (typeof currentGameState !== 'undefined' && currentGameState) || ctx.gameState;
   const mealRoom = gs.player.location;
   const table = Object.values(gs.objects?.[`room_${mealRoom}`] || {})
     .find(o => o.defId === 'dining_table' || o.defId === 'kitchen_table') || null;
   if (table) {
-    const eaters = servings.length;
-    for (const [dishType, qty] of Object.entries(DISH_TUNING.setMealFootprint)) {
-      lines.push(`ADD_DISHES ${table.id} ${dishType} ${qty * eaters}`);
-    }
     lines.push(`SET_OBJECT_STATE ${table.id} clutter cluttered`);
     lines.push(`SET_TABLE_SPREAD ${table.id} ${spread.map(o => o.stack.defId).join(' ')}`);
   }
@@ -2058,52 +2269,535 @@ function setMealTasteLines(ctx, prepared) {
   return reactions;
 }
 
+// Phase 3 (D10): this describes a table that has just been LAID, not a meal
+// that has been eaten. Nobody has sat down yet — that is `sit` — so there are
+// no taste reactions, no under-catering, and nobody to name as company. What
+// it can still say is what went out, whether any of it is off, whether the
+// table was set for a booked occasion, and whether there is enough for the
+// people who might turn up.
 function setMealNarration(ctx, prepared) {
   const spread = prepared?.spread || [];
-  if (spread.length === 0) return 'You sit down to eat, but there is nothing to put on the table.';
-  const attendees = prepared?.attendees || [];
-  const servings = prepared?.servings || [];
-  const names = attendees.map(a => ctx.gameState.npcs[a.npcId]?.bible?.name || 'a roommate');
+  if (spread.length === 0) return 'You go to lay the table, but there is nothing to put on it.';
   // Food-overhaul Phase 3 (D25): a plate dishes its own label ("pasta"),
   // not the cooked_meal carrier def's ("cooked meal").
   const dishes = joinList(spread.map(o => stackLabel(o.stack).toLowerCase()));
-  const setting = prepared?.hasCommitment ? ' The table is properly set.' : '';
-  // Food-overhaul Phase 7 (D23): the taste reactions ride along on whatever
-  // the meal was — a dinner Maya loves reads differently from one she picks
-  // at, and the narration says so where the deltas already did.
-  const tasteLines = setMealTasteLines(ctx, prepared);
-  const tasteTail = tasteLines.length > 0 ? ' ' + tasteLines.join(' ') : '';
+  const setting = prepared?.hasCommitment ? ' It is booked, and the table is properly set.' : '';
 
-  // Anything on the table that has turned gets its own line — it's the most
-  // important thing about the meal, and it applies to the SPREAD now, so a
-  // single bad dish among four is named as the one that's off.
+  // Anything laid out that has already turned gets its own line — it is the
+  // most important thing about the table, and it applies to the SPREAD, so a
+  // single bad dish among four is named as the one that is off.
   const now = gameDaysNow(ctx.gameState.meta.clock);
   const off = spread.filter(o => freshnessOf(o.stack, o.containerDef ?? null, now)?.key === 'spoiled');
   if (off.length > 0) {
     const offLabels = joinList(off.map(o => stackLabel(o.stack).toLowerCase()));
-    const reaction = names.length
-      ? `${joinList(names)} ${names.length > 1 ? 'make' : 'makes'} a face but eats anyway.`
-      : 'You grimace and eat it anyway.';
-    return `You lay out ${dishes}. The ${offLabels} is past its best and everyone can tell. ${reaction}${tasteTail}`;
+    return `You lay out ${dishes}.${setting} The ${offLabels} is past its best, and it is not subtle about it.`;
   }
 
-  // Under-catering is now something the player chose, so it gets said out
-  // loud rather than quietly halving somebody's relationship delta.
+  // How many the table could actually feed, against how many seats there are.
+  // Said now rather than at the meal, because catering is a decision made
+  // HERE and the player should be able to fix it before anyone sits down.
+  const servings = spreadServings(spread);
+  const short = servings < SIT_TUNING.maxSeats
+    ? ` There is enough for ${servings === 1 ? 'one' : servings}.` : '';
+  return `You lay ${dishes} out on the table.${setting}${short} It smells like dinner, and that carries.`;
+}
+
+// --- `sit`'s runtime logic (action-outcome-window-plan Phase 3) -----------
+// D10's real meal event, and the one verb that exercises the whole
+// architecture at once: D5's image split, D6's conditional handoff, D12's
+// per-NPC ask, D13's downstream chore.
+//
+// THE CLOSED-FORM RULE (D22). When the player sits, the game answers "who
+// shows up in the next 45 minutes?" immediately — no ticks, no walk
+// simulation, no real waiting. Confirmed guests are not rolled for at all:
+// they said yes, so they are there. Everyone else is scored off the signal
+// substrate, rolled once, and asked. From the player's side the whole thing
+// resolves in the time it takes to open a window.
+//
+// SEATING ORDER IS LOAD-BEARING (D23). Invited guests are seated first and
+// unconditionally, so a walk-in can never take a chair a confirmed guest was
+// owed. Only the seats left over are offered to walk-ins.
+
+// What is actually on the table, re-resolved against live stacks. `set_meal`
+// recorded def ids only (SET_TABLE_SPREAD) and consumed nothing, so the food
+// is still wherever it was — which means it can also be GONE, and a spread
+// that half-vanished between laying and sitting is a real outcome the meal
+// has to be able to describe rather than a bug to paper over.
+//
+// Returns the same { stack, def, from, sourceLabel, containerDef, day } rows
+// edibleStacks yields, so every downstream consumer (taste bands, plate
+// instances, freshness) reads exactly what a set_meal spread used to.
+function resolveLaidSpread(gs, ctx) {
+  const roomObjects = gs.objects?.[`room_${ctx.roomId}`] || {};
+  const laidIds = tableSpreadIds(roomObjects);
+  if (laidIds.length === 0) return { rows: [], laidIds, missing: [] };
+
+  const available = edibleStacks(gs, ctx);
+  const rows = [];
+  const missing = [];
+  // One row per laid dish, matched to a live stack that has not already been
+  // claimed by an earlier dish of the same def.
+  const claimed = new Set();
+  for (const defId of laidIds) {
+    const hit = available.find(o => o.stack.defId === defId && !claimed.has(o.stack)
+      && stackServingsLeft(o.stack) > 0);
+    if (hit) { claimed.add(hit.stack); rows.push(hit); }
+    else missing.push(defId);
+  }
+  return { rows, laidIds, missing };
+}
+
+// The table's own object, in the room the meal is happening in. Same lookup
+// buildSetMealEffects used, kept as one helper now that three callers want it.
+function mealTableIn(gs, roomId) {
+  return Object.values(gs.objects?.[`room_${roomId}`] || {})
+    .find(o => o.defId === 'dining_table' || o.defId === 'kitchen_table') || null;
+}
+
+// D12/D23's guest list, resolved closed-form. PURE except for the rng it is
+// handed — the roll is here, the scoring is overture.js's, and the writing is
+// buildSitEffects'.
+//
+// Returns { confirmed, asked, seatsLeft, scheduled } where `asked` is the
+// ordered list of walk-in candidates who rolled through and will actually put
+// the question to the player. Nobody is seated by this function: an ask is a
+// question, and D12 is explicit that joining is never an automatic seat.
+function resolveSitGuestList(gs, roomId, rng) {
+  const commitments = activeMealCommitmentsInRoom(gs, roomId);
+  const scheduled = commitments.length > 0;
+
+  // Confirmed guests: everyone who accepted a commitment active in this room
+  // right now. D22 — they are not rolled for and not asked. They committed;
+  // sitting down is when they turn up.
+  const confirmedIds = [];
+  for (const c of commitments) {
+    for (const id of c.acceptedIds || []) {
+      if (id !== 'player' && gs.npcs[id] && !confirmedIds.includes(id)) confirmedIds.push(id);
+    }
+  }
+  // Anyone already standing in the room who is NOT on a commitment is not a
+  // "walk-in" in the fiction — they are already here — but they still have to
+  // ask, because D12 says joining is always an explicit ask. They are simply
+  // the candidates with the strongest reach.
+  const confirmed = confirmedIds.slice(0, SIT_TUNING.maxSeats - 1);
+
+  // Seats: the player always has one. D23's cap counts them.
+  let seatsLeft = Math.max(0, (SIT_TUNING.maxSeats - 1) - confirmed.length);
+  if (seatsLeft === 0) {
+    return { confirmed, asked: [], seatsLeft, scheduled, candidates: [] };
+  }
+
+  const candidates = mealJoinCandidates(gs, roomId, { exclude: confirmed, scheduled });
+  const asked = [];
+  for (const cand of candidates) {
+    if (asked.length >= seatsLeft) break;
+    if (rng() < cand.chance) asked.push(cand);
+  }
+  return { confirmed, asked, seatsLeft, scheduled, candidates };
+}
+
+// D12's per-NPC ask, as one beat inside the window. The DECISION that this
+// person asks was made by resolveSitGuestList before we got here; this only
+// puts the question and returns the answer.
+//
+// Returns true (yes), false (no), or null (the player closed the window) —
+// and null aborts the whole action, because a closed window is not a "no" to
+// a question the game has already committed to asking.
+async function askJoinMeal(gs, npcId) {
+  if (typeof presentActionStep !== 'function') return true;
+  const npc = gs.npcs[npcId];
+  const name = npc?.bible?.name || 'Someone';
+  const answer = await presentActionStep(gs, {
+    heading: name,
+    // Deliberately does not END on the closing quote: render.js's shared
+    // sentence() tests /[.!?]$/ and appends a period to anything else, so a
+    // line finishing on a quote mark renders as `?".` — the trailing clause
+    // is the smaller fix, and it keeps that helper out of scope.
+    narration: `${name} appears in the doorway holding an empty plate. "Room for one more?" they ask`,
+    cutout: { npcId, pose: 'standing', expression: 'talking' },
+    defaultChoice: null,      // no quiet answer — a person is standing there
+    choices: [
+      { id: 'yes', label: `Pull out a chair`, tone: 'primary' },
+      { id: 'no', label: `Not tonight`, tone: 'quiet' },
+    ],
+  });
+  if (answer === null) return null;
+  return answer === 'yes';
+}
+
+// D10's in-scene choice of what to eat from what is laid out. Rendered inside
+// the same chrome as the asks, so the whole of `sit` happens in one frame
+// rather than bouncing the player between a window and a modal.
+//
+// Returns the chosen INDEX into `rows`, or null if the window closed.
+async function pickMealDish(rows, guestCount) {
+  if (typeof presentActionStep !== 'function') return 0;
+  const answer = await presentActionStep(currentGameState, {
+    heading: 'What do you take?',
+    narration: guestCount > 0
+      ? 'The table is between you. You serve yourself first.'
+      : 'Everything is still out. You pick.',
+    defaultChoice: null,
+    choices: rows.map((o, i) => ({
+      id: String(i),
+      label: stackLabel(o.stack),
+      tone: i === 0 ? 'primary' : 'quiet',
+    })),
+  });
+  if (answer === null) return null;
+  const i = Number(answer);
+  return Number.isFinite(i) ? i : 0;
+}
+
+// The interactive half (D2 — the existing interaction UI renders INSIDE the
+// window's chrome). Two sub-steps, both of them the player answering rather
+// than the game deciding:
+//   1. one "Can I join you?" beat per walk-in who rolled through (D12), and
+//   2. the in-scene choice of what to eat from what is laid out (D10),
+//      offered only when there is more than one dish to choose between.
+// Both run through ActionWindow's own step primitives, so a cancel at any
+// point aborts the whole action the way every other picker in this file does.
+async function prepareSit(ctx) {
+  const gs = ctx.gameState;
+  const { rows, missing } = resolveLaidSpread(gs, ctx);
+  if (rows.length === 0) {
+    return { cancelled: true, spread: [], guests: [], reason: 'nothing-left' };
+  }
+
+  const rng = seededRng(gs.meta?.seed, `sit_${gs.meta.clock.day}_${gs.meta.clock.minutes}`);
+  const { confirmed, asked, scheduled, candidates } = resolveSitGuestList(gs, ctx.roomId, rng);
+
+  // The asks, one beat at a time, inside the window (D2/D12). Declining costs
+  // nothing beyond the seat — it is not an overture refusal and must not
+  // spend D10's economy, because "not tonight, I'm eating" is not the same as
+  // turning someone away who crossed a room to talk to you.
+  const accepted = [];
+  for (const cand of asked) {
+    const yes = await askJoinMeal(gs, cand.npcId);
+    if (yes === null) return { cancelled: true, spread: rows, guests: [] }; // window closed
+    if (yes) accepted.push(cand.npcId);
+  }
+
+  const guests = [...confirmed, ...accepted];
+
+  // D10's in-scene food choice. Only worth asking when there is a real choice
+  // — one dish on the table is not a decision, it is dinner.
+  let playerPick = rows[0];
+  if (rows.length > 1) {
+    const picked = await pickMealDish(rows, guests.length);
+    if (picked === null) return { cancelled: true, spread: rows, guests };
+    playerPick = rows[picked] || rows[0];
+  }
+
+  // Seat order: the player takes what they chose, then the guests round-robin
+  // the rest. allocateSpread is reused unchanged — it is the same "everyone
+  // takes one, round-robin across the dishes" rule set_meal proved out, only
+  // now it starts from the dish the player actually picked.
+  const ordered = [playerPick, ...rows.filter(r => r !== playerPick)];
+  const eaters = ['player', ...guests];
+  const servings = allocateSpread(ordered, eaters);
+  const fedNpcIds = servings.filter(s => s.who !== 'player').map(s => s.who);
+
+  const attendees = guests.map(id => ({ npcId: id, npc: gs.npcs[id], committed: confirmed.includes(id) }));
+  return {
+    spread: rows, ordered, servings, fedNpcIds, attendees, guests,
+    confirmed, walkIns: accepted, scheduled, missing, playerPick,
+    affection: presentResidentAffection(ctx),
+    // Recorded for the handoff/audit trail: who was even in the running, and
+    // with what chance. Never read by the effects — this is evidence, not input.
+    candidateTrace: candidates.map(c => ({ npcId: c.npcId, chance: Math.round(c.chance * 1000) / 1000 })),
+  };
+}
+
+// Every effect the meal applies. Structurally the old buildSetMealEffects,
+// minus the lay-out writes (those already happened at set_meal) and plus
+// D13's mess, which now lands HERE because the mess is made by eating rather
+// than by putting food on a table.
+function buildSitEffects(ctx, prepared) {
+  const servings = prepared?.servings || [];
+  if (servings.length === 0) return [];
+  const spread = prepared?.ordered || prepared?.spread || [];
+  const attendees = prepared?.attendees || [];
+  const fedNpcIds = prepared?.fedNpcIds || [];
+  const lines = [];
+
+  // One EAT_ITEM per serving actually served, naming BOTH the dish and the
+  // eater — unchanged from set_meal's proven shape. EAT_ITEM's `who` routes
+  // the restore to their needs out of the real stack at the real per-serving
+  // value; nothing is restored from nowhere.
+  for (const s of servings) {
+    lines.push(`EAT_ITEM ${s.defId} 1 ${s.from} ${s.who}`);
+  }
+
+  const quality = spreadQuality(spread);
+  const moodByEater = new Map(servings.map(s => {
+    const plate = s.stack?.meta?.plate;
+    const mood = plate ? (plateMoodPerServing(s.stack) ?? 0) : (perServingConsumable(s.def).mood || 0);
+    return [s.who, mood];
+  }));
+  // LIVE first, snapshot second. prepare() awaited up to four windows before
+  // we got here, and executeAction's own comment says the continuous clock can
+  // replace currentGameState across a gap that long — so an attendee's
+  // relationship must be read off the object the effects are about to be
+  // applied to, not off the one that existed before the player started
+  // answering. `sit` awaits far longer than any other verb, which is what
+  // makes the difference worth spending a lookup on.
+  //
+  // Declared BEFORE bandByEater: that line calls aOf, and a `const` referenced
+  // from a hoisted function before its own declaration is a TDZ throw, not an
+  // undefined.
+  const liveGs = (typeof currentGameState !== 'undefined' && currentGameState) || ctx.gameState;
+  function aOf(who) { return liveGs.npcs?.[who] || attendees.find(x => x.npcId === who)?.npc; }
+
+  const bandByEater = new Map(servings.map(s => [s.who, tasteBandForStack(s.stack, npcTaste(aOf(s.who)))]));
+
+  for (const a of attendees) {
+    const npc = aOf(a.npcId);
+    if (!npc) continue;   // they left the flat mid-meal; nothing to write
+    const isFed = fedNpcIds.includes(a.npcId);
+    const band = isFed ? (bandByEater.get(a.npcId) || 'neutral') : 'neutral';
+    const bandRow = tasteBandRow(band);
+    const moodBoost = (COMMITMENT_TUNING.attendeeMoodBonus + (isFed ? (moodByEater.get(a.npcId) || 0) : 0)) * bandRow.moodMult;
+    if (moodBoost > 0) lines.push(`MOOD_DELTA ${a.npcId} +${Math.round(moodBoost * 100) / 100}`);
+    lines.push(`ADJUST_NEED ${a.npcId} comfort +${COMMITMENT_TUNING.attendeeComfortRestore}`);
+    const delta = Math.round(mealRelDelta(quality, npc, isFed) * bandRow.relMult * 1000) / 1000;
+    if (delta > 0) lines.push(`REL_DELTA ${a.npcId} affection +${delta}`);
+    if (isFed && COMMITMENT_TUNING.relationshipTensionRelief > 0) {
+      lines.push(`REL_DELTA ${a.npcId} tension -${COMMITMENT_TUNING.relationshipTensionRelief}`);
+    }
+  }
+
+  const commitmentBonus = prepared?.scheduled ? COMMITMENT_TUNING.settingBonusMood : 0;
+  const affection = prepared?.affection ?? 0;
+  const socialBonus = affection > 0 ? Math.round(affection * MOOD_TARGET.social.activityScale * 100) / 100 : 0;
+  const playerBonus = Math.round((commitmentBonus + socialBonus) * 100) / 100;
+  if (playerBonus > 0) lines.push(`ADJUST_NEED player mood +${playerBonus}`);
+
+  // D13 — eating leaves a real mess, and it is the EXISTING mess: dish units
+  // in the table's dish map (what self.dishes washes) plus the clutter state
+  // (what container.clear-mess and the maid's cleanRoomObjects clear). No new
+  // mess system, exactly as the decision requires. The clutter flag was
+  // already set by set_meal; it is re-asserted here so a solo eater who never
+  // laid a formal table still leaves one behind.
+  //
+  // The spread flag is CLEARED: the food has been eaten, so a table that goes
+  // on claiming a spread would keep drawing dinner into the scene art long
+  // after it was gone. Clearing it is also what makes `sit` un-repeatable
+  // without laying the table again, which is the gate `tableIsLaid` reads.
+  const gs = (typeof currentGameState !== 'undefined' && currentGameState) || ctx.gameState;
+  const table = mealTableIn(gs, gs.player.location);
+  if (table) {
+    for (const [dishType, qty] of Object.entries(DISH_TUNING.setMealFootprint)) {
+      lines.push(`ADD_DISHES ${table.id} ${dishType} ${qty * servings.length}`);
+    }
+    lines.push(`SET_OBJECT_STATE ${table.id} clutter cluttered`);
+    lines.push(`SET_TABLE_SPREAD ${table.id}`);
+  }
+  return lines;
+}
+
+function sitNarration(ctx, prepared) {
+  const spread = prepared?.ordered || prepared?.spread || [];
+  if (spread.length === 0) return 'You sit down, but the table is bare.';
+  const attendees = prepared?.attendees || [];
+  const names = attendees.map(a => ctx.gameState.npcs[a.npcId]?.bible?.name || 'a roommate');
+  const mine = stackLabel(prepared?.playerPick?.stack || spread[0].stack).toLowerCase();
+
+  // Something that was laid out is no longer there. Said first, because it is
+  // the most surprising thing about sitting down.
+  const raided = (prepared?.missing || []).length > 0
+    ? ' Something you put out earlier has already gone.' : '';
+
+  const tasteLines = sitTasteLines(ctx, prepared);
+  const tasteTail = tasteLines.length > 0 ? ' ' + tasteLines.join(' ') : '';
+
   const unfed = attendees.length - (prepared?.fedNpcIds?.length || 0);
+  if (names.length === 0) {
+    // D10's quick solo beat. Deliberately short — it is a Tier C moment, not
+    // a scene, and the mess it leaves is the part that matters afterward.
+    return `You sit down and eat the ${mine} on your own.${raided} The plates stay where they are.`;
+  }
   if (unfed > 0) {
     const shortNames = joinList(names.slice(-unfed));
-    return `You lay out ${dishes} and sit down with ${joinList(names)}.${setting} There isn't enough to go round — ${shortNames} ${unfed > 1 ? 'end up' : 'ends up'} picking at an empty plate.${tasteTail}`;
+    return `You sit down to ${mine} with ${joinList(names)}.${raided} There isn't enough to go round — ${shortNames} ${unfed > 1 ? 'end up' : 'ends up'} picking at an empty plate.${tasteTail}`;
   }
+  // Someone invited themselves and you said yes. Worth its own clause,
+  // because an evening you planned and an evening that happened to you are
+  // different evenings — and the wording has to survive a MIXED list, where
+  // some of the people at the table were expected and some just turned up.
+  const walkIns = (prepared?.walkIns || []).length;
+  const confirmedCount = (prepared?.confirmed || []).length;
+  let uninvited = '';
+  if (walkIns > 0) {
+    const who = walkIns === 1
+      ? (ctx.gameState.npcs[prepared.walkIns[0]]?.bible?.name || 'One of them')
+      : `${walkIns} of them`;
+    uninvited = confirmedCount > 0
+      ? ` ${who} invited themselves, and the table is better for it.`
+      : ` Nobody planned it, and it is better for that.`;
+  }
+  return `You sit down to ${mine} with ${joinList(names)}.${raided}${uninvited} It all tastes better for the company.${tasteTail}`;
+}
 
-  const leftover = Math.max(0, spreadServings(spread) - servings.length) > 0
-    ? ' — there are leftovers for later' : '';
-  if (names.length > 0) {
-    return `You lay out ${dishes} and share dinner with ${joinList(names)}.${setting} It all tastes better for the company${leftover}.${tasteTail}`;
+// The same per-eater taste bands buildSitEffects scales its deltas by, said
+// out loud — so the prose and the relationship change cannot disagree about
+// what each guest got. Structurally setMealTasteLines, rehomed onto `sit`
+// because `sit` is where anyone eats now.
+function sitTasteLines(ctx, prepared) {
+  const reactions = [];
+  for (const s of prepared?.servings || []) {
+    if (s.who === 'player') continue;
+    const npc = ctx.gameState.npcs[s.who];
+    if (!npc) continue;
+    const row = tasteBandRow(tasteBandForStack(s.stack, npcTaste(npc)));
+    if (!row?.reaction) continue;
+    reactions.push(row.reaction.replace('{name}', npc.bible?.name || 'They'));
   }
-  if (prepared?.hasCommitment) {
-    return `You lay out ${dishes} and set the table properly. Nobody showed${leftover}.`;
+  return reactions;
+}
+
+// D10's shared-meal scene resolves into a real conversation, or into nothing.
+// Returns null when nobody came — and a null choice list is what makes the
+// solo beat a plain tap-to-continue (D1) rather than a menu with one item.
+//
+// One choice per guest, because "who do you actually talk to" is a decision
+// the player makes about a specific person, not a generic "chat" verb. Each
+// carries handoff: true, so dismissing through it cross-fades into the
+// conversation instead of snapping shut (D6 via D20 — the window performs the
+// transition, sitWindowDismiss below supplies the destination).
+function sitWindowChoices(view) {
+  const guests = (view.prepared && view.prepared.guests) || [];
+  if (guests.length === 0) return null;
+  const gs = view.gs;
+  const rows = guests.map(id => ({
+    id: `talk:${id}`,
+    label: `Talk to ${gs?.npcs?.[id]?.bible?.name || 'them'}`,
+    tone: 'primary',
+    handoff: true,
+  }));
+  rows.push({ id: 'done', label: 'Finish up', tone: 'quiet' });
+  return rows;
+}
+
+// Dream Engine Phase 7 (D16): a nap dreams too, differently — a single-panel
+// fragment form at DREAM_TUNING.napChanceMult of the night rate, out of the
+// queue's own nap slot (D36). Same D20 split as sitWindowDismiss below: the
+// window transitioned, and where it lands is the verb's business. Everything
+// this decides is "was there a nap dream", and even that is asked of dreams.js.
+//
+// Un-guarded on the reason: any dismissal of the nap window means the nap
+// happened, and there is no choice on it to branch over.
+async function napWindowDismiss() {
+  if (typeof presentDreamForSleep === 'function') await presentDreamForSleep('nap');
+}
+
+// The DESTINATION half of D20's split, and it lives here in the verb's own
+// file rather than in actionwindow.js — the window transitions, the verb
+// decides where to. Reads the id the player pressed; anything that is not a
+// talk choice is a plain close.
+async function sitWindowDismiss(view, reason) {
+  if (typeof reason !== 'string' || !reason.startsWith('talk:')) return;
+  const npcId = reason.slice('talk:'.length);
+  if (!npcId || !view.gs?.npcs?.[npcId]) return;
+  if (typeof doTalk === 'function') await doTalk(npcId);
+}
+
+// D5's instance image. The frame is worth generating because THIS table, with
+// THESE people at it, is the point — so the subject carries the guest list and
+// the clock stamp, exactly the way self.eat's does for its dish.
+function sitWindowSubject(view) {
+  const p = view.prepared || {};
+  const clock = view.gs?.meta?.clock || {};
+  const who = (p.guests || []).slice().sort().join('-') || 'alone';
+  return `${who}-d${clock.day || 0}m${Math.floor(clock.minutes || 0)}`;
+}
+
+function sitWindowPhrase(view) {
+  const p = view.prepared || {};
+  const gs = view.gs;
+  const dishes = (p.ordered || p.spread || [])
+    .map(o => stackLabel(o.stack).toLowerCase()).slice(0, 3);
+  const food = dishes.length ? dishes.join(' and ') : 'a plate of food';
+  const names = (p.guests || []).map(id => gs?.npcs?.[id]?.bible?.name).filter(Boolean);
+  if (names.length === 0) {
+    return `one person eating alone at a laid table, ${food} in front of them, the other chairs empty`;
   }
-  return `You set the table with ${dishes} and eat${leftover}.`;
+  return `${names.length + 1} people seated around a table sharing a meal, ${food} laid out between them, mid-conversation`;
+}
+
+// --- Action outcome window Phase 6 (the long tail) ---------------------------
+// The shared instance-subject/phrase builders for the verbs whose frame is
+// genuinely THIS occurrence (which dish, which partner, which outfit). Same
+// contract Phase 1's eatWindowSubject/eatWindowPhrase established: the
+// discriminator varies per occurrence and the phrase is authored HERE, in the
+// verb's file, never in actionwindow.js (Design invariant 1). All PURE
+// reads of the view.
+function actionWindowClockStamp(view) {
+  const clock = view?.gs?.meta?.clock || {};
+  return `d${clock.day || 0}m${Math.floor(clock.minutes || 0)}`;
+}
+function actionWindowSlug(str) {
+  return String(str || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24);
+}
+// The partner in a paired act is result.shared.withIds[0] — the Make-a-Move
+// picker's explicit choice, threaded through resolveSharedActivity.
+function intimacyPartner(view) {
+  const id = view?.result?.shared?.withIds?.[0];
+  return (id && view?.gs?.npcs?.[id]) || null;
+}
+function intimacyPartnerName(view) {
+  const p = intimacyPartner(view);
+  return p?.bible?.name || 'them';
+}
+function intimacyWindowSubject(view) {
+  return `${actionWindowSlug(intimacyPartnerName(view)) || 'partner'}-${actionWindowClockStamp(view)}`;
+}
+// self.cook's fresh plate frame — which dish and how it turned out.
+function cookWindowSubject(view) {
+  return `${actionWindowSlug(view?.prepared?.recipe?.label) || 'meal'}-${actionWindowClockStamp(view)}`;
+}
+function cookWindowPhrase(view) {
+  const label = (view?.prepared?.recipe?.label || 'a meal').toLowerCase();
+  const grade = view?.prepared?.plate?.grade;
+  return `serving up a freshly cooked ${label}${grade ? `, turned out ${grade}` : ''}, a plated dish in front of them, the kitchen warm and smelling of it`;
+}
+// The reheat frame — the specific leftover being warmed through.
+function reheatWindowSubject(view) {
+  const label = view?.prepared?.option ? stackLabel(view.prepared.option.stack) : '';
+  return `${actionWindowSlug(label) || 'reheat'}-${actionWindowClockStamp(view)}`;
+}
+function reheatWindowPhrase(view) {
+  const label = view?.prepared?.option ? stackLabel(view.prepared.option.stack).toLowerCase() : 'leftovers';
+  return `reheating ${label} on the stove, steam rising off the pan`;
+}
+function microwaveWindowPhrase(view) {
+  const label = view?.prepared?.option ? stackLabel(view.prepared.option.stack).toLowerCase() : 'leftovers';
+  return `pulling a steaming plate of ${label} from the microwave`;
+}
+// The wardrobe frame — the freshly chosen fit, keyed so each outfit keeps
+// its own frame rather than one shared "changed clothes" picture.
+function changeOutfitWindowSubject(view) {
+  const outfit = view?.prepared?.outfit || {};
+  const bits = Object.values(outfit).filter(Boolean).slice(0, 2).map(actionWindowSlug);
+  return `${bits.join('-') || 'outfit'}-${actionWindowClockStamp(view)}`;
+}
+function changeOutfitWindowPhrase(view) {
+  return 'freshly changed into a new outfit, adjusting the clothes, a little more put-together than before';
+}
+function masturbateWindowPhrase(view) {
+  return 'a quiet, private moment alone, alone with their thoughts';
+}
+function quickieWindowPhrase(view) {
+  return `a quick, breathless intimate moment with ${intimacyPartnerName(view)}, close and unselfconscious`;
+}
+function sexWindowPhrase(view) {
+  return `making love with ${intimacyPartnerName(view)} in a private room, tangled together, the room warm`;
+}
+function cuddleWindowPhrase(view) {
+  return `curled up and holding ${intimacyPartnerName(view)}, at ease and close`;
+}
+function shareShowerWindowPhrase(view) {
+  return `sharing a warm shower with ${intimacyPartnerName(view)}, taking turns under the water`;
 }
 
 // --- self.dishes' runtime logic (food-overhaul Phase 4, D9/D11) ---

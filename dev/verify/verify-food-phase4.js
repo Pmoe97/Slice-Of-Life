@@ -213,7 +213,7 @@ await check('solo eating leaves a plate + fork (2 units) on the table in the roo
       && table.dishes.plate === 1 && table.dishes.fork === 1 && table.dishUnits === 2;
   })()`));
 
-await check('a set meal for the player + 2 roommates leaves 3× plate/cup/fork (9 units) on the table plus clutter/spread',
+await check('a sit-down meal for the player + 2 roommates leaves 3× plate/cup/fork (9 units) on the table plus clutter/spread',
   api(`(() => {
     const h = house('p4-meal', 2);
     const table = objIn(h, 'kitchen_table');
@@ -232,7 +232,7 @@ await check('a set meal for the player + 2 roommates leaves 3× plate/cup/fork (
       servings: [serving('player'), serving(npcIds[0]), serving(npcIds[1])],
       fedNpcIds: npcIds, affection: 0, hasCommitment: false,
     };
-    const lines = buildSetMealEffects(ctx, prepared);
+    const lines = buildSitEffects(ctx, prepared);
     applyLines(h, lines);
     return table.dishes.plate === 3 && table.dishes.cup === 3 && table.dishes.fork === 3
       && table.dishUnits === 9

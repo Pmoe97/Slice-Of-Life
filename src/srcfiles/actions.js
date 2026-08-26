@@ -170,7 +170,12 @@ async function executeAction(actionId, gameState, actorId, opts) {
   if (def.skill) effectLines.push(`ADD_SKILL_XP ${def.skill.id} ${def.skill.xp}`);
   const effects = effectLines.map(line => parseEffectDSL(line)[0]).filter(Boolean);
   const effCtx = buildEffectContext(live, [], ctx.presentNpcIds, ctx.roomObjects, actor ? (actor.inventory || []) : []);
-  applyEffects(effects, effCtx);
+  // action-outcome-window-plan Phase 1: applyEffects' OWN returned list is
+  // what the outcome window's delta strip reads (its only permitted data
+  // source — no before/after diffing, no per-verb delta bookkeeping). It
+  // rides out on the result below; every caller that doesn't want it simply
+  // ignores it, exactly as they ignored `shared` before it existed.
+  const appliedEffects = applyEffects(effects, effCtx);
 
   // Phase 7 (D7): an action that dirtied a room's objects (SET_OBJECT_STATE
   // on a dirtyWhen-carrying object — cooking a stove, a shared meal on the
@@ -312,7 +317,17 @@ async function executeAction(actionId, gameState, actorId, opts) {
     resolvePairedAct(live, def, ctx, minutes);
   }
 
-  return { ok: true, ticksSpent: ticks, minutesSpent: minutes, shared, narration: narrateAction(def, ctx, prepared, shared), momentPhoto };
+  // action-outcome-window-plan Phase 1: `applied`/`prepared`/`roomId` are the
+  // three things the outcome window needs that the old result shape didn't
+  // carry — the typed effect list for the delta strip, the prepare() pick for
+  // an instance image's subject (WHICH plate you ate), and the room the verb
+  // actually happened in. The window READS these; nothing here decides for it.
+  return {
+    ok: true, ticksSpent: ticks, minutesSpent: minutes, shared,
+    narration: narrateAction(def, ctx, prepared, shared), momentPhoto,
+    applied: (appliedEffects && appliedEffects.applied) || [],
+    prepared, roomId: ctx.roomId,
+  };
 }
 
 // Runs `fn` with gameState.player.flags._vulnerableState set, restoring
@@ -798,13 +813,18 @@ function narrateAction(def, ctx, prepared, shared) {
 // replacement for a hand-written doX(). Called from UI's handleAction. ---
 async function runRegisteredAction(actionId, opts) {
   showLoading();
-  // Phase 7 (D7): a set_meal that HAPPENED is the moment a scheduled meal
+  // Phase 7 (D7): a meal that HAPPENED is the moment a scheduled meal
   // commitment in the player's room becomes 'held' — captured BEFORE the
   // action so a late dinner that ends just past the window still counts
   // (executeAction advances the clock by the action's minutes). Eating a
   // solo snack in the dining room during someone's dinner window is NOT
-  // the same thing, so only set_meal marks.
-  const mealCommitments = actionId === 'set_meal'
+  // the same thing, so only the meal verb marks.
+  //
+  // action-outcome-window-plan Phase 3 (D10): that verb is `sit`, not
+  // `set_meal`. Laying the table is no longer the meal — you can lay it and
+  // walk away — and a commitment that went 'held' on the food going down
+  // would count a dinner nobody ever sat down to.
+  const mealCommitments = actionId === 'sit'
     ? activeMealCommitmentsInRoom(currentGameState, currentGameState.player.location)
     : [];
   try {
@@ -826,7 +846,7 @@ async function runRegisteredAction(actionId, opts) {
     // B6: fire-and-forget — the modal generates/shows the photo on its own
     // time and shouldn't hold up this action's render/save/hideLoading.
     if (result.momentPhoto) showActionMomentModal(result.momentPhoto);
-    if (actionId === 'set_meal') {
+    if (actionId === 'sit') {
       for (const c of mealCommitments) c.status = 'held';
     }
     // Phase 8: working out grows the energy ceiling (energyMax). This is
@@ -856,6 +876,30 @@ async function runRegisteredAction(actionId, opts) {
     }
     render(currentGameState, currentSceneState);
     await saveAtBoundary(actionId, currentGameState);
+    // action-outcome-window-plan Phase 1 (D1): the outcome window is
+    // presented LAST, after the world behind it is already rendered and
+    // saved. Nothing about the action is pending on the tap — dismissing is
+    // a close, never a commit — so a reload mid-window loses a picture, not
+    // a meal. Verbs with no `outcomeWindow` (every Tier A verb, which is
+    // still almost all of them) fall straight through and resolve exactly as
+    // they always have.
+    if (def && def.outcomeWindow && typeof presentActionOutcome === 'function') {
+      const reason = await presentActionOutcome(currentGameState, def, result);
+      // Phase 3 (D20): the window performed whatever transition the dismissal
+      // called for; where that transition LANDS is the verb's own business,
+      // so the def declares it and the caller runs it. Keeping this here
+      // rather than inside actionwindow.js is what stops the renderer from
+      // knowing what a conversation is. `sit` uses it to hand off into `talk`
+      // with a specific guest (D6/D10).
+      if (typeof def.outcomeWindow.onDismiss === 'function' && reason) {
+        const view = {
+          gs: currentGameState, def, result,
+          prepared: result.prepared || null,
+          roomId: result.roomId || currentGameState.player.location,
+        };
+        await def.outcomeWindow.onDismiss(view, reason);
+      }
+    }
   } finally {
     hideLoading();
   }

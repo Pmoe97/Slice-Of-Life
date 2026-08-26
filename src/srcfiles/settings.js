@@ -155,6 +155,14 @@ function normalizeSettings(s) {
   // cycle rows can't resolve would show a blank "—" tile forever.
   if (!SCENE_VIS_MODES.some((m) => m.id === out.sceneVisualizerMode)) out.sceneVisualizerMode = SETTINGS_DEFAULTS.sceneVisualizerMode;
   if (!SCENE_VIS_EVERY_N_OPTIONS.some((n) => n.id === out.sceneVisualizerEveryN)) out.sceneVisualizerEveryN = SETTINGS_DEFAULTS.sceneVisualizerEveryN;
+  // Dream Engine D17: the same bogus-id guard as the two rows above. These
+  // ids are read by the compiler's frequency roll and its register /
+  // abstraction weight lookups (DREAM_TUNING, defs.dreams.js), so an
+  // unresolvable id would be worse than a blank tile — it would key into a
+  // missing weight map every time a dream was compiled.
+  if (!DREAM_FREQUENCIES.some((f) => f.id === out.dreamFrequency)) out.dreamFrequency = SETTINGS_DEFAULTS.dreamFrequency;
+  if (!DREAM_REGISTER_MODES.some((r) => r.id === out.dreamRegister)) out.dreamRegister = SETTINGS_DEFAULTS.dreamRegister;
+  if (!DREAM_ABSTRACTION_MODES.some((a) => a.id === out.dreamAbstraction)) out.dreamAbstraction = SETTINGS_DEFAULTS.dreamAbstraction;
   return out;
 }
 

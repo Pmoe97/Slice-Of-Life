@@ -67,6 +67,13 @@ const SAVE_KEYS = [
     // per-machine debug history (debuglog.js). Deliberately excluded from
     // exportSaveRecord/importSaveRecord below — see the scrub there.
     'debugLog',
+    // Dream Engine Phase 1: the queue / diary / motif-history subtree
+    // (dreams.js). Listing it here is only HALF the wiring — it must also be
+    // read back in loadGameState's world literal below, or it writes fine
+    // all session and reads back empty on the next load. That is the exact
+    // castWeb failure this whole table exists to prevent, and gameplayOptions
+    // above hit it again a day ago.
+    'dreams',
   ] },
   { folder: 'npcs', all: true },
   { folder: 'objects', all: true },
@@ -142,6 +149,14 @@ const WORLD_KEY_FALLBACKS = {
   // Troubleshooting export log: empty for saves written before this existed
   // — no migration, same additive-default precedent as relationships/signals.
   debugLog: () => [],
+  // Dream Engine Phase 1: the queue / diary / motif-history subtree. An
+  // empty-shaped default is exactly what a save from before this existed
+  // should read as (no queued dreams, an empty diary, nextIndex 1), so no
+  // migration — the same additive-default precedent as relationships/signals.
+  // defaultDreamState lives in dreams.js, which loads well after this file;
+  // that is fine and deliberate, per this table's comment above: these are
+  // called at RUNTIME only.
+  dreams: () => defaultDreamState(),
 };
 
 // --- Migration functions (per folder). Stubbed for day-one; iterate here. ---
@@ -826,6 +841,12 @@ async function saveAtBoundary(reason, gameState) {
     // the SAVE_KEYS loop below like any other world key.
     gameState.world.phone = gameState.world.phone || defaultPhoneState();
     gameState.world.afterHours = gameState.world.afterHours || defaultAfterHoursState();
+    // Dream Engine Phase 1: same guarantee for world.dreams, so the
+    // background compiler (Phase 4) and the sleep hook (Phase 7) can read the
+    // subtree without a null check on a state built by a path that predates
+    // it. WORLD_KEY_FALLBACKS.dreams already covers the write; this covers
+    // the in-memory object every later reader actually holds.
+    gameState.world.dreams = gameState.world.dreams || defaultDreamState();
     // The persisted key list is SAVE_KEYS and nothing else — the single
     // table both the autosave path and the snapshot path (captureSave)
     // walk, so a new world sub-key joins both with one edit.
@@ -1188,6 +1209,12 @@ async function loadGameState() {
   // it writes fine all session and silently reads back empty next load —
   // the exact failure gameplayOptions' own comment above warns about.
   const debugLog = await getWorld('debugLog') || WORLD_KEY_FALLBACKS.debugLog();
+  // Dream Engine Phase 1 — the OTHER half of the SAVE_KEYS entry above. Read
+  // through normalizeDreamState (dreams.js) rather than a bare `|| {}` so a
+  // hand-edited or half-written subtree degrades to "no dreams yet" instead
+  // of throwing on the sleep path, exactly as normalizePhoneState /
+  // normalizeAfterHoursState do two lines up.
+  const dreams = normalizeDreamState(await getWorld('dreams'));
 
   const gameState = {
     meta,
@@ -1201,7 +1228,7 @@ async function loadGameState() {
     npcIds: Object.keys(npcs).filter(id => id.startsWith('npc_')),
     // droppedConstraints is persisted in meta by writeGeneratedGameState.
     droppedConstraints: meta.droppedConstraints || [],
-    world: { rooms, castWeb, relationships, quests, events, deliveries, renovationJobs, visits, commitments, foodOrders, groceryOrders, externalStubs, escortRoster, escortBookings, moveInOffers, rent, computer, taxes, bills, upgrades, utilities, phone, afterHours, hotSinglesRoster, flags, outsidePartners, pregnancies, autoCookCleared, gameplayOptions, debugLog },
+    world: { rooms, castWeb, relationships, quests, events, deliveries, renovationJobs, visits, commitments, foodOrders, groceryOrders, externalStubs, escortRoster, escortBookings, moveInOffers, rent, computer, taxes, bills, upgrades, utilities, phone, afterHours, hotSinglesRoster, flags, outsidePartners, pregnancies, autoCookCleared, gameplayOptions, debugLog, dreams },
   };
   // Rebuild the live room graph from base + whichever structural upgrades
   // this save has built (floorplan plan Phase 6). MUST run before anything

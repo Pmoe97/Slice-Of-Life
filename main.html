@@ -1784,35 +1784,18 @@ body {
 }
 .chip-nav-back:hover { background: var(--color-surface-hover); border-color: var(--color-accent); }
 
-/* The peek/listen lens (intimacy-voyeurism Phase 10, D6/D7). A fixed
-   overlay at the modal tier with a dark stage. The keyhole itself is the
+/* The peek/listen lens (intimacy-voyeurism Phase 10, D6/D7; moved into
+   the action window's stage by Phase 4, D18). The keyhole itself is the
    SVG mask on .peek-lens — the generated image is a plain room view, and
    the mask + vignette + shimmer are what make it a keyhole. */
-.peek-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-modal);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background:
-    radial-gradient(ellipse at center, rgba(20,20,40,0.55) 0%, rgba(8,8,16,0.92) 70%, rgba(5,5,10,0.97) 100%);
-}
-.peek-overlay[hidden] { display: none !important; }
-.peek-stage {
+.peek-content {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--space-3);
-  max-width: min(92vw, 380px);
+  width: 100%;
 }
-.peek-heading {
-  font-size: var(--fs-sm);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--color-warm);
-}
+.peek-content[hidden] { display: none !important; }
 .peek-keyhole {
   position: relative;
   width: min(46vh, 300px);
@@ -1828,6 +1811,18 @@ body {
   inset: 0;
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='270' viewBox='0 0 200 270'%3E%3Cpath d='M100 23 A72 72 0 1 1 100 167 A72 72 0 1 1 100 23 Z M60 252 L82 158 L118 158 L140 252 Q100 268 60 252 Z' fill='black'/%3E%3C/svg%3E");
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='270' viewBox='0 0 200 270'%3E%3Cpath d='M100 23 A72 72 0 1 1 100 167 A72 72 0 1 1 100 23 Z M60 252 L82 158 L118 158 L140 252 Q100 268 60 252 Z' fill='black'/%3E%3C/svg%3E");
+  /* Without an explicit size/repeat, browsers default to the SVG's native
+     200x270 units, tiled (mask-repeat: repeat) to fill the box — and this
+     box is almost always bigger than 200x270 CSS px, especially on phones
+     (min(46vh,300px) alone exceeds 200px on any viewport taller than
+     ~435px). That tiling is exactly the "grid of keyholes" bug: pin it to
+     the box with no-repeat so exactly one keyhole ever renders. */
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
   background: #0a0a14;
   overflow: hidden;
 }
@@ -1923,8 +1918,234 @@ body {
   flex-shrink: 0;
 }
 /* The listen twin hides the image lens and shows the audio line instead. */
-.peek-overlay[data-mode="listen"] .peek-keyhole { display: none; }
-.peek-overlay[data-mode="listen"] .peek-caption { font-size: var(--fs-md); }
+.peek-content[data-mode="listen"] .peek-keyhole { display: none; }
+.peek-content[data-mode="listen"] .peek-caption { font-size: var(--fs-md); }
+
+/* The action outcome window (action-outcome-window-plan Phase 1). Same
+   fixed-overlay-plus-centered-stage chrome as .peek-overlay, minus the
+   keyhole: this frame is a plain rounded viewport, because the point of a
+   peek is that you are looking THROUGH something and the point of an outcome
+   is that you are looking AT what just happened. Tier B (`data-tier="B"`)
+   hides the frame the same way the listen twin hides the lens. */
+.aw-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3);
+  background:
+    radial-gradient(ellipse at center, rgba(20,20,40,0.5) 0%, rgba(8,8,16,0.9) 70%, rgba(5,5,10,0.96) 100%);
+  cursor: pointer; /* D1: the whole backdrop is the dismiss target */
+}
+.aw-overlay[hidden] { display: none !important; }
+.aw-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  width: min(92vw, 460px);
+  max-height: 94vh;
+  overflow-y: auto;
+}
+.aw-heading {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--color-warm);
+  text-align: center;
+}
+.aw-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(255,205,110,0.22), 0 18px 48px rgb(0 0 0 / 0.55);
+}
+.aw-frame[hidden] { display: none !important; }
+.aw-lens {
+  position: absolute;
+  inset: 0;
+  background: #0a0a14;
+  overflow: hidden;
+}
+.aw-lens img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+/* `display: block` above beats the UA's [hidden] rule, so the hidden state
+   needs saying explicitly — without this, a window whose frame is still
+   generating keeps painting the PREVIOUS window's blob. */
+.aw-lens img[hidden] { display: none !important; }
+/* Phase 3 (D2/D24): a cutout is a person on a transparent background, not a
+   scene. Cover-cropping one shows a midriff, so it is CONTAINED and sits on
+   the lens's own dark ground with a little breathing room under it — the
+   same "figure standing in the frame" reading the scene cutouts have. */
+.aw-frame[data-cutout] { aspect-ratio: 4 / 3; }
+.aw-frame[data-cutout] .aw-lens img {
+  object-fit: contain;
+  object-position: center bottom;
+  padding: var(--space-2) 0 0;
+}
+/* The same light sweep the peek lens uses while a frame generates — the
+   window is readable (narration + deltas are already painted) the whole
+   time this runs, so it is a progress hint, never a gate. */
+.aw-shimmer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(115deg, transparent 20%, rgba(255,255,255,0.10) 42%, rgba(255,255,255,0.16) 50%, rgba(255,255,255,0.10) 58%, transparent 80%);
+  background-size: 240% 100%;
+  animation: peek-shimmer-sweep 1.4s ease-in-out infinite;
+}
+.aw-narration {
+  margin: 0;
+  font-size: var(--fs-base);
+  line-height: var(--lh-loose);
+  color: var(--color-text);
+  text-align: center;
+  max-width: 42ch;
+}
+/* The "what changed" strip — one chip per typed effect the action applied,
+   shaped after the scene reader's .sr-moodle row. */
+.aw-deltas {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+}
+.aw-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-sm);
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+}
+.aw-delta-glyph { font-size: var(--fs-base); }
+.aw-delta-label { color: var(--color-text-dim); }
+.aw-delta-value { font-weight: 700; font-variant-numeric: tabular-nums; }
+.aw-delta[data-tone="up"] .aw-delta-value { color: var(--color-positive); }
+.aw-delta[data-tone="down"] .aw-delta-value { color: var(--color-negative); }
+.aw-delta[data-tone="flat"] .aw-delta-value { color: var(--color-text); }
+/* The strip is `display: flex` from the rule above, which beats the UA's
+   [hidden] — so a body that hides it (the dream, Phase 7) was still paying
+   for its row gap in the stage. Said explicitly, exactly as .aw-choices and
+   .aw-picker already do. */
+.aw-deltas[hidden] { display: none !important; }
+.aw-delta-empty {
+  font-size: var(--fs-sm);
+  color: var(--color-text-faint);
+  font-style: italic;
+}
+.aw-continue { min-width: 140px; }
+/* Tier B is narration + deltas only (D3) — no frame, even if one somehow
+   got planned. Mirrors the listen twin's rule above. */
+.aw-overlay[data-tier="B"] .aw-frame { display: none !important; }
+
+/* --- Phase 2: D7's world-initiated gate, D6's handoff close --------------- */
+/* A gate's answers. Row on desktop, stacked full-width on a narrow screen,
+   because two side-by-side buttons at 375px are two mis-taps waiting. */
+.aw-choices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+}
+.aw-choices[hidden] { display: none !important; }
+.aw-continue[hidden] { display: none !important; }
+.aw-choice { min-width: 140px; }
+/* Phase 5 (D8): the scheduling picker's slot list inside the action window —
+   a day header + one row per free window, the recipe-pick row chrome the
+   modal calendars already use. */
+.aw-picker { width: 100%; }
+.aw-picker[hidden] { display: none !important; }
+.aw-pick-list { display: flex; flex-direction: column; gap: var(--space-2); width: 100%; }
+.aw-pick-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+}
+.aw-pick-name { font-weight: 700; }
+.aw-pick-meta { font-size: var(--fs-xs); color: var(--color-text-dim); }
+.aw-pick-cancel { margin-top: var(--space-2); }
+@media (max-width: 480px) {
+  .aw-choices { flex-direction: column; }
+  .aw-choice { width: 100%; }
+}
+/* --- Dream Engine Phase 7: the dream body (D3/D13/D15) -------------------- */
+/* A dream is read, not scanned: the prose is a written panel of 45-70 words
+   (D35) rather than a one-line outcome, so it sets left and a little wider
+   than the centred outcome line, which stacks 70 words into a very tall
+   column at 42ch. */
+.aw-overlay[data-body="dream"] .aw-narration {
+  text-align: left;
+  max-width: 52ch;
+}
+/* The frame is a picture of somewhere that does not exist, so it gets the
+   cooler, deeper shadow rather than the outcome frame's warm key line. */
+.aw-overlay[data-body="dream"] .aw-frame {
+  box-shadow: 0 0 0 1px rgba(150,160,255,0.20), 0 18px 48px rgb(0 0 0 / 0.65);
+}
+/* One dot per panel. Position, not control — pointer-events off so a tap on
+   the dots is a tap on the backdrop, which is what advances the dream. */
+.aw-dream-dots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  pointer-events: none;
+}
+.aw-dream-dots[hidden] { display: none !important; }
+.aw-dream-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-border);
+  transition: background 200ms ease-out, transform 200ms ease-out;
+}
+.aw-dream-dot[data-on] {
+  background: var(--color-warm);
+  transform: scale(1.25);
+}
+@media (prefers-reduced-motion: reduce) {
+  .aw-dream-dot { transition: none; }
+}
+
+/* D6: the handoff close is a cross-fade, not a dissolve into nothing — the
+   window sinks slightly and clears while the conversation it is handing off
+   to rises underneath. Inert from the first frame (the promise has already
+   resolved and the caller is already opening the next surface), so this is
+   decoration over an overlay nobody can interact with any more. Duration must
+   match ACTION_WINDOW_HANDOFF_MS in actionwindow.js. */
+.aw-overlay[data-handoff] {
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 420ms ease-out;
+}
+.aw-overlay[data-handoff] .aw-stage {
+  transform: scale(0.97) translateY(6px);
+  transition: transform 420ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .aw-overlay[data-handoff],
+  .aw-overlay[data-handoff] .aw-stage { transition: none; }
+}
 
 /* --- Input row --- */
 .footer-input-row {
@@ -2257,11 +2478,42 @@ body {
 .ctr-detail-fresh[data-state="rotten"] { color: var(--color-negative); }
 .ctr-action-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 
-/* Wardrobe panel (intimacy-voyeurism Phase 5): reuses the container panel's
-   two-column body; only the rows are its own. The outfit column reads like a
-   character sheet — slot rows with the worn piece named; the wardrobe column
-   filters to the selected slot while one is being picked. */
-.wdb-box { width: min(860px, 94vw); }
+/* Wardrobe panel (intimacy-voyeurism Phase 5; moved into the action window's
+   chrome by audit finding #9). Reuses the container panel's two-column body
+   shape (.ctr-col/.ctr-list/.ctr-actions); only the rows are its own. The
+   outfit column reads like a character sheet — slot rows with the worn piece
+   named; the wardrobe column filters to the selected slot while one is being
+   picked. Its two-column layout needs real width and a bounded height with
+   its OWN internal scroll (so the header/hint/Apply button never scroll out
+   of view) — both narrower than the default outcome card, so they're keyed
+   off data-body="wardrobe" rather than living on .aw-stage's own defaults. */
+.aw-overlay[data-body="wardrobe"] .aw-stage {
+  width: min(860px, 94vw);
+  height: min(72vh, 92dvh);
+  max-height: min(72vh, 92dvh);
+  overflow-y: hidden;
+}
+.wdb-content {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.wdb-content[hidden] { display: none !important; }
+.wdb-content-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+/* .wdb-body was never actually given the container panel's own .ctr-body
+   (display:flex) — its two .ctr-col children were stacking vertically
+   instead of side by side. Pre-existing, fixed in passing while this file
+   was already open for the Tier D move. */
+.wdb-body { display: flex; flex: 1; min-height: 0; }
 .wdb-subtitle { flex: 1; text-align: left; }
 .wdb-slot-row {
   display: flex;
@@ -4508,6 +4760,66 @@ body {
 }
 .codex-entry-badge[data-fresh] { color: var(--color-accent); border-color: var(--color-accent-dim); }
 
+/* --- Dream Diary (Dream Engine Phase 8, D42) --- */
+/* The filed-dreams app — shared by the phone and the computer window like
+   codex, so the same classes style both surfaces. The gallery is a list of
+   first-panel-thumbnail rows; the detail page is a header, the panel figures
+   (image + prose) and the register's wake line. Thumbnails and panels start
+   as placeholders and swap in as their cached images resolve. */
+.dream-diary { display: flex; flex-direction: column; gap: var(--space-2); }
+.dream-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+.dream-row:hover { border-color: var(--color-accent-dim); }
+.dream-thumb {
+  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+.dream-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dream-row-title { font-size: var(--fs-sm); font-weight: 600; color: var(--color-text); }
+.dream-row-meta { font-size: var(--fs-xs); color: var(--color-text-dim); line-height: var(--lh-tight); }
+.dream-row-chevron { color: var(--color-text-faint); }
+.dream-empty { padding: var(--space-4); text-align: center; font-size: var(--fs-sm); color: var(--color-text-dim); }
+.dream-entry-head { padding: var(--space-2) 0 var(--space-2); border-bottom: 1px solid var(--color-border); margin-bottom: var(--space-3); }
+.dream-entry-title { font-size: var(--fs-lg); font-weight: 700; }
+.dream-entry-meta { margin-top: 2px; }
+.dream-panels { display: flex; flex-direction: column; gap: var(--space-4); }
+.dream-panel { margin: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.dream-img {
+  width: 100%;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  display: block;
+}
+.dream-panel-text {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-relaxed);
+  color: var(--color-text);
+  padding: 0 var(--space-1);
+}
+.dream-wake {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+  font-style: italic;
+}
+
 /* --- BrineOS Phase 6: Clock app --- */
 .phone-clock-face {
   font-size: var(--fs-xl);
@@ -5013,23 +5325,6 @@ body {
 
 
 /* Interruption bubble (Phase 5) — DOM-injected, survives re-renders */
-.interrupt-bubble { position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; pointer-events: auto; }
-.interrupt-bubble-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.4); backdrop-filter: blur(2px); animation: interrupt-fade-in 0.2s ease-out; }
-.interrupt-bubble-card { position: relative; max-width: 460px; width: 90%; background: var(--color-card); border: 1px solid var(--color-border); border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); animation: interrupt-slide-in 0.3s cubic-bezier(0.16, 1, 0.3, 1); z-index: 1; }
-.interrupt-bubble-header { display: flex; align-items: center; gap: 10px; padding: 14px 16px 8px; }
-.interrupt-bubble-avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 600; font-size: var(--fs-sm); flex-shrink: 0; }
-.interrupt-bubble-name { font-weight: 600; font-size: var(--fs-sm); }
-.interrupt-bubble-door { margin-left: auto; }
-.interrupt-bubble-text { padding: 4px 16px 16px; font-size: var(--fs-sm); line-height: 1.5; min-height: 40px; }
-.interrupt-bubble-actions { display: flex; gap: 10px; padding: 0 16px 16px; }
-.interrupt-bubble-actions .btn { flex: 1; }
-.interrupt-btn-sorry { background: var(--color-accent); color: #fff; border: none; }
-.interrupt-btn-sorry:hover { filter: brightness(1.1); }
-.interrupt-btn-own { background: var(--color-surface-alt); border: 1px solid var(--color-border); }
-.interrupt-btn-own:hover { filter: brightness(1.05); }
-@keyframes interrupt-fade-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes interrupt-slide-in { from { opacity: 0; transform: translateY(20px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
-
 /* Streamly */
 .str-player { background: var(--color-card); border: 1px solid var(--color-border); border-radius: 6px; padding: 12px; margin-bottom: 12px; }
 .str-player-header { font-size: var(--fs-xs); color: var(--color-text-dim); text-transform: uppercase; letter-spacing: 1px; }
@@ -6233,63 +6528,98 @@ body {
   </div>
 </div>
 
-<!-- Wardrobe panel (Intimacy & Voyeurism Phase 5, D11): the Change Outfit
-     picker, opened from the wardrobe's submenu verb. Left column = current
-     outfit (one row per body slot); right column = owned clothing (filtered
-     to the selected slot while one is picked). Apply commits the drafted
-     outfit through the action pipeline; Close/Escape resolves null. -->
-<div id="wardrobe-panel" class="inventory-panel" hidden>
-  <div class="invp-box wdb-box">
-    <div class="invp-header">
-      <h2 id="wdb-title">Wardrobe</h2>
-      <span class="dim tiny wdb-subtitle" id="wdb-subtitle"></span>
-      <div class="invp-tools">
+<!-- The action outcome window (action-outcome-window-plan Phase 1): the
+     reusable pane an action that mattered resolves into — heading, an image
+     frame (Tier C — hidden entirely at Tier B, and collapsed when a
+     generation fails), the narration, the "what changed" delta strip, and a
+     Continue button. Dismissal is a tap on the overlay, the button, or
+     Escape/Enter/Space (D1) — there is no timer anywhere in this
+     component. The peek/listen hold (Phase 4, D18) reuses the same
+     chrome: its keyhole lens, caption and risk meter are #peek-content
+     inside this stage, not a bespoke overlay. -->
+<div id="action-window-overlay" class="aw-overlay" hidden>
+  <div class="aw-stage">
+    <div class="aw-heading" id="aw-heading"></div>
+    <!-- The peek/listen lens (Phase 4, D18) lives INSIDE the action window's
+         stage — the keyhole mask, vignette and risk meter are peek's CONTENT,
+         not shared chrome, so they sit here in #peek-content rather than in a
+         bespoke overlay of their own. The CSS/SVG mask is the keyhole (D6);
+         the caption under the lens is the composed "what you see/hear" line;
+         the Stop button ends the hold. The listen twin shows the same chrome with
+         an audio line instead of the lens image. -->
+    <div class="peek-content" id="peek-content" data-mode="peek" hidden>
+      <div class="peek-keyhole" id="peek-keyhole">
+        <div class="peek-lens">
+          <img id="peek-img" alt="">
+        </div>
+        <div class="peek-vignette"></div>
+        <div class="peek-shimmer" id="peek-shimmer" hidden></div>
+      </div>
+      <div class="peek-caption" id="peek-caption"></div>
+      <div class="peek-meter">
+        <span class="peek-meter-label">Being noticed</span>
+        <div class="peek-meter-bar"><div class="peek-risk-fill" id="peek-risk-fill" data-fill="0"></div></div>
+        <span class="peek-meta" id="peek-meta"></span>
+      </div>
+      <button id="peek-stop-btn" class="btn btn-secondary">Stop Watching</button>
+    </div>
+    <!-- Wardrobe (Intimacy & Voyeurism Phase 5, D11; moved into the action
+         window's chrome by audit finding #9 — D2 named this picker by name
+         as UI that belongs inside ActionWindow, not its own untouched
+         screen). Left column = current outfit (one row per body slot); right
+         column = owned clothing (filtered to the selected slot while one is
+         picked). Apply commits the drafted outfit through the action
+         pipeline; Close/Escape/backdrop resolves null. render.js's
+         renderWardrobePanel paints everything inside this container —
+         actionwindow.js only shows/hides it. -->
+    <div class="wdb-content" id="wardrobe-content" hidden>
+      <div class="wdb-content-header">
+        <span class="dim tiny wdb-subtitle" id="wdb-subtitle"></span>
         <button type="button" class="btn btn-secondary tiny" id="wdb-close-btn">Close</button>
       </div>
-    </div>
-    <div class="wdb-body">
-      <div class="ctr-col">
-        <div class="ctr-col-title">Current Outfit</div>
-        <div class="ctr-list" id="wdb-outfit-list"></div>
+      <div class="wdb-body">
+        <div class="ctr-col">
+          <div class="ctr-col-title">Current Outfit</div>
+          <div class="ctr-list" id="wdb-outfit-list"></div>
+        </div>
+        <div class="ctr-col">
+          <div class="ctr-col-title">In the Wardrobe</div>
+          <div class="ctr-list" id="wdb-items-list"></div>
+        </div>
       </div>
-      <div class="ctr-col">
-        <div class="ctr-col-title">In the Wardrobe</div>
-        <div class="ctr-list" id="wdb-items-list"></div>
+      <div class="ctr-actions">
+        <div class="dim tiny" id="wdb-hint">Pick a slot on the left, then a piece on the right. Nothing is worn until you Apply.</div>
+        <div class="ctr-action-row">
+          <button type="button" class="btn tiny" id="wdb-apply-btn" disabled>Change</button>
+        </div>
       </div>
     </div>
-    <div class="ctr-actions">
-      <div class="dim tiny" id="wdb-hint">Pick a slot on the left, then a piece on the right. Nothing is worn until you Apply.</div>
-      <div class="ctr-action-row">
-        <button type="button" class="btn tiny" id="wdb-apply-btn" disabled>Change</button>
+    <!-- Phase 5 (D8): the scheduling picker — a Tier D interaction that lives
+         INSIDE the action window's chrome like the peek hold does. The slot
+         rows are the caller's (render.js computes free windows and hands them in);
+         this container is just where they paint. -->
+    <div class="aw-picker" id="aw-picker" hidden></div>
+    <div class="aw-frame" id="aw-frame" hidden>
+      <div class="aw-lens">
+        <img id="aw-img" alt="">
       </div>
+      <div class="aw-shimmer" id="aw-shimmer" hidden></div>
     </div>
-  </div>
-</div>
-
-<!-- The peek/listen lens (intimacy-voyeurism Phase 10, D6/D7). A fixed
-     overlay holding a keyhole-shaped viewport: the CSS/SVG mask is the
-     keyhole (D6 — never baked into the generated image), the vignette and
-     shimmer are pure CSS, and a risk meter shows how long the occupant is
-     taking to notice. The caption under the lens is the composed "what you
-     see/hear" line; the Stop button ends the hold. The listen twin shows
-     the same chrome with an audio line instead of the lens image. -->
-<div id="peek-overlay" class="peek-overlay" hidden>
-  <div class="peek-stage">
-    <div class="peek-heading" id="peek-heading">Peeking</div>
-    <div class="peek-keyhole" id="peek-keyhole">
-      <div class="peek-lens">
-        <img id="peek-img" alt="">
-      </div>
-      <div class="peek-vignette"></div>
-      <div class="peek-shimmer" id="peek-shimmer" hidden></div>
-    </div>
-    <div class="peek-caption" id="peek-caption"></div>
-    <div class="peek-meter">
-      <span class="peek-meter-label">Being noticed</span>
-      <div class="peek-meter-bar"><div class="peek-risk-fill" id="peek-risk-fill" data-fill="0"></div></div>
-      <span class="peek-meta" id="peek-meta"></span>
-    </div>
-    <button id="peek-stop-btn" class="btn btn-secondary">Stop Watching</button>
+    <p class="aw-narration" id="aw-narration"></p>
+    <!-- Dream Engine Phase 7 (D3/D15): one dot per panel of the dream being
+         shown, the current one lit. Sits directly under the prose because it
+         is a position indicator, not a control — the whole window advances on
+         a tap, and a dot is never itself clickable. Hidden for every other
+         body, and for a single-panel dream (every nap dream, D16), where a
+         lone dot would read as a broken control. -->
+    <div class="aw-dream-dots" id="aw-dream-dots" hidden></div>
+    <div class="aw-deltas" id="aw-deltas"></div>
+    <!-- Phase 2 (D7): a world-initiated gate asks instead of reporting, so it
+         paints its answers here and hides Continue. The two are exclusive —
+         a gate with a Continue button would offer a third answer nobody
+         defined. -->
+    <div class="aw-choices" id="aw-choices" hidden></div>
+    <button id="aw-continue-btn" class="btn btn-primary aw-continue">Continue</button>
   </div>
 </div>
 
@@ -6665,12 +6995,12 @@ body {
      'settings' only at runtime, but sits right after its schema and before
      STATE (which consults autosaveIntervalMs at runtime only) for tidy load
      order. -->
-<script src="src/srcfiles/defs.settings.js?v=9"></script>
-<script src="src/srcfiles/settings.js?v=7"></script>
-<script src="src/srcfiles/icons.js?v=30"></script>
+<script src="src/srcfiles/defs.settings.js?v=10"></script>
+<script src="src/srcfiles/settings.js?v=8"></script>
+<script src="src/srcfiles/icons.js?v=31"></script>
 <script src="src/srcfiles/defs.world.js?v=44"></script>
-<script src="src/srcfiles/defs.actions.js?v=43"></script>
-<script src="src/srcfiles/defs.computer.js?v=31"></script>
+<script src="src/srcfiles/defs.actions.js?v=45"></script>
+<script src="src/srcfiles/defs.computer.js?v=32"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
      at runtime; IMAGE's titleGallery consumes genTitlePrompt. -->
@@ -6682,11 +7012,19 @@ body {
 <!-- The interior: the composite-shape library and the authored room designs
      (Home Design Studio). Pure data; authored in dev/designer.html. -->
 <script src="src/srcfiles/defs.design.js?v=2"></script>
+<!-- Dream Engine Phase 1: the dream component tables (defs.dreams.js) — the
+     forms, perspectives, tempos, registers, lenses, distortions, motifs and
+     every tuning number a dream is assembled from. Pure data with no
+     dependencies, grouped with the other defs.* files because that is what it
+     is. MUST load before dreams.js, which selects from these tables; the
+     selection is a seeded roll made before any model call, because the LLM
+     never decides a dream's structure (D1). -->
+<script src="src/srcfiles/defs.dreams.js?v=7"></script>
 <!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/srcfiles/orbital.js?v=12"></script>
-<script src="src/srcfiles/state.js?v=62"></script>
-<script src="src/srcfiles/sim.js?v=87"></script>
+<script src="src/srcfiles/state.js?v=63"></script>
+<script src="src/srcfiles/sim.js?v=88"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
@@ -6714,12 +7052,12 @@ body {
      scoreCandidates calls scoreOvertures, and evaluateDrives calls the writers
      here for the tick it wins. -->
 <script src="src/srcfiles/overture.js?v=16"></script>
-<script src="src/srcfiles/actions.js?v=34"></script>
+<script src="src/srcfiles/actions.js?v=35"></script>
 <script src="src/srcfiles/intent.js?v=18"></script>
 <script src="src/srcfiles/skills.js?v=19"></script>
-<script src="src/srcfiles/stealth.js?v=19"></script>
+<script src="src/srcfiles/stealth.js?v=20"></script>
 <script src="src/srcfiles/time.js?v=30"></script>
-<script src="src/srcfiles/computer.js?v=63"></script>
+<script src="src/srcfiles/computer.js?v=64"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -6754,21 +7092,44 @@ body {
      and called by sim.js at runtime only. -->
 <script src="src/srcfiles/rumination.js?v=15"></script>
 <script src="src/srcfiles/prompt.js?v=19"></script>
-<script src="src/srcfiles/llm.js?v=40"></script>
+<script src="src/srcfiles/llm.js?v=42"></script>
 <!-- Plan X-5 Phase 1: the wire for conversation consequences — parsing,
      clamping, windowing and ingestion for the Assessor and the Chronicler.
      After llm.js because the two passes' calls live there and are fired from
      ui.js; x5.js itself is pure and calls no model. -->
 <script src="src/srcfiles/x5.js?v=15"></script>
 <script src="src/srcfiles/interruption.js?v=23"></script>
-<script src="src/srcfiles/image.js?v=32"></script>
+<script src="src/srcfiles/image.js?v=34"></script>
 <!-- Intimacy & Voyeurism Phase 10 (D6/D7): the peek/listen hold — the timed
      real-time session loop (risk ramp, per-NPC caught outcomes, image budget)
      plus the pure derivations it re-reads every real second. After image.js
      (calls composePeekKey/getPeekImage at runtime) and before render.js/ui.js,
      which call renderPeekOverlay/startPeekSession at runtime only. Phase 15
      writes the 'witnessed' ledger entries via codex.js at session end. -->
-<script src="src/srcfiles/peek.js?v=3"></script>
+<script src="src/srcfiles/peek.js?v=4"></script>
+<!-- Dream Engine Phase 1 (dreams.js): the dream compiler, writer, renderer
+     and viewer. After image.js because every panel goes through a cached
+     getter there (getDreamPanelImage) — root.generateImage is never called
+     from this file, or the LRU and the style funnel are both bypassed. After
+     defs.dreams.js, whose tables it selects from. Before actionwindow.js /
+     render.js / ui.js, which call presentDream and the sleep hook at runtime
+     only. Its load-time surface is module state plus pure functions
+     (defaultDreamState, normalizeDreamState, and later harvestResidue /
+     compileDream), so it also loads cleanly in the bare vm harness — see the
+     matching entry in dev/verify/loadgame.js's ORDER, added in the same
+     commit as this tag (design invariant 6). -->
+<script src="src/srcfiles/dreams.js?v=7"></script>
+<!-- Action outcome window (action-outcome-window-plan Phase 1, D1/D3/D5): the
+     reusable outcome pane — the delta strip's projection of applyEffects'
+     typed effect list, the spec resolver, and the open/render/dismiss
+     lifecycle. Sits beside peek.js for the same reason peek.js sits here: its
+     load-time surface is module state plus pure tables/functions
+     (deriveActionDeltas, resolveActionWindowSpec), while everything that
+     needs a DOM or the live state (presentActionOutcome, renderActionWindow)
+     is called at runtime only. After image.js (calls getActionWindowImage);
+     before render.js/ui.js/actions.js, which call presentActionOutcome at
+     runtime only. -->
+<script src="src/srcfiles/actionwindow.js?v=10"></script>
 <!-- Intimacy-Voyeurism Phase 17 (D13/D14): boundary acts — sleeping-room
      (sleep_with/sleep_watch), three-way acts (throuple/cuck), and the NPC
      sneak_into_bed drive. Depends on willingness.js (the gate), npc.js
@@ -6776,10 +7137,10 @@ body {
      writers) and codex.js (ledger), so it loads after all of them and after
      peek.js (reuses its willingness/prose/undressed patterns), but before
      render.js/ui.js which call its resolvers/applys at runtime only. -->
-<script src="src/srcfiles/boundary.js?v=1"></script>
+<script src="src/srcfiles/boundary.js?v=2"></script>
 <script src="src/srcfiles/pregnancy.js?v=1"></script>
-<script src="src/srcfiles/render.js?v=76"></script>
-<script src="src/srcfiles/render.computer.js?v=51"></script>
+<script src="src/srcfiles/render.js?v=79"></script>
+<script src="src/srcfiles/render.computer.js?v=52"></script>
 <script src="src/srcfiles/render.desktop.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
@@ -6811,18 +7172,18 @@ body {
      pipeline at runtime). Every dependency is a call-time one, so this slot
      is flexible within that range. -->
 <script src="src/srcfiles/asks.js?v=11"></script>
-<script src="src/srcfiles/ui.js?v=129"></script>
-<script src="src/srcfiles/ui.computer.js?v=47"></script>
+<script src="src/srcfiles/ui.js?v=135"></script>
+<script src="src/srcfiles/ui.computer.js?v=48"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
      site header with fake address bar + internal back/forward, footer, 404,
      skeleton grid, and every AfterHours renderer + handler. After
      ui.computer.js (doBrowserVisit calls AH.onSiteOpen at runtime) and
      before ui.windowmanager.js. -->
-<script src="src/srcfiles/afterhours.js?v=29"></script>
+<script src="src/srcfiles/afterhours.js?v=31"></script>
 <script src="src/srcfiles/ui.windowmanager.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell orchestration — after ui.computer.js. -->
-<script src="src/srcfiles/ui.phone.js?v=22"></script>
+<script src="src/srcfiles/ui.phone.js?v=23"></script>
 <!-- The Player Design studio and the opening cutscene (player creation +
      intro plan, Phases 3-5). BEFORE menu.js, because menu.js's last line
      invokes boot() — anything loading after that runs once boot has already

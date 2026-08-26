@@ -302,6 +302,22 @@ const APP_DEFS = {
       detail: { label: 'Profile', renderer: 'codex-detail', hideFromNav: true },
     },
   },
+  // Dream Engine Phase 8 (D42): the Dream Diary — every dream the player has
+  // watched, filed by fileDreamToDiary (dreams.js) newest-first and capped at
+  // DREAM_TUNING.diaryCap. The gallery is a list of first-panel thumbnails;
+  // the detail page repaints all panels from their frozen prompt+seed (D14)
+  // via getDreamPanelImage and reprints the register's wake line (D42). A
+  // shared phone/computer app exactly like codex; the 'dreams.*' renderers
+  // live in RENDER.COMPUTER, declared for both devices.
+  dreams: {
+    id: 'dreams', label: 'Dream Diary', category: 'personal', requires: [],
+    devices: ['computer', 'phone'],
+    entryScreen: 'diary',
+    screens: {
+      diary: { label: 'Dreams', renderer: 'dreamdiary' },
+      entry: { label: 'Dream', renderer: 'dreamentry', hideFromNav: true },
+    },
+  },
 };
 
 // --- Decor catalog: what the Home app sells (decor-economy plan) ---

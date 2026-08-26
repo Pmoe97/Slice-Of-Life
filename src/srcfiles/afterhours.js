@@ -2710,7 +2710,7 @@ function doAfterHoursHotSingle(npcId) {
 // milestones use (processNpcImMessages). Idempotent: a second click toasts
 // instead of re-greeting. world.afterHours needs an explicit boundary to
 // flush (the ah-like precedent), so saveAtBoundary fires immediately.
-function doAfterHoursSayHi(npcId) {
+async function doAfterHoursSayHi(npcId) {
   const gs = currentGameState;
   if (!gs) return;
   AH_ensureState(gs);
@@ -2732,7 +2732,18 @@ function doAfterHoursSayHi(npcId) {
     processNpcImMessages(gs, [{ npcId, text: line }]);
   }
   AH_spawnToast(`You said hi to ${name} — they texted you!`);
-  saveAtBoundary('ah-say-hi', gs);
+  await saveAtBoundary('ah-say-hi', gs);
+  // action-outcome-window-plan Phase 6 (D3): making contact on a dating site
+  // is a real beat — who it is you've now met. The frame is reused per
+  // person (their existing portrait vibe, D5).
+  await presentActionOutcome(currentGameState, {
+    id: 'ah.say-hi', label: 'Say Hi',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: `You said hi to ${name}`,
+      image: { kind: 'archetype', variant: 'dating', phrase: 'swiping through a dating profile on a dating site, an opening message sent' },
+    },
+  }, { applied: [], narration: `You said hi to ${name} — they texted you!`, minutesSpent: 0 });
   AH_refresh();
 }
 
@@ -2760,19 +2771,12 @@ async function doAfterHoursInviteOver(npcId) {
     AH_spawnToast(`Say hi to ${name} first — they won't come over cold.`);
     return;
   }
-  const tomorrow = (gs.meta?.clock?.day ?? 1) + 1;
-  const already = (gs.world.visits || []).some(v =>
-    v.npcId === npcId && visitDay(v) === tomorrow && v.status !== 'done' && v.status !== 'deferred');
-  if (already) {
-    AH_spawnToast(`${name} is already coming by tomorrow.`);
-    return;
-  }
   const result = await doInviteOver(npcId, 'ah');
-  // Report what actually happened rather than assuming: the gates above
-  // mirror doInviteOver's, but a mirror that drifts would otherwise toast a
-  // confirmation for a visit that was never scheduled.
+  // Report what actually happened rather than assuming: doInviteOver's gates
+  // could still decline, so a confirmation is only toasts when it actually
+  // scheduled (result.when carries the day+time the player picked).
   if (result?.ok) {
-    AH_spawnToast(`${name} — the person you met on AfterHours — says they'll come by tomorrow.`);
+    AH_spawnToast(`${name} — the person you met on AfterHours — says they'll come by ${result.when || 'then'}.`);
   } else if (result?.reason) {
     AH_spawnToast(result.reason);
   }
@@ -2911,11 +2915,17 @@ async function doAfterHoursCum() {
     await advanceAndResolveMinutes(minutes);
 
     const site = SITE_DEFS['afterhours'];
+    // audit finding #12: capture applyEffects' own return so the outcome
+    // window below can read a genuine result instead of an empty stand-in
+    // (Design Invariant 1) — hoisted out of the if-block since it's needed
+    // after the interruption roll.
+    let cumApplied = [];
     if (site?.cumEffects) {
       const effects = site.cumEffects.map(line => parseEffectDSL(line)[0]).filter(Boolean);
       const roomObjects = currentGameState.objects[`room_${currentGameState.player.location}`] || {};
       const effCtx = buildEffectContext(currentGameState, [], [], roomObjects, currentGameState.player.inventory || []);
-      applyEffects(effects, effCtx);
+      const cumResult = applyEffects(effects, effCtx);
+      cumApplied = (cumResult && cumResult.applied) || [];
     }
 
     browser.afterHoursSession = null;
@@ -2930,6 +2940,18 @@ async function doAfterHoursCum() {
       await showInterruptionBubble(currentGameState, result.npcId, result.doorState);
     } else {
       pendingInterruption = null;
+      // action-outcome-window-plan Phase 6 (D3): the climax resolves like
+      // the intimacy act it redeems — a private beat with the effects already
+      // applied. The frame is reused per device (D5); a caught interruption
+      // above is its own window and wins the beat instead.
+      await presentActionOutcome(currentGameState, {
+        id: 'afterhours.cum', label: 'Alone',
+        outcomeWindow: {
+          tier: 'C', trigger: 'player', dismissal: 'tap',
+          heading: 'A private moment',
+          image: { kind: 'archetype', variant: 'alone', phrase: 'leaning back in a quiet room, a screen still glowing, catching your breath' },
+        },
+      }, { applied: cumApplied, narration: 'You finish, feeling a mix of relief and mild shame.', minutesSpent: MASTURBATION.timeCostMinutes });
     }
   } finally {
     hideLoading();
@@ -2973,6 +2995,17 @@ async function doAfterHoursWatch(clipId, device) {
   AH_recordWatch(currentGameState, clip);
   addLogEntry('narration', `You start watching "${clip.title}" on AfterHours.`);
   await saveAtBoundary('ah-watch', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3): watching is a real, private
+  // beat. Nothing numeric shifts (the mood lands at the end, if at all); the
+  // frame is reused per site (D5).
+  await presentActionOutcome(currentGameState, {
+    id: 'browser.watch', label: 'Watch',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: 'AfterHours',
+      image: { kind: 'archetype', variant: 'afterhours', phrase: 'watching a video on a glowing screen in a dim room, headphones on' },
+    },
+  }, { applied: [], narration: `You start watching "${clip.title}".`, minutesSpent: 0 });
 
   ahNav('player', { clipId });
   AH_refresh();

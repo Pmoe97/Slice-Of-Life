@@ -144,6 +144,24 @@ async function doGigWorkBlock(gigId, device) {
     renderComputerScreen(currentGameState);
     render(currentGameState, currentSceneState);
     await saveAtBoundary('gig-work', currentGameState);
+    // action-outcome-window-plan Phase 6 (D3) / audit finding #12: the
+    // payout is genuinely nothing until delivery, but workGigBlock DOES
+    // spend a flat GIG_ENERGY_PER_BLOCK every block — that was previously
+    // missing from the strip entirely. Read as the known constant (not
+    // recomputed) since workGigBlock doesn't return the delta actually
+    // applied after clamping.
+    await presentActionOutcome(currentGameState, {
+      id: 'work.block', label: 'Work',
+      outcomeWindow: {
+        tier: 'C', trigger: 'player', dismissal: 'tap',
+        heading: `Work block — ${pct}%`,
+        image: { kind: 'archetype', variant: 'work', phrase: 'focused at a desk working on a computer, a deadline approaching' },
+      },
+    }, {
+      applied: [{ type: 'ADJUST_NEED', params: { who: 'player', need: 'energy', delta: -GIG_ENERGY_PER_BLOCK } }],
+      narration: `You work on "${result.gig.label}". Progress: ${pct}% (${result.gig.blocksDone.toFixed(2)}/${result.gig.blocks} blocks).`,
+      minutesSpent: GIG_TUNING.workBlockMinutes,
+    });
   } finally {
     hideLoading();
   }
@@ -160,6 +178,21 @@ async function doGigDeliver(gigId) {
   renderComputerScreen(currentGameState);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('gig-deliver', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3) / audit finding #12: deliverGig
+  // already runs the payout through applyEffects — it just discarded the
+  // return before. Now it's threaded back rather than re-parsed by hand.
+  await presentActionOutcome(currentGameState, {
+    id: 'gig.deliver', label: 'Deliver',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: result.tierUp ? `Delivered — ${result.tierUp.to}!` : 'Delivered',
+      image: { kind: 'instance', phrase: 'handing over finished work and receiving payment, satisfied' },
+    },
+  }, {
+    applied: result.applied || [],
+    narration: `Delivered "${result.gig.label}"${result.late ? ' (late)' : ''}. +${result.payout}.`,
+    minutesSpent: 0,
+  });
 }
 
 async function doGigAbandon(gigId) {
@@ -624,6 +657,25 @@ async function doAttendLesson(courseId) {
     renderComputerScreen(currentGameState);
     render(currentGameState, currentSceneState);
     await saveAtBoundary('classes-lesson', currentGameState);
+    // action-outcome-window-plan Phase 6 (D3) / audit finding #12: the XP
+    // was already known (result.xpGain/result.course.skillId, exactly what
+    // attendLesson passed to awardSkillXp) but wasn't in the strip — "rides
+    // the narration" undersold it, since ADD_SKILL_XP already has a row
+    // builder. The frame is reused per course (same subject every lesson, D5).
+    await presentActionOutcome(currentGameState, {
+      id: 'classes.attend', label: 'Attend Lesson',
+      outcomeWindow: {
+        tier: 'C', trigger: 'player', dismissal: 'tap',
+        heading: result.completed ? 'Course complete' : 'Lesson done',
+        image: { kind: 'archetype', variant: 'class', phrase: 'sitting in a classroom lesson, notebook and notes' },
+      },
+    }, {
+      applied: [{ type: 'ADD_SKILL_XP', params: { skillId: result.course.skillId, xp: result.xpGain } }],
+      narration: result.completed
+        ? `You finish ${result.course.label}. Certificate unlocked, for whatever that's worth.`
+        : `You attend a lesson in ${result.course.label}. +${result.xpGain} ${result.course.skillId} XP.`,
+      minutesSpent: result.ticks * CLOCK.tickMinutes,
+    });
   } finally {
     hideLoading();
   }
@@ -807,6 +859,17 @@ async function doClassifiedsAccept(npcId, roomId) {
     renderComputerScreen(currentGameState);
     render(currentGameState, currentSceneState);
     await saveAtBoundary('classifieds-accept', currentGameState);
+    // action-outcome-window-plan Phase 6 (D3): a new roommate moving in is
+    // a real beat. Nothing numeric shifts here; the frame is fresh (this
+    // arrival, once).
+    await presentActionOutcome(currentGameState, {
+      id: 'classifieds.accept', label: 'Accept Roommate',
+      outcomeWindow: {
+        tier: 'C', trigger: 'player', dismissal: 'tap',
+        heading: 'A new face',
+        image: { kind: 'instance', phrase: 'welcome, a new roommate arriving with a single suitcase at the door' },
+      },
+    }, { applied: [], narration: `${result.npc.bible.name} moves in. Rent shifts to reflect the new headcount.`, minutesSpent: 0 });
   } finally {
     hideLoading();
   }
@@ -957,10 +1020,21 @@ function doClassifiedsStudioClear() {
 
 // Phase 7: Interview — open an IM thread with the prospective applicant.
 // Creates a thread if none exists and switches to the Messages app.
-function doClassifiedsInterview(npcId) {
+async function doClassifiedsInterview(npcId) {
   if (!npcId) return;
   const npc = currentGameState.npcs[npcId];
   if (!npc) return;
+  // action-outcome-window-plan Phase 6 (D3): interviewing an applicant is a
+  // real beat — what you learned about them, before the IM thread opens.
+  // Fresh frame: this applicant, once.
+  await presentActionOutcome(currentGameState, {
+    id: 'classifieds.interview', label: 'Interview',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: `Interview: ${npc.bible?.name || 'Applicant'}`,
+      image: { kind: 'instance', phrase: 'interviewing an applicant over chat, reading their profile on screen' },
+    },
+  }, { applied: [], narration: `You get to know ${npc.bible?.name || 'the applicant'}. ${npc.bible?.age ? `They're ${npc.bible.age}. ` : ''}A note in their file: ${(npc.personality && npc.personality[0]) || 'quiet, steady'}.`, minutesSpent: 0 });
   // Create a thread so the applicant shows up in the IM contact list
   ensureImThread(currentGameState, npcId);
   // Set the IM app to view this thread
@@ -1405,7 +1479,10 @@ async function doStreamWatch(showId, device) {
 
     const roomObjects = currentGameState.objects[`room_${currentGameState.player.location}`] || {};
     const effCtx = buildEffectContext(currentGameState, [], [], roomObjects, currentGameState.player.inventory || []);
-    applyEffects([{ type: 'ADJUST_NEED', params: { who: 'player', need: 'mood', delta: String(result.show.moodGain) } }], effCtx);
+    // audit finding #12: capture the real return instead of separately
+    // hand-building an identical-looking literal for the outcome window —
+    // the two can no longer drift apart (Design Invariant 1).
+    const streamResult = applyEffects([{ type: 'ADJUST_NEED', params: { who: 'player', need: 'mood', delta: String(result.show.moodGain) } }], effCtx);
 
     await advanceAndResolve(result.show.episodeTicks);
     currentGameState.player = decayPlayerNeeds(currentGameState.player, result.show.episodeTicks * CLOCK.tickMinutes, currentGameState);
@@ -1413,6 +1490,21 @@ async function doStreamWatch(showId, device) {
     renderComputerScreen(currentGameState);
     render(currentGameState, currentSceneState);
     await saveAtBoundary('stream-watch', currentGameState);
+    // action-outcome-window-plan Phase 6 (D3): watching an episode is a
+    // real, time-costing action with a mood delta. The strip reads the mood
+    // effect it actually applied; the frame is a reused still per show (D5).
+    await presentActionOutcome(currentGameState, {
+      id: 'stream.watch', label: 'Stream',
+      outcomeWindow: {
+        tier: 'C', trigger: 'player', dismissal: 'tap',
+        heading: result.show.label,
+        image: { kind: 'archetype', variant: 'stream', phrase: 'curled up watching a show on a screen, the glow on their face' },
+      },
+    }, {
+      applied: (streamResult && streamResult.applied) || [],
+      narration: `You watch episode ${result.episode} of ${result.show.label}.`,
+      minutesSpent: result.show.episodeTicks * CLOCK.tickMinutes,
+    });
   } finally {
     hideLoading();
   }
@@ -1564,6 +1656,17 @@ async function doUpgradeBook(facilityId) {
   renderComputerScreen(currentGameState);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('upgrade-book', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3): booking the planned work is a
+  // real scheduled commitment. The strip reads the upfront cost; the frame is
+  // a reused "planned renovation" archetype (the job repeats, D5).
+  await presentActionOutcome(currentGameState, {
+    id: 'upgrades.book', label: 'Book Work',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: `Work booked — ${def.label}`,
+      image: { kind: 'archetype', variant: 'renovation', phrase: 'a contractor\'s planning sketch and measurements for a renovation, blueprints on the table' },
+    },
+  }, { applied: [{ type: 'SPEND_MONEY', params: { amount: result.cost || 0, reason: `${def.label} booked` } }], narration: `The crew finishes ${formatDate(result.etaDay)}.`, minutesSpent: 0 });
 }
 
 // Structural work (floorplan plan Phase 6). No booking modal: a structural
@@ -1577,10 +1680,21 @@ async function doBookStructural(upgradeId) {
   if (!def) return;
   const result = bookStructuralJob(currentGameState, upgradeId, {});
   if (!result.ok) { addLogEntry('system', result.reason); renderComputerScreen(currentGameState); return; }
-  addLogEntry('narration', `You book the ${def.label} — $${result.cost.toLocaleString()} paid upfront. The crew finishes ${formatDate(result.etaDay)}.`);
+  addLogEntry('narration', `You book the ${def.label} — ${result.cost.toLocaleString()} paid upfront. The crew finishes ${formatDate(result.etaDay)}.`);
   renderComputerScreen(currentGameState);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('structural-book', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3): booking structural work is a
+  // real scheduled commitment. The strip reads the upfront cost; the frame is
+  // a reused "planned structural work" archetype (the job repeats, D5).
+  await presentActionOutcome(currentGameState, {
+    id: 'upgrades.book-structural', label: 'Book Structural Work',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: `Work booked — ${def.label}`,
+      image: { kind: 'archetype', variant: 'renovation', phrase: 'a contractor\'s plan for knocking through a wall, measurements and layout sketched' },
+    },
+  }, { applied: [{ type: 'SPEND_MONEY', params: { amount: result.cost || 0, reason: `${def.label} booked` } }], narration: `The crew finishes ${formatDate(result.etaDay)}.`, minutesSpent: 0 });
 }
 
 // Phase 9: repair facility condition (maintenance without tier upgrade).
@@ -1593,6 +1707,17 @@ async function doUpgradeRepair(facilityId) {
   renderComputerScreen(currentGameState);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('upgrade-repair', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3): a repair is the moment the
+  // facility actually gets fixed. The strip reads the condition restored; the
+  // frame is fresh (this repair, once).
+  await presentActionOutcome(currentGameState, {
+    id: 'upgrades.repair', label: 'Repair',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: `${def.label} restored`,
+      image: { kind: 'instance', phrase: `a repaired ${def.label.toLowerCase()} looking good as new` },
+    },
+  }, { applied: [{ type: 'SPEND_MONEY', params: { amount: result.cost || 0, reason: `${def.label} repair` } }], narration: `You repair the ${def.label} — restored ${result.conditionRestored} condition for ${result.cost}.`, minutesSpent: 0 });
 }
 
 // BrineOS Phase 8.4: a before/after restoration shot. Reuses the same
@@ -1661,6 +1786,7 @@ async function doTaxWithdrawReserve(amount) {
 async function showInterruptionBubble(gameState, npcId, doorState) {
   const npc = gameState.npcs[npcId];
   if (!npc) return;
+  if (typeof presentWorldGate !== 'function') return;
 
   const browser = gameState.world.computer.apps.browser;
   const clips = browser.afterHoursClips;
@@ -1668,122 +1794,43 @@ async function showInterruptionBubble(gameState, npcId, doorState) {
   const clipTitle = clip?.title || 'something';
   const clipCategory = clip?.category || browser.afterHoursCategory || 'adult content';
 
-  // Check if we have pre-generated text for this NPC
+  // Pre-generated text for this NPC shows instantly; otherwise generate
+  // on-demand into the window's narration, with a "footsteps..." line first.
   let text = null;
   if (pendingInterruption && pendingInterruption.npcId === npcId) {
     text = pendingInterruption.text;
     pendingInterruption = null;
   }
-
-  // Create the bubble DOM (no text yet if we need to generate)
-  const bubble = createInterruptionBubble(npc, doorState, text);
-  const container = document.getElementById('computer-screen');
-  if (container) container.appendChild(bubble);
-
-  // If no pre-generated text, generate on-demand with placeholder
+  const heading = npc.bible.name || 'Someone';
   if (!text) {
-    const placeholder = bubble.querySelector('.interrupt-bubble-text');
-    if (placeholder) placeholder.textContent = '...';
-
+    const narration = document.getElementById('aw-narration');
+    if (narration) narration.textContent = '...';
     try {
       const prompt = buildInterruptionPrompt(gameState, npcId, { title: clipTitle, category: clipCategory }, doorState);
-      const generated = await root.generateText(prompt);
-      const textEl = bubble.querySelector('.interrupt-bubble-text');
-      if (textEl) textEl.textContent = generated.trim();
+      text = (await root.generateText(prompt)).trim();
     } catch (e) {
-      // Fallback: a generic line based on personality
-      const fallback = buildInterruptionFallback(npc, doorState);
-      const textEl = bubble.querySelector('.interrupt-bubble-text');
-      if (textEl) textEl.textContent = fallback;
+      text = buildInterruptionFallback(npc, doorState);
     }
   }
 
-  // Wire up the response buttons. dismiss() is single-shot and tears down
-  // its own keydown listener: previously the listener was only removed
-  // inside its own Escape branch, so dismissing with a button left it
-  // armed on `document` forever — a later Escape re-ran dismiss() against
-  // an already-removed bubble, applying the relationship/suspicion
-  // consequences a second time and firing a second saveAtBoundary. One
-  // listener leaked per bubble, and they stacked across a session.
-  const sorryBtn = bubble.querySelector('.interrupt-btn-sorry');
-  const ownBtn = bubble.querySelector('.interrupt-btn-own');
-  let dismissed = false;
-  const dismiss = (response) => {
-    if (dismissed) return;
-    dismissed = true;
-    document.removeEventListener('keydown', escapeHandler);
-    applyInterruptionConsequences(gameState, npcId, doorState, response);
-    bubble.remove();
-    saveAtBoundary('ah-interrupt', gameState);
-  };
-  function escapeHandler(e) {
-    if (e.key === 'Escape') dismiss('sorry');
-  }
-  if (sorryBtn) sorryBtn.addEventListener('click', () => dismiss('sorry'));
-  if (ownBtn) ownBtn.addEventListener('click', () => dismiss('own_it'));
-
-  // Escape is a shortcut for "Sorry!", not a free exit — there's no
-  // consequence-free way out of being walked in on, and the earlier
-  // comment here claimed otherwise. Clicking the backdrop does the same.
-  const overlay = bubble.querySelector('.interrupt-bubble-overlay');
-  if (overlay) overlay.addEventListener('click', () => dismiss('sorry'));
-  document.addEventListener('keydown', escapeHandler);
-}
-
-// Create the bubble DOM element
-function createInterruptionBubble(npc, doorState, text) {
-  const bubble = document.createElement('div');
-  bubble.className = 'interrupt-bubble';
-
-  const name = npc.bible.name || 'Someone';
-  const initial = name.charAt(0);
-  const color = hashToColor(name);
-
-  const doorNote = doorState === 'locked'
-    ? 'They knocked first — your door was locked.'
-    : doorState === 'closed'
-    ? 'Your door was closed but unlocked.'
-    : 'Your door was open.';
-
-  buildBubbleCard(bubble, { color, initial, name, note: doorNote, text }, [
-    { cls: 'interrupt-btn-sorry', label: 'Sorry!' },
-    { cls: 'interrupt-btn-own', label: 'Own it' },
-  ]);
-
-  return bubble;
-}
-
-// Shared DOM builder for both bubbles. `name` comes from a character bible
-// and `text` straight from generateText — neither is safe to interpolate
-// into an innerHTML template, which is what both bubbles used to do. Only
-// the fixed skeleton is markup; every value is set through textContent.
-function buildBubbleCard(bubble, { color, initial, name, note, text }, buttons) {
-  bubble.innerHTML = `
-    <div class="interrupt-bubble-overlay"></div>
-    <div class="interrupt-bubble-card">
-      <div class="interrupt-bubble-header">
-        <div class="interrupt-bubble-avatar"></div>
-        <div class="interrupt-bubble-name"></div>
-        <div class="interrupt-bubble-door dim tiny"></div>
-      </div>
-      <div class="interrupt-bubble-text"></div>
-      <div class="interrupt-bubble-actions"></div>
-    </div>
-  `;
-  const avatar = bubble.querySelector('.interrupt-bubble-avatar');
-  avatar.style.background = color;
-  avatar.textContent = initial;
-  bubble.querySelector('.interrupt-bubble-name').textContent = name;
-  bubble.querySelector('.interrupt-bubble-door').textContent = note;
-  bubble.querySelector('.interrupt-bubble-text').textContent = text || '...';
-
-  const actions = bubble.querySelector('.interrupt-bubble-actions');
-  for (const b of buttons) {
-    const btn = document.createElement('button');
-    btn.className = `btn ${b.cls}`;
-    btn.textContent = b.label;
-    actions.appendChild(btn);
-  }
+  // The world opened this (the player was walked in on), so it is a gate
+  // (D7): it asks rather than reporting. The two answers are the old bubble's
+  // "Sorry!" and "Own it", and the consequences applied are EXACTLY the old
+  // bubble's — a gate does not invent a new cost, it only changes the surface
+  // (D18: byte-identical behavior, only the DOM moved).
+  const answer = await presentWorldGate(gameState, {
+    tier: 'B',
+    heading,
+    narration: text,
+    defaultChoice: 'sorry',
+    choices: [
+      { id: 'sorry', label: 'Sorry!' },
+      { id: 'own_it', label: 'Own it' },
+    ],
+  });
+  if (answer === null) return;
+  applyInterruptionConsequences(gameState, npcId, doorState, answer);
+  await saveAtBoundary('ah-interrupt', gameState);
 }
 
 // Fallback line if LLM generation fails
@@ -1805,8 +1852,8 @@ function buildInterruptionFallback(npc, doorState) {
 
 // ===== SECTION: NPC CAUGHT PEEPING BUBBLE =====
 // Phase 6: the mirror of the interruption bubble — shown when the player
-// catches an NPC peeping on them. Reuses the Phase 5 bubble DOM structure
-// and CSS (.interrupt-bubble, .interrupt-bubble-card, etc). The NPC's line
+// catches an NPC peeping on them. Renders through the shared action-window
+// gate (Phase 4, D18) instead of a bespoke bubble. The NPC's line
 // is AI-generated via buildNpcCaughtPeepingPrompt. Player response options
 // are "What are you doing?!" (confront), "...come in." (invite), and
 // "Get out." (cold) — each applies different tension/affection deltas.
@@ -1814,79 +1861,39 @@ function buildInterruptionFallback(npc, doorState) {
 async function showNpcCaughtPeepingBubble(gameState, npcId, playerState) {
   const npc = gameState.npcs[npcId];
   if (!npc) return;
+  if (typeof presentWorldGate !== 'function') return;
 
-  // Create the bubble DOM (no text yet — we need to generate)
-  const bubble = createNpcCaughtPeepingBubble(npc, playerState, null);
-  const container = document.getElementById('computer-screen') || document.getElementById('main-content');
-  if (container) container.appendChild(bubble);
-  else document.body.appendChild(bubble);
-
-  // Generate the NPC's reaction text
-  const placeholder = bubble.querySelector('.interrupt-bubble-text');
-  if (placeholder) placeholder.textContent = '...';
-
+  // Generate the NPC's reaction text into the window's narration, with a
+  // "..." line first.
+  const narration = document.getElementById('aw-narration');
+  if (narration) narration.textContent = '...';
   let text = null;
   try {
     const prompt = buildNpcCaughtPeepingPrompt(gameState, npcId, playerState);
-    const generated = await root.generateText(prompt);
-    text = generated.trim();
+    text = (await root.generateText(prompt)).trim();
   } catch (e) {
     text = buildNpcCaughtPeepingFallback(npc);
   }
 
-  const textEl = bubble.querySelector('.interrupt-bubble-text');
-  if (textEl) textEl.textContent = text;
-
-  // Wire up the three response buttons. Single-shot dismiss that removes
-  // its own keydown listener — same leak/double-apply as the interruption
-  // bubble; see the comment in showInterruptionBubble.
-  const confrontBtn = bubble.querySelector('.peep-btn-confront');
-  const inviteBtn = bubble.querySelector('.peep-btn-invite');
-  const coldBtn = bubble.querySelector('.peep-btn-cold');
-  let dismissed = false;
-  const dismiss = (response) => {
-    if (dismissed) return;
-    dismissed = true;
-    document.removeEventListener('keydown', escapeHandler);
-    applyNpcPeepConsequences(gameState, npcId, response, playerState);
-    bubble.remove();
-    saveAtBoundary('npc-peep-caught', gameState);
-  };
-  function escapeHandler(e) {
-    if (e.key === 'Escape') dismiss('confront');
-  }
-  if (confrontBtn) confrontBtn.addEventListener('click', () => dismiss('confront'));
-  if (inviteBtn) inviteBtn.addEventListener('click', () => dismiss('invite'));
-  if (coldBtn) coldBtn.addEventListener('click', () => dismiss('cold'));
-
-  // Escape / backdrop click both dismiss as confront (default reaction)
-  const overlay = bubble.querySelector('.interrupt-bubble-overlay');
-  if (overlay) overlay.addEventListener('click', () => dismiss('confront'));
-  document.addEventListener('keydown', escapeHandler);
-}
-
-function createNpcCaughtPeepingBubble(npc, playerState, text) {
-  const bubble = document.createElement('div');
-  bubble.className = 'interrupt-bubble';
-
-  const name = npc.bible.name || 'Someone';
-  const initial = name.charAt(0);
-  const color = hashToColor(name);
-
-  const stateNote = {
-    masturbating: 'They were watching you masturbate.',
-    showering: 'They were watching you shower.',
-    sleeping: 'They were watching you sleep.',
-    undressed: 'They were watching you change.',
-  }[playerState] || 'They were watching you.';
-
-  buildBubbleCard(bubble, { color, initial, name, note: stateNote, text }, [
-    { cls: 'peep-btn-confront', label: NPC_PEEP_RESPONSES.confront.label },
-    { cls: 'peep-btn-invite', label: NPC_PEEP_RESPONSES.invite.label },
-    { cls: 'peep-btn-cold', label: NPC_PEEP_RESPONSES.cold.label },
-  ]);
-
-  return bubble;
+  // The world opened this (an NPC was caught peeping), so it is a gate
+  // (D7): it asks rather than reporting. The three answers are the old
+  // bubble's (confront / invite / cold), and the consequences applied are
+  // EXACTLY the old bubble's (D18: byte-identical behavior, only the DOM
+  // moved).
+  const answer = await presentWorldGate(gameState, {
+    tier: 'B',
+    heading: npc.bible.name || 'Someone',
+    narration: text,
+    defaultChoice: 'confront',
+    choices: [
+      { id: 'confront', label: NPC_PEEP_RESPONSES.confront.label },
+      { id: 'invite', label: NPC_PEEP_RESPONSES.invite.label },
+      { id: 'cold', label: NPC_PEEP_RESPONSES.cold.label },
+    ],
+  });
+  if (answer === null) return;
+  applyNpcPeepConsequences(gameState, npcId, answer, playerState);
+  await saveAtBoundary('npc-peep-caught', gameState);
 }
 
 // Apply consequences based on player's response to catching the NPC

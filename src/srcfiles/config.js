@@ -1291,6 +1291,58 @@ const COMMITMENT_TUNING = {
   retainedDays: 7,
 };
 
+// --- `sit`: who ends up at the table (action-outcome-window-plan D12/D22) ---
+// The instant the player sits, the game answers "who shows up in the next 45
+// minutes?" in CLOSED FORM — no real waiting, no ticks, no walk simulation.
+// Confirmed guests are not rolled for at all: they said yes, so they arrive.
+// Everyone else is a walk-in candidate, and a candidate has to clear three
+// bars in order — can they know (signals), would they want to (interest), do
+// they get a seat (the cap).
+const SIT_TUNING = {
+  // The window `sit` resolves, in game-minutes. Nothing waits it out; the
+  // number is what the fiction says elapsed, and what the action costs.
+  windowMinutes: 45,
+
+  // D23 — four AT THE TABLE, counting the player. So three NPC seats, which
+  // is the same ceiling group conversation has always had: a bigger table
+  // means a context window nobody can weigh properly. Raise both together or
+  // neither.
+  maxSeats: 4,
+
+  // Invited guests are seated FIRST and unconditionally, so a walk-in can
+  // never take a confirmed guest's chair (D23). If confirmed guests alone
+  // exceed the cap, the walk-in roll does not run at all.
+  //
+  // How strongly a perceived food signal argues for wandering in. The signal
+  // substrate (SIGNALS' perceiveSignals) is what decides whether an NPC could
+  // possibly know a meal is happening — an NPC who perceives nothing is not a
+  // candidate at any interest level, which is the whole reason D12 leans on
+  // signals rather than a bespoke proximity roll.
+  signalWeight: 0.45,
+  // Being in the room already, or one step away, argues for it too — you do
+  // not need to smell dinner to notice it happening in front of you.
+  presentBonus: 0.35,
+  adjacentBonus: 0.15,
+  // Affection and hunger are the two motives. Hunger is the one D5 excepts
+  // for overtures (needs do not motivate an overture) — but this is not an
+  // overture, it is a meal, and being hungry is the most legible reason a
+  // person joins one.
+  affectionWeight: 0.40,
+  hungerWeight: 0.50,
+  // `hunger` is a 0..100 SATIATION need like every other one here — low means
+  // hungry. So hunger AT OR ABOVE this contributes nothing: someone who has
+  // just eaten is not drawn in by the smell of food. Below it, the term ramps
+  // toward 1 as they approach empty.
+  hungerFull: 60,
+  // A scheduled meal LOWERS the walk-in chance but never zeroes it (D12,
+  // explicit): a planned dinner reads as a private thing, not a closed one.
+  scheduledDamping: 0.55,
+  // The final chance is clamped here. The ceiling is what stops a well-liked,
+  // hungry roommate from joining literally every meal.
+  minChance: 0.0,
+  maxChance: 0.65,
+};
+
 // What kinds of thing the household can agree to do together (initiative plan
 // Phase 4, D8). commitments.js's header has anticipated a non-'meal' kind since
 // it was written — "the same table later serves movie nights, chore agreements,
@@ -7178,7 +7230,15 @@ const ACTION_TUNING = {
   // Phase 7 (D7): laying out and eating a proper shared meal takes a real
   // stretch of clock — longer than a solo bite (INVENTORY_TUNING
   // useTimeMinutes meal: 25), shorter than cooking a dish from scratch.
+  //
+  // action-outcome-window-plan Phase 3 (D10) SPLIT this. `set_meal` now only
+  // lays the table (setTableMinutes) and `sit` is the meal itself
+  // (SIT_TUNING.windowMinutes). The two still sum to about the old 40 — the
+  // meal did not get longer, it got divisible, which is what lets someone
+  // walk in between the food going down and the player sitting.
+  // Kept because save-compat readers and the old harnesses still name it.
   setMealMinutes: 40,
+  setTableMinutes: 10,
   // Food-overhaul Phase 3 (D26/D27): the interim stove reheat — faster than
   // waiting out THAW_TUNING for a frozen batch, and the whole kitchen touch
   // that earns a betterHot plate its mood bonus at the table. Phase 6's

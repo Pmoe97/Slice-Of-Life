@@ -635,4 +635,137 @@ function ageOverture(gameState, npcId, resolved) {
   return npc.overture;
 }
 
+// --- Meal joining (action-outcome-window-plan Phase 3, D12/D22/D23) --------
+// "Can I join you?" is an overture in everything but name: an NPC decides,
+// off their own motives, to direct something at the player and wait on an
+// answer. So it lives here with the rest of what that means, and it reuses
+// this file's limiter (overtureRefusalScale) rather than growing a second
+// curve — turning someone down at the table is the same kind of no as turning
+// down an approach, and an NPC who has been refused twice this week should ask
+// less often for BOTH reasons at once.
+//
+// What it deliberately does NOT reuse: `npc.overture` itself. A join ask is
+// answered inside the `sit` window, in the same breath it is made — it never
+// outlives the moment, so it never needs a pending record, an age-out, or a
+// hold. Writing one would mean inventing a lapse path for a question that
+// cannot go unanswered.
+//
+// EVERYTHING HERE IS PURE. It reads state and returns numbers; `sit` does the
+// rolling and the writing. That split is what lets the window show the ask
+// without the window deciding anything (Design invariant 1).
+
+// Is this NPC in a position to walk in at all? Not about wanting to — about
+// being able to. Mirrors the bars an overture clears, minus the ones that are
+// meaningless here (proximity is scored rather than gated, because "how far
+// away are they" is exactly what the signal term is measuring).
+function mealJoinEligible(gameState, npcId, roomId) {
+  const npc = gameState && gameState.npcs && gameState.npcs[npcId];
+  if (!npc) return { eligible: false, reason: 'no_npc' };
+  // A resident of the flat, present in it. A guest or an offsite NPC is not
+  // wandering into your kitchen.
+  if (!npc.location) return { eligible: false, reason: 'offsite' };
+  // The same suppression an overture respects: someone giving you the cold
+  // shoulder does not ask to share your dinner.
+  if (typeof coldShoulderSuppressesOvertures === 'function' && coldShoulderSuppressesOvertures(npc)) {
+    return { eligible: false, reason: 'cold_shoulder' };
+  }
+  // Asleep, at work, or commuting — probed through resolveScheduleActivity
+  // against the CURRENT clock, exactly the way respondToCommitment probes the
+  // proposed slot, and refused on the same `busyBlocks` list. (`npc.activity`
+  // is a display string like 'at work', not a block id, so it is the wrong
+  // thing to test — the block is what the schedule actually says.)
+  if (typeof resolveScheduleActivity === 'function' && gameState.meta && gameState.meta.clock) {
+    const { block } = resolveScheduleActivity(npc, gameState.meta.clock);
+    if (COMMITMENT_TUNING.busyBlocks.includes(block)) return { eligible: false, reason: block };
+  }
+  return { eligible: true, reason: null };
+}
+
+// How strongly does the meal reach this NPC, 0..1? The signal substrate is
+// the primary answer (D12): perceiveSignals already models smell drifting
+// further than sound and sight barely leaving its room, and it already knows
+// about closed doors and headphones. Presence and adjacency are added on top
+// because you do not need to SMELL a dinner that is happening in front of you.
+//
+// Returns { reach, perceived, present, adjacent } — the parts as well as the
+// total, because `sit`'s narration wants to say HOW they noticed.
+function mealJoinReach(gameState, npcId, roomId) {
+  const npc = gameState.npcs[npcId];
+  const npcRoom = npc && npc.location;
+  if (!npcRoom) return { reach: 0, perceived: 0, present: false, adjacent: false };
+
+  const present = npcRoom === roomId;
+  const adjacent = !present && typeof isRoomAdjacent === 'function' && isRoomAdjacent(npcRoom, roomId);
+
+  // What they actually perceive of the FOOD, from where they are standing.
+  // Scoped to signals originating in the meal's room so an unrelated pot on a
+  // different stove cannot pull someone to this table.
+  let perceived = 0;
+  if (typeof perceiveSignals === 'function') {
+    for (const rec of perceiveSignals(gameState, npcId, npcRoom) || []) {
+      if (rec.sourceRoomId !== roomId) continue;
+      if (rec.signalId !== 'cooking') continue;
+      perceived = Math.max(perceived, rec.intensity);
+    }
+  }
+
+  const reach = clamp(
+    perceived * SIT_TUNING.signalWeight
+      + (present ? SIT_TUNING.presentBonus : 0)
+      + (adjacent ? SIT_TUNING.adjacentBonus : 0),
+    0, 1);
+  return { reach, perceived, present, adjacent };
+}
+
+// Would they want to? Affection and hunger, scaled by the reach above and
+// damped by a scheduled meal — a planned dinner reads as a private thing, but
+// never a closed one (D12: lowers, never zeroes).
+//
+// Returns { chance, reach, terms } with everything the caller needs to explain
+// the number, because a chance nobody can account for is a chance nobody can
+// tune.
+function mealJoinChance(gameState, npcId, roomId, opts = {}) {
+  const npc = gameState.npcs[npcId];
+  const { reach, perceived, present, adjacent } = mealJoinReach(gameState, npcId, roomId);
+  if (reach <= 0) return { chance: 0, reach, terms: { blocked: 'no_reach' } };
+
+  const rel = (npc && npc.relPlayer) || {};
+  const affection = Math.max(0, rel.affection || 0);
+  const hunger = (npc && npc.needs && typeof npc.needs.hunger === 'number') ? npc.needs.hunger : 100;
+  // Ramps 0 → 1 as satiation falls from hungerFull to empty.
+  const hungerTerm = hunger >= SIT_TUNING.hungerFull
+    ? 0 : (SIT_TUNING.hungerFull - hunger) / SIT_TUNING.hungerFull;
+
+  const motive = affection * SIT_TUNING.affectionWeight + hungerTerm * SIT_TUNING.hungerWeight;
+  const day = gameState.meta && gameState.meta.clock ? gameState.meta.clock.day : 0;
+  const limiter = overtureRefusalScale(npc, day);
+  const damping = opts.scheduled ? SIT_TUNING.scheduledDamping : 1;
+
+  const chance = clamp(motive * reach * limiter * damping, SIT_TUNING.minChance, SIT_TUNING.maxChance);
+  return {
+    chance, reach,
+    terms: { affection, hunger, hungerTerm, motive, limiter, damping, perceived, present, adjacent },
+  };
+}
+
+// Everyone who is NOT already a confirmed guest, with their chance of asking.
+// Pure and UNROLLED — `sit` rolls, because a function that both computes a
+// chance and consumes randomness cannot be re-read to explain what it did.
+// Sorted strongest-first so a seat-capped table gives its remaining chairs to
+// the people most likely to want them.
+function mealJoinCandidates(gameState, roomId, opts = {}) {
+  const exclude = new Set(opts.exclude || []);
+  const out = [];
+  for (const npcId of Object.keys((gameState && gameState.npcs) || {})) {
+    if (exclude.has(npcId)) continue;
+    const elig = mealJoinEligible(gameState, npcId, roomId);
+    if (!elig.eligible) continue;
+    const scored = mealJoinChance(gameState, npcId, roomId, opts);
+    if (scored.chance <= 0) continue;
+    out.push({ npcId, npc: gameState.npcs[npcId], ...scored });
+  }
+  out.sort((a, b) => b.chance - a.chance);
+  return out;
+}
+
 // ===== /SECTION: OVERTURE =====

@@ -12,6 +12,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "8735"],
       "port": 8735
+    },
+    {
+      "name": "slice-of-life-dreams",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8736"],
+      "port": 8736
     }
   ]
 }

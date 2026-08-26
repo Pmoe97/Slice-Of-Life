@@ -906,6 +906,281 @@ async function callChronicler(gameState, npcId, win) {
   }
 }
 
+// ===== Dream Engine Phase 5 — the Dreamweaver =====
+// (src/ref/complete/dream-engine-plan.md)
+//
+// The one model call in the whole dream pipeline, and the most tightly fenced
+// call in the codebase. compileDream (dreams.js) has already decided the form,
+// the panel count, each panel's beat, the perspective, tempo, register, lens,
+// distortion, setting, cast and motif, and has already frozen each panel's
+// image prompt. This call writes PROSE INTO THAT SKELETON and does nothing
+// else — D1, and every rule below serves it.
+//
+// Why it sits here and its parser does not: same split as the Assessor and the
+// Chronicler. The prompt and the call are LLM's; reading the reply, cleaning
+// it and the templated fallback are pure and live in dreams.js. This function
+// returns { ok, panels } and writes nothing, including to the dream record —
+// applyDreamPanelText is what applies it.
+//
+// Three things a later edit will be tempted to do and must not:
+//   1. Ask the model for a title, a mood, a register or "how many panels this
+//      wants to be". Every one of those is a structural decision that
+//      defs.dreams.js already made, and asking re-opens the door D1 shut.
+//   2. Hand it the residue as instructions. The fragments are RAW MATERIAL,
+//      explicitly unordered and non-obligatory, and the prompt says so twice
+//      because a list under a heading reads as a checklist to a model and a
+//      panel that dutifully works through four fragments is a summary of the
+//      player's week, not a dream.
+//   3. Let a failure be an exception. A dream that throws on the background
+//      pre-generation path presents as a silently dreamless playthrough. Every
+//      failure here returns ok:false and the caller templates the dream.
+
+// The cast, by name, with the stance that decides how the dream treats them.
+// Deliberately NOT relationshipDirective(): that function is written as
+// instructions to the NPC ("You barely know them"), which is the wrong voice
+// and the wrong subject — a dream is not a conversation and the NPC is not
+// answering. This is the dreamer's read on them, which is all a dream has.
+//
+// `role` is the compiler's, not the model's: 'figure' is the dream's subject,
+// 'witness' is present and does not intervene, and 'absent' means the dream is
+// about them NOT being there — the panel's image was already composed around
+// the empty space, so a panel that walks them through the door contradicts its
+// own picture.
+function buildDreamCastBlock(gs, dream) {
+  const cast = Array.isArray(dream.cast) ? dream.cast : [];
+  if (cast.length === 0) {
+    return 'WHO IS IN IT: nobody. There are no other people in this dream and none arrive. Do not invent one, do not give the dreamer a companion, and do not have a voice address them.\n';
+  }
+  const lines = cast.map((member) => {
+    const npc = gs?.npcs?.[member.npcId];
+    const name = npc?.bible?.name || 'someone';
+    const rel = npc?.relPlayer || {};
+    const roleLine = member.role === 'absent'
+      ? 'ABSENT — the dream is about them not being here. Their place in it is a space where they should be. They never arrive, are never seen, and nobody explains where they are.'
+      : (member.role === 'witness'
+        ? 'WITNESS — present the whole time and does not intervene. They do not help, do not obstruct, and do not leave.'
+        : 'FIGURE — the dream is about them. They are the subject of it.');
+    return `- ${name}: ${roleLine}\n  How the dreamer holds them: ${dreamCastStance(rel)}`;
+  });
+  return `WHO IS IN IT (these people and no others — do not add a third, do not name a stranger):\n${lines.join('\n')}\n`;
+}
+
+// The dreamer's read on one person, from the relationship axes. Short and
+// unhedged on purpose: a dream does not weigh a relationship, it takes one
+// position on it and stages that. Falls through to a neutral line rather than
+// an empty string so the prompt never has a dangling label.
+function dreamCastStance(rel) {
+  const bits = [];
+  if ((rel.tension || 0) > 0.4) bits.push('something between them is unresolved and neither has said it');
+  if ((rel.desire || 0) > 0.4) bits.push('the dreamer wants them and has not acted on it');
+  else if ((rel.desire || 0) < -0.3) bits.push('the dreamer keeps finding reasons to be elsewhere');
+  if ((rel.affection || 0) > 0.4) bits.push('the dreamer is fond of them without saying so');
+  else if ((rel.affection || 0) < -0.2) bits.push('the dreamer does not much like them');
+  if ((rel.trust || 0) > 0.5) bits.push('the dreamer trusts them');
+  if ((rel.comfort || 0) > 0.5) bits.push('the dreamer is physically easy around them');
+  return bits.length > 0 ? bits.join('; ') : 'someone the dreamer lives beside and has not worked out yet';
+}
+
+// The raw material. Everything about how this block is worded is load-bearing:
+// the fragments come out of the harvester loudest-first, and a model handed a
+// ranked list under a heading will work through it like a brief. So the
+// heading says unordered, the rules block says non-obligatory, and the count
+// is never stated as a target.
+function buildDreamResidueBlock(dream) {
+  const residue = Array.isArray(dream.residue) ? dream.residue.filter(f => f && f.text) : [];
+  if (residue.length === 0) {
+    return 'WHAT THE DAY LEFT BEHIND: nothing in particular. Build the dream out of the form, the place and the recurring thing alone.\n';
+  }
+  return `WHAT THE DAY LEFT BEHIND — raw material, in no order, and NOT a list of things to include:
+${residue.map(f => `- ${f.text}`).join('\n')}
+Use one of these, or a piece of one, or none. A dream that works through all of them is a summary of somebody's week and not a dream.
+`;
+}
+
+// The true-dream replacement for the residue block (Phase 9, D9). Where the
+// residue block hands the writer raw material it may use or ignore, this
+// hands it ONE thing that actually happened and tells it to replay it
+// faithfully, from the outside, without commentary. The clause was already
+// redacted at harvest time, so the model never has to reason about what is
+// safe to say - and the block says the event is the truth of the dream so the
+// writer does not decorate it into a metaphor, which is the whole point of
+// the class (D9).
+function buildDreamReplayBlock(dream) {
+  const f = (Array.isArray(dream.residue) ? dream.residue : []).find((x) => x && x.text);
+  if (!f) {
+    return 'THE EVENT TO REPLAY: none — this dream replays a moment the dreamer missed, but the record is empty. Build the panels out of the form and the place alone.\n';
+  }
+  return `THE EVENT TO REPLAY — this actually happened, and the dreamer was not there for it. Replay it faithfully, from the outside, without commentary:
+- ${f.text}
+This is the truth of the dream. Do not improve on it, do not moralise it, do not add meaning to it.
+`;
+}
+
+// The prompt. Order is deliberate and matches the plan: the form and its beats
+// first (that is the thing being filled in), then how it is told, then who is
+// in it, then the recurring anchor, then the raw material, then the rules.
+//
+// Every directive below is read out of defs.dreams.js by id off the compiled
+// record. Nothing here is authored in this file — that is what makes adding a
+// register or a lens a data edit and nothing else (D6). If a table lookup
+// misses, its line is dropped rather than defaulted, because a made-up
+// directive is worse than a missing one.
+function buildDreamPrompt(gs, dream) {
+  const s = dream.slots || {};
+  const form = DREAM_FORMS[s.form];
+  const beats = (form && Array.isArray(form.beats)) ? form.beats : [];
+  const n = beats.length;
+  const isTrue = dream.kind === 'true';
+  const isRecurring = dream.kind === 'recurring';
+  // The diary entry a recurring dream re-runs, for the one beat that shifted
+  // against it. The record stores recurrenceOf, not the origin itself, so the
+  // diary is the one place to look and a hand-edited diary is the one way to
+  // come up empty - in which case the shift line just drops the quotation.
+  const origin = isRecurring
+    ? (Array.isArray(gs?.world?.dreams?.diary) ? gs.world.dreams.diary : []).find((d) => d && d.id === dream.recurrenceOf)
+    : null;
+
+  // The panel-by-panel spine. Numbered so the reply's array order is
+  // unambiguous, and each beat's id is stated so the reply can carry it back.
+  // A TRUE dream swaps in the beat's replay directive, which turns the same
+  // beat shapes into phases of a faithful replay (D9); a RECURRING dream
+  // reuses the origin's directives, and the one re-rolled beat gets a line
+  // that names the change against the last time (D11).
+  const beatLines = beats.map((b, i) => {
+    const head = `PANEL ${i + 1} (beat id "${b.id}"): `;
+    if (isTrue) return head + (b.replayDirective || b.directive);
+    if (isRecurring && b.id === dream.shiftedBeat) {
+      const lastTime = (origin && Array.isArray(origin.panels) && origin.panels[i] && origin.panels[i].text)
+        ? ` Last time it read: "${origin.panels[i].text}".`
+        : '';
+      return head + `The same panel as the last time this dream happened, EXCEPT one small specific thing is different — an object, a detail, a placement, a word someone said.${lastTime} Describe the difference once, flatly; nobody remarks on it and nothing else about the panel changes.`;
+    }
+    return head + (b.directive || '');
+  }).join('\n\n');
+
+  const told = [
+    ['PERSPECTIVE', DREAM_PERSPECTIVES[s.perspective]],
+    ['PACE', DREAM_TEMPO[s.tempo]],
+    ['TONE', DREAM_REGISTERS[s.register]],
+    ['WHERE IT HAPPENS', DREAM_SETTINGS[s.setting?.settingId]],
+    // D9: a true dream's place is exactly right, so the distortion line is
+    // relabelled rather than dropped - 'none' still carries a directive the
+    // writer needs ("an ordinary space, accurately and unremarkably
+    // rendered").
+    [isTrue ? 'THE PLACE' : 'WHAT IS WRONG WITH THE PLACE', DREAM_DISTORTIONS[s.distortion]],
+    ['HOW IT LOOKS', DREAM_LENSES[s.lens]],
+  ].filter(([, entry]) => entry && entry.directive)
+    .map(([label, entry]) => `${label}: ${entry.directive}`)
+    .join('\n');
+
+  // The apartment case names the actual room, so the writer furnishes the
+  // room the player lives in rather than a generic one. Read through
+  // roomPhrase (config.js) rather than restated here — design invariant 7.
+  const roomLine = (s.setting?.sourceKind === 'apartment' && s.setting.roomId)
+    ? `\nTHE ROOM: ${roomPhrase(s.setting.roomId)}. It is the dreamer's own home and they know it well. Furnish it from that; do not add a floor, a wing or a neighbour the flat does not have.`
+    : '';
+
+  const motifDirective = dreamMotifDirective(gs, dream.motif);
+  const motifBlock = (dream.motif && dream.motif.text)
+    ? `\nTHE RECURRING THING — it appears in this dream and is never explained:\n- ${dream.motif.text}${motifDirective ? `\n  ${motifDirective}` : ''}${dream.motif.carriedFrom ? '\n  It has been in one of this dreamer\'s dreams before. Do not say so and do not have them recognise it.' : ''}\n`
+    : '';
+
+  const panelWord = n === 1 ? 'panel' : 'panels';
+
+  const shapeLine = isTrue
+    ? 'THE SHAPE OF IT: A real thing that happened, replayed as a dream. Every panel is a phase of faithfully reconstructing one event the dreamer never saw. The form below fixes how the replay is staged; the event it replays is the truth every panel serves.'
+    : `THE SHAPE OF IT: ${form ? form.directive : 'A dream in one held image.'}`;
+
+  const materialBlock = isTrue ? buildDreamReplayBlock(dream) : buildDreamResidueBlock(dream);
+
+  const truthRule = isTrue
+    ? 'Everything you describe is real and happened. Render it accurately, the way a reliable witness would, from the outside. Nothing in this dream is symbolic; do not reach for a metaphor where the fact will do.'
+    : 'State the impossible thing flatly, once, and never explain it. Nobody in a dream is surprised by the dream.';
+
+  const recurrenceRule = isRecurring
+    ? '\n- This dream has happened before. Do not have the dreamer recognise it as a repeat, and do not explain the recurrence.'
+    : '';
+
+  return `You are writing the prose for a dream. Everything about its shape has already been decided — the number of ${panelWord}, what each one is, who is in it, where it happens, how it is told and how it looks. You are not designing a dream. You are writing the words for one that already exists.
+
+${shapeLine}
+
+THIS DREAM HAS EXACTLY ${n} ${panelWord.toUpperCase()}. Write ${n === 1 ? 'it' : 'each of them'} and no more.
+
+${beatLines}
+
+HOW IT IS TOLD:
+${told}${roomLine}
+
+${buildDreamCastBlock(gs, dream)}${motifBlock}
+${materialBlock}
+RESPOND WITH VALID JSON AND NOTHING ELSE — one entry per panel, in order:
+{ "panels": [ ${beats.map(b => `{ "beat": "${b.id}", "text": "..." }`).join(', ')} ] }
+
+RULES — these are the difference between a dream and a generated paragraph, and none of them are optional:
+- Present tense throughout. Every panel.
+- ${DREAM_TUNING.panelWordMin} to ${DREAM_TUNING.panelWordMax} words per panel. Not a sentence, not an essay.
+- Concrete physical nouns. A named object beats an atmosphere every time. If you cannot picture it, do not write it.
+- ${truthRule}
+- NEVER end on waking, on an alarm, on opening your eyes, or on the dreamer realising it was a dream.
+- NEVER write "suddenly", "somehow I knew", "I realised", "I understood", "it dawned on", or "as if".
+- NEVER name the emotion. Not afraid, not sad, not aroused, not happy. Put it in the body and in the objects and let the reader do the rest.
+- NEVER reach for stock dream furniture — flying, falling, teeth, being naked in public, chased by something unseen — unless the panel above explicitly asked for it.
+- No framing device. No "the dream begins", no "in the dream", no narrator standing outside it.
+- Do not resolve anything. Do not have the dreamer decide, understand, or get out.
+- Do not name a place, employer, street or institution. This dream is not allowed to assert a location the world has never heard of.
+- Do not write dialogue unless a panel asked for it, and never more than one line.${recurrenceRule}
+- Do not explain yourself, do not add commentary, do not use markdown. JSON only.`;
+}
+
+// The call. Returns { ok, panels } where `panels` is an array of exactly
+// dream.panels.length prose strings, ready for applyDreamPanelText.
+//
+// Same one-retry-on-parse-failure rule as callAssessor and callChronicler
+// (the 2026-08-17 audit's U3 amendment), and for the same reason: a failed
+// parse wrote nothing, so a single re-roll cannot double-apply anything. The
+// difference is what happens after the retry — the judges no-op, and this one
+// hands the caller ok:false so buildDreamFallback can template the dream
+// instead. A dream is a thing the player is about to LOOK at; there is
+// always something to fall back to, and a blank window is not it.
+//
+// LLM never writes state (this file's contract): nothing here touches the
+// dream record, world.dreams, or anything else. The strings are returned.
+async function callDreamweaver(gameState, dream) {
+  const panelCount = Array.isArray(dream?.panels) ? dream.panels.length : 0;
+  if (!dream || panelCount === 0) return { ok: false, panels: [], reason: 'no panels' };
+  if (!DREAM_FORMS[dream.slots?.form]) return { ok: false, panels: [], reason: 'unknown form' };
+  try {
+    const run = async () => {
+      const response = await root.generateText({
+        instruction: buildDreamPrompt(gameState, dream),
+        startWith: '{',
+      });
+      return parseDreamweaverReply(response, dream);
+    };
+    let parsed = await run();
+    if (parsed === null) {
+      console.warn('Dreamweaver reply unparseable; retrying once');
+      parsed = await run();
+    }
+    if (parsed === null) {
+      // Tier 4 is "nothing recoverable", exactly as in callLLM. Recorded
+      // rather than swallowed: a dream engine that quietly templates every
+      // dream looks identical from the outside to one that is working, which
+      // is the failure mode this project has been bitten by before.
+      recordParseTier(4);
+      console.warn('Dreamweaver reply unparseable on retry; dream falls back to templated prose');
+      return { ok: false, panels: [], reason: 'unparseable' };
+    }
+    recordParseTier(parsed.tier);
+    return { ok: true, panels: parsed.panels };
+  } catch (e) {
+    recordParseTier(4);
+    console.warn('Dreamweaver call failed:', e.message);
+    return { ok: false, panels: [], reason: e.message };
+  }
+}
+
 // --- Call LLM and parse response ---
 async function callLLM(context, playerAction) {
   const prompt = buildScenePrompt(context, playerAction);

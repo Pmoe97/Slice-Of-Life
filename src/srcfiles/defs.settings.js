@@ -36,7 +36,51 @@ const SETTINGS_DEFAULTS = {
   sceneVisualizerMode: 'off',     // id from SCENE_VIS_MODES
   sceneVisualizerEveryN: '3',     // id from SCENE_VIS_EVERY_N_OPTIONS, read
                                   // only when sceneVisualizerMode === 'everyN'
+  // Dream Engine D17: three flat fields, for exactly the reason the F3 block
+  // above gives — doSettingsCycle (menu.js) reads/writes 'cycle' rows by flat
+  // field name and has no dot-path support, so every cycle row in this schema
+  // is flat. sfwMode stays a HARD, INDEPENDENT gate over all three: when it
+  // is on, the `erotic` register is removed from the weight table outright,
+  // whatever dreamRegister says.
+  dreamFrequency: 'sometimes',    // id from DREAM_FREQUENCIES
+  dreamRegister: 'balanced',      // id from DREAM_REGISTER_MODES
+  dreamAbstraction: 'balanced',   // id from DREAM_ABSTRACTION_MODES
 };
+
+// Dream Engine D17. How often a sleep produces a dream. Each option's
+// `chance` is the real per-sleep probability the Phase 4 frequency roll reads
+// (naps roll at a lower rate of their own, D16); `.id` is what persists —
+// the same string-id-over-number convention as AUTOSAVE_INTERVALS and
+// SCENE_VIS_EVERY_N_OPTIONS. 'off' is a hard stop: no compile, no
+// background render, no image quota spent.
+const DREAM_FREQUENCIES = [
+  { id: 'off',       label: 'Off',       chance: 0 },
+  { id: 'rare',      label: 'Rare',      chance: 0.2 },
+  { id: 'sometimes', label: 'Sometimes', chance: 0.5 },
+  { id: 'often',     label: 'Often',     chance: 0.8 },
+];
+
+// Dream Engine D17. Reweights DREAM_REGISTERS at selection time — it never
+// softens a prompt, and it never adds a register the table does not already
+// carry. The per-mode weight maps themselves live in DREAM_TUNING
+// (defs.dreams.js, Phase 2), keyed by these ids, so tuning tone is a data
+// edit in one file rather than a change here.
+const DREAM_REGISTER_MODES = [
+  { id: 'gentle',   label: 'Gentle' },
+  { id: 'balanced', label: 'Balanced' },
+  { id: 'charged',  label: 'Charged' },
+];
+
+// Dream Engine D17. How far a dream drifts from the literal — reweights the
+// distortion and lens pools the same way, against DREAM_TUNING's per-mode
+// maps. Reweighting only: a grounded dream draws from the same pool as a
+// surreal one, just with the far end pushed down (see the parked open
+// question on whether surreal should unlock forms grounded cannot reach).
+const DREAM_ABSTRACTION_MODES = [
+  { id: 'grounded', label: 'Grounded' },
+  { id: 'balanced', label: 'Balanced' },
+  { id: 'surreal',  label: 'Surreal' },
+];
 
 // F3: how often a conversation's illustrated panel regenerates. 'off' draws
 // nothing (today's plain text-only chat). 'mood' regenerates on a mood-label
@@ -594,6 +638,44 @@ const SETTINGS_TABS = [
             desc: 'Scales UI text only — layout and imagery stay exactly as they are.',
             action: 'settings.cycle',
             options: TEXT_SIZES,
+          },
+        ],
+      },
+      {
+        // Dream Engine Phase 1 (D17). Three cycle rows, no new action id —
+        // 'settings.cycle' is already in MENU_ACTIONS, which design
+        // invariant 1 requires. Lives in General rather than Images because
+        // these shape what a dream IS, not how it is drawn; the panel art
+        // obeys the global image style like every other generated frame.
+        title: 'Dreams',
+        desc: 'Sleeping and napping sometimes produce a short illustrated dream, built from things that actually happened in your save. Dreams change nothing — they colour a morning and go in your Dream Diary. They are drawn quietly in the background before you ever click Sleep, so turning them up costs image quota over time.',
+        rows: [
+          {
+            id: 'dream-frequency',
+            kind: 'cycle',
+            field: 'dreamFrequency',
+            label: 'Dream frequency',
+            desc: 'How often a night\'s sleep produces a dream. Off stops them being written or drawn at all.',
+            action: 'settings.cycle',
+            options: DREAM_FREQUENCIES,
+          },
+          {
+            id: 'dream-register',
+            kind: 'cycle',
+            field: 'dreamRegister',
+            label: 'Dream tone',
+            desc: 'Weights the emotional register — Gentle leans tender and sublime, Charged leans anxious and erotic. SFW guidance mode removes explicit dreams regardless of this setting.',
+            action: 'settings.cycle',
+            options: DREAM_REGISTER_MODES,
+          },
+          {
+            id: 'dream-abstraction',
+            kind: 'cycle',
+            field: 'dreamAbstraction',
+            label: 'Dream abstraction',
+            desc: 'How far a dream drifts from the literal. Grounded keeps the apartment recognisable; Surreal lets it come apart.',
+            action: 'settings.cycle',
+            options: DREAM_ABSTRACTION_MODES,
           },
         ],
       },

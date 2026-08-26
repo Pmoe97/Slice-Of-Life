@@ -581,7 +581,11 @@ function deliverGig(gameState, gigId) {
   if (gig.blocksDone < gig.blocks) return { ok: false, reason: 'That gig is not finished yet.' };
   const late = gameState.meta.clock.day > gig.deadlineDay;
   const effCtx = buildEffectContext(gameState, [], [], {}, []);
-  applyEffects(parseEffectDSL(`EARN_MONEY ${gig.payout} gig`), effCtx);
+  // action-outcome-window-plan audit finding #12: capture the return —
+  // it was already going through applyEffects and just being discarded, so
+  // the outcome window's caller can read the real result (Design Invariant 1)
+  // instead of re-parsing `payout` by hand.
+  const payoutResult = applyEffects(parseEffectDSL(`EARN_MONEY ${gig.payout} gig`), effCtx);
   // Track gross for the quarterly tax bill (Phase 6).
   const taxes = gameState.world.taxes || (gameState.world.taxes = { quarterGross: 0, lastQuarterBilled: -1, unpaid: 0, autoReserve: false, reserve: 0 });
   taxes.quarterGross = (taxes.quarterGross || 0) + gig.payout;
@@ -616,7 +620,7 @@ function deliverGig(gameState, gigId) {
   if (tierUp) {
     pushMoodImpulse(gameState.player, MOOD_PAYOUTS.repTierUp, gameState.meta.clock.day);
   }
-  return { ok: true, gig, late, payout: gig.payout, repDelta, tierUp };
+  return { ok: true, gig, late, payout: gig.payout, repDelta, tierUp, applied: (payoutResult && payoutResult.applied) || [] };
 }
 
 // Abandon a gig — a deliberate choice that costs more reputation than a

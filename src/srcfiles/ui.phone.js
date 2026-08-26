@@ -121,6 +121,16 @@ async function doPhoneTakePhoto() {
   addLogEntry('system', 'Photo saved.');
   renderPhoneScreen(currentGameState);
   await saveAtBoundary('phone-camera-take', currentGameState);
+  // action-outcome-window-plan Phase 6 (D3): taking a photo is a real beat —
+  // it IS a photo action, so the frame is fresh (this shot, once).
+  await presentActionOutcome(currentGameState, {
+    id: 'phone.camera-take', label: 'Take Photo',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: 'Photo saved',
+      image: { kind: 'instance', phrase: 'holding up a phone to take a photo of the room' },
+    },
+  }, { applied: [], narration: 'You snap a photo. It\'s saved to your camera roll.', minutesSpent: 0 });
 }
 
 // Navigation is a direct navStack push, same directness as

@@ -65,7 +65,8 @@ between folders together.
 | `src/ref/complete/asks-and-attachments-handoff-prompt.md` | **The session prompt for the ask plan** — the one-phase-per-session protocol (Step 0 Status-table orientation with the dependency-graph exceptions, Step 1 Handoff/citations/stop-and-flag, Step 2 the ask invariants — decision-before-LLM, flavor-never-decides, effect-strip gated at `doConvSend`, seeded determinism — plus load-order and willingness-gate rules, Step 3 the mandatory Handoff overwrite). Hand this to an implementation session, not the plan — though there is nothing left to implement; a fresh session opening it will find the plan already complete. |
 | `src/ref/complete/player-creation-and-intro-plan.md` | The other half of `game-opening-plan.md`, which shipped the opening's mechanics and never shipped its protagonist or its fiction. Adds the full-screen **Player Design studio** (`src/srcfiles/studio.js`, seven tabs generated from one table and validated through the same `validateNpcField` the Character Studio uses), first-class `player.name`/`surname`/`portrait`, the **`physical.intimate`** layer on player and NPCs alike behind a three-part fail-closed gate in `getPhysicalDescriptionForPrompt`, and the pregenerated-image opening cutscene (`src/srcfiles/defs.intro.js`). **Built — all 6 phases, D1–D20, 54 assertions in `verify-intro.js`.** Also fixed the defect that motivated it: `menu.new-game` had been opening the legacy 2-roommate cast form, so the solo start `ECONOMY.opening.soloStart` and the whole rent model assume was **not what New Game did** — `startSoloGame` existed and was reachable from no button. The 16 pregenerated intro images landed 2026-08-14, which is what moved this to `complete/`. |
 | `src/ref/patterns/perchance-agent-handoff-prompt.md` | The original generic one-phase-per-session protocol (each overhaul now has its own; this is the ancestor) |
-| `src/ref/complete/intimacy-and-voyeurism-overhaul-plan.md` | The adult-sim layer: full wardrobe system, sensory door cues + fog-of-war floor plan, desire as a real need, the timed real-time peek/listen system with per-NPC caught outcomes, symmetric player/NPC intimacy verbs, emergent NPC couples + outside partners + infidelity, the per-character knowledge codex + Confront/Spread/Matchmake, shaming/cold-shoulder/move-out consequences, boundary acts (sleeping-room, throuple, bull/cuck), pregnancy, and music devices + headphones. **Complete — all 19 phases built and verified live 2026-08-16**, design session 2026-08-15, D1–D16 locked. Rides the signals/drive/overture/gossip substrate; the non-negotiables are D1 (no explicitness ceiling), D2 (never a shame simulator), D3 (symmetric initiation), D13 (no force — willingness is the only door), D15 (deterministic authority, LLM narrates only within the authorized frame). | 
+| `src/ref/complete/intimacy-and-voyeurism-overhaul-plan.md` | The adult-sim layer: full wardrobe system, sensory door cues + fog-of-war floor plan, desire as a real need, the timed real-time peek/listen system with per-NPC caught outcomes, symmetric player/NPC intimacy verbs, emergent NPC couples + outside partners + infidelity, the per-character knowledge codex + Confront/Spread/Matchmake, shaming/cold-shoulder/move-out consequences, boundary acts (sleeping-room, throuple, bull/cuck), pregnancy, and music devices + headphones. **Complete — all 19 phases built and verified live 2026-08-16**, design session 2026-08-15, D1–D16 locked. Rides the signals/drive/overture/gossip substrate; the non-negotiables are D1 (no explicitness ceiling), D2 (never a shame simulator), D3 (symmetric initiation), D13 (no force — willingness is the only door), D15 (deterministic authority, LLM narrates only within the authorized frame). |
+| `src/ref/wip/action-outcome-window-plan.md` | **Design session complete 2026-08-24; D1–D14 locked, six phases written, none started.** Paired with `action-outcome-window-handoff-prompt.md`. One reusable, tiered outcome-window component (narration + optional image + a "what changed" strip, reading the SAME typed effect list `applyEffects` already produces) so player verbs stop resolving invisibly. Default bias now favors imagery even for mundane actions (D3); images split reused-per-archetype vs. fresh-per-instance (D5); a new hand-off-to-conversation resolution mode covers being caught peeping and NPC-initiated "they want to talk" gates (D6/D7/D9); AfterHours' hardcoded "tomorrow" invite becomes a real scheduling picker (D8); a new `sit` verb splits "lay the table" from "start the meal," branching into a full interactive scene when company is already booked (D10). Sleep/nap's imagery is hooked but deliberately not designed — a "Dream Engine" is carved out to its own future plan (D11). `peek.js`'s overlay is the prototype, migration onto the new component still an open question. Landed in passing: the keyhole mask-tiling CSS bug (`.peek-lens`, `main.html`) is fixed and verified live. | 
 | `src/ref/complete/intimacy-and-voyeurism-handoff-prompt.md` | The session prompt for the row above (one-prompt-per-plan convention). Hard rules beyond the standard set: the willingness function is the only door into any intimacy act (verify the negative floor aborts — the one check that can't be skipped), no hardcoded explicit strings that bypass the `getPhysicalDescriptionForPrompt` gate, `clothing === 'undressed'` must keep its meaning at the intimate gate, symmetric-initiation bypasses are bugs, and new timed loops must respect the closed-form fast-forward. |
 
 > An earlier revision of this file cited `src/ref/Original Prompt and Response
@@ -136,14 +137,14 @@ partial bump is how you get a client running half-old code):
 
 ```
 config.js → icons.js → defs.world.js → defs.actions.js → defs.computer.js
-→ defs.menu.js → defs.intro.js → defs.design.js → orbital.js → state.js → sim.js
+→ defs.menu.js → defs.intro.js → defs.design.js → defs.dreams.js → orbital.js → state.js → sim.js
 → commitments.js → world.js
 → signals.js → scene.js → items.js → inventory.js → effects.js → cooking.js
 → taste.js → drives.js
 → cognition.js → actions.js → intent.js → skills.js → stealth.js → time.js
 → computer.js → tracker.js → phone.js → npc.js → willingness.js → rumination.js → prompt.js
 → llm.js → x5.js → interruption.js
-→ image.js → peek.js → render.js → render.computer.js → render.desktop.js
+→ image.js → peek.js → dreams.js → actionwindow.js → render.js → render.computer.js → render.desktop.js
 → render.phone.js → asks.js → ui.js → ui.computer.js → afterhours.js
 → ui.windowmanager.js → ui.phone.js → studio.js → menu.js
 ```
@@ -161,6 +162,39 @@ peekImageBudgetAllows/Spend, pickPeekProse) is loaded — and exercised by
 verify-w10.js — before render, while its session controller
 (startPeekSession/_peekTick/_endPeekSession) needs renderPeekOverlay (render.js)
 and handleAction (ui.js) only at call time.
+
+`dreams.js` (dream-engine-plan, COMPLETE) sits between `peek.js` and
+`actionwindow.js`, and `defs.dreams.js` with the other defs. Same reasoning as
+its two neighbours: its load-time surface is module state plus pure functions
+— `harvestResidue` (a save to a scored pool of dreamable fragments),
+`compileDream` (seeded selection from `defs.dreams.js`'s tables), the writer's
+pure half and the consumption half — all of which the six `verify-dreams-*`
+harnesses exercise directly. Everything needing a DOM, `root.generateText` or
+`root.generateImage` (`topUpDreamQueue`'s render pass, `presentDream`'s window,
+the Dream Diary renderers) is reached at call time only. It reads the
+knowledge, relationship and NPC-memory systems and writes to NONE of them: the
+only writes a dream makes are the wake tint through `applyEffects` and its own
+`world.dreams` bookkeeping, and that asymmetry is what makes the dream mind's
+deliberate omniscience safe.
+
+`actionwindow.js` (action-outcome-window-plan Phase 1) sits between `peek.js`
+and `render.js` for the same reason `peek.js` does: its load-time surface is
+module state plus pure tables and pure functions
+(`ACTION_WINDOW_ROW_BUILDERS`, `deriveActionDeltas`,
+`resolveActionWindowSpec`, `actionWindowHandsOff`), while the lifecycle half
+(`presentActionOutcome`/`presentWorldGate`/`presentActionStep`/
+`renderActionWindow`/`dismissActionWindow`) reaches for the DOM and
+`image.js`'s `getActionWindowImage`/`getCharacterCutout` only at call time. It
+loads after `image.js` (whose image getters it calls) and before
+`actions.js`' runtime caller in `runRegisteredAction`.
+
+Phases 2–3 added three call-time dependencies that all point FORWARD past this
+file's own slot, and all of them are guarded by `typeof x === 'function'` for
+exactly that reason: `ui.js`'s overture gate calls `presentWorldGate`,
+`defs.actions.js`'s `sit` calls `presentActionStep`, and `sit`'s outcome
+window hands off into `ui.js`'s `doTalk` — but never from inside
+`actionwindow.js`, which performs the transition and lets the verb's own
+`outcomeWindow.onDismiss` supply the destination.
 
 **A new `src/srcfiles/*.js` needs a line in TWO places**: `main.html`'s script
 tags and `dev/verify/loadgame.js`'s `ORDER` array. `rumination.js` shipped with

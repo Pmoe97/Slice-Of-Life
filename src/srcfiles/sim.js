@@ -4796,6 +4796,15 @@ function buildGameState(seed, cast, clock, droppedConstraints, economyCfg) {
       // milestone flags (tutorialRenoUsed, tutorial_<milestoneId>) — see
       // src/ref/complete/contractor-tutorial-overhaul-plan.md.
       flags: {},
+      // Dream Engine Phase 1: the dream queue / diary / motif-history
+      // subtree (dreams.js). Stamped here so a brand-new game starts with
+      // the real shape rather than relying on the read-time fallback; old
+      // saves get the identical object from WORLD_KEY_FALLBACKS.dreams, so
+      // no migration. defaultDreamState is defined in a LATER script and is
+      // resolved at call time, which is fine — buildGameState is only ever
+      // called at runtime, the same as this literal's initBillState /
+      // initUpgradesState calls below.
+      dreams: defaultDreamState(),
       rent,
       // Phase 6 taxes: estimated tax on a 70-day period (calendar plan D3 —
       // end of Summer and end of Winter). quarterGross accumulates each

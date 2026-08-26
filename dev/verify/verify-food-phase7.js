@@ -256,7 +256,7 @@ await check('fed lovers bond more than neutrals more than hates, at the right mu
       seats: 3, totalServings: 6,
     };
     const ctx = cookCtx(h, 'dining');
-    const lines = buildSetMealEffects(ctx, prepared);
+    const lines = buildSitEffects(ctx, prepared);
     const eats = lines.filter(l => l.startsWith('EAT_ITEM '));
     if (eats.length !== 3) return 'expected 3 EAT_ITEM lines, got ' + eats.length;
     const rels = {};
@@ -284,7 +284,7 @@ await check('fed lovers bond more than neutrals more than hates, at the right mu
     return true;
   })()`));
 
-await check('setMealNarration says which reactions were not neutral',
+await check('sitNarration says which reactions were not neutral',
   api(`(() => {
     const h = house('p7-narr', 1);
     const npcId = Object.keys(h.npcs)[0];
@@ -305,7 +305,7 @@ await check('setMealNarration says which reactions were not neutral',
       attendees: [{ npcId, npc: h.npcs[npcId], committed: false }],
       fedNpcIds: [npcId], seats: 2, totalServings: 6,
     };
-    const narration = setMealNarration(cookCtx(h, 'dining'), prepared);
+    const narration = sitNarration(cookCtx(h, 'dining'), prepared);
     return typeof narration === 'string' && narration.includes(tasteBandRow('love').reaction.replace('{name}', h.npcs[npcId].bible.name));
   })()`));
 

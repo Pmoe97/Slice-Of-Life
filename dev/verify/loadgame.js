@@ -14,7 +14,7 @@ const SRC = path.join(__dirname, '..', '..', 'src', 'srcfiles');
 // safe — the divergence is deliberate, not drift.
 const ORDER = [
   'config.js', 'defs.settings.js', 'settings.js', 'icons.js', 'defs.world.js', 'defs.actions.js', 'defs.computer.js',
-  'defs.menu.js', 'defs.intro.js', 'defs.design.js',
+  'defs.menu.js', 'defs.intro.js', 'defs.design.js', 'defs.dreams.js',
   'orbital.js', 'state.js', 'sim.js', 'commitments.js', 'world.js', 'movement.js',
   'signals.js', 'scene.js',
   'items.js', 'inventory.js', 'effects.js', 'cooking.js', 'taste.js', 'drives.js', 'cognition.js', 'overture.js',
@@ -40,6 +40,28 @@ const ORDER = [
   // _peekTick) needs the DOM and currentGameState only at call time, so the
   // whole file loads cleanly here and the logic half is directly testable.
   'peek.js',
+  // dreams.js (dream-engine-plan Phase 1) sits between peek.js and
+  // actionwindow.js in main.html, and here for the same reason peek.js and
+  // image.js do: its load-time surface is module state plus pure functions —
+  // defaultDreamState / normalizeDreamState now, and harvestResidue (Phase 3)
+  // and compileDream (Phase 4) later, which are the halves actually worth
+  // testing. Everything that needs a DOM, root.generateImage or
+  // root.generateText (the render queue, presentDream) is called at runtime
+  // only. Registered here in the SAME COMMIT as the main.html tag: shipping a
+  // file to only one of the two lists is the rumination.js scar, where five
+  // harnesses and 175 assertions died silently.
+  'dreams.js',
+  // actionwindow.js (action-outcome-window-plan Phase 1) sits between peek.js
+  // and boundary.js in main.html, for the same reason peek.js sits where it
+  // does: its load-time surface is module state plus pure tables and pure
+  // functions (ACTION_WINDOW_ROW_BUILDERS, deriveActionDeltas,
+  // resolveActionWindowSpec), so the half worth testing — the delta strip's
+  // projection of applyEffects' typed effect list, and the def-to-spec
+  // resolution — is directly testable here. The lifecycle half
+  // (presentActionOutcome/renderActionWindow/dismissActionWindow) needs a DOM
+  // and reaches for it only inside function bodies, guarded on
+  // `typeof document`, so the whole file loads cleanly in the vm.
+  'actionwindow.js',
   // boundary.js (intimacy-voyeurism Phase 17, D13/D14) sits between peek.js
   // and render.js in index.html. Its whole surface — BOUNDARY_ACT_DEFS, the
   // sleeping-room gate, wake/catch, the throuple gate, three-way infidelity,

@@ -62,6 +62,9 @@ const COMPUTER_RENDERERS = {
   // Intimacy & Voyeurism Phase 15 (D8): the knowledge codex.
   'codex-roster': renderCodexRoster,
   'codex-detail': renderCodexDetail,
+  // Dream Engine Phase 8 (D42): the dream diary — gallery + per-dream detail.
+  'dreamdiary': renderDreamDiary,
+  'dreamentry': renderDreamEntry,
 };
 
 // Rows whose def declares `requiresContentFlag` are hidden from any
@@ -4522,6 +4525,184 @@ function renderCodexDetail(body, gs, app, screenDef) {
   body.appendChild(list);
 }
 
+// ===== Dream Diary (Dream Engine Phase 8, D42) ==============================
+// The diary app surfaces `world.dreams.diary` (filed newest-first by
+// fileDreamToDiary, capped at DREAM_TUNING.diaryCap). The gallery lists every
+// dream as a first-panel thumbnail row; the detail page repaints ALL panels
+// from the record's frozen prompt+seed via getDreamPanelImage (D14) and
+// reprints the register's wake line (D42). A diary entry is a memory of one
+// specific picture, so the record's own seed is used — never a hash of the
+// device-specific cache key, whose orientation/style parts may differ between
+// the screen where the dream was shown and the screen where it is re-read.
+//
+// Declared here AND in the MOBILE section below, identical, matching the
+// codex precedent: the shared-app path serves both surfaces from one
+// body-less renderer, and the duplicate declaration is how every shared
+// renderer in this file is written (the later copy wins via hoisting).
+function dreamEntryParams(gs) {
+  const phone = gs?.world?.phone;
+  if (phone?.openAppId === 'dreams' && Array.isArray(phone.navStack)) {
+    const top = phone.navStack[phone.navStack.length - 1];
+    if (top && top.appId === 'dreams' && top.screenId === 'entry') return top.params || {};
+  }
+  const win = gs?.world?.computer?.windows?.dreams;
+  if (win && win.screenId === 'entry') return win.params || {};
+  return {};
+}
+
+function dreamEmptyState(text) {
+  const div = document.createElement('div');
+  div.className = 'dream-empty';
+  div.textContent = text;
+  return div;
+}
+
+function dreamLabel(table, id, fallback) {
+  const entry = table && id != null ? table[id] : null;
+  return (entry && entry.label) || fallback || id;
+}
+
+// Placeholder-then-async-swap with a data-* stale-guard — the renderScene
+// idiom applied to a dream panel. Stamp the key that describes the desired
+// picture (device-specific: orientation + image style), show the placeholder,
+// then swap only if this element is still mounted AND still asking for that
+// exact key (the same <img> may have been repurposed for another panel, or
+// the phone rotated while the image was generating).
+function loadDreamPanelIntoImg(img, dream, panelIndex) {
+  const key = typeof dreamPanelCacheKey === 'function'
+    ? dreamPanelCacheKey(dream, panelIndex)
+    : String(dream && dream.id) + ':' + panelIndex;
+  img.setAttribute('data-dream-key', key);
+  img.classList.remove('dream-img-loaded');
+  if (typeof getPlaceholder === 'function') img.src = getPlaceholder();
+  else img.removeAttribute('src');
+  if (typeof getDreamPanelImage !== 'function' || !dream) return;
+  getDreamPanelImage(dream, panelIndex).then((resolved) => {
+    if (!img.isConnected) return;
+    if (img.getAttribute('data-dream-key') !== key) return;
+    if (resolved && resolved.url) {
+      img.src = resolved.url;
+      if (resolved.prompt && typeof setImageMeta === 'function') {
+        const panel = dream.panels && dream.panels[panelIndex];
+        setImageMeta(img, {
+          label: 'Dream panel',
+          prompt: resolved.prompt,
+          seed: panel && panel.seed != null ? panel.seed : null,
+          negativePrompt: (typeof IMAGE_NEGATIVE !== 'undefined' && IMAGE_NEGATIVE.dream) || null,
+        });
+      }
+    }
+    img.classList.add('dream-img-loaded');
+  }).catch(() => {
+    img.classList.add('dream-img-loaded');
+  });
+}
+
+function renderDreamDiary(body, gs, app, screenDef) {
+  body.innerHTML = '';
+  const diary = gs?.world?.dreams?.diary;
+  if (!Array.isArray(diary) || diary.length === 0) {
+    body.appendChild(dreamEmptyState('Your dream diary is empty — it fills as you sleep and dream.'));
+    return;
+  }
+  const list = document.createElement('div');
+  list.className = 'dream-diary';
+  for (const dream of diary) {
+    if (!dream || !dream.id) continue;
+    const row = document.createElement('button');
+    row.className = 'dream-row';
+    row.setAttribute('data-action', 'dreams.open-entry');
+    row.setAttribute('data-row-id', dream.id);
+    const thumb = document.createElement('img');
+    thumb.className = 'dream-thumb';
+    thumb.alt = 'First dream panel';
+    thumb.setAttribute('loading', 'lazy');
+    const main = document.createElement('div');
+    main.className = 'dream-row-main';
+    const title = document.createElement('div');
+    title.className = 'dream-row-title';
+    title.textContent = dreamLabel(DREAM_FORMS, dream.slots && dream.slots.form, 'A dream');
+    const meta = document.createElement('div');
+    meta.className = 'dream-row-meta dim tiny';
+    const shownDay = Number(dream.shownDay) || Number(dream.compiledDay) || 1;
+    const register = dreamLabel(DREAM_REGISTERS, dream.slots && dream.slots.register, '');
+    // D16/D36: nap-ness is `forSleep`. `kind` is the D8 CLASS
+    // (distorted / true / recurring) and is never 'nap', so testing it here
+    // meant a nap dream was never once labelled as one.
+    const isNap = dream.forSleep === 'nap';
+    const panelCount = Array.isArray(dream.panels) ? dream.panels.length : 0;
+    meta.textContent = `Day ${shownDay}${register ? ' · ' + register : ''}${isNap ? ' · nap' : ''}${panelCount > 1 ? ` · ${panelCount} panels` : ''}`;
+    main.appendChild(title);
+    main.appendChild(meta);
+    const chevron = document.createElement('span');
+    chevron.className = 'dream-row-chevron';
+    chevron.textContent = '›';
+    row.appendChild(thumb);
+    row.appendChild(main);
+    row.appendChild(chevron);
+    list.appendChild(row);
+    loadDreamPanelIntoImg(thumb, dream, 0);
+  }
+  body.appendChild(list);
+}
+
+function renderDreamEntry(body, gs, app, screenDef) {
+  body.innerHTML = '';
+  const params = dreamEntryParams(gs);
+  const dreamId = params.dreamId;
+  const diary = gs?.world?.dreams?.diary;
+  const dream = dreamId && Array.isArray(diary) ? diary.find((d) => d && d.id === dreamId) : null;
+  if (!dream) {
+    body.appendChild(dreamEmptyState('That dream has been forgotten.'));
+    return;
+  }
+  const form = dream.slots && DREAM_FORMS[dream.slots.form];
+  const register = dream.slots && DREAM_REGISTERS[dream.slots.register];
+  const head = document.createElement('div');
+  head.className = 'dream-entry-head';
+  const title = document.createElement('div');
+  title.className = 'dream-entry-title';
+  title.textContent = (form && form.label) || 'A dream';
+  const meta = document.createElement('div');
+  meta.className = 'dream-entry-meta dim tiny';
+  const shownDay = Number(dream.shownDay) || Number(dream.compiledDay) || 1;
+  meta.textContent = `Day ${shownDay}${register && register.label ? ' · ' + register.label : ''}${dream.forSleep === 'nap' ? ' · nap' : ''}`;
+  head.appendChild(title);
+  head.appendChild(meta);
+  body.appendChild(head);
+
+  const frames = document.createElement('div');
+  frames.className = 'dream-panels';
+  if (Array.isArray(dream.panels)) {
+    dream.panels.forEach((panel, i) => {
+      const fig = document.createElement('figure');
+      fig.className = 'dream-panel';
+      const img = document.createElement('img');
+      img.className = 'dream-img';
+      img.alt = 'Dream panel ' + (i + 1);
+      img.setAttribute('loading', 'lazy');
+      loadDreamPanelIntoImg(img, dream, i);
+      fig.appendChild(img);
+      const cap = document.createElement('figcaption');
+      cap.className = 'dream-panel-text';
+      cap.textContent = panel && panel.text ? panel.text : '';
+      fig.appendChild(cap);
+      frames.appendChild(fig);
+    });
+  }
+  body.appendChild(frames);
+
+  if (typeof dreamWakeLine === 'function') {
+    const wake = dreamWakeLine(dream);
+    if (wake) {
+      const wakeEl = document.createElement('div');
+      wakeEl.className = 'dream-wake dim tiny';
+      wakeEl.textContent = wake;
+      body.appendChild(wakeEl);
+    }
+  }
+}
+
 // ===== /SECTION: RENDER.COMPUTER =====
 // ===== SECTION: RENDER.COMPUTER (MOBILE) =====
 // The whole money picture at a glance. Four real numbers, all drawn
@@ -5246,6 +5427,168 @@ function renderCodexDetail(body, gs, app, screenDef) {
     list.appendChild(row);
   }
   body.appendChild(list);
+}
+
+// ===== Dream Diary — MOBILE copy (Dream Engine Phase 8, D42) ================
+// Identical to the desktop declaration above; the shared-app path serves the
+// phone from the same renderers, and the duplicate declaration is the codex
+// precedent (the later copy wins via hoisting).
+function dreamEntryParams(gs) {
+  const phone = gs?.world?.phone;
+  if (phone?.openAppId === 'dreams' && Array.isArray(phone.navStack)) {
+    const top = phone.navStack[phone.navStack.length - 1];
+    if (top && top.appId === 'dreams' && top.screenId === 'entry') return top.params || {};
+  }
+  const win = gs?.world?.computer?.windows?.dreams;
+  if (win && win.screenId === 'entry') return win.params || {};
+  return {};
+}
+
+function dreamEmptyState(text) {
+  const div = document.createElement('div');
+  div.className = 'dream-empty';
+  div.textContent = text;
+  return div;
+}
+
+function dreamLabel(table, id, fallback) {
+  const entry = table && id != null ? table[id] : null;
+  return (entry && entry.label) || fallback || id;
+}
+
+function loadDreamPanelIntoImg(img, dream, panelIndex) {
+  const key = typeof dreamPanelCacheKey === 'function'
+    ? dreamPanelCacheKey(dream, panelIndex)
+    : String(dream && dream.id) + ':' + panelIndex;
+  img.setAttribute('data-dream-key', key);
+  img.classList.remove('dream-img-loaded');
+  if (typeof getPlaceholder === 'function') img.src = getPlaceholder();
+  else img.removeAttribute('src');
+  if (typeof getDreamPanelImage !== 'function' || !dream) return;
+  getDreamPanelImage(dream, panelIndex).then((resolved) => {
+    if (!img.isConnected) return;
+    if (img.getAttribute('data-dream-key') !== key) return;
+    if (resolved && resolved.url) {
+      img.src = resolved.url;
+      if (resolved.prompt && typeof setImageMeta === 'function') {
+        const panel = dream.panels && dream.panels[panelIndex];
+        setImageMeta(img, {
+          label: 'Dream panel',
+          prompt: resolved.prompt,
+          seed: panel && panel.seed != null ? panel.seed : null,
+          negativePrompt: (typeof IMAGE_NEGATIVE !== 'undefined' && IMAGE_NEGATIVE.dream) || null,
+        });
+      }
+    }
+    img.classList.add('dream-img-loaded');
+  }).catch(() => {
+    img.classList.add('dream-img-loaded');
+  });
+}
+
+function renderDreamDiary(body, gs, app, screenDef) {
+  body.innerHTML = '';
+  const diary = gs?.world?.dreams?.diary;
+  if (!Array.isArray(diary) || diary.length === 0) {
+    body.appendChild(dreamEmptyState('Your dream diary is empty — it fills as you sleep and dream.'));
+    return;
+  }
+  const list = document.createElement('div');
+  list.className = 'dream-diary';
+  for (const dream of diary) {
+    if (!dream || !dream.id) continue;
+    const row = document.createElement('button');
+    row.className = 'dream-row';
+    row.setAttribute('data-action', 'dreams.open-entry');
+    row.setAttribute('data-row-id', dream.id);
+    const thumb = document.createElement('img');
+    thumb.className = 'dream-thumb';
+    thumb.alt = 'First dream panel';
+    thumb.setAttribute('loading', 'lazy');
+    const main = document.createElement('div');
+    main.className = 'dream-row-main';
+    const title = document.createElement('div');
+    title.className = 'dream-row-title';
+    title.textContent = dreamLabel(DREAM_FORMS, dream.slots && dream.slots.form, 'A dream');
+    const meta = document.createElement('div');
+    meta.className = 'dream-row-meta dim tiny';
+    const shownDay = Number(dream.shownDay) || Number(dream.compiledDay) || 1;
+    const register = dreamLabel(DREAM_REGISTERS, dream.slots && dream.slots.register, '');
+    // D16/D36: nap-ness is `forSleep`. `kind` is the D8 CLASS
+    // (distorted / true / recurring) and is never 'nap', so testing it here
+    // meant a nap dream was never once labelled as one.
+    const isNap = dream.forSleep === 'nap';
+    const panelCount = Array.isArray(dream.panels) ? dream.panels.length : 0;
+    meta.textContent = `Day ${shownDay}${register ? ' · ' + register : ''}${isNap ? ' · nap' : ''}${panelCount > 1 ? ` · ${panelCount} panels` : ''}`;
+    main.appendChild(title);
+    main.appendChild(meta);
+    const chevron = document.createElement('span');
+    chevron.className = 'dream-row-chevron';
+    chevron.textContent = '›';
+    row.appendChild(thumb);
+    row.appendChild(main);
+    row.appendChild(chevron);
+    list.appendChild(row);
+    loadDreamPanelIntoImg(thumb, dream, 0);
+  }
+  body.appendChild(list);
+}
+
+function renderDreamEntry(body, gs, app, screenDef) {
+  body.innerHTML = '';
+  const params = dreamEntryParams(gs);
+  const dreamId = params.dreamId;
+  const diary = gs?.world?.dreams?.diary;
+  const dream = dreamId && Array.isArray(diary) ? diary.find((d) => d && d.id === dreamId) : null;
+  if (!dream) {
+    body.appendChild(dreamEmptyState('That dream has been forgotten.'));
+    return;
+  }
+  const form = dream.slots && DREAM_FORMS[dream.slots.form];
+  const register = dream.slots && DREAM_REGISTERS[dream.slots.register];
+  const head = document.createElement('div');
+  head.className = 'dream-entry-head';
+  const title = document.createElement('div');
+  title.className = 'dream-entry-title';
+  title.textContent = (form && form.label) || 'A dream';
+  const meta = document.createElement('div');
+  meta.className = 'dream-entry-meta dim tiny';
+  const shownDay = Number(dream.shownDay) || Number(dream.compiledDay) || 1;
+  meta.textContent = `Day ${shownDay}${register && register.label ? ' · ' + register.label : ''}${dream.forSleep === 'nap' ? ' · nap' : ''}`;
+  head.appendChild(title);
+  head.appendChild(meta);
+  body.appendChild(head);
+
+  const frames = document.createElement('div');
+  frames.className = 'dream-panels';
+  if (Array.isArray(dream.panels)) {
+    dream.panels.forEach((panel, i) => {
+      const fig = document.createElement('figure');
+      fig.className = 'dream-panel';
+      const img = document.createElement('img');
+      img.className = 'dream-img';
+      img.alt = 'Dream panel ' + (i + 1);
+      img.setAttribute('loading', 'lazy');
+      loadDreamPanelIntoImg(img, dream, i);
+      fig.appendChild(img);
+      const cap = document.createElement('figcaption');
+      cap.className = 'dream-panel-text';
+      cap.textContent = panel && panel.text ? panel.text : '';
+      fig.appendChild(cap);
+      frames.appendChild(fig);
+    });
+  }
+  body.appendChild(frames);
+
+  if (typeof dreamWakeLine === 'function') {
+    const wake = dreamWakeLine(dream);
+    if (wake) {
+      const wakeEl = document.createElement('div');
+      wakeEl.className = 'dream-wake dim tiny';
+      wakeEl.textContent = wake;
+      body.appendChild(wakeEl);
+    }
+  }
 }
 
 // ===== /SECTION: RENDER.COMPUTER =====
