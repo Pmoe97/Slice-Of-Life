@@ -209,6 +209,10 @@ async function startPeekSession(roomId, mode) {
     ticksElapsed: 0,
     riskAccum: 0,
     caught: false,
+    // Set when the occupant caught the watcher and did not mind
+    // (PEEK_OUTCOMES' `continuesHold`). Stops the catch roll — they already
+    // know — without ending the hold.
+    acknowledged: false,
     freshImages: 0,
     lastActivity: focus.npc.activity || '',
     lastActKey: null,
@@ -242,7 +246,13 @@ async function _peekTick() {
   if (focus.npcId !== s.focusNpcId) s.focusNpcId = focus.npcId;
 
   s.ticksElapsed++;
-  s.riskAccum = Math.min(PEEK.maxRisk, s.riskAccum + peekRiskPerTick(s, gs));
+  // ASSIGN, do not add. peekRiskPerTick already returns the risk AT this tick
+  // — its own formula carries baseRisk and the full perception term, and the
+  // ramp is `riskPerTick x ticksElapsed`. Summing it charged both again every
+  // second, turned the linear ramp quadratic, and slammed riskAccum into
+  // maxRisk by second 6, after which every tick was a flat ~58% catch. The
+  // name is the trap: "risk per tick" reads like an increment and is a level.
+  s.riskAccum = Math.min(PEEK.maxRisk, peekRiskPerTick(s, gs));
 
   // Mark the one-shot desire source once per session on a sexual act — the
   // plan's 'peeked_at_sex' reader (strongest-pending wins; decayPlayerNeeds
@@ -254,9 +264,15 @@ async function _peekTick() {
 
   await _refreshView(s, focus);
 
-  const chance = peekCaughtChance(s.riskAccum);
-  const rng = seededRng(gs.meta.seed, `peek_roll_${gs.meta.clock.day}_${Math.floor(gs.meta.clock.minutes * 100)}_${s.roomId}_${s.focusNpcId}_${s.ticksElapsed}`);
-  if (rng() < chance) { await _resolvePeekCaught(s, gs); return; }
+  // Once the occupant has caught the watcher and NOT minded (PEEK_OUTCOMES'
+  // `continuesHold`), there is nothing left to catch: they know. Rolling on
+  // would re-run the whole caught resolution every second, re-applying its
+  // relationship deltas and re-narrating its prose.
+  if (!s.acknowledged) {
+    const chance = peekCaughtChance(s.riskAccum);
+    const rng = seededRng(gs.meta.seed, `peek_roll_${gs.meta.clock.day}_${Math.floor(gs.meta.clock.minutes * 100)}_${s.roomId}_${s.focusNpcId}_${s.ticksElapsed}`);
+    if (rng() < chance) { await _resolvePeekCaught(s, gs); return; }
+  }
 
   if (s.ticksElapsed >= PEEK.maxHoldTicks) { _endPeekSession('cramp'); return; }
   updatePeekHold(gs, s);
@@ -337,6 +353,15 @@ async function _resolvePeekCaught(s, gs) {
   const outcome = resolvePeekCaughtOutcome(gs, s);
   s.caught = true;
   const cfg = PEEK_OUTCOMES[outcome];
+  // Hoisted out of the else-branch below, where it used to be declared with
+  // `const` — the `engage` block further down referenced it from OUTSIDE that
+  // block and threw `ReferenceError: effCtx is not defined` every time a warm
+  // or neutral occupant opened the door. The throw landed before
+  // _endPeekSession, so the interval was never cleared and the session never
+  // tore down; the next tick re-entered this function and re-applied the
+  // deltas. `engage` carries weight 2/2/1 in warm/warmDeviant/neutral, so it
+  // was not a rare path.
+  const effCtx = buildEffectContext(gs, [s.focusNpcId], [s.focusNpcId], {}, []);
 
   // Intimacy & Voyeurism Phase 16 (D2/D14): the 'confront' outcome resolves
   // through the shaming system (SHAMING, npc.js) — per-dynamic-tier reaction
@@ -377,7 +402,6 @@ async function _resolvePeekCaught(s, gs) {
     if (cfg.affection) lines.push(`REL_DELTA ${s.focusNpcId} affection +${cfg.affection}`);
     if (cfg.suspicion) lines.push(`ADJUST_SUSPICION ${s.focusNpcId} boundary_violation +${cfg.suspicion}`);
     if (cfg.mood) lines.push(`ADJUST_NEED player mood +${cfg.mood}`);
-    const effCtx = buildEffectContext(gs, [s.focusNpcId], [s.focusNpcId], {}, []);
     const effResult = applyEffects(lines.map(l => parseEffectDSL(l)[0]).filter(Boolean), effCtx);
     s._applied = (effResult && effResult.applied) || [];
   }
@@ -385,7 +409,13 @@ async function _resolvePeekCaught(s, gs) {
   // engage: the door opens. The occupant acknowledges the watcher — the
   // surface Phase 11's invites and Phase 16's reactions ride on.
   if (outcome === 'engage') {
-    applyEffects(parseEffectDSL(`SET_OBJECT_STATE ${s.doorId} ajar ajar`).map(l => l[0]).filter(Boolean), effCtx);
+    // parseEffectDSL already returns an ARRAY OF EFFECT OBJECTS, so the old
+    // `.map(l => l[0])` mapped each object to `undefined` and `.filter(Boolean)`
+    // then dropped every one — the door never actually went ajar. The
+    // `lines.map(l => parseEffectDSL(l)[0])` idiom used elsewhere in this file
+    // indexes [0] because it parses ONE line at a time; this call parses a
+    // whole string and needs no indexing.
+    applyEffects(parseEffectDSL(`SET_OBJECT_STATE ${s.doorId} ajar ajar`), effCtx);
   }
 
   // escalate: D7's "desire gain for both" — a small bump on the occupant's
@@ -412,6 +442,30 @@ async function _resolvePeekCaught(s, gs) {
   // mortification or joke) is appended when it exists.
   s._outcomeProse = pickPeekProse(gs, `${outcome}_${s.mode}`, s)
     + (s._shamingProse ? ' ' + s._shamingProse : '');
+
+  // PEEK_OUTCOMES' `continuesHold` (ignore / escalate): they clocked the
+  // watcher and did not mind, so the watching goes on. Ending the session
+  // here — which is what every outcome used to do — shut the lens and threw a
+  // modal over the exact beat the player was watching for.
+  //
+  // The hold keeps its risk history (the accumulator is a level, so it simply
+  // stops being rolled against) and drops its cached frame so the lens
+  // re-derives the view for the moment AFTER being seen. No caught window: a
+  // modal is how you leave a keyhole, and nobody is leaving.
+  if (cfg && cfg.continuesHold) {
+    s.acknowledged = true;
+    s.lastActKey = null;
+    s._peekImageKey = null;
+    const stillThere = peekFocusOccupant(gs, s.roomId);
+    // They walked out in the same beat they noticed. Nothing left to watch,
+    // so this falls through to the ordinary teardown below.
+    if (stillThere) {
+      s.focusNpcId = stillThere.npcId;
+      await _refreshView(s, stillThere);
+      return;
+    }
+  }
+
   await _endPeekSession('caught');
   await presentPeekCaughtWindow(gs, s);
 }

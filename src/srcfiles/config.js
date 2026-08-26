@@ -6280,8 +6280,8 @@ const ACTIVITY_ROOM_PREFERENCES = {
 
 // --- Off-screen event tables (deterministic, no LLM) ---
 const OFFSCREEN_EVENTS = [
-  { type: 'cooking', weight: 4, text: '{name} cooked {dish} and left leftovers.', moodDelta: 0.05, dataFields: ['dish'] },
-  { type: 'breakage', weight: 1, text: '{name} broke a {item} in the kitchen.', moodDelta: -0.1, dataFields: ['item'] },
+  { type: 'cooking', roomId: 'kitchen', weight: 4, text: '{name} cooked {dish} and left leftovers.', moodDelta: 0.05, dataFields: ['dish'] },
+  { type: 'breakage', roomId: 'kitchen', weight: 1, text: '{name} broke a {item} in the kitchen.', moodDelta: -0.1, dataFields: ['item'] },
   { type: 'bad_day', weight: 2, text: '{name} had a rough day at work.', moodDelta: -0.15, dataFields: [] },
   { type: 'guest', weight: 1, text: '{name} brought {guest} home.', moodDelta: 0.1, dataFields: ['guest'] },
   { type: 'argument', weight: 2, text: '{name} and {other} argued about {topic}.', moodDelta: -0.2, dataFields: ['other', 'topic'] },
@@ -6293,18 +6293,21 @@ const OFFSCREEN_EVENTS = [
   // --- New events (P8) ---
   { type: 'date', weight: 1, text: '{name} went on a {date_desc} date.', moodDelta: 0.12, dataFields: ['date_desc'] },
   { type: 'hobby', weight: 2, text: '{name} spent time on their {hobby}.', moodDelta: 0.06, dataFields: ['hobby'] },
-  { type: 'nap', weight: 2, text: '{name} took a long nap on the couch.', moodDelta: 0.04, dataFields: [] },
+  { type: 'nap', roomId: 'living_room', weight: 2, text: '{name} took a long nap on the couch.', moodDelta: 0.04, dataFields: [] },
   { type: 'phone_call', weight: 2, text: '{name} had a long phone call with {caller}.', moodDelta: 0.03, dataFields: ['caller'] },
-  { type: 'laundry', weight: 1, text: '{name} did a load of laundry.', moodDelta: 0.02, dataFields: [] },
-  { type: 'burnt_food', weight: 1, text: '{name} burnt something in the kitchen — the smoke alarm went off.', moodDelta: -0.05, dataFields: [] },
+  { type: 'laundry', roomId: 'laundry', weight: 1, text: '{name} did a load of laundry.', moodDelta: 0.02, dataFields: [] },
+  { type: 'burnt_food', roomId: 'kitchen', weight: 1, text: '{name} burnt something in the kitchen — the smoke alarm went off.', moodDelta: -0.05, dataFields: [] },
   { type: 'package', weight: 1, text: '{name} got a package delivered.', moodDelta: 0.05, dataFields: [] },
-  { type: 'late_night_snack', weight: 2, text: '{name} had a late-night snack raid on the fridge.', moodDelta: 0.02, dataFields: [] },
+  { type: 'late_night_snack', roomId: 'kitchen', weight: 2, text: '{name} had a late-night snack raid on the fridge.', moodDelta: 0.02, dataFields: [] },
   // Intimacy & Voyeurism Phase 18 (D16): the baby-presence schedule note.
   // Drawn ONLY for a resident parent (drawOffscreenEvent appends it to the
   // pool when npc.flags._baby is set) — the parent stays home with the new
   // addition instead of living their old evening. `baby` gets its own
   // EVENT_EMOTION/EVENT_IMPORTANCE rows above.
-  { type: 'baby', weight: 3, text: '{name} stayed in with the baby all evening — tiny socks everywhere, half-eaten meals, zero complaints.', moodDelta: 0.08, dataFields: [] },
+  // REMOVED from the base pool 2026-08-26: this row sat here AND was
+  // appended by drawOffscreenEvent for a real parent, so every NPC in the
+  // house could draw "stayed in with the baby" whether or not one existed.
+  // The comment above was already correct; the array was not.
 ];
 
 const EVENT_FILL_DATA = {
@@ -6858,20 +6861,45 @@ const PEEP_SUSPECTED_TEMPLATES = [
 const PEEK = {
   realTickMs: 1000,          // the session loop's real-time cadence
   tickMinutes: 1,            // game-minutes per hold tick (1 gm per real second)
-  // The risk ramp (D7). Per-tick increment:
+  // The risk ramp (D7). peekRiskPerTick returns the risk AT tick t — a level,
+  // not an increment:
   //   baseRisk + riskPerTick × ticksElapsed
   //     − stealthSuccess(player) × stealthBonus  — the planted curve's first reader
   //     − doorLocked × lockBonus                 — a locked door = a complacent occupant
   //     + getNpcPerception(occupant) × perceptionWeight
-  baseRisk: 0.05,
-  riskPerTick: 0.012,
+  //
+  // 2026-08-26 playtest: the caller used to SUM this into riskAccum, which
+  // charged baseRisk and the whole perception term again every second and
+  // turned the linear ramp above into a quadratic one. riskAccum hit maxRisk
+  // by second 6 and pinned the catch roll at a flat 58%/tick forever; the
+  // median hold was 3 seconds and nobody could hold a keyhole. The numbers
+  // below are re-tuned for the fixed reading (peek.js assigns rather than
+  // adds) and are meaningless under the old one — if a future edit makes
+  // riskAccum accumulate again, these become far too punishing, not too
+  // generous, which is the failure that is hard to see from inside a session.
+  //
+  // What the curve buys, against a typical awake NPC (perception ≈ 0.5):
+  //   untrained, unlocked door   — median hold ~15s, 90% caught by ~34s
+  //   stealth maxed              — ~32s
+  //   stealth maxed + locked     — ~44s
+  //   a sleepy/incurious target  — ~19s;  a sharp one ~12s
+  baseRisk: 0.010,
+  riskPerTick: 0.005,
   maxRisk: 1.0,
-  stealthBonus: 0.04,
-  lockBonus: 0.02,
-  perceptionWeight: 0.15,
+  // Stealth and a locked door were worth 0.04/0.02 against a base+perception
+  // of ~0.125 — under 30% and under 15% of the standing risk, i.e. a skill
+  // and a precaution the player could not feel. Both now move the curve.
+  stealthBonus: 0.10,
+  lockBonus: 0.06,
+  // Was 0.15, which made an awake NPC's perception term (~0.075) worth 1.5x
+  // the ENTIRE baseRisk before the ramp had started — the "impossibly
+  // perceptive" complaint, and the reason tick 1 alone was an 18% catch.
+  // Still the widest single spread in the formula (a sleepy target holds
+  // ~19s where a sharp one holds ~12s), just no longer the whole formula.
+  perceptionWeight: 0.10,
   // The caught roll each tick: maxCatchChance × riskAccum/(riskAccum + riskHalfway).
   // Monotone-saturating — a long hold is eventually caught, never certain in one tick.
-  riskHalfway: 0.55,
+  riskHalfway: 1.8,
   maxCatchChance: 0.9,
   // Safety cap: a hold nobody stops ends on its own (4 real minutes).
   maxHoldTicks: 240,
@@ -6924,9 +6952,23 @@ const PEEK_OUTCOMES = {
   // producer path — the caught resolution is deterministic, D15). tension/
   // affection are the occupant's relPlayer axes, suspicion is the boundary
   // subject, mood is the player's impulse.
+  //
+  // `continuesHold` (2026-08-26 playtest): whether being caught by THIS
+  // reaction ends the watching. Every outcome used to end it — the lens shut
+  // and a modal opened — including the two where the fiction is explicitly
+  // that the watching goes on. Being clocked by someone who shrugs and
+  // carries on is not the end of a peek; being clocked by someone who plays
+  // up to it is the payoff. Those two keep the hold and stop rolling for a
+  // catch (you cannot be caught by someone who already knows), and the lens
+  // re-derives its view so the frame reflects the moment.
+  //
+  // `engage` deliberately does NOT continue: the door opens and the occupant
+  // invites the watcher in, which is the handoff into a conversation that
+  // presentPeekCaughtWindow already performs (D6/D18). A keyhole you are
+  // standing on the wrong side of is not a keyhole any more.
   stop:     { tension: 0.10, suspicion: 0.10 },
-  ignore:   { tension: 0.05 },
-  escalate: { tension: 0.02, mood: 0.05 },
+  ignore:   { tension: 0.05, continuesHold: true },
+  escalate: { tension: 0.02, mood: 0.05, continuesHold: true },
   engage:   { tension: 0.06, affection: 0.04, mood: 0.10 },
   confront: { tension: 0.20, suspicion: 0.25, affection: -0.15, mood: -0.05 },
 };
@@ -7907,6 +7949,14 @@ const DRIVE_DEFS = {
     timeOfDay: ['morning', 'wind_down', 'leisure'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'hygiene', delta: 40 } }],
     activityOverride: 'showering',
+    // A shower happens in a bathroom. `actionId` above gives the commitment a
+    // real object anchor, but an anchor is a STAND-POINT INSIDE a room, not a
+    // choice of room — and 'showering' is absent from ACTIVITY_ROOM_PREFERENCES
+    // (where 'skincare routine' correctly names both bathrooms), so nothing
+    // routed this anywhere. NPCs showered wherever they happened to be
+    // standing, and the event log duly recorded a shower in the living room.
+    // Same mechanism and same rooms read_book uses.
+    moveToRoom: ['bathroom_a', 'bathroom_b'],
     eventTemplate: '{name} took a shower.',
     eventMood: 0.02,
     cooldownMinutes: 300,
@@ -7999,12 +8049,21 @@ const DRIVE_DEFS = {
     timeOfDay: ['leisure', 'wind_down'],
     effects: [{ type: 'ADJUST_NEED', params: { who: 'self', need: 'energy', delta: 25 } }],
     activityOverride: 'napping',
+    // Somewhere with a couch. Like `shower` above, `actionId` buys a bed/sofa
+    // anchor WITHIN a room and nothing was choosing the room, so a nap landed
+    // wherever the NPC was standing — the gym, a hallway, or the player's own
+    // bedroom, which reads to a player as a housemate having climbed into
+    // their bed. Deliberately common rooms only: it matches the off-screen
+    // table's own "a long nap on the couch", and it keeps the `leaves` note
+    // below true rather than quietly invalidating it.
+    moveToRoom: ['living_room', 'game_room'],
     // No `leaves`. The obvious trace — napping in a bedroom leaves the bed
     // unmade — measured dead: 26 nap fires across 12 households × 7 days and
     // not one happened in a bedroom (the schedule parks NPCs in common rooms
-    // at nap time). A trace that can never fire is the same defect class as a
-    // drive nobody performs; the mechanism is generic, so if a future phase
-    // puts NPCs in bedrooms during the day, this is one config line away.
+    // at nap time, and moveToRoom above now keeps them there deliberately). A
+    // trace that can never fire is the same defect class as a drive nobody
+    // performs; the mechanism is generic, so if a future phase gives this
+    // drive a bedroom to nap in, this is one config line away.
     eventTemplate: '{name} crashed for a nap.',
     eventMood: 0.05,
     cooldownMinutes: 480,

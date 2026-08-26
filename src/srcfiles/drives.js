@@ -678,8 +678,19 @@ function resolveStandardDrive(driveId, drive, c) {
 
   // Move to common area — actually relocate the NPC to a common room
   // rather than just relabeling their activity while they stay put.
-  if (drive.moveToCommon && !location) {
-    const rooms = COMMON_ROOMS.map(roomId => {
+  //
+  // The guard used to read `drive.moveToCommon && !location`, i.e. "only
+  // relocate somebody who is nowhere". `location` is the schedule's resolved
+  // room and is set for every NPC on every tick, so the branch never ran and
+  // seek_company narrated "came out to the common area for some company"
+  // while the NPC stayed exactly where they were — the precise thing the
+  // comment above says this exists to prevent. Now it relocates whenever the
+  // NPC is not ALREADY in a common room, which is what "come out to the
+  // common area" means; the candidate list excludes where they already are so
+  // the pick cannot be a no-op.
+  const alreadyCommon = location && COMMON_ROOMS.includes(location);
+  if (drive.moveToCommon && !alreadyCommon) {
+    const rooms = COMMON_ROOMS.filter(roomId => roomId !== location).map(roomId => {
       const occCount = getPresentNpcIds(npcs, roomId).length;
       const capacity = ROOMS[roomId].capacity;
       const weight = occCount >= capacity ? 1 / SCENE.crowdAvoidanceWeight : 1;
@@ -851,12 +862,22 @@ function resolveStandardDrive(driveId, drive, c) {
     }
   }
 
-  // Generic event for drives with eventTemplate
+  // Generic event for drives with eventTemplate.
+  //
+  // `locationOverride || location`, in that order, and the order is the whole
+  // point: a drive that declares `moveToRoom` HAS already chosen where the
+  // activity happens, and it is the destination, not the room being left. The
+  // stamp used to read `location` while `c.setLocation(locationOverride)` ran
+  // a dozen lines further down, so the log recorded where somebody walked
+  // FROM — "curled up with a book" filed under the hallway they crossed to
+  // reach the study. Every reader of world.events (the room-evidence
+  // narration, the dream harvester, the knowledge layer) took that at face
+  // value.
   if (drive.eventTemplate && !drive.npcToNpc) {
     const evt = {
       day: gameState.meta.clock.day,
       tick: currentTick,
-      roomId: location,
+      roomId: locationOverride || location,
       npcId,
       type: driveId,
       moodDelta: drive.eventMood || 0,
