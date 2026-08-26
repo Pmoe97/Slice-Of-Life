@@ -1,5 +1,14 @@
 # AI-Assisted Character Generation — session prompt
 
+> **RETIRED 2026-08-26 — do not run this prompt.** All seven phases are built
+> and verified and `ai-character-generation-plan.md` sits beside this file in
+> `src/ref/complete/`. Its Status header says COMPLETE and its Status table has
+> no unstarted row, so Step 0 below would correctly tell you to stop — this
+> banner just saves you the reading. Kept as the design record of how the
+> overhaul was run. Further work on AI character generation is a change to a
+> finished system: start from the plan's `## Locked decisions` (D1–D14), not
+> from this protocol.
+
 Hand this to an implementation session **verbatim**. It is reused unchanged
 every session; the plan's Handoff section, not this prompt, is what tells you
 where things stand.
@@ -24,7 +33,7 @@ which phase to work on — find it yourself using the steps below.
 ## Step 0 — find out where you are (cheap: the Status table, not the full doc)
 
 Read only the `## Handoff — read this first` section and the `## Status` table
-in `src/ref/wip/ai-character-generation-plan.md`.
+in `src/ref/complete/ai-character-generation-plan.md`.
 
 The first phase not marked built is your phase. Phases 1 and 2 are a hard
 ordering — **never build the engine before free text works**. Phase 2 has no

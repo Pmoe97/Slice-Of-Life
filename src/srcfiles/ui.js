@@ -4914,6 +4914,21 @@ async function handleAction(action, npcId, extra) {
     case 'classifieds.studio-save-edits':
       doClassifiedsStudioSaveEdits();
       break;
+    // AI-Assisted Character Generation Phase 6 — rewriting a character who
+    // already lives in the apartment. Generate produces a diff (D12); Apply
+    // and Cancel are the only ways anything is actually written.
+    case 'classifieds.studio-rewrite-toggle':
+      doClassifiedsStudioRewriteToggle();
+      break;
+    case 'classifieds.studio-rewrite-generate':
+      await doClassifiedsStudioConceptRewrite();
+      break;
+    case 'classifieds.studio-rewrite-apply':
+      doClassifiedsStudioRewriteApply();
+      break;
+    case 'classifieds.studio-rewrite-cancel':
+      doClassifiedsStudioRewriteCancel();
+      break;
     case 'classifieds.studio-create':
       await doClassifiedsStudioCreate();
       break;

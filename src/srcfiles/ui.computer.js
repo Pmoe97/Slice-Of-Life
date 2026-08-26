@@ -1245,11 +1245,18 @@ function doClassifiedsStudioSetMode(rowId) {
     studio.tab = 'personal';
     studio.editMode = false;
     studio.editSelections = {};
+    // AI-Assisted Character Generation Phase 6: a pending rewrite is
+    // per-character. Leaving it set while switching to a DIFFERENT NPC's
+    // profile would let a stale "apply" button commit someone else's diff to
+    // the wrong person the next time this screen renders.
+    studio.pendingRewrite = null;
+    studio.rewriteConcept = defaultConceptState();
   } else if (rowId === 'create' || rowId === 'list') {
     studio.mode = rowId;
     studio.viewingNpcId = null;
     studio.editMode = false;
     studio.editSelections = {};
+    studio.pendingRewrite = null;
   }
   rerenderStudio();
 }
@@ -1407,6 +1414,59 @@ function applyNpcField(obj, path, value) {
 // ones, logs the rejected ones, and recomputes the derived relationship
 // fields. Cannot produce a corrupt save: an invalid edit is refused, not
 // coerced.
+// The shared apply loop (AI-Assisted Character Generation Phase 6, D13):
+// validate -> skip no-op -> write -> log to bibleChanges -> one revision per
+// PASS (not per field) -> recompute derived relPlayer fields. Extracted out
+// of doClassifiedsStudioSaveEdits so a concept rewrite (below) goes through
+// the exact same gate the manual Edit Mode does — it cannot write a value the
+// manual editor would reject, and it inherits revision history for free.
+//
+// `edits` is a plain {path, value} array with NO DOM dependency, which is
+// what makes this callable from two very different producers: a form
+// harvest, and conceptToEditList's diff. `gs` is threaded through rather than
+// read off currentGameState so this has no implicit global dependency.
+//
+// Returns the applied subset (post no-op-skip, post-validation) — the caller
+// needs it for two different reasons: doClassifiedsStudioSaveEdits counts it
+// for its narration line, and the rewrite path (below) inspects its paths to
+// decide whether to bump genSeed (D14) BEFORE anything is written, so a
+// throw partway through never leaves genSeed bumped with nothing behind it.
+function applyStudioEditList(gs, npc, edits) {
+  const errors = [];
+  const applied = [];
+  let bibleTouched = false;
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  for (const { path, value } of edits) {
+    const res = validateNpcField(path, value);
+    if (!res.ok) { errors.push(`${path}: ${res.error}`); continue; }
+    // Skip no-op writes — an Edit Mode save also collects untouched inputs,
+    // and re-logging an identical value would fabricate a revision.
+    if (same(studioGetPath(npc, path), res.value)) continue;
+    if (applyNpcField(npc, path, res.value)) {
+      applied.push({ path, value: res.value });
+      if (path.startsWith('bible.')) {
+        bibleTouched = true;
+        if (!Array.isArray(npc.bibleChanges)) npc.bibleChanges = [];
+        npc.bibleChanges.push({ path, value: res.value, day: gs.meta.clock.day });
+      }
+    }
+  }
+
+  // One revision per save pass (D17: bibleRevision counts edit passes, not
+  // fields — a three-field save is one revision, three logged changes).
+  if (bibleTouched) npc.bibleRevision = (npc.bibleRevision || 0) + 1;
+
+  // Derived fields recompute from what was edited (D17); they are never
+  // written directly.
+  if (applied.length > 0 && npc.relPlayer) {
+    const d = deriveConversationPhase(npc.relPlayer);
+    npc.relPlayer.intimacyLevel = d.intimacyLevel;
+    npc.relPlayer.conversationPhase = d.conversationPhase;
+  }
+
+  return { applied, errors };
+}
+
 function doClassifiedsStudioSaveEdits() {
   const gs = currentGameState;
   const studio = studioState(gs);
@@ -1436,49 +1496,124 @@ function doClassifiedsStudioSaveEdits() {
     edits.push({ path, value: studioPoolNamesToValues(path, names) });
   }
 
-  const errors = [];
-  let applied = 0;
-  let bibleTouched = false;
-  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  for (const { path, value } of edits) {
-    const res = validateNpcField(path, value);
-    if (!res.ok) { errors.push(`${path}: ${res.error}`); continue; }
-    // Skip no-op writes — an Edit Mode save also collects untouched inputs,
-    // and re-logging an identical value would fabricate a revision.
-    if (same(studioGetPath(npc, path), res.value)) continue;
-    if (applyNpcField(npc, path, res.value)) {
-      applied++;
-      if (path.startsWith('bible.')) {
-        bibleTouched = true;
-        if (!Array.isArray(npc.bibleChanges)) npc.bibleChanges = [];
-        npc.bibleChanges.push({ path, value: res.value, day: gs.meta.clock.day });
-      }
-    }
-  }
-
-  // One revision per save pass (D17: bibleRevision counts edit passes, not
-  // fields — a three-field save is one revision, three logged changes).
-  if (bibleTouched) npc.bibleRevision = (npc.bibleRevision || 0) + 1;
-
-  // Derived fields recompute from what was edited (D17); they are never
-  // written directly.
-  if (applied > 0 && npc.relPlayer) {
-    const d = deriveConversationPhase(npc.relPlayer);
-    npc.relPlayer.intimacyLevel = d.intimacyLevel;
-    npc.relPlayer.conversationPhase = d.conversationPhase;
-  }
+  const { applied, errors } = applyStudioEditList(gs, npc, edits);
 
   studio.editMode = false;
   studio.editSelections = {};
   if (errors.length > 0) {
     addLogEntry('system', `Studio: ${errors.length} field${errors.length === 1 ? '' : 's'} not saved — ${errors.slice(0, 3).join('; ')}${errors.length > 3 ? '…' : ''}`);
   }
-  if (applied > 0) {
-    addLogEntry('narration', `Updated ${applied} field${applied === 1 ? '' : 's'} for ${npc.bible?.name || 'this character'}.`);
+  if (applied.length > 0) {
+    addLogEntry('narration', `Updated ${applied.length} field${applied.length === 1 ? '' : 's'} for ${npc.bible?.name || 'this character'}.`);
   }
   rerenderStudio();
-  if (applied > 0 || errors.length > 0) {
+  if (applied.length > 0 || errors.length > 0) {
     saveAtBoundary('classifieds-studio-edit', gs).catch(() => {});
+  }
+}
+
+// --- Live character rewrite (AI-Assisted Character Generation Phase 6) ---
+// D12: a live NPC may be FULLY rewritten, behind an explicit confirm naming
+// what moves and what does not. Generating never writes anything by itself —
+// it computes a diff against the current bible and holds it on
+// `studio.pendingRewrite` until Apply or Cancel. D13: the diff is applied
+// through the exact same gate as a manual edit (applyStudioEditList above).
+
+function doClassifiedsStudioRewriteToggle() {
+  const studio = studioState(currentGameState);
+  if (!studio.rewriteConcept) studio.rewriteConcept = defaultConceptState();
+  const live = readConceptControls('studio-rewrite');
+  if (live) studio.rewriteConcept.text = live.text;
+  studio.rewriteConcept.open = !studio.rewriteConcept.open;
+  rerenderStudio();
+}
+
+async function doClassifiedsStudioConceptRewrite() {
+  const gs = currentGameState;
+  const studio = studioState(gs);
+  const npcId = studio.viewingNpcId;
+  const npc = npcId ? gs.npcs[npcId] : null;
+  if (!npc) return;
+  if (!studio.rewriteConcept) studio.rewriteConcept = defaultConceptState();
+  const state = studio.rewriteConcept;
+  const live = readConceptControls('studio-rewrite');
+  if (!live) return;
+  state.text = live.text;
+  state.lastError = '';
+  if (!live.text) {
+    state.lastError = 'Describe who they are now.';
+    rerenderStudio();
+    return;
+  }
+
+  state.busy = true;
+  studio.pendingRewrite = null;
+  rerenderStudio();
+  try {
+    const result = await fillFromConcept(live.text, 'npcRewrite', {
+      existingName: npc.bible?.name,
+      usedNames: usedNpcNames ? [...usedNpcNames(gs)].filter(n => n !== npc.bible?.name) : [],
+    });
+    if (!result.ok) { state.lastError = result.reason; return; }
+
+    // The diff, built BEFORE anything is written: conceptToEditList already
+    // skips paths that would be no-ops, so what survives here is exactly
+    // what would change. oldValue is captured now, from the untouched npc —
+    // capturing it after Apply would show "old" and "new" as identical.
+    const edits = conceptToEditList(result.draft, npc);
+    if (edits.length === 0) {
+      state.lastError = 'That reads the same as who they already are — nothing to change.';
+      return;
+    }
+    studio.pendingRewrite = {
+      edits: edits.map(e => ({ path: e.path, oldValue: studioGetPath(npc, e.path), newValue: e.value })),
+      touchesAppearance: conceptEditsTouchAppearance(edits),
+    };
+  } catch (e) {
+    state.lastError = `Something went wrong applying that: ${(e && e.message) || 'unknown error'}`;
+  } finally {
+    state.busy = false;
+    rerenderStudio();
+  }
+}
+
+function doClassifiedsStudioRewriteCancel() {
+  const studio = studioState(currentGameState);
+  studio.pendingRewrite = null;
+  rerenderStudio();
+}
+
+function doClassifiedsStudioRewriteApply() {
+  const gs = currentGameState;
+  const studio = studioState(gs);
+  const npcId = studio.viewingNpcId;
+  const npc = npcId ? gs.npcs[npcId] : null;
+  const pending = studio.pendingRewrite;
+  if (!npc || !pending) return;
+
+  const edits = pending.edits.map(e => ({ path: e.path, value: e.newValue }));
+  const { applied, errors } = applyStudioEditList(gs, npc, edits);
+
+  // D14: bump ONLY when the applied set actually touched appearance — decided
+  // from what was APPLIED, not from the pre-apply diff, so a physical edit
+  // that failed validation (and therefore never landed) cannot bump the
+  // portrait cache key for nothing.
+  if (conceptEditsTouchAppearance(applied)) {
+    npc.bible.genSeed = Math.floor(Math.random() * 1000000);
+  }
+
+  studio.pendingRewrite = null;
+  if (studio.rewriteConcept) { studio.rewriteConcept.text = ''; studio.rewriteConcept.open = false; }
+
+  if (errors.length > 0) {
+    addLogEntry('system', `Studio: ${errors.length} field${errors.length === 1 ? '' : 's'} not applied — ${errors.slice(0, 3).join('; ')}${errors.length > 3 ? '…' : ''}`);
+  }
+  if (applied.length > 0) {
+    addLogEntry('narration', `Rewrote ${applied.length} field${applied.length === 1 ? '' : 's'} for ${npc.bible?.name || 'this character'}.`);
+  }
+  rerenderStudio();
+  if (applied.length > 0 || errors.length > 0) {
+    saveAtBoundary('classifieds-studio-rewrite', gs).catch(() => {});
   }
 }
 

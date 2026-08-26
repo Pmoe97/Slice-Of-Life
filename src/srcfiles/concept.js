@@ -970,18 +970,27 @@ function renderConceptSection(state, opts) {
 
   // D10: off by default. A fill merges OVER the draft and never blanks a
   // field the player typed, unless they ask for it here.
-  const replaceLabel = document.createElement('label');
-  replaceLabel.className = 'concept-replace';
-  const cb = document.createElement('input');
-  cb.type = 'checkbox';
-  cb.checked = !!s.replace;
-  cb.disabled = !!s.busy;
-  cb.setAttribute('data-concept-replace', key);
-  replaceLabel.appendChild(cb);
-  const cbText = document.createElement('span');
-  cbText.textContent = 'Replace what I\'ve already written';
-  replaceLabel.appendChild(cbText);
-  row.appendChild(replaceLabel);
+  //
+  // `opts.hideReplace` (Phase 6): a rewrite has no draft to merge OVER — D12
+  // is that the bible is fully replaced, previewed as a diff, and the player
+  // approves or cancels the whole thing at the confirm panel. A checkbox
+  // offering to NOT do that would be a control with no effect, which is worse
+  // than no control — so it is not built at all for this scope, rather than
+  // built and ignored.
+  if (!o.hideReplace) {
+    const replaceLabel = document.createElement('label');
+    replaceLabel.className = 'concept-replace';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!s.replace;
+    cb.disabled = !!s.busy;
+    cb.setAttribute('data-concept-replace', key);
+    replaceLabel.appendChild(cb);
+    const cbText = document.createElement('span');
+    cbText.textContent = 'Replace what I\'ve already written';
+    replaceLabel.appendChild(cbText);
+    row.appendChild(replaceLabel);
+  }
 
   body.appendChild(row);
 

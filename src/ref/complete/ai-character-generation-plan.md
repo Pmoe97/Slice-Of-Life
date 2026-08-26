@@ -1,9 +1,7 @@
 # AI-Assisted Character Generation
 
-Status: **in progress — Phases 1–5 built and verified.** Design session
-complete 2026-08-26; all decisions locked. Phases 1–5 implemented and verified
-the same day. Next: **Phase 6** (live-character rewrite), then Phase 7, which
-is now mostly done — see its row in the Status table.
+Status: **complete — all 7 phases built and verified 2026-08-26.** Design
+session complete 2026-08-26; all decisions locked. Moving to `complete/`.
 Last updated 2026-08-26.
 
 Companions:
@@ -26,21 +24,93 @@ Companions:
   `rollCastSlot` partial contract, and the structured-draw → prose-expansion
   split this plan inverts for one code path).
 
-This is a living document, worked one phase per session. **Read the Handoff
-section immediately below before anything else** — it is the single source of
-truth for where the last session left off. Update it, and the Status table
-near the bottom, as the very last thing you do each session — see
-`src/ref/wip/ai-character-generation-handoff-prompt.md` for the full session
-protocol.
+This plan is **complete** — all 7 phases built and verified 2026-08-26. Kept
+here as design record and precedent, alongside
+`src/ref/complete/ai-character-generation-handoff-prompt.md`. A future session
+touching this feature is doing maintenance on a finished system, not resuming
+this plan.
 
 ---
 
 ## Handoff — read this first
 
-**Resume at:** **Phase 6** — the live-character rewrite, the only surface left.
-Phases 1–5 are built and verified, and Phase 7 is all but done (its portrait
-prompt landed in Phase 4, its D4 resolver cleanup in Phase 1; only the
-move-to-`complete/` doc pass remains).
+**Resume at:** nothing — all 7 phases are built and verified. This document is
+now historical/reference; a future session touching this feature is doing
+maintenance on a finished system, not resuming a plan.
+
+**Phase 6 notes (2026-08-26):**
+
+The profile surface now carries the section for an existing NPC (scope
+`npcRewrite`). The shared `renderConceptSection` gained one new option,
+`hideReplace`, because D10's "Replace what I've already written" checkbox has
+no meaning here — D12 says the bible is *fully* replaced by design, so a
+checkbox offering to not do that would be a control with no effect. It is not
+built at all for this scope rather than built and ignored.
+
+**The generate→confirm split, precisely:** Generate never writes the bible. It
+calls `fillFromConcept('npcRewrite', …)`, then `conceptToEditList(draft, npc)`
+to get the real diff (no-ops already excluded), captures each path's *old*
+value from the untouched npc before anything changes, and holds the result on
+`studio.pendingRewrite`. The confirm panel (`renderStudioRewritePreview`)
+shows every `path: old → new`, the count, and D12's fixed preserved-fields
+statement. Only **Apply** (`doClassifiedsStudioRewriteApply`) or **Cancel**
+(`doClassifiedsStudioRewriteCancel`) do anything; Cancel clears the pending
+diff and touches nothing else.
+
+**D13's extraction, done as specified:** `applyStudioEditList(gs, npc, edits)`
+pulled out of `doClassifiedsStudioSaveEdits` — validate → skip no-op → write
+→ log `bibleChanges` → one `bibleRevision` per pass → recompute
+`relPlayer`'s derived fields. Both the manual Edit Mode save and the rewrite
+Apply now call the same function; a rewrite cannot write anything the manual
+editor would reject, and it inherits revision history for free. It takes a
+plain `{path, value}` array with no DOM read, which is what makes it callable
+from `conceptToEditList`'s diff as well as a form harvest.
+
+**D14, decided from the APPLIED set, not the proposed one:** `genSeed` bumps
+only when `conceptEditsTouchAppearance` is true of what was actually
+*written* (post-validation, post no-op-skip) — not the pre-apply diff. A
+`bible.physical.*` edit that failed validation and never landed cannot bump
+the portrait cache key for nothing.
+
+**A state-reset detail worth naming for future maintenance:** `pendingRewrite`
+and `rewriteConcept` are reset whenever `doClassifiedsStudioSetMode` switches
+to a *different* NPC's profile. Without that, a pending diff computed for NPC
+A would sit armed while looking at NPC B, and the next Apply click would
+rewrite the wrong person.
+
+**Verified live**, per the plan's own checklist: recorded `relPlayer`,
+`memory`, `residency`, `mood`, `location`, `bibleRevision` before a rewrite on
+a real rolled resident (not Del, the hand-authored contractor — worth calling
+out, since `Object.keys(gs.npcs)[0]` grabs Del if no filter is applied, and
+rewriting the one hand-authored NPC in the game would have been a bad first
+test); the diff preview matched exactly what Apply wrote; **Cancel left
+every field byte-identical**, including `bibleRevision` at 0; **Apply**
+produced `bibleRevision: 1` and one `bibleChanges` entry per changed path
+(13 in, 13 out); every independently-tracked `relPlayer` axis (trust,
+affection, tension, respect, comfort, desire, grievances, firstMetDay,
+lastInteractionDay) was byte-identical after — the ONLY two fields that moved
+were `intimacyLevel`/`conversationPhase`, which is D17's pre-existing,
+deliberate *derived-field recompute*, not a leak (confirmed: my test had
+seeded them inconsistently with trust/affection by hand, and the recompute
+step "corrected" them to what the real derivation function produces for those
+numbers — this is D17 working as designed, not a Phase 6 side effect); an
+appearance-touching rewrite bumped `genSeed`, a personality-only one
+(traits/want, no physical) did not; `buildNpcBlockV2`'s persona block
+reflected the new wound/quirk immediately, with no trace of the old one.
+
+**Phase 7** needed only the doc-index move — its portrait-prompt item landed
+inside Phase 4 and its D4 resolver-cleanup item landed inside Phase 1, both
+noted in their own sections above when they happened rather than deferred.
+
+Full `dev/verify/run-all.js`: **unchanged at the 72-failure / 8-errored
+baseline**. `verify-concept-p2.js` stays at 138 — Phase 6's new code
+(`applyStudioEditList`, the rewrite handlers) lives in `ui.computer.js`,
+outside `dev/verify/loadgame.js`'s ORDER (truncated before the render/ui
+layer, same as every profile-editing function before it), so it was verified
+live rather than added to the Node harness — consistent with how Phases 3–5's
+UI-layer work was verified.
+
+---
 
 **Phases 4 + 5 notes (2026-08-26):**
 
@@ -880,7 +950,7 @@ descriptions, `authoredFields` populated per roommate, `bibleRevision` 0, and
 
 ---
 
-### Phase 6 — Live character rewrite
+### Phase 6 — Live character rewrite — **BUILT 2026-08-26**
 
 **Goal:** The profile surface gains the section for an existing NPC. A fill
 produces a preview of exactly which bible fields would change; a confirm
@@ -914,7 +984,7 @@ bible. Cancel a rewrite at the confirm and assert nothing changed.
 
 ---
 
-### Phase 7 — Portrait prompt and polish
+### Phase 7 — Portrait prompt and polish — **DONE 2026-08-26**
 
 **Goal:** The player scope's `portraitPrompt` reaches the Portrait tab, and
 the loose ends the earlier phases deliberately deferred are closed.
@@ -948,8 +1018,8 @@ baseline recorded in Phase 1's session notes.
 | 3 | **Built & verified** (2026-08-26) | Character Studio create mode on the new engine; shared `renderConceptSection` authored; 30 appearance fields added; old AI path deleted |
 | 4 | **Built & verified** (2026-08-26) | Player Design studio + sandbox appearance studio; also landed Phase 7's portrait prompt |
 | 5 | **Built & verified** (2026-08-26) | Sandbox roommate editor; one description fills five sub-tabs; zero prose calls at start (D9) |
-| 6 | Not started | Live-character rewrite behind a confirm, through the existing edit loop |
-| 7 | **Mostly done** — only the doc-index move remains | Portrait prompt landed in Phase 4; the D4 resolver cleanup landed in Phase 1 |
+| 6 | **Built & verified** (2026-08-26) | Live-character rewrite behind a confirm, through the shared `applyStudioEditList` |
+| 7 | **Done** (2026-08-26) | Portrait prompt landed in Phase 4; D4 resolver cleanup landed in Phase 1; doc-index move done in this session |
 
 ---
 

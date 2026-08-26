@@ -140,6 +140,12 @@ function defaultComputerState() {
         studio: {
           draft: {},
           concept: { open: false, text: '', busy: false, replace: false, lastError: '' },
+          // AI-Assisted Character Generation Phase 6: the profile surface's
+          // own Describe & Generate state, and the rewrite diff it produces —
+          // held pending until the player Applies or Cancels (D12), never
+          // written by Generate itself.
+          rewriteConcept: { open: false, text: '', busy: false, replace: false, lastError: '' },
+          pendingRewrite: null,
           preview: null,       // cached preview NPC bible (Phase 4 live preview)
           mode: 'create',
           viewingNpcId: null,

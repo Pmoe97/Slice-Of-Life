@@ -2507,7 +2507,14 @@ function renderRoomListStudio(body, gs, app, screen) {
 // Phase 5 profile keys (normalizeComputerState replaces the whole studio
 // object, so the defaults live here too, read-side).
 function studioDefaultState() {
-  return { draft: {}, concept: defaultConceptState(), preview: null, mode: 'create', viewingNpcId: null, tab: 'personal', editMode: false, editSelections: {} };
+  return {
+    draft: {}, concept: defaultConceptState(), preview: null, mode: 'create',
+    viewingNpcId: null, tab: 'personal', editMode: false, editSelections: {},
+    // AI-Assisted Character Generation Phase 6: the profile surface's own
+    // Describe & Generate state, and the pending rewrite it produces (a diff
+    // awaiting Apply/Cancel — never applied by Generate itself, per D12).
+    rewriteConcept: defaultConceptState(), pendingRewrite: null,
+  };
 }
 
 // Mode-switch bar: "New Character" (create) and "Characters" (list), shown on
@@ -3042,6 +3049,24 @@ function renderStudioProfileMode(body, gs, studio, npc) {
   `;
   body.appendChild(header);
 
+  // Describe & Generate (AI-Assisted Character Generation Phase 6). Above the
+  // tab bar — like every other surface's section — because a rewrite touches
+  // fields across every tab, not just the one currently open. D12: this never
+  // writes the bible by itself; Generate only produces the diff/confirm panel
+  // below it. Held on the NPC's own profile state (never studio.draft — the
+  // top-of-phase check: a resident and an in-progress create-mode draft must
+  // not share a struct), and reset whenever the viewed NPC changes.
+  if (!studio.rewriteConcept) studio.rewriteConcept = defaultConceptState();
+  const rewriteConceptEl = renderConceptSection(studio.rewriteConcept, {
+    key: 'studio-rewrite',
+    scope: 'npcRewrite',
+    toggleAction: 'classifieds.studio-rewrite-toggle',
+    generateAction: 'classifieds.studio-rewrite-generate',
+    hideReplace: true,
+  });
+  if (rewriteConceptEl) body.appendChild(rewriteConceptEl);
+  if (studio.pendingRewrite) body.appendChild(renderStudioRewritePreview(studio.pendingRewrite, npc));
+
   // Edit Mode toggle — only meaningful on the editable tabs.
   if (STUDIO_EDITABLE_TABS.includes(studio.tab)) {
     const editRow = document.createElement('div');
@@ -3093,6 +3118,64 @@ function renderStudioProfileMode(body, gs, studio, npc) {
     more: renderStudioMoreDetailsTab,
   };
   (renderers[studio.tab] || renderStudioPersonalTab)(content, gs, studio, npc);
+}
+
+// The rewrite confirm panel (AI-Assisted Character Generation Phase 6, D12).
+// A diff of exactly what Apply would change, plus the plain-language
+// statement of what is NOT touched — the thing that makes "full rewrite" a
+// safe button to press rather than a leap of faith. `studioPathLabel` is the
+// same schema-derived labeller the read-only profile rows already use, so a
+// path here reads identically to how it reads everywhere else in the studio.
+function renderStudioRewritePreview(pending, npc) {
+  const wrap = document.createElement('div');
+  wrap.className = 'rewrite-preview';
+
+  const title = document.createElement('div');
+  title.className = 'rewrite-preview-title';
+  title.textContent = `Rewrite ${fullName(npc.bible) || 'this character'} — ${pending.edits.length} field${pending.edits.length === 1 ? '' : 's'} would change`;
+  wrap.appendChild(title);
+
+  const list = document.createElement('div');
+  list.className = 'rewrite-diff-list';
+  const fmt = (v) => {
+    if (v === undefined || v === null || v === '') return '—';
+    if (Array.isArray(v)) return v.map(x => (x && typeof x === 'object') ? (x.name ?? JSON.stringify(x)) : x).join(', ') || '—';
+    if (typeof v === 'object') return JSON.stringify(v);
+    return String(v);
+  };
+  for (const e of pending.edits) {
+    const row = document.createElement('div');
+    row.className = 'rewrite-diff-row';
+    row.innerHTML = `
+      <div class="rewrite-diff-path">${studioPathLabel(e.path)}</div>
+      <div class="rewrite-diff-old">${fmt(e.oldValue)}</div>
+      <div class="rewrite-diff-arrow">→</div>
+      <div class="rewrite-diff-new">${fmt(e.newValue)}</div>
+    `;
+    list.appendChild(row);
+  }
+  wrap.appendChild(list);
+
+  const preserved = document.createElement('p');
+  preserved.className = 'rewrite-preserved';
+  preserved.textContent = 'Your relationship, memories, room, mood and everything happening right now are kept exactly as they are — only the character sheet above changes.';
+  wrap.appendChild(preserved);
+
+  const actions = document.createElement('div');
+  actions.className = 'rewrite-actions';
+  const applyBtn = document.createElement('button');
+  applyBtn.className = 'btn';
+  applyBtn.setAttribute('data-action', 'classifieds.studio-rewrite-apply');
+  applyBtn.textContent = 'Apply rewrite';
+  actions.appendChild(applyBtn);
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn btn-secondary';
+  cancelBtn.setAttribute('data-action', 'classifieds.studio-rewrite-cancel');
+  cancelBtn.textContent = 'Cancel';
+  actions.appendChild(cancelBtn);
+  wrap.appendChild(actions);
+
+  return wrap;
 }
 
 // A schema-driven field row. editMode swaps it between a read-only display

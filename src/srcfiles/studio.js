@@ -38,7 +38,10 @@ function blankStudioDraft(kind) {
     age: null,
     gender: '',
     physical: {},
-    portrait: { prompt: '', seed: 0, promptDirty: false },
+    // lastGeneratedPrompt/variant (bug fix 2026-08-26): scratch fields the
+    // Regenerate button uses to tell "same text, asking for a new draw" apart
+    // from "first draw of this text" — see doStudioPortraitGenerate.
+    portrait: { prompt: '', seed: 0, promptDirty: false, lastGeneratedPrompt: '', variant: 0 },
   };
 }
 
@@ -1119,11 +1122,30 @@ async function doStudioPortraitGenerate() {
   const ta = document.getElementById('ps-prompt');
   const prompt = (ta?.value || '').trim();
   if (!prompt) return;
-  studioSubject.draft.portrait.prompt = prompt;
-  // A stable seed per prompt, so regenerating an unchanged prompt reproduces
-  // the same face rather than rerolling it — the contract getCharacterImage
-  // already relies on for NPC portraits.
-  studioSubject.draft.portrait.seed = hashStr(prompt);
+  const portrait = studioSubject.draft.portrait;
+  portrait.prompt = prompt;
+  // Bug fix (2026-08-26): the seed used to be a bare hashStr(prompt) — stable
+  // per PROMPT TEXT, so regenerating an unchanged prompt reproduces the same
+  // face rather than rerolling it, which is the contract getCharacterImage
+  // relies on for NPC portraits (an NPC's face must not change every time a
+  // scene redraws them). Reused verbatim here, it broke the "Regenerate"
+  // button: getPlayerPortraitImage caches strictly by seed, so pressing
+  // Regenerate without touching the text produced the SAME seed, hit the
+  // SAME cache entry, and returned the identical image — indistinguishable
+  // from the button silently doing nothing.
+  //
+  // `variant` breaks that tie. It compares against `lastGeneratedPrompt` — a
+  // separate field from `prompt`, which is kept live-synced to the textarea
+  // by every keystroke (wirePlayerStudioInputs) and so can never itself be
+  // used to detect "unchanged since last generate". Typing a genuinely new
+  // description resets the count to 0, so the FIRST draw of any given prompt
+  // is still reproducible — preserving the stability `portrait.seed` needs
+  // once it becomes the player's identity token for the rest of the game
+  // (image.js's playerPortraitIdentity) — and only an explicit repeat click
+  // asks for a new one.
+  portrait.variant = (prompt === portrait.lastGeneratedPrompt) ? (portrait.variant || 0) + 1 : 0;
+  portrait.lastGeneratedPrompt = prompt;
+  portrait.seed = hashStr(portrait.variant ? `${prompt}#${portrait.variant}` : prompt);
   studioSubject.busy = true;
   renderPlayerStudio();
   try {
@@ -1142,8 +1164,14 @@ async function doStudioPortraitGenerate() {
 
 function doStudioPortraitReset() {
   if (studioSubject?.kind !== 'player') return;
-  studioSubject.draft.portrait.promptDirty = false;
-  studioSubject.draft.portrait.prompt = '';
+  const portrait = studioSubject.draft.portrait;
+  portrait.promptDirty = false;
+  portrait.prompt = '';
+  // Back to a blank slate: the next Generate is a "first draw" of whatever
+  // prompt the fields rebuild, not a same-text repeat of whatever was typed
+  // before Reset was pressed.
+  portrait.lastGeneratedPrompt = '';
+  portrait.variant = 0;
   renderPlayerStudio();
 }
 
@@ -1166,7 +1194,10 @@ function studioDraftFromPlayerRecord(prev) {
     age: prev.age ?? null,
     gender: prev.gender || '',
     physical: JSON.parse(JSON.stringify(prev.physical || {})),
-    portrait: { prompt: prev.portrait?.prompt || '', seed: prev.portrait?.seed || 0, promptDirty: !!prev.portrait?.promptDirty },
+    portrait: {
+      prompt: prev.portrait?.prompt || '', seed: prev.portrait?.seed || 0, promptDirty: !!prev.portrait?.promptDirty,
+      lastGeneratedPrompt: prev.portrait?.lastGeneratedPrompt || '', variant: prev.portrait?.variant || 0,
+    },
   };
 }
 
