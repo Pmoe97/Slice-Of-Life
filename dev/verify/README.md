@@ -111,6 +111,22 @@ baseline has moved and every later comparison in it is stale.
    phase. Plan 4 moved `MEMORY_BUDGET.maxFacts` (40) to `BELIEF.maxFacts` (60)
    and `verify-p3` went on comparing against `undefined` — which fails loudly,
    but the same class of move can just as easily pass loudly.
+8. **Always pass `required:` to `loadEngine()`.** Without it the loader
+   swallows every read failure: a wrong `SRC` path loads ZERO files, each
+   `api()` call throws `ReferenceError` into a `check()` that scores it as an
+   ordinary FAIL, and the harness still prints a normal-looking summary line.
+   On 2026-08-28 the whole tree sat in that state — `loadgame.js` and ~57
+   harnesses pointed at `srcfiles/` instead of `src/srcfiles/`, and six used a
+   path one level above the repo root — so `run-all.js` could not execute at
+   all. `required: ['config.js', 'sim.js', …]` turns that silence into a
+   thrown error naming the missing file. If a result ever looks surprisingly
+   clean or surprisingly broken, print `loaded.length` before debugging
+   anything else.
+9. **Paths are repo-root-relative, two levels up.** From `dev/verify/`:
+   `path.join(__dirname, '..', '..', 'src', 'srcfiles')` for sources,
+   `path.join(__dirname, '..', '..', 'index.html')` for the entry document.
+   Three `'..'` reaches ABOVE the repo and fails with an `ENOENT` naming a
+   path outside the project — that is the tell.
 
 ## The DOM half
 
