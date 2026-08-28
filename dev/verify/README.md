@@ -1,6 +1,6 @@
 # `dev/verify/` — the regression suite
 
-Not part of the shipped game. `main.html` never loads any of this.
+Not part of the shipped game. `index.html` never loads any of this.
 
 ```bash
 node dev/verify/run-all.js        # everything, with a total
@@ -28,7 +28,7 @@ It stops before `render.js`/`ui.js`, which need a DOM. Those are verified in
 
 | File | Covers |
 |---|---|
-| `loadgame.js` | The loader. Everything else requires it. **Its `ORDER` array must list every file `main.html` loads** — see rule 6. |
+| `loadgame.js` | The loader. Everything else requires it. **Its `ORDER` array must list every file `index.html` loads** — see rule 6. |
 | `run-all.js` | Runs every `verify-*.js`, totals, exits non-zero on failure. |
 | `verify-p1..p5.js` | Plan 0 — NPC correctness fixes |
 | `verify-s1..s5.js` | Plan 1 — perception & signals |
@@ -98,9 +98,9 @@ baseline has moved and every later comparison in it is stale.
    `verify-c1` hardcoded `eat`'s morning `blockAppeal` of 1.2 and a recency
    window derived from a cooldown of 8; Plan 3's Phase 5 moved both. Read the
    number from the table.
-6. **`loadgame.js`'s `ORDER` must list every file `main.html` loads.** A new
+6. **`loadgame.js`'s `ORDER` must list every file `index.html` loads.** A new
    `src/srcfiles/*.js` needs a line in BOTH. `rumination.js` shipped in
-   `main.html` and never reached `ORDER`, so five harnesses — including all of
+   `index.html` and never reached `ORDER`, so five harnesses — including all of
    `verify-c2` — died with `ReferenceError: ruminate is not defined` the moment
    they called `resolveTick`, and **175 assertions silently stopped running**.
    `run-all.js` reports an errored harness separately from a failing one for
@@ -122,7 +122,7 @@ python -m http.server 8734
 # then open  http://localhost:8734/dev-harness.html?cb=1
 ```
 
-`dev-harness.html` shims the Perchance runtime and replays `main.html`.
+`dev-harness.html` shims the Perchance runtime and replays `index.html`.
 **Always append a cache-buster** (`?cb=2`, `?cb=3`…) — the browser caches the
 harness itself and will silently serve a stale copy of your edit.
 

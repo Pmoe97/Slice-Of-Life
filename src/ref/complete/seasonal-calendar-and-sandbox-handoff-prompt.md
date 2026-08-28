@@ -164,15 +164,15 @@ You should never need to fully read the whole plan document in a session.
 
     | In this repo | In Perchance | What it is |
     |---|---|---|
-    | `main.html` | `index.html` | The page body + every `<script>` tag |
+    | `index.html` | `index.html` | The page body + every `<script>` tag |
     | `perchance.pjs` | `main.pjs` | The `$meta` block and the plugin imports |
 
   - **The `?v=` cache-busters bump on every changed srcfile.** They live in
-    the script list in `main.html` / `index.html`. If you add a new srcfile it
+    the script list in `index.html` / `index.html`. If you add a new srcfile it
     must be registered in **both** that script list **and**
     `dev/verify/loadgame.js`'s `ORDER` array, **in the same commit** — a
     missed `ORDER` entry silently drops assertions rather than failing.
-  - `main.html` / `index.html` is the `<body>` contents only — never add
+  - `index.html` / `index.html` is the `<body>` contents only — never add
     `<html>`/`<head>`/`<body>` tags. Imported plugins are reached via `root`,
     and they are declared in `perchance.pjs` / `main.pjs`.
   - Every new UI control's action id must exist in the `data-action` dispatch

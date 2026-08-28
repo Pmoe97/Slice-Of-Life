@@ -217,7 +217,7 @@ check('the divisor is restored after the probe', J('X5.deltaDivisor') === X5.del
 
 // ---------------------------------------------------------------------------
 console.log('\nwiring and provenance of the numbers');
-const mainHtml = fs.readFileSync(path.join(__dirname, '..', '..', 'main.html'), 'utf8');
+const mainHtml = fs.readFileSync(path.join(__dirname, '..', '..', 'index.html'), 'utf8');
 const readme = fs.readFileSync(path.join(__dirname, 'README.md'), 'utf8');
 const ver = (f) => { const m = mainHtml.match(new RegExp(`srcfiles/${f.replace('.', '\\.')}\\?v=(\\d+)`)); return m ? +m[1] : -1; };
 

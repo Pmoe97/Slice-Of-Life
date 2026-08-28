@@ -130,7 +130,7 @@ verified):**
   real measured ones. A future Node-capable session may re-run the suite
   for extra confidence, but nothing in it reads `HEARTBEAT_MINUTES`, so
   the retune cannot break its assertions.
-- No files were added this session → no `loadgame.js` ORDER / main.html
+- No files were added this session → no `loadgame.js` ORDER / index.html
   script-tag updates needed. (Only config.js was edited — a value change
   plus comment — and index.html's `?v=` for it.)
 - The Phase-3 flagged finding still stands for any future work that calls

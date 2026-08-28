@@ -8,7 +8,7 @@
 //
 //   - `required: ['dreams.js', 'defs.dreams.js']` makes loadEngine THROW if
 //     either file is missing from ORDER. That single line is the rumination.js
-//     scar's tripwire — that file shipped registered in main.html only, and
+//     scar's tripwire — that file shipped registered in index.html only, and
 //     took five harnesses and 175 assertions down without a word.
 //   - The REAL write/load round trip through writeGeneratedGameState ->
 //     loadGameState, against an in-memory kv (the makeMemKv pattern the food

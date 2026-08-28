@@ -71,7 +71,7 @@ Smaller:
   phone and the button flips back while the record survives), and re-entry
   re-armed the warmup and fired a second interruption pre-generation.
 - Every `index.html` citation in this plan and in the handoff prompt was
-  unfollowable — **the file is `main.html`**. All corrected.
+  unfollowable — **the file is `index.html`**. All corrected.
 
 Verified clean and unchanged by the audit: sandbox + referrerpolicy on both
 hosts' embeds, `textContent`-only for API output (markup in a clip title
@@ -127,7 +127,7 @@ path, and the deviant number has mechanical teeth.
   `doInviteOver(npcId, 'ah')` — no money anywhere (Hot Singles are not a
   service). Handlers use addEventListener directly (no ui.js dispatch
   change), so no new data-action entries were needed.
-- `main.html`: `.ah-hotsingle-invite` style (violet, like the pink say-hi)
+- `index.html`: `.ah-hotsingle-invite` style (violet, like the pink say-hi)
   in the Phase 7 hotsingle block; `?v=` bumped together — config.js 34→35,
   sim.js 23→24, llm.js 9→10, interruption.js 9→10, ui.js 32→33,
   afterhours.js 16→17. Script LIST unchanged, so the load-order comment
@@ -478,9 +478,9 @@ player can switch hosts when both sites carry the clip.
   ~440-450 is the template; don't regress it).
 - `src/srcfiles/config.js`: `AH_TUNING` (blend weights 50/50, per-page count,
   dedup duration tolerance ±10%, source order).
-- `main.html`: `.ah-source-badge`, `.ah-host-switch` styles; add the
+- `index.html`: `.ah-source-badge`, `.ah-host-switch` styles; add the
   `afterhours.js` script tag **after `ui.computer.js`** (before
-  `ui.windowmanager.js`) and update the load-order comment at main.html:2255;
+  `ui.windowmanager.js`) and update the load-order comment at index.html:2255;
   bump `?v=` on every changed script tag.
 
 **Verification (live page, browser_eval):** search a term that hits both
@@ -514,7 +514,7 @@ loading, and the per-playthrough seed arrive.
 - `src/srcfiles/computer.js`: `defaultComputerState` gains
   `afterHoursView: { view:'home', params:{}, stack:[] }` and `afterHoursSeed`.
 - `src/srcfiles/config.js`: `AH_TUNING` gains route names and skeleton timing.
-- `main.html`: `.ah-addressbar`, `.ah-footer`, `.ah-skeleton`,
+- `index.html`: `.ah-addressbar`, `.ah-footer`, `.ah-skeleton`,
   `.ah-toast-layer` styles; `?v=` bumps.
 
 **Verification:** navigate categories → search → player and back/forward
@@ -541,7 +541,7 @@ moves over verbatim** — regression-proof it first.
   "Share" → fake link + toast.
 - `src/srcfiles/ui.computer.js`: `doAfterHoursWatch` (line 443) rewires to
   `ahNav('player', { clipId })`; session/cum/stop handlers preserved.
-- `main.html`: `.ah-player-layout`, `.ah-rail`, `.ah-comments`, `.ah-related-*`
+- `index.html`: `.ah-player-layout`, `.ah-rail`, `.ah-comments`, `.ah-related-*`
   styles; `?v=` bumps.
 
 **Verification:** clicking a card lands on the player view (not a panel above
@@ -570,7 +570,7 @@ display but don't filter (neither API honors them).
   queries and order).
 - `src/srcfiles/computer.js`: `defaultComputerState` gains
   `afterHoursCache` and the search view's active-filter state.
-- `main.html`: `.ah-carousel`, `.ah-row`, `.ah-cat-tile` styles; `?v=` bumps.
+- `index.html`: `.ah-carousel`, `.ah-row`, `.ah-cat-tile` styles; `?v=` bumps.
 
 **Verification:** home renders ≥4 distinct rows each populated with a PH/EP
 mix; Continue Watching shows the last-watched clip; Recommended reflects a
@@ -594,7 +594,7 @@ AfterHours-managed lifecycle timers (Locked decision 14).
   cleared on close; close button swaps to a new ad), `renderTicker()`
   ("12,483 watching now" ticking up/down via direct DOM writes), `spawnToast(text)`
   into the `.ah-toast-layer` with auto-dismiss.
-- `main.html`: `.ah-ad-*`, `.ah-ticker`, `.ah-toast` + animations; `?v=` bumps.
+- `index.html`: `.ah-ad-*`, `.ah-ticker`, `.ah-toast` + animations; `?v=` bumps.
 
 **Verification:** ad slots appear on home/search/player and rotate on
 interval; a fake close button replaces the ad; the ticker counts up and down
@@ -620,7 +620,7 @@ history when no clip is active.
   like/unlike, search-history recording, the home "Continue Watching" tile.
 - `src/srcfiles/interruption.js`: the masturbation memory text (line 215)
   falls back to the most recent `world.afterHours.history` title.
-- `main.html`: `?v=` bumps on changed scripts.
+- `index.html`: `?v=` bumps on changed scripts.
 
 **Verification:** watch a clip, like two, close the computer; reload the save
 → history/liked/search history all survive; Continue Watching resumes the
@@ -654,7 +654,7 @@ deviant-skewed personality.
   `escortRoster` precedent).
 - `src/srcfiles/config.js`: `AH_HOT_SINGLES_TUNING` (roster size ~6, deviant
   skew strength, opening-line pool).
-- `main.html`: `.ah-hotsingle-*` styles; `?v=` bumps.
+- `index.html`: `.ah-hotsingle-*` styles; `?v=` bumps.
 
 **Verification:** roster is deterministic (same 6 singles every load of the
 same save); each is a full `gameState.npcs` entry with skewed

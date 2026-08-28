@@ -349,7 +349,7 @@ and 07:52:10 for a fast one, without anyone authoring either number.
   uses a `// ===== SECTION: X =====` convention, follow it. **At or above
   ~150 lines**, create `src/srcfiles/behavior.js`, loaded immediately
   after `cognition.js` and before `actions.js` in **both**
-  `main.html`'s `<script>` tags and `dev/verify/loadgame.js`'s `ORDER`
+  `index.html`'s `<script>` tags and `dev/verify/loadgame.js`'s `ORDER`
   array (see this plan's own Hard technical rules — a file registered in
   only one of the two is exactly the `rumination.js` failure
   `dev/verify/README.md` rule 6 documents, and it fails silently). Count

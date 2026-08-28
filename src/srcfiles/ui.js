@@ -5212,7 +5212,7 @@ async function handleAction(action, npcId, extra) {
       showMenuScreen('title');
       break;
     // F1 (Discord feedback, 2026-08-23): New Game's gameplay-options step.
-    // A standalone overlay sibling of #player-studio (see main.html), not
+    // A standalone overlay sibling of #player-studio (see index.html), not
     // part of showMenuScreen's managed set — the title screen underneath
     // was never hidden for this flow (closeMainMenu doesn't fire until
     // startSoloGame actually begins), so Back only needs to close this

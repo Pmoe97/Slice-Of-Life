@@ -1,14 +1,14 @@
 <!DOCTYPE html>
 <!--
   TEMPORARY local dev/test harness — NOT part of the shipped game.
-  main.html only runs inside Perchance's own page shell, which injects
+  index.html only runs inside Perchance's own page shell, which injects
   `root` (kv storage + generateText/generateImage) and a couple of
   window.generatorPublicId/generatorIsUnsaved globals at runtime. Outside
-  Perchance those don't exist, so main.html can't boot in a plain browser.
+  Perchance those don't exist, so index.html can't boot in a plain browser.
 
   This harness defines a minimal in-memory shim for exactly the surface
   src/srcfiles/state.js, src/srcfiles/llm.js, and src/srcfiles/image.js
-  call, then fetches main.html
+  call, then fetches index.html
   itself (so the DOM/CSS/script list stay a single source of truth — this
   file never duplicates them) and replays its content into this page.
   Delete this file once the computer-UI rework is verified; it is a
@@ -18,7 +18,7 @@
 <head>
 <meta charset="utf-8">
 <!-- Perchance's own page shell sets this (verified: width=device-width,
-     initial-scale=1, interactive-widget=resizes-content); main.html is
+     initial-scale=1, interactive-widget=resizes-content); index.html is
      just a <body> fragment with no <head> of its own, so this harness
      has to supply an equivalent for local mobile-viewport testing to be
      representative at all. -->
@@ -82,13 +82,13 @@
   window.generatorPublicId = undefined;
 
   async function loadHarness() {
-    const html = await (await fetch('main.html?t=' + Date.now(), { cache: 'no-store' })).text();
+    const html = await (await fetch('index.html?t=' + Date.now(), { cache: 'no-store' })).text();
     const doc = new DOMParser().parseFromString(html, 'text/html');
 
     // Styles: copy both <style> blocks verbatim.
     for (const style of doc.querySelectorAll('style')) document.head.appendChild(style.cloneNode(true));
 
-    // Markup: everything main.html has outside <style>/<script>/<template>
+    // Markup: everything index.html has outside <style>/<script>/<template>
     // tags is the #app skeleton — append it as-is.
     for (const node of [...doc.body.childNodes]) {
       const tag = node.tagName;
@@ -96,7 +96,7 @@
       document.body.appendChild(document.importNode(node, true));
     }
 
-    // Scripts: main.html loads them via <script src>, in a documented
+    // Scripts: index.html loads them via <script src>, in a documented
     // load-bearing order — replay that same order here, waiting for each
     // to finish before starting the next (classic scripts inserted via
     // createElement run async by default otherwise).
@@ -105,7 +105,7 @@
     for (const tag of scriptTags) {
       await new Promise((resolve, reject) => {
         const s = document.createElement('script');
-        // main.html's src attributes carry their own ?v= cache-bust, so
+        // index.html's src attributes carry their own ?v= cache-bust, so
         // append with the right separator rather than a second '?'.
         const rawSrc = tag.getAttribute('src');
         s.src = rawSrc + (rawSrc.includes('?') ? '&' : '?') + 't=' + bust;

@@ -1,6 +1,6 @@
 // ===== SECTION: COMPUTER =====
 // Session state and domain logic for the computer as a full-viewport
-// takeover — not the modal shell (see main.html's #computer-screen,
+// takeover — not the modal shell (see index.html's #computer-screen,
 // gated by #app[data-mode="computer"], which also hides the header and
 // both sidebars and collapses #app's grid to just the computer). Being
 // "on the computer" means the whole screen IS the monitor; the only way

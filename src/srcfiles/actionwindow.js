@@ -582,7 +582,7 @@ function openActionWindow(gs, spec) {
 }
 
 // How long the handoff cross-fade runs. Must match .aw-overlay[data-handoff]'s
-// transition in main.html — the timer only decides when the (already inert,
+// transition in index.html — the timer only decides when the (already inert,
 // already resolved) overlay stops taking up compositing, never when the player
 // gets control back, so a drift here is a cosmetic tail, not a stuck window.
 const ACTION_WINDOW_HANDOFF_MS = 420;

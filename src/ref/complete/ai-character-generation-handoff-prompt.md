@@ -88,10 +88,10 @@ You should never need to fully read the whole plan document in a session.
     control accepts and displays a value outside its pool.
 
 - **Hard technical rules**, each with the consequence that earned it:
-  1. **Register a new source file in `main.html` AND `dev/verify/loadgame.js`
+  1. **Register a new source file in `index.html` AND `dev/verify/loadgame.js`
      in the same commit.** `rumination.js` shipped to only one of the two and
      five harnesses with 175 assertions died silently.
-  2. **Bump the `?v=` query on every `main.html` script tag you edit.** The
+  2. **Bump the `?v=` query on every `index.html` script tag you edit.** The
      browser will serve you a cached file and you will debug a change that
      never loaded.
   3. **Never author a field without its reader in the same phase.**
@@ -128,7 +128,7 @@ You should never need to fully read the whole plan document in a session.
     `git worktree add /tmp/<dir> HEAD --detach` rather than trusting memory;
     the baseline at the start of this plan was **72 failed, 8 errored**.
   - **The live page** for anything with a surface. Serve with the
-    `slice-of-life` launch config and drive `dev-harness.html` — `main.html`
+    `slice-of-life` launch config and drive `dev-harness.html` — `index.html`
     cannot boot outside Perchance because it needs `root`. Prefer
     `read_page` / `javascript_tool` assertions over screenshots. **Reload
     before trusting anything**, and pair that with rule 2.

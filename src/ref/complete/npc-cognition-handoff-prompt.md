@@ -108,7 +108,7 @@ rather than working from a paraphrase:
 - **No field without its reader in the same phase** (roadmap R8/RI6). The NPC
   audit that started this roadmap found 34 fields written, migrated,
   schema-validated and read by nothing.
-- **Bump `?v=N` in `main.html` for every file you change.** A partial bump is
+- **Bump `?v=N` in `index.html` for every file you change.** A partial bump is
   how a client ends up running half-old code. They are independent per-file
   counters; bump the ones you touched. A new file needs a `<script>` tag —
   `cognition.js` loads after `drives.js`.

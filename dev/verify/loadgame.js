@@ -15,7 +15,7 @@ const SRC = path.join(__dirname, '..', '..', 'src', 'srcfiles');
 const ORDER = [
   'config.js', 'defs.settings.js', 'settings.js', 'icons.js',
   // fields.js (AI-Assisted Character Generation Phase 1) sits directly after
-  // icons.js in main.html — it must load before the three surfaces that build
+  // icons.js in index.html — it must load before the three surfaces that build
   // controls with it (menu.js, render.computer.js, studio.js). Every document
   // touch in it is guarded on `typeof document`, so it loads cleanly in the
   // bare vm and its pure halves (fieldsPoolHash, offPoolValues) are directly
@@ -31,7 +31,7 @@ const ORDER = [
   'skills.js', 'stealth.js', 'time.js', 'computer.js', 'tracker.js', 'debuglog.js', 'phone.js',
   'npc.js', 'willingness.js', 'relationships.js', 'rumination.js', 'prompt.js', 'llm.js',
   // concept.js (AI-Assisted Character Generation Phase 2) sits directly after
-  // llm.js in main.html. Everything in it is pure except fillFromConcept,
+  // llm.js in index.html. Everything in it is pure except fillFromConcept,
   // which reaches for root.generateText inside the function body only — so the
   // whole file loads in the bare vm and the half worth testing (the tolerant
   // parser, the schema-driven normalizer, the three adapters) is directly
@@ -58,18 +58,18 @@ const ORDER = [
   // whole file loads cleanly here and the logic half is directly testable.
   'peek.js',
   // dreams.js (dream-engine-plan Phase 1) sits between peek.js and
-  // actionwindow.js in main.html, and here for the same reason peek.js and
+  // actionwindow.js in index.html, and here for the same reason peek.js and
   // image.js do: its load-time surface is module state plus pure functions —
   // defaultDreamState / normalizeDreamState now, and harvestResidue (Phase 3)
   // and compileDream (Phase 4) later, which are the halves actually worth
   // testing. Everything that needs a DOM, root.generateImage or
   // root.generateText (the render queue, presentDream) is called at runtime
-  // only. Registered here in the SAME COMMIT as the main.html tag: shipping a
+  // only. Registered here in the SAME COMMIT as the index.html tag: shipping a
   // file to only one of the two lists is the rumination.js scar, where five
   // harnesses and 175 assertions died silently.
   'dreams.js',
   // actionwindow.js (action-outcome-window-plan Phase 1) sits between peek.js
-  // and boundary.js in main.html, for the same reason peek.js sits where it
+  // and boundary.js in index.html, for the same reason peek.js sits where it
   // does: its load-time surface is module state plus pure tables and pure
   // functions (ACTION_WINDOW_ROW_BUILDERS, deriveActionDeltas,
   // resolveActionWindowSpec), so the half worth testing — the delta strip's

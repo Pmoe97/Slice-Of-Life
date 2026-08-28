@@ -92,7 +92,7 @@ audit, does the repairing).
 >    "expected-and-benign" (a comment pointing at a renamed helper) from
 >    "broken" (a claim that misleads a future editor — e.g. a doc saying
 >    `defs.computer.js` holds Nile rows when the catalog derives from
->    ITEM_DEFS, or a loadgame.js comment saying "in main.html" when the file
+>    ITEM_DEFS, or a loadgame.js comment saying "in index.html" when the file
 >    is index.html).
 > 3. **Bugs.** Actual behavioral defects. Pay special attention to the bug
 >    classes the phases themselves documented: boolean-return used as a
@@ -398,7 +398,7 @@ audit, does the repairing).
 > 5. **Stale-citation catalogue** — every claim in the plan/Handoff/verify
 >    harnesses that does not match current code, each tagged
 >    `expected-and-benign` or `broken`. Include the loadgame.js "in
->    main.html" comment, the defs.computer.js Nile-row line, the missing
+>    index.html" comment, the defs.computer.js Nile-row line, the missing
 >    verify-w1…w3, and any version-number drift (config v=121 etc. vs the
 >    `?v=` on the actual script tags).
 > 6. **Prioritized fix list** — every Blocker/Major finding as a concrete,

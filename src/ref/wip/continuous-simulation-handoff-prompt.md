@@ -189,7 +189,7 @@ These survive every phase in this roadmap, not just the one you're on:
    `root.kv` directly — go through `state.js`'s existing accessor
    pattern (`getObjectBucket`/`setObjectBucket` and siblings are the
    worked example).
-3. **A new `src/srcfiles/*.js` file needs a line in TWO places: `main.html`'s
+3. **A new `src/srcfiles/*.js` file needs a line in TWO places: `index.html`'s
    `<script>` tags AND `dev/verify/loadgame.js`'s `ORDER` array** — even
    though you cannot run `loadgame.js` yourself (see Verification), leave
    it correct for whoever/whatever does next. `rumination.js` shipped with
@@ -233,7 +233,7 @@ because the literal file won't run for you — translate it:
    live generator page — every function these harnesses call
    (`resolveTick`, `evaluateDrives`, `perceiveSignals`, and everything
    this roadmap adds) is a plain global in that page's scope once
-   `main.html` has loaded, the same way this project's own
+   `index.html` has loaded, the same way this project's own
    `structural/ARCHITECTURE.md` documents for its iframe-injection
    technique. Call the same functions, on the same kind of synthetic or
    real game state, and assert the same thresholds inline in your
@@ -246,7 +246,7 @@ because the literal file won't run for you — translate it:
 4. `execute_js` (an isolated worker, no DOM, no Node) is useful for a
    quick isolated sanity check that doesn't need the real engine loaded —
    e.g. confirming a rate-conversion formula's arithmetic in the abstract.
-   It cannot load `main.html`'s script-tag globals (no DOM to attach
+   It cannot load `index.html`'s script-tag globals (no DOM to attach
    them to), so it is not a substitute for `browser_eval` on anything
    that needs real game state.
 5. `vision` is for the phases whose own Verification is inherently visual

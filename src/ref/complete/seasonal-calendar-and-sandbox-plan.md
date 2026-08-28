@@ -158,7 +158,7 @@ session protocol.
 
 - **D11 — Sandbox is a third start path, peer to solo and cast.** A new
   `menu.sandbox` title-screen button between "New Game" and "Load Game"
-  (`main.html:5414`). It reaches `startSandboxGame(cfg)`, which mirrors
+  (`index.html:5414`). It reaches `startSandboxGame(cfg)`, which mirrors
   `startSoloGame` (`ui.js:5928`) — same stop-autosave / stop-clock /
   generate / patch / write / sync / render sequence, same single uncovering
   point. It does **not** run the intro cutscene.
@@ -790,7 +790,7 @@ working defaults and a Start button that reaches a playable game. The
 roommate and house sub-editors are stubs; the path end-to-end is real.
 
 **Files:**
-- `main.html` (this is **`index.html` inside Perchance** — see the handoff
+- `index.html` (this is **`index.html` inside Perchance** — see the handoff
   prompt's file-name mapping table; the repo name and the Perchance name
   differ and neither can be changed): a
   `<button class="title-btn" data-action="menu.sandbox">Sandbox</button>`

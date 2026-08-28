@@ -95,7 +95,7 @@ gigs → Computer/phone → Social → boundary/sleep/throuple → AfterHours).*
   `HOBBY_WINDOW_PHRASE`). Shared helpers `actionWindowClockStamp` /
   `actionWindowSlug` / `intimacyPartner` / `intimacyPartnerName` added next to
   `sitWindowPhrase`.
-- **No new `src/srcfiles/*.js` files** → `main.html`/`loadgame.js` ORDER
+- **No new `src/srcfiles/*.js` files** → `index.html`/`loadgame.js` ORDER
   array unchanged (the phase's hard rule). **One TDZ trap hit + fixed:** the
   hobby `outcomeWindow.image.phrase` must be a FUNCTION (`(view) =>
   HOBBY_WINDOW_PHRASE[objDef]`), not a construction-time read — the
@@ -158,7 +158,7 @@ already has (D8's literal text).*
   `.aw-picker`/`.aw-pick-list`/`.aw-pick-btn`/`.aw-pick-name`/`.aw-pick-meta`/
   `.aw-pick-cancel` CSS; `actionwindow.js?v=8`, `render.js?v=78`, `ui.js?v=130`,
   `afterhours.js?v=30` script tags. **No new `src/srcfiles/*.js` files →
-  `main.html`/`loadgame.js` ORDER array unchanged** (the phase's hard rule).
+  `index.html`/`loadgame.js` ORDER array unchanged** (the phase's hard rule).
 - **Verified live**: picker opens with the day's real free slots (clock at
   1140/19:00 → Today 19:00–21:00 etc.); heading correct ("Invite X over" /
   "Invite X to dinner"); `doAfterHoursInviteOver('hs1')` + clicking the Today
@@ -226,7 +226,7 @@ delta strip's only data source (Design invariant 1).*
   `presentWorldGate` resolves a bubble choice and returns it. No syntax errors,
   no `perchanceErrors`. The old identifiers are confirmed gone
   (`renderPeekOverlay`/`buildBubbleCard`/`create*Bubble` all
-  `undefined`). `main.html` script tags bumped; `loadgame.js` ORDER array
+  `undefined`). `index.html` script tags bumped; `loadgame.js` ORDER array
   unchanged (no new files). Phase 4 added no new files → no new D-number is
   strictly required, but D18's migration is now recorded as *built*, not just
   decided.
@@ -285,7 +285,7 @@ into, so the split is the mechanic, not a refactor for tidiness.
   reason and calls `def.outcomeWindow.onDismiss(view, reason)`. The
   commitment-`held` marking moved from `set_meal` to `sit` (a table you laid
   and walked away from must not count as a dinner held).
-- **`main.html`** — `.aw-frame[data-cutout]` (4/3, `object-fit: contain`,
+- **`index.html`** — `.aw-frame[data-cutout]` (4/3, `object-fit: contain`,
   bottom-anchored); `actionwindow.js?v=6`.
 - **`dev/verify/verify-aow-p3.js`** (new, **18 passed, 0 failed**) — covers
   the pure half: the join scorers, `resolveSitGuestList`'s closed form and
@@ -465,7 +465,7 @@ work rather than build a phase. Findings, most severe first:
 7. **A real, now-fixed blocking bug caught mid-audit:** `actionwindow.js`'s
    Phase 4/5 additions (`openPeekHold`/`renderPeekHold`, `presentSchedulePicker`)
    referenced `#peek-content` and `#aw-picker` as DOM containers, but
-   `main.html` was never edited to add them — the OLD `#peek-overlay` markup
+   `index.html` was never edited to add them — the OLD `#peek-overlay` markup
    was still sitting there, hidden, with the exact same child ids
    (`#peek-caption`/`#peek-meta`/`#peek-risk-fill`/`#peek-stop-btn`) the new
    code was writing into. Net effect: starting a peek/listen hold or opening
@@ -475,7 +475,7 @@ work rather than build a phase. Findings, most severe first:
    nested inside `#action-window-overlay`, `#aw-picker` alongside it, the old
    `#peek-overlay`/`.interrupt-bubble*` CSS and markup fully removed) and
    re-verified: every `getElementById` target in `actionwindow.js` now
-   resolves in `main.html`. This is the shape of bug the plan's own
+   resolves in `index.html`. This is the shape of bug the plan's own
    Verification steps are supposed to catch (D1: "on the live page") — worth
    remembering that a Node harness pass (`run-all.js` stayed at 2607/72/8,
    unchanged) gives zero coverage of this class of error.
@@ -1086,7 +1086,7 @@ behavior yet, every other verb keeps its current no-window resolution.
   the pure-logic/render split `peek.js`/`render.js` already use — this file
   holds no decision logic, only projection, matching the Design invariant
   below.
-- `main.html`: new `#action-window-overlay` markup + CSS, modeled directly
+- `index.html`: new `#action-window-overlay` markup + CSS, modeled directly
   on `.peek-overlay`/`.peek-stage`/`.peek-lens` (reuse the structure, not
   the peek-specific content).
 - `src/srcfiles/image.js`: the D5 archetype-vs-instance cache-key split —
@@ -1184,7 +1184,7 @@ NPC bubble (`ui.computer.js`) migrate the same way.
 **Files:**
 - `src/srcfiles/peek.js`: `renderPeekOverlay` calls become `ActionWindow`
   calls; `startPeekSession`/`_peekTick`/`_endPeekSession` unchanged.
-- `main.html`: `#peek-overlay` and its CSS block removed once nothing
+- `index.html`: `#peek-overlay` and its CSS block removed once nothing
   references it — confirm with a repo-wide search first.
 - `src/srcfiles/ui.computer.js`: the interruption and caught-peeping bubble
   call sites, same migration pattern.

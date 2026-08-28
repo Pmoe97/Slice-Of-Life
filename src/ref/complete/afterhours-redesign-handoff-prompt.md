@@ -84,8 +84,8 @@ Verification) for the phase you're on.
   - The masturbate/cum/session mechanic is sacred: any phase that touches the
     watch/player area must re-verify the full session flow before calling
     itself done.
-  - Bump the `?v=` query on **every** changed script tag in `main.html`
-    together, and update the load-order comment (main.html, the SCRIPTS section
+  - Bump the `?v=` query on **every** changed script tag in `index.html`
+    together, and update the load-order comment (index.html, the SCRIPTS section
     header ~line 2553) if the
     script list changes. New `afterhours.js` code loads after `ui.computer.js`.
 - **Actually run the phase's Verification steps before considering it done**

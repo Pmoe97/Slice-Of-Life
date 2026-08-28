@@ -256,7 +256,7 @@ fashion, quirks, interests, piercings, the novel job title with a real
 
 **Phase 2 notes (2026-08-26):**
 
-`src/srcfiles/concept.js` shipped, registered in **both** `main.html` (after
+`src/srcfiles/concept.js` shipped, registered in **both** `index.html` (after
 `llm.js`) and `dev/verify/loadgame.js`. Surface:
 `CONCEPT_SCOPES` (the four scopes of D5), `buildConceptPrompt`,
 `parseConceptResponse` + `conceptRepairJson`, `normalizeConceptDraft`,
@@ -316,7 +316,7 @@ and is silently counted as "errored" by the suite.
 
 Phase 1 shipped. New file `src/srcfiles/fields.js` (`comboControl`,
 `customChipInput`, `offPoolValues`, `takeCustomChipValue`,
-`fieldsDatalistId`), registered in **both** `main.html` and
+`fieldsDatalistId`), registered in **both** `index.html` and
 `dev/verify/loadgame.js`. Converted: the sandbox roommate editor's occupation
 / interests / values / all five backstory fields (`sbxSelectControl` gained a
 `free` flag), the Player Design studio's non-enum selects and its
@@ -725,11 +725,11 @@ the hair colour field, confirm, and see it in the finished character.
   input that appends a chip to the selection, and renders any off-pool value
   already in the draft as a chip with a remove affordance. Guard the whole
   file's DOM use on `typeof document` so it loads in the vm harness.
-- `main.html`: one `<script src="src/srcfiles/fields.js?v=1">` tag,
+- `index.html`: one `<script src="src/srcfiles/fields.js?v=1">` tag,
   positioned after `icons.js` and before `menu.js` / `render.computer.js` /
   `studio.js`. Bump the `?v=` of every file this phase edits.
 - `dev/verify/loadgame.js`: register `fields.js` in `ORDER` at the matching
-  position, **in the same commit as the main.html tag** (design invariant 5 —
+  position, **in the same commit as the index.html tag** (design invariant 5 —
   the rumination.js scar).
 - `src/srcfiles/menu.js`: `sbxSelectControl` gains a `free` flag; when set it
   delegates to `comboControl`. Called with `free: true` from
@@ -765,7 +765,7 @@ the hair colour field, confirm, and see it in the finished character.
   the built occupation record. This is the half that makes free text on those
   three fields real rather than decorative — see the Handoff for why it could
   not wait for Phase 2.
-- `main.html` CSS: `.combo-input` styling matching the existing
+- `index.html` CSS: `.combo-input` styling matching the existing
   `.sbx-control` / `.rl-studio-input` / studio select appearance, so the swap
   is invisible. `datalist` renders natively; there is no dropdown chrome to
   build.
@@ -828,7 +828,7 @@ in the file that touches `root.generateText`. No UI calls it yet.
     followed by a newline, which is precisely the shape a full-appearance
     response has. This is a top-of-phase correctness note, not a style
     preference.
-- `main.html` + `dev/verify/loadgame.js`: register `concept.js` in both, same
+- `index.html` + `dev/verify/loadgame.js`: register `concept.js` in both, same
   commit, positioned after `llm.js` (it reuses that file's prompt
   conventions) and before the UI layer.
 - `dev/verify/verify-concept-p2.js` **(new)**.
@@ -878,7 +878,7 @@ response filter are deleted.
   spreads `draft.physical` over the rolled physical *after* `rollCastSlot`,
   which bypasses `applyAuthoredPhysical`'s `heightBuild` recompute; route it
   through the partial instead so the derived field is correct.
-- `main.html`: styling for the section.
+- `index.html`: styling for the section.
 
 **Verification:** In a running game, open the Studio, describe a character,
 Generate. Assert the draft is populated across all groups including
@@ -909,7 +909,7 @@ gets appearance only.
   Scope is `studioSubject.kind === 'npc' ? 'npcAppearance' : 'player'`. The
   `physical.piercings` / `physical.tattoos` / `physical.intimate.genitals`
   row groups accept generated rows, capped at each group's declared `max`.
-- `main.html`: the section's markup inside `#player-studio`, above `#ps-tabs`.
+- `index.html`: the section's markup inside `#player-studio`, above `#ps-tabs`.
 
 **Verification:** From the title screen, New Game -> Player Design, describe
 yourself, Generate. Assert every tab shows filled values, that the Intimate
@@ -937,7 +937,7 @@ sub-tabs, and one description fills all five sub-tabs at once.
   to templated once a fill has written prose fields. The rail card subtitle
   (`sbxRoommateSub`) should reflect a filled roommate, so the strip shows at
   a glance which are authored.
-- `main.html`: section markup and CSS inside the sandbox shell.
+- `index.html`: section markup and CSS inside the sandbox shell.
 
 **Verification:** Sandbox -> add three roommates -> describe each in one
 sentence -> Generate. Assert each `partial` is fat and distinct, that the
@@ -1092,7 +1092,7 @@ Phase 7 depends on Phase 4 (portrait) and on Phase 1's deferred TODO.
    Relying on `validateCharacter` to strip unknown keys is what made the
    `authoredFields` lock a silent no-op before it was declared in
    `CHARACTER_SCHEMA` — the castWeb scar in a different costume.
-5. **A new source file is registered in `main.html` and
+5. **A new source file is registered in `index.html` and
    `dev/verify/loadgame.js` in the same commit.** `rumination.js` shipped to
    only one of the two lists and five harnesses with 175 assertions died
    silently. This plan adds two files.

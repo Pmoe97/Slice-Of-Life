@@ -134,7 +134,7 @@ gaps and audited Phases 8 and 9 together. Both halves are recorded here.
 **Things that looked wrong in the crashed session's own notes and are NOT:**
 
 - Its notes refer throughout to `src/dev/verify/` and `index.html`. The real
-  paths are `dev/verify/` and `main.html`, and **the files landed in the right
+  paths are `dev/verify/` and `index.html`, and **the files landed in the right
   places** — the notes were wrong, the edits were not.
 - It reported corrupting `llm.js` with a byte-level replace and then repairing
   it. The repair is clean; `buildDreamPrompt` reads correctly end to end.
@@ -906,12 +906,12 @@ phase dies with a `ReferenceError`.
   cycle rows in the settings screen def.
 - `src/srcfiles/settings.js`: three normalizer lines in the settings loader
   alongside the existing `sfwMode` line.
-- `main.html`: two `<script>` tags — `defs.dreams.js` before `dreams.js`,
+- `index.html`: two `<script>` tags — `defs.dreams.js` before `dreams.js`,
   `dreams.js` after `image.js` and before `actionwindow.js`. **Bump every
   `?v=N` tag together**, never one.
 - `dev/verify/loadgame.js`: two entries in `ORDER` at the same positions.
 
-**Top-of-phase note:** registering a new file in `main.html` but not
+**Top-of-phase note:** registering a new file in `index.html` but not
 `loadgame.js` is the `rumination.js` scar — five harnesses and 175 assertions
 died silently. Do both in the same commit.
 
@@ -1182,7 +1182,7 @@ were asleep: …" on the same morning.
 
 | Phase | Status | What it does |
 |---|---|---|
-| 1 | **Done** (2026-08-25) | `world.dreams` subtree, three settings sliders, both new files registered in `main.html` **and** `loadgame.js`. Harness `verify-dreams-p1.js`, 18/18. |
+| 1 | **Done** (2026-08-25) | `world.dreams` subtree, three settings sliders, both new files registered in `index.html` **and** `loadgame.js`. Harness `verify-dreams-p1.js`, 18/18. |
 | 2 | **Done** (2026-08-25) | `defs.dreams.js` — all seven component tables plus `DREAM_TUNING`, pure data, keyed by id. Abstraction banded via `DREAM_ABSTRACTION_BANDS`; wake tint on the register via `DREAM_WAKE_BANDS`. Harness `verify-dreams-tables.js`, 27/27. |
 | 3 | **Done** (2026-08-25) | `harvestResidue` + `harvestItemMotifs` — nine scorers, pure and deterministic, including D7's unseen-event material. `DREAM_RESIDUE_KINDS` + `DREAM_TUNING.residue` added. Harness `verify-dreams-residue.js`, 32/32. |
 | 4 | **Done** (2026-08-25) | `compileDream` + `composeDreamPanelPrompt` + `composeDreamPanelKey` — seeded, deterministic, every slot filled and every panel prompt frozen; no LLM, no images. Added `DREAM_SETTINGS`, `dreamerInFrame`, `settingKind` and four compiler numbers to `defs.dreams.js`. Harness `verify-dreams-compile.js`, 40/40, 16 tripwires proven. |
@@ -1261,7 +1261,7 @@ half-state.
    every existing seed's cast. This has bitten the project before and the rule
    is absolute: new draws append at the end of their own sequence, and the
    dream sequence is a separate one.
-6. **Register the file in both places.** `main.html` *and*
+6. **Register the file in both places.** `index.html` *and*
    `dev/verify/loadgame.js`, in the same commit. `rumination.js` shipped with
    only the first and took five harnesses and 175 assertions down silently.
 7. **Never enumerate persisted keys in two places.** `world.dreams` goes into

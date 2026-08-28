@@ -551,7 +551,7 @@ check('completing a structural job sets the flag and rebuilds the graph',
 // in the game. Asserted because a missing style is invisible to every other
 // kind of test.
 check('the `disabled` button class is actually styled',
-      /\.btn\.disabled\s*\{/.test(fs.readFileSync(path.join(SRC, '..', '..', 'main.html'), 'utf8')),
+      /\.btn\.disabled\s*\{/.test(fs.readFileSync(path.join(SRC, '..', '..', 'index.html'), 'utf8')),
       'render.computer.js emits class="... disabled" for jobs you cannot afford');
 check('...and recomputes rent, so the desirability change lands',
       /structuralId[\s\S]{0,900}?computeRent\(currentGameState\.npcs, currentGameState\)/.test(uiSrc));
@@ -672,7 +672,7 @@ check('EVERY part is normalized to the 0..1 box', unnormalised.length === 0,
 check('every part declares a kind the renderer draws',
       shapeIds.every(id => SHAPES[id].parts.every(p => ['rect', 'ellipse', 'line'].includes(p.kind))));
 check('every part class has a style rule', (() => {
-  const css = fs.readFileSync(path.join(SRC, '..', '..', 'main.html'), 'utf8');
+  const css = fs.readFileSync(path.join(SRC, '..', '..', 'index.html'), 'utf8');
   const missing = [];
   for (const id of shapeIds) for (const p of SHAPES[id].parts) {
     if (!new RegExp(`\\.fp-p-${p.cls}\\b`).test(css)) missing.push(`${id}:${p.cls}`);

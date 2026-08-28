@@ -76,7 +76,7 @@ rather than working from a paraphrase:
   channel-tagged conversation buffer Phase 5 reads)
 - The conversation overlay — `openConversationOverlay`, `convAddBubble`,
   `convAddBeat`, `doConvSend` in `src/srcfiles/ui.js`, markup at
-  `#conversation-overlay` in `main.html`
+  `#conversation-overlay` in `index.html`
 
 **Hard technical rules.** Each carries its consequence:
 
@@ -96,7 +96,7 @@ rather than working from a paraphrase:
 - **No field without its reader in the same phase** (roadmap R8/RI6). The NPC
   audit that started this whole roadmap found 34 fields written, migrated,
   schema-validated and read by nothing.
-- **Bump `?v=N` in `main.html` for every file you change.** A partial bump is
+- **Bump `?v=N` in `index.html` for every file you change.** A partial bump is
   how a client ends up running half-old code. They are independent per-file
   counters; bump the ones you touched.
 - **Do not put backslash escapes through a `python - <<'PYEOF'` heredoc in

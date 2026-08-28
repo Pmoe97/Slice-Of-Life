@@ -528,15 +528,15 @@ check('resolveBatch is still deterministic under the same seed', api(`
 // ---------------------------------------------------------------------------
 console.log('\n(house rules) the files this phase touched are loadable and versioned');
 
-const MAIN = fs.readFileSync(path.join(SRC, '..', '..', 'main.html'), 'utf8');
+const MAIN = fs.readFileSync(path.join(SRC, '..', '..', 'index.html'), 'utf8');
 // Floors, never equalities — verify-r5 pinned ui.js?v=55 exactly and reported
 // the next plan's edit as a Plan 2 regression (README rule 4).
 for (const [file, floor] of [['config.js', 81], ['sim.js', 42], ['rumination.js', 4], ['ui.js', 60]]) {
   const m = MAIN.match(new RegExp(`${file.replace('.', '\\.')}\\?v=(\\d+)`));
-  check(`main.html loads ${file} at v>=${floor}`, !!m && Number(m[1]) >= floor, m ? `found v=${m[1]}` : 'not found');
+  check(`index.html loads ${file} at v>=${floor}`, !!m && Number(m[1]) >= floor, m ? `found v=${m[1]}` : 'not found');
 }
 // README rule 6, scoped to what this phase can honestly claim. The general
-// form ("every file main.html loads is in ORDER") cannot be asserted without
+// form ("every file index.html loads is in ORDER") cannot be asserted without
 // restating the render/ui boundary the loader deliberately stops at, and a
 // hand-kept exclusion list is the same defect the rule exists to prevent. What
 // IS assertable: every file whose functions this harness calls came up, and
@@ -550,7 +550,7 @@ check('every file this phase touched is loadable by the harness, or deliberately
 check('every file named in loadgame.js ORDER exists on disk',
       [...ORDER_SRC.matchAll(/'([\w.]+\.js)'/g)].map(m => m[1])
         .every(f => fs.existsSync(path.join(SRC, f))),
-      'rumination.js cost 175 silent assertions by being in main.html and not here');
+      'rumination.js cost 175 silent assertions by being in index.html and not here');
 
 console.log(`\n${'='.repeat(46)}\n  ${pass} passed, ${fail} failed\n${'='.repeat(46)}`);
 process.exit(fail > 0 ? 1 : 0);

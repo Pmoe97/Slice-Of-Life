@@ -101,7 +101,7 @@ You should never need to fully read the whole plan document in a session.
   - Every image goes through `image.js`'s existing cache/budget machinery.
     A direct `generateImage` call from inside `actionwindow.js` is a bug,
     not a shortcut.
-  - `main.html`'s script tags and `dev/verify/loadgame.js`'s `ORDER` array
+  - `index.html`'s script tags and `dev/verify/loadgame.js`'s `ORDER` array
     both need a line for any new `src/srcfiles/*.js` file, in the same
     commit — a file present in only one has silently broken every harness
     that touches it before in this project's history (see

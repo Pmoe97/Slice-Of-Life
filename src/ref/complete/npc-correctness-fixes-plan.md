@@ -149,7 +149,7 @@ implemented and verified (151 assertions across
   because the `additions.recentExchanges` path needs it and runs earlier than
   the dialogue block — do not move it back down next to its other use, that
   is a TDZ error.
-- `main.html` cache tags: the three changed files were bumped
+- `index.html` cache tags: the three changed files were bumped
   (`config.js` 54→55, `npc.js` 12→13, `llm.js` 13→14).
   **ARCHITECTURE.md's "bump every tag together" instruction is stale** — the
   tags are independent per-file counters ranging from v=1 to v=55, so the

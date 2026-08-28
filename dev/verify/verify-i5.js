@@ -660,13 +660,13 @@ check('but nobody is available everywhere all the time', bestPct < 100,
 // ---------------------------------------------------------------------------
 console.log('\nHousekeeping');
 
-const mainHtml = fs.readFileSync(path.join(SRC, '..', '..', 'main.html'), 'utf8');
+const mainHtml = fs.readFileSync(path.join(SRC, '..', '..', 'index.html'), 'utf8');
 const ver = (f) => { const m = mainHtml.match(new RegExp(`srcfiles/${f.replace('.', '\\.')}\\?v=(\\d+)`)); return m ? Number(m[1]) : -1; };
 check('config.js version is at least 84', ver('config.js') >= 84, `v=${ver('config.js')}`);
 check('defs.actions.js version is at least 17', ver('defs.actions.js') >= 17, `v=${ver('defs.actions.js')}`);
 check('actions.js version is at least 13', ver('actions.js') >= 13, `v=${ver('actions.js')}`);
 // README rule 6, in the scoped form verify-i2 established. The general form
-// ("every file main.html loads is in ORDER") cannot be asserted without
+// ("every file index.html loads is in ORDER") cannot be asserted without
 // restating the render/ui boundary the loader deliberately stops at, and a
 // hand-kept exclusion list is the same defect the rule exists to prevent.
 // Phase 5 added no new engine file — all three files it touched were already
@@ -677,7 +677,7 @@ check('every file this phase touched is loadable by the harness',
 check('every file named in loadgame.js ORDER exists on disk',
       [...ORDER_SRC.matchAll(/'([\w.]+\.js)'/g)].map(m => m[1])
         .every(f => fs.existsSync(path.join(SRC, f))),
-      'rumination.js cost 175 silent assertions by being in main.html and not here');
+      'rumination.js cost 175 silent assertions by being in index.html and not here');
 
 // The two leading spaces are load-bearing: run-all.js matches
 // /^ {2}(\d+) passed, (\d+) failed$/m, and a footer it cannot parse is reported

@@ -1046,7 +1046,7 @@ unaided.
 
 **Files, as shipped** (the signatures are the real ones — grep these, not the
 Phase 3 sketch a previous revision of this list carried):
-- `src/srcfiles/overture.js`: **new**, loaded after `cognition.js` in `main.html` AND in `dev/verify/loadgame.js`'s `ORDER`. `scoreOvertures(npc, npcId, gameState, ctx)` / `bestMotive` / `chooseOverture(choice)` / `overtureRefusalScale(npc, day)` (pure), `openOverture` / `resolveOverture` / `lapseOverture` / `ageOverture` (the named writers, D19) plus `noteOvertureRefused` and `isOverturePending`, and `overtureAllowed(gameState, overtureId)` implementing D9's gate over the `OVERTURE_DND_SOURCES` registry.
+- `src/srcfiles/overture.js`: **new**, loaded after `cognition.js` in `index.html` AND in `dev/verify/loadgame.js`'s `ORDER`. `scoreOvertures(npc, npcId, gameState, ctx)` / `bestMotive` / `chooseOverture(choice)` / `overtureRefusalScale(npc, day)` (pure), `openOverture` / `resolveOverture` / `lapseOverture` / `ageOverture` (the named writers, D19) plus `noteOvertureRefused` and `isOverturePending`, and `overtureAllowed(gameState, overtureId)` implementing D9's gate over the `OVERTURE_DND_SOURCES` registry.
 - `src/srcfiles/config.js`: `OVERTURE` (tuning, including D10's refusal economy), `OVERTURE_DEFS` with the `approach_player` entry, `OVERTURE_APPROACH_TEMPLATES` and `OVERTURE_REFUSAL_FACTS` (D12's two paths made visible).
 - `src/srcfiles/drives.js`: `candidateDef(id)` — the one lookup across both tables — and the overture branch in `evaluateDrives`, which returns before `openPursuit` can run.
 - `src/srcfiles/cognition.js`: the motive scoring term (D5) and the merged candidate list, so an overture competes with ordinary drives on one scale and one chooser picks between them.

@@ -646,10 +646,10 @@ api(script).then(out => {
 
   // -------------------------------------------------------------------------
   console.log('\nwiring (README rule 6 — a new file needs a line in BOTH)');
-  const mainHtml = fs.readFileSync(path.join(__dirname, '..', '..', 'main.html'), 'utf8');
+  const mainHtml = fs.readFileSync(path.join(__dirname, '..', '..', 'index.html'), 'utf8');
   const loader = fs.readFileSync(path.join(__dirname, 'loadgame.js'), 'utf8');
-  check('main.html loads x5.js with a cache-busting version', /src\/srcfiles\/x5\.js\?v=\d+/.test(mainHtml));
-  check('x5.js loads AFTER llm.js in main.html',
+  check('index.html loads x5.js with a cache-busting version', /src\/srcfiles\/x5\.js\?v=\d+/.test(mainHtml));
+  check('x5.js loads AFTER llm.js in index.html',
         mainHtml.indexOf('srcfiles/x5.js') > mainHtml.indexOf('srcfiles/llm.js'));
   check('loadgame.js ORDER lists x5.js', /'x5\.js'/.test(loader),
         'rumination.js shipped without this and silently killed 175 assertions across five harnesses');

@@ -4,7 +4,7 @@
 //
 // Covers debuglog.js's own invariants (write/prune/query/format) against a
 // real vm engine, plus the registration hazards the plan called out by
-// name: the file must be listed in BOTH main.html and loadgame.js's ORDER
+// name: the file must be listed in BOTH index.html and loadgame.js's ORDER
 // (README rule 6 — this is the exact rumination.js failure mode), and
 // world.debugLog must be listed in all THREE of state.js's SAVE_KEYS,
 // WORLD_KEY_FALLBACKS, and loadGameState's hand-list, or it writes fine all
@@ -28,14 +28,14 @@ function check(name, cond, detail) {
 }
 
 const srcOf = (f) => fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'srcfiles', f), 'utf8');
-const mainHtml = fs.readFileSync(path.join(__dirname, '..', '..', 'main.html'), 'utf8');
+const mainHtml = fs.readFileSync(path.join(__dirname, '..', '..', 'index.html'), 'utf8');
 const loadgameSrc = fs.readFileSync(path.join(__dirname, 'loadgame.js'), 'utf8');
 const stateSrc = srcOf('state.js');
 
 // ---------------------------------------------------------------------------
 console.log('\nregistration: the two-place and three-place hazards the plan named');
 
-check('debuglog.js is loaded by main.html', /debuglog\.js\?v=\d+/.test(mainHtml));
+check('debuglog.js is loaded by index.html', /debuglog\.js\?v=\d+/.test(mainHtml));
 check('debuglog.js is listed in loadgame.js ORDER', /'debuglog\.js'/.test(loadgameSrc));
 check('debugLog is listed in state.js SAVE_KEYS (world folder)', /'debugLog',/.test(stateSrc));
 check('debugLog has a WORLD_KEY_FALLBACKS default', /debugLog: \(\) => \[\]/.test(stateSrc));

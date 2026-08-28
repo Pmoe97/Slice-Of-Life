@@ -97,7 +97,7 @@ marked Done is your phase.
 * **Zero is the modal answer** (D8). If a prompt you write does not lead with
   the all-zero case, it will drift, and Phase 4 will measure it as a straight
   line.
-* **Bump `?v=N` in `main.html` for every file you change.** A new file needs a
+* **Bump `?v=N` in `index.html` for every file you change.** A new file needs a
   `<script>` tag — `x5.js` loads after `llm.js` — **and a line in
   `dev/verify/loadgame.js`'s `ORDER`.** `rumination.js` shipped without the
   latter and silently killed 175 assertions across five harnesses.

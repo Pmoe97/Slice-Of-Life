@@ -40,7 +40,7 @@ code and no locked decision turned out unworkable.
   directly beside `getRecentExchanges` — the same buffer, one function per
   reader: that one is the prompt's view, this one is the player's. Helpers
   `recallRow` and `recallTimeLabel` beside it. The plan's file list named only
-  `ui.js` and `main.html`; putting the logic in `npc.js` instead of the
+  `ui.js` and `index.html`; putting the logic in `npc.js` instead of the
   renderer is what made 43 assertions possible on a phase billed as DOM-only.
 - It returns display-ready rows — `{kind:'time',label}`,
   `{kind:'bubble',from,text}`, `{kind:'beat',text}` — so the DOM half
@@ -145,7 +145,7 @@ repointed.
 
 **Phase 2 notes (2026-08-10):**
 - **The dev harness works again and is the way to see this.** `dev-harness.html`
-  shims the Perchance runtime and replays `main.html`. It had been failing at
+  shims the Perchance runtime and replays `index.html`. It had been failing at
   boot with `Cannot read properties of undefined (reading 'get')` because its
   kv shim predates `menu.js` — it was missing the `menu`, `saves` and
   `saveIndex` folders. Fixed. **Its folder list must be kept in step with the
@@ -306,7 +306,7 @@ you are standing in and the other is a list.
 
 Citations were true at commit `2e77243`. Find by name, not line number.
 
-**What the main content area is today** (`main.html`, `#main-content`):
+**What the main content area is today** (`index.html`, `#main-content`):
 
 ```html
 <div class="scene-container"><img id="scene-img"> <span id="scene-label"></span></div>
@@ -526,7 +526,7 @@ they are, who is there, what they can sense, and what has happened since they
 walked in — with history collapsed below it.
 
 **Files:**
-- `main.html`: replace `<div class="narration-log">` with the scene-reader shell — `#scene-reader` containing `#scene-heading`, `#scene-establishing`, `#scene-beats`, `#scene-history` (a `<details>`). Add the CSS: a type scale that makes the establishing passage read as prose, beats as dialogue/narration, and history as subordinate. Bump every changed `?v=N`.
+- `index.html`: replace `<div class="narration-log">` with the scene-reader shell — `#scene-reader` containing `#scene-heading`, `#scene-establishing`, `#scene-beats`, `#scene-history` (a `<details>`). Add the CSS: a type scale that makes the establishing passage read as prose, beats as dialogue/narration, and history as subordinate. Bump every changed `?v=N`.
 - `src/srcfiles/render.js`: `renderSceneReader(gs, sceneState)` projecting `composeScene`'s output onto that shell. `renderNarrationLog` is **deleted**, and `render()`'s call to it replaced. Keep `#tpl-log-entry` for the beats list — the per-type styling it already carries (`log-action`, `log-internal`) is still exactly right.
 - `src/srcfiles/ui.js`: `addLogEntry` calls `renderSceneReader` instead of `renderNarrationLog`.
 
@@ -546,7 +546,7 @@ before/after.
 coming from.
 
 **Files:**
-- `main.html`: `#scene-moodles`, a slim row above `#scene-heading`. CSS for the strip and for the floor-plan icon layer.
+- `index.html`: `#scene-moodles`, a slim row above `#scene-heading`. CSS for the strip and for the floor-plan icon layer.
 - `src/srcfiles/config.js`: `SIGNAL_ICONS` — channel → glyph, plus a small per-signal override for the ones that deserve their own (a note, rot). Band → opacity.
 - `src/srcfiles/render.js`: `renderSceneMoodles(gs)` — perceived signals for the player's room plus existing need warnings, as icons with title text. `renderFloorPlan` gains a signal pass: for every room, the standing+transient signals ORIGINATING there (D9), drawn as small glyphs inside the room rect at band opacity.
 - `src/srcfiles/signals.js`: `signalsByRoom(gameState)` — a room→records map for the floor plan. Derived per call like everything else in that file; no new state.
@@ -585,7 +585,7 @@ them. Past exchanges above, clearly past; the live one below, clearly live.
 
 **Files:**
 - `src/srcfiles/ui.js`: `openConversationOverlay` stops wiping to empty. It renders prior exchanges from `npc.memory.recent` filtered to `channel === 'scene'` (Plan 0 Phase 1 made this buffer 40 deep and channel-tagged for exactly this), each with a timestamp from its `day`/`tick`, then a separator, then the live conversation. `convAddBubble`/`convAddBeat` append below the separator as they do now.
-- `main.html`: CSS for `[data-past]` bubbles — reduced contrast, timestamp gutter — and for the separator.
+- `index.html`: CSS for `[data-past]` bubbles — reduced contrast, timestamp gutter — and for the separator.
 
 **Verification:** browser. Talk to someone, leave, talk again: the first
 conversation appears above the separator, greyed and timestamped, and the new

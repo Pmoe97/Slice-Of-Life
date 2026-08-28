@@ -538,7 +538,7 @@ api(e2e).then(w => {
         'a window variable that is sometimes the DOM and sometimes a judged scene is a bug waiting for a typo');
 
   console.log('\nwiring (README rule 4 — a floor, never an equality)');
-  const mainHtml = fs.readFileSync(path.join(__dirname, '..', '..', 'main.html'), 'utf8');
+  const mainHtml = fs.readFileSync(path.join(__dirname, '..', '..', 'index.html'), 'utf8');
   const ver = (f) => { const m = mainHtml.match(new RegExp(`srcfiles/${f.replace(/\./g, '\\.')}\\?v=(\\d+)`)); return m ? +m[1] : -1; };
   for (const [f, floor] of [['config.js', 78], ['llm.js', 20], ['x5.js', 2], ['ui.js', 58], ['ui.computer.js', 29], ['ui.phone.js', 9]]) {
     check(`${f} version is at or above the Phase 2 floor (${floor})`, ver(f) >= floor, `got ${ver(f)}`);

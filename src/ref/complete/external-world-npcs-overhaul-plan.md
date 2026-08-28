@@ -231,7 +231,7 @@ table at the bottom, as the very last thing you do each session — see
   seed: gs.seed }` before calling anything that reads `meta.clock`.
   `currentGameState` is a top-level `let`, so assign it bare, not via
   `window.`. Stub `saveAtBoundary`/`render`/`addLogEntry`. Bump the `?v=`
-  query on every changed script in `main.html` or the browser serves stale
+  query on every changed script in `index.html` or the browser serves stale
   code.
 - Serve the repo (`.claude/launch.json` → python http.server on 8734) and load
   `dev-harness.html`. The harness injects scripts after DOMContentLoaded, so
@@ -614,7 +614,7 @@ in-flight jobs don't break.
 driver-visit scheduling), `render.*` (menus, cart, live ETA), `ui.js`
 (handover on driver arrival). **As built, also:** `config.js`
 (`FOOD_TUNING`, `VISIT_TUNING.activities.delivery`), `sim.js` +
-`state.js` (`world.foodOrders` init and persistence), `main.html`
+`state.js` (`world.foodOrders` init and persistence), `index.html`
 (`.dd-*` styles).
 
 **Verification:** An order schedules a driver visit at the chosen time; the

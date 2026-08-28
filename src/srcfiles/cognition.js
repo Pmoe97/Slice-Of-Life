@@ -543,7 +543,7 @@ function scoreCandidates(npc, npcId, gameState, resolved, perceived, opts = {}) 
   // Called directly rather than behind a `typeof` guard on purpose: a guard
   // would turn overture.js failing to load into an initiative system that
   // silently does nothing, which is the exact shape of the rumination.js
-  // incident (in main.html, never in loadgame.js's ORDER, 175 assertions gone).
+  // incident (in index.html, never in loadgame.js's ORDER, 175 assertions gone).
   // A ReferenceError is findable in a way that silence is not.
   const motives = scoreOvertures(npc, npcId, gameState, ctx);
   ctx.motives = motives;

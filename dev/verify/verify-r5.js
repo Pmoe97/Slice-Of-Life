@@ -188,7 +188,7 @@ check('and it keeps the NEWEST exchanges', api(`
 
 console.log('\nThe pane is wired to it, and the markup it emits is styled');
 const UI = fs.readFileSync(path.join(SRCDIR, 'ui.js'), 'utf8');
-const HTML = fs.readFileSync(path.join(ROOT, 'main.html'), 'utf8');
+const HTML = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 const openFn = UI.slice(UI.indexOf('function openConversationOverlay'), UI.indexOf('function closeConversationOverlay'));
 const recallFn = UI.slice(UI.indexOf('function convRenderRecalled'), UI.indexOf('function convShowTyping'));
 

@@ -112,7 +112,7 @@ and review granularity.
 * **Content flags gate desire-driven behaviour** (D14).
   `meta.contentConfig.contentFlags.romance` / `.mature` already exist and the
   player owns them. An overture is always declinable (D10).
-* **Bump `?v=N` in `main.html` for every file you change.** They are
+* **Bump `?v=N` in `index.html` for every file you change.** They are
   independent per-file counters. A new file needs a `<script>` tag —
   `overture.js` loads after `cognition.js`.
 * **A new `src/srcfiles/*.js` needs a line in `dev/verify/loadgame.js`'s

@@ -275,7 +275,7 @@ new D40 — BUILT):**
   (`upgrades` shipped with no icon and silently rendered a blank desktop
   tile for a whole phase); every new `APP_DEFS` entry should get one in the
   same pass rather than relying on `svgIcon`'s silent `''` fallback.
-- **main.html.** `?v=` bumped on all 7 touched files: `icons.js` 27,
+- **index.html.** `?v=` bumped on all 7 touched files: `icons.js` 27,
   `defs.computer.js` 30, `effects.js` 36, `computer.js` 58,
   `render.computer.js` 46, `ui.js` 104, `ui.computer.js` 46.
 - **dev/verify/verify-food-phase8.js (NEW), 16/16 passing.** Covers card

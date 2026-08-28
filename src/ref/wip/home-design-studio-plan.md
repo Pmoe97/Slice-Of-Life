@@ -120,7 +120,7 @@ makes it a billiard table with delusions.
 | 40 composite shapes | `src/srcfiles/defs.design.js` |
 | Authored decor + gating | same file, `ROOM_DECOR` / `decorVisible` |
 | Shape renderer | `render.js` — `renderDesignShape`, `renderAuthoredDecor` |
-| Part palette CSS | `main.html`, `.fp-p-*` |
+| Part palette CSS | `index.html`, `.fp-p-*` |
 | The editor | `dev/designer.html` |
 | Palette sync | `dev/sync-designer.js` |
 | Assertions | `dev/verify/verify-plan.js` §8 |

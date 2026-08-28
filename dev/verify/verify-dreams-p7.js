@@ -747,12 +747,12 @@ await check('the dream body shows no delta strip and no choices (D13), and hides
     return true;
   })());
 
-await check('main.html carries the dots element the branch paints into',
+await check('index.html carries the dots element the branch paints into',
   (() => {
-    const html = fs.readFileSync(path.join(SRC, '..', '..', 'main.html'), 'utf8');
-    if (!/id="aw-dream-dots"/.test(html)) return 'main.html has no #aw-dream-dots';
-    if (!/\.aw-dream-dot\b/.test(html)) return 'main.html has no styling for the dots';
-    if (!/aw-overlay\[data-body="dream"\]/.test(html)) return 'main.html has no dream-body styling';
+    const html = fs.readFileSync(path.join(SRC, '..', '..', 'index.html'), 'utf8');
+    if (!/id="aw-dream-dots"/.test(html)) return 'index.html has no #aw-dream-dots';
+    if (!/\.aw-dream-dot\b/.test(html)) return 'index.html has no styling for the dots';
+    if (!/aw-overlay\[data-body="dream"\]/.test(html)) return 'index.html has no dream-body styling';
     return true;
   })());
 

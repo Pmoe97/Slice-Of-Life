@@ -159,13 +159,13 @@ Each of these has a consequence attached. They are not style preferences.
    repair, and prefer fixing a wrong assertion over re-tuning a seed to hide
    one.
 
-8. **A new `src/srcfiles/*.js` file needs a line in TWO places:** `main.html`'s
+8. **A new `src/srcfiles/*.js` file needs a line in TWO places:** `index.html`'s
    `<script>` tags **and** `dev/verify/loadgame.js`'s `ORDER` array. `rumination.js`
    once shipped with only the first and **175 assertions silently stopped
    running** with a `ReferenceError` until someone noticed. Leave `ORDER`
    correct even though you may not be able to run it yourself.
 
-9. **Bump the `?v=` query string in `main.html` for every source file you
+9. **Bump the `?v=` query string in `index.html` for every source file you
    edit.** A browser serving a cached `config.js` against a fresh `cognition.js`
    produces a bug that looks like a logic error and is not one.
 
@@ -197,7 +197,7 @@ because the literal file will not run for you.** Translate them:
    generator page**. Every function these harnesses call — `resolveTick`,
    `resolveBatch`, `generateCast`, `scoreCandidates`, `npcIsOffsite`,
    `occupationAffinity`, `openHomeWorkCommitment` — is a plain global in that
-   page's scope once `main.html` has loaded. Call the same functions, on the
+   page's scope once `index.html` has loaded. Call the same functions, on the
    same kind of state, and assert the same thresholds inline.
 3. **`browser_refresh` before trusting any check that depends on freshly
    edited code.** A loaded page will happily keep serving a stale copy of a
@@ -205,7 +205,7 @@ because the literal file will not run for you.** Translate them:
    difference between verifying your change and verifying the old one.
 4. `execute_js` is an isolated worker with no DOM and no Node — fine for
    checking a formula's arithmetic in the abstract, useless for anything
-   needing real game state. It cannot load `main.html`'s globals.
+   needing real game state. It cannot load `index.html`'s globals.
 5. `vision` is for the parts whose verification is genuinely visual.
 
 **Two checks apply to nearly every phase here and are easy to skip:**

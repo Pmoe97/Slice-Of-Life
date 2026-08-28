@@ -221,7 +221,7 @@ everything after it):**
   canvas), and `getCharacterCutout`/`getPlayerCutout` — all in `image.js`.
   `CUTOUT_TUNING`/`CUTOUT_POSES`/`CUTOUT_EXPRESSIONS` and the cutout/500-cap
   `IMAGE_CACHE` changes are in `config.js`. `#scene-cutouts`/`.scene-cutout`
-  CSS and the container div landed in `main.html` between `#scene-img` and
+  CSS and the container div landed in `index.html` between `#scene-img` and
   `.scene-overlay`, per D1's DOM ordering — dead until Phase 3. One
   deliberate deviation from the plan's literal data-model sketch: CSS
   `--cutout-x`/`--cutout-y` are documented as PIXEL offsets computed by

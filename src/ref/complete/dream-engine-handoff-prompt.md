@@ -41,7 +41,7 @@ The first phase not marked "Done" is your phase.
 
 **Hard prerequisites:**
 - **Never start any phase before Phase 1.** Phase 1 registers `defs.dreams.js`
-  and `dreams.js` in both `main.html` and `dev/verify/loadgame.js`; without it
+  and `dreams.js` in both `index.html` and `dev/verify/loadgame.js`; without it
   every later phase's harness dies with a `ReferenceError` that looks like a
   logic bug and isn't.
 - **Never start Phase 4 before both 2 and 3.** The compiler selects from the
@@ -110,7 +110,7 @@ You should never need to fully read the whole plan document in a session.
     key stale-guard.
 
 - **Hard technical rules:**
-  - **Register a new file in `main.html` AND `dev/verify/loadgame.js`, in the
+  - **Register a new file in `index.html` AND `dev/verify/loadgame.js`, in the
     same commit.** `rumination.js` shipped with only the first and silently
     killed five harnesses and 175 assertions.
   - **Bump every `?v=N` script tag together.** A partial bump is how you get a

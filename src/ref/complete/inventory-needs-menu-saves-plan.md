@@ -207,7 +207,7 @@ slideshow pacing, the boot cover, and the fullscreenButton fix.
 - **Menu markup/CSS live in the primary HTML document.** Naming note, since
   this has already confused one review: Perchance's editor calls that living
   text field **`index.html`**, and the same field is checked into this repo as
-  **`main.html`**. One file, two names — `main.html` is the one on disk to
+  **`index.html`**. One file, two names — `index.html` is the one on disk to
   edit; there is no separate `index.html`. (The other Perchance field is
   `main.pjs`, checked in as `perchance.pjs`.)
   `#main-menu` sits at z-index 190 (above phone 170, below modal/save/
@@ -628,7 +628,7 @@ still routes exclusively through `applyEffects`.
   time as the equivalent action chip and goes through
   `advanceAndResolveMinutes` — the panel must never be a way to sidestep the
   clock.
-- `main.html`: inventory panel + templates + styles; `?v=` bumps; add
+- `index.html`: inventory panel + templates + styles; `?v=` bumps; add
   `inventory.js` to the SCRIPTS block after `items.js`.
 
 **Verification:** open the bag with mixed contents; search matches on both
@@ -660,7 +660,7 @@ two-panel transfer UIs, and cooking stops being a slot machine.
 - `src/srcfiles/ui.js`: open-container action wiring; the doormat becomes a
   real destination so the existing delivery drops (ui.js:542, ui.js:881) land
   somewhere the player visits and unpacks.
-- `main.html`: container view markup + styles; `?v=` bumps.
+- `index.html`: container view markup + styles; `?v=` bumps.
 
 **Verification:** open the fridge, move items both directions, reload and
 confirm contents persisted; Take All / Put All move everything; cooking offers
@@ -690,7 +690,7 @@ refill is retired. No action in the game restores hunger from nothing.
   pizza and should be ~4 servings.
 - `src/srcfiles/effects.js`: leave the hook for Phase 4's spoiled-food penalty;
   no applier change needed otherwise.
-- `main.html`: eat-picker markup; `?v=` bumps.
+- `index.html`: eat-picker markup; `?v=` bumps.
 
 **Verification:** eat from the bag in a bedroom; eat from the fridge in the
 kitchen without taking first; a multi-serving dish leaves a partial stack with
@@ -935,7 +935,7 @@ this — wrap it.
 - `src/srcfiles/ui.js`: save/load/overwrite/delete handlers; export a record
   to a compressed base64 blob (copyable and downloadable) and import it back
   with validation and a version-mismatch warning.
-- `main.html`: save menu markup + styles; `?v=` bumps.
+- `index.html`: save menu markup + styles; `?v=` bumps.
 
 **Storage discipline:** measure a real snapshot's size early in this phase and
 **record the number in the Handoff note.** Cap total saves, warn near the
@@ -1059,7 +1059,7 @@ draft of this phase, and each one is a decision, not an oversight:**
   a shared style tail and negative prompt. **Every entry carries a rating tag**
   (deviation 2). Keep the lists large; the reference games reach their
   combinatorial range with roughly 50 entries per list across five lists.
-- `main.html`: menu markup, the z0 gradient + two image layers + overlay + text
+- `index.html`: menu markup, the z0 gradient + two image layers + overlay + text
   column stack (§1.1's DOM tree is a good map), Discord badge, styles; `?v=`
   bumps; `menu.js` loads after `ui.js`.
 
@@ -1171,7 +1171,7 @@ a temporary shim.
    image layers permanently, so zero images is a designed state; the slideshow
    degrades generation failure → cache → gradient, with bounded retries and no
    uncapped retry loop.
-10. **Bump the `?v=` query on every changed script tag in `main.html`.** The
+10. **Bump the `?v=` query on every changed script tag in `index.html`.** The
     restaurant-network overhaul lost a full debugging session to stale cached
     `src/*.js` — this is the most common way work in this repo appears not to
     have happened.

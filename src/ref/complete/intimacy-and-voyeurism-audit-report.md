@@ -134,7 +134,7 @@ Ran the **real** `writeGeneratedGameState` + `loadGameState` against an in-memor
 
 | # | Location | Claim | Reality | Tag |
 |---|---|---|---|---|
-| S1 | loadgame.js (×6: codex / image / peek / boundary / pregnancy / studio comments) | "…in main.html" | The file is **index.html**; main.html does not exist. The intent is unambiguous. | **broken** (misleads a reader into hunting a non-existent file) |
+| S1 | loadgame.js (×6: codex / image / peek / boundary / pregnancy / studio comments) | "…in index.html" | The file is **index.html**; index.html does not exist. The intent is unambiguous. | **broken** (misleads a reader into hunting a non-existent file) |
 | S2 | Plan Phase-4 file list ("Nile rows for clothing" in `defs.computer.js`) | Clothing catalog rows in defs.computer.js | **D18 locked the one-table decision**: clothing lives in ITEM_DEFS (defs.world.js); `CLOTHING_DEFS` is a derived view (defs.world.js:1303); `SHOP_CATALOG_LIST` derives from priced ITEM_DEFS. Verified: defs.computer.js has no clothing rows (only the `wardrobe` furniture row, defs.computer.js:288 — correct). The plan itself documents the deviation at line 280. | **expected-and-benign** (documented locked-decision deviation) |
 | S3 | Plan Phase-19 handoff (plan line 33) | "defs.computer.js: Nile rows" line cited as if it were an action item | The handoff itself labels it "a stale citation; documented not changed" — verified no defs.computer.js change was needed and none exists. | **expected-and-benign** |
 | S4 | Handoff Phase-14 note | "the pairDeltas double-application … is still documented" | Documented in the plan (line 88) and config.js:7058; **not** in the drives.js:1030 comment a code-reader sees first (M4). | **expected-and-benign** (documented; code side thinner than plan side) |
@@ -154,7 +154,7 @@ Ordered by severity × blast radius. All tagged **Read-only** (repair belongs to
 2. **[Minor] state.js:3 "sole kv access" comment** — either add a `state.js` adapter for the menu-gallery prefs or carve out the exception in the comment. Tag: **Read-only**. Touch: `state.js:3` (or `menu.js`/`image.js` gallery-pref call sites).
 3. **[Minor] loadgame.js header note** — acknowledge the two intentional ORDER divergences (codex.js, studio.js) so the rule's letter is enforced consciously. Tag: **Read-only**. Touch: `src/dev/verify/loadgame.js` header comment.
 4. **[Minor] drives.js:1030 comment** — append the "double-application kept for the w13 baseline" note so the code self-documents the behaviour the plan documents. Tag: **Read-only**. Touch: `src/srcfiles/drives.js` comment above the castWeb block.
-5. **[Nit] S1 "in main.html" ×6** — sed the loadgame.js comments to "index.html". Tag: **Read-only**. Touch: `src/dev/verify/loadgame.js`.
+5. **[Nit] S1 "in index.html" ×6** — sed the loadgame.js comments to "index.html". Tag: **Read-only**. Touch: `src/dev/verify/loadgame.js`.
 6. **[Nit, Needs-design-decision] n2 afterhours.js:2923** — decide whether the "mild shame" narration line stays (it is prose, not a mechanic; if it should go, it's a one-line pool edit).
 
 No Blocker fixes. No code-behaviour fixes are required.

@@ -15,7 +15,7 @@
 // separately from width because a landscape phone is touch-primary but
 // can be wider than 520px, while a narrow desktop browser window is
 // still mouse-driven and should keep real floating/draggable windows.
-// Keep this condition byte-for-byte in sync with main.html's matching
+// Keep this condition byte-for-byte in sync with index.html's matching
 // `@media (hover: none) and (pointer: coarse), (max-width: 520px)`
 // block — that CSS copy only handles touch-target sizing and hiding the
 // (now-meaningless) maximize control; this JS copy is what actually

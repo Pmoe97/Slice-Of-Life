@@ -137,7 +137,7 @@ function showMainMenu(context) {
   // restarts it; every other way out (Continue/Load/New Game/Exit) starts
   // the loop itself after replacing the state.
   if (context === 'pause' && currentGameState) pauseClockLoop();
-  // Boot context re-covers the game shell (see main.html's #app comment):
+  // Boot context re-covers the game shell (see index.html's #app comment):
   // returning to the title from Exit Game must not leave the old play
   // screen showing behind a menu the player is about to start a new game
   // from. The pause context deliberately leaves it visible — a pause menu
@@ -1929,7 +1929,7 @@ function closeSettingsScreen() {
 }
 
 // F4 (Discord feedback, 2026-08-24): the cheat menu — reachable only from
-// the pause screen (see main.html), so unlike Settings there is no second
+// the pause screen (see index.html), so unlike Settings there is no second
 // origin to remember; Back always returns to 'pause'.
 let cheatActiveTab = 'player';
 // The NPC tab's picker selection — shared across renders so switching tabs

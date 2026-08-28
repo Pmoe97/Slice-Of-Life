@@ -150,7 +150,7 @@ sections once so you understand the shape, then the specific phase block
     ruled these out as a basis. Do not import their record shape, key naming,
     or storage strategy into Phase 9 — build the design in the plan's "Data
     model" section.
-  - Bump the `?v=` query on **every** changed script tag in `main.html`
+  - Bump the `?v=` query on **every** changed script tag in `index.html`
     together, and update the load-order comment in the SCRIPTS section header
     if the script list changes. New files (`inventory.js`, `commitments.js`,
     `menu.js`) load after their dependencies — `inventory.js` after `items.js`,

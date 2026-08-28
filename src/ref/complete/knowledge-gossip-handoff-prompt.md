@@ -122,7 +122,7 @@ Verification is not optional, and where it happens depends on the phase:
 * Pure logic → the harness. `node dev/verify/run-all.js` runs the whole suite;
   `node dev/verify/verify-k1.js` runs one. Read `dev/verify/README.md` first.
   **Environment deviation: this workspace currently has no node, no `dev/`,
-  and the HTML file is `index.html` (not `main.html`).** In that case write
+  and the HTML file is `index.html` (not `index.html`).** In that case write
   the same harness as a browser_eval script into `scratch/` (the cognition
   plan's `scratch/verify-c5.js` precedent) and record that it is ephemeral —
   the numbers are the record. If a future session has the real `dev/`, run it

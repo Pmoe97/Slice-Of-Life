@@ -130,10 +130,10 @@ Handoff, "Locked decisions" once for the shape, then the specific phase block.
     pattern for DOM-flow evals that would persist: stub `saveAtBoundary` and
     `queueWrite` to no-ops (and clear `writeQueue` + cancel its timer) for
     the duration of the eval, then restore them — zero kv writes, zero risk.
-  - **`loadgame.js`'s `ORDER` array must list every file `main.html` loads,
+  - **`loadgame.js`'s `ORDER` array must list every file `index.html` loads,
     updated in the same commit.** `cooking.js` (new, Phase 5) needs a line
     in both the moment it exists. Missing this is not cosmetic: a file that
-    ships in `main.html` but not `ORDER` makes every `dev/verify` harness
+    ships in `index.html` but not `ORDER` makes every `dev/verify` harness
     that touches it die with a silent `ReferenceError`, and *that harness
     stops reporting instead of failing* — it happened for real in this
     project (`rumination.js` shipped without an `ORDER` line and 175

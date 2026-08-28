@@ -100,7 +100,7 @@ not exist in this workspace, blocker 1):
   frantic queue.
 
 **Measurement notes for the next person:** the `?v=` bumps are config 73,
-drives 17, cognition 4 (per-file counters in index.html — there is no main.html
+drives 17, cognition 4 (per-file counters in index.html — there is no index.html
 in this workspace). The wrap fix must stay in agreement across the two readers
 (drives.js `isOnCooldown` and cognition.js `recencyMultiplier`) — they read
 the same clock the same way, and a future edit must touch both. The in-memory
@@ -110,7 +110,7 @@ the shipped code, not a harness approximation.
 
 **Blockers / flagged deviations:**
 
-1. **Environment (unchanged).** No node, no `dev/verify/`, no `main.html` in
+1. **Environment (unchanged).** No node, no `dev/verify/`, no `index.html` in
    this workspace. All Phase 5 measurement was browser_eval against the live
    engine; `scratch/verify-c5.js` holds the population harness (paste into a
    browser_eval to re-run; it is ephemeral — the numbers above are the
@@ -119,10 +119,10 @@ the shipped code, not a harness approximation.
    notes where they disagree.
 
    **RESOLVED 2026-08-12, and it had consequences worth reading.** The canonical
-   repo does have node, `dev/verify/` and `main.html` (there is no
+   repo does have node, `dev/verify/` and `index.html` (there is no
    `index.html`); Phases 3–5 ran somewhere that did not, so **the suite was
    never run against any of their changes**. What that hid, found and fixed on
-   2026-08-12: `rumination.js` (Plan 4) shipped in `main.html` but was never
+   2026-08-12: `rumination.js` (Plan 4) shipped in `index.html` but was never
    added to `dev/verify/loadgame.js`'s `ORDER`, so five harnesses — including
    all of `verify-c2` — died at `ReferenceError: ruminate is not defined` and
    **175 assertions silently stopped running**; `verify-c1` still hardcoded
@@ -131,7 +131,7 @@ the shipped code, not a harness approximation.
    Plan 4's 6; and `verify-p3` still read `MEMORY_BUDGET.maxFacts` after Plan 4
    renamed it to `BELIEF.maxFacts`. All repointed; suite green at 662. The
    `?v=` numbers in the note above (config 73, drives 17) are that workspace's
-   counters and are NOT this repo's — main.html is the authority. **Run
+   counters and are NOT this repo's — index.html is the authority. **Run
    `node dev/verify/run-all.js` before closing any future phase**, and treat a
    harness reported as DID NOT REPORT as a failure, never as a pass.
 2. **`do_laundry` hamper gap (unchanged from Phase 4).** Nothing fills the

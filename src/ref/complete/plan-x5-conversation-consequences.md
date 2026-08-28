@@ -45,7 +45,7 @@ from 938. `verify-x1.js` contributes 115, `verify-x2.js` 80, `verify-x3.js` 81,
   re-runs.
 - **`src/srcfiles/config.js`** — **`X5.deltaDivisor` 100 → 50**, the only
   constant this phase moved, plus the reasoning and the floor recorded at the
-  constant itself (D27). `main.html` is `config.js?v=79`.
+  constant itself (D27). `index.html` is `config.js?v=79`.
 - **`dev/verify/verify-x4.js`** — 19 assertions covering the side Phases 1–3
   could not: the ladder is *reachable*, a quiet judge is *still* quiet, and the
   divisor floor is a live guard.

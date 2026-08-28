@@ -746,17 +746,17 @@ check('openOverture is the only thing in the tick that writes the record — sco
 // ---------------------------------------------------------------------------
 console.log('\n(house rules) the new file is loaded, ordered and versioned');
 
-const MAIN = fs.readFileSync(path.join(SRC, '..', '..', 'main.html'), 'utf8');
+const MAIN = fs.readFileSync(path.join(SRC, '..', '..', 'index.html'), 'utf8');
 // Floors, never equalities (README rule 4).
 for (const [file, floor] of [['config.js', 82], ['sim.js', 43], ['drives.js', 20], ['cognition.js', 5], ['overture.js', 1], ['ui.js', 61]]) {
   const m = MAIN.match(new RegExp(`${file.replace('.', '\\.')}\\?v=(\\d+)`));
-  check(`main.html loads ${file} at v>=${floor}`, !!m && Number(m[1]) >= floor, m ? `found v=${m[1]}` : 'not found');
+  check(`index.html loads ${file} at v>=${floor}`, !!m && Number(m[1]) >= floor, m ? `found v=${m[1]}` : 'not found');
 }
-check('overture.js loads AFTER cognition.js in main.html',
+check('overture.js loads AFTER cognition.js in index.html',
       MAIN.indexOf('src/srcfiles/overture.js') > MAIN.indexOf('src/srcfiles/cognition.js'),
       'scoreCandidates calls scoreOvertures; the reverse order is a load-time ReferenceError waiting to happen');
 // README rule 6, and the incident it exists for: rumination.js shipped in
-// main.html, never reached ORDER, and killed 175 assertions across five
+// index.html, never reached ORDER, and killed 175 assertions across five
 // harnesses for two plans.
 const ORDER_SRC = fs.readFileSync(path.join(__dirname, 'loadgame.js'), 'utf8');
 check('overture.js is in loadgame.js ORDER, after cognition.js',

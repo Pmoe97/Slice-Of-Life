@@ -219,7 +219,7 @@ before any design work started. What it found, worth carrying forward:
 - **The whole screen is one function.** `renderSandboxScreen()`
   (`menu.js:348-390`) does a full `body.innerHTML = ''` rebuild on every
   mutation — no sectioning, no tabs, everything in one scrolling
-  `46vh`-capped box (`main.html:3267`). There is no existing tab state to
+  `46vh`-capped box (`index.html:3267`). There is no existing tab state to
   migrate; this is a from-scratch shell over an unchanged data model.
 - **Two tab patterns already exist in this codebase**, and they are NOT the
   same shape. Pattern A (`PLAYER_STUDIO_TABS`, `studio.js:57-152`) is a flat
@@ -259,7 +259,7 @@ before any design work started. What it found, worth carrying forward:
   two — harmless pre-game (no live energy gate exists yet), but worth
   correcting for consistency.
 - **`.sbx-badge`/`.sbx-badge-on` CSS exists with no element ever creating
-  one** (`main.html`, in the `.sbx-*` block) — dead CSS from an earlier
+  one** (`index.html`, in the `.sbx-*` block) — dead CSS from an earlier
   iteration. D11 proposes wiring it to something real (a roommate's rolled
   occupation category / trait badges on the new roommate rail) rather than
   deleting it, since the visual design already anticipated exactly this kind
@@ -345,7 +345,7 @@ simply never had UI.
   for one thing (the appearance editor) that this plan is explicitly not
   touching (D2). Pattern B also already has session-scoped remembered-tab
   state and a rail-nav layout that reads cleanly at the width sandbox mode
-  already commits to (`main.html:5607-5626`'s 176px left rail).
+  already commits to (`index.html:5607-5626`'s 176px left rail).
 
 - **D2 — Appearance editing (player and every roommate) keeps launching the
   existing studio overlay. It is never reimplemented inline.** The Player
@@ -597,9 +597,9 @@ shell works, not migrating everything at once.
   `sandbox.subtab` (sets `sandboxActiveSubtab`, keyed per tab id). Both
   added to `MENU_ACTIONS`/`ENERGY_GATE_EXEMPT` (and D11's two existing-verb
   fixes land here, since this is the phase touching that exact list).
-- `main.html`: new `.sbx-tab-rail`/`.sbx-tab-btn`/`.sbx-subtab-strip`/
+- `index.html`: new `.sbx-tab-rail`/`.sbx-tab-btn`/`.sbx-subtab-strip`/
   `.sbx-subtab-btn` rules, styled off the existing `.settings-rail`/
-  `.settings-tab-btn` shapes (`main.html:2881-2902` region) recolored into
+  `.settings-tab-btn` shapes (`index.html:2881-2902` region) recolored into
   the `.sbx-*` palette (`#191527`/`#2e2745`/`#d9b871`) rather than a new
   palette. New `.sbx-toggle`/`.sbx-slider-row` rules for the two new row
   kinds (the latter can share most of `.settings-slider-row`'s rules,
@@ -755,7 +755,7 @@ roommate's sub-tab is open will silently point at the wrong person.
 - `src/srcfiles/ui.js`: `handleAction` cases for entering/leaving a
   roommate's sub-tab view and for `sandbox.roommate-subtab` (switches which
   of the five is shown, shared across roommates per D12).
-- `main.html`: `.sbx-roommate-rail`/`.sbx-roommate-rail-card` (compact
+- `index.html`: `.sbx-roommate-rail`/`.sbx-roommate-rail-card` (compact
   variant of today's `.sbx-roommate-card`, no inline form), reusing
   `.sbx-subtab-strip`/`.sbx-subtab-btn` from Phase 1 for the per-roommate
   sub-tab strip rather than inventing a fourth tab-strip style.
@@ -786,7 +786,7 @@ merely functional.
   against both `PLAYER_STUDIO_TABS` and `SETTINGS_TABS`: neither has one).
   Scroll-position preservation across tab switches, matching Settings'
   existing `prevScroll` handling (`menu.js:1146,1175`).
-- `main.html`: D11's `.sbx-badge`/`.sbx-badge-on` resolution — wire to a
+- `index.html`: D11's `.sbx-badge`/`.sbx-badge-on` resolution — wire to a
   roommate's occupation-category chip on the rail card, or remove if it
   reads as clutter once actually built and looked at.
 

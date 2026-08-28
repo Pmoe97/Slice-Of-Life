@@ -2284,7 +2284,7 @@ function resolveTick(gameState) {
     // of (npc, absolute minute) and no longer depends on the draw order of
     // the other NPCs sharing this tick (C6). `day * 1440 + minutes` is
     // clockToAbsolute's formula, kept inline because time.js loads after
-    // this file in both main.html and loadgame.js's ORDER.
+    // this file in both index.html and loadgame.js's ORDER.
     const driveResult = evaluateDrives(
       npc, id, npcs, resolved[id], gameState,
       seededRng(meta.seed, `npc_${id}_decision_${meta.clock.day * 1440 + meta.clock.minutes}`),
@@ -2614,7 +2614,7 @@ function resolveBatch(gameState, ticks, opts = {}) {
 // Pure + synchronous (C6): plain arithmetic over state — no rng, no kv, no
 // model calls. Returns a NEW state (npcs/player replaced) like resolveBatch;
 // callers assign the result. Clock-driven in time.js, defined here because
-// sim.js loads before time.js in main.html and loadgame.js's ORDER.
+// sim.js loads before time.js in index.html and loadgame.js's ORDER.
 function applyNeedsHeartbeat(gameState, minutes, options = {}) {
   if (!gameState || minutes <= 0 || !gameState.npcs) return gameState;
 

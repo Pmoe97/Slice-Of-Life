@@ -18,7 +18,7 @@ or its *protagonist*. Three specific holes:
 1. **New Game did not do the solo start.** `menu.new-game` routed to
    `showCharCreationModal('random')`, the legacy form whose "Number of
    Roommates" select defaults to **2**. `startSoloGame()` was written,
-   correct, and reachable from no button in `main.html`. The empty-bedrooms-
+   correct, and reachable from no button in `index.html`. The empty-bedrooms-
    as-scoreboard premise the entire rent economy rests on was not what
    pressing New Game actually produced.
 2. **The player had no name.** `player.name` appeared exactly once in the
@@ -178,7 +178,7 @@ builds a body the enum has no single word for.
 | 3 | The studio. New `src/srcfiles/studio.js` + `#player-studio` markup/CSS. Seven tabs generated from `PLAYER_STUDIO_TABS`; add/remove rows from `STUDIO_ROW_GROUPS` (one builder, three groups); every field validated through `validateNpcField`. `menu.new-game` rerouted; legacy form → debug panel. |
 | 4 | The portrait. `buildPlayerPortraitPrompt` + `getPlayerPortraitImage` (image.js), the Portrait tab, the `promptDirty` latch. |
 | 5 | The cutscene. `defs.intro.js` (16 beats) + the player in studio.js: two-layer crossfade, next-image preload, keyboard nav, skip, and the art-less layout. |
-| 6 | Wiring. `startSoloGame(draft)`, its opening log line rewritten to follow the cutscene rather than restate it, every `?v=N` bumped, both new files added to `main.html` **and** `dev/verify/loadgame.js`'s `ORDER`. |
+| 6 | Wiring. `startSoloGame(draft)`, its opening log line rewritten to follow the cutscene rather than restate it, every `?v=N` bumped, both new files added to `index.html` **and** `dev/verify/loadgame.js`'s `ORDER`. |
 
 ---
 

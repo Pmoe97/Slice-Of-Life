@@ -599,7 +599,7 @@ api(script).then(out => {
         'the Phase 2 version of this bug made every Assessor pass a silent no-op that still marked the buffer');
 
   console.log('\nwiring (README rule 4 — a floor, never an equality)');
-  const mainHtml = fs.readFileSync(path.join(__dirname, '..', '..', 'main.html'), 'utf8');
+  const mainHtml = fs.readFileSync(path.join(__dirname, '..', '..', 'index.html'), 'utf8');
   const ver = (f) => { const m = mainHtml.match(new RegExp(`srcfiles/${f.replace(/\./g, '\\.')}\\?v=(\\d+)`)); return m ? +m[1] : -1; };
   for (const [f, floor] of [['llm.js', 21], ['x5.js', 3], ['ui.js', 59], ['ui.computer.js', 30],
                             ['ui.phone.js', 10], ['rumination.js', 3]]) {
