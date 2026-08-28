@@ -23,6 +23,10 @@ const SETTINGS_DEFAULTS = {
   imageStyle: 'none',             // style id from IMAGE_STYLES, or '__custom' (D9)
   customStylePrompt: '',          // used when imageStyle === '__custom'
   theme: 'midnight',              // id from COLOR_THEMES (D10)
+  // avatars-and-sprite-studio D12: the effective ceiling on the background
+  // sprite queue's tier list. Flat, for the reason the F3 block below gives —
+  // doSettingsCycle reads/writes cycle rows by flat field name.
+  characterArt: 'household',      // id from CHARACTER_ART_MODES
   reduceMotion: false,            // character-cutout plan D9: stills the scene
                                   // cutout transitions. OS prefers-reduced-motion
                                   // already does this on its own; this is the
@@ -86,6 +90,16 @@ const DREAM_ABSTRACTION_MODES = [
 // nothing (today's plain text-only chat). 'mood' regenerates on a mood-label
 // change rather than a raw count — see moodLabel(npc.mood) in ui.js's
 // maybeShowConversationScene.
+// avatars-and-sprite-studio D12. Each id maps to a ceiling in
+// SPRITE_QUEUE.tiers; 'off' is not a ceiling but a hard gate — the queue
+// never runs AND scenes render plate-only, because a player who turned
+// character art off did not ask for it to arrive by another route.
+const CHARACTER_ART_MODES = [
+  { id: 'off', label: 'Off', ceiling: null },
+  { id: 'household', label: 'Household only', ceiling: 'resident' },
+  { id: 'known', label: 'Everyone I know', ceiling: 'contact' },
+];
+
 const SCENE_VIS_MODES = [
   { id: 'off', label: 'Off' },
   { id: 'everyMessage', label: 'Every reply' },
@@ -852,6 +866,15 @@ const SETTINGS_TABS = [
       {
         title: 'Motion',
         rows: [
+          {
+            id: 'character-art',
+            kind: 'cycle',
+            field: 'characterArt',
+            label: 'Character art',
+            desc: 'Who gets a generated sprite. Your household is drawn in the background while the game is idle; everyone else is drawn the first time you actually see them. Off means nobody — scenes show the room alone and people are shown by name.',
+            action: 'settings.cycle',
+            options: CHARACTER_ART_MODES,
+          },
           {
             id: 'reduce-motion',
             kind: 'toggle',

@@ -17,10 +17,14 @@ const MEMORY_BUDGET = {
   // player line plus up to three NPC dialogue lines, so the old cap of 10
   // held roughly two and a half exchanges — an NPC's working memory of a
   // conversation reset every couple of messages, which is exactly the "why
-  // does she keep re-introducing herself" feeling. 40 is ~10 real exchanges;
-  // the prompt shows the trailing 16 (~4 exchanges) of the matching channel.
+  // does she keep re-introducing herself" feeling. 40 is ~10 real exchanges.
+  // Bug report (2026-08-27): the buffer now also carries the turn's
+  // narration/action/internal beats (applyProposal mirrors them), so a turn
+  // is ~6 entries rather than ~4; 24 shows roughly four real exchanges of
+  // the matching channel, the continuity window the anti-repetition fix
+  // needs.
   maxRecent: 40,
-  promptRecentCount: 16,
+  promptRecentCount: 24,
   // Facts budget moved to BELIEF.maxFacts (knowledge-gossip Phase 1, D15):
   // the facts tier gained confidence/salience/pinned, and its eviction,
   // retrieval and prompt window all read the new numbers from there.
@@ -526,6 +530,16 @@ function getStyleDirective(npc) {
 // in-person dialogue. Entries written before the channel field existed have
 // no `channel` and are treated as 'scene' — the only surface that could
 // produce them in bulk, since the IM path was comparatively new.
+//
+// Bug report (2026-08-27) — conversation repetition. This used to flatten
+// every entry to `${speaker}: ${text}`, so the beats the writer itself had
+// narrated vanished from the transcript it was about to write again: an
+// action entry's speaker was the literal string 'action' ("action: *closes
+// her book*"), and narration/internal entries only ever existed in the UI
+// log, never in the buffer at all. To the model, the book was therefore
+// always just sitting there un-put-down, and it re-narrated the same
+// micro-beat every turn. Renders each type the way the UI does (recallRow's
+// mapping, below) so continuity survives the round-trip.
 function getRecentExchanges(npc, count, channel) {
   const recent = npc.memory?.recent;
   if (!Array.isArray(recent) || recent.length === 0) return '';
@@ -534,8 +548,24 @@ function getRecentExchanges(npc, count, channel) {
   if (inChannel.length === 0) return '';
   return inChannel
     .slice(-(count || MEMORY_BUDGET.promptRecentCount))
-    .map(e => `${e.speaker}: ${e.text}`)
+    .map(promptRecentRow)
     .join(' | ');
+}
+
+// Prompt-side row renderer — the exact mirror of the UI's recallRow, so a
+// line reads the same to the model as it did to the player when it happened.
+// player_input and dialogue carry their speaker; an action is a *beat*; an
+// internal thought is attributed to whoever had it; narration reads as
+// scene-setting prose. Unknown types (LLM-supplied recentExchanges) degrade
+// to a bare beat rather than guessing at a speaker.
+function promptRecentRow(e) {
+  const type = e.type || (e.speaker === 'player' ? 'player_input' : 'dialogue');
+  const text = e.text;
+  if (type === 'player_input') return `You: ${text}`;
+  if (type === 'dialogue') return `${e.speaker}: ${text}`;
+  if (type === 'action') return `*${cleanActionText(text)}*`;
+  if (type === 'internal') return e.speaker ? `(${e.speaker} thinks: ${text})` : `(${text})`;
+  return text;
 }
 
 // Scene reader plan Phase 5 (D13/D14) — the PLAYER's view of the same buffer
@@ -576,6 +606,15 @@ function recallSceneExchanges(npc, nowDay) {
   return rows;
 }
 
+// A model asked for actions "in asterisks" will often hand them back with
+// *...* already around the text, and the renderers wrap again — the `**...**`
+// clutter the chat log showed (bug report 2026-08-26). Strip padding
+// asterisks/spaces once here so every renderer adds exactly one pair.
+function cleanActionText(text) {
+  if (typeof text !== 'string') return text;
+  return text.trim().replace(/^\*+|\*+$/g, '').trim();
+}
+
 // Scene reader plan Phase 5 — mirrors doConvSend's live mapping exactly, so a
 // line reads the same recalled as it did when it happened. Anything unknown
 // (memoryAdditions.recentExchanges is LLM-supplied and only validated as an
@@ -584,7 +623,7 @@ function recallRow(e) {
   const type = e.type || (e.speaker === 'player' ? 'player_input' : 'dialogue');
   if (type === 'player_input') return { kind: 'bubble', from: 'player', text: e.text };
   if (type === 'dialogue') return { kind: 'bubble', from: 'npc', text: e.text };
-  if (type === 'action') return { kind: 'bubble', from: 'action', text: `*${e.text}*` };
+  if (type === 'action') return { kind: 'bubble', from: 'action', text: `*${cleanActionText(e.text)}*` };
   if (type === 'internal') return { kind: 'beat', text: `(${e.text})` };
   return { kind: 'beat', text: e.text };
 }
@@ -1468,19 +1507,53 @@ function advanceEngagement(sceneState, speakerIds) {
 }
 
 // Resolve LLM dialogue speakers (which may be an npc id OR name — both are
-// valid per validateProposal) back to npc ids, for engagement tracking.
+// valid per validateProposal) back to npc ids, for engagement tracking. Name
+// matching is case-insensitive: the model frequently lowers or titles a name
+// it only ever saw in prose.
 function resolveSpeakerIds(dialogue, activeNpcsContext) {
   const ids = [];
   for (const d of dialogue || []) {
-    const match = (activeNpcsContext || []).find(n => n.id === d.speaker || n.name === d.speaker);
+    const match = (activeNpcsContext || []).find(n => n.id === d.speaker
+      || (typeof n.name === 'string' && n.name.toLowerCase() === String(d.speaker).toLowerCase()));
     if (match) ids.push(match.id);
   }
   return ids;
 }
 
+// The union of both scene tiers — the NPCs physically present that a scene
+// proposal may reference. The active/ambient split is a PROMPT-BUDGET cap
+// (max 2 full bible blocks), not a "who may be addressed" rule: a player
+// acting on an ambient NPC (an escort they just let in, a guest at the
+// door) must be able to get that person into the exchange, so speakers,
+// mood deltas and dialogue memory are all resolved against this pool and
+// the caller promotes anyone who actually spoke.
+function sceneSpeakerPool(context) {
+  return [...(context.activeNpcs || []), ...(context.ambientNpcs || [])];
+}
+
+// Resolve an NPC reference (an id, or a name — case-insensitively) from a
+// proposal field to the NPC context that owns it, across the present pool.
+// Returns null when the reference matches nobody in the scene.
+function resolvePresentNpcRef(context, ref) {
+  if (typeof ref !== 'string' || !ref) return null;
+  const low = ref.toLowerCase();
+  return sceneSpeakerPool(context).find(n => n.id === ref || (typeof n.name === 'string' && n.name.toLowerCase() === low)) || null;
+}
+
 // --- Context assembly for LLM ---
 // Builds the context object that LLM uses to construct prompts.
 // Only loads bibles for active NPCs (max 2). Ambient NPCs get one-line sketch.
+
+// Bug report (2026-08-27) — awareness: what a same-room observer would
+// notice about the player's state of dress, or null when there is nothing
+// worth a sense line ('dressed' is not a perception). Reads the shared
+// CLOTHING_STATE_PERCEIVED_PROSE table (config.js) so it can never drift
+// from CLOTHING_STATE_PROSE, the description the PLAYER section already
+// carries.
+function playerClothingPerceivedProse(clothing) {
+  if (!clothing || clothing === 'dressed') return null;
+  return (typeof CLOTHING_STATE_PERCEIVED_PROSE !== 'undefined' && CLOTHING_STATE_PERCEIVED_PROSE[clothing]) || null;
+}
 
 function assembleContext(gameState, sceneState) {
   const { player, npcs, world, meta } = gameState;
@@ -1527,9 +1600,20 @@ function assembleContext(gameState, sceneState) {
       // that you walked straight past. A roommate remarking on something the
       // player hasn't mentioned is the first moment the perception layer is
       // visible in fiction rather than in mechanics.
-      perceived: mergePerceived(perceiveSignals(gameState, id, npc.location || roomId))
-        .slice(0, 3)
-        .map(rec => ({ ...rec, phrase: signalPhrase(rec, gameState) })),
+      //
+      // Bug report (2026-08-27) — awareness: the player's own body is also
+      // something a present NPC can sense. Appended AFTER the salience slice
+      // so a naked/towel-wrapped player is never crowded out of the
+      // three-record window by kitchen smells, and only for NPCs actually
+      // sharing the player's room — the phrase claims to be true only there.
+      perceived: (() => {
+        const recs = mergePerceived(perceiveSignals(gameState, id, npc.location || roomId)).slice(0, 3);
+        if (npc.location === roomId) {
+          const prose = playerClothingPerceivedProse(player.clothing);
+          if (prose) recs.push({ signalId: 'player_clothing', here: true, phrase: prose });
+        }
+        return recs.map(rec => ({ ...rec, phrase: rec.phrase || signalPhrase(rec, gameState) }));
+      })(),
       // Escorts (external-world plan Phase 7): the live booking, if this NPC
       // is mid-appointment. buildNpcBlockV2 reads boundaryText; the services
       // array is also what the scene chips are built from.
@@ -1804,17 +1888,25 @@ function validateProposal(proposal, context) {
   // fall back from (see callLLM), never an assert() throw. DEV is true in
   // the Perchance editor, so throwing here would take down every scene
   // whose model response doesn't parse cleanly.
+  //
+  // Speakers may be any PRESENT NPC (active OR ambient), matched by id or
+  // case-insensitively by name. The old gate only allowed the two active
+  // slots, but a player addressing an ambient visitor (an escort, a guest)
+  // makes the model voice that person — and rejecting the whole turn over
+  // it degraded the exchange to a fallback line. The caller promotes any
+  // ambient NPC who actually speaks, so the budget cap still holds at
+  // prompt-build time.
   if (proposal.dialogue) {
     if (!Array.isArray(proposal.dialogue)) {
       errors.push('Proposal dialogue must be array');
     } else {
-      const validSpeakers = [...context.activeNpcs.map(n => n.id), ...context.activeNpcs.map(n => n.name), 'player', 'You'];
       for (const entry of proposal.dialogue) {
         if (!entry.speaker || !entry.text) {
           errors.push('Dialogue entry missing speaker or text');
           continue;
         }
-        if (!validSpeakers.includes(entry.speaker)) {
+        const speaker = String(entry.speaker);
+        if (speaker !== 'player' && speaker !== 'You' && !resolvePresentNpcRef(context, speaker)) {
           errors.push(`Unknown speaker: ${entry.speaker}`);
         }
       }
@@ -1837,14 +1929,17 @@ function validateProposal(proposal, context) {
     }
   }
 
-  // Validate mood deltas
+  // Validate mood deltas — keys may be an id or a name (case-insensitive)
+  // of any present NPC. The model only ever sees one NPC's id in the output
+  // template, so a delta for anyone else usually arrives keyed by name (the
+  // only handle it had) — that is a valid reference, not a hallucinated one.
   if (proposal.moodDeltas) {
-    for (const [npcId, delta] of Object.entries(proposal.moodDeltas)) {
-      if (!context.activeNpcs.find(n => n.id === npcId)) {
-        errors.push(`Mood delta for non-active NPC: ${npcId}`);
+    for (const [npcRef, delta] of Object.entries(proposal.moodDeltas)) {
+      if (!resolvePresentNpcRef(context, npcRef)) {
+        errors.push(`Mood delta for non-present NPC: ${npcRef}`);
       }
       if (typeof delta !== 'number' || Math.abs(delta) > 0.2) {
-        errors.push(`Mood delta for ${npcId} out of range (max ±0.2): ${delta}`);
+        errors.push(`Mood delta for ${npcRef} out of range (max ±0.2): ${delta}`);
       }
     }
   }
@@ -1957,11 +2052,16 @@ async function applyProposal(proposal, context, gameState, playerAction, opts = 
   }
 
   // Apply mood deltas — in-memory, same rationale as relationship deltas.
+  // Keys arrive as id OR name (see validateProposal); resolve a name ref to
+  // its id so the delta lands on the right NPC either way, and read the
+  // mood reason against both the raw ref and the resolved id.
   if (proposal.moodDeltas) {
-    for (const [npcId, delta] of Object.entries(proposal.moodDeltas)) {
+    for (const [npcRef, delta] of Object.entries(proposal.moodDeltas)) {
+      const npcCtx = resolvePresentNpcRef(context, npcRef);
+      const npcId = npcCtx ? npcCtx.id : npcRef;
       const npc = gameState.npcs[npcId];
       // NPC Overhaul Phase 7 — pass mood reason from proposal or derive from narration
-      const moodReason = proposal.moodReasons?.[npcId] || (delta > 0 ? 'feeling better' : delta < 0 ? 'feeling worse' : '');
+      const moodReason = (proposal.moodReasons?.[npcRef] ?? proposal.moodReasons?.[npcId]) || (delta > 0 ? 'feeling better' : delta < 0 ? 'feeling worse' : '');
       if (npc) gameState.npcs[npcId] = applyMoodDelta(npc, delta, moodReason);
       updatedNpcIds.add(npcId);
       events.push({ type: 'moodDelta', npcId, delta });
@@ -2197,12 +2297,49 @@ async function applyProposal(proposal, context, gameState, playerAction, opts = 
 
   if (proposal.dialogue) {
     for (const d of proposal.dialogue) {
-      const npcMatch = context.activeNpcs.find(n => n.id === d.speaker || n.name === d.speaker);
+      // Resolve across the present pool, not just activeNpcs — an ambient
+      // NPC the model voiced (and the caller promotes) still owns her line
+      // in memory.
+      const npcMatch = resolvePresentNpcRef(context, d.speaker);
       if (npcMatch) {
         const npc = gameState.npcs[npcMatch.id];
         if (npc) gameState.npcs[npcMatch.id] = addRecentExchange(npc, d.speaker, d.text, 'dialogue', recentDay, recentTick, channel, recentScene);
       }
       logDebugEvent(gameState, 'conversation', npcMatch ? [npcMatch.id] : debugLogSpeakerIds, { channel, sceneId: recentScene, speaker: d.speaker, text: d.text });
+    }
+  }
+
+  // Bug report (2026-08-27) — conversation repetition + the export gap.
+  // Narration/action/internal beats were written to the session log only:
+  // the LLM-supplied memoryAdditions.recentExchanges path could add them to
+  // memory.recent (and the model was never told to produce that field), and
+  // logDebugEvent mirrored only the player line and dialogue. The scene
+  // prompt's [Memories — recent] thus carried no actions or thoughts the
+  // model had already narrated, and an exported debug slice read like the
+  // NPC had replied to nothing. Beats are shared scene facts, so mirror each
+  // one into EVERY active NPC's buffer and into the debug log (tagged with
+  // `type` so formatDebugLogEntryText can render it). An action/internal
+  // beat is attributed to the primary speaker — the model writes the
+  // responding NPC's actions — resolved the same way dialogue resolves;
+  // narration is uncredited scene prose.
+  const primaryBeatSpeaker = (proposal.dialogue && proposal.dialogue.length > 0)
+    ? resolvePresentNpcRef(context, proposal.dialogue[0].speaker)?.id
+    : (context.activeNpcs[0]?.id || null);
+  const beatName = primaryBeatSpeaker
+    ? (gameState.npcs[primaryBeatSpeaker]?.bible?.name || primaryBeatSpeaker)
+    : (context.activeNpcs[0]?.name || null);
+  const beats = [];
+  if (proposal.narration) beats.push({ type: 'narration', speaker: '', text: proposal.narration });
+  if (proposal.actions) for (const a of proposal.actions) beats.push({ type: 'action', speaker: beatName || '', text: a });
+  if (proposal.internal) beats.push({ type: 'internal', speaker: beatName || '', text: proposal.internal });
+  if (beats.length > 0) {
+    const beatIds = primaryBeatSpeaker ? [primaryBeatSpeaker] : debugLogSpeakerIds;
+    for (const b of beats) {
+      logDebugEvent(gameState, 'conversation', beatIds, { channel, sceneId: recentScene, speaker: b.speaker, text: b.text, type: b.type });
+      for (const npcCtx of context.activeNpcs) {
+        const npc = gameState.npcs[npcCtx.id];
+        if (npc) gameState.npcs[npcCtx.id] = addRecentExchange(npc, b.speaker, b.text, b.type, recentDay, recentTick, channel, recentScene);
+      }
     }
   }
 

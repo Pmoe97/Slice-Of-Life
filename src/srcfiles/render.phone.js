@@ -275,6 +275,17 @@ function renderPhoneNotifications(body, gs) {
     const main = document.createElement('div');
     main.className = 'phone-tracker-main';
 
+    // Bug report (2026-08-26): every entry already carries its source app
+    // via deepLink.appId (TRACKER's file header — that's what the title
+    // click routes on); the list just never displayed it, so a bell icon
+    // and a bare title gave no way to tell a Bills notice from an IM one
+    // without tapping through. APP_DEFS is the single source of app
+    // labels everywhere else (desktop icons, taskbar, Start menu).
+    const appLabel = document.createElement('div');
+    appLabel.className = 'phone-tracker-app';
+    appLabel.textContent = APP_DEFS[e.deepLink.appId]?.label || e.deepLink.appId;
+    main.appendChild(appLabel);
+
     const title = document.createElement('button');
     title.className = 'phone-tracker-title phone-tracker-link';
     title.setAttribute('data-action', 'computer.open-screen');

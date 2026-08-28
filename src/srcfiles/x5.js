@@ -52,13 +52,42 @@ const X5_PLAYER_PARTICIPANT = 'player';
 // line" does not.
 //
 // Returns { obj, tier } or null. tier 1 = clean parse, 2 = brace-matched.
+//
+// Boxed-String coercion (bug report 2026-08-26): the ai-text-plugin resolves
+// `await root.generateText(...)` with a boxed `new String(...)` object, not a
+// primitive — `doOnFinishStuff` builds `finishData = new String(chunks.join(""))`
+// and resolves with it. Every judge that fed that object straight to
+// `JSON.parse` was silently rejected by a `typeof !== 'string'` guard, so the
+// Assessor, Chronicler and Dreamweaver all failed to parse 100% of replies
+// ("Assessor reply unparseable" every window) while callLLM kept working only
+// because it calls `.trim()` first, which coerces. Coerce here, once, so every
+// x5-parser and its tier-3 regexes see a primitive.
+function x5CoerceString(v) {
+  if (typeof v === 'string') return v;
+  if (v instanceof String) return v.valueOf();
+  if (v === null || v === undefined) return '';
+  return String(v);
+}
+
 function x5ParseJsonObject(text) {
-  if (typeof text !== 'string') return null;
+  text = x5CoerceString(text);
   let s = text.trim();
   if (!s) return null;
   // A fenced answer. `startWith: '{'` makes this rare, not impossible.
   s = s.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
   if (!s) return null;
+
+  // Bug report (2026-08-26): the Assessor/Chronicler run on a small local
+  // quantized model (transformers.js, wasm, q8 — see the dev console: this
+  // is not the same model class the narrator's callLLM path targets), which
+  // is far more prone to two specific JSON slips a bigger model rarely
+  // makes: "smart" typographic quotes swapped in for straight ones, and a
+  // trailing comma before a closing brace/bracket. Both are silent
+  // JSON.parse killers that no amount of brace-matching below can repair —
+  // normalize them here, unconditionally, since neither transform can turn
+  // already-valid JSON invalid.
+  s = s.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+  s = s.replace(/,(\s*[}\]])/g, '$1');
 
   // Candidate repairs, cheapest first. `startWith: '{'` means the leading
   // brace is usually present but occasionally swallowed, and stopSequences
@@ -169,7 +198,8 @@ function parseAssessorReply(text, opts = {}) {
   // carry recoverable "npc_x": { ... "trust": 2 ... } runs, and the axis
   // grammar is flat enough to sweep for directly. An all-zero mangled reply
   // recovers as {}, which is correct: it parsed as far as "nothing changed".
-  if (typeof text !== 'string' || !text.trim()) return null;
+  if (typeof text !== 'string') text = x5CoerceString(text); // boxed String from the plugin — see x5ParseJsonObject
+  if (!text.trim()) return null;
   const blockRe = /"([A-Za-z0-9_]+)"\s*:\s*\{([^{}]*)\}/g;
   let m, recovered = false;
   while ((m = blockRe.exec(text)) !== null) {
@@ -520,6 +550,18 @@ function formatWindowTranscript(entries, opts = {}) {
   return rows
     .slice(-(opts.maxLines || X5.transcriptMaxLines))
     .map(e => {
+      // Bug report (2026-08-27): applyProposal now writes the writer's
+      // narration/action/internal beats into memory.recent, so the judge's
+      // transcript can contain them too. Render each type as it read when it
+      // happened — the same mapping recallRow/promptRecentRow use — rather
+      // than flattening a narration beat into "Elsa: <scene prose>" or an
+      // action into a speaker line. The judge reads ARCS; stripping the
+      // actions would hide exactly the reaction-beat repetition this judging
+      // pass exists to grade.
+      const type = e.type || (e.speaker === 'player' || e.speaker === 'You' ? 'player_input' : 'dialogue');
+      if (type === 'action') return `*${cleanActionText(e.text)}*`;
+      if (type === 'internal') return e.speaker ? `(${e.speaker} thinks: ${e.text})` : `(${e.text})`;
+      if (type === 'narration') return e.text;
       const isPlayer = e.speaker === 'player' || e.speaker === 'You';
       const who = isPlayer ? 'Player' : (label || e.speaker);
       return `${who}${e.channel === 'im' ? ' (text)' : ''}: ${e.text}`;

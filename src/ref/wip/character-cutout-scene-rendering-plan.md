@@ -591,6 +591,90 @@ forward.
   invariant 3 (the blob itself is still the only thing stored; the anchor
   is derived on load like the bbox already is).
 
+### Cutout quality amendments (first live run, 2026-08-26)
+
+The review pass above was written against reasoning, not pixels. The first
+run that produced real cutouts produced *heavy* background noise: a haze of
+speckle across the whole frame, visible on the sprite in isolation and
+splattered over the room plate once composited. Root-cause was two separate
+failures, one at each end of the pipeline.
+
+**Cause 1 — Stage 0 asked for the wrong backdrop.** "simple studio
+background" is a photography term, and the model rendered exactly what it
+names: a mottled muslin studio backdrop. RMBG-1.4 then had to segment a
+*textured* plate, which is the one job the Stage 0 prompt existed to spare
+it. Compounding it, `applyImageStyle` appends the active style suffix to
+whatever it is handed, so on a texture-flavoured style (`watercolor` →
+"visible paper texture", `vintage` → "grainy texture", `sketch` → "rough
+graphite texture", `oilPainting` → "impasto") the *last* thing the model
+read was an instruction to texture the whole frame, backdrop included.
+
+**Cause 2 — the cleanup could not remove what it existed to remove.** Over a
+textured plate RMBG hedges, and the hedge lands as alpha-30..alpha-150
+pixels rather than at 0. Stage 2 was structurally unable to touch them:
+it labeled the *closed* mask, so D15's 2px dilate-then-erode bridged
+scattered residue into one component with the character; that component was
+therefore the largest; "largest" is the definition of main; and main is
+never erased. Against a synthetic frame reproducing the failure at 512×768,
+**99.9% of the residue survived the old pipeline** — the sweep was very
+nearly a no-op. `speckAreaMax` could not have saved it either: at 120px
+absolute, most real residue blobs clear it easily.
+
+- **D17 — Alpha levels (the matte knee).** A new first step, before D14 and
+  D15/D5: remap the alpha channel so at-or-below `alphaFloor` (110) is
+  background (0), at-or-above `alphaCeil` (200) is subject (255), and the
+  band between gets a smoothstep. RMBG emits a probability, not a decision;
+  this makes the decision once, up front, instead of leaving every
+  downstream stage to cope with a hedge. Biggest single lever on the
+  reported noise, and it keeps genuine soft edges soft rather than
+  hard-cutting them.
+- **D18 — Closing rescues, it no longer merges.** Stage 2 now labels the
+  **raw** mask, so "main" is decided honestly and bridging can never inflate
+  it. The closed mask is consulted only for a second question, asked about
+  wisp-scale components alone (`rescueAreaMax`, 300px): *would closing have
+  attached you to the main body?* If yes it is a hair wisp or a fingertip
+  and it is rescued — the exact case D15 was added for, with none of the
+  merge damage. Anything bigger than a wisp is judged on its merits however
+  close to the silhouette it sits, because residue hugging the edge is the
+  commonest residue there is. `removeBorderComponents` also flips **on**,
+  made safe by `borderIgnoreBottom`: the bottom band is the one edge a
+  standing or seated pose legitimately reaches, and the top/left/right bands
+  are unambiguously background.
+- **D19 — Dominance prune, and the crop anchors to the subject.** A non-main
+  component is also erased when it is under `speckRelMax` (6%) of the main
+  component's area, whatever its absolute size. Separately, Stage 3 now
+  takes its bbox from the **main component's own footprint** (plus anything
+  rescued for it), not from "whatever still has alpha". Cleanup is
+  best-effort and one stubborn corner speck is always possible; what must
+  not be possible is that speck deciding the crop, because D16 measures the
+  floor anchor from the same box — a residue-pinned, frame-wide bbox handed
+  the layout a character at the wrong scale, floating off the floor. This
+  makes placement *immune* to leftover noise instead of merely unlikely to
+  meet it. A null bbox (the mask failed outright) now takes D12's
+  missing-cutout exit rather than caching a valid, fully transparent PNG as
+  that character's sprite forever.
+- **D20 — Stage 0 stops asking for the backdrop, and gets the last word.**
+  "simple studio background" is gone; the prompt asks for a plain flat pure
+  white background and even lighting on the character. `cutoutPromptFor` is
+  now the only composer the two getters use, and it appends
+  `CUTOUT_ISOLATION_TAIL` **after** the style suffix so a texture-flavoured
+  style cannot be the final instruction. The negative prompt gains the
+  artifacts this run actually produced: mottled/textured/muslin backdrop,
+  grain, speckles, splatter, dust, scratches, and the cast shadow that pools
+  under the feet and comes through the mask as an attached grey slab.
+  Cutout keys gain `CUTOUT_PIPELINE_VERSION` (`c2`) alongside
+  `IMAGE_PROMPT_VERSION`, so this repaints every cutout **without** throwing
+  away plates, portraits, peek frames and outcome-window art — bump that
+  token, not the shared one, for future cutout-only changes.
+
+Measured on the synthetic 512×768 reproduction (`dev/verify/verify-cutout-p1.js`
+carries the unit-level regressions; the whole-frame numbers were a one-off
+harness run): residue surviving the sweep went from **99.9% → ~15%** on a
+deliberately pathological haze covering a third of the frame, with 100% of
+the subject retained. The remaining share is residue that directly abuts the
+silhouette in that synthetic; D20's prompt fix is what removes it at source,
+and is the half of this that cannot be unit-tested here.
+
 ### Failure
 - **D12 — Degrade order.** A missing/failed cutout hides that layer and the
   scene-reader text still narrates the character. A missing plate falls
@@ -609,21 +693,37 @@ const CUTOUT_TUNING = {
   speckAreaMax: 120,          // erase components smaller than this
   speckMainRatio: 0.85,       // ...and smaller than this share of the main
   borderMarginFrac: 0.02,     // border band: max(3, round(min(W,H)*this))
-  removeBorderComponents: false, // D5: seated/edge poses may touch the frame
-  closeRadius: 2,              // D15: dilate-then-erode radius (px) before
-                                // component labeling — protects hair wisps/
-                                // fingertips from being pruned as specks
+  removeBorderComponents: true,  // D18: on, and safe because of the next line
+  borderIgnoreBottom: true,   // D18: feet/hips legitimately reach the bottom
+  closeRadius: 2,              // D15/D18: dilate-then-erode radius (px), used
+                                // to RESCUE wisp-scale fragments — it no
+                                // longer merges components before main is
+                                // chosen
   spillAlphaMax: 250,          // D14: pixels with speckAlpha < alpha < this
                                 // are matte-edge pixels; their RGB gets
                                 // decontaminated toward the subject's own
                                 // opaque-pixel mean color
+  alphaFloor: 110,            // D17: the matte knee — at/below this is
+  alphaCeil: 200,             //      background, at/above is subject,
+                              //      smoothstep between
+  speckRelMax: 0.06,          // D19: erase any non-main component under this
+                              //      share of main, whatever its pixel count
+  rescueAreaMax: 300,         // D18: only fragments this small can be rescued
+                              //      by proximity — a wisp, not a blob
 };
 ```
 
+The pipeline order inside `cleanCutout` is now: **D17 levels → D14 spill
+suppression → D15/D5/D18/D19 specks → Stage 3 subject-anchored bbox.**
+
 ### Cache keys (image.js)
 ```js
+const CUTOUT_PIPELINE_VERSION = 'c2';   // D20: cutout-only, bump instead of
+                                       // IMAGE_PROMPT_VERSION so a cleanup
+                                       // change does not evict plates,
+                                       // portraits, peek and window art
 function cutoutKey(identity, pose, expression, outfit, styleToken) {
-  return `cut_${IMAGE_PROMPT_VERSION}_${identity}_${pose}_${expression}_${outfit}`
+  return `cut_${IMAGE_PROMPT_VERSION}${CUTOUT_PIPELINE_VERSION}_${identity}_${pose}_${expression}_${outfit}`
     + (styleToken ? `_${styleToken}` : '');
 }
 function plateKey(roomId, phase, detail, styleToken) {
@@ -819,7 +919,7 @@ tuning decisions.
 
 | Phase | Status | What it does |
 |---|---|---|
-| 1 | **Built** — `verify-cutout-p1.js` 21/21. Pixel output unseen (live-run items 1–4). | Cutout factory: RMBG removal, specks cleanup (D5/D15), spill suppression (D14), bbox/bottomFrac (D16), deterministic keys, LRU round-trip |
+| 1 | **Built + first live run done (2026-08-26)** — `verify-cutout-p1.js` 47/47. Alpha survives the canvas→blob round-trip (live-run item 1, settled). The run exposed heavy background noise; D17–D20 fix it — see *Cutout quality amendments (first live run)*. Needs a second live run to confirm the fix on real pixels. | Cutout factory: RMBG removal, alpha levels (D17), specks cleanup (D5/D15/D18/D19), spill suppression (D14), subject-anchored bbox/bottomFrac (D16/D19), deterministic keys, LRU round-trip |
 | 2 | **Built** — `verify-cutout-p2.js` 19/19. | Empty background plates: people-free prompt, people-ban negative, plate keys |
 | 3 | **Built** — `verify-cutout-p3.js` 15/15 + live browser verification of the layer diff, idempotency, geometry and resize. | Layered render: plate + positioned cutouts, layout, transitions, pv4 switch. **Floor shadow deliberately not built** — `::after` doesn't render on `<img>`; needs a wrapper and a vision pass first. |
 | 4 | **Built** — covered by `verify-cutout-p45.js` + the live degrade path (harness generation always throws, so every verified render exercised it). | Reroll = plate only (D11); degrade paths (D12); images-off playability |

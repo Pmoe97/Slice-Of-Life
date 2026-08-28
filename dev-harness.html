@@ -52,6 +52,8 @@
       // 'get')` during boot, which reads like a game bug and isn't one —
       // keep this list in step with KVFolders in state.js.
       menu: makeFolder(), saves: makeFolder(), saveIndex: makeFolder(),
+      // avatars-and-sprite-studio Phase 1: the permanent override store.
+      sprites: makeFolder(),
     },
     // Deliberately reject — exercises the game's own existing fallback
     // paths (image.js's gradient placeholder, IM's broken-response

@@ -469,7 +469,7 @@ async function getPlayerPortraitImage(portrait) {
   const cached = await getCachedImage(key);
   if (cached) return { url: createObjectUrl(key, cached), cached: true };
   try {
-    const result = await root.generateImage(applyImageStyle(portrait.prompt), {
+    const result = await generateImageTracked(applyImageStyle(portrait.prompt), {
       resolution: IMAGE_CACHE.resolutions.char,
       seed: portrait.seed,
       negativePrompt: 'blurry, distorted, extra limbs, low quality, text, watermark',
@@ -571,7 +571,7 @@ async function getScenePlate(roomId, phase, roomObjects) {
   try {
     const prompt = applyImageStyle(buildBackgroundPrompt(roomId, phase, roomObjects));
     const resolution = IMAGE_CACHE.resolutions.scene[sceneOrientation()];
-    const result = await root.generateImage(prompt, {
+    const result = await generateImageTracked(prompt, {
       resolution,
       seed: composePlateSeed(key),
       negativePrompt: backgroundNegPrompt(),
@@ -611,21 +611,45 @@ function cutoutExpressionFor(gs, who, isPlayer, charId) {
 // this function's job, bottomFrac here is the D16 FALLBACK only — the
 // renderer overrides it with a measured value once a cutout has loaded.
 function layoutSceneCutouts(gs, sceneState, plateKeyStr) {
+  // D12/"off": a player who turned character art off gets the room alone.
+  // Gated here rather than in the renderer so nothing downstream — the
+  // layout, the diff, the queue's refill — even considers a cast.
+  if (typeof characterArtEnabled === 'function' && !characterArtEnabled()) return [];
+
   const roomId = gs.player.location;
   const roomObjects = gs.objects?.[`room_${roomId}`];
   const seated = tableSpreadIds(roomObjects).length > 0;
   const activeNpcIds = (sceneState?.active || []).slice().sort();
-  const seed = hashStr(`${plateKeyStr}|${activeNpcIds.join(',')}`);
+  // D15 — the AMBIENT tier renders too. Scene presence has always been two
+  // tiers: promoteToActive/demoteToAmbient (npc.js) keep a capped foreground
+  // `active` set and an `ambient` list holding everyone else in the room, and
+  // the LLM context builder feeds BOTH. So an NPC could be described by the
+  // scene reader, be addressable, appear in the present-list — and be absent
+  // from the picture. That gap was exactly one tier wide.
+  //
+  // Ambient characters get a smaller scale and a z below every active slot,
+  // which is a free depth cue the presence model was already handing us.
+  const ambientNpcIds = (sceneState?.ambient || [])
+    .filter((id) => !activeNpcIds.includes(id))
+    .slice().sort();
+  // The seed still folds only the plate key and WHO IS PRESENT, never any
+  // character's identity (D10) — only the count changes.
+  const seed = hashStr(`${plateKeyStr}|${activeNpcIds.join(',')}|${ambientNpcIds.join(',')}`);
   const rng = mulberry32(seed);
 
   // The player is always the center-most slot (D10 — "player center-front"),
   // regardless of join order: NPCs sorted by id fill outward from the
-  // middle where the player sits.
-  const npcSlots = activeNpcIds.map(id => ({ charId: id, isPlayer: false }));
+  // middle where the player sits. Ambient NPCs sit outside the active band,
+  // furthest from centre, which reads as "further back" as well as smaller.
+  const npcSlots = activeNpcIds.map(id => ({ charId: id, isPlayer: false, ambient: false }));
   const centerIdx = Math.floor(npcSlots.length / 2);
-  const slots = npcSlots.slice(0, centerIdx)
-    .concat([{ charId: 'player', isPlayer: true }])
-    .concat(npcSlots.slice(centerIdx));
+  const ambientSlots = ambientNpcIds.map(id => ({ charId: id, isPlayer: false, ambient: true }));
+  const half = Math.ceil(ambientSlots.length / 2);
+  const slots = ambientSlots.slice(0, half)
+    .concat(npcSlots.slice(0, centerIdx))
+    .concat([{ charId: 'player', isPlayer: true, ambient: false }])
+    .concat(npcSlots.slice(centerIdx))
+    .concat(ambientSlots.slice(half));
   const count = slots.length;
 
   const pose = seated ? 'seated' : 'standing';
@@ -642,12 +666,16 @@ function layoutSceneCutouts(gs, sceneState, plateKeyStr) {
     return {
       charId: slot.charId,
       isPlayer: slot.isPlayer,
+      ambient: !!slot.ambient,
       pose,
       expression: cutoutExpressionFor(gs, who, slot.isPlayer, slot.charId),
       xFrac,
       bottomFrac: poseDef.bottomFrac,
-      scale: poseDef.scale,
-      z: slot.isPlayer ? 100 : 10 + i, // player always drawn on top (D10)
+      // D15: ambient figures are smaller and sit BEHIND every active one.
+      // The z bands never overlap — ambient occupies 1..9, active 10.., the
+      // player 100 — so a promote/demote can never reorder the foreground.
+      scale: poseDef.scale * (slot.ambient ? SPRITE_QUEUE.ambientScale : 1),
+      z: slot.isPlayer ? 100 : (slot.ambient ? 1 + i : 10 + i),
     };
   });
 }
@@ -670,7 +698,7 @@ async function rerollSceneImage(gs, sceneState, fields) {
   const ctx = sceneArtContext(gs, sceneState);
   if (!ctx || !ctx.sceneKey) return { error: 'No scene to reroll.' };
   try {
-    const result = await root.generateImage(fields.prompt, {
+    const result = await generateImageTracked(fields.prompt, {
       resolution: IMAGE_CACHE.resolutions.scene[sceneOrientation()],
       seed: fields.seed ?? Math.floor(Math.random() * 2147483647),
       negativePrompt: fields.negativePrompt || backgroundNegPrompt(),
@@ -702,7 +730,7 @@ async function getCharacterImage(npc, expression, pose) {
 
   try {
     const prompt = applyImageStyle(buildCharacterPrompt(npc, expression, pose));
-    const result = await root.generateImage(prompt, {
+    const result = await generateImageTracked(prompt, {
       resolution: IMAGE_CACHE.resolutions.char,
       seed: npc.bible.genSeed,
       negativePrompt: 'blurry, distorted, extra limbs, low quality, text, watermark',
@@ -749,8 +777,17 @@ function cutoutOutfitToken(who) {
   return `c${clothing}_o${o}_t${t}_b${b}`;
 }
 
+// D20: a cutout-only version token, folded in ALONGSIDE IMAGE_PROMPT_VERSION
+// rather than by bumping it. The Stage 0 prompt and the D17/D18/D19 cleanup
+// both changed, so every cutout generated before them has to be repainted —
+// but plates, portraits, peek frames and outcome-window art are all still
+// correct, and bumping the shared version would have thrown that whole cache
+// away too. Bump this, not IMAGE_PROMPT_VERSION, for any future change that
+// only alters how cutouts are made.
+const CUTOUT_PIPELINE_VERSION = 'c2';
+
 function cutoutKey(identity, pose, expression, outfit, styleToken) {
-  return `cut_${IMAGE_PROMPT_VERSION}_${identity}_${pose}_${expression}_${outfit}`
+  return `cut_${IMAGE_PROMPT_VERSION}${CUTOUT_PIPELINE_VERSION}_${identity}_${pose}_${expression}_${outfit}`
     + (styleToken ? `_${styleToken}` : '');
 }
 
@@ -771,16 +808,71 @@ function buildCutoutPrompt(who, pose, expression, opts = {}) {
   const exprWord = expression === 'happy' ? 'happy expression'
     : expression === 'talking' ? 'talking, mouth slightly open'
     : 'neutral expression';
-  return `${clause}, ${exprWord}, ${poseWord}, full body, isolated on solid pure white background, `
-    + 'simple studio background, clean studio lighting, character sprite.';
+  return `${clause}, ${exprWord}, ${poseWord}, full body, `
+    + 'alone on a plain flat pure white background, even soft lighting on the character, '
+    + 'character sprite.';
+}
+
+// D20: the isolation instruction, re-stated so it is the LAST thing the model
+// reads. applyImageStyle appends the active style suffix to whatever it is
+// handed, and half of IMAGE_STYLES ends in a texture phrase — 'visible paper
+// texture', 'grainy texture', 'rough graphite texture', 'impasto'. Those apply
+// to the WHOLE frame, backdrop included, which is precisely the mottled plate
+// RMBG then has to guess its way through. Every other surface wants the style
+// to have the last word; the cutout surface cannot afford it.
+const CUTOUT_ISOLATION_TAIL = ', flat solid white background, empty background behind the subject, '
+  + 'no backdrop texture, no background pattern, no shadow cast on the background.';
+
+// The one composer both cutout getters use: character prose -> active style ->
+// isolation tail (D20). Never call applyImageStyle on a cutout prompt directly.
+function cutoutPromptFor(who, pose, expression, opts) {
+  return applyImageStyle(buildCutoutPrompt(who, pose, expression, opts)) + CUTOUT_ISOLATION_TAIL;
 }
 
 // persona-realm's negPrompt() (Stage 0): ban anything that would read as
 // "background" or a second subject, so Stage 1's mask gets a clean, single-
-// subject edge to work with.
+// subject edge to work with. D20 widens it past persona-realm's list with the
+// terms the first live run actually produced: a photographer's mottled muslin
+// backdrop (what 'studio background' summons), speckle/grain, and the cast
+// shadow that pools under the feet and comes through the mask as an attached
+// grey slab.
 function cutoutNegativePrompt() {
   return 'blurry, distorted, extra limbs, low quality, text, watermark, '
-    + 'background details, background scenery, noise, artifacts, textures on background, borders, frame, vignette, multiple people, cropped';
+    + 'background details, background scenery, noise, artifacts, textures on background, borders, frame, vignette, multiple people, cropped, '
+    + 'studio backdrop, muslin backdrop, canvas backdrop, mottled background, textured background, gradient background, '
+    + 'grunge, speckles, splatter, paint splatter, grain, film grain, dust, scratches, paper texture, '
+    + 'cast shadow, drop shadow, floor, ground plane, reflection';
+}
+
+// --- D17: alpha levels (the matte knee) ------------------------------------
+// The FIRST thing that touches a fresh cutout's alpha channel, and the single
+// biggest lever on background noise. RMBG-1.4 emits a probability mask, not a
+// decision: over a flat backdrop it reads ~0 / ~255 and everything downstream
+// is easy, but over ANY texture it hedges, and the hedge lands as a haze of
+// alpha-30..alpha-150 pixels spread across the whole frame. D5's sweep cannot
+// help there — the haze is not small, and after D15's closing it is not even
+// separate from the subject. So decide it here, before it becomes anyone
+// else's problem: at or below `alphaFloor` is background (0), at or above
+// `alphaCeil` is subject (255), and the band between gets a smoothstep so a
+// genuine soft edge — hair, a blurred hand — keeps its gradient instead of
+// turning into a jaggy hard cut. Mutates `data` in place; pure array math.
+function cutoutAlphaLevels(data, width, height, tuning) {
+  tuning = tuning || CUTOUT_TUNING;
+  const floor = tuning.alphaFloor, ceil = tuning.alphaCeil;
+  if (!(ceil > floor)) return 0; // misconfigured knee — leave the mask alone
+  const n = width * height;
+  let cleared = 0;
+  for (let i = 0; i < n; i++) {
+    const o = i * 4 + 3;
+    const a = data[o];
+    if (a <= floor) { if (a > 0) cleared++; data[o] = 0; }
+    else if (a >= ceil) data[o] = 255;
+    else {
+      const t = (a - floor) / (ceil - floor);
+      data[o] = Math.round(255 * t * t * (3 - 2 * t)); // smoothstep
+    }
+  }
+  return cleared;
 }
 
 // --- D14: edge spill suppression (decontamination) -------------------------
@@ -879,8 +971,10 @@ function cutoutMorphClose(mask, width, height, radius) {
 // Flood-fill component labeling (an explicit Int32Array stack, no
 // recursion — persona-realm's killParasitesSync approach, safe on the
 // cutout resolution). Returns per-component pixel area and whether it
-// touches the border band.
-function cutoutLabelComponents(mask, width, height, marginBand) {
+// touches the border band. D18: `ignoreBottom` drops the bottom edge from
+// that band — feet, chair legs and a lounging hip all legitimately reach it,
+// and it is the only edge where they do.
+function cutoutLabelComponents(mask, width, height, marginBand, ignoreBottom) {
   const n = width * height;
   const labels = new Int32Array(n).fill(-1);
   const stack = new Int32Array(n);
@@ -898,7 +992,8 @@ function cutoutLabelComponents(mask, width, height, marginBand) {
       const idx = stack[--top];
       area++;
       const x = idx % width, y = (idx / width) | 0;
-      if (x < marginBand || y < marginBand || x >= width - marginBand || y >= height - marginBand) touchesBorder = true;
+      if (x < marginBand || y < marginBand || x >= width - marginBand) touchesBorder = true;
+      if (!ignoreBottom && y >= height - marginBand) touchesBorder = true;
       if (x > 0) { const i2 = idx - 1; if (mask[i2] && labels[i2] === -1) { labels[i2] = nextLabel; stack[top++] = i2; } }
       if (x < width - 1) { const i2 = idx + 1; if (mask[i2] && labels[i2] === -1) { labels[i2] = nextLabel; stack[top++] = i2; } }
       if (y > 0) { const i2 = idx - width; if (mask[i2] && labels[i2] === -1) { labels[i2] = nextLabel; stack[top++] = i2; } }
@@ -911,42 +1006,108 @@ function cutoutLabelComponents(mask, width, height, marginBand) {
   return { labels, areas, border, count: nextLabel };
 }
 
-// Orchestrates D15 (close) + D5 (persona-realm's speck removal, tuned):
-// erase a non-main component's ORIGINAL pixels (alpha -> 0) if it is
-// smaller than speckAreaMax, or (when removeBorderComponents is on)
-// touches the border band — AND is smaller than speckMainRatio of the main
-// component. removeBorderComponents defaults false (D5) so seated/edge
-// poses that legitimately reach the frame edge are never clipped. Mutates
-// `data`'s alpha channel in place.
+// Orchestrates D15 (close) + D5 (persona-realm's speck removal, tuned) +
+// D18/D19 (the amendments the first live run forced).
+//
+// D18 — CLOSING NOW RESCUES, IT NO LONGER MERGES. The original sweep labeled
+// the CLOSED mask and read each original pixel's label out of it, so a
+// dilate-then-erode of radius 2 could bridge scattered background residue
+// into one component with the character. That component was then the largest,
+// i.e. "the main one", i.e. immune — the sweep was structurally unable to
+// erase the noise it existed to erase. So label the RAW mask (which decides
+// what "main" is, honestly), and consult the closed mask only to ask a second
+// question about each WISP-SCALE component (`rescueAreaMax`): would closing
+// have attached you to the main body? If yes it is a hair wisp or a
+// fingertip, and it is rescued — the exact case D15 was added for, with none
+// of the merge damage. Anything bigger than a wisp is judged on its merits
+// below however close to the subject it sits, because residue hugging the
+// silhouette's edge is the commonest residue of all.
+//
+// D19 — a non-main component is also erased when it is under `speckRelMax` of
+// the main component's area, whatever its absolute size. `speckAreaMax` alone
+// (120px) let anything bigger through, which on a 512x768 frame is most of
+// the residue worth complaining about.
+//
+// Mutates `data`'s alpha channel in place.
 function cutoutPruneSpecks(data, width, height, tuning) {
   tuning = tuning || CUTOUT_TUNING;
   const n = width * height;
   const foreground = new Uint8Array(n);
   for (let i = 0; i < n; i++) foreground[i] = data[i * 4 + 3] > tuning.speckAlpha ? 1 : 0;
-  const closed = cutoutMorphClose(foreground, width, height, tuning.closeRadius);
   const marginBand = Math.max(3, Math.round(tuning.borderMarginFrac * Math.min(width, height)));
-  const { labels, areas, border, count } = cutoutLabelComponents(closed, width, height, marginBand);
-  if (count === 0) return { erased: 0, mainArea: 0, componentCount: 0 };
+  const raw = cutoutLabelComponents(foreground, width, height, marginBand, tuning.borderIgnoreBottom);
+  const { labels, areas, border, count } = raw;
+  // A frame with no foreground at all still returns a (empty) mainMask —
+  // cleanCutout reads it unconditionally, and 'the mask failed entirely' is
+  // exactly the case that must reach the null-bbox exit rather than throw.
+  if (count === 0) return { erased: 0, mainArea: 0, componentCount: 0, rescued: 0, mainMask: new Uint8Array(n) };
   let mainLabel = 0;
   for (let i = 1; i < count; i++) if (areas[i] > areas[mainLabel]) mainLabel = i;
   const mainArea = areas[mainLabel];
+
+  // D18's rescue question, asked once for the whole frame: which raw
+  // components does the closed mask put in the same blob as the main one?
+  const rescued = new Uint8Array(count);
+  let rescuedCount = 0;
+  if (tuning.closeRadius) {
+    const closed = cutoutMorphClose(foreground, width, height, tuning.closeRadius);
+    const closedLabels = cutoutLabelComponents(closed, width, height, marginBand, tuning.borderIgnoreBottom).labels;
+    // Closing is extensive, so every original foreground pixel has a closed
+    // label; find the closed label the main component sits in, then mark any
+    // other raw component sharing it.
+    let mainClosed = -1;
+    for (let i = 0; i < n && mainClosed < 0; i++) if (foreground[i] && labels[i] === mainLabel) mainClosed = closedLabels[i];
+    if (mainClosed >= 0) {
+      for (let i = 0; i < n; i++) {
+        if (!foreground[i]) continue;
+        const lbl = labels[i];
+        if (lbl === mainLabel || rescued[lbl]) continue;
+        if (areas[lbl] > tuning.rescueAreaMax) continue; // wisp-scale only
+        if (closedLabels[i] === mainClosed) { rescued[lbl] = 1; rescuedCount++; }
+      }
+    }
+  }
+
   const erase = new Uint8Array(count);
   for (let i = 0; i < count; i++) {
-    if (i === mainLabel) continue;
+    if (i === mainLabel || rescued[i]) continue;
     const small = areas[i] < tuning.speckAreaMax;
+    const dwarfed = areas[i] < tuning.speckRelMax * mainArea;       // D19
     const edge = tuning.removeBorderComponents && border[i];
-    if ((small || edge) && areas[i] < tuning.speckMainRatio * mainArea) erase[i] = 1;
+    if ((small || dwarfed || edge) && areas[i] < tuning.speckMainRatio * mainArea) erase[i] = 1;
   }
   let erased = 0;
+  // The subject's own footprint, kept separately from the alpha channel: the
+  // crop (Stage 3) anchors to THIS, not to "whatever still has alpha". See
+  // cleanCutout for why that distinction is load-bearing.
+  const mainMask = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
     if (!foreground[i]) continue;
     const lbl = labels[i];
     if (lbl >= 0 && erase[lbl]) { data[i * 4 + 3] = 0; erased++; }
+    else if (lbl === mainLabel || rescued[lbl]) mainMask[i] = 1;
   }
-  return { erased, mainArea, componentCount: count };
+  return { erased, mainArea, componentCount: count, rescued: rescuedCount, mainMask };
 }
 
 // --- Stage 3: alpha bounding box -------------------------------------------
+// Over an explicit foreground mask rather than the alpha channel — the
+// subject-only variant cleanCutout prefers (see there for why).
+function cutoutBBoxFromMask(mask, width, height) {
+  let minX = width, minY = height, maxX = -1, maxY = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!mask[y * width + x]) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return null;
+  return { minX, minY, maxX, maxY, width: maxX - minX + 1, height: maxY - minY + 1 };
+}
+
 function cutoutBBox(data, width, height, alphaThreshold) {
   const threshold = alphaThreshold != null ? alphaThreshold : CUTOUT_TUNING.bboxAlpha;
   let minX = width, minY = height, maxX = -1, maxY = -1;
@@ -983,9 +1144,18 @@ function cleanCutout(canvas, tuning) {
   const ctx = canvas.getContext('2d');
   const width = canvas.width, height = canvas.height;
   const imageData = ctx.getImageData(0, 0, width, height);
+  cutoutAlphaLevels(imageData.data, width, height, tuning);   // D17, first — decide the mask before anyone reads it
   cutoutSuppressSpill(imageData.data, width, height, tuning); // D14, before Stage 2 per its placement in the pipeline
-  cutoutPruneSpecks(imageData.data, width, height, tuning);   // D15 + D5
-  const bbox = cutoutBBox(imageData.data, width, height, tuning.bboxAlpha);
+  const pruned = cutoutPruneSpecks(imageData.data, width, height, tuning); // D15 + D5 + D18/D19
+  // D19: crop to the SUBJECT, not to whatever still has alpha. Cleanup is
+  // best-effort — one stubborn speck in a corner is always possible — but the
+  // bbox is not cosmetic: Stage 3 crops to it and D16 measures the floor
+  // anchor from it, so a single surviving corner pixel used to pin the box
+  // open to the full frame and hand the layout a character who was the wrong
+  // size and floating off the floor. Anchoring to the main component makes
+  // placement immune to leftover noise instead of merely unlikely to see it.
+  const bbox = cutoutBBoxFromMask(pruned.mainMask, width, height)
+    || cutoutBBox(imageData.data, width, height, tuning.bboxAlpha);
   ctx.putImageData(imageData, 0, 0);
   if (!bbox) return { canvas, bbox: null, bottomFrac: null };
   const cropped = (typeof OffscreenCanvas !== 'undefined')
@@ -1011,15 +1181,22 @@ async function getCharacterCutout(npc, pose, expression) {
   const cached = await getCachedImage(key);
   if (cached) return { url: createObjectUrl(key, cached), cached: true, key };
   try {
-    const prompt = applyImageStyle(buildCutoutPrompt(npc, pose, expression));
+    const prompt = cutoutPromptFor(npc, pose, expression);
     const seed = composeCutoutSeed(identity, pose, expression, outfit, styleToken);
-    const result = await root.generateImage(prompt, {
+    const result = await generateImageTracked(prompt, {
       resolution: IMAGE_CACHE.resolutions.cutout,
       seed,
       removeBackground: true,
       negativePrompt: cutoutNegativePrompt(),
     });
     const cleaned = cleanCutout(result.canvas);
+    // D20: a null bbox means the cleanup erased everything — the mask failed
+    // outright. cleanCutout hands back the UNCROPPED canvas in that case, and
+    // canvasToBlob would happily produce a valid, fully transparent PNG, which
+    // the LRU would then serve as this character's sprite forever. D12 already
+    // says a missing cutout hides its layer; take that path instead of caching
+    // an invisible one.
+    if (!cleaned.bbox) return { url: null, cached: false, key, error: 'empty cutout frame' };
     const blob = await canvasToBlob(cleaned.canvas);
     if (!blob) return { url: null, cached: false, key, error: 'empty cutout frame' };
     await setCachedImage(key, blob);
@@ -1040,15 +1217,22 @@ async function getPlayerCutout(player, pose, expression) {
   const cached = await getCachedImage(key);
   if (cached) return { url: createObjectUrl(key, cached), cached: true, key };
   try {
-    const prompt = applyImageStyle(buildCutoutPrompt(player, pose, expression, { isPlayer: true }));
+    const prompt = cutoutPromptFor(player, pose, expression, { isPlayer: true });
     const seed = composeCutoutSeed(identity, pose, expression, outfit, styleToken);
-    const result = await root.generateImage(prompt, {
+    const result = await generateImageTracked(prompt, {
       resolution: IMAGE_CACHE.resolutions.cutout,
       seed,
       removeBackground: true,
       negativePrompt: cutoutNegativePrompt(),
     });
     const cleaned = cleanCutout(result.canvas);
+    // D20: a null bbox means the cleanup erased everything — the mask failed
+    // outright. cleanCutout hands back the UNCROPPED canvas in that case, and
+    // canvasToBlob would happily produce a valid, fully transparent PNG, which
+    // the LRU would then serve as this character's sprite forever. D12 already
+    // says a missing cutout hides its layer; take that path instead of caching
+    // an invisible one.
+    if (!cleaned.bbox) return { url: null, cached: false, key, error: 'empty cutout frame' };
     const blob = await canvasToBlob(cleaned.canvas);
     if (!blob) return { url: null, cached: false, key, error: 'empty cutout frame' };
     await setCachedImage(key, blob);
@@ -1103,7 +1287,7 @@ async function getPeekImage(gs, roomId, npc, npcId) {
   if (cached) return { url: createObjectUrl(key, cached), cached: true, key };
   try {
     const prompt = applyImageStyle(composePeekPrompt(gs, roomId, npc, actKey, npcId));
-    const result = await root.generateImage(prompt, {
+    const result = await generateImageTracked(prompt, {
       resolution: IMAGE_CACHE.resolutions.char, // 512x768 portrait — fits the keyhole
       negativePrompt: 'blurry, distorted, extra limbs, low quality, text, watermark, keyhole, door hardware',
     });
@@ -1188,7 +1372,7 @@ async function getActionWindowImage(gs, plan) {
   if (cached) return { url: createObjectUrl(key, cached), cached: true, key, prompt };
 
   try {
-    const result = await root.generateImage(prompt, {
+    const result = await generateImageTracked(prompt, {
       resolution: IMAGE_CACHE.resolutions.scene[sceneOrientation()],
       seed: hashStr(key),
       negativePrompt: IMAGE_NEGATIVE.actionWindow,
@@ -1204,16 +1388,49 @@ async function getActionWindowImage(gs, plan) {
 }
 
 // --- Canvas to Blob ---
+// Bug report (2026-08-26): "Character cutout generation failed: canvas.
+// toBlob is not a function". cleanCutout (above) crops into a fresh
+// `new OffscreenCanvas(...)` whenever the browser supports it (true in
+// every modern build), and OffscreenCanvas has no `.toBlob` — that's an
+// HTMLCanvasElement-only method. It has `.convertToBlob()` instead, which
+// returns the blob directly rather than taking a callback. Every cutout
+// generation was silently failing (falling back to no cutout art) because
+// of this single unhandled-type gap.
 function canvasToBlob(canvas) {
+  if (!canvas) return Promise.resolve(null);
+  if (typeof canvas.convertToBlob === 'function') {
+    return canvas.convertToBlob({ type: 'image/png' });
+  }
   return new Promise((resolve) => {
-    if (!canvas) {
-      resolve(null);
-      return;
-    }
     canvas.toBlob((blob) => {
       resolve(blob);
     }, 'image/png');
   });
+}
+
+// --- Foreground generation tracking (avatars-and-sprite-studio D14) ------
+// EVERY call to root.generateImage in this project goes through here, so the
+// background sprite queue can answer one question honestly: is the game
+// already spending image quota on something the player is waiting for?
+//
+// D14's rule is that a scene plate, a peek frame, a dream panel or an
+// outcome-window image ALWAYS wins. That is only enforceable if there is a
+// single place that knows a generation is in flight; before this there was
+// none, and sixteen call sites each knew only about themselves.
+//
+// Deliberately counts the QUEUE's own generations too. The queue checks
+// imageBusy() before it starts an item and never re-checks mid-flight, so
+// counting itself costs nothing and keeps this an honest global picture
+// rather than a special case with an exception in it.
+let imageGenerationsInFlight = 0;
+function imageBusy() { return imageGenerationsInFlight > 0; }
+async function generateImageTracked(prompt, opts) {
+  imageGenerationsInFlight++;
+  try {
+    return await root.generateImage(prompt, opts);
+  } finally {
+    imageGenerationsInFlight--;
+  }
 }
 
 // --- Object URL management ---
@@ -1361,7 +1578,7 @@ function buildPhoneSnoopPhotoPrompt(npc) {
 async function generatePhoneSnoopPhotoImage(npc) {
   const prompt = buildPhoneSnoopPhotoPrompt(npc);
   try {
-    const result = await root.generateImage(applyImageStyle(prompt), {
+    const result = await generateImageTracked(applyImageStyle(prompt), {
       resolution: IMAGE_CACHE.resolutions.char,
       seed: Math.floor(Math.random() * 2147483647),
       negativePrompt: 'blurry, distorted, extra limbs, low quality, text, watermark',
@@ -1376,7 +1593,7 @@ async function generatePhoneSnoopPhotoImage(npc) {
 async function generateConversationSceneImage(gameState, npc) {
   const prompt = buildConversationScenePrompt(gameState, npc);
   try {
-    const result = await root.generateImage(applyImageStyle(prompt), {
+    const result = await generateImageTracked(applyImageStyle(prompt), {
       resolution: IMAGE_CACHE.resolutions.scene[sceneOrientation()],
       seed: Math.floor(Math.random() * 2147483647),
       negativePrompt: IMAGE_NEGATIVE.scene,
@@ -1407,7 +1624,7 @@ async function getPhotoImage(photo) {
     // is never re-styled here; a normal capture keeps the raw frozen prompt
     // and gets the style overlay applied like every other generated image.
     const promptForGen = photo.promptStyled ? photo.prompt : applyImageStyle(photo.prompt);
-    const result = await root.generateImage(promptForGen, {
+    const result = await generateImageTracked(promptForGen, {
       resolution: IMAGE_CACHE.resolutions.bg,
       seed: photo.seed,
       negativePrompt: photo.negativePrompt || IMAGE_NEGATIVE.photo,
@@ -1437,7 +1654,7 @@ async function getAskPhotoImage(record) {
   const cached = await getCachedImage(photoKey);
   if (cached) return { url: createObjectUrl(photoKey, cached), cached: true };
   try {
-    const result = await root.generateImage(applyImageStyle(record.prompt), {
+    const result = await generateImageTracked(applyImageStyle(record.prompt), {
       resolution: IMAGE_CACHE.resolutions.char,
       seed: record.seed,
       negativePrompt: 'blurry, distorted, extra limbs, low quality, text, watermark',
@@ -1503,7 +1720,7 @@ async function getDreamPanelImage(dream, panelIndex) {
   if (cached) return { url: createObjectUrl(key, cached), cached: true, key, prompt };
 
   try {
-    const result = await root.generateImage(prompt, {
+    const result = await generateImageTracked(prompt, {
       resolution: IMAGE_CACHE.resolutions.scene[sceneOrientation()],
       seed: panel.seed,
       negativePrompt: IMAGE_NEGATIVE.dream,
@@ -1565,7 +1782,7 @@ async function rerollPhotoImage(photo, imgEl, fields) {
     photo.promptStyled = true;
     photo.seed = fields.seed ?? Math.floor(Math.random() * 2147483647);
     photo.negativePrompt = fields.negativePrompt || IMAGE_NEGATIVE.photo;
-    const result = await root.generateImage(photo.prompt, {
+    const result = await generateImageTracked(photo.prompt, {
       resolution: IMAGE_CACHE.resolutions.bg,
       seed: photo.seed,
       negativePrompt: photo.negativePrompt,
@@ -1589,7 +1806,7 @@ async function rerollPeekFrame(gs, roomId, npc, npcId, imgEl, fields) {
   const actKey = npc.activity || npc.clothing || 'hanging_out';
   const key = composePeekKey(gs, roomId, npc, actKey);
   try {
-    const result = await root.generateImage(fields.prompt, {
+    const result = await generateImageTracked(fields.prompt, {
       resolution: IMAGE_CACHE.resolutions.char,
       seed: fields.seed ?? Math.floor(Math.random() * 2147483647),
       negativePrompt: fields.negativePrompt || IMAGE_NEGATIVE.peek,
@@ -1980,7 +2197,7 @@ async function genNextTitleImg() {
     const cap = menuRatingCap(titleGallery.contentConfig);
     const orient = titleGallery.orientation || menuViewportOrientation();
     const prompt = applyImageStyle(genTitlePrompt(titleGallery.contentConfig, orient));
-    const result = await root.generateImage(prompt, {
+    const result = await generateImageTracked(prompt, {
       resolution: MENU_SLIDESHOW.resolutions[orient],
       negativePrompt: MENU_ART.negativePrompt,
     });

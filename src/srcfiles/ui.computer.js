@@ -1635,27 +1635,32 @@ function doImOpenThread(npcId) {
   if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
 }
 
+// Bug report (2026-08-26): the phone's Messages screen shows either the
+// contact list or the open thread, never both (renderMessages) — this is
+// the "back" side of that, clearing which thread is open so the next
+// render falls back to the list. Never reachable from the computer window,
+// which keeps both panes on screen and has no back control wired to it.
+function doImCloseThread() {
+  currentGameState.world.computer.apps.im.viewingNpcId = null;
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+}
+
 // Guard so concurrent Send clicks/races can't fire overlapping sends —
 // the LLM call inside resolveImReply can take up to a minute, and without
 // this each extra click sent the same message again (the input wasn't
 // cleared yet) and got a separate reply.
 let imSending = false;
 
-// Inject a temporary "is typing…" indicator at the bottom of the open IM
-// thread's message log. Returns a remove() fn. Keeps the UI responsive
-// while the NPC reply is being generated — the player's own message has
-// already been appended and painted before this is shown, so the thread
-// reads naturally: your bubble, then their typing dots, then their reply.
-function showImTypingIndicator(scope) {
-  const log = (scope || document).querySelector('.im-msg-log');
-  if (!log) return () => {};
-  const indicator = document.createElement('div');
-  indicator.className = 'im-typing';
-  indicator.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
-  log.appendChild(indicator);
-  log.scrollTop = log.scrollHeight;
-  return () => { if (indicator.parentNode) indicator.remove(); };
-}
+// Bug report (2026-08-26): which NPCs currently have a reply in flight.
+// RENDER.COMPUTER's renderMessages reads this directly (same
+// typeof-guarded cross-file pattern as homePlacementUI) to decide whether
+// to draw the "is typing…" dots — so the indicator is derived from state
+// every render, not injected imperatively into one specific DOM snapshot.
+// That's what makes it survive a rebuild: switching to another contact and
+// back while a reply is still pending re-renders the thread from this set,
+// so the dots are exactly where they'd be if the DOM had never rebuilt.
+const IM_PENDING_REPLY = new Set();
 
 // Which DOM subtree an IM interaction belongs to. The computer window and
 // the phone app BOTH render the shared renderMessages UI (including a
@@ -1677,7 +1682,21 @@ async function doImSend(npcId, device) {
   // this is what stops a second click in the same tick from reading the
   // same text and firing a duplicate send.
   if (input) input.value = '';
+  // Bug report (2026-08-26): Enter-to-send never blurs the input (a click
+  // on a separate Send button would, but Enter fires this handler straight
+  // from the input's own keydown), so document.activeElement stayed this
+  // input through the entire send. renderWindows' typingHere guard exists
+  // to protect a mid-keystroke input from an UNRELATED background
+  // re-render (needs heartbeat, an NPC arriving home) — it can't tell that
+  // apart from "the input's own action just fired," so every render below
+  // was silently skipped on the computer window until something else (a
+  // click that moved focus away, like reopening the thread) forced a
+  // rebuild. The value is already captured above, so there's nothing left
+  // in this input worth protecting — blur it and let renders land, then
+  // refocus the fresh one once the whole exchange is done.
+  input?.blur();
   imSending = true;
+  IM_PENDING_REPLY.add(npcId);
   const sendBtn = scope?.querySelector('.im-send-btn');
   if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
 
@@ -1685,9 +1704,11 @@ async function doImSend(npcId, device) {
   // appears instantly — we do NOT block the UI while waiting for the NPC
   // reply. No global loading overlay (the whole point: keep typing/reading).
   const appended = appendPlayerImMessage(currentGameState, npcId, text);
-  if (!appended.ok) { addLogEntry('system', appended.reason); imSending = false; if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send'; } return; }
+  if (!appended.ok) { addLogEntry('system', appended.reason); imSending = false; IM_PENDING_REPLY.delete(npcId); if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send'; } return; }
   // The thread is shared state, so both devices showing Messages repaint;
-  // each render call is a no-op when its device is off/closed.
+  // each render call is a no-op when its device is off/closed. IM_PENDING_REPLY
+  // already has this npcId, so renderMessages paints the typing dots as
+  // part of this same pass — no separate imperative injection needed.
   renderComputerScreen(currentGameState);
   if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
   // Rendering rebuilt the DOM, so the send button we disabled above is
@@ -1696,13 +1717,12 @@ async function doImSend(npcId, device) {
   const pendingBtn = scope?.querySelector('.im-send-btn');
   if (pendingBtn) { pendingBtn.disabled = true; pendingBtn.textContent = 'Sending…'; }
 
-  // Show the "typing…" indicator on the freshly rendered log while the
-  // NPC generates a reply.
-  const removeTyping = showImTypingIndicator(scope);
-
   try {
     const result = await resolveImReply(currentGameState, npcId, text);
     if (!result.ok) { addLogEntry('system', result.reason); }
+    // Clear BEFORE the render below so this same pass both drops the typing
+    // dots and paints the reply — never two separate visible steps.
+    IM_PENDING_REPLY.delete(npcId);
     await advanceAndResolve(1);
     currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
     renderComputerScreen(currentGameState);
@@ -1717,7 +1737,7 @@ async function doImSend(npcId, device) {
     await chronicleIfFull();
     await saveAtBoundary('im-send', currentGameState);
   } finally {
-    removeTyping();
+    IM_PENDING_REPLY.delete(npcId);
     imSending = false;
     // Re-enable the send button (the render calls may have rebuilt the
     // DOM, so find it fresh within the same device scope).
@@ -1793,16 +1813,24 @@ async function doBillsPay(billId) {
 async function doBillsPayAll() {
   await doPayBillsFromWorld('bills-pay-all');
   renderComputerScreen(currentGameState);
+  render(currentGameState, currentSceneState);
 }
 
 // BrineOS Phase 7: toggle a single bill's autopay flag. Rendered on both
 // devices for free (shared bills-dashboard renderer, Phase 1/5).
+// Bug report (2026-08-26): this only ever called renderComputerScreen, so
+// toggling autopay from the PHONE's Bills screen updated the state but left
+// the phone's DOM showing the stale on/off label until something else
+// forced a rebuild (e.g. reopening the app) — every other bills/invest
+// handler in this file calls the full render() too (see doBillsPay,
+// doInvestBuy) precisely so renderPhoneScreen runs alongside it.
 async function doBillsToggleAutopay(billId) {
   if (!billId) return;
   const result = toggleBillAutopay(currentGameState, billId);
   if (!result.ok) { addLogEntry('system', result.reason); return; }
   addLogEntry('system', `Autopay ${result.autopay ? 'enabled' : 'disabled'} for ${BILL_DEFS[billId].label}.`);
   renderComputerScreen(currentGameState);
+  render(currentGameState, currentSceneState);
   await saveAtBoundary('bills-toggle-autopay', currentGameState);
 }
 

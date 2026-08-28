@@ -47,10 +47,14 @@ const CONCEPT_TEMPERAMENT_AXES = [
 // - typicalAttire: reserved with no reader (config.js says so in as many
 //   words). Writing it would be the stressProfile mistake — plan invariant 3.
 // - intimate: derived from `gender` by generateIntimate and authored by the
-//   player on the studio's Intimate tab. A description almost never specifies
-//   it, and asking a model for it unprompted is not something the fill should
-//   do on its own initiative. Parked as an open question in the plan, not a
-//   permanent exclusion.
+//   player on the studio's Intimate tab, so the generic walk does not ask for
+//   it wholesale. Genitals are the ONE exception: a description sometimes
+//   specifies them, and the model otherwise buries them in
+//   distinguishingFeatures (the original reason they kept landing there — no
+//   structured home existed). `intimate.genitals` is asked for and read
+//   explicitly — see conceptIntimateSkeleton and the intimate case in
+//   conceptNormalizePhysical. Breasts and bodyHair stay derived/player-
+//   authored and are deliberately not offered.
 const CONCEPT_PHYSICAL_SKIP = new Set(['heightBuild', 'typicalAttire', 'intimate']);
 
 // The two physical arrays that hold ROW OBJECTS rather than strings, with the
@@ -128,6 +132,23 @@ const CONCEPT_SCOPES = {
 
 // --- Prompt ---
 
+// The one intimate subtree the model is asked for. Genitals are typed rows in
+// the schema (CHARACTER_SCHEMA's `intimate.genitals`), built from itemFields
+// so this fragment cannot drift from the validator. Breasts and bodyHair stay
+// derived-from-gender / player-authored and are not offered. The prompt marks
+// the array optional: it is only filled when the description specifies it,
+// never invented on the model's own initiative.
+function conceptIntimateSkeleton() {
+  const physical = CHARACTER_SCHEMA && CHARACTER_SCHEMA.bible && CHARACTER_SCHEMA.bible.physical;
+  const g = physical && physical.fields && physical.fields.intimate && physical.fields.intimate.fields &&
+    physical.fields.intimate.fields.genitals;
+  if (!g || !g.itemFields) return '';
+  const shape = Object.entries(g.itemFields)
+    .map(([k, spec]) => k === 'type' ? `"type": "${(spec.enum || ['penis', 'vagina']).join(' or ')}"` : `"${k}": "…"`)
+    .join(', ');
+  return `"intimate": { "genitals": [{ ${shape} }] }`;
+}
+
 // The physical block, generated from CHARACTER_SCHEMA rather than hand-listed,
 // so a field added to the schema is asked for automatically. The alternative —
 // a hand-maintained list here — is precisely the failure that let four
@@ -140,13 +161,18 @@ function conceptPhysicalSkeleton() {
     const parts = [];
     for (const [key, spec] of Object.entries(fields)) {
       const path = prefix ? `${prefix}.${key}` : key;
+      if (!prefix && key === 'intimate') {
+        const frag = conceptIntimateSkeleton();
+        if (frag) parts.push(frag);
+        continue;
+      }
       if (!prefix && CONCEPT_PHYSICAL_SKIP.has(key)) continue;
       if (spec.type === 'object' && spec.fields) {
         const inner = walk(spec.fields, path);
         if (inner) parts.push(`"${key}": { ${inner} }`);
       } else if (spec.type === 'array') {
         if (key === 'distinguishingFeatures') {
-          parts.push(`"${key}": ["up to ${CONCEPT_FEATURES_MAX} specific visible details — scars, freckles, a chipped tooth"]`);
+          parts.push(`"${key}": ["up to ${CONCEPT_FEATURES_MAX} specific VISIBLE details — scars, freckles, a chipped tooth. Never genitals — those go in intimate.genitals"]`);
         } else if (CONCEPT_PHYSICAL_ROWS[key]) {
           const shape = CONCEPT_PHYSICAL_ROWS[key].keys.map(k => `"${k}": "…"`).join(', ');
           parts.push(`"${key}": [{ ${shape} }]`);
@@ -269,6 +295,7 @@ HOW TO WRITE THIS:
 - Write in your OWN words. There is no list to pick from — specific and particular beats generic every time. "collects other people's discarded houseplants" is a character; "gardening" is a category.
 - Physical fields are short phrases, not sentences — they get joined into a description, so "dyed lavender, badly grown out" works and "Her hair is dyed lavender." does not.
 - Fill in what the description leaves out, consistently. Do not leave fields blank.
+- If the description specifies genitals, put them in "physical.intimate.genitals" as one or more typed objects — "type" is "penis" or "vagina" — using only the fields that fit that type (e.g. length/girth/cut/balls for a penis, labia/colour for a vagina). If it doesn't, leave the array empty. Genitals never go in "distinguishingFeatures".
 - Adults only: every character is 18 or older.
 
 Respond with ONE JSON object and nothing else — no markdown, no commentary, no code fences.
@@ -308,7 +335,15 @@ ${blocks.join(',\n')}
 // indexOf) must NOT trigger this, or prepending `{` ahead of it would bury
 // the real opening brace under a fake one.
 function parseConceptResponse(text) {
-  if (typeof text !== 'string') return null;
+  // `await root.generateText(...)` resolves to a BOXED String — the plugin
+  // attaches .text/.generatedText/.stopReason metadata to a `new String(...)`
+  // (ai-text-plugin's doOnFinishStuff), so `typeof` is 'object', never
+  // 'string'. A strict type check here rejected EVERY reply before it was even
+  // looked at. llm.js's calls never hit this because they only use String
+  // methods / JSON.parse, which coerce boxed strings transparently. Coerce
+  // instead; a genuinely non-string value still fails the checks below.
+  if (text == null) return null;
+  if (typeof text !== 'string') text = String(text);
   let s = text.trim();
   if (!s) return null;
 
@@ -317,6 +352,12 @@ function parseConceptResponse(text) {
   s = s.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
 
   if (/^"[^"\\]*(?:\\.[^"\\]*)*"\s*:/.test(s)) s = '{' + s;
+
+  // Sibling shape of the same recovery bug: instead of dropping the seed, the
+  // continuation can RE-EMIT it, doubling the opening brace (`{{"name": ...`).
+  // A valid reply never begins with two open braces, so collapsing the pair to
+  // one cannot misfire on real JSON.
+  s = s.replace(/^\{(\s*\{)/, '$1').trim();
 
   const start = s.indexOf('{');
   if (start < 0) return null;
@@ -487,8 +528,41 @@ function conceptNormalizePhysical(value, touched) {
   let any = false;
 
   for (const [key, sub] of Object.entries(spec.fields)) {
-    if (CONCEPT_PHYSICAL_SKIP.has(key)) continue;
     const raw = value[key];
+
+    // intimate.genitals — the one model-authored intimate subtree. Rows are
+    // typed objects (type: penis|vagina); per-row keys are filtered through
+    // GENITAL_TYPE_FIELDS and capped at the schema's maxItems. Only read when
+    // the model actually wrote it — an empty/absent array means the rolled
+    // defaults stand. Breasts/bodyHair deliberately not read (they stay
+    // derived or player-authored).
+    if (key === 'intimate') {
+      const rawG = raw && raw.genitals;
+      if (Array.isArray(rawG)) {
+        const max = (sub.fields && sub.fields.genitals && sub.fields.genitals.maxItems) || 4;
+        const rows = [];
+        for (const row of rawG) {
+          if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+          const tf = GENITAL_TYPE_FIELDS[row.type];
+          if (!tf) continue;
+          const entry = { type: row.type };
+          for (const k of Object.keys(tf)) {
+            const s = conceptCleanString(row[k], k === 'description' ? 200 : 80);
+            if (s) entry[k] = s;
+          }
+          rows.push(entry);
+          if (rows.length >= max) break;
+        }
+        if (rows.length > 0) {
+          out.intimate = { genitals: rows };
+          touched.push('physical.intimate.genitals');
+          any = true;
+        }
+      }
+      continue;
+    }
+
+    if (CONCEPT_PHYSICAL_SKIP.has(key)) continue;
     if (raw === undefined || raw === null) continue;
 
     if (key === 'distinguishingFeatures') {

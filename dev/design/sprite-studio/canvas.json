@@ -1,0 +1,93 @@
+{
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "title": "Roster",
+      "x": 0,
+      "y": 0,
+      "w": 960,
+      "h": 680
+    },
+    {
+      "file": "Character.dc.html",
+      "title": "Character sheet",
+      "x": 1040,
+      "y": 0,
+      "w": 960,
+      "h": 790
+    },
+    {
+      "file": "Editor.dc.html",
+      "title": "Editor",
+      "x": 2080,
+      "y": 0,
+      "w": 1140,
+      "h": 760
+    },
+    {
+      "file": "AvatarCrop.dc.html",
+      "title": "Avatar crop",
+      "x": 0,
+      "y": 910,
+      "w": 940,
+      "h": 680
+    },
+    {
+      "file": "Phone.dc.html",
+      "title": "Phone",
+      "x": 1020,
+      "y": 910,
+      "w": 420,
+      "h": 780
+    },
+    {
+      "file": "Surfaces.dc.html",
+      "title": "Before / after",
+      "x": 1520,
+      "y": 910,
+      "w": 1000,
+      "h": 920
+    },
+    {
+      "file": "Resolution.dc.html",
+      "title": "Store + resolver",
+      "x": 0,
+      "y": 1950,
+      "w": 1200,
+      "h": 710
+    }
+  ],
+  "annotations": [
+    {
+      "id": "note-brief",
+      "x": 0,
+      "y": -180,
+      "w": 300,
+      "text": "Sprite Studio \u2014 the in-game avatar and sprite editor.\n\nCompanion to src/ref/wip/avatars-and-sprite-studio-plan.md. Every screen here maps to a phase in that document.\n\nAll character art is real: generated from the game's own Stage 0 prompts, matted and cropped by the actual pipeline math."
+    },
+    {
+      "id": "note-editor",
+      "x": 2080,
+      "y": -180,
+      "w": 340,
+      "text": "Phase 5. The cleanup sliders ARE CUTOUT_TUNING \u2014 same fields, same functions, running live against the preserved master.\n\nThis is what unsticks the cutout plan: it turns a tuning gate nobody in the repo can see into a slider the player can drag."
+    },
+    {
+      "id": "note-crop",
+      "x": 0,
+      "y": 720,
+      "w": 320,
+      "text": "Phase 7. The crop shown is what D9 actually produced on this image \u2014 proportional basis, no neck found, side 0.269 of figure height.\n\nD9 was rewritten mid-session after failing against real silhouettes. See refs/out/REPORT.md."
+    },
+    {
+      "id": "note-stores",
+      "x": 1280,
+      "y": 1950,
+      "w": 330,
+      "text": "Phase 1, and the spine of the whole plan.\n\nIf you read one artboard, read this one \u2014 everything else depends on generated art and authored art living in different places with different rules."
+    }
+  ],
+  "launch": {
+    "view": "canvas"
+  }
+}

@@ -50,6 +50,34 @@ const ORDER = [
   // (composeSceneKey, buildImagePrompt, sceneDetailSignature) is directly
   // testable here. That half is exactly the part with logic worth testing.
   'image.js',
+  // sprites.js (avatars-and-sprite-studio Phase 1) sits directly after
+  // image.js in index.html, and here for the same reason: its whole surface is
+  // pure logic plus kv — slot-id grammar, the index, the store's refuse-at-cap
+  // writer, and resolveSprite — with no DOM touch at load OR call time, so it
+  // is among the most directly testable files in the project. Registered in
+  // BOTH lists in the same commit: shipping a file to only one of the two is
+  // the rumination.js scar, where five harnesses and 175 assertions died
+  // silently.
+  'sprites.js',
+  // avatar.js (avatars-and-sprite-studio Phase 2) sits directly after
+  // sprites.js in index.html. It is a UI component file, but — like icons.js
+  // and fields.js — its builders are pure and it touches the DOM only inside
+  // function bodies, so the whole file loads in the bare vm and the halves
+  // worth testing (hashToColor, avatarInitials, avatarIdentityFor,
+  // avatarChipSize) are directly testable. It also OWNS hashToColor now,
+  // which render.computer.js calls, so it must load before that file in both
+  // lists. Registered in BOTH in the same commit.
+  'avatar.js',
+  // spritestudio.js (avatars-and-sprite-studio Phase 4) — the studio's verbs.
+  // Its roster/readiness/upload-ingest/link-pin logic is pure over game state
+  // plus the sprite store; the DOM is touched only inside the UI-handler half
+  // (and its one top-level addEventListener is guarded on `typeof document`),
+  // so the whole file loads in the bare vm and the half worth testing is
+  // directly testable. render.spritestudio.js is NOT in this list: it is pure
+  // view code that registers into COMPUTER_RENDERERS, and the render layer is
+  // deliberately outside this loader. Registered in BOTH index.html and here
+  // in the same commit.
+  'spritestudio.js',
   // peek.js (intimacy-voyeurism Phase 10) sits between image.js and render.js
   // in index.html. Its load-time surface is module state + pure derivation
   // functions (peekRiskPerTick, peekCaughtChance, peekOutcomeWeights,
@@ -125,6 +153,23 @@ function loadEngine(opts = {}) {
     // branch can override before calling in.
     var innerWidth = 1280;
     var innerHeight = 800;
+    // Object URLs. The sandbox had no URL at all, so any path reaching
+    // image.js's createObjectUrl threw — which nothing did until
+    // sprites.js's resolveSprite made blob-backed lookups directly testable.
+    // Deliberately a counter stub rather than Node's real implementation:
+    // a harness wants a deterministic, inspectable handle, and no file in
+    // this project ever constructs a real URL (grep: only createObjectURL
+    // and revokeObjectURL are used).
+    var __objectUrlSeq = 0;
+    var __objectUrlsLive = new Set();
+    var URL = {
+      createObjectURL: (blob) => {
+        const u = 'blob:test/' + (++__objectUrlSeq);
+        __objectUrlsLive.add(u);
+        return u;
+      },
+      revokeObjectURL: (u) => { __objectUrlsLive.delete(u); },
+    };
   `, ctx);
   // Typed arrays: not in the vm's original exposed-globals list (nothing
   // needed them until the cutout pipeline's pure pixel-math functions,

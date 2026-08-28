@@ -349,6 +349,16 @@ function activeImageStyle() {
   };
 }
 
+// avatars-and-sprite-studio D12: the Character art ceiling. Returns the
+// CHARACTER_ART_MODES entry, so callers get both the id (for an 'off' gate)
+// and the tier ceiling (for the queue) without re-deriving either.
+function activeCharacterArt() {
+  const id = settingsCache.characterArt;
+  return CHARACTER_ART_MODES.find((m) => m.id === id)
+    || CHARACTER_ART_MODES.find((m) => m.id === SETTINGS_DEFAULTS.characterArt)
+    || CHARACTER_ART_MODES[0];
+}
+
 // D5: patch a game-state-shaped object's contentConfig so the whole
 // pipeline sees the SFW state. Callers decide WHEN (toggle time on the live
 // game via applySfwLive, new-game cast approval via pendingCast, resume)

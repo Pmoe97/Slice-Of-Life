@@ -34,6 +34,11 @@ const FOLDER_VERSIONS = {
   images: 1,
   snapshots: 1,
   objects: 3,
+  // avatars-and-sprite-studio-plan Phase 1 (D1): the permanent override store
+  // for player-authored sprite art. Registered here so it gets the same
+  // snapshot-before-migrate treatment every other folder has — a migration
+  // that mangled this folder would destroy work no seed can reproduce.
+  sprites: 1,
 };
 
 // --- Persisted-key table (Phase 9: the invariant the save system rests on) ---
@@ -461,6 +466,16 @@ const MIGRATIONS = {
   ],
   images: [],
   snapshots: [],
+  // sprites (avatars-and-sprite-studio-plan Phase 1) starts at version 1 with
+  // no migrations yet, same as images/snapshots above. Missing here — rather
+  // than an explicit [] — is exactly the bug checkAndMigrateFolder's own
+  // comment predicted: an EXISTING save's meta.versions predates the folder,
+  // so versions.sprites reads 0 (not the target 1), the early-return does not
+  // fire, and migrateFolderKeys did `for (const m of MIGRATIONS['sprites'])`
+  // against undefined. A brand-new game never hit it — initStorage seeds
+  // versions straight from FOLDER_VERSIONS when meta doesn't exist yet — so it
+  // only surfaced on a real save on the live site.
+  sprites: [],
   objects: [
     // objects 1->2 (Apartment Expansion): the old single `hallway` and
     // `bathroom` rooms became per-wing pairs, so their object buckets have
@@ -576,7 +591,20 @@ async function migrateFolderKeys(folder, fromVer, toVer) {
 // ===== KV ADAPTER =====
 // All kv access goes through here. Folders are auto-created by property access.
 
-const KVFolders = ['meta', 'player', 'world', 'npcs', 'images', 'snapshots', 'objects'];
+// `sprites` (avatars-and-sprite-studio-plan Phase 1) joins this list for
+// migration support, but is deliberately ABSENT from SAVE_KEYS above and from
+// every save payload. It is browser-local and save-independent, like kv.menu's
+// settings and the kv.images LRU.
+//
+// This is a flagged deviation from the plan's Phase 1 bullet, which had it
+// riding along inside saves. Tying authored art to a save payload means
+// loading an older save can destroy work made later — precisely the failure
+// design invariant 2 exists to prevent, arriving through the save system
+// instead of through eviction. Slot ids anchor on genSeed, which is stable
+// across saves of the same run, so a save-independent store simply keeps
+// working. Moving art between machines is Phase 8's export/import, which is a
+// deliberate act rather than a side effect of loading.
+const KVFolders = ['meta', 'player', 'world', 'npcs', 'images', 'snapshots', 'objects', 'sprites'];
 
 // --- Pending operation records for multi-key crash recovery ---
 async function setPendingOp(opId, description, keys) {
@@ -633,6 +661,12 @@ async function reconcilePendingOp() {
 
 // --- Version check + migrate a folder (snapshot first) ---
 async function checkAndMigrateFolder(folder) {
+  // A folder the host has not provisioned cannot be migrated, and reaching
+  // into it would throw before any of the real work below. Hit when a NEW
+  // folder joins KVFolders and an existing save's meta.versions predates it
+  // (versions[folder] is 0, so this function does not early-return) — the
+  // sprites folder in the avatars-and-sprite-studio plan is the first.
+  if (!root.kv[folder]) return;
   const meta = await root.kv.meta.get('meta') || {};
   const versions = meta.versions || {};
   const currentVer = versions[folder] || 0;
@@ -2015,6 +2049,89 @@ async function importSaveRecord(text) {
   }
   record._importedGameVersion = parsed.gameVersion || 'unknown';
   return record;
+}
+
+// --- Sprite override export/import (avatars-and-sprite-studio-plan Phase 8,
+// D1/D7) ---
+// kv.sprites is deliberately save-independent (see the KVFolders comment
+// above) — an hour of painting a household must not evaporate because an
+// older save got loaded. Carrying it to a NEW save or a different machine is
+// therefore a deliberate act, not a load side effect, and this is that act:
+// the same gzip/base64 envelope exportSaveRecord/importSaveRecord already
+// use, over every record in the store rather than a save payload. Blobs
+// don't survive JSON on their own, so each one is base64'd alongside its
+// MIME type; import rebuilds real Blobs and writes each record back through
+// putSpriteRecord, which means D7's cap is enforced exactly as it would be
+// for a manual save — an import that would overflow the store REFUSES the
+// individual records that don't fit rather than silently evicting anything,
+// and reports which ones so the player can free space and retry.
+const SPRITE_EXPORT_TYPE = 'slice-of-life-sprite-overrides';
+const SPRITE_EXPORT_VERSION = 1;
+
+async function blobToBase64(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  return bytesToBase64(bytes);
+}
+
+function base64ToBlob(b64, type) {
+  return new Blob([base64ToBytes(b64)], { type: type || 'application/octet-stream' });
+}
+
+async function exportSpriteOverrides() {
+  const slots = await listSpriteSlots();
+  const records = [];
+  for (const slot of slots) {
+    const rec = await getSpriteRecord(slot);
+    if (!rec) continue;
+    records.push({
+      ...rec,
+      image: rec.image ? { data: await blobToBase64(rec.image), type: rec.image.type } : null,
+      master: rec.master ? { data: await blobToBase64(rec.master), type: rec.master.type } : null,
+    });
+  }
+  const json = JSON.stringify({
+    type: SPRITE_EXPORT_TYPE,
+    version: SPRITE_EXPORT_VERSION,
+    gameVersion: GAME_VERSION,
+    exportedAt: Date.now(),
+    records,
+  });
+  const bytes = new TextEncoder().encode(json);
+  const compressed = await gzipBytes(bytes);
+  return bytesToBase64(compressed);
+}
+
+// Parse + validate an exported blob and WRITE it into the live store (unlike
+// importSaveRecord, which only returns a record for restoreSave to install —
+// there is no separate "install" step here because kv.sprites is not a save
+// slot to choose between, just the one store). Returns a summary rather than
+// throwing per-record: one bad or oversized record in a household export
+// must not sink the other nineteen.
+async function importSpriteOverrides(text) {
+  let parsed;
+  try {
+    const compressed = base64ToBytes(text.trim());
+    const bytes = await gunzipBytes(compressed);
+    parsed = JSON.parse(new TextDecoder().decode(bytes));
+  } catch (e) {
+    throw new Error('That file is not a valid sprite export (could not decompress it).');
+  }
+  if (!parsed || parsed.type !== SPRITE_EXPORT_TYPE) {
+    throw new Error('That file is not a sprite export for this game.');
+  }
+  if (parsed.version !== SPRITE_EXPORT_VERSION) {
+    throw new Error(`Unsupported sprite export version ${parsed.version} (this build reads version ${SPRITE_EXPORT_VERSION}).`);
+  }
+  const imported = [];
+  const skipped = [];
+  for (const rec of parsed.records || []) {
+    const image = rec.image ? base64ToBlob(rec.image.data, rec.image.type) : null;
+    const master = rec.master ? base64ToBlob(rec.master.data, rec.master.type) : null;
+    const res = await putSpriteRecord({ ...rec, image, master });
+    if (res.ok) imported.push(rec.slot);
+    else skipped.push({ slot: rec.slot, message: res.message });
+  }
+  return { imported, skipped, gameVersion: parsed.gameVersion || 'unknown' };
 }
 
 // ===== /SECTION: STATE =====

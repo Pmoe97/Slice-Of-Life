@@ -41,8 +41,113 @@ function fullnessLine(player, gameState) {
   return ` (${parts.join(', ')})`;
 }
 
+// Who lives here (bug report 2026-08-26): the scene prompt never told the
+// model whose home it was standing in, so NPCs had no grounding for "this is
+// our apartment" — they talked like strangers in their own living room and
+// had no reason to know the player belongs here. The player is always a
+// resident (render.computer.js counts them as the +1); this line names the
+// residents and flags any present non-resident as a guest.
+function homeContextLine(gameState, activeNpcs) {
+  if (!gameState?.npcs) return '';
+  const residents = Object.values(gameState.npcs)
+    .filter(n => n && n.residency?.status === 'resident' && n.bible?.name)
+    .map(n => n.bible.name);
+  if (residents.length === 0) return '';
+  let line = `- The home: this is the shared apartment where the player lives with ${residents.join(', ')}.`;
+  const guests = (activeNpcs || [])
+    .map(n => ({ npc: gameState.npcs[n.id], name: n.name }))
+    .filter(({ npc }) => npc && npc.residency?.status !== 'resident')
+    .map(({ name }) => name);
+  if (guests.length > 0) {
+    line += ` ${guests.join(', ')} ${guests.length > 1 ? 'are' : 'is'} a guest here — visiting, not a resident.`;
+  }
+  return line;
+}
+
+// House-awareness block (bug report 2026-08-28): the scene prompt told the
+// model whose home it was and who lived there, but nothing about the place
+// itself — no rooms beyond the current one, no furniture, no facilities and
+// their working state. Residents know their own flat, so no NPC could ever
+// say "the TV's still not fixed" or "let's use the shower in B" — the model
+// simply had no grounds to. This block hands it a compact floor-plan of the
+// whole home, derived from APARTMENT_LAYOUT (what each room contains) and
+// FACILITY_DEFS + world.upgrades (what works in each room), so NPCs can
+// reference the house like people who live in it. Pure data — costs nothing,
+// can't contradict mechanical state.
+// Objects whose very existence is gated by a facility's broken tier (the
+// broken desc says the object ISN'T there — "a blank wall where a TV should
+// be", "a TV with no console"). Dropping them from the room's object list
+// when that facility is broken keeps the block from claiming "Sofa, TV …
+// (no tv)". Everything else in a broken room still exists, just broken, so
+// the facility note already carries that.
+const FACILITY_GATED_OBJECTS = {
+  tv: 'living_room_entertainment',
+  game_console: 'game_room_setup',
+};
+
+function buildHomeContextBlock(gameState) {
+  if (!gameState?.npcs) return '';
+  const upgrades = gameState?.world?.upgrades || {};
+  const tierOf = (fid) => upgrades[fid]?.tier || FACILITY_STARTING_TIERS[fid] || 'functional';
+  const lines = [];
+  for (const [roomId, def] of Object.entries(ROOMS)) {
+    if (!def?.name) continue;
+    const parts = [];
+    for (const entry of APARTMENT_LAYOUT[roomId] || []) {
+      const odef = OBJECT_DEFS[entry?.defId];
+      if (!odef?.label) continue;
+      const low = entry.defId;
+      if (low === 'floor' || low.endsWith('_door')) continue; // doors/floors are implied
+      const gatedBy = FACILITY_GATED_OBJECTS[low];
+      if (gatedBy && tierOf(gatedBy) === 'broken') continue; // absent, don't list it
+      parts.push(odef.label);
+    }
+    const facNotes = [];
+    for (const fid of ROOM_FACILITIES[roomId] || []) {
+      const fdef = FACILITY_DEFS[fid];
+      if (!fdef) continue;
+      const tier = upgrades[fid]?.tier || FACILITY_STARTING_TIERS[fid] || 'functional';
+      const t = fdef.tiers?.find(x => x.tier === tier);
+      if (!t) continue;
+      // A 'functional' bedroom is the implied baseline (a bed to sleep in);
+      // it adds no information, so only flag the broken/uninhabitable and
+      // the upgraded/comfortable states.
+      if (tier === 'functional' && fid.startsWith('bedroom_habitability_')) continue;
+      facNotes.push(t.label.toLowerCase());
+    }
+    let line = `- ${def.name}: ${parts.join(', ')}`;
+    if (facNotes.length > 0) line += ` (${facNotes.join('; ')})`;
+    lines.push(line);
+  }
+  if (lines.length === 0) return '';
+  return `\nTHE HOME (the whole shared apartment — every resident knows every room and what works in it; use this as grounding for anything a character references):\n${lines.join('\n')}`;
+}
+
+// Conversation-continuity (2026-08-28): a paused conversation reopened is the
+// SAME in-person talk, not a fresh approach. Without this the model re-greets
+// the player on every reopen ("oh, you're still here") because the scene
+// genuinely looks like a fresh approach to it. context.conversationNpcId is
+// set by doConvSend to the NPC the player is actually speaking to, so this
+// line can never claim continuity for a bystander — it only fires for the
+// resumed partner, when the session says we've already talked and nobody
+// left the room. Returns '' (and keeps the prompt's blank-line rhythm) when
+// none of that holds.
+function conversationContinuityLine(context, gameState) {
+  const sess = gameState?.player?.conversation;
+  if (!sess?.resumed || !sess.spoken
+      || context.conversationNpcId !== sess.npcId
+      || gameState.npcs?.[sess.npcId]?.location !== gameState.player?.location) return '';
+  const name = gameState.npcs?.[sess.npcId]?.bible?.name;
+  if (!name) return '';
+  return `\n- Ongoing in-person conversation: the player is mid-conversation with ${name} — a talk that was merely paused and reopened (the conversation window closed and reopened; neither of you left the room). This is one CONTINUOUS exchange, not a fresh approach. Do not greet the player or remark on their presence or return — no "you're still here", no "good to see you again", no re-introductions. Continue directly from where the last exchange left off.`;
+}
+
 function buildScenePrompt(context, playerAction) {
   const { scene, player, activeNpcs, ambientNpcs, worldEvents, gameState } = context;
+  // Bug report (2026-08-28): the explicit-narration rule only lands when the
+  // mature content flag is on — in SFW mode the CONTENT GUIDANCE says fade
+  // to black, and this reinforcement must not contradict it.
+  const matureOn = !((context.contentConfig?.contentFlags || CONTENT_CONFIG.contentFlags).mature === false);
 
   // food-overhaul Phase 2 (D2/D4): the Hunger number now means fullness —
   // the line also carries the remaining window and the day's kcal ledger so
@@ -55,10 +160,12 @@ ${buildContentSection(context.contentConfig)}
 
 CURRENT SCENE:
 - Location: ${scene.room}
+${homeContextLine(gameState, activeNpcs)}
+${buildHomeContextBlock(gameState)}
 - Time: ${scene.phase}, ${scene.time}, Day ${scene.day}
 - Cleanliness: ${scene.cleanliness > 70 ? 'tidy' : scene.cleanliness > 40 ? 'lived-in' : 'messy'}
 ${buildSensoryLine(scene)}
-
+${conversationContinuityLine(context, gameState)}
 PLAYER:
 - Current mood: ${moodLabel(player.mood)}
 - Energy: ${Math.round(player.energy)}%, Hunger: ${Math.round(player.hunger)}%${fullnessLine(player, gameState)}
@@ -128,8 +235,19 @@ CRITICAL RULES:
 - effects is optional: a list of world-change lines drawn ONLY from the OPTIONAL WORLD CHANGES list above (e.g. "ADJUST_NEED player energy -5"). Omit it or leave it empty if nothing applies. Never invent a new effect type or reference someone not listed above.
 - NEVER emit a hunger change for the player. Eating is an item-driven action the player takes; narration can describe a meal, but it must not feed them.
 - advocateFor is optional and RARE — only when someone naturally suggests moving in (usually a resident close to their friend/partner). One NPC can raise it per turn, max. Omit unless it genuinely fits the conversation.
+- [Memories — recent] contains the FULL transcript of this conversation so far: the narration, the physical actions in asterisks, the unspoken thoughts, and the dialogue. Read it before you write. Do NOT repeat a physical beat you have already narrated. A stance once established persists: if a character is already reading with her book in her lap, she stays reading — do not have her set the book down, close it, or look up from it again unless something in this turn genuinely interrupts her. Vary reaction beats; recycling the same micro-action turn after turn is the one failure this conversation will be judged on.
+- React to the player's state as written in the PLAYER section. If the player is completely naked, undressed, wrapped in a towel, soaked from a swim, or visibly exhausted, the characters in the room SEE that and would naturally notice, react to, or comment on it — not ignore it. A naked player walking into the living room is an event in the fiction.
+- When an intimate act with a willing partner is already underway or has been explicitly agreed to, do not re-litigate consent: a character who agreed stays engaged. Portray resistance or hesitation only when this character's own numbers genuinely indicate it (low desire/comfort, tension, an early conversation phase) — never as a generic default.
 - Keep it SHORT. One narration paragraph, 1-3 dialogue lines max.
 - Do not break the fourth wall. Do not describe the format. Just tell the story.`;
+
+  // Bug report (2026-08-28): the explicit-narration rule, land right at the
+  // point of use. CONTENT GUIDANCE sits near the top of the prompt and can
+  // drift out of attention by the time the model writes the act; this line
+  // re-states it beside the output contract, only when the mature flag is on.
+  if (matureOn) {
+    prompt += `\n- When an intimate act is part of the scene, the CONTENT GUIDANCE above applies with full force: write the narration explicitly. Name the act and the body parts; describe what the body is doing and feeling moment by moment — the wetness, the sounds, the trembling, the tongue on the glans, saliva dripping, nipples hardening, the rhythm. No euphemisms ("her work", "the task at hand"), no fade-to-black, no collapsing the act into a single beat.`;
+  }
 
   // Asks plan Phase 1 (asks-and-attachments-plan.md): on an ask turn the
   // ask-directive block lands LAST — the writer reads the decision

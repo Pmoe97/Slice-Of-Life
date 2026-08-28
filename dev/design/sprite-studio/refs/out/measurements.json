@@ -1,0 +1,488 @@
+[
+  {
+    "file": "1.png",
+    "name": "Marisol Vance",
+    "pose": "standing",
+    "tests": "long loose hair \u2014 the shoulder-break breaker",
+    "size": [
+      512,
+      768
+    ],
+    "matte": {
+      "bgPixels": 308432,
+      "bgFrac": 0.7844,
+      "enclosedPixels": 10126
+    },
+    "alphaLevelsCleared": 10010,
+    "spillTouched": 3237,
+    "subjectMeanRGB": [
+      111,
+      102,
+      105
+    ],
+    "components": 5,
+    "componentAreasTop": [
+      84737,
+      4,
+      4,
+      1,
+      1
+    ],
+    "mainArea": 84737,
+    "erased": 10,
+    "rescued": 0,
+    "bbox": {
+      "minX": 72,
+      "minY": 27,
+      "maxX": 347,
+      "maxY": 742,
+      "width": 276,
+      "height": 716
+    },
+    "bottomFrac": 0.0326,
+    "head": {
+      "crop": {
+        "x": 162,
+        "y": 47,
+        "w": 192,
+        "h": 192
+      },
+      "basis": "proportional",
+      "headPeakRow": 97,
+      "headPeakFrac": 0.135,
+      "headPeakW": 137,
+      "neckRow": 111,
+      "neckFrac": 0.155,
+      "neckW": 129,
+      "neckRatio": 1.06,
+      "neckFound": false,
+      "coreRows": 172,
+      "sideFracOfBbox": 0.269,
+      "clamped": null,
+      "maxWidthPx": 257
+    }
+  },
+  {
+    "file": "2.png",
+    "name": "Theo Hargrove",
+    "pose": "standing",
+    "tests": "broad shoulders + WHITE TEE (matte trap)",
+    "size": [
+      512,
+      768
+    ],
+    "matte": {
+      "bgPixels": 277995,
+      "bgFrac": 0.707,
+      "enclosedPixels": 4373
+    },
+    "alphaLevelsCleared": 8032,
+    "spillTouched": 2363,
+    "subjectMeanRGB": [
+      101,
+      83,
+      80
+    ],
+    "components": 1,
+    "componentAreasTop": [
+      115181
+    ],
+    "mainArea": 115181,
+    "erased": 0,
+    "rescued": 0,
+    "bbox": {
+      "minX": 107,
+      "minY": 54,
+      "maxX": 386,
+      "maxY": 732,
+      "width": 280,
+      "height": 679
+    },
+    "bottomFrac": 0.0456,
+    "head": {
+      "crop": {
+        "x": 176,
+        "y": 22,
+        "w": 157,
+        "h": 157
+      },
+      "basis": "neck",
+      "headPeakRow": 31,
+      "headPeakFrac": 0.046,
+      "headPeakW": 96,
+      "neckRow": 108,
+      "neckFrac": 0.159,
+      "neckW": 74,
+      "neckRatio": 1.3,
+      "neckFound": true,
+      "coreRows": 140,
+      "sideFracOfBbox": 0.232,
+      "clamped": null,
+      "maxWidthPx": 272
+    }
+  },
+  {
+    "file": "3.png",
+    "name": "Nadia Ishikawa",
+    "pose": "standing",
+    "tests": "high bun + glasses \u2014 headroom",
+    "size": [
+      512,
+      768
+    ],
+    "matte": {
+      "bgPixels": 247650,
+      "bgFrac": 0.6298,
+      "enclosedPixels": 1516
+    },
+    "alphaLevelsCleared": 7254,
+    "spillTouched": 2903,
+    "subjectMeanRGB": [
+      120,
+      98,
+      92
+    ],
+    "components": 3,
+    "componentAreasTop": [
+      145714,
+      22,
+      21
+    ],
+    "mainArea": 145714,
+    "erased": 0,
+    "rescued": 2,
+    "bbox": {
+      "minX": 99,
+      "minY": 11,
+      "maxX": 422,
+      "maxY": 767,
+      "width": 324,
+      "height": 757
+    },
+    "bottomFrac": 0,
+    "head": {
+      "crop": {
+        "x": 151,
+        "y": 42,
+        "w": 203,
+        "h": 203
+      },
+      "basis": "proportional",
+      "headPeakRow": 112,
+      "headPeakFrac": 0.148,
+      "headPeakW": 168,
+      "neckRow": 113,
+      "neckFrac": 0.149,
+      "neckW": 169,
+      "neckRatio": 0.99,
+      "neckFound": false,
+      "coreRows": 182,
+      "sideFracOfBbox": 0.269,
+      "clamped": null,
+      "maxWidthPx": 295
+    }
+  },
+  {
+    "file": "4.png",
+    "name": "Julian Rourke",
+    "pose": "seated",
+    "tests": "seated framing",
+    "size": [
+      512,
+      768
+    ],
+    "matte": {
+      "bgPixels": 240087,
+      "bgFrac": 0.6106,
+      "enclosedPixels": 6644
+    },
+    "alphaLevelsCleared": 9829,
+    "spillTouched": 2839,
+    "subjectMeanRGB": [
+      158,
+      101,
+      74
+    ],
+    "components": 7,
+    "componentAreasTop": [
+      152953,
+      11,
+      4,
+      1,
+      1,
+      1,
+      1
+    ],
+    "mainArea": 152953,
+    "erased": 2,
+    "rescued": 4,
+    "bbox": {
+      "minX": 26,
+      "minY": 82,
+      "maxX": 465,
+      "maxY": 744,
+      "width": 440,
+      "height": 663
+    },
+    "bottomFrac": 0.0299,
+    "head": {
+      "crop": {
+        "x": 169,
+        "y": 68,
+        "w": 175,
+        "h": 175
+      },
+      "basis": "neck",
+      "headPeakRow": 56,
+      "headPeakFrac": 0.084,
+      "headPeakW": 137,
+      "neckRow": 120,
+      "neckFrac": 0.181,
+      "neckW": 89,
+      "neckRatio": 1.53,
+      "neckFound": true,
+      "coreRows": 156,
+      "sideFracOfBbox": 0.264,
+      "clamped": null,
+      "maxWidthPx": 419
+    }
+  },
+  {
+    "file": "5.png",
+    "name": "Priya Iyer",
+    "pose": "lounging",
+    "tests": "silhouette never narrows \u2014 clamp case",
+    "size": [
+      512,
+      768
+    ],
+    "matte": {
+      "bgPixels": 234541,
+      "bgFrac": 0.5965,
+      "enclosedPixels": 993
+    },
+    "alphaLevelsCleared": 7267,
+    "spillTouched": 2807,
+    "subjectMeanRGB": [
+      138,
+      107,
+      92
+    ],
+    "components": 2,
+    "componentAreasTop": [
+      158859,
+      4
+    ],
+    "mainArea": 158859,
+    "erased": 0,
+    "rescued": 1,
+    "bbox": {
+      "minX": 118,
+      "minY": 10,
+      "maxX": 405,
+      "maxY": 767,
+      "width": 288,
+      "height": 758
+    },
+    "bottomFrac": 0,
+    "head": {
+      "crop": {
+        "x": 151,
+        "y": 40,
+        "w": 204,
+        "h": 204
+      },
+      "basis": "proportional",
+      "headPeakRow": 112,
+      "headPeakFrac": 0.148,
+      "headPeakW": 195,
+      "neckRow": 130,
+      "neckFrac": 0.172,
+      "neckW": 195,
+      "neckRatio": 1.0,
+      "neckFound": false,
+      "coreRows": 182,
+      "sideFracOfBbox": 0.269,
+      "clamped": null,
+      "maxWidthPx": 262
+    }
+  },
+  {
+    "file": "6.png",
+    "name": "Sam (player)",
+    "pose": "standing",
+    "tests": "the player token",
+    "size": [
+      512,
+      768
+    ],
+    "matte": {
+      "bgPixels": 299725,
+      "bgFrac": 0.7622,
+      "enclosedPixels": 9105
+    },
+    "alphaLevelsCleared": 10664,
+    "spillTouched": 3053,
+    "subjectMeanRGB": [
+      139,
+      120,
+      117
+    ],
+    "components": 2,
+    "componentAreasTop": [
+      93336,
+      2
+    ],
+    "mainArea": 93336,
+    "erased": 2,
+    "rescued": 0,
+    "bbox": {
+      "minX": 79,
+      "minY": 21,
+      "maxX": 374,
+      "maxY": 751,
+      "width": 296,
+      "height": 731
+    },
+    "bottomFrac": 0.0208,
+    "head": {
+      "crop": {
+        "x": 166,
+        "y": 15,
+        "w": 170,
+        "h": 170
+      },
+      "basis": "neck",
+      "headPeakRow": 62,
+      "headPeakFrac": 0.085,
+      "headPeakW": 148,
+      "neckRow": 117,
+      "neckFrac": 0.16,
+      "neckW": 55,
+      "neckRatio": 2.67,
+      "neckFound": true,
+      "coreRows": 152,
+      "sideFracOfBbox": 0.233,
+      "clamped": null,
+      "maxWidthPx": 296
+    }
+  },
+  {
+    "file": "7.png",
+    "name": "Marisol Vance",
+    "pose": "talking",
+    "tests": "talking expression",
+    "size": [
+      512,
+      768
+    ],
+    "matte": {
+      "bgPixels": 315499,
+      "bgFrac": 0.8024,
+      "enclosedPixels": 350
+    },
+    "alphaLevelsCleared": 7039,
+    "spillTouched": 2376,
+    "subjectMeanRGB": [
+      116,
+      104,
+      111
+    ],
+    "components": 1,
+    "componentAreasTop": [
+      77820
+    ],
+    "mainArea": 77820,
+    "erased": 0,
+    "rescued": 0,
+    "bbox": {
+      "minX": 18,
+      "minY": 27,
+      "maxX": 344,
+      "maxY": 739,
+      "width": 327,
+      "height": 713
+    },
+    "bottomFrac": 0.0365,
+    "head": {
+      "crop": {
+        "x": 152,
+        "y": 55,
+        "w": 192,
+        "h": 192
+      },
+      "basis": "proportional",
+      "headPeakRow": 105,
+      "headPeakFrac": 0.147,
+      "headPeakW": 138,
+      "neckRow": 106,
+      "neckFrac": 0.149,
+      "neckW": 138,
+      "neckRatio": 1.0,
+      "neckFound": false,
+      "coreRows": 171,
+      "sideFracOfBbox": 0.269,
+      "clamped": null,
+      "maxWidthPx": 308
+    }
+  },
+  {
+    "file": "9.png",
+    "name": "Marisol Vance",
+    "pose": "portrait",
+    "tests": "the char_ portrait the map misuses",
+    "size": [
+      512,
+      768
+    ],
+    "matte": {
+      "bgPixels": 0,
+      "bgFrac": 0.0,
+      "enclosedPixels": 0
+    },
+    "alphaLevelsCleared": 0,
+    "spillTouched": 0,
+    "subjectMeanRGB": [
+      112,
+      105,
+      95
+    ],
+    "components": 1,
+    "componentAreasTop": [
+      393216
+    ],
+    "mainArea": 393216,
+    "erased": 0,
+    "rescued": 0,
+    "bbox": {
+      "minX": 0,
+      "minY": 0,
+      "maxX": 511,
+      "maxY": 767,
+      "width": 512,
+      "height": 768
+    },
+    "bottomFrac": 0,
+    "head": {
+      "crop": {
+        "x": 152,
+        "y": 0,
+        "w": 206,
+        "h": 206
+      },
+      "basis": "proportional",
+      "headPeakRow": 15,
+      "headPeakFrac": 0.02,
+      "headPeakW": 512,
+      "neckRow": 16,
+      "neckFrac": 0.021,
+      "neckW": 512,
+      "neckRatio": 1.0,
+      "neckFound": false,
+      "coreRows": 184,
+      "sideFracOfBbox": 0.269,
+      "clamped": null,
+      "maxWidthPx": 512
+    }
+  }
+]

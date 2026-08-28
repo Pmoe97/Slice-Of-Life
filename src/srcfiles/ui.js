@@ -4378,6 +4378,18 @@ const ENERGY_GATE_EXEMPT = new Set([
   // was full Sleep, even though Nap exists specifically as its quicker
   // alternative. Same reasoning as 'sleep' above.
   'self.nap',
+  // Bug report (2026-08-26): waiting is zero exertion — you're just letting
+  // the clock run, which is strictly less effort than the already-exempt
+  // Nap. Blocking it at 0 energy left no way to simply stand still.
+  'wait',
+  // Bug report (2026-08-26): "I could not open a website on a computer I
+  // am already on" — browsing is reading a screen, not exertion, so it must
+  // stay reachable at 0 energy exactly like computer.use/phone.* already
+  // are. Same reasoning covers window chrome (minimize/maximize/close,
+  // taskbar, Start): rearranging what's on the screen isn't work either.
+  'browser.visit',
+  'computer.window-close', 'computer.window-minimize', 'computer.window-maximize',
+  'computer.taskbar-click', 'computer.toggle-start',
   // Door handling is a one-minute mechanical act, not exertion — and the
   // unlock from outside must always be reachable, or an exhausted player
   // who locked their own door at 0 energy could never get back in to sleep.
@@ -4470,6 +4482,12 @@ function isActionExemptFromEnergyGate(action) {
   // must be glanceable regardless of exhaustion — same rationale as
   // computer.use above.
   if (action.startsWith('phone.')) return true;
+  // Bug report (2026-08-26): texting is reading/typing on a screen you're
+  // already holding, same category as browser.visit above — opening a
+  // thread or sending a reply was still hard-blocked at 0 energy even
+  // though phone.* itself was already exempt, which is exactly the
+  // "nothing on the phone should be energy gated" gap the report named.
+  if (action.startsWith('im.')) return true;
   // D17: the scene-art info/reroll controls are viewing tools, not actions —
   // exhaustion never blocks reading a prompt or rerolling art.
   if (action === 'scene.image-info' || action === 'scene.image-reroll') return true;
@@ -4899,6 +4917,116 @@ async function handleAction(action, npcId, extra) {
     case 'classifieds.studio-edit-add-custom':
       doClassifiedsStudioEditAddCustom(extra?.rowId);
       break;
+    // Sprite Studio (avatars-and-sprite-studio Phase 4). `device` rides every
+    // case so one set of handlers serves the computer window and the phone.
+    case 'sprites.filter':
+      doSpritesFilter(extra?.rowId, extra?.device);
+      break;
+    case 'sprites.open-character':
+      doSpritesOpenCharacter(extra?.rowId, extra?.device);
+      break;
+    case 'sprites.open-roster':
+      doSpritesOpenRoster(extra?.device);
+      break;
+    case 'sprites.select-cell':
+      doSpritesSelectCell(extra?.rowId, extra?.device);
+      break;
+    case 'sprites.set-outfit':
+      doSpritesSetOutfit(extra?.rowId, extra?.device);
+      break;
+    case 'sprites.regenerate':
+      await doSpritesRegenerate(extra?.rowId, extra?.device);
+      break;
+    case 'sprites.revert':
+      await doSpritesRevert(extra?.rowId, extra?.device);
+      break;
+    case 'sprites.upload':
+      doSpritesUpload('cutout', extra?.rowId, extra?.device);
+      break;
+    case 'sprites.avatar-upload':
+      doSpritesUpload('avatar', SPRITE_AVATAR_VARIANT, extra?.device);
+      break;
+    case 'sprites.avatar-regenerate':
+      await doSpritesAvatarRegenerate(extra?.rowId, extra?.device);
+      break;
+    case 'sprites.avatar-link':
+      await doSpritesAvatarLink(extra?.rowId, extra?.device);
+      break;
+    // The editor (Phase 5). Sliders attach their own listeners — a range
+    // needs input/change, which a click dispatch cannot express.
+    case 'sprites.edit':
+      await doSpritesEdit(extra?.rowId, extra?.device);
+      break;
+    case 'sprites.editor-close':
+      doSpritesEditorClose(extra?.device);
+      break;
+    case 'sprites.editor-save':
+      await doSpritesEditorSave(extra?.device);
+      break;
+    case 'sprites.editor-tool':
+      doSpritesEditorTool(extra?.rowId, extra?.device);
+      break;
+    case 'sprites.editor-backdrop':
+      doSpritesEditorBackdrop(extra?.rowId, extra?.device);
+      break;
+    case 'sprites.editor-undo':
+      doSpritesEditorUndo(extra?.device);
+      break;
+    case 'sprites.editor-redo':
+      doSpritesEditorRedo(extra?.device);
+      break;
+    case 'sprites.editor-reset-tuning':
+      doSpritesEditorResetTuning(extra?.device);
+      break;
+    case 'sprites.editor-reset-strokes':
+      doSpritesEditorResetStrokes(extra?.device);
+      break;
+    case 'sprites.editor-autotrim':
+      doSpritesEditorAutoTrim(extra?.device);
+      break;
+    // The drawing and colour tools (Phase 6). The sliders and the two colour
+    // inputs attach their own listeners for the same reason the matte ones do:
+    // a range needs input/change, which a click dispatch cannot express.
+    case 'sprites.editor-swatch':
+      doSpritesEditorSwatch(extra?.rowId, extra?.device);
+      break;
+    case 'sprites.editor-flip':
+      doSpritesEditorFlip(extra?.device);
+      break;
+    case 'sprites.editor-reset-adjust':
+      doSpritesEditorResetAdjust(extra?.device);
+      break;
+    case 'sprites.editor-crop-artwork':
+      doSpritesEditorCropArtwork(extra?.device);
+      break;
+    case 'sprites.editor-reset-frame':
+      doSpritesEditorResetFrame(extra?.device);
+      break;
+    case 'sprites.avatar-unlink':
+      await doSpritesAvatarUnlink(extra?.rowId, extra?.device);
+      break;
+    // The wildcard sweep and the recrop surface (Phase 7).
+    case 'sprites.override-widen':
+      await doSpritesOverrideWiden(extra?.rowId, extra?.device);
+      break;
+    case 'sprites.override-narrow':
+      await doSpritesOverrideNarrow(extra?.rowId, extra?.device);
+      break;
+    case 'sprites.avatar-edit':
+      await doSpritesAvatarEdit(extra?.rowId, extra?.device);
+      break;
+    case 'sprites.avatar-recrop':
+      await doSpritesAvatarRecrop(extra?.rowId, extra?.device);
+      break;
+    case 'sprites.recrop-close':
+      doSpritesRecropClose(extra?.device);
+      break;
+    case 'sprites.recrop-auto':
+      doSpritesRecropAuto(extra?.device);
+      break;
+    case 'sprites.recrop-save':
+      await doSpritesRecropSave(extra?.device);
+      break;
     case 'classifieds.studio-set-mode':
       doClassifiedsStudioSetMode(extra?.rowId);
       break;
@@ -4954,6 +5082,15 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'im.open-thread':
       doImOpenThread(extra?.rowId);
+      break;
+    // Bug report (2026-08-26): the phone's Messages layout — Phone contact-
+    // list overhaul. On the narrow phone screen the thread list and the open
+    // conversation are now mutually exclusive panes (see renderMessages'
+    // device check), so opening a thread needs an explicit way back to the
+    // list. The computer window keeps both panes on screen and never shows
+    // this control.
+    case 'im.close-thread':
+      doImCloseThread();
       break;
     case 'im.send':
       await doImSend(extra?.rowId, extra?.device);
@@ -5507,6 +5644,9 @@ async function handleAction(action, npcId, extra) {
     case 'conv.confirm-ask-leave':
       await doConvConfirmAskLeave(npcId);
       break;
+    case 'conv.pause':
+      pauseConversationOverlay();
+      break;
     default:
       console.warn('Unknown action:', action);
   }
@@ -5518,6 +5658,28 @@ async function handleFreeText(text) {
 }
 
 // --- Player actions ---
+
+// Free-text actions can address a present NPC who isn't one of the two
+// "active" scene slots (e.g. an escort the player just invited in while two
+// residents are also in the room). The narrator must be able to give that
+// person dialogue, so promote whoever the action names — longest name first
+// so "Sam" can't shadow "Samantha". No-op when the text names nobody
+// present, or when they're already active. PURE w.r.t. gameState — the
+// returned sceneState is a new object, currentGameState is only read.
+function promoteNpcNamedInText(actionText, sceneState, gameState) {
+  if (!actionText || !sceneState || !gameState) return sceneState;
+  const text = actionText.toLowerCase();
+  const present = [...(sceneState.active || []), ...(sceneState.ambient || [])]
+    .map(id => ({ id, name: (gameState.npcs[id]?.bible?.name || '') }))
+    .filter(p => p.name)
+    .sort((a, b) => b.name.length - a.name.length);
+  for (const p of present) {
+    if (text.includes(p.name.toLowerCase())) {
+      return promoteToActive(sceneState, p.id).sceneState;
+    }
+  }
+  return sceneState;
+}
 
 async function doPlayerAction(actionText) {
   // Energy gate for free-text: if energy is 0, only allow the intent to
@@ -5547,6 +5709,19 @@ async function doPlayerAction(actionText) {
   try {
     await advanceAndResolve(1);
 
+    // The tick above may have moved an arriving visitor (an escort whose
+    // appointment just started, a guest, a partner) into this room — the
+    // scene participants must reflect CURRENT presence, not whatever the
+    // last move/turn computed. Without this a freshly arrived NPC the
+    // player is acting on isn't in the scene at all, so the narrator can't
+    // let them speak and the turn degrades to a fallback line.
+    currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
+    // If the free text names a present NPC who isn't one of the two active
+    // slots, promote them — the person the player is addressing must be
+    // able to speak in the narration (an escort chip routes
+    // "Ask <Name> for <service>" through here, for example).
+    currentSceneState = promoteNpcNamedInText(actionText, currentSceneState, currentGameState);
+
     // Assemble context
     const context = assembleContext(currentGameState, currentSceneState);
 
@@ -5559,7 +5734,17 @@ async function doPlayerAction(actionText) {
       for (const entry of applied.logEntries) addLogEntry(entry.type, entry.text, entry.speaker);
       // Piggyback compaction on this player-contact call, never on a pure tick.
       await compactMemoryIfNeeded([...applied.updatedNpcIds, ...(applied.effectNpcIds || [])]);
-      currentSceneState = advanceEngagement(currentSceneState, resolveSpeakerIds(result.proposal.dialogue, context.activeNpcs));
+      // Any ambient NPC the narrator voiced (the player addressed them even
+      // though they weren't one of the two active slots) is promoted to
+      // active, so engagement tracking and the next prompt see them as a
+      // real participant.
+      const spokenIds = resolveSpeakerIds(result.proposal.dialogue, sceneSpeakerPool(context));
+      for (const sid of spokenIds) {
+        if (!currentSceneState.active.includes(sid)) {
+          currentSceneState = promoteToActive(currentSceneState, sid).sceneState;
+        }
+      }
+      currentSceneState = advanceEngagement(currentSceneState, spokenIds);
     } else {
       // Fallback narration
       addLogEntry('narration', `You ${actionText.toLowerCase()}.`);
@@ -5978,7 +6163,7 @@ function convAddImageBubble(from, url, text, tag) {
 function convRenderProposal(applied) {
   for (const entry of applied.logEntries || []) {
     if (entry.type === 'narration') convAddBeat(entry.text);
-    else if (entry.type === 'action') convAddBubble('action', `*${entry.text}*`);
+    else if (entry.type === 'action') convAddBubble('action', `*${cleanActionText(entry.text)}*`);
     else if (entry.type === 'internal') convAddBeat(`(${entry.text})`);
     else if (entry.type === 'dialogue') convAddBubble('npc', entry.text);
   }
@@ -6079,10 +6264,18 @@ function openConversationOverlay(npcId) {
   if (!overlay) return;
 
   // Header
+  // The conversation's speaker chip (avatars-and-sprite-studio Phase 2,
+  // D10/D11). The element is authored in index.html, so this is the in-place
+  // form: paint the initials and the tint synchronously, then let the art
+  // arrive over the top if there is any. There is no state in between.
   const avatar = document.getElementById('conv-avatar');
   if (avatar) {
-    avatar.textContent = (npc.bible?.name || '?').charAt(0);
-    avatar.style.background = hashToColor(npc.bible?.name || npcId);
+    const name = npc.bible?.name || npcId;
+    avatar.classList.add('avatar-chip');
+    avatar.style.background = hashToColor(name);
+    avatar.removeAttribute('data-has-art');
+    avatar.innerHTML = `<span class="avatar-chip-initials">${avatarEscape(avatarInitials(name))}</span>`;
+    mountAvatar(avatar, npc);
   }
   const nameEl = document.getElementById('conv-name');
   if (nameEl) nameEl.textContent = npc.bible?.name || 'Unknown';
@@ -6136,6 +6329,41 @@ function closeConversationOverlay() {
   // guaranteed to follow — someone else's overture can sit queued for the
   // whole length of a talk. Retry the moment the screen is the player's again.
   if (typeof flushPendingOvertureGate === 'function') flushPendingOvertureGate();
+}
+
+// Conversation-continuity (2026-08-28): closing the overlay is a PAUSE, not
+// an ending — a real in-person talk doesn't reset because you stopped
+// looking at the chat window. The durable half lives on player.conversation,
+// a session record that survives the overlay closing AND the save loading,
+// so reopening the same person in the same room is one continuous exchange
+// (no re-approach, no re-greeting, no "oh, you're still here") and the main
+// screen can show an avatar bubble while a talk is merely paused. The
+// session dies the moment either party leaves the room (checked lazily on
+// read) or the player ends the talk outright (Leave / step away).
+function activeConversationSession(gs) {
+  const sess = gs?.player?.conversation;
+  if (!sess || !sess.npcId || !sess.spoken) return null;
+  const npc = gs.npcs?.[sess.npcId];
+  if (!npc || npc.location !== gs.player.location || gs.player.location !== sess.roomId) {
+    delete gs.player.conversation;
+    return null;
+  }
+  return sess;
+}
+
+function endConversationSession(gs) {
+  if (gs?.player?.conversation) delete gs.player.conversation;
+}
+
+// The pause (minimize) close: overlay away, conversation intact. No "step
+// away" is narrated, the NPC stays active in the scene, and the avatar
+// bubble appears on the main screen so the talk can resume as if it never
+// closed. Escape, backdrop-click and the ✕ button all route here.
+function pauseConversationOverlay() {
+  if (!convState) return;
+  closeConversationOverlay();
+  if (currentGameState) popTimeContext();
+  render(currentGameState, currentSceneState);
 }
 
 // --- Asks plan Phase 2: the Request-tree menu. The tree renders from the
@@ -6314,6 +6542,10 @@ async function doTalk(npcId) {
     addLogEntry('narration', relCheck.reason);
     render(currentGameState, currentSceneState);
     await saveAtBoundary('talk-avoided', currentGameState);
+    // Conversation-continuity: someone who refuses to talk to you is no
+    // longer mid-conversation with you — drop any paused session with them
+    // so the avatar bubble can't sit there promising a talk they won't have.
+    if (currentGameState.player.conversation?.npcId === npcId) endConversationSession(currentGameState);
     return;
   }
 
@@ -6327,11 +6559,29 @@ async function doTalk(npcId) {
       .replace('{name}', them?.bible?.name || 'They'));
   }
 
+  // Conversation-continuity (2026-08-28): if a paused session for THIS NPC
+  // is still alive (we've talked, neither of us left the room), reopening is
+  // a RESUME, not a fresh approach — no overture resolution, no "You
+  // approach X to talk" beat, no re-greeting. Just reopen the overlay and
+  // pick up where the last exchange left off. The session is (re)written
+  // here for both paths so spoken/resumed stay in sync with who the talk is
+  // actually about.
+  const priorSession = activeConversationSession(currentGameState);
+  const resume = priorSession?.npcId === npcId;
+  currentGameState.player.conversation = {
+    npcId,
+    roomId: currentGameState.player.location,
+    spoken: !!(resume && priorSession.spoken),
+    resumed: !!resume,
+  };
+
   // Initiative plan Phase 3: if they crossed the room to reach you, this is
   // the ending where the player said yes. Resolved BEFORE the overlay opens so
   // the flag below cannot make the DND gate read as "already in conversation"
   // for a record that is still pending, and so the opening beat can be theirs.
-  const overture = isOverturePending(currentGameState.npcs[npcId])
+  // On a resume the player is still mid-conversation — nothing fires here;
+  // any queued overture stays pending for when the talk genuinely ends.
+  const overture = !resume && isOverturePending(currentGameState.npcs[npcId])
     ? resolveOverture(currentGameState, npcId, 'engaged') : null;
 
   // Promote to active — demotes the least-engaged active member if the
@@ -6375,9 +6625,24 @@ async function doTalk(npcId) {
   // Generate the opening exchange. Whose beat it is depends on who opened:
   // "You approach [name] to talk" when the player did, and the motive that
   // won the tick when the NPC did (initiative plan Phase 3).
-  await doConvSend(overture
-    ? overtureOpeningLine(npc, overture)
-    : `You approach ${npc.bible?.name || 'your roommate'} to talk.`);
+  //
+  // Bug report (2026-08-26): the player-approached branch used to route
+  // through doConvSend just like the overture branch — which sends the
+  // narration beat AND immediately calls the LLM for the NPC's reply,
+  // locking the input behind a "typing…" wait before the player has said
+  // anything. That's backwards when the PLAYER walked over: they should get
+  // the first word, exactly like the comment above already says the
+  // overture case gets theirs. Only an NPC-initiated overture (they crossed
+  // the room to reach you) still auto-generates an opening line — the
+  // approach beat itself never calls the LLM.
+  if (overture) {
+    await doConvSend(overtureOpeningLine(npc, overture));
+  } else if (!resume) {
+    convAddBeat(`You approach ${npc.bible?.name || 'your roommate'} to talk.`);
+  }
+  // resume: no opening beat at all — the log already shows the ongoing
+  // exchange, and nothing tells the world (or the model) a fresh approach
+  // just happened.
 
   // Talking to the referenced NPC is the completion trigger for any
   // active goal about them — deterministic, doesn't depend on the LLM
@@ -6393,6 +6658,13 @@ async function doTalk(npcId) {
 // decides the match; flavor text never does (D1/invariant 2).
 async function doConvSend(forcedText, giftDefId) {
   if (!convState || convState.sending) return;
+  // Bug report (2026-08-27): the LLM call below takes up to a minute, and a
+  // player who closes the overlay (or moves rooms) mid-flight runs
+  // closeConversationOverlay, which nulls the module-global convState. The
+  // reply's state work must still land (memory, assessor, chronicler, save),
+  // so the NPC id is snapshotted here and everything below reads it — never
+  // the live global, which may be gone by the time an await resumes.
+  const myNpcId = convState.npcId;
   const input = document.getElementById('conv-input');
   let text = forcedText;
   if (giftDefId) {
@@ -6431,8 +6703,25 @@ async function doConvSend(forcedText, giftDefId) {
     // flavor handed to resolveAsk below stays exactly what was parsed (D1).
     const body = parsedAsk ? (parsedAsk.flavor || askLeaf.defaultFlavor || '') : text;
     convAddBubble('player', body, askLeaf.label);
+    // Bug report (2026-08-26): `text` still held the raw `$RequestIntimacy
+    // <flavor>` input below this point, and both the callLLM prompt and
+    // applyProposal's memory.recent write use `text` as the player's turn —
+    // so the literal $Tag was leaking into the LLM's own context AND into
+    // permanent conversation memory, replayed in every future prompt about
+    // this exchange. The displayed bubble already strips it down to the
+    // clean flavor (`body`); reuse that same value for everything else the
+    // turn feeds. No-op for a gift turn — its `body` already equals `text`.
+    text = body;
   } else {
     convAddBubble('player', text);
+  }
+
+  // A real turn (player words, a gift, or an NPC opening line) is
+  // "participating in dialogue" — the condition that keeps the paused
+  // conversation (and its avatar bubble) alive after the overlay closes
+  // (activeConversationSession requires it).
+  if (currentGameState?.player?.conversation?.npcId === myNpcId) {
+    currentGameState.player.conversation.spoken = true;
   }
 
   // Typing indicator while the NPC generates a response.
@@ -6448,6 +6737,11 @@ async function doConvSend(forcedText, giftDefId) {
     // preserve the ordering resolveAsk's seed relies on (D1/D6 below).
     await advanceAndResolve(0);
     const context = assembleContext(currentGameState, currentSceneState);
+    // Conversation-continuity: tag the prompt with who this conversation is
+    // actually with, so buildScenePrompt can tell the model a resume is one
+    // continuous talk — and can never claim that about a different NPC who
+    // merely happens to be in the room.
+    context.conversationNpcId = myNpcId;
 
     // Ask turns decide BEFORE the LLM runs (invariant 1): resolveAsk is
     // pure — decision + stance + directive + effect lines, no model call,
@@ -6456,7 +6750,7 @@ async function doConvSend(forcedText, giftDefId) {
     // (D1/D6) requires. A gift turn passes the chosen item as the structured
     // `extra` payload — never through the flavor (D1/invariant 2).
     const askTurn = askLeaf
-      ? resolveAsk(currentGameState, convState.npcId, askLeaf.id,
+      ? resolveAsk(currentGameState, myNpcId, askLeaf.id,
           giftDefId ? text : parsedAsk.flavor, context,
           giftDefId ? { giftDefId } : undefined)
       : null;
@@ -6495,8 +6789,8 @@ async function doConvSend(forcedText, giftDefId) {
       // like a phrased one (Phase 10 audit). The speaker is the ACTIVE
       // context's name — the exact value applyProposal matches dialogue
       // against — so a name-less NPC (bible.name '') still records the line.
-      const npcName = (context.activeNpcs.find(n => n.id === convState.npcId)?.name)
-        || currentGameState.npcs[convState.npcId]?.bible?.name || 'they';
+      const npcName = (context.activeNpcs.find(n => n.id === myNpcId)?.name)
+        || currentGameState.npcs[myNpcId]?.bible?.name || 'they';
       applied = await applyProposal(
         { dialogue: [{ speaker: npcName, text: buildAskFallbackLine(askTurn, npcName) }] },
         context, currentGameState, text
@@ -6528,22 +6822,22 @@ async function doConvSend(forcedText, giftDefId) {
           await runAskPhotoFlow(askTurn, context);
         }
         askTurn.applyEffects();
-        applied.updatedNpcIds.push(convState.npcId);
+        applied.updatedNpcIds.push(myNpcId);
       }
       // Also persist key beats to the main session log so the scene
       // viewer retains context after the conversation closes.
       const allLogs = [...applied.logEntries, ...((pass2 && pass2.logEntries) || [])];
       if (allLogs.length > 0) {
-        addLogEntry('narration', `[Talking to ${currentGameState.npcs[convState.npcId]?.bible?.name || 'them'}] ${allLogs.filter(e => e.type === 'dialogue').map(e => `${e.speaker}: "${e.text}"`).join(' ')}`);
+        addLogEntry('narration', `[Talking to ${currentGameState.npcs[myNpcId]?.bible?.name || 'them'}] ${allLogs.filter(e => e.type === 'dialogue').map(e => `${e.speaker}: "${e.text}"`).join(' ')}`);
       }
       await compactMemoryIfNeeded([...applied.updatedNpcIds, ...(applied.effectNpcIds || [])]);
       const speakerIds = (result.valid && result.proposal)
         ? resolveSpeakerIds(result.proposal.dialogue, context.activeNpcs)
-        : [convState.npcId];
+        : [myNpcId];
       currentSceneState = advanceEngagement(currentSceneState, speakerIds);
       // F3: fire-and-forget, after the turn's own dialogue/beats are already
       // painted in — never blocks the reply the player is waiting on.
-      const sceneNpc = currentGameState.npcs?.[convState.npcId];
+      const sceneNpc = currentGameState.npcs?.[myNpcId];
       if (sceneNpc) maybeShowConversationScene(sceneNpc);
     }
 
@@ -6564,7 +6858,7 @@ async function doConvSend(forcedText, giftDefId) {
     convAddBeat('Something went wrong. Try again.');
     convSetStatus('In conversation');
   } finally {
-    convState.sending = false;
+    if (convState) convState.sending = false;
     if (sendBtn) sendBtn.disabled = false;
     const freshInput = document.getElementById('conv-input');
     if (freshInput) freshInput.focus();
@@ -6581,7 +6875,8 @@ async function doConvSend(forcedText, giftDefId) {
 // Returns { logEntries } — the pass-2 entries for the session log — or
 // null when the player cancels.
 async function runAskScheduleFlow(askTurn, context, playerAction) {
-  const npc = currentGameState.npcs?.[convState.npcId];
+  const convNpcId = convState?.npcId; // snapshot — the overlay may close mid-modal
+  const npc = currentGameState.npcs?.[convNpcId];
   if (!npc) return null;
   const name = npc.bible?.name || 'they';
   // Loop so a recheck failure (state moved since the probe) reopens the
@@ -6590,7 +6885,7 @@ async function runAskScheduleFlow(askTurn, context, playerAction) {
   for (let tries = 0; tries < 5; tries++) {
     slot = await openAskScheduleModal({
       title: `${askTurn.ask.label} — when works for ${name}?`,
-      npcId: convState.npcId,
+      npcId: convNpcId,
       mealLabels: askTurn.ask.kind === 'meal', // Phase 5 (D10): label rows that land in a meal slot
     });
     if (!slot) return null;
@@ -6611,7 +6906,7 @@ async function runAskScheduleFlow(askTurn, context, playerAction) {
     startAbs: slot.startAbs, endAbs: slot.endAbs,
     roomId: askTurn.ask.roomId || 'living_room',
     invitedIds: [],
-    proposerId: convState.npcId,
+    proposerId: convNpcId,
   });
   askTurn.setSlot(slot);
   const when = askWhenPhrase(slot, currentGameState.meta.clock.day);
@@ -6656,7 +6951,7 @@ async function runAskScheduleFlow(askTurn, context, playerAction) {
     // (Phase 10 audit) so the sign-off lands in memory.recent exactly like a
     // phrased confirm, not just in the DOM. Speaker uses the active
     // context's name — the value applyProposal matches dialogue against.
-    const confirmName = (fresh.activeNpcs.find(n => n.id === convState.npcId)?.name) || name;
+    const confirmName = (fresh.activeNpcs.find(n => n.id === convNpcId)?.name) || name;
     const appliedF = await applyProposal(
       { dialogue: [{ speaker: confirmName, text: `${confirmName} confirms — ${dayLabel} at ${when.timeLabel}.` }] },
       fresh, currentGameState, null
@@ -6675,10 +6970,10 @@ async function runAskScheduleFlow(askTurn, context, playerAction) {
 // as an NPC image bubble. Failure degrades to a text beat: the decision
 // already happened, so the ask is settled either way.
 async function runAskPhotoFlow(askTurn, context) {
-  const npc = currentGameState.npcs?.[convState.npcId];
+  const npc = currentGameState.npcs?.[convState?.npcId]; // overlay may close mid-flow
   if (!npc) return;
   const day = askDay(currentGameState);
-  const record = buildAskPhotoRecord(currentGameState, npc, convState.npcId, askTurn.flavor, day, askTurn.ladder.count);
+  const record = buildAskPhotoRecord(currentGameState, npc, convState?.npcId, askTurn.flavor, day, askTurn.ladder.count);
   convSetStatus('sending photo…');
   let url = null;
   try {
@@ -6820,9 +7115,10 @@ function doConvGiveGift(defId) {
 // capability needed for a plausible in-fiction reaction.
 async function doConvSharePhoto(photoId) {
   if (!convState || convState.sending) return;
+  const myNpcId = convState.npcId; // snapshot — see doConvSend
   const gs = currentGameState;
   const photo = gs?.world?.phone?.camera?.roll?.find(p => p.id === photoId);
-  if (!photo || !gs.npcs?.[convState.npcId]) return;
+  if (!photo || !gs.npcs?.[myNpcId]) return;
   convState.sending = true;
   const sendBtn = document.getElementById('conv-send-btn');
   if (sendBtn) sendBtn.disabled = true;
@@ -6841,7 +7137,7 @@ async function doConvSharePhoto(photoId) {
       const applied = await applyProposal(result.proposal, context, currentGameState, text);
       convRenderProposal(applied);
       if (applied.logEntries.length > 0) {
-        addLogEntry('narration', `[Talking to ${currentGameState.npcs[convState.npcId]?.bible?.name || 'them'}] ${applied.logEntries.filter(e => e.type === 'dialogue').map(e => `${e.speaker}: "${e.text}"`).join(' ')}`);
+        addLogEntry('narration', `[Talking to ${currentGameState.npcs[myNpcId]?.bible?.name || 'them'}] ${applied.logEntries.filter(e => e.type === 'dialogue').map(e => `${e.speaker}: "${e.text}"`).join(' ')}`);
       }
       await compactMemoryIfNeeded([...applied.updatedNpcIds, ...(applied.effectNpcIds || [])]);
       currentSceneState = advanceEngagement(currentSceneState, resolveSpeakerIds(result.proposal.dialogue, context.activeNpcs));
@@ -6859,7 +7155,7 @@ async function doConvSharePhoto(photoId) {
     convAddBeat('Something went wrong. Try again.');
     convSetStatus('In conversation');
   } finally {
-    convState.sending = false;
+    if (convState) convState.sending = false;
     if (sendBtn) sendBtn.disabled = false;
     const freshInput = document.getElementById('conv-input');
     if (freshInput) freshInput.focus();
@@ -6871,6 +7167,9 @@ function doConvLeave() {
   const npcId = convState.npcId;
   const npc = currentGameState?.npcs?.[npcId];
   closeConversationOverlay();
+  // Conversation-continuity: Leave is the deliberate END — the paused
+  // session and its avatar bubble die here (the player has walked away).
+  endConversationSession(currentGameState);
   // Step away from the active conversation.
   currentSceneState = demoteToAmbient(currentSceneState, npcId);
   if (npc) addLogEntry('narration', `You step away from ${npc.bible?.name || 'them'}.`);
@@ -6899,6 +7198,8 @@ async function doConvConfirmAskLeave(npcId) {
   closeModal();
   if (convState) popTimeContext();
   closeConversationOverlay();
+  // Conversation-continuity: the talk is over — clear the paused session.
+  endConversationSession(currentGameState);
   await doAskToLeave(npcId);
 }
 
@@ -6911,6 +7212,8 @@ async function doStepAway(npcId) {
   if (!npc) return;
   currentSceneState = demoteToAmbient(currentSceneState, npcId);
   addLogEntry('narration', `You step away from ${npc.bible.name || 'them'}.`);
+  // Conversation-continuity: a deliberate step away ends the talk.
+  endConversationSession(currentGameState);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('step-away', currentGameState);
 }
@@ -7049,7 +7352,16 @@ async function doMove(targetRoomId) {
       if (result.valid && result.proposal) {
         const applied = await applyProposal(result.proposal, context, currentGameState, 'You walk into the room.');
         for (const entry of applied.logEntries) addLogEntry(entry.type, entry.text, entry.speaker);
-        currentSceneState = advanceEngagement(currentSceneState, resolveSpeakerIds(result.proposal.dialogue, context.activeNpcs));
+        // Same ambient-speaker promotion as doPlayerAction: a present-but-
+        // ambient NPC the narrator voiced on arrival becomes a real
+        // participant.
+        const spokenIds = resolveSpeakerIds(result.proposal.dialogue, sceneSpeakerPool(context));
+        for (const sid of spokenIds) {
+          if (!currentSceneState.active.includes(sid)) {
+            currentSceneState = promoteToActive(currentSceneState, sid).sceneState;
+          }
+        }
+        currentSceneState = advanceEngagement(currentSceneState, spokenIds);
       }
     }
 
@@ -8679,6 +8991,25 @@ function attachEventHandlers() {
   const convSendBtn = document.getElementById('conv-send-btn');
   if (convSendBtn) {
     convSendBtn.addEventListener('click', () => handleAction('conv.send'));
+  }
+  // Conversation-continuity (2026-08-28): the overlay's pause controls.
+  // Escape and the dark backdrop mean PAUSE, never leave — the talk survives
+  // and the avatar bubble appears so it can be resumed. Registered BEFORE
+  // the ask-menu Escape handler below: on the first Escape the menu is still
+  // open, so this handler yields and lets the menu's own handler close it;
+  // the second Escape (menu gone) pauses the conversation itself.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const convOverlay = document.getElementById('conversation-overlay');
+    if (!convOverlay || !convOverlay.hasAttribute('data-open')) return;
+    if (askMenuIsOpen()) return;
+    pauseConversationOverlay();
+  });
+  const convOverlayEl = document.getElementById('conversation-overlay');
+  if (convOverlayEl) {
+    convOverlayEl.addEventListener('click', (e) => {
+      if (e.target === convOverlayEl && !askMenuIsOpen()) pauseConversationOverlay();
+    });
   }
   // Asks plan Phase 2 — the Request-tree menu controls. The + toggles the
   // popover; back/close and the rows handle their own nav/insert; the

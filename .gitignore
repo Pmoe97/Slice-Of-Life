@@ -3,3 +3,8 @@
 Thumbs.db
 *.log
 node_modules/
+
+# Python bytecode cache (dev/design tooling)
+__pycache__/
+pycache__/
+*.pyc

@@ -184,6 +184,27 @@ const APP_DEFS = {
       assign: { label: 'Assign Room', renderer: 'roomlist-assign', hideFromNav: true },
     },
   },
+  // The Sprite Studio (avatars-and-sprite-studio-plan Phase 4, D16).
+  // A plain `utility` app rather than an in-fiction consumer product: the
+  // computer's OS chrome already supports system utilities, and dressing an
+  // out-of-fiction asset editor up as a brand would be a costume, not a
+  // fiction. `devices` carries BOTH surfaces — render.phone.js reuses
+  // COMPUTER_RENDERERS unchanged, so the split costs one capability check
+  // rather than a second implementation. The paint canvas (Phase 5) is
+  // computer-only and the phone says so with a real affordance rather than a
+  // missing button; `editor` and `recrop` are hideFromNav because you reach
+  // them from a sprite cell or the avatar panel, never from the tab bar.
+  sprites: {
+    id: 'sprites', label: 'Sprite Studio', category: 'utility', requires: [],
+    devices: ['computer', 'phone'],
+    entryScreen: 'roster',
+    screens: {
+      roster: { label: 'Roster', renderer: 'sprites-roster' },
+      character: { label: 'Character', renderer: 'sprites-character', hideFromNav: true },
+      editor: { label: 'Editor', renderer: 'sprites-editor', hideFromNav: true },
+      recrop: { label: 'Recrop', renderer: 'sprites-recrop', hideFromNav: true },
+    },
+  },
   // Real conversations with residents, through the exact same LLM
   // proposal contract doTalk/doPlayerAction already use — a reply can
   // move relPlayer, land a memory fact, everything a scene conversation

@@ -150,6 +150,20 @@ check('a seed-restore does not fire on the normal seed-present case (no double b
 const midTokenDrop = '",\n  "age": 28,\n  "gender": "male"\n}';
 check('a drop mid-token (not at a key boundary) fails cleanly, no throw',
   (() => { try { return parseConceptResponse(midTokenDrop) === null; } catch (e) { return false; } })());
+// Sibling shape of the same recovery bug: instead of dropping the seed, the
+// continuation can RE-EMIT it, doubling the opening brace (`{{"name": ...`).
+// Collapsing the pair to one is safe — a valid reply never starts with two.
+check('a doubled seed brace (`{{`) still recovers with all fields intact',
+  (() => { const r = parseConceptResponse('{{' + pretty.slice(1)); return !!r && r.name === 'Wren' && r.age === 29; })());
+check('the double-brace collapse never fires on a normal seed-present reply',
+  parseConceptResponse(pretty)?.name === 'Wren');
+// The plugin resolves `await generateText(...)` with a BOXED String
+// (`new String(chunks.join(""))` in ai-text-plugin's doOnFinishStuff) so it
+// can attach .text/.generatedText metadata. A strict `typeof === 'string'`
+// check at the parser's entry therefore rejected every reply — this pins that
+// the boxed form parses identically to the primitive.
+check('a boxed String (what await generateText actually resolves to) parses',
+  parseConceptResponse(new String(JSON.stringify(GOOD)))?.name === 'Wren');
 // A restore that only catches a LATER key (physical onward) is not a failure
 // — it is the SAME mechanism doing exactly its job on a shorter prefix, and
 // normalizeConceptDraft already degrades gracefully on a partial object.
@@ -197,8 +211,42 @@ check('pool value keeps its authored opposition',
 
 // Skipped subtrees (concept.js's CONCEPT_PHYSICAL_SKIP).
 check('heightBuild is never generated (it is a derived cache)', draft.physical?.heightBuild === undefined);
-check('intimate is never generated', draft.physical?.intimate === undefined);
+check('intimate is not generated when the description says nothing intimate',
+  draft.physical?.intimate === undefined);
 check('typicalAttire is never generated (reserved, no reader)', draft.physical?.typicalAttire === undefined);
+
+// intimate.genitals — typed rows, per-type key filtering via GENITAL_TYPE_FIELDS.
+const G = {
+  ...GOOD,
+  physical: {
+    ...GOOD.physical,
+    intimate: {
+      genitals: [
+        { type: 'penis', length: 'long', girth: 'thick', cut: 'uncircumcised', balls: 'heavy',
+          labia: 'prominent', color: 'dusky', hair: 'trimmed', sensitivity: 'high',
+          description: 'a long, thick uncircumcised cock with heavy balls' },
+        { type: 'vagina', labia: 'neat and tucked', color: 'dusky', hair: 'landing strip',
+          sensitivity: 'tender', description: 'a neat, tucked vulva', length: 'nine inches',
+          balls: 'huge' },
+        { type: 'bogus', length: 'ignore me' },
+      ],
+    },
+  },
+};
+const gDraft = normalizeConceptDraft(G, 'player');
+const gG = gDraft.physical?.intimate?.genitals;
+check('genitals rows survive typed', Array.isArray(gG) && gG.length === 2);
+check('the penis row keeps only penis keys', !!gG && gG[0].type === 'penis' && gG[0].length === 'long' &&
+  gG[0].girth === 'thick' && gG[0].cut === 'uncircumcised' && gG[0].balls === 'heavy' &&
+  gG[0].labia === undefined);
+check('the vagina row keeps only vagina keys', !!gG && gG[1].type === 'vagina' && gG[1].labia === 'neat and tucked' &&
+  gG[1].color === 'dusky' && gG[1].hair === 'landing strip' && gG[1].length === undefined &&
+  gG[1].balls === undefined);
+check('unknown genital types are dropped', !gG.some(r => r.type === 'bogus'));
+check('normalized genitals pass validateNpcField', validateNpcField('bible.physical.intimate.genitals', gG).ok);
+check('genitals survive conceptToPartial', Array.isArray(conceptToPartial(gDraft).physical?.intimate?.genitals));
+check('genitals count as one authored physical prefix',
+  conceptTouchedFields(gDraft).filter(a => a.startsWith('physical')).length === 1);
 
 console.log('\n--- 3. Every normalized path is schema-legal ---');
 
@@ -295,7 +343,10 @@ check('the prompt does NOT dump the quirks pool (D3)',
 check('the prompt does NOT dump the traits pool (D3)',
   !npcPrompt.includes('passive-aggressive, protective, manipulative'), 'PERSONALITY_TRAITS_POOL leaked');
 check('the prompt names the real gender enum', npcPrompt.includes('trans_female'));
-check('the prompt does not ask for intimate anatomy', !npcPrompt.includes('genitals'));
+check('the prompt asks for intimate.genitals as typed rows',
+  npcPrompt.includes('intimate.genitals') && npcPrompt.includes('vagina or penis'));
+check('the prompt tells the model genitals do not go in distinguishingFeatures', npcPrompt.includes('Never genitals'));
+check('the prompt does not ask for breasts (still derived/gender-based)', !npcPrompt.includes('"breasts"'));
 check('the prompt carries the player\'s description', npcPrompt.includes('a shy barista'));
 const ctxPrompt = buildConceptPrompt('x', 'npcFull', { authored: { name: 'Del' }, usedNames: ['Mira', 'Wren'] });
 check('already-authored values are shown to the model', ctxPrompt.includes('name: Del'));

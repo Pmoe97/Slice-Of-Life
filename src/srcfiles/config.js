@@ -4316,7 +4316,7 @@ const CLOTHING_STATE_PROSE = {
   dressed: 'dressed normally',
   changing: 'mid-change, caught between two outfits',
   nude: 'completely naked',
-  towel: 'wrapped in a towel (just showered)',
+  towel: 'wrapped in a towel (fresh from the water)',
   sleepwear: 'in sleepwear',
   undressed: 'undressed',
 };
@@ -4330,6 +4330,19 @@ const CLOTHING_STATE_SCENE_TEXT = {
   towel: 'wrapped in a towel',
   sleepwear: 'in sleepwear',
   undressed: 'undressed',
+};
+
+// What a same-room NPC would NOTICE about the player's state of dress —
+// appended to that NPC's [Senses] block by assembleContext (bug report
+// 2026-08-27: Elsa stood next to a completely naked player and never
+// mentioned it). 'dressed' is deliberately absent: normally dressed is not
+// a sense line.
+const CLOTHING_STATE_PERCEIVED_PROSE = {
+  nude: 'the player is completely naked',
+  undressed: 'the player is undressed',
+  towel: 'the player is wrapped in a towel, fresh from the water',
+  sleepwear: 'the player is in sleepwear',
+  changing: 'the player is mid-change, caught between two outfits',
 };
 
 // --- NPC wardrobe AI (Intimacy & Voyeurism Phase 6, D11) ---
@@ -4608,7 +4621,11 @@ const INTIMACY = {
   // Player side. share_shower's hygiene is a RESTORE (the shower washes); the
   // paired table below mirrors it for the partner.
   playerMoodGain:   { masturbate: 0.15, quickie: 0.25, sex: 0.35, cuddle: 0.3,  share_shower: 0.15 },
-  playerEnergyCost: { masturbate: 3,    quickie: 6,    sex: 12,   cuddle: 0,    share_shower: 4 },
+  // Bug report (2026-08-26): masturbating is a relaxing act, not exertion —
+  // same bucket as napping/relaxing (which both RESTORE energy), so it
+  // should never have drained it. quickie/sex/share_shower keep their costs;
+  // those are actual physical exertion.
+  playerEnergyCost: { masturbate: 0,    quickie: 6,    sex: 12,   cuddle: 0,    share_shower: 4 },
   playerHygieneCost:{ quickie: 5,       sex: 10,       cuddle: 0, masturbate: 0 },
 
   // Partner side (the target NPC).
@@ -5385,14 +5402,45 @@ const CUTOUT_TUNING = {
   speckAreaMax: 120,          // erase components smaller than this
   speckMainRatio: 0.85,       // ...and smaller than this share of the main
   borderMarginFrac: 0.02,     // border band: max(3, round(min(W,H)*this))
-  removeBorderComponents: false, // D5: seated/edge poses may touch the frame
-  closeRadius: 2,              // D15: dilate-then-erode radius (px) before
-                                // component labeling — protects hair wisps/
-                                // fingertips from being pruned as specks
+  removeBorderComponents: true,  // D18: a non-main blob touching the TOP/LEFT/
+                                // RIGHT band is background residue, never a
+                                // body part. Safe now only because
+                                // borderIgnoreBottom exempts the one edge a
+                                // seated/standing pose legitimately reaches.
+  borderIgnoreBottom: true,   // D18: feet, chair legs and a lounging hip all
+                                // sit in the bottom band — never prune there
+  closeRadius: 2,              // D15: dilate-then-erode radius (px), used to
+                                // RESCUE near-touching fragments (hair wisps,
+                                // fingertips) — see D18: it no longer merges
+                                // components before the main one is chosen
   spillAlphaMax: 250,          // D14: pixels with speckAlpha < alpha < this
                                 // are matte-edge pixels; their RGB gets
                                 // decontaminated toward the subject's own
                                 // opaque-pixel mean color
+  // --- D17: alpha levels (the matte knee) ---------------------------------
+  // RMBG-1.4's mask is a per-pixel probability. On a textured backdrop it
+  // hedges: background residue lands in the low-mid alphas instead of at 0,
+  // which is exactly the speckle the first live run showed. Collapse the
+  // hedge before anything else looks at the alpha channel: below the floor
+  // is background, above the ceiling is subject, smoothstep between so a
+  // genuine soft edge stays soft.
+  alphaFloor: 110,
+  alphaCeil: 200,
+  // --- D19: dominance prune ------------------------------------------------
+  // speckAreaMax is an ABSOLUTE pixel count (120px), so a residue blob big
+  // enough to clear it survived the D5 sweep no matter how obviously it was
+  // not the character. Anything under this SHARE of the main component is
+  // background too: a real body part is connected to the body, so it is
+  // never its own component in the first place.
+  speckRelMax: 0.06,
+  // D18: the rescue is for WISP-SCALE fragments only — a hair strand, a
+  // fingertip, the tip of a shoe. An absolute pixel budget, not a share of
+  // the main component: "wisp-scale" is a property of the render resolution
+  // (512x768), not of how large the character happens to be in frame.
+  // Without this cap, proximity alone was enough to rescue anything, and
+  // background residue hugging the subject's edge is the most common
+  // residue there is.
+  rescueAreaMax: 300,
 };
 
 // D16 fallback defaults only — once a cutout has actually been generated,
@@ -5406,6 +5454,105 @@ const CUTOUT_POSES = {
   lounging: { label: 'Lounging', scale: 0.90, bottomFrac: 0.03, seedWord: 'lounging' },
 };
 const CUTOUT_EXPRESSIONS = ['neutral', 'happy', 'talking'];
+
+// ===== SPRITE OVERRIDE STORE (avatars-and-sprite-studio-plan, Phase 1) =====
+// Tuning for kv.sprites — the permanent store for art a HUMAN produced
+// (uploaded, painted, recropped, pinned), as opposed to the kv.images LRU
+// above, which holds machine output.
+//
+// Every number here is a refusal threshold, not an eviction threshold (D7).
+// The LRU's contract is "make room by dropping the oldest"; this store's is
+// the exact inverse — at the cap a save is REFUSED with a message naming what
+// to delete, because one eviction here is one destroyed thing a player made
+// and no seed can bring it back.
+const SPRITE_STORE = {
+  maxSlots: 240,                      // hard cap; refuse, never evict
+  softByteBudget: 48 * 1024 * 1024,   // shown in the studio, warns at 80%
+  maxUploadBytes: 6 * 1024 * 1024,
+  uploadTypes: ['image/png', 'image/webp', 'image/jpeg'],
+  // An upload that is not already RGBA gets an alpha channel added and, when
+  // this says so, is run through cleanCutout with the slot's tuning. Defaults
+  // ON for cutouts and OFF for avatars: a JPEG has no alpha at all, and a
+  // full-body sprite on a backdrop is useless as a layer, while a headshot
+  // that fills its own circular frame is fine exactly as it arrived.
+  importRemoveBg: { cutout: true, avatar: false },
+};
+
+// --- AVATAR_TUNING (avatars-and-sprite-studio-plan, Phase 2, D9/D9b) --------
+// The head crop that turns a full-body cutout into a headshot.
+//
+// EVERY NUMBER HERE IS MEASURED, not chosen. The plan's original D9 — median
+// width of the top 5% of the bbox, first row exceeding 1.6x that is the
+// shoulder line — was run against eight real generations before a line of
+// this was written, and did not work. The top 5% of a bbox is the CROWN, the
+// narrow dome at the top of the skull, so the reference width read ~40% low
+// and 1.6x an underestimate was crossed while still inside the head. Six of
+// seven subjects fell straight through to the minSideFrac clamp: the guard
+// rail was doing all the work and the detector none.
+//
+// The width profiles showed two populations, split by HAIR rather than build:
+// short or tied hair gives an enormous neck signal (one subject narrows
+// 137px -> 55px), while long hair worn down gives NONE — the profile rises
+// monotonically from crown to hip because the hair fills the neck and covers
+// the shoulder line. Half the subjects. So the neck is a refinement available
+// on some people, never the primary mechanism.
+//
+// Full run: dev/design/sprite-studio/refs/out/REPORT.md.
+// Reference implementation: dev/design/sprite-studio/matte-and-measure.py.
+const AVATAR_TUNING = {
+  headBandFrac: 0.25,      // window from the bbox top to look for head + neck in
+  peakLoFrac: 0.02,        // head-peak search starts below the crown sliver
+  peakHiFrac: 0.15,
+  neckRatio: 1.25,         // peakWidth / neckWidth before a neck counts as real
+  defaultHeadFrac: 0.24,   // crown -> chin as a share of bbox height (no neck)
+  chinDropFrac: 0.30,      // below the neck line, as a share of the core
+  headroomFrac: 0.12,      // above the crown, as a share of the crop side
+  // D9b — the vertical anchor is the head's WIDEST row, never bbox.minY.
+  // bbox.minY is the top of whatever is highest: a bun, a hat, a raised tuft.
+  // Hanging the crop off it slides the whole frame up and eats the chin —
+  // measured, on a subject with a high bun, whose mouth was cut off. The
+  // widest row sits at cheekbone/ear level, roughly the middle of the face,
+  // and is stable across hairstyles. This nudges down from there so the chin
+  // clears.
+  faceBiasFrac: 0.10,
+  // Guard rails for a mask that failed outright. On the eight real subjects
+  // measured, NEITHER FIRES — which is the point. A clamp that fires
+  // routinely is the signature of a detector that does not work.
+  minSideFrac: 0.16,
+  maxSideFrac: 0.34,
+  outputSize: 256,         // a derived/stored avatar is a 256x256 square PNG
+  // The sizes the shared chip renders at, in CSS px (D11). Kept here so the
+  // crop surface can preview every one of them at once: a crop that reads
+  // beautifully at 96 can be an unrecognisable smudge at 18, and 18 is the
+  // size the player sees most often.
+  sizes: { map: 18, chip: 24, header: 40, card: 56, hero: 96 },
+};
+
+// --- SPRITE_QUEUE (avatars-and-sprite-studio-plan, Phase 3, D12-D14) -------
+// The background worker that keeps the household ready without anybody
+// waiting, and without spending the world's quota on people you met once.
+const SPRITE_QUEUE = {
+  // D12 — priority tiers, highest first. NOTHING BELOW `contact` IS EVER
+  // GENERATED EAGERLY, at any setting. `gs.npcs` grows without bound as
+  // RoomList loads full profiles on demand, so a roster you walked past must
+  // cost nothing; being *interesting* is what earns art, and the four tiers
+  // below are this game's existing answers to that.
+  tiers: ['player', 'resident', 'present', 'contact'],
+  maxPerDay: 12,        // resets on the in-game day rollover
+  maxPerSession: 40,
+  idleMs: 2500,         // quiet time required before the queue may start
+  yieldMs: 400,         // between items, so a burst never feels like a stall
+  // D13 — ONE CUTOUT BUYS BOTH ASSETS, and that is what makes an eager pass
+  // affordable at all. The avatar is a crop of the cutout (D8), so a
+  // character is "ready" after exactly one generation, not two. If this list
+  // ever grows past one entry, re-read D13 before assuming the budget above
+  // still holds.
+  readySet: [{ pose: 'standing', expression: 'neutral', outfit: 'current' }],
+  // D15 — the ambient tier's depth cue. Characters in the room but not in the
+  // foreground conversation render smaller and behind, which is a free depth
+  // signal the presence model was already handing us.
+  ambientScale: 0.82,
+};
 
 // --- Title-gallery slideshow (menu overhaul Phase 10) ---
 // Adopts the reference games' two-layer crossfade + lazy 3-image buffer
@@ -7222,6 +7369,11 @@ const ACTION_TUNING = {
   relaxMoodGain: 0.16,
   relaxEnergyGain: 5,
   dishesMoodGain: 0.05,
+  // Bug report (2026-08-26): eating and showering both leave you feeling
+  // more energized in real life, not less — sized well under a Relax (5) or
+  // a Nap (15) since neither verb is *about* resting the way those are.
+  eatEnergyGain: 2,
+  showerEnergyGain: 2,
   // Phase 5: new room actions
   // Initiative plan Phase 5: these three entries had no `timeCost` at all, and
   // resolveTimeCost reads `timeCost.base` unconditionally — so Work Out, Play
@@ -7725,7 +7877,17 @@ const CONTENT_DIRECTIVES = {
   substance: { on: 'Drinking, smoking, and similar habits may appear naturally.', off: 'Keep substance use off-page.' },
   romance: { on: 'Romantic and physically intimate material may develop naturally between consenting characters.', off: 'Keep romantic content light and non-explicit.' },
   conflict: { on: 'Arguments and interpersonal conflict may escalate realistically.', off: 'Keep conflict low-key and quickly defused.' },
-  mature: { on: 'Mature themes and adult situations are permitted when the scene calls for them — write them like an adult novel would, not a summary of one.', off: 'Keep content non-explicit; fade to black rather than describing explicit material.' },
+  mature: {
+    // Bug report (2026-08-28): the previous 'on' wording was too soft —
+    // "when the scene calls for them" gave the model an out, and it leaned
+    // into euphemism ("her work", "the task at hand") instead of narration.
+    // Now the directive is explicit and prescriptive: name the act and the
+    // body parts, describe the physical/sensory reality moment by moment,
+    // and never dodge into summary. Applies to every scene/IM prompt that
+    // builds CONTENT GUIDANCE.
+    on: 'Sexual content is FULLY EXPLICIT when it occurs — write it like the adult novel it is, never a summary. Name the act and the body parts directly (penis, glans, cock, pussy, clit, nipples, tongue, mouth, hands, saliva, wetness, arousal, cum); never substitute euphemisms for the act itself ("her work", "the task at hand", "pleasuring him", "they were intimate", "it went all the way"). Describe every intimate act as it happens, moment by moment, in concrete physical and sensory detail — what the body is doing, what it feels like, the wet sounds, the taste, the trembling, the slickness, the stiffening nipples, the quickened breathing, the rhythm. A blowjob is a blowjob: lips stretched around the shaft, tongue flicking and swirling over the glans, the suction and slurp, saliva dripping down onto her chest, her own arousal rising while she works. Never fade to black, never skip ahead, never collapse a sex act into a single beat. This applies to every intimate act — kissing, undressing, groping, fingering, oral, penetration, the aftermath — keep the detail explicit and unflinching throughout.',
+    off: 'Keep content non-explicit; fade to black rather than describing explicit material.' },
+
 };
 
 // --- NPC Autonomy drives (P7). Data-driven definitions that fire during

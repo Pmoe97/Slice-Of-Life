@@ -1,0 +1,206 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    :root{
+      --bg:#1a1a2e; --surface:#232342; --surface-alt:#2a2a4a; --border:#3a3a5c;
+      --border-strong:#4a4a7c; --card:#2c2c50; --text:#e0e0f0; --dim:#8888aa; --faint:#5a5a7c;
+      --accent:#7b6cf6; --accent-hover:#9d92f8; --pos:#6cf6a9; --warn:#f6d76c; --neg:#f66c8c;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);
+      font-family:'Segoe UI',system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.45}
+    a{color:#9d92f8}a:hover{color:#7b6cf6}
+    .h1{font-size:22px;font-weight:700}
+    .tiny{font-size:11px}.dim{color:var(--dim)}
+    .col-h{font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;
+      padding-bottom:5px;margin-bottom:10px;border-bottom:1px solid var(--border)}
+    .col-before{color:var(--neg)}
+    .col-after{color:var(--pos)}
+    .panel{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px}
+    .sect-t{font-size:13px;font-weight:700;margin-bottom:2px}
+    .av{border-radius:50%;overflow:hidden;background:var(--surface-alt);display:flex;
+      align-items:center;justify-content:center;flex-shrink:0}
+    .av img{width:100%;height:100%;object-fit:cover;display:block}
+    .init{display:flex;align-items:center;justify-content:center;width:100%;height:100%;
+      font-weight:700;color:rgba(255,255,255,.9)}
+    .conv-header{display:flex;align-items:center;gap:12px;padding:12px 16px;
+      border-bottom:1px solid var(--border)}
+    .conv-box{background:var(--surface);border:1px solid var(--border-strong);border-radius:10px;overflow:hidden}
+    .row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px}
+    .row+.row{margin-top:4px}
+    .line{display:flex;gap:8px;padding:6px 10px;align-items:flex-start}
+    .speaker{font-weight:700;color:var(--accent)}
+    .speech{font-style:italic}
+  </style>
+</helmet>
+
+<div style="padding:26px 28px;background:var(--bg);min-height:100%">
+
+  <div class="h1">Every person in the game, before and after</div>
+  <div class="dim tiny" style="margin-bottom:20px">
+    Twenty-six hand-rolled <code>hashToColor(name) + name.charAt(0)</code> templates across four files, replaced by one component.
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:28px">
+    <div class="col-h col-before">Today</div>
+    <div class="col-h col-after">With avatars</div>
+  </div>
+
+  <!-- ROW 1: the floor plan -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-bottom:20px">
+    <div>
+      <div class="panel">
+        <svg viewBox="0 0 260 120" style="width:100%;display:block">
+          <rect x="4" y="4" width="120" height="112" fill="#232342" stroke="#3a3a5c" stroke-width="1.5"/>
+          <rect x="132" y="4" width="124" height="54" fill="#232342" stroke="#3a3a5c" stroke-width="1.5"/>
+          <rect x="132" y="62" width="124" height="54" fill="#26264a" stroke="#3a3a5c" stroke-width="1.5"/>
+          <text x="10" y="18" fill="#5a5a7c" font-size="8" font-family="Segoe UI">Living room</text>
+          <text x="138" y="18" fill="#5a5a7c" font-size="8" font-family="Segoe UI">Kitchen</text>
+          <text x="138" y="76" fill="#5a5a7c" font-size="8" font-family="Segoe UI">Hallway</text>
+          <g><circle cx="44" cy="64" r="9" fill="#2a2a4a" stroke="#4a4a7c" stroke-width="1.5"/>
+             <text x="44" y="67" text-anchor="middle" fill="#e0e0f0" font-size="8" font-weight="700" font-family="Segoe UI">MV</text></g>
+          <g><circle cx="80" cy="78" r="9" fill="#2a2a4a" stroke="#4a4a7c" stroke-width="1.5"/>
+             <text x="80" y="81" text-anchor="middle" fill="#e0e0f0" font-size="8" font-weight="700" font-family="Segoe UI">TH</text></g>
+          <g><circle cx="180" cy="32" r="9" fill="#2a2a4a" stroke="#4a4a7c" stroke-width="1.5"/>
+             <text x="180" y="35" text-anchor="middle" fill="#e0e0f0" font-size="8" font-weight="700" font-family="Segoe UI">NI</text></g>
+          <g><circle cx="196" cy="90" r="9" fill="#5a4fa0" stroke="#7b6cf6" stroke-width="2"/>
+             <text x="196" y="93" text-anchor="middle" fill="#e0e0f0" font-size="7" font-weight="700" font-family="Segoe UI">You</text></g>
+        </svg>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:8px;align-items:flex-start">
+        <div style="position:relative;flex-shrink:0;border:1px solid var(--border);border-radius:4px;
+             overflow:hidden;background:#f2f2f4;width:60px;height:90px">
+          <img src="portrait-raw.jpg" alt="" style="height:100%;display:block;margin:0 auto">
+          <div style="position:absolute;left:50%;top:50%;width:36px;height:36px;margin:-18px 0 0 -18px;
+               border-radius:50%;border:2px solid var(--neg);box-shadow:0 0 0 999px rgba(26,26,46,.72)"></div>
+        </div>
+        <div class="tiny dim" style="line-height:1.5">
+          The marker pulls the <code>char_</code> portrait &mdash; a <b style="color:var(--text)">512&times;768 full-body character sheet</b> &mdash;
+          into an 18&times;18 circular clip. The red ring is what survives: a slice of her waist.
+          <br><br>
+          The player&rsquo;s marker also references a <code>clip-path</code> id that is never defined, and never hydrates at all.
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="panel">
+        <div style="position:relative;width:100%;aspect-ratio:260/120">
+          <svg viewBox="0 0 260 120" style="position:absolute;inset:0;width:100%;height:100%;display:block">
+            <rect x="4" y="4" width="120" height="112" fill="#232342" stroke="#3a3a5c" stroke-width="1.5"/>
+            <rect x="132" y="4" width="124" height="54" fill="#232342" stroke="#3a3a5c" stroke-width="1.5"/>
+            <rect x="132" y="62" width="124" height="54" fill="#26264a" stroke="#3a3a5c" stroke-width="1.5"/>
+            <text x="10" y="18" fill="#5a5a7c" font-size="8" font-family="Segoe UI">Living room</text>
+            <text x="138" y="18" fill="#5a5a7c" font-size="8" font-family="Segoe UI">Kitchen</text>
+            <text x="138" y="76" fill="#5a5a7c" font-size="8" font-family="Segoe UI">Hallway</text>
+          </svg>
+          <div class="av" style="position:absolute;left:13.46%;top:45.83%;width:6.92%;aspect-ratio:1;
+               box-shadow:inset 0 0 0 1.5px var(--border-strong)"><img src="av-marisol.webp" alt=""></div>
+          <div class="av" style="position:absolute;left:27.31%;top:57.5%;width:6.92%;aspect-ratio:1;
+               box-shadow:inset 0 0 0 1.5px var(--border-strong)"><img src="av-theo.webp" alt=""></div>
+          <div class="av" style="position:absolute;left:65.77%;top:19.17%;width:6.92%;aspect-ratio:1;
+               box-shadow:inset 0 0 0 1.5px var(--border-strong)"><img src="av-nadia.webp" alt=""></div>
+          <div class="av" style="position:absolute;left:71.92%;top:67.5%;width:6.92%;aspect-ratio:1;
+               box-shadow:inset 0 0 0 2px var(--accent)"><img src="av-sam.webp" alt=""></div>
+        </div>
+      </div>
+      <div class="tiny dim" style="margin-top:6px">
+        The same 18&times;18 markers, filled by the resolver. <code>slice</code> instead of the default <code>meet</code>, so a square avatar fills the circle rather than letterboxing.
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW 2: conversation -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-bottom:20px">
+    <div class="conv-box">
+      <div class="conv-header">
+        <div class="av" style="width:40px;height:40px;background:#8a5a4a"><span class="init" style="font-size:17px">M</span></div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600">Marisol Vance</div>
+          <div class="tiny dim">In conversation</div>
+        </div>
+      </div>
+      <div style="padding:8px 6px 12px">
+        <div class="line"><div class="speaker">Marisol:</div><div class="speech">You left the milk out again.</div></div>
+        <div class="line"><div class="speaker">Theo:</div><div class="speech">That was Nadia, actually.</div></div>
+        <div class="line"><div class="speaker">Nadia:</div><div class="speech">It was absolutely not.</div></div>
+      </div>
+    </div>
+
+    <div class="conv-box">
+      <div class="conv-header">
+        <div class="av" style="width:40px;height:40px"><img src="av-marisol.webp" alt=""></div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600">Marisol Vance</div>
+          <div class="tiny dim">In conversation</div>
+        </div>
+      </div>
+      <div style="padding:8px 6px 12px">
+        <div class="line" style="align-items:center">
+          <div class="av" style="width:24px;height:24px"><img src="av-marisol.webp" alt=""></div>
+          <div class="speech">You left the milk out again.</div>
+        </div>
+        <div class="line" style="align-items:center">
+          <div class="av" style="width:24px;height:24px"><img src="av-theo.webp" alt=""></div>
+          <div class="speech">That was Nadia, actually.</div>
+        </div>
+        <div class="line" style="align-items:center">
+          <div class="av" style="width:24px;height:24px"><img src="av-nadia.webp" alt=""></div>
+          <div class="speech">It was absolutely not.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW 3: lists -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:28px">
+    <div class="panel">
+      <div class="sect-t">Messages</div>
+      <div class="tiny dim" style="margin-bottom:10px">RoomList, applicants, contacts, the phone &mdash; all the same template</div>
+      <div class="row" style="background:var(--surface-alt)">
+        <div class="av" style="width:32px;height:32px;background:#8a5a4a"><span class="init" style="font-size:14px">M</span></div>
+        <div style="flex:1"><div style="font-size:13px;font-weight:600">Marisol Vance</div><div class="tiny dim">are you home?</div></div>
+      </div>
+      <div class="row">
+        <div class="av" style="width:32px;height:32px;background:#4a7a6a"><span class="init" style="font-size:14px">T</span></div>
+        <div style="flex:1"><div style="font-size:13px;font-weight:600">Theo Hargrove</div><div class="tiny dim">got the rent sorted</div></div>
+      </div>
+      <div class="row">
+        <div class="av" style="width:32px;height:32px;background:#6a5a8a"><span class="init" style="font-size:14px">N</span></div>
+        <div style="flex:1"><div style="font-size:13px;font-weight:600">Nadia Ishikawa</div><div class="tiny dim">borrowing your charger</div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="sect-t">Messages</div>
+      <div class="tiny dim" style="margin-bottom:10px">One <code>avatarChip</code>, every surface, initials underneath as the floor</div>
+      <div class="row" style="background:var(--surface-alt)">
+        <div class="av" style="width:32px;height:32px"><img src="av-marisol.webp" alt=""></div>
+        <div style="flex:1"><div style="font-size:13px;font-weight:600">Marisol Vance</div><div class="tiny dim">are you home?</div></div>
+      </div>
+      <div class="row">
+        <div class="av" style="width:32px;height:32px"><img src="av-theo.webp" alt=""></div>
+        <div style="flex:1"><div style="font-size:13px;font-weight:600">Theo Hargrove</div><div class="tiny dim">got the rent sorted</div></div>
+      </div>
+      <div class="row">
+        <div class="av" style="width:32px;height:32px"><img src="av-nadia.webp" alt=""></div>
+        <div style="flex:1"><div style="font-size:13px;font-weight:600">Nadia Ishikawa</div><div class="tiny dim">borrowing your charger</div></div>
+      </div>
+      <div class="row">
+        <div class="av" style="width:32px;height:32px;background:#8a6a4a"><span class="init" style="font-size:14px">BE</span></div>
+        <div style="flex:1"><div style="font-size:13px;font-weight:600">Beatrix Ellery</div>
+          <div class="tiny" style="color:var(--faint)">no art yet &mdash; and this is correct, not a failure</div></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

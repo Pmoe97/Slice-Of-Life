@@ -39,6 +39,13 @@ function defaultComputerState() {
       // same-day generation (same pattern as generateApplicantsForDay).
       gigs: { board: [], accepted: [], reputation: 0, lastRefreshDay: 0 },
       shop: { cart: [], wishlist: [] },
+      // Sprite Studio (avatars-and-sprite-studio Phase 4). Navigation state
+      // only — every asset lives in kv.sprites or the image LRU, never here,
+      // so a save carries which screen you were on and nothing else.
+      sprites: {
+        mode: 'roster', viewingIdentity: null, viewingId: null,
+        filter: 'all', outfit: 'current', editing: null, notice: null,
+      },
       // Home app (decor-economy plan Phase 1): a second cart, same shape as
       // shop's. The app's catalog is DECOR_CATALOG_DEFS (defs.computer.js),
       // so cart entries are { defId, units } in this array exactly like

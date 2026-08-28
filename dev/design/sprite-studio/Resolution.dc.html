@@ -1,0 +1,157 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    :root{
+      --bg:#1a1a2e; --surface:#232342; --surface-alt:#2a2a4a; --border:#3a3a5c;
+      --border-strong:#4a4a7c; --card:#2c2c50; --text:#e0e0f0; --dim:#8888aa; --faint:#5a5a7c;
+      --accent:#7b6cf6; --accent-hover:#9d92f8; --pos:#6cf6a9; --warn:#f6d76c;
+      --neg:#f66c8c; --cool:#6cc7f6;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);
+      font-family:'Segoe UI',system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.45}
+    a{color:#9d92f8}a:hover{color:#7b6cf6}
+    code{font-family:Consolas,'Courier New',monospace;font-size:.92em}
+    .h1{font-size:22px;font-weight:700}
+    .tiny{font-size:11px}.dim{color:var(--dim)}
+    .step{display:grid;grid-template-columns:26px 1fr 152px 1fr;gap:12px;align-items:center;
+      background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
+    .step.own{border-color:rgba(123,108,246,.55);background:rgba(123,108,246,.07)}
+    .step.gen{border-color:rgba(108,199,246,.35)}
+    .step.floor{border-color:rgba(90,90,124,.55);background:rgba(90,90,124,.09)}
+    .n{width:22px;height:22px;border-radius:50%;background:var(--surface-alt);color:var(--dim);
+      display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
+    .step.own .n{background:var(--accent);color:#fff}
+    .lbl{font-size:13px;font-weight:600}
+    .src{font-size:10px;font-family:Consolas,monospace;color:var(--dim);
+      background:var(--surface-alt);border-radius:4px;padding:3px 7px;text-align:center}
+    .arrow{display:flex;justify-content:center;padding:2px 0}
+    .arrow svg{width:14px;height:14px;color:var(--faint)}
+    .store{border-radius:8px;padding:14px;border:1px solid var(--border)}
+    .store-t{font-size:14px;font-weight:700;margin-bottom:2px;display:flex;align-items:center;gap:7px}
+    .store-t code{font-size:12px;font-weight:600}
+    .kv{display:grid;grid-template-columns:104px 1fr;gap:5px 10px;font-size:11px;margin-top:10px}
+    .kv .k{color:var(--faint)}
+    .rule{border-left:3px solid var(--accent);padding:2px 0 2px 13px;font-size:14px;font-style:italic}
+  </style>
+</helmet>
+
+<div style="padding:26px 30px;background:var(--bg);min-height:100%">
+
+  <div class="h1">One resolver, two stores</div>
+  <div class="dim tiny" style="margin-bottom:6px">
+    <code>resolveSprite(identity, kind, variant)</code> is the only thing in the codebase allowed to read a sprite blob.
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 400px;gap:30px;margin-top:18px">
+
+    <!-- the ladder -->
+    <div>
+      <div class="tiny dim" style="text-transform:uppercase;letter-spacing:.06em;font-weight:700;margin-bottom:9px">
+        Resolution order &mdash; fixed, single-file, asserted
+      </div>
+
+      <div class="step own">
+        <div class="n">1</div>
+        <div><div class="lbl">Exact override</div><div class="tiny dim">what this player made, for this exact outfit</div></div>
+        <div class="src">kv.sprites</div>
+        <div class="tiny dim">permanent</div>
+      </div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m6 13 6 6 6-6"/></svg></div>
+
+      <div class="step own">
+        <div class="n">2</div>
+        <div><div class="lbl">Wildcard override</div><div class="tiny dim">&hellip;or for every outfit of this pose and expression</div></div>
+        <div class="src">kv.sprites</div>
+        <div class="tiny dim">permanent</div>
+      </div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m6 13 6 6 6-6"/></svg></div>
+
+      <div class="step gen">
+        <div class="n">3</div>
+        <div><div class="lbl">Session map</div><div class="tiny dim">object URLs already resolved this session</div></div>
+        <div class="src">in memory</div>
+        <div class="tiny dim">no kv touch</div>
+      </div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m6 13 6 6 6-6"/></svg></div>
+
+      <div class="step gen">
+        <div class="n">4</div>
+        <div><div class="lbl">Generated cache</div><div class="tiny dim">the existing 500-entry LRU, keyed with version + style</div></div>
+        <div class="src">kv.images</div>
+        <div class="tiny dim">evictable</div>
+      </div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m6 13 6 6 6-6"/></svg></div>
+
+      <div class="step gen">
+        <div class="n">5</div>
+        <div><div class="lbl">Generate</div><div class="tiny dim">RMBG cutout, then the cleanup pipeline</div></div>
+        <div class="src">generateImage</div>
+        <div class="tiny dim">costs quota</div>
+      </div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m6 13 6 6 6-6"/></svg></div>
+
+      <div class="step floor">
+        <div class="n">6</div>
+        <div><div class="lbl">Initials</div><div class="tiny dim">and this is <b style="color:var(--text)">correct</b>, not a failure</div></div>
+        <div class="src">no image</div>
+        <div class="tiny dim">always works</div>
+      </div>
+
+      <div style="margin-top:16px;display:flex;gap:10px;align-items:flex-start">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="var(--warn)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16.5v.01"/></svg>
+        <div class="tiny dim">
+          Step 3 is why this exists at all. <code>renderFloorPlan</code> runs on every action and loops the whole
+          roster; every cache <i>hit</i> costs a <code>kv.meta</code> read-modify-write. Today that is free because
+          nothing is ever in the cache. The day avatars populate, a 20-person roster costs 20 kv writes per click.
+        </div>
+      </div>
+    </div>
+
+    <!-- the two stores -->
+    <div style="display:flex;flex-direction:column;gap:16px">
+
+      <div class="rule">A cache holds what can be regenerated.<br>A store holds what cannot.</div>
+
+      <div class="store" style="border-color:rgba(108,199,246,.4)">
+        <div class="store-t"><code style="color:var(--cool)">kv.images</code> <span class="tiny dim" style="font-weight:600">&mdash; the existing LRU</span></div>
+        <div class="tiny dim">Machine output. Reproducible from a seed, so eviction is free and invisible.</div>
+        <div class="kv">
+          <div class="k">Holds</div><div>plates, cutouts, portraits, peek, dreams, photos, menu art</div>
+          <div class="k">Cap</div><div>500 entries, evicted oldest-first</div>
+          <div class="k">Key carries</div><div>prompt version, pipeline version, style token</div>
+          <div class="k">On overflow</div><div>silently drops the oldest</div>
+        </div>
+      </div>
+
+      <div class="store" style="border-color:rgba(123,108,246,.55);background:rgba(123,108,246,.06)">
+        <div class="store-t"><code style="color:var(--accent-hover)">kv.sprites</code> <span class="tiny dim" style="font-weight:600">&mdash; new, permanent</span></div>
+        <div class="tiny dim">Human output. Not reproducible from anything. One eviction is one destroyed thing somebody made.</div>
+        <div class="kv">
+          <div class="k">Holds</div><div>uploaded, painted, recropped and pinned art &mdash; nothing else, ever</div>
+          <div class="k">Cap</div><div>240 slots / 48 MB, shown in the app</div>
+          <div class="k">Slot id carries</div><div><b style="color:var(--warn)">no version, no style token</b></div>
+          <div class="k">On overflow</div><div><b style="color:var(--pos)">refuses the save</b> and names what to delete</div>
+          <div class="k">Each record</div><div>working image <i>and</i> untouched master</div>
+        </div>
+      </div>
+
+      <div class="tiny dim" style="line-height:1.55">
+        Version tokens belong in cache keys and never in slot ids. Bumping
+        <code>CUTOUT_PIPELINE_VERSION</code> must repaint every generated sprite and be
+        <b style="color:var(--text)">incapable</b> of orphaning something a player painted.
+      </div>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

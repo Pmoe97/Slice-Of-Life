@@ -12,6 +12,13 @@
 
 const ICONS = {
   // --- App icons (keyed by APP_DEFS id) ---
+  // Sprite Studio (avatars-and-sprite-studio Phase 4): a framed figure — the
+  // artboard the app is about, with a person cut out of it.
+  sprites: () => svgWrap(`
+    <rect x="3" y="3" width="18" height="18" rx="2"/>
+    <circle cx="12" cy="9.5" r="2.6"/>
+    <path d="M7.6 18a4.4 4.4 0 0 1 8.8 0"/>
+  `),
   work: () => svgWrap(`
     <rect x="3" y="8" width="18" height="12" rx="2"/>
     <path d="M8 8V6a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>

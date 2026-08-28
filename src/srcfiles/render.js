@@ -6,6 +6,7 @@
 // --- Main render entry point (idempotent) ---
 function render(gameState, sceneState) {
   if (!gameState) return;
+  refreshFooterRealHeight();
   renderHeader(gameState);
   renderFloorPlan(gameState);
   renderPlayerPanel(gameState);
@@ -27,11 +28,82 @@ function render(gameState, sceneState) {
   // sync for free, rather than every computer action needing to remember
   // a second render call.
   if (gameState.world.computer) renderComputerScreen(gameState);
+  // One pass for every avatar chip on the page that does not have art yet
+  // (avatars-and-sprite-studio Phase 2, D11). One sweep beats a promise per
+  // row, and resolveAvatar's session memo means the second and every later
+  // pass costs no kv at all — which is the whole reason the old per-render
+  // per-NPC cache lookup could be replaced rather than merely trimmed.
+  if (typeof hydrateAvatars === 'function') hydrateAvatars();
+  // The background sprite queue (Phase 3, D14). A render IS the player doing
+  // something, so it pushes the idle deadline out; the pump then declines to
+  // start until the game has been quiet for SPRITE_QUEUE.idleMs and no
+  // foreground generation is in flight.
+  if (typeof noteSpriteActivity === 'function') {
+    noteSpriteActivity();
+    spriteQueuePump(gameState);
+  }
   // BrineOS Phase 3 (plan 3.5): sibling call — the phone FAB renders on
   // every pass, and the overlay when open. Decision E: it's an overlay,
   // not a mode switch, so it must redraw here even while the computer is
   // on (the phone can float over a fullscreen desktop).
   if (gameState.world.phone) renderPhoneScreen(gameState);
+  // Conversation-continuity (2026-08-28): the paused-conversation avatar
+  // bubble renders every pass like the FAB — it lives on the main screen,
+  // so it needs the same keep-in-sync for free. It mutates NO state except
+  // the lazy session invalidation activeConversationSession performs on
+  // stale sessions (a read-time cleanup, the standard lazy pattern).
+  renderConvBubble(gameState);
+}
+
+// Conversation-continuity (2026-08-28): --footer-real-h. The footer's
+// min-height (var(--footer-h)) is only a floor — the expanded HUD / desktop
+// footer is much taller — and every fixed element anchored to the bottom
+// right of the screen (phone FAB, phone device, avatar bubble) must clear
+// the REAL footer or it sits on top of the action chips. Measured once per
+// render pass (cheap: one offsetHeight), written as a :root custom property
+// so the CSS keeps a single anchor point.
+let _lastFooterRealH = -1;
+function refreshFooterRealHeight() {
+  const footer = document.getElementById('footer');
+  const h = footer ? footer.offsetHeight : 0;
+  if (h !== _lastFooterRealH) {
+    _lastFooterRealH = h;
+    document.documentElement.style.setProperty('--footer-real-h', h + 'px');
+  }
+}
+
+// Conversation-continuity (2026-08-28): the avatar bubble — the persistent
+// "we're mid-conversation, tap to resume" chip on the main screen. Visible
+// while a conversation session is alive (we've spoken, neither of us left
+// the room) and no overlay that would swallow the tap is open. Paints the
+// avatar with the same chip machinery as the conversation header, once per
+// NPC (art is a fetch; re-painting every pass would hammer it).
+let _convBubbleNpc = null;
+function renderConvBubble(gs) {
+  const bubble = document.getElementById('conv-bubble');
+  if (!bubble) return;
+  const sess = activeConversationSession(gs);
+  const convOpen = document.getElementById('conversation-overlay')?.hasAttribute('data-open');
+  const phoneOpen = document.getElementById('phone-screen')?.hasAttribute('data-open');
+  const show = !!sess && !convOpen && !phoneOpen;
+  bubble.hidden = !show;
+  if (!show) return;
+  bubble.setAttribute('data-action', 'talk');
+  bubble.setAttribute('data-npc', sess.npcId);
+  if (_convBubbleNpc === sess.npcId) return;
+  _convBubbleNpc = sess.npcId;
+  const npc = gs.npcs[sess.npcId];
+  const name = npc?.bible?.name || sess.npcId;
+  const avatar = document.getElementById('conv-bubble-avatar');
+  if (avatar) {
+    avatar.classList.add('avatar-chip');
+    avatar.style.background = hashToColor(name);
+    avatar.removeAttribute('data-has-art');
+    avatar.innerHTML = `<span class="avatar-chip-initials">${avatarEscape(avatarInitials(name))}</span>`;
+    mountAvatar(avatar, npc);
+  }
+  const label = document.getElementById('conv-bubble-label');
+  if (label) label.textContent = name;
 }
 
 // --- Header ---
@@ -226,10 +298,18 @@ function renderFloorPlanStatic(gs, container) {
        + '<rect width="14" height="14" fill="rgba(224,160,64,0.18)"/>'
        + '<line x1="0" y1="0" x2="0" y2="14" stroke="rgba(224,160,64,0.5)" stroke-width="5"/></pattern>';
 
-  // One clip per NPC avatar — every NPC, not just the ones present this tick,
+  // One clip per avatar — every NPC, not just the ones present this tick,
   // because the live layer owns who is visible and the markers must exist
   // for it to show them at all.
-  for (const id of Object.keys(gs.npcs || {})) {
+  //
+  // BLOCKER FIX (avatars-and-sprite-studio Phase 2, Evidence 2): this loop
+  // covered `gs.npcs` only, while avatarMarkerHtml('player', ...) has always
+  // emitted `clip-path="url(#fp-clip-player)"` — an id that was never
+  // defined. Per CSS Masking an invalid clip-path reference applies NO
+  // clipping at all, so the player's art would have rendered as an unclipped
+  // rectangle straddling the ring. Invisible until now only because the
+  // player never hydrated either (the second half of the same bug).
+  for (const id of [...Object.keys(gs.npcs || {}), 'player']) {
     svg += `<clipPath id="fp-clip-${id}"><circle cx="0" cy="0" r="9"/></clipPath>`;
   }
   svg += '</defs>';
@@ -701,7 +781,7 @@ function renderAutoFurniture(gs, roomId) {
 // marker's caption is the Phase 5 clothing line instead (what you have on is
 // the one thing you always know about yourself).
 function avatarMarkerHtml(id, isPlayer, npc, plausible) {
-  const label = isPlayer ? 'You' : initialsFor(npc);
+  const label = isPlayer ? 'You' : avatarInitials(npc?.bible?.name);
   let cls = 'fp-avatar';
   if (isPlayer) cls += ' is-player';
   if (plausible) cls += ` plausible-${plausible.tier}`;
@@ -714,7 +794,10 @@ function avatarMarkerHtml(id, isPlayer, npc, plausible) {
   }
   return `<g class="${cls}" data-avatar-id="${id}" transform="translate(0,0)">`
     + `<circle class="fp-avatar-bg" cx="0" cy="0" r="9"/>`
-    + `<image class="fp-avatar-img" data-avatar-for="${id}" x="-9" y="-9" width="18" height="18" clip-path="url(#fp-clip-${id})" href="" hidden="hidden"/>`
+    // preserveAspectRatio="slice", not the default "meet": a square 256x256
+    // avatar must FILL the 18x18 box and be cropped by the ring, never
+    // letterboxed inside it with transparent gutters either side.
+    + `<image class="fp-avatar-img" data-avatar-for="${id}" x="-9" y="-9" width="18" height="18" preserveAspectRatio="xMidYMid slice" clip-path="url(#fp-clip-${id})" href="" hidden="hidden"/>`
     + `<text class="fp-avatar-initials" data-initials-for="${id}" x="0" y="3">${escapeHtml(label)}</text>`
     + `<circle class="fp-avatar-ring" cx="0" cy="0" r="9"/>`
     + caption
@@ -806,35 +889,52 @@ function renderFloorPlanLive(gs) {
   }
 }
 
-function initialsFor(npc) {
-  const name = npc?.bible?.name || '';
-  if (!name) return '?';
-  return name.split(/\s+/).slice(0, 2).map(p => p[0]).join('').toUpperCase();
-}
+// initialsFor is gone — avatar.js's `avatarInitials(name)` is the one
+// implementation now (D11). A second copy of a component's logic is a second
+// copy to drift, which is the whole reason this plan exists.
 
-// Fill in avatar art from the image cache ONLY — never by generating.
+// Fill in avatar art from cache ONLY — never by generating.
 // A floor plan redraws on essentially every interaction, and kicking off a
-// portrait generation from a render pass would spend real quota every time
-// somebody walked into a room. Portraits reach the cache through the surfaces
-// that legitimately generate them (the character studio, NPC portraits); this
-// picks them up for free once they exist and shows initials until then.
-// Phase 4: iterates every NPC (not just the present ones) because the live
-// layer keeps markers for the whole cast on the plan.
+// generation from a render pass would spend real quota every time somebody
+// walked into a room. Art reaches the cache through the surfaces that
+// legitimately make it (the Sprite Studio, Phase 3's queue); this picks it up
+// for free once it exists and shows initials until then (D10).
+//
+// REBUILT in avatars-and-sprite-studio Phase 2. It previously carried three
+// defects, all silent, all guaranteed to surface the day avatars populate:
+//
+//   1. It pulled `composeCharKey(npc,'neutral','standing')` — the `char_`
+//      PORTRAIT key, a 512x768 FULL-BODY character sheet — into an 18x18
+//      circular clip. With SVG's default `xMidYMid meet` that letterboxes to
+//      12x18 and the circle cuts the middle band, i.e. a slice of the
+//      subject's waist. There is no crop of a full-body sheet that is a good
+//      18px token, which is what D8/D9's headshot exists to fix.
+//   2. It looped `gs.npcs` only, so the PLAYER never hydrated at all and
+//      showed "You" forever.
+//   3. It called getCachedImage per NPC per render, and every cache HIT does
+//      a read-modify-write on the shared kv.meta record. Free today because
+//      nothing is ever in the cache; the day avatars populate, a 20-person
+//      roster costs 20 kv writes per click. resolveAvatar's session memo is
+//      what makes that structurally impossible — asserted, not assumed, in
+//      verify-sprite-p1.js.
 async function hydrateFloorPlanAvatars(gs) {
-  if (typeof getCachedImage !== 'function') return;
-  for (const [id, npc] of Object.entries(gs.npcs || {})) {
-    if (!npc?.bible?.genSeed) continue;
-    const key = composeCharKey(npc, 'neutral', 'standing');
+  if (typeof resolveAvatar !== 'function') return;
+  const subjects = Object.entries(gs.npcs || {})
+    .map(([id, npc]) => ({ id, who: npc, isPlayer: false }));
+  subjects.push({ id: 'player', who: gs.player, isPlayer: true });
+
+  for (const { id, who, isPlayer } of subjects) {
+    const identity = avatarIdentityFor(who, isPlayer);
+    if (!identity) continue;
     try {
-      const blob = await getCachedImage(key);
-      if (!blob) continue;
-      const url = createObjectUrl(key, blob);
+      const res = await resolveAvatar(identity, { who, isPlayer, generate: false });
+      if (!res || !res.url) continue;
       for (const img of document.querySelectorAll(`[data-avatar-for="${id}"]`)) {
-        img.setAttribute('href', url);
+        img.setAttribute('href', res.url);
         img.removeAttribute('hidden');
       }
       for (const t of document.querySelectorAll(`[data-initials-for="${id}"]`)) t.setAttribute('hidden', 'hidden');
-    } catch (e) { /* cache miss is the normal case, not an error */ }
+    } catch (e) { /* no art yet is the normal case, not an error */ }
   }
 }
 
@@ -1065,19 +1165,27 @@ function renderSceneCutouts(gs, ctx) {
   if (!host) return;
   const overlay = ctx.overlay || [];
 
+  // Layers are keyed by SLOT ID, not by the generated cache key
+  // (avatars-and-sprite-studio Phase 3). A slot id is what a character's
+  // sprite IS — identity, pose, expression, outfit — independent of whether
+  // the pixels came from an override, the cache or a fresh generation. Keying
+  // on the cache key meant a player painting a sprite produced a different
+  // key for the same character, so the diff removed their layer and built a
+  // new one: a flash, a restarted transition, and a re-request.
   const desired = new Map();
   for (const p of overlay) {
     const who = p.isPlayer ? gs.player : gs.npcs[p.charId];
     if (!who) continue;
     const identity = cutoutIdentityToken(who, p.isPlayer);
-    desired.set(cutoutKey(identity, p.pose, p.expression, cutoutOutfitToken(who), imageStyleToken()), { placement: p, who });
+    const variant = cutoutVariant(p.pose, p.expression, cutoutOutfitToken(who));
+    desired.set(spriteSlotId(identity, 'cutout', variant), { placement: p, who, identity, variant });
   }
 
   for (const layer of [...host.children]) {
     if (!desired.has(layer.getAttribute('data-cutout-key'))) layer.remove();
   }
 
-  for (const [key, { placement, who }] of desired) {
+  for (const [key, { placement, who, identity, variant }] of desired) {
     let layer = host.querySelector(`[data-cutout-key="${CSS.escape(key)}"]`);
     if (!layer) {
       layer = document.createElement('img');
@@ -1085,9 +1193,14 @@ function renderSceneCutouts(gs, ctx) {
       layer.alt = '';
       layer.setAttribute('data-cutout-key', key);
       host.appendChild(layer);
-      const fetch = placement.isPlayer
-        ? getPlayerCutout(who, placement.pose, placement.expression)
-        : getCharacterCutout(who, placement.pose, placement.expression);
+      // Through the resolver, so a sprite the player painted is what stands
+      // in the room — the entire point of the override store. `generate: true`
+      // is correct here and only here on the render path: a character the
+      // player is LOOKING AT is the one case where making the art now is what
+      // they want, and it is what "lazy generation on first appearance" means.
+      const fetch = resolveSprite(identity, 'cutout', variant, {
+        who, isPlayer: placement.isPlayer, generate: true,
+      });
       fetch.then(result => {
         if (!layer.isConnected) return; // scene moved on before this resolved
         if (!result.url) { layer.classList.add('cutout-missing'); return; }
@@ -1097,6 +1210,10 @@ function renderSceneCutouts(gs, ctx) {
         });
       });
     }
+    // D15: the depth class rides the diff, so a promote/demote rescales an
+    // EXISTING layer (and animates the change through the .scene-cutout
+    // transition) rather than dropping it and re-requesting the art.
+    layer.classList.toggle('is-ambient', !!placement.ambient);
     placeSceneCutout(host, layer, placement);
   }
 }
@@ -1126,7 +1243,10 @@ window.addEventListener('resize', () => {
   for (const p of ctx.overlay || []) {
     const who = p.isPlayer ? currentGameState.player : currentGameState.npcs[p.charId];
     if (!who) continue;
-    const key = cutoutKey(cutoutIdentityToken(who, p.isPlayer), p.pose, p.expression, cutoutOutfitToken(who), imageStyleToken());
+    const key = spriteSlotId(
+      cutoutIdentityToken(who, p.isPlayer), 'cutout',
+      cutoutVariant(p.pose, p.expression, cutoutOutfitToken(who)),
+    );
     const layer = host.querySelector(`[data-cutout-key="${CSS.escape(key)}"]`);
     if (layer) placeSceneCutout(host, layer, p);
   }
@@ -4154,6 +4274,34 @@ function sentence(text) {
   return /[.!?]$/.test(capped) ? capped : capped + '.';
 }
 
+// Put a small avatar in front of a dialogue line's speaker name.
+//
+// A log entry records who spoke as a display NAME (the LLM proposal names
+// people, it does not carry ids), so this resolves back through the live
+// cast. A name that matches nobody — a stranger, a renamed character, the
+// player under a nickname — simply gets no chip: the line keeps its
+// accent-coloured name and reads as it always did. That is the D10 floor
+// again, one level down.
+function mountSpeakerChip(el, speakerName) {
+  if (!speakerName || typeof avatarChip !== 'function' || !currentGameState) return;
+  const name = String(speakerName).trim().toLowerCase();
+  let who = null, isPlayer = false;
+  if (currentGameState.player && String(currentGameState.player.name || '').trim().toLowerCase() === name) {
+    who = currentGameState.player; isPlayer = true;
+  } else {
+    for (const npc of Object.values(currentGameState.npcs || {})) {
+      if (String(npc?.bible?.name || '').trim().toLowerCase() === name) { who = npc; break; }
+    }
+  }
+  if (!who) return;
+  const chip = avatarChip(who, {
+    size: 'chip', isPlayer, className: 'log-speaker-chip',
+    ring: isPlayer ? 'player' : 'default',
+    title: speakerName,
+  });
+  el.insertBefore(chip, el.firstChild);
+}
+
 // One log entry -> one node. Extracted from the old renderNarrationLog so the
 // beats list and any future consumer share exactly one idea of how an entry
 // looks; the type-specific branches below are unchanged from that function.
@@ -4165,12 +4313,18 @@ function buildLogEntryNode(tpl, entry) {
   if (entry.type === 'dialogue') {
     el.querySelector('.speaker').textContent = `${entry.speaker}: `;
     el.querySelector('.speech').textContent = `"${entry.text}"`;
+    // A speaker chip in front of the name (avatars-and-sprite-studio Phase 2).
+    // The scene reader is the one surface where several people talk in the
+    // same block, so a face is doing real disambiguation work here rather
+    // than decoration. A log entry carries a NAME, not an id — no match
+    // means no chip, and the line reads exactly as it always has.
+    mountSpeakerChip(el, entry.speaker);
   } else if (entry.type === 'narration') {
     el.querySelector('.speaker').textContent = '';
     el.querySelector('.speech').textContent = entry.text;
   } else if (entry.type === 'action') {
     el.querySelector('.speaker').textContent = '';
-    el.querySelector('.speech').textContent = entry.text;
+    el.querySelector('.speech').textContent = cleanActionText(entry.text);
     el.classList.add('log-action');
   } else if (entry.type === 'internal') {
     el.querySelector('.speaker').textContent = '';

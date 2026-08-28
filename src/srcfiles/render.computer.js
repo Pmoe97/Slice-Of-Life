@@ -253,7 +253,7 @@ function renderApplicantProfile(body, gs, app, screen) {
   const genderLabel = (b.gender || '').replace('_', ' ');
   profile.innerHTML = `
     <div class="rl-profile-header">
-      <div class="rl-card-avatar rl-profile-avatar" style="background: ${hashToColor(b.name)};">${b.name.charAt(0)}</div>
+      ${avatarChipHtml({ bible: b }, { className: 'rl-card-avatar rl-profile-avatar', size: 'hero', name: b.name })}
       <div>
         <div class="rl-profile-name">${b.name}</div>
         <div class="dim tiny">${b.age} · ${genderLabel} · ${b.occupation.title} — ${b.occupation.hours}</div>
@@ -2159,7 +2159,7 @@ function renderRoomListApplicants(body, gs, app, screen) {
     card.setAttribute('data-action', 'classifieds.view-applicant');
     card.setAttribute('data-row-id', npcId);
     card.innerHTML = `
-      <div class="rl-card-avatar" style="background: ${hashToColor(npc.bible.name)};">${npc.bible.name.charAt(0)}</div>
+      ${avatarChipHtml(npc, { className: 'rl-card-avatar', size: 'card' })}
       <div class="rl-card-name">${npc.bible.name}${isFav ? ' <span class="rl-card-star">★</span>' : ''}</div>
       <div class="dim tiny">${npc.bible.occupation.title}</div>
       <div class="dim tiny" style="margin-top:2px;">${npc.bible.age} · ${(npc.bible.gender || '').replace('_', ' ')} · ${npc.bible.occupation.incomeBand} income</div>
@@ -2206,7 +2206,7 @@ function renderRoomListOffers(body, gs, app, screen) {
     const card = document.createElement('div');
     card.className = 'rl-card';
     card.innerHTML = `
-      <div class="rl-card-avatar" style="background: ${hashToColor(b.name)};">${b.name.charAt(0)}</div>
+      ${avatarChipHtml({ bible: b }, { className: 'rl-card-avatar', size: 'card', name: b.name })}
       <div class="rl-card-name">${b.name}</div>
       <div class="dim tiny">${b.occupation.title || ''}${advocate !== 'You' ? ` · advocated by ${advocate}` : ''}</div>
       <div class="dim tiny" style="margin-top:2px;">${b.age || ''} · you're ${phase} with them</div>
@@ -2399,7 +2399,7 @@ function renderRoomListBrowse(body, gs, app, screen) {
     const isFav = stub.fullNpcId && (classifieds.favorites || []).includes(stub.fullNpcId);
     const star = isFav ? ' <span class="rl-card-star">★</span>' : '';
     card.innerHTML = `
-      <div class="rl-card-avatar" style="background: ${hashToColor(stub.name)};">${stub.name.charAt(0)}</div>
+      ${avatarChipHtml(null, { className: 'rl-card-avatar', size: 'card', name: stub.name })}
       <div class="rl-card-name">${fullName(stub)}${statusBadge}${star}</div>
       <div class="dim tiny">${stub.age} · ${genderLabel} · ${stub.occupation.title}</div>
       <div class="dim tiny" style="margin-top:2px;">${stub.coreTrait} · ${stub.occupation.incomeBand} income</div>
@@ -2447,12 +2447,15 @@ function renderRoomListQueue(body, gs, app, screen) {
       row.style.cursor = 'pointer';
     }
     const avatar = document.createElement('div');
-    avatar.className = 'rl-card-avatar rl-queue-avatar';
+    avatar.className = 'avatar-chip rl-card-avatar rl-queue-avatar';
     avatar.style.background = hashToColor(entry.name || '?');
     avatar.style.width = '36px';
     avatar.style.height = '36px';
     avatar.style.fontSize = 'var(--fs-sm)';
-    avatar.textContent = (entry.name || '?').charAt(0);
+    // A queue entry is a fetch-in-flight, not a live NPC — there is no
+    // identity to resolve art against until it lands, so this is the one
+    // person-chip that is initials by construction rather than by absence.
+    avatar.innerHTML = `<span class="avatar-chip-initials">${avatarEscape(avatarInitials(entry.name || '?'))}</span>`;
 
     const info = document.createElement('div');
     info.className = 'rl-queue-info';
@@ -3010,7 +3013,7 @@ function renderStudioListMode(body, gs, studio) {
       row.className = 'rl-studio-charrow';
       const statusLabel = (n.residency?.status || '').replace(/_/g, ' ');
       row.innerHTML = `
-        <div class="rl-card-avatar rl-studio-char-avatar" style="background: ${hashToColor(b.name || npcId)};">${(b.name || '?').charAt(0)}</div>
+        ${avatarChipHtml(n, { className: 'rl-card-avatar rl-studio-char-avatar', size: 'card', name: b.name || npcId })}
         <div class="rl-studio-char-info">
           <div class="rl-studio-char-name">${b.name || 'Unnamed'}</div>
           <div class="dim tiny">${b.age ?? '—'} · ${b.gender || '—'} · ${b.occupation?.title || '—'} · ${statusLabel}</div>
@@ -3039,7 +3042,7 @@ function renderStudioProfileMode(body, gs, studio, npc) {
   const statusLabel = (npc.residency?.status || '').replace(/_/g, ' ');
   header.innerHTML = `
     <div class="rl-profile-header">
-      <div class="rl-card-avatar rl-profile-avatar" style="background: ${hashToColor(b.name)};">${(b.name || '?').charAt(0)}</div>
+      ${avatarChipHtml(npc, { className: 'rl-card-avatar rl-profile-avatar', size: 'hero', name: b.name })}
       <div>
         <div class="rl-profile-name">${fullName(b) || 'Unnamed'}</div>
         <div class="dim tiny">${b.age ?? '—'} · ${b.gender || '—'} · ${b.occupation?.title || '—'}</div>
@@ -3533,7 +3536,7 @@ function renderStudioGalleryTab(content, gs, studio, npc) {
     tile.className = 'rl-studio-gallery-tile';
     tile.innerHTML = `
       <div class="rl-studio-gallery-canvas">
-        <div class="rl-studio-gallery-letter">${(npc.bible?.name || '?').charAt(0)}</div>
+        ${avatarChipHtml(npc, { className: 'rl-studio-gallery-letter', size: 'hero', ring: 'none' })}
         <div class="rl-studio-gallery-loader">…</div>
       </div>
       <div class="dim tiny">${shot.label}</div>`;
@@ -3757,44 +3760,61 @@ function renderMessages(body, gs, app, screen) {
     || gs.npcs[id].contactKnown === true
   );
 
+  // Bug report (2026-08-26): the phone's Messages layout permanently split
+  // the narrow phone screen between a fixed sidebar and the thread — the
+  // @container rule that stacks them on a narrow COMPUTER window never
+  // applies here (it targets .win-body's own container, and #phone-content
+  // isn't one), so the phone always fell through to the base two-column
+  // rule and lost roughly half its width to the contact list even with a
+  // thread open. On the phone, show exactly one pane at a time — the list,
+  // or the open thread with a way back — like a real phone Messages app;
+  // the computer window keeps both panes side by side, unchanged.
+  const device = body.closest('[data-device]')?.getAttribute('data-device') || 'computer';
+  const npc = gs.npcs[im.viewingNpcId];
+  const view = device === 'phone' ? (npc ? 'thread' : 'list') : 'both';
+
   const layout = document.createElement('div');
   layout.className = 'im-layout';
+  layout.setAttribute('data-view', view);
 
-  const sidebar = document.createElement('div');
-  sidebar.className = 'im-sidebar';
-  if (contactIds.length === 0) sidebar.innerHTML = '<p class="dim tiny">No one to text yet.</p>';
-  for (const npcId of contactIds) {
-    const npc = gs.npcs[npcId];
-    const thread = im.threads[npcId];
-    const unread = thread?.unread || 0;
-    const lastMsg = thread?.msgs?.[thread.msgs.length - 1];
-    const row = document.createElement('div');
-    row.className = 'im-thread-row' + (im.viewingNpcId === npcId ? ' active' : '');
-    row.setAttribute('data-action', 'im.open-thread');
-    row.setAttribute('data-row-id', npcId);
-    row.innerHTML = `
-      <div class="im-avatar" style="background: ${hashToColor(npc.bible?.name || npcId)};">${(npc.bible?.name || '?').charAt(0)}</div>
-      <div class="im-thread-info">
-        <div class="im-thread-name">${npc.bible?.name || 'Unknown'}${npc.residency?.status === 'prospective' ? ' <span class="im-thread-tag">applicant</span>' : ''}</div>
-        <div class="im-thread-preview dim tiny">${lastMsg ? truncateText(lastMsg.text, 34) : 'Say hi'}</div>
-      </div>
-      ${unread ? `<div class="im-unread-badge">${unread}</div>` : ''}
-    `;
-    sidebar.appendChild(row);
+  if (view !== 'thread') {
+    const sidebar = document.createElement('div');
+    sidebar.className = 'im-sidebar';
+    if (contactIds.length === 0) sidebar.innerHTML = '<p class="dim tiny">No one to text yet.</p>';
+    for (const npcId of contactIds) {
+      const contactNpc = gs.npcs[npcId];
+      const thread = im.threads[npcId];
+      const unread = thread?.unread || 0;
+      const lastMsg = thread?.msgs?.[thread.msgs.length - 1];
+      const row = document.createElement('div');
+      row.className = 'im-thread-row' + (im.viewingNpcId === npcId ? ' active' : '');
+      row.setAttribute('data-action', 'im.open-thread');
+      row.setAttribute('data-row-id', npcId);
+      row.innerHTML = `
+        ${avatarChipHtml(contactNpc, { className: 'im-avatar', size: 'header', name: contactNpc.bible?.name || npcId })}
+        <div class="im-thread-info">
+          <div class="im-thread-name">${contactNpc.bible?.name || 'Unknown'}${contactNpc.residency?.status === 'prospective' ? ' <span class="im-thread-tag">applicant</span>' : ''}</div>
+          <div class="im-thread-preview dim tiny">${lastMsg ? truncateText(lastMsg.text, 34) : 'Say hi'}</div>
+        </div>
+        ${unread ? `<div class="im-unread-badge">${unread}</div>` : ''}
+      `;
+      sidebar.appendChild(row);
+    }
+    layout.appendChild(sidebar);
   }
-  layout.appendChild(sidebar);
 
-  const pane = document.createElement('div');
-  pane.className = 'im-pane';
-  const npc = gs.npcs[im.viewingNpcId];
-  if (!npc) {
-    pane.innerHTML = '<p class="dim">Select a conversation.</p>';
-  } else {
-    const thread = im.threads[im.viewingNpcId] || { msgs: [] };
+  if (view !== 'list') {
+    const pane = document.createElement('div');
+    pane.className = 'im-pane';
+    if (!npc) {
+      pane.innerHTML = '<p class="dim">Select a conversation.</p>';
+    } else {
+      const thread = im.threads[im.viewingNpcId] || { msgs: [] };
     const header = document.createElement('div');
     header.className = 'im-chat-header';
     header.innerHTML = `
-      <div class="im-avatar" style="background: ${hashToColor(npc.bible?.name || im.viewingNpcId)};">${(npc.bible?.name || '?').charAt(0)}</div>
+      ${device === 'phone' ? '<button class="btn tiny im-back-btn" data-action="im.close-thread" aria-label="Back to contacts">‹</button>' : ''}
+      ${avatarChipHtml(npc, { className: 'im-avatar', size: 'header', name: npc.bible?.name || im.viewingNpcId })}
       <div class="im-chat-name">${npc.bible?.name || 'Unknown'}</div>
     `;
     // Invitations (external-world plan Phase 2): inviting someone over is a
@@ -3860,6 +3880,19 @@ function renderMessages(body, gs, app, screen) {
       }
       log.appendChild(bubble);
     }
+    // Bug report (2026-08-26): the "is typing…" dots are derived from
+    // UI.COMPUTER's IM_PENDING_REPLY set (same cross-file guard pattern as
+    // homePlacementUI below) rather than injected imperatively — that's
+    // what lets them survive a rebuild. Switching to another contact and
+    // back while a reply is still in flight re-renders this thread from
+    // the set, so the indicator reappears exactly as it would have if the
+    // DOM had never been torn down.
+    if (typeof IM_PENDING_REPLY !== 'undefined' && IM_PENDING_REPLY.has(im.viewingNpcId)) {
+      const indicator = document.createElement('div');
+      indicator.className = 'im-typing';
+      indicator.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+      log.appendChild(indicator);
+    }
     pane.appendChild(log);
 
     const inputRow = document.createElement('div');
@@ -3872,11 +3905,10 @@ function renderMessages(body, gs, app, screen) {
     // Enter sends (Shift+Enter inserts a newline-free newline — there's
     // no newline in a single-line input, so Enter is always send). The
     // guard inside doImSend handles the case where the user mashes Enter
-    // while a previous send is still in flight. The device is resolved
-    // from the pane this renderer filled so a phone-sent message is
-    // scoped to the phone's input (2026-08-17 audit U2) — this handler
-    // bypasses the data-action dispatcher, which would have set it.
-    const device = body.closest('[data-device]')?.getAttribute('data-device') || 'computer';
+    // while a previous send is still in flight. `device` (resolved above,
+    // once per render) scopes a phone-sent message to the phone's input
+    // (2026-08-17 audit U2) — this handler bypasses the data-action
+    // dispatcher, which would have set it.
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -3895,8 +3927,9 @@ function renderMessages(body, gs, app, screen) {
     // Auto-scroll to the bottom of the message log after render so the
     // newest messages are visible without manual scrolling.
     requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
+    }
+    layout.appendChild(pane);
   }
-  layout.appendChild(pane);
   body.appendChild(layout);
 }
 
@@ -3905,14 +3938,9 @@ function truncateText(str, n) {
 }
 
 // --- Helper: deterministic color from a string hash, for thumbnails ---
-function hashToColor(str) {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
-  }
-  const hue = Math.abs(hash) % 360;
-  return `hsl(${hue}, 45%, 35%)`;
-}
+// hashToColor moved to src/srcfiles/avatar.js (avatars-and-sprite-studio
+// Phase 2, D11): it is used by both files and belongs with the component it
+// colours. Still called from here unchanged — avatar.js loads first.
 
 // Phase 5: build an itemised usage breakdown for a metered bill. Returns
 // an HTML string of meter line-items ("Showers 5 · Heat 30d · Computer 12h")

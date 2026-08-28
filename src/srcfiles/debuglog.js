@@ -129,6 +129,16 @@ function formatDebugLogEntryText(entry, gameState) {
       break;
     }
     case 'conversation': {
+      // Bug report (2026-08-27) — the export gap: applyProposal used to
+      // mirror only the player line and dialogue into the debug log, so an
+      // exported conversation slice read like the NPC had replied to
+      // nothing — all the narration/action/internal beats were missing. They
+      // now arrive tagged with a `type`; render them the way the chat pane
+      // does so an exported slice reads like the conversation actually read.
+      const t = d.type;
+      if (t === 'narration') { lines.push(`  [${d.channel || 'scene'}] (narration) ${d.text}`); break; }
+      if (t === 'action') { lines.push(`  [${d.channel || 'scene'}] *${String(d.text).trim().replace(/^\*+|\*+$/g, '').trim()}*`); break; }
+      if (t === 'internal') { lines.push(`  [${d.channel || 'scene'}] (${who || 'They'} thinks: ${d.text})`); break; }
       const speakerName = d.speaker === 'player' ? 'You' : (npcs[d.speaker]?.bible?.name || d.speaker);
       lines.push(`  [${d.channel || 'scene'}] ${speakerName}: "${d.text}"`);
       break;

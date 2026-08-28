@@ -231,7 +231,12 @@ const ACTION_DEFS = {
     afterClothing: 'towel',
     emitsSignal: { signal: 'running_water', intensity: SIGNALS_EMIT.shower },
     timeCost: { base: 15 },
-    effects: [`ADJUST_NEED player hygiene +${NEEDS.hygiene.washRestore}`],
+    effects: [
+      `ADJUST_NEED player hygiene +${NEEDS.hygiene.washRestore}`,
+      // Bug report (2026-08-26): showering leaves you feeling more
+      // energized, not less — a small restore, same idea as Relax/Nap.
+      `ADJUST_NEED player energy +${ACTION_TUNING.showerEnergyGain}`,
+    ],
     meters: [['showers', 1], ['waterHeating', 1]],
     narration: { mode: 'template', templates: ['You take a shower. Refreshed.'] },
     // Action outcome window Phase 1 (D3/D5): the ARCHETYPE half of the image
@@ -775,6 +780,19 @@ const ACTION_DEFS = {
     source: { kind: 'room', roomIds: ['pool_room'] },
     group: 'pool_room', chipPriority: 35,
     requires: ['facilityFunctional:pool_systems'],
+    // Bug report (2026-08-27): swimming is a naked-in-water act like the
+    // shower — it previously declared NO clothing state, so the player
+    // "swam" in whatever they were wearing (the outcome-window image
+    // rendered the full outfit: hoodie and shorts in the pool). 'undressed'
+    // is live for the swim's ticks (the peep system and the scene's
+    // perception layer read it), then 'towel' is left behind and reverted
+    // to 'dressed' by TRANSIENT_CLOTHING on the next decayPlayerNeeds span
+    // — the same arc as self.shower. The archetype window names 'undressed'
+    // itself (see the shower's comment: the window describes the act, not
+    // the outcome state).
+    vulnerableState: 'swimming',
+    transientClothing: 'undressed',
+    afterClothing: 'towel',
     timeCost: { base: 30 },
     skill: { id: 'fitness', xp: 10 },
     effects: [
@@ -796,7 +814,7 @@ const ACTION_DEFS = {
     narration: { mode: 'template', templates: ['You swim until your arms ache. The water is the quietest place in the apartment.'] },
     outcomeWindow: {
       tier: 'C', trigger: 'player', dismissal: 'tap',
-      image: { kind: 'archetype', variant: 'swim', phrase: 'swimming laps in the pool, gliding through the water' },
+      image: { kind: 'archetype', variant: 'swim', clothing: 'undressed', phrase: 'swimming laps in the pool, gliding through the water' },
     },
   },
   'self.play_games': {
@@ -1977,6 +1995,12 @@ function buildEatEffects(ctx, prepared) {
   if (affection > 0) {
     const bonus = Math.round(affection * MOOD_TARGET.social.activityScale * 100) / 100;
     if (bonus > 0) lines.push(`ADJUST_NEED player mood +${bonus}`);
+  }
+  // Bug report (2026-08-26): eating should perk you up a little, not just
+  // fill you up — a small flat restore (well under a Relax/Nap), skipped
+  // when the raw-food penalty above already dinged energy for the bite.
+  if (!(!option.stack?.meta?.plate && option.def?.rawDangerous)) {
+    lines.push(`ADJUST_NEED player energy +${ACTION_TUNING.eatEnergyGain}`);
   }
   return lines;
 }

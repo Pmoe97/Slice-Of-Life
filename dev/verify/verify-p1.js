@@ -94,7 +94,7 @@ api(script).then(recent => {
   check('every entry tagged channel=scene', recent.every(e => e.channel === 'scene'));
 
   // -------------------------------------------------------------
-  console.log('\nD5 — buffer depth 40, prompt slice 16');
+  console.log('\nD5 — buffer depth 40, prompt slice 24');
   // -------------------------------------------------------------
   ctx.__t.deep = freshNpc('n1');
   api(`
@@ -106,7 +106,7 @@ api(script).then(recent => {
   check('buffer caps at MEMORY_BUDGET.maxRecent (40)', deepLen === 40, `got ${deepLen}`);
   check('cap keeps the NEWEST, drops the oldest', api(`__t.deep.memory.recent[39].text`) === 'line 59');
   const sliceLen = api(`getRecentExchanges(__t.deep, undefined, 'scene').split(' | ').length`);
-  check('prompt slice returns 16 entries by default', sliceLen === 16, `got ${sliceLen}`);
+  check('prompt slice returns 24 entries by default', sliceLen === 16, `got ${sliceLen}`);
 
   // -------------------------------------------------------------
   console.log('\nD6 — scene and IM transcripts do not interleave');

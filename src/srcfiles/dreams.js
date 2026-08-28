@@ -1397,7 +1397,8 @@ function parseDreamweaverReply(text, dream) {
   // JSON.parse can still carry every panel intact, and the grammar here is
   // flat enough to read directly. Positional only: a sweep has no reliable
   // pairing between a beat and the text that followed it.
-  if (typeof text !== 'string' || !text.trim()) return null;
+  if (typeof text !== 'string') text = x5CoerceString ? x5CoerceString(text) : String(text); // boxed String — see x5ParseJsonObject
+  if (!text.trim()) return null;
   const re = /"text"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
   const found = [];
   let m;
