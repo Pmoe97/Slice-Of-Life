@@ -800,6 +800,20 @@ body {
 /* People. A circle carrying a portrait when one is cached, initials when
    not — the map never generates art (see hydrateFloorPlanAvatars). */
 .fp-people { pointer-events: none; }
+/* npc-avatar-liveliness Phase 2b (D20): the avatar layer is click-through
+   by design — a click must fall through to the room rect underneath. Only
+   NPC markers get pointer-events back (the .is-clickable class, set in
+   avatarMarkerHtml for non-player markers); the player's own marker and the
+   captions stay inert, so clicking an avatar walks the player TO that
+   person and clicking anywhere else on a room still moves there. */
+.fp-people [data-avatar-id].is-clickable { pointer-events: all; cursor: pointer; }
+.fp-people [data-avatar-id].is-clickable:hover .fp-avatar-ring {
+  stroke: var(--color-accent);
+  stroke-width: 2;
+}
+.fp-people [data-avatar-id].is-clickable:hover .fp-avatar-bg {
+  fill: var(--color-accent-dim);
+}
 .fp-avatar-bg { fill: var(--color-surface-alt); }
 .fp-avatar-ring { fill: none; stroke: var(--color-border-strong); stroke-width: 1.5; }
 .fp-avatar.is-player .fp-avatar-ring { stroke: var(--color-accent); stroke-width: 2; }
@@ -808,7 +822,7 @@ body {
 .fp-avatar.is-transit .fp-avatar-ring { stroke: var(--color-warning); stroke-dasharray: 3 2; }
 .fp-avatar-initials {
   fill: var(--color-text);
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 700;
   text-anchor: middle;
   letter-spacing: 0.2px;
@@ -819,7 +833,7 @@ body {
    than a guess. */
 .fp-avatar-activity {
   fill: var(--color-text-dim);
-  font-size: 6.5px;
+  font-size: 7px;
   font-weight: 600;
   text-anchor: middle;
   letter-spacing: 0.2px;
@@ -834,6 +848,22 @@ body {
 .fp-avatar.plausible-inside .fp-avatar-activity { fill: var(--color-text-faint); }
 .fp-avatar-img[hidden] { display: none; }
 .fp-avatar[hidden] { display: none; }
+/* Phase 1 (npc-avatar-liveliness, D18): the dotted route under an NPC's
+   marker — the exact path the presentation layer animates along. One per
+   avatar, accent-coloured (movement.present.js), drawn into the .fp-paths
+   group the static pass inserts ahead of .fp-people. No transition here: the
+   presentation layer writes d/opacity per frame, and a CSS transition would
+   compose two smoothings into lag (the plan's D5 trap). */
+.fp-route {
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 5 4;
+  pointer-events: none;
+}
+/* will-change on the marker group is fine and welcome (the plan blesses it) —
+   it layers the transform the present layer rewrites every rAF. */
+.fp-avatar { will-change: transform; }
 .fp-door-icon {
   fill: var(--color-warning);
   font-size: 6px;
@@ -1364,7 +1394,7 @@ body {
 #computer-screen { display: none; position: relative; flex: 1; overflow: hidden; }
 #app[data-mode="computer"] #computer-screen { display: flex; }
 
-/* AVATAR — the one person-chip from src/srcfiles/avatar.js (avatars-and-
+/* AVATAR — the one person-chip from src/src/srcfiles/avatar.js (avatars-and-
    sprite-studio Phase 2, D10/D11). Replaces 26 hand-rolled circles across
    ui.js / render.computer.js / render.phone.js.
 
@@ -1411,7 +1441,7 @@ body {
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
 }
 
-/* SPRITE STUDIO (avatars-and-sprite-studio Phase 4) — src/srcfiles/
+/* SPRITE STUDIO (avatars-and-sprite-studio Phase 4) — src/src/srcfiles/
    render.spritestudio.js. One stylesheet for both surfaces: the computer
    window sizes itself, and the phone's narrower container collapses the
    two-column character sheet into one via a container query rather than a
@@ -1566,7 +1596,7 @@ body {
 .spr-prev-fig { display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .spr-prev-fig canvas { border-radius: 50%; border: 1px solid var(--color-border-strong); display: block; }
 
-/* ICONS — the .icon-<name> SVG wrapper from src/srcfiles/icons.js. Sized/colored
+/* ICONS — the .icon-<name> SVG wrapper from src/src/srcfiles/icons.js. Sized/colored
    through normal CSS on the wrapper span; the <svg> inside just fills it
    and inherits color via currentColor, same as a text glyph would. */
 .icon { display: inline-flex; width: 20px; height: 20px; color: var(--color-text); flex-shrink: 0; }
@@ -3453,7 +3483,7 @@ body {
 }
 .ps-control:focus { outline: none; border-color: #6f5cc4; }
 
-/* FIELDS — the shared free-text controls from src/srcfiles/fields.js.
+/* FIELDS — the shared free-text controls from src/src/srcfiles/fields.js.
    AI-Assisted Character Generation Phase 1 (D1): a combo input REPLACES a
    <select> in place, so it deliberately has no box styling of its own — it
    inherits whichever surface class its caller passed (.ps-control,
@@ -4784,7 +4814,7 @@ body {
    Hidden by RENDER until a conversation session is alive (we've spoken,
    neither of us left the room); tapping it reopens the talk exactly where
    it was. */
-.conv-bubble {
+.conv-resume-bubble {
   position: fixed;
   right: var(--space-4);
   bottom: calc(var(--footer-real-h, var(--footer-h)) + var(--space-4) + 68px);
@@ -4803,11 +4833,11 @@ body {
   font-weight: 600;
   line-height: 1;
 }
-.conv-bubble[hidden] { display: none; }
-.conv-bubble:hover { background: var(--color-surface-hover); }
-.conv-bubble .conv-bubble-avatar { --avatar-size: 36px; }
-.conv-bubble-label { white-space: nowrap; }
-#app[data-mode="computer"] .conv-bubble { bottom: calc(var(--taskbar-h) + var(--space-4) + 68px); }
+.conv-resume-bubble[hidden] { display: none; }
+.conv-resume-bubble:hover { background: var(--color-surface-hover); }
+.conv-resume-bubble .conv-resume-bubble-avatar { --avatar-size: 36px; }
+.conv-resume-bubble-label { white-space: nowrap; }
+#app[data-mode="computer"] .conv-resume-bubble { bottom: calc(var(--taskbar-h) + var(--space-4) + 68px); }
 
 /* The phone device (plan 3.2): a phone-shaped panel anchored above the
    FAB. Sibling of #computer-screen, so it's independent of computer power
@@ -5845,7 +5875,7 @@ body {
 .rl-studio-field { margin-bottom: var(--space-2); }
 .rl-studio-label { display: block; margin-bottom: 2px; font-weight: 600; }
 .rl-studio-input { width: 100%; box-sizing: border-box; padding: 4px 8px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-bg); color: var(--color-text); font-size: var(--fs-sm); }
-/* CONCEPT — the shared "Describe & Generate" section (src/srcfiles/concept.js).
+/* CONCEPT — the shared "Describe & Generate" section (src/src/srcfiles/concept.js).
    AI-Assisted Character Generation Phase 3. This one block serves four
    surfaces with three different palettes (the computer UI's CSS variables,
    and the pre-game studio/sandbox screens' hardcoded dark values), so it is
@@ -6105,6 +6135,10 @@ body {
 .conv-typing .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-text-dim); animation: im-typing-bounce 1.2s ease-in-out infinite; }
 .conv-typing .dot:nth-child(2) { animation-delay: 0.2s; }
 .conv-typing .dot:nth-child(3) { animation-delay: 0.4s; }
+.conv-typing-image { gap: 6px; }
+.conv-typing-image .conv-typing-icon { font-size: 1.15em; line-height: 1; opacity: 0.9; }
+.conv-join { align-self: flex-start; margin-top: var(--space-1); padding: var(--space-1) var(--space-3); border-radius: var(--radius-lg); border: 1px solid var(--color-accent); background: transparent; color: var(--color-accent); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; }
+.conv-join:hover { background: var(--color-accent); color: var(--color-bg); }
 .conv-input-row { display: flex; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--color-border); flex-shrink: 0; position: relative; }
 .conv-input-row input { flex: 1; background: var(--color-surface-alt); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); color: var(--color-text); font-size: var(--fs-base); font-family: var(--font-sans); outline: none; }
 .conv-input-row input:focus-visible { border-color: var(--color-accent); }
@@ -6517,9 +6551,9 @@ body {
        — visible only while a session is alive (we've spoken, neither of us
        left the room) and no overlay is open; tap to reopen the talk exactly
        where it left off. -->
-  <button id="conv-bubble" class="conv-bubble" aria-label="Reopen your conversation" hidden>
-    <span class="conv-bubble-avatar avatar-chip" id="conv-bubble-avatar"></span>
-    <span class="conv-bubble-label" id="conv-bubble-label"></span>
+  <button id="conv-bubble" class="conv-resume-bubble" aria-label="Reopen your conversation" hidden>
+    <span class="conv-resume-bubble-avatar avatar-chip" id="conv-bubble-avatar"></span>
+    <span class="conv-resume-bubble-label" id="conv-bubble-label"></span>
   </button>
   <section id="phone-screen" class="phone-device" data-device="phone" aria-label="Phone">
     <div class="phone-statusbar">
@@ -6547,8 +6581,8 @@ body {
      never moves (zero images is a designed state), two crossfading image
      layers above it, a left-to-right darkening overlay, and the
      left-aligned text column on top. Slideshow logic lives in
-     src/srcfiles/image.js (titleGallery); the component lives in
-     src/srcfiles/menu.js. -->
+     src/src/srcfiles/image.js (titleGallery); the component lives in
+     src/src/srcfiles/menu.js. -->
 <div id="main-menu" class="main-menu" hidden>
   <div class="title-bg-layer"></div>
   <img id="titleBgImgA" class="title-bg-img" alt="">
@@ -7386,34 +7420,41 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/srcfiles/config.js?v=154"></script>
+<script src="src/src/srcfiles/config.js?v=158"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
      STATE (which consults autosaveIntervalMs at runtime only) for tidy load
      order. -->
-<script src="src/srcfiles/defs.settings.js?v=10"></script>
-<script src="src/srcfiles/settings.js?v=8"></script>
-<script src="src/srcfiles/icons.js?v=31"></script>
+<script src="src/src/srcfiles/defs.settings.js?v=10"></script>
+<script src="src/src/srcfiles/settings.js?v=8"></script>
+<script src="src/src/srcfiles/icons.js?v=31"></script>
 <!-- FIELDS — shared form-control builders (comboControl / customChipInput).
      AI-Assisted Character Generation Phase 1: must load before menu.js,
      render.computer.js and studio.js, all of which build controls with it.
      Registered in dev/verify/loadgame.js's ORDER in the same commit. -->
-<script src="src/srcfiles/fields.js?v=1"></script>
-<script src="src/srcfiles/defs.world.js?v=44"></script>
-<script src="src/srcfiles/defs.actions.js?v=47"></script>
-<script src="src/srcfiles/defs.computer.js?v=32"></script>
+<script src="src/src/srcfiles/fields.js?v=1"></script>
+<script src="src/src/srcfiles/defs.world.js?v=45"></script>
+<script src="src/src/srcfiles/defs.actions.js?v=47"></script>
+<script src="src/src/srcfiles/defs.computer.js?v=32"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
      at runtime; IMAGE's titleGallery consumes genTitlePrompt. -->
-<script src="src/srcfiles/defs.menu.js?v=20"></script>
+<script src="src/src/srcfiles/defs.menu.js?v=20"></script>
 <!-- The opening cutscene's script, as data (player creation + intro plan,
      Phase 5). Pure strings — no dependency on anything, but grouped with the
      other defs.* files because that is what it is. -->
-<script src="src/srcfiles/defs.intro.js?v=13"></script>
+<script src="src/src/srcfiles/defs.intro.js?v=13"></script>
 <!-- The interior: the composite-shape library and the authored room designs
      (Home Design Studio). Pure data; authored in dev/designer.html. -->
-<script src="src/srcfiles/defs.design.js?v=2"></script>
+<script src="src/src/srcfiles/defs.design.js?v=3"></script>
+  <!-- defs.placement.js (npc-avatar-liveliness Phase 2, D8): the shared
+       furniture placement module. FP_FOOTPRINTS (moved out of render.js) +
+       the pure resolveAutoPlacements packer + resolveObjectStandPoint (D9/D10)
+       anchor resolution. Lives here — after defs.design.js (ROOM_DECOR) and
+       before render.js (which merges FP_FOOTPRINTS at load) — and is
+       registered in loadgame.js's ORDER in the same commit (invariant 6). -->
+  <script src="src/src/srcfiles/defs.placement.js?v=1"></script>
 <!-- Dream Engine Phase 1: the dream component tables (defs.dreams.js) — the
      forms, perspectives, tempos, registers, lenses, distortions, motifs and
      every tuning number a dream is assembled from. Pure data with no
@@ -7421,113 +7462,121 @@ body {
      is. MUST load before dreams.js, which selects from these tables; the
      selection is a seeded roll made before any model call, because the LLM
      never decides a dream's structure (D1). -->
-<script src="src/srcfiles/defs.dreams.js?v=7"></script>
+<script src="src/src/srcfiles/defs.dreams.js?v=7"></script>
 <!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
-<script src="src/srcfiles/orbital.js?v=12"></script>
-<script src="src/srcfiles/state.js?v=63"></script>
-<script src="src/srcfiles/sim.js?v=91"></script>
+<script src="src/src/srcfiles/orbital.js?v=12"></script>
+<script src="src/src/srcfiles/state.js?v=63"></script>
+<script src="src/src/srcfiles/sim.js?v=92"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
-<script src="src/srcfiles/commitments.js?v=13"></script>
-<script src="src/srcfiles/world.js?v=31"></script>
-<script src="src/srcfiles/movement.js?v=2"></script>
-<script src="src/srcfiles/signals.js?v=19"></script>
-<script src="src/srcfiles/scene.js?v=17"></script>
-<script src="src/srcfiles/items.js?v=29"></script>
+<script src="src/src/srcfiles/commitments.js?v=13"></script>
+<script src="src/src/srcfiles/world.js?v=31"></script>
+<script src="src/src/srcfiles/movement.js?v=2"></script>
+<!-- NPC avatar liveliness Phase 1 (movement.present.js): the presentation
+     layer — per-avatar TRACK-vs-CATCH-UP animation on REAL time, its own rAF
+     (D23), and the D18 dotted-route overlay. Owns no sim state (invariant 1).
+     Sits right after movement.js (uses planWalk's machinery: findPath /
+     sharedWallSegment / pointAlongPath at runtime) and before render.js,
+     whose renderFloorPlanLive delegates to presentFrame. Registered in
+     dev/verify/loadgame.js's ORDER in the same commit (invariant 6). -->
+<script src="src/src/srcfiles/movement.present.js?v=5"></script>
+<script src="src/src/srcfiles/signals.js?v=19"></script>
+<script src="src/src/srcfiles/scene.js?v=17"></script>
+<script src="src/src/srcfiles/items.js?v=29"></script>
 <!-- Inventory overhaul Phase 1: pure inventory query/sort/describe helpers
      (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
      time) and before render.js/ui.js, which call it at runtime. -->
-<script src="src/srcfiles/inventory.js?v=22"></script>
-<script src="src/srcfiles/effects.js?v=36"></script>
+<script src="src/src/srcfiles/inventory.js?v=22"></script>
+<script src="src/src/srcfiles/effects.js?v=37"></script>
 <!-- Food-overhaul Phase 5: the pure cooking engine (cooking.js) — after
      effects.js (uses clamp) and items.js (makePlate/freshnessOf); its
      functions are called at runtime by defs.actions.js and render.js. -->
-<script src="src/srcfiles/cooking.js?v=4"></script>
-<script src="src/srcfiles/taste.js?v=1"></script>
-<script src="src/srcfiles/drives.js?v=44"></script>
+<script src="src/src/srcfiles/cooking.js?v=4"></script>
+<script src="src/src/srcfiles/taste.js?v=1"></script>
+<script src="src/src/srcfiles/drives.js?v=44"></script>
 <!-- NPC utility scoring (npc-cognition-plan.md). Loads after drives.js: it
      reuses driveGateValue / isOnCooldown / DRIVE_COOLDOWN_KEY from it. -->
-<script src="src/srcfiles/cognition.js?v=29"></script>
+<script src="src/src/srcfiles/cognition.js?v=30"></script>
 <!-- NPC initiative (npc-initiative-plan.md Phase 3). Loads after cognition.js:
      scoreCandidates calls scoreOvertures, and evaluateDrives calls the writers
      here for the tick it wins. -->
-<script src="src/srcfiles/overture.js?v=16"></script>
-<script src="src/srcfiles/actions.js?v=35"></script>
-<script src="src/srcfiles/intent.js?v=18"></script>
-<script src="src/srcfiles/skills.js?v=19"></script>
-<script src="src/srcfiles/stealth.js?v=20"></script>
-<script src="src/srcfiles/time.js?v=30"></script>
-<script src="src/srcfiles/computer.js?v=66"></script>
+<script src="src/src/srcfiles/overture.js?v=16"></script>
+<script src="src/src/srcfiles/actions.js?v=36"></script>
+<script src="src/src/srcfiles/intent.js?v=18"></script>
+<script src="src/src/srcfiles/skills.js?v=19"></script>
+<script src="src/src/srcfiles/stealth.js?v=20"></script>
+<script src="src/src/srcfiles/time.js?v=30"></script>
+<script src="src/src/srcfiles/computer.js?v=67"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
-<script src="src/srcfiles/tracker.js?v=17"></script>
-<script src="src/srcfiles/debuglog.js?v=2"></script>
+<script src="src/src/srcfiles/tracker.js?v=17"></script>
+<script src="src/src/srcfiles/debuglog.js?v=2"></script>
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
-<script src="src/srcfiles/phone.js?v=20"></script>
-<script src="src/srcfiles/npc.js?v=54"></script>
+<script src="src/src/srcfiles/phone.js?v=20"></script>
+<script src="src/src/srcfiles/npc.js?v=54"></script>
 <!-- Intimacy & Voyeurism Phase 9 (D13): the willingness gate — the ONLY door
      into any intimacy act. Pure function + tuning (willingness.js); reads
      npc.js's shared clothing reads at call time, consumed by cognition.js's
      scoring and defs.actions.js's requirement checker at runtime only. -->
-<script src="src/srcfiles/willingness.js?v=2"></script>
+<script src="src/src/srcfiles/willingness.js?v=2"></script>
 <!-- Intimacy & Voyeurism Phase 12 (D12): the relationship store + formation
      pass (relationships.js). After npc.js (reuses clamp01/clampAxis at
      runtime) and after willingness.js for file grouping; reads sim.js's
      moveToRoom/changeResidencyStatus/computeRent and config's ROOMS/
      FACILITY_DEFS at call time only. The resolveTick proximity accumulator
      (sim.js) calls notePairCoLocation at runtime, after load. -->
-<script src="src/srcfiles/relationships.js?v=5"></script>
+<script src="src/src/srcfiles/relationships.js?v=5"></script>
 <!-- Intimacy & Voyeurism Phase 15 (D8): the knowledge codex — the ledger's
      readers, the three spendable verbs (Confront/Spread/Matchmake) and the
      witnessed-entry writer. After relationships.js (reuses getRelationship/
      pairCompatibility/tryAdvanceRelationshipStatus/infidelityCheatingFact/
      relationshipSummaryForNpc) and npc.js (receiveTransmittedFact); the UI
      half lives in render.computer.js + ui.js, called at runtime only. -->
-<script src="src/srcfiles/codex.js?v=2"></script>
+<script src="src/src/srcfiles/codex.js?v=2"></script>
 <!-- Knowledge-gossip Phase 3: deterministic rumination (inference rules +
      open-question lifecycle) — after npc.js (reuses addMemoryFact/
      backfillFactRecordV2/factTopicPhrase/factInterestRelevance/factEmotionalWeight)
      and called by sim.js at runtime only. -->
-<script src="src/srcfiles/rumination.js?v=15"></script>
-<script src="src/srcfiles/prompt.js?v=19"></script>
-<script src="src/srcfiles/llm.js?v=45"></script>
+<script src="src/src/srcfiles/rumination.js?v=15"></script>
+<script src="src/src/srcfiles/prompt.js?v=20"></script>
+<script src="src/src/srcfiles/llm.js?v=47"></script>
 <!-- CONCEPT — the character-concept engine (description -> validated draft).
      AI-Assisted Character Generation Phase 2. Sits after llm.js (whose prompt
      conventions it follows) and before the UI layer that calls it. Reads
      sim.js's D4 resolvers and state.js's validateNpcField, both already
      loaded. Registered in dev/verify/loadgame.js's ORDER in the same commit. -->
-<script src="src/srcfiles/concept.js?v=8"></script>
+<script src="src/src/srcfiles/concept.js?v=8"></script>
 <!-- Plan X-5 Phase 1: the wire for conversation consequences — parsing,
      clamping, windowing and ingestion for the Assessor and the Chronicler.
      After llm.js because the two passes' calls live there and are fired from
      ui.js; x5.js itself is pure and calls no model. -->
-<script src="src/srcfiles/x5.js?v=17"></script>
-<script src="src/srcfiles/interruption.js?v=23"></script>
-<script src="src/srcfiles/image.js?v=35"></script>
+<script src="src/src/srcfiles/x5.js?v=17"></script>
+<script src="src/src/srcfiles/interruption.js?v=23"></script>
+<script src="src/src/srcfiles/image.js?v=37"></script>
 <!-- Avatars & Sprite Studio Phase 1: the permanent override store (kv.sprites)
      and resolveSprite, the ONE function allowed to read a sprite blob. After
      image.js because the resolver falls through to cutoutKey / getCachedImage
      / getCharacterCutout when no override exists; before render.js and ui.js,
      which consume it at runtime only. Registered in dev/verify/loadgame.js's
      ORDER in the same commit. -->
-<script src="src/srcfiles/sprites.js?v=1"></script>
+<script src="src/src/srcfiles/sprites.js?v=1"></script>
 <!-- Avatars & Sprite Studio Phase 2: the ONE avatar component, replacing 26
      hand-rolled hashToColor+charAt(0) templates across ui.js,
      render.computer.js, render.phone.js and render.js. Owns hashToColor now
      (moved from render.computer.js), so it must load before all four. After
      sprites.js, whose resolveAvatar it calls at runtime. -->
-<script src="src/srcfiles/avatar.js?v=1"></script>
+<script src="src/src/srcfiles/avatar.js?v=1"></script>
 <!-- Intimacy & Voyeurism Phase 10 (D6/D7): the peek/listen hold — the timed
      real-time session loop (risk ramp, per-NPC caught outcomes, image budget)
      plus the pure derivations it re-reads every real second. After image.js
      (calls composePeekKey/getPeekImage at runtime) and before render.js/ui.js,
      which call renderPeekOverlay/startPeekSession at runtime only. Phase 15
      writes the 'witnessed' ledger entries via codex.js at session end. -->
-<script src="src/srcfiles/peek.js?v=5"></script>
+<script src="src/src/srcfiles/peek.js?v=7"></script>
 <!-- Dream Engine Phase 1 (dreams.js): the dream compiler, writer, renderer
      and viewer. After image.js because every panel goes through a cached
      getter there (getDreamPanelImage) — root.generateImage is never called
@@ -7539,7 +7588,7 @@ body {
      compileDream), so it also loads cleanly in the bare vm harness — see the
      matching entry in dev/verify/loadgame.js's ORDER, added in the same
      commit as this tag (design invariant 6). -->
-<script src="src/srcfiles/dreams.js?v=7"></script>
+<script src="src/src/srcfiles/dreams.js?v=7"></script>
 <!-- Action outcome window (action-outcome-window-plan Phase 1, D1/D3/D5): the
      reusable outcome pane — the delta strip's projection of applyEffects'
      typed effect list, the spec resolver, and the open/render/dismiss
@@ -7550,7 +7599,7 @@ body {
      is called at runtime only. After image.js (calls getActionWindowImage);
      before render.js/ui.js/actions.js, which call presentActionOutcome at
      runtime only. -->
-<script src="src/srcfiles/actionwindow.js?v=10"></script>
+<script src="src/src/srcfiles/actionwindow.js?v=10"></script>
 <!-- Intimacy-Voyeurism Phase 17 (D13/D14): boundary acts — sleeping-room
      (sleep_with/sleep_watch), three-way acts (throuple/cuck), and the NPC
      sneak_into_bed drive. Depends on willingness.js (the gate), npc.js
@@ -7558,20 +7607,20 @@ body {
      writers) and codex.js (ledger), so it loads after all of them and after
      peek.js (reuses its willingness/prose/undressed patterns), but before
      render.js/ui.js which call its resolvers/applys at runtime only. -->
-<script src="src/srcfiles/boundary.js?v=2"></script>
-<script src="src/srcfiles/pregnancy.js?v=1"></script>
-<script src="src/srcfiles/render.js?v=80"></script>
-<script src="src/srcfiles/render.computer.js?v=56"></script>
+<script src="src/src/srcfiles/boundary.js?v=2"></script>
+<script src="src/src/srcfiles/pregnancy.js?v=1"></script>
+<script src="src/src/srcfiles/render.js?v=82"></script>
+<script src="src/src/srcfiles/render.computer.js?v=56"></script>
 <!-- Avatars & Sprite Studio Phase 4: the studio's verbs and its screens.
      render.spritestudio.js extends COMPUTER_RENDERERS, so it must load AFTER
      render.computer.js declares it; spritestudio.js holds the actions and is
      registered in dev/verify/loadgame.js's ORDER in the same commit. -->
-<script src="src/srcfiles/spritestudio.js?v=1"></script>
-<script src="src/srcfiles/render.spritestudio.js?v=1"></script>
-<script src="src/srcfiles/render.desktop.js?v=19"></script>
+<script src="src/src/srcfiles/spritestudio.js?v=1"></script>
+<script src="src/src/srcfiles/render.spritestudio.js?v=1"></script>
+<script src="src/src/srcfiles/render.desktop.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
-<script src="src/srcfiles/render.phone.js?v=25"></script>
+<script src="src/src/srcfiles/render.phone.js?v=25"></script>
 <!-- Asks & attachments (asks-and-attachments-plan.md Phase 1 + Phase 3 +
      Phase 4 + Phase 5 + Phase 6 + Phase 7 + Phase 8 + Phase 9): the ask
      spine — parse/decide/
@@ -7598,30 +7647,30 @@ body {
      time), x5.js, and the renderers; before ui.js (doConvSend runs the
      pipeline at runtime). Every dependency is a call-time one, so this slot
      is flexible within that range. -->
-<script src="src/srcfiles/asks.js?v=11"></script>
-<script src="src/srcfiles/ui.js?v=143"></script>
-<script src="src/srcfiles/ui.computer.js?v=53"></script>
+<script src="src/src/srcfiles/asks.js?v=12"></script>
+<script src="src/src/srcfiles/ui.js?v=146"></script>
+<script src="src/src/srcfiles/ui.computer.js?v=53"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
      site header with fake address bar + internal back/forward, footer, 404,
      skeleton grid, and every AfterHours renderer + handler. After
      ui.computer.js (doBrowserVisit calls AH.onSiteOpen at runtime) and
      before ui.windowmanager.js. -->
-<script src="src/srcfiles/afterhours.js?v=31"></script>
-<script src="src/srcfiles/ui.windowmanager.js?v=19"></script>
+<script src="src/src/srcfiles/afterhours.js?v=31"></script>
+<script src="src/src/srcfiles/ui.windowmanager.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell orchestration — after ui.computer.js. -->
-<script src="src/srcfiles/ui.phone.js?v=23"></script>
+<script src="src/src/srcfiles/ui.phone.js?v=23"></script>
 <!-- The Player Design studio and the opening cutscene (player creation +
      intro plan, Phases 3-5). BEFORE menu.js, because menu.js's last line
      invokes boot() — anything loading after that runs once boot has already
      started, which is a race nobody should have to reason about. Calls into
      SIM/IMAGE/STATE at runtime only, so it needs nothing at load time. -->
-<script src="src/srcfiles/studio.js?v=22"></script>
+<script src="src/src/srcfiles/studio.js?v=22"></script>
 
 <!-- Menu overhaul Phase 10: the main-menu component — after ui.js (calls
      resumeFromRecord/openSaveMenu/startAutosave and the data-action chain
      at runtime). Loads LAST: the bottom of menu.js invokes boot(), which
      ui.js can no longer call itself because boot() reaches into MENU/IMAGE
      functions defined after UI. -->
-<script src="src/srcfiles/menu.js?v=38"></script>
+<script src="src/src/srcfiles/menu.js?v=38"></script>
 <!-- ===== /SECTION: SCRIPTS ===== -->

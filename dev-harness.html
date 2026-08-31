@@ -7,7 +7,7 @@
   Perchance those don't exist, so index.html can't boot in a plain browser.
 
   This harness defines a minimal in-memory shim for exactly the surface
-  src/srcfiles/state.js, src/srcfiles/llm.js, and src/srcfiles/image.js
+  src/src/srcfiles/state.js, src/src/srcfiles/llm.js, and src/src/srcfiles/image.js
   call, then fetches index.html
   itself (so the DOM/CSS/script list stay a single source of truth — this
   file never duplicates them) and replays its content into this page.
@@ -103,7 +103,7 @@
     // to finish before starting the next (classic scripts inserted via
     // createElement run async by default otherwise).
     const scriptTags = [...doc.querySelectorAll('script[src]')];
-    const bust = Date.now(); // avoid a stale cached src/srcfiles/*.js across repeat test loads
+    const bust = Date.now(); // avoid a stale cached src/src/srcfiles/*.js across repeat test loads
     for (const tag of scriptTags) {
       await new Promise((resolve, reject) => {
         const s = document.createElement('script');
