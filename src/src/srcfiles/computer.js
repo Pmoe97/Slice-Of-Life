@@ -196,6 +196,24 @@ function defaultComputerState() {
       // shows — app state, not DOM state, same as classifieds'
       // viewingApplicantId.
       recipes: { unlockedIds: [], planner: [], viewingRecipeId: null },
+      // DailyGrid (actions-and-activities-overhaul-plan.md Phase 14, D23).
+      // `day` + `words` are what generatePuzzleForDay (puzzles.js) writes;
+      // `day: 0` guarantees the very first call (any real day >= 1) sees a
+      // mismatch and generates, same "day 0 never matches" trick gigs'
+      // lastRefreshDay default relies on. `filledCells`/`revealed` are both
+      // `{ "row,col": value }` maps — plain objects, not arrays, since cells
+      // are sparse and keyed by position, not sequential. `completedDay`
+      // guards the one-time reward per puzzle (mirrors `gigs.lastRefreshDay`'s
+      // idempotency role, just for "have I already paid out today's puzzle"
+      // instead of "have I already generated today's board").
+      puzzles: { day: 0, words: [], rows: 0, cols: 0, filledCells: {}, revealed: {}, completedDay: null },
+      // Chatter (actions-and-activities-overhaul-plan.md Phase 15, D24).
+      // `posts` accumulates (unlike puzzles' single current grid) — see
+      // chatter.js's generateChatterForDay for why `lastGeneratedDay` is a
+      // watermark rather than an equality guard. `nextPostId` is a monotonic
+      // counter independent of `posts.length` so a pruned-away id is never
+      // reissued to a new post.
+      social_feed: { posts: [], lastGeneratedDay: 0, nextPostId: 1 },
     },
   };
 }
@@ -304,6 +322,18 @@ function openApp(gameState, appId) {
   // Contractor tutorial (contractor doc Phase 3): the first RenoFix open
   // fires the how-to-book hint (idempotent — the flag makes it one-shot).
   if (appId === 'upgrades') fireContractorMilestone(gameState, 'renofixOpened');
+  // DailyGrid (Phase 14, D23): generate today's puzzle the moment the app is
+  // opened, same "populate on first meaningful contact" call classifieds'
+  // postListing makes rather than forcing a day-1 special case into the new-
+  // game bootstrap (RoomList's own precedent, not gig board's — a crossword
+  // has none of the gig board's income urgency). generatePuzzleForDay is
+  // idempotent, so reopening an already-open window just no-ops here.
+  if (appId === 'puzzles') generatePuzzleForDay(gameState, gameState.meta.clock.day);
+  // Chatter (Phase 15, D24): catch the feed up to today the moment it's
+  // opened, same on-open trigger as DailyGrid above — generateChatterForDay
+  // is idempotent (a watermark guard, see chatter.js), so reopening an
+  // already-open window just no-ops here.
+  if (appId === 'social_feed') generateChatterForDay(gameState, gameState.meta.clock.day);
 }
 
 // Device-parameterised screen navigation (BrineOS 0.2). The default
@@ -1057,6 +1087,13 @@ function cleanRoomObjects(gameState, roomId) {
       if (obj.state[key] !== cleanValue) { obj.state[key] = cleanValue; cleanedCount++; }
     }
   }
+  // Actions & Activities Overhaul Phase 9 (D17/D49): a housekeeper/roommate
+  // cleaning the room also sweeps up the ambient dirt.js layer (foot traffic,
+  // dust, cooking, eating) — that mess has no object of its own to reset
+  // above, but "someone cleaned this room" should still clear it. Written
+  // directly (not via bumpRoomDirt) so the single refreshRoomCleanliness call
+  // below covers both layers in one recompute rather than two.
+  if (gameState.world.rooms[roomId]) gameState.world.rooms[roomId].dirt = 0;
   refreshRoomCleanliness(gameState, roomId);
   // Perception plan Phase 2 (D10): a room-level `odor = 'none'` write used to
   // sit here. Resetting the object states above is now sufficient — the smell
@@ -1085,7 +1122,7 @@ function performCleaningVisit(gameState, service) {
     const ownerId = roomOwnerId(roomId, gameState.npcs);
     if (!ownerId || ownerId === 'player') continue;
     const rng = seededRng(gameState.meta.seed, `cleaning_${gameState.meta.clock.day}_${roomId}`);
-    if (rng() < STEALTH_TUNING.baseEvidenceDiscoveryChance) {
+    if (rng() < STEALTH_TUNING.roomSearchEvidenceDiscoveryChance) {
       lines.push(`MEMORY_EPISODE ${ownerId} Someone let a cleaning service into their room again without asking.`);
       lines.push(`ADJUST_SUSPICION ${ownerId} boundary_violation +${STEALTH_TUNING.housekeeperSuspicionDelta}`);
     }
@@ -1789,7 +1826,10 @@ function accrueHvacForDay(gameState, day) {
   const season = getSeason(day);
   const seasonIdx = CALENDAR.seasons.indexOf(season);
   const rate = UTILITY_HVAC_SEASONAL[seasonIdx] || 0;
-  utils.hvac.count = (utils.hvac.count || 0) + rate * UTILITY_THERMOSTAT;
+  // Actions & Activities Overhaul Phase 8 (D16): thermostatHvacMultiplier
+  // (temperature.js) replaces the old flat UTILITY_THERMOSTAT=1.0 constant —
+  // billing now scales with the player's actual chosen delta from neutralC.
+  utils.hvac.count = (utils.hvac.count || 0) + rate * thermostatHvacMultiplier(gameState);
   utils.hvac.daysAccrued = (utils.hvac.daysAccrued || 0) + 1;
 }
 
@@ -2639,18 +2679,16 @@ function performMaidVisit(gameState, contract, entry) {
   const itemsCleaned = performCleaningVisit(gameState, { accessScope: scope });
   const result = { itemsCleaned, scope, hours, laundrySteps: 0, mealsCooked: 0 };
 
-  // Laundry: step the hamper down (full → partial → empty), capped by hours.
+  // Laundry (Actions & Activities Overhaul Phase 11, D20): if she's onsite
+  // long enough for at least one step, she starts a real wash load from the
+  // shared hamper — runHamperIntoWasher (ITEMS) is the same move-and-cycle-
+  // start the player's own Wash action runs, not a blind fill-flag reset
+  // that would make the physical dirty garments vanish.
   if ((contract.addons || []).includes('laundry')) {
     const steps = Math.floor(hours / MAID_TUNING.laundryHoursPerStep);
-    const bucket = gameState.objects?.room_laundry || {};
-    const hamper = Object.values(bucket).find(o => o.defId === 'laundry_hamper');
-    if (hamper && steps > 0) {
-      const ladder = ['empty', 'partial', 'full'];
-      let idx = ladder.indexOf(hamper.state?.fill || 'empty');
-      if (idx < 0) idx = 0;
-      const newIdx = Math.max(0, idx - steps);
-      result.laundrySteps = idx - newIdx;
-      hamper.state = { ...(hamper.state || {}), fill: ladder[newIdx] };
+    if (steps > 0) {
+      const now = gameDaysNow(gameState.meta.clock);
+      result.laundrySteps = runHamperIntoWasher(gameState, now) ? 1 : 0;
     }
   }
 

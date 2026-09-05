@@ -17,7 +17,7 @@ which phase to work on — find it yourself using the steps below.
 ## Step 0 — find out where you are (cheap: the Status table, not the full doc)
 
 Read only the `## Handoff — read this first` section and the `## Status` table
-in `src/src/ref/wip/settings-and-pause-overhaul-plan.md`.
+in `src/src/ref/complete/settings-and-pause-overhaul-plan.md`.
 
 The first phase not marked "Done" is your phase. The phases must be done in
 order, with these exceptions: **Phases 4, 7, 8 and 9 are mutually independent

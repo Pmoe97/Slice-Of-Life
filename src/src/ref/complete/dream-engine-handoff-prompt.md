@@ -165,7 +165,7 @@ Do this whether the phase finished, is partial, or is blocked.
    both this prompt and the plan into `src/src/ref/complete/` together, and update
    the index rows in `src/src/ref/README.md` and
    `src/src/ref/structural/ARCHITECTURE.md` in the same commit. Also close out the
-   Dream Engine item on `src/src/ref/wip/action-outcome-window-plan.md`, which has
+   Dream Engine item on `src/src/ref/complete/action-outcome-window-plan.md`, which has
    been waiting on this plan since its D11.
 
 Do not end a session without doing this. A half-finished phase with a precise

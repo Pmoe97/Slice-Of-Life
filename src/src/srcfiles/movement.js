@@ -272,6 +272,99 @@ function reconcileNpcPos(npc) {
   npc.pos = { x: cx, y: cy };
 }
 
+// --- Follow (actions-and-activities-overhaul-plan.md Phase 6, D11) ---
+// npc.follow = { leader: 'player', sinceDay } | null. asks.js's ASK_FOLLOW
+// leaf is the only writer that CREATES the record (its postEffects); this is
+// the presentation layer's half — it only CONSUMES npc.follow to relocate a
+// follower room-by-room alongside the leader, and CLEARS it (never creates
+// it) the moment a follower balks at a room, per D11's "the walk
+// presentation never writes it". Called from ui.js's doMove right after
+// resolveWalk, with the SAME room-by-room sequence (walk.crossed) the
+// player's own stealth/footstep loop mirrors just above it in that function
+// — a follower makes the whole multi-room trip in lockstep, not a
+// teleport straight to the destination.
+//
+// The refusal line is isPrivacyRoom (cognition.js) — the exact "don't
+// follow" signal imminentDeparture already draws for a departing
+// conversation partner's own bedroom/a bathroom (D12/D13's destType ===
+// 'privacy'), reused whole rather than reinvented. A follower who balks
+// stops one room short (never enters) and the relationship ends there.
+//
+// Sim-tick-level persistence (surviving a `wait`/sleep/batch span with no
+// doMove call) and the sleep/off-site-work release are sim.js Pass 1's job,
+// not this function's — see its own D11 comment. This function only ever
+// fires from an actual doMove call.
+//
+// Returns released npcIds (npc balked and was left behind) for the caller
+// to narrate; empty when every follower made the whole trip.
+function advanceFollowers(gameState, leaderId, fromRoom, roomSequence) {
+  const released = [];
+  if (!gameState || !roomSequence || !roomSequence.length) return released;
+  for (const [npcId, npc] of Object.entries(gameState.npcs || {})) {
+    if (!npc || !npc.follow || npc.follow.leader !== leaderId) continue;
+    if (npc.location !== fromRoom) continue; // wasn't with the leader to begin with
+    for (const roomId of roomSequence) {
+      if (isPrivacyRoom(roomId, npc)) {
+        delete npc.follow;
+        delete npc.touring; // Phase 17 (D27): a refused room ends the tour along with the Follow it rode
+        released.push(npcId);
+        break;
+      }
+      npc.walk = null;
+      npc.location = roomId;
+      reconcileNpcPos(npc);
+    }
+  }
+  return released;
+}
+
+// --- Touring (actions-and-activities-overhaul-plan.md Phase 17, D27) ------
+// npc.touring = { visited: [roomId,...] } | undefined. asks.js's ASK_TOUR is
+// the only writer that CREATES it (alongside npc.follow, in the same
+// postEffects); this is the presentation layer's half — it only CONSUMES
+// npc.touring to fire each TOUR_STOPS room's beat once, and CLEARS it (along
+// with npc.follow) the moment every curated stop has been shown. Called from
+// ui.js's doMove, once per move, for the room the player actually ended up
+// in (walkNarration's own destination-only precedent — a beat per ARRIVAL,
+// not per room crossed mid-route). advanceFollowers (above) has already run
+// by the time this is called, so a follower who balked isn't standing in
+// `roomId` and is silently skipped — no beat fires for a room they never
+// actually reached.
+//
+// Returns beat lines ({ npcId, line, final }) for the caller to narrate, one
+// per touring npc who reached a NEW stop this move. `final: true` marks the
+// wrap-up beat — the last stop shown completed the whole curated list, so
+// this call also ends the tour (clears follow/touring) and pays out
+// TOUR_TUNING's completion reward directly (same "NPC state gets a direct
+// write from the presentation layer, mirroring Follow's own precedent"
+// reasoning advanceFollowers above already established for npc.location —
+// this isn't an ACTION_DEFS action, so there's no applyEffects DSL pipeline
+// to route it through).
+function advanceTouring(gameState, leaderId, roomId) {
+  const beats = [];
+  if (!gameState) return beats;
+  const stopLine = TOUR_STOPS[roomId];
+  for (const [npcId, npc] of Object.entries(gameState.npcs || {})) {
+    if (!npc || !npc.touring || !npc.follow || npc.follow.leader !== leaderId) continue;
+    if (npc.location !== roomId) continue; // balked/released this trip — advanceFollowers already handled it
+    if (!stopLine || npc.touring.visited.includes(roomId)) continue;
+    npc.touring.visited.push(roomId);
+    const name = npc.bible?.name || 'them';
+    beats.push({ npcId, line: stopLine.replace('{name}', name) });
+    if (npc.touring.visited.length >= Object.keys(TOUR_STOPS).length) {
+      beats.push({ npcId, line: TOUR_TUNING.completeLine.replace('{name}', name), final: true });
+      delete npc.follow;
+      delete npc.touring;
+      npc.mood = clamp(npc.mood + TOUR_TUNING.completeMoodDelta, -1, 1);
+      npc.relPlayer = npc.relPlayer || {};
+      for (const [axis, delta] of Object.entries(TOUR_TUNING.completeRelDelta)) {
+        npc.relPlayer[axis] = clamp((npc.relPlayer[axis] || 0) + delta, -1, 1);
+      }
+    }
+  }
+  return beats;
+}
+
 // --- Reverse overture (npc-avatar-liveliness Phase 2b, D20) ---
 // Pure: where must the player walk to reach NPC npcId, and at what player-
 // tier cost? Reads npc.location/npc.walk/npc.commitment and the player's

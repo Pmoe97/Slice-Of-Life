@@ -64,6 +64,16 @@ function deriveStandingSignals(gameState) {
       }
     }
   }
+  // Actions & Activities Overhaul Phase 9 (D17/D49): the ambient dirt.js
+  // layer's own signal — a ROOM condition, not an object's, so it has no
+  // OBJECT_DEFS.emits entry to walk above. Straight from world.rooms[roomId]
+  // .dirt; sourceId is the room itself since no single object is the cause.
+  for (const [roomId, room] of Object.entries(gameState.world?.rooms || {})) {
+    if (!ROOMS[roomId]) continue;
+    const dirt = room?.dirt || 0;
+    if (dirt < DIRT_TUNING.dustSignalFloor) continue;
+    out.push({ signalId: 'dust', roomId, intensity: dustSignalIntensity(dirt), sourceId: roomId });
+  }
   return out;
 }
 
@@ -90,6 +100,35 @@ function transientIntensityNow(rec, nowTick) {
   if (!decay) return rec.intensity; // no decay declared → treat as steady
   const age = Math.max(0, nowTick - (rec.bornTick || 0));
   return Math.max(0, rec.intensity - age * decay);
+}
+
+// --- Sneaking (P1B, D34) ---------------------------------------------------
+// A player toggle (ui.js's doToggleSneaking, set on gameState.player.sneaking)
+// that suppresses the player's OWN footsteps signal on movement — today's
+// stealth mechanics all gate specific interactions (entering a bedroom,
+// searching a phone), never the general act of moving past or near someone
+// in a common room. This is the connective tissue that makes that possible.
+function playerSneaking(gameState) {
+  return !!gameState?.player?.sneaking;
+}
+
+// The player-side mirror of sim.js's per-NPC footsteps emission (same
+// SIGNALS_EMIT.footstepsTransit/footstepsArrive split — passing through a
+// room is louder than settling into it). Called from UI's doMove for every
+// room the player enters, mid-route and destination alike. Sneaking
+// suppresses this entirely rather than merely damping it — full silence is
+// the deliberate payoff of turning it on, not a partial dial (the mechanics
+// that DO want a partial dial, like pickpocket's detection roll, already
+// have their own skillMod-scaled chance; this is the one signal Sneaking
+// alone controls).
+function emitPlayerFootsteps(gameState, roomId, transit) {
+  if (playerSneaking(gameState)) return;
+  emitTransient(gameState, {
+    id: 'footsteps',
+    roomId,
+    intensity: transit ? SIGNALS_EMIT.footstepsTransit : SIGNALS_EMIT.footstepsArrive,
+    sourceId: 'player',
+  });
 }
 
 // Emit an act's signal into the world. Trusted producer — callers are

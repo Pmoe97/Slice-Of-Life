@@ -7,10 +7,14 @@ const path = require('path');
 const SRC = path.join(__dirname, '..', '..', 'srcfiles');
 
 // Load order per ARCHITECTURE.md, truncated before the render/ui layer.
-// NOTE: this ORDER intentionally diverges from index.html at two files, both
-// documented below: codex.js (pure ledger/domain logic, loads after
-// interruption.js) and studio.js (UI-layer file whose logic half is pure,
-// loads after pregnancy.js). No load-time dependencies, so either position is
+// NOTE: this ORDER intentionally diverges from index.html at three files,
+// all documented below: codex.js (pure ledger/domain logic, loads after
+// interruption.js), asks.js (pure decision logic, loads after pregnancy.js
+// — actions-and-activities-overhaul-plan.md Phase 1 found it missing from
+// this list entirely, the exact invariant-8 bug shape the plan's own header
+// warns about, and added it here in the same commit as ASK_INVITE), and
+// studio.js (UI-layer file whose logic half is pure, loads after asks.js).
+// No load-time dependencies for any of the three, so either position is
 // safe — the divergence is deliberate, not drift.
 const ORDER = [
   'config.js', 'defs.settings.js', 'settings.js', 'icons.js',
@@ -45,11 +49,44 @@ const ORDER = [
   // the bare vm and the half worth testing is directly testable. Registered
   // in BOTH lists in the same commit (invariant 6).
   'movement.present.js',
-  'signals.js', 'scene.js',
+  // meanwhile.js (continuous-cadence-closure Phase 8, D9) sits directly
+  // after signals.js in index.html and here for the same reason: pure,
+  // calls signals.js's reachMultipliers/SIGNAL_TUNING and config.js's
+  // EVENT_IMPORTANCE/ROOMS at runtime (all already loaded above it), no DOM
+  // dependency at load or call time. scene.js's composeScene calls its
+  // composeMeanwhileTicker, so it must load before scene.js. Registered in
+  // BOTH lists in the same commit (invariant 6).
+  'signals.js', 'meanwhile.js', 'scene.js',
   'items.js', 'inventory.js', 'effects.js', 'cooking.js', 'taste.js', 'drives.js', 'cognition.js', 'overture.js',
   'actions.js', 'intent.js',
   'skills.js', 'stealth.js', 'time.js', 'computer.js', 'tracker.js', 'debuglog.js', 'phone.js',
-  'npc.js', 'willingness.js', 'relationships.js', 'rumination.js', 'prompt.js', 'llm.js',
+  'npc.js',
+  // flags.js (actions-and-activities-overhaul-plan.md Phase 3, D15) sits
+  // directly after npc.js in index.html — it calls addMemoryFact/
+  // MEMORY_IMPORTANCE at runtime, plus effects.js's applyEffects/
+  // buildEffectContext/parseEffectDSL and sim.js's getPresentNpcIds, all
+  // already loaded above it. Pure decision function (resolveHouseRuleViolations)
+  // plus a trusted-producer applier (applyHouseRuleViolations), same tier as
+  // stealth.js — no DOM dependency at load or call time.
+  'flags.js',
+  // temperature.js (actions-and-activities-overhaul-plan.md Phase 8, D16)
+  // sits directly after flags.js in index.html — it calls sim.js's
+  // getSeasonIndex and mulberry32/hashStr, both already loaded above it.
+  // All pure (ambientTempC/thermostatHvacMultiplier/npcComfortBandC/
+  // temperatureClothingBiasWeight/thermostatSelfAdjustChance) — no DOM
+  // dependency at load or call time.
+  'temperature.js',
+  // dirt.js (actions-and-activities-overhaul-plan.md Phase 9, D17/D49) sits
+  // directly after temperature.js in index.html — it calls world.js's
+  // refreshRoomCleanliness and effects.js's clamp, both already loaded above
+  // it (world.js line 41, effects.js in the items/inventory/effects/... run
+  // just above flags.js). All its writes are function-body calls resolved at
+  // runtime, not load time, so callers loaded earlier in this list that
+  // reference bumpRoomDirt/dustSignalIntensity (signals.js, effects.js,
+  // defs.actions.js, computer.js, sim.js) are safe the same way — every
+  // script finishes loading before any gameplay call happens.
+  'dirt.js',
+  'willingness.js', 'relationships.js', 'rumination.js', 'prompt.js', 'llm.js',
   // concept.js (AI-Assisted Character Generation Phase 2) sits directly after
   // llm.js in index.html. Everything in it is pure except fillFromConcept,
   // which reaches for root.generateText inside the function body only — so the
@@ -135,6 +172,21 @@ const ORDER = [
   // real game state (willingness.js/npc.js/relationships.js/codex.js are
   // already loaded above it).
   'boundary.js',
+  // nightscene.js (night-scene-sleeping-npc-plan Phase 3b) sits directly
+  // after boundary.js in index.html and here for the same reason: it is the
+  // Living Tableau's DECIDER half, and every mechanic it touches is already
+  // in boundary.js above it (nightPalette / nightActionValid /
+  // nightStepAction / applyNightStep / composeNightLine). Its load-time
+  // surface is module state plus pure functions — the selection repair, the
+  // motion preview, the bar model, the labels and the whole view model, which
+  // is exactly the half worth testing (verify-night-p3.js) — and its only DOM
+  // touches are inside function bodies guarded on `typeof document`, so the
+  // whole file loads cleanly in the bare vm. render.nightscene.js is NOT in
+  // this list: it is pure view code and the render layer is deliberately
+  // outside this loader, same as render.spritestudio.js. Registered in BOTH
+  // index.html and here in the same commit — shipping a file to only one of
+  // the two lists is the rumination.js scar.
+  'nightscene.js',
   // pregnancy.js (intimacy-voyeurism Phase 18, D14/D16) sits between
   // boundary.js and render.js in index.html. Its whole surface — the
   // conception roll, the day-rollover pass, and the pure readers the scene
@@ -143,6 +195,51 @@ const ORDER = [
   // real game state (relationships.js/willingness.js/npc.js are loaded
   // above it).
   'pregnancy.js',
+  // money.js (actions-and-activities-overhaul-plan.md Phase 4, D9) — the
+  // bidirectional ledger. Pure reads plus a mutating adjustMoneyLedger, no
+  // load-time dependencies; sits directly before asks.js here exactly as it
+  // does in index.html (its only caller), so this is real position, not a
+  // documented divergence like asks.js's own note just below.
+  'money.js',
+  // mail.js (actions-and-activities-overhaul-plan.md Phase 12, D21) — the
+  // mailbox + door event. Pure reads plus mutating helpers over
+  // world.mailbox/world.deliveries/world.doorEvent, no load-time
+  // dependencies of its own (items.js/sim.js/time.js/config.js are already
+  // loaded above it). Sits directly after money.js here exactly as it does
+  // in index.html — real position, not a divergence.
+  'mail.js',
+  // puzzles.js (actions-and-activities-overhaul-plan.md Phase 14, D23) —
+  // DailyGrid, the seeded daily crossword. Pure reads plus mutating
+  // generatePuzzleForDay/fillPuzzleCell/revealHintForWord, no load-time
+  // dependencies of its own (seededRng/pickUnique/pushMoodImpulse from
+  // sim.js, awardSkillXp from skills.js, MOOD_PAYOUTS from config.js — all
+  // already loaded above it). Sits directly after mail.js here exactly as
+  // it does in index.html — real position, not a divergence.
+  'puzzles.js',
+  // chatter.js (actions-and-activities-overhaul-plan.md Phase 15, D24) — the
+  // in-house social feed. Pure reads plus mutating generateChatterForDay/
+  // postChatterAsPlayer/toggleChatterLike/addChatterComment, no load-time
+  // dependencies of its own (factRecency/factEmotionalWeight/
+  // factPersonalityBias/talkativeness/clamp01 from npc.js, pairKey from
+  // relationships.js, seededRng/weightedPick/pushMoodImpulse from sim.js,
+  // clamp from effects.js, EVENT_IMPORTANCE/MEMORY_IMPORTANCE/BELIEF/
+  // MOOD_PAYOUTS from config.js — all already loaded above it). Sits
+  // directly after puzzles.js here exactly as it does in index.html — real
+  // position, not a divergence.
+  'chatter.js',
+  // asks.js (asks-and-attachments-plan.md) sits between render.phone.js and
+  // ui.js in index.html — squarely inside the render/ui block this loader
+  // otherwise stops before. It was simply never added here across that
+  // plan's whole run (invariant 8's exact bug shape: registered in
+  // index.html only). Its whole surface — ASK_TYPES/ASK_CATEGORIES, every
+  // leaf's decide()/effects()/leafNote(), resolveAsk, parseAskInput, the
+  // repeat ladder — is pure decision logic with no DOM dependency at load OR
+  // call time (grep confirms zero `document.`/`window.`/addEventListener),
+  // so the whole file loads cleanly here, same as boundary.js/pregnancy.js
+  // above it. Added in the same commit as ASK_INVITE
+  // (actions-and-activities-overhaul-plan.md Phase 1) so that leaf — and
+  // every leaf before it — finally gets Node coverage.
+  'asks.js',
   // studio.js is a UI-layer file and sits BELOW ui.js in index.html, but like
   // image.js its logic half is pure: PLAYER_STUDIO_TABS and
   // STUDIO_ROW_GROUPS are tables asserted against CHARACTER_SCHEMA, and

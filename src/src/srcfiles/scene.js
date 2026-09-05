@@ -441,6 +441,13 @@ function composeScene(gameState, sceneState) {
     .filter(e => (e.sceneId ?? 0) === scene.id)
     .slice(-SCENE_READER.maxBeats);
 
+  // Continuous-cadence-closure Phase 8 (D9): the ambient "meanwhile" ticker —
+  // one line about a real recorded event the player could plausibly have
+  // perceived, here or nearby, since it last got a chance to surface. Lives
+  // in meanwhile.js, called here rather than reimplemented so composeScene
+  // stays the single place a render reads "what belongs in this scene".
+  const meanwhile = composeMeanwhileTicker(gameState, roomId);
+
   return {
     heading,
     self: selfLine,
@@ -448,6 +455,7 @@ function composeScene(gameState, sceneState) {
     doorCues,
     sensory,
     callouts,
+    meanwhile,
     beats,
     history: sceneHistory(gameState),
   };

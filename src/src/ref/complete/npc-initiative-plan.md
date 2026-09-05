@@ -4,7 +4,7 @@ Status: **COMPLETE — all six phases shipped.** Decisions locked D1–D36. Last
 updated 2026-08-13.
 
 Companions:
-- `src/src/ref/wip/SENSORY-AND-SOCIAL-ROADMAP.md` (the umbrella — this is Plan 5 of six, and the payoff the other five were built for. It carries R1–R8 and RI1–RI6, which this plan inherits).
+- `src/src/ref/complete/SENSORY-AND-SOCIAL-ROADMAP.md` (the umbrella — this is Plan 5 of six, and the payoff the other five were built for. It carries R1–R8 and RI1–RI6, which this plan inherits).
 - `src/src/ref/complete/npc-cognition-plan.md` (Plan 3 — **complete**. `npc.pursuit` is committed intent; this plan's overtures are selected by the same scorer and must not become a second one).
 - `src/src/ref/complete/knowledge-gossip-memory-plan.md` (Plan 4 — **complete**. Open questions, grievances and the player model are the motivations this plan spends. Its D13 bridge is the minimal proof this plan generalises).
 - `src/src/ref/complete/perception-and-signals-plan.md` (Plan 1 — **complete**. The expression layer in Phase 1 is entirely built on its propagation model).

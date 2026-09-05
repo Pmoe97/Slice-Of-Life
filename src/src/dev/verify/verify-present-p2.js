@@ -178,13 +178,13 @@ api(`
   };
 `);
 
-console.log('\\n1. Every auto room — drawn footprint and anchor stand-point agree (invariant 2)');
+console.log('\n1. Every auto room — drawn footprint and anchor stand-point agree (invariant 2)');
 const ar = api('__autoRooms()');
 check(`stand-point == D10 offset of the drawn rect in all ${ar.placements} placements across ${ar.rooms} rooms`,
       ar.placements > 0 && ar.allMatch, ar.failures.slice(0, 5).join(' | '));
 check('...and none of them is the room centroid (NPCs stand AT the object)', ar.allOffCentre);
 
-console.log('\\n2. Authored room (pool_room) — resolves against ROOM_DECOR, never the auto packer');
+console.log('\n2. Authored room (pool_room) — resolves against ROOM_DECOR, never the auto packer');
 const pr = api('__poolRoom()');
 check('the swimming_pool object resolves to the authored pool edge (inset 6)',
       pr.poolFound && pr.onEdge, `sp=(${pr.sp.x.toFixed(1)},${pr.sp.y.toFixed(1)}) exp=(${pr.exp.x.toFixed(1)},${pr.exp.y.toFixed(1)})`);
@@ -193,7 +193,7 @@ check('...and NOT the auto-pack placement (nothing the packer makes is drawn her
       pr.notAuto, `auto centre=(${pr.auto ? pr.auto.x.toFixed(1) : '?'},${pr.auto ? pr.auto.y.toFixed(1) : '?'})`);
 check('a decoration with no defId (pool_pump) falls to the room centroid', pr.pumpAtCentre);
 
-console.log('\\n3. D17 — the curated anchor table is wired');
+console.log('\n3. D17 — the curated anchor table is wired');
 const tb = api('__table()');
 check('bed/sofa/armchair are anchorMode center (lie-on/sit-in surfaces)',
       tb.bed === 'center' && tb.sofa === 'center' && tb.armchair === 'center',
@@ -203,26 +203,26 @@ check('curated standInset values land (pool 6, dining 6, kitchen table 6, stove 
       `pool=${tb.pool} dining=${tb.dining} kt=${tb.kitchenTable} stove=${tb.stove} desk=${tb.desk} tv=${tb.tv}`);
 check(`DEFAULT_STAND_INSET is 4`, tb.def === 4, `got ${tb.def}`);
 
-console.log('\\n4. Determinism — the packer is a pure function of (gs, roomId)');
+console.log('\n4. Determinism — the packer is a pure function of (gs, roomId)');
 check('resolveAutoPlacements twice returns byte-identical JSON', api('__deterministic()'));
 
-console.log('\\n5. D9 tier 1 — a PLACED object wins over the packer');
+console.log('\n5. D9 tier 1 — a PLACED object wins over the packer');
 const pw = api('__placedWins()');
 check('the stand-point is the offset of the placed rect, not the packer\'s',
       pw.atPos && pw.differsFromPacker,
       `sp=(${pw.sp.x.toFixed(1)},${pw.sp.y.toFixed(1)}) packer=(${pw.packerSp.x.toFixed(1)},${pw.packerSp.y.toFixed(1)})`);
 
-console.log('\\n6. End-to-end — self.cook anchors at the stove\'s drawn edge');
+console.log('\n6. End-to-end — self.cook anchors at the stove\'s drawn edge');
 const ca = api('__cookAnchor()');
 check('anchor resolves to the kitchen stove object at its drawn-edge stand-point',
       ca.anchored && ca.roomIsKitchen && ca.atStove,
       `room=${ca.roomIsKitchen} point=(${ca.point ? ca.point.x.toFixed(1) : '?'},${ca.point ? ca.point.y.toFixed(1) : '?'}) exp=(${ca.exp.x.toFixed(1)},${ca.exp.y.toFixed(1)})`);
 check('...off the kitchen centroid', ca.offCentre);
 
-console.log('\\n7. fpFootprint — the decor alias chain resolves, undrawn defIds are null');
+console.log('\n7. fpFootprint — the decor alias chain resolves, undrawn defIds are null');
 const al = api('__aliases()');
 check('sofa_basic → sofa, bed_basic → bed', al.sofaAlias && al.bedAlias);
 check('floor is undrawn (null); stove resolves to its own footprint', al.noFloor && al.stoveOk);
 
-console.log(`\\n${'='.repeat(46)}\\n  ${pass} passed, ${fail} failed\\n${'='.repeat(46)}`);
+console.log(`\n${'='.repeat(46)}\n  ${pass} passed, ${fail} failed\n${'='.repeat(46)}`);
 process.exit(fail > 0 ? 1 : 0);

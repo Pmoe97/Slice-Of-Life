@@ -12,7 +12,12 @@ session 2026-08-14, all five plan documents
 written the same session — see each for its own Handoff. This file stays
 in `wip/` as the umbrella once phases begin landing, the way
 `SENSORY-AND-SOCIAL-ROADMAP.md` did for the six plans before it.
-Last updated 2026-08-15.
+**Plan 1's own "built" claim carries a 2026-09-02 correction — see its
+description below before trusting "event-driven decision cadence" at face
+value; the gap it names is now closed by
+[`continuous-cadence-closure-plan.md`](continuous-cadence-closure-plan.md),
+also complete as of the same date.**
+Last updated 2026-09-02.
 
 Companions:
 - [`continuous-simulation-handoff-prompt.md`](continuous-simulation-handoff-prompt.md)
@@ -256,6 +261,28 @@ physical-output layer (C4). Work/commute becomes one long commitment
 rather than a block sequence. 6 phases; **all built** — Phase 6 (the
 tuning pass) landed the D16 tuning changes and watched three simulated
 days live.
+
+**Correction (2026-09-02).** This description's own words — "Decision
+cadence becomes event-driven: each NPC carries its own next-decision time;
+the loop resolves only who's due, not everyone on a fixed interval" —
+overstated what Plan 1 actually shipped. `npc.commitment` did (and does)
+genuinely store a continuous absolute-minute completion time, replacing
+the fully-dead `npc.pursuit` — that half of the claim was real. But
+nothing ever checked that time except `resolveTick`, and `resolveTick`
+only ever fired on a flat 30-minute grid (`CLOCK.tickMinutes`/
+`TIME_DILATION.simCheckpointMinutes`, both hardcoded to 30, on both the
+discrete action path and the idle/continuous path) — a continuous *data
+model* wrapped around the exact same fixed-interval *poll* it claimed to
+replace, with only cheaper per-NPC filtering (`dueNpcIds`) once that poll
+fired. A commitment finishing at `:47` was not discovered until the next
+`:00`/`:30` boundary. Found by direct code reading, not doc-trusting, and
+closed by
+[`continuous-cadence-closure-plan.md`](continuous-cadence-closure-plan.md)'s
+Phases 6-7: `nextWakeAbs` (Phase 6) is the real next-wake-time primitive
+this description assumed already existed, and the Phase 7 cutover is what
+actually makes `resolveTick`/`resolveBatch` resolve at the soonest real
+scheduled event instead of a flat grid. See that plan's own "The thesis"
+section for the full gap analysis this correction is drawn from.
 
 ### Plan 2 — Needs and the Heartbeat *(built — see [`../complete/needs-and-heartbeat-plan.md`](../complete/needs-and-heartbeat-plan.md))*
 

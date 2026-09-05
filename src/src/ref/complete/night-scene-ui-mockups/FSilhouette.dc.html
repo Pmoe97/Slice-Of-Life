@@ -1,0 +1,133 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
+    a { color: #f6a96c; } a:hover { color: #f6d76c; }
+  </style>
+</helmet>
+<div style="position:relative;width:1200px;height:760px;background:#161628;color:#e0e0f0;overflow:hidden;display:flex">
+
+  <div style="width:560px;flex-shrink:0;padding:28px 32px;display:flex;flex-direction:column;gap:18px;border-right:1px solid #3a3a5c;background:#1a1a2e">
+    <div style="display:flex;align-items:baseline;gap:10px">
+      <span style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#f6a96c">Night scene</span>
+      <span style="font-size:11px;color:#5a5a7c">authored art — never generated, never bad</span>
+    </div>
+
+    <svg viewBox="0 0 496 470" width="496" height="470" xmlns="http://www.w3.org/2000/svg">
+      <rect x="4" y="4" width="488" height="462" rx="16" fill="#161628" stroke="#3a3a5c"/>
+      <g stroke="#4a4a7c" stroke-width="1.5">
+        <rect x="120" y="34" width="94" height="94" rx="46" fill="rgba(226,108,166,0.10)"/>
+        <rect x="98" y="140" width="138" height="104" rx="26" fill="rgba(226,108,166,0.30)"/>
+        <rect x="104" y="254" width="126" height="70" rx="22" fill="rgba(226,108,166,0.14)"/>
+        <rect x="98" y="334" width="138" height="60" rx="20" fill="rgba(226,108,166,0.46)" stroke="#f66c8c" stroke-width="2.5"/>
+        <rect x="104" y="404" width="126" height="46" rx="18" fill="rgba(226,108,166,0.06)"/>
+      </g>
+      <g font-family="Segoe UI, system-ui, sans-serif" font-size="12" fill="#8888aa">
+        <text x="252" y="86">Face &amp; mouth</text>
+        <text x="252" y="104" font-size="10" fill="#5a5a7c">heat +3 · detect +14</text>
+        <text x="252" y="188">Chest</text>
+        <text x="252" y="206" font-size="10" fill="#5a5a7c">heat +6 · detect +11</text>
+        <text x="252" y="292">Stomach</text>
+        <text x="252" y="310" font-size="10" fill="#5a5a7c">heat +2 · detect +3</text>
+        <text x="252" y="360" fill="#f66c8c" font-weight="600">Between her legs</text>
+        <text x="252" y="378" font-size="10" fill="#f66c8c">heat +9 · detect +13 · leaves 2</text>
+        <text x="252" y="432">Thighs &amp; calves</text>
+        <text x="252" y="450" font-size="10" fill="#5a5a7c">heat +3 · detect +4</text>
+      </g>
+      <g stroke="#3a3a5c" stroke-width="1" stroke-dasharray="3 3">
+        <line x1="216" y1="80" x2="246" y2="80"/>
+        <line x1="238" y1="182" x2="246" y2="182"/>
+        <line x1="232" y1="286" x2="246" y2="286"/>
+        <line x1="238" y1="354" x2="246" y2="354"/>
+        <line x1="232" y1="426" x2="246" y2="426"/>
+      </g>
+    </svg>
+
+    <div style="display:flex;align-items:center;gap:16px">
+      <div style="display:flex;align-items:center;gap:7px">
+        <span style="width:14px;height:14px;border-radius:4px;background:rgba(226,108,166,0.10);border:1px solid #4a4a7c"></span>
+        <span style="font-size:11px;color:#5a5a7c">untouched</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:7px">
+        <span style="width:14px;height:14px;border-radius:4px;background:rgba(226,108,166,0.46);border:1px solid #4a4a7c"></span>
+        <span style="font-size:11px;color:#5a5a7c">fill = heat this zone has given</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:7px">
+        <span style="width:14px;height:14px;border-radius:4px;background:transparent;border:2px solid #f66c8c"></span>
+        <span style="font-size:11px;color:#5a5a7c">outline = risk if touched now</span>
+      </div>
+    </div>
+  </div>
+
+  <div style="flex-grow:1;display:flex;flex-direction:column;min-width:0">
+    <div style="padding:28px 32px 18px;display:flex;flex-direction:column;gap:14px">
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline">
+          <span style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#8888aa">Detection</span>
+          <span style="font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;color:#f66c8c">62</span>
+        </div>
+        <div style="position:relative;height:16px;border-radius:4px;background:#2a2a4a;border:1px solid #3a3a5c;overflow:hidden">
+          <div style="position:absolute;top:0;bottom:0;left:0;width:62%;background:linear-gradient(90deg,#b8455f,#f66c8c)"></div>
+          <div style="position:absolute;top:0;bottom:0;left:0;width:24%;background:#6d1f36"></div>
+          <div style="position:absolute;top:0;bottom:0;left:24%;width:2px;background:#e0e0f0;opacity:0.6"></div>
+        </div>
+        <span style="font-size:11px;color:#5a5a7c">floor 24 · permanent</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline">
+          <span style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#8888aa">Heat</span>
+          <span style="font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;color:#e26ca6">48</span>
+        </div>
+        <div style="position:relative;height:16px;border-radius:4px;background:#2a2a4a;border:1px solid #3a3a5c;overflow:hidden">
+          <div style="position:absolute;top:0;bottom:0;left:0;width:48%;background:linear-gradient(90deg,#8e3f6b,#e26ca6)"></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="padding:0 32px;display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between">
+        <span style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#8888aa">Last milestone</span>
+        <span style="font-size:11px;color:#5a5a7c">4 frames this session</span>
+      </div>
+      <div style="position:relative;width:100%;height:216px;border-radius:8px;background:radial-gradient(120% 90% at 50% 32%,#3b3050,#1c1728);overflow:hidden;border:1px solid #3a3a5c">
+        <div style="position:absolute;top:14px;left:0;right:0;text-align:center;font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:#5a5a7c">[ generated frame — milestones only ]</div>
+        <div style="position:absolute;left:0;right:0;bottom:0;padding:10px 12px;display:flex;gap:8px;align-items:center;background:linear-gradient(180deg,rgba(18,15,26,0),rgba(18,15,26,0.9))">
+          <button style="height:32px;padding:0 12px;border:1px solid #4a4a7c;border-radius:4px;background:rgba(26,26,46,0.9);color:#e0e0f0;font-size:12px;font-family:inherit">Keep</button>
+          <button style="height:32px;padding:0 12px;border:1px solid #4a4a7c;border-radius:4px;background:rgba(26,26,46,0.9);color:#8888aa;font-size:12px;font-family:inherit">Redraw</button>
+          <div style="flex-grow:1"></div>
+          <span style="font-size:11px;color:#5a5a7c">nothing waits on this</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="padding:18px 32px;flex-grow:1">
+      <p style="margin:0;font-size:17px;line-height:1.7;color:#e0e0f0;text-wrap:pretty">She shifts an inch toward your hand and settles again, breath catching once before it evens out.</p>
+    </div>
+
+    <div style="padding:0 32px 18px;display:flex;flex-direction:column;gap:10px">
+      <span style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#8888aa">Evidence — 2 outstanding</span>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button style="height:40px;padding:0 14px;border:1px solid #b8455f;border-radius:16px;background:rgba(246,108,140,0.10);color:#f66c8c;font-size:13px;font-family:inherit">Straighten her panties +5</button>
+        <button style="height:40px;padding:0 14px;border:1px solid #b8455f;border-radius:16px;background:rgba(246,108,140,0.10);color:#f66c8c;font-size:13px;font-family:inherit">Smooth the sheets +3</button>
+      </div>
+    </div>
+
+    <div style="padding:0 32px 28px;display:flex;gap:10px">
+      <button style="height:48px;padding:0 22px;border:none;border-radius:8px;background:#7b6cf6;color:#fff;font-size:13px;font-weight:600;font-family:inherit">Quell</button>
+      <div style="flex-grow:1"></div>
+      <button style="height:48px;padding:0 20px;border:1px solid #3a3a5c;border-radius:8px;background:#2a2a4a;color:#8888aa;font-size:13px;font-weight:600;font-family:inherit">Slip out</button>
+      <button style="height:48px;padding:0 20px;border:1px solid #4a4a7c;border-radius:8px;background:transparent;color:#f6a96c;font-size:13px;font-weight:600;font-family:inherit">Bail</button>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

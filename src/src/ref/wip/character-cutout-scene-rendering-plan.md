@@ -10,7 +10,7 @@ is the remaining gate — see the Handoff.
 
 Companions:
 - `src/src/ref/complete/scene-reader-ui-plan.md` (built — the frosted reader panel this plan renders *underneath*; the scene goes from one `<img>` to a plate plus layered cutouts below that panel)
-- `src/src/ref/wip/settings-and-pause-overhaul-plan.md` (planned — its D9 image-style fold extends into cutout cache keys; a reduce-motion preference should ride its settings surface if it ships first)
+- `src/src/ref/complete/settings-and-pause-overhaul-plan.md` (planned — its D9 image-style fold extends into cutout cache keys; a reduce-motion preference should ride its settings surface if it ships first)
 - `src/src/ref/complete/intimacy-and-voyeurism-overhaul-plan.md` (built — peek's gated generative path stays untouched; clothing states and content-flag parity govern what cutouts may show)
 - `src/src/ref/complete/player-creation-and-intro-plan.md` (built — `player.portrait.seed` is the anchor that makes player cutouts deterministic)
 - `src/src/ref/complete/floorplan-and-movement-plan.md` (built — room/phase changes drive plate keys and the layout reseeds)

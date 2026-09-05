@@ -21,6 +21,7 @@ function render(gameState, sceneState) {
   const composedScene = renderSceneReader(gameState, sceneState);
   markCalloutsShouted(gameState, composedScene);
   markDoorCuesShown(gameState, composedScene);
+  markMeanwhileShown(gameState, composedScene?.meanwhile);
   renderFooter(gameState);
   // Harmless when #main-content isn't in computer mode (CSS keeps
   // #computer-screen hidden either way) — always redrawing it here means
@@ -594,6 +595,12 @@ const FP_FURNITURE = {
     `<rect class="fp-f-soft" x="${x}" y="${y}" width="${w}" height="${h}" rx="2"/>` },
   pool_pump: { ...FP_FOOTPRINTS.pool_pump, draw: (x, y, w, h) =>
     `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="1"/>` },
+  // East Wing Phase 13 (D22): the sauna subroom — a walled box with a door
+  // notch on its north edge, drawn like any other piece of furniture (no
+  // new floor-plan node; see the OBJECT_DEFS entry's comment).
+  sauna: { ...FP_FOOTPRINTS.sauna, draw: (x, y, w, h) =>
+    `<rect class="fp-f" x="${x}" y="${y}" width="${w}" height="${h}" rx="1" fill="none"/>`
+    + `<rect class="fp-f-detail" x="${x + w * 0.35}" y="${y}" width="${w * 0.3}" height="2"/>` },
   plant_lr: { ...FP_FOOTPRINTS.plant_lr, draw: (x, y, w, h) => plantSymbol(x, y, w, h) },
   plant_balcony: { ...FP_FOOTPRINTS.plant_balcony, draw: (x, y, w, h) => plantSymbol(x, y, w, h) },
   lamp_lr: { ...FP_FOOTPRINTS.lamp_lr, draw: (x, y, w, h) =>
@@ -1701,7 +1708,11 @@ function currentWardrobeObject(gs) {
   return findObjectById(gs, _wardrobeObjId) || null;
 }
 
-function openWardrobePanel(gs, objId, currentOutfit) {
+// East Wing Phase 13 (D22): `heading` defaults to 'Wardrobe' so the
+// pre-existing bedroom callsite is untouched; lockers.change_outfit
+// (defs.actions.js) passes 'Lockers' so the panel doesn't misname itself
+// when opened from the east wing.
+function openWardrobePanel(gs, objId, currentOutfit, heading) {
   if (typeof openActionWindow !== 'function' || !gs) return Promise.resolve(null);
   // This runs during prepare(), so the loading overlay is still up — same
   // reason presentActionStep/openSpreadPicker take it down first, rather
@@ -1714,7 +1725,7 @@ function openWardrobePanel(gs, objId, currentOutfit) {
   _wardrobeSlot = null;
   const opened = openActionWindow(gs, {
     tier: 'D', trigger: 'player', body: 'wardrobe',
-    heading: 'Wardrobe', dismissal: 'tap', defaultChoice: 'cancel',
+    heading: heading || 'Wardrobe', dismissal: 'tap', defaultChoice: 'cancel',
     choices: null, image: null,
   });
   // openActionWindow's promise executor runs renderActionWindow(s)
@@ -3789,6 +3800,21 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
       hereChips.push(wardrobeChip);
       continue;
     }
+    // East Wing Phase 13 (D22): the lockers get the same submenu treatment
+    // as the wardrobe (Change Outfit / Open) — the "wardrobe hook" for swim
+    // gear, so the player doesn't need a bedroom trip to change poolside.
+    if (obj.defId === 'lockers') {
+      const lockersChip = {
+        label: def.container?.label || def.label || 'Lockers',
+        action: 'lockers.interact',
+        bucket: 'containers',
+        groupKey: `lockers-${obj.id}`,
+        extra: { objId: obj.id },
+      };
+      lockersChip.children = submenuVerbChips(lockersChip);
+      hereChips.push(lockersChip);
+      continue;
+    }
     const label = def.container?.label || def.label || 'Container';
     hereChips.push({ label: `Open ${label}`, action: 'container.open', bucket: 'containers', extra: { objId: obj.id } });
   }
@@ -3829,7 +3855,19 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
       // alongside Nap/Sleep/Masturbate rather than nesting a second "Bed ▸"
       // inside the Bed group.
       const bedChip = { label: 'Bed', action: 'bed.interact', extra: { objId: obj.id }, npcId: sleeperId };
-      for (const child of submenuVerbChips(bedChip)) { child.bucket = 'bed'; hereChips.push(child); }
+      for (const child of submenuVerbChips(bedChip)) {
+        // night-scene D13 / Phase 6: the Night Scene's row is the one bed verb
+        // with a real entry guard — resident, genuinely asleep, in this room,
+        // no cold shoulder, no session already open. Checking it HERE rather
+        // than inside the scene is what makes an ineligible target show no
+        // chip at all instead of a chip that says no; the same gate is
+        // re-run on entry, because visibility is not a lock.
+        if (child.action === 'boundary.night_scene'
+          && !(typeof resolveNightSceneGate === 'function'
+            && resolveNightSceneGate(gs, sleeperId, { location: roomId }).allowed)) continue;
+        child.bucket = 'bed';
+        hereChips.push(child);
+      }
     }
     break;
   }
@@ -3915,6 +3953,18 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
       hereChips.push({ label: `Check ${owner.bible.name || 'Their'} Phone`, action: 'search-phone', npcId: roomOwner });
     }
   }
+  // Actions & Activities Overhaul Phase 11 (D20): laundry snoop. The laundry
+  // room has no single owner (it's common), so the gate is simply "is
+  // anyone else's clothing physically sitting in the hamper/washer/dryer
+  // right now" — resolveLaundrySnoop (stealth.js) picks which resident's
+  // laundry the player actually finds, same "the chip never promises a find
+  // it can't deliver" rule pickpocketing's chip follows.
+  if (roomId === 'laundry') {
+    const hasOthersLaundry = Object.values(roomObjectsHere).some(o =>
+      ['laundry_hamper', 'washer', 'dryer'].includes(o.defId)
+      && (o.contents || []).some(s => isClothingStack(s) && s.ownerId && s.ownerId !== 'player'));
+    if (hasOthersLaundry) hereChips.push({ label: 'Snoop Through the Laundry', action: 'snoop-laundry' });
+  }
   // Group by likeness and render groups before flat actions.
   const { groups: hereGroups, flat: hereFlat } = partitionHereChips(hereChips);
   groups.push({ id: 'here', label: 'Here', chips: [...hereGroups, ...hereFlat] });
@@ -3941,21 +3991,42 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
     const npc = gs.npcs[npcId];
     socialChips.push({ label: `Talk to ${npc.bible.name || 'Someone'}`, action: 'talk', npcId });
   }
-  // Intimacy & Voyeurism Phase 11 (D3): Make a Move — one chip whenever
-  // someone is present; the flow picks the partner (when several are) and the
-  // act. The paired acts never render as flat chips (their ACTION_DEFS source
-  // kind is 'paired', which actionSourceMatches rejects), so this chip is
-  // their only door — D3's symmetric-initiation surface, gated by the same
-  // Phase 9 willingness function the NPC side uses.
-  if (presentNpcIds.length > 0) {
-    socialChips.push({ label: 'Make a Move', action: 'make_a_move' });
+  // P1B (D33/D36): pickpocketing — a covert take off a present, aware
+  // resident's person. Gated the same way Give Item gates its own chip: only
+  // shown when there's actually something takeable, so the chip never
+  // promises a lift that resolvePickpocket would just refuse. A
+  // suspicion-window NPC (D36) also offers the cover-tracks follow-up right
+  // alongside it.
+  for (const npcId of presentNpcIds) {
+    const npc = gs.npcs[npcId];
+    if (npc.residency?.status !== 'resident') continue;
+    const name = npc.bible?.name || 'Them';
+    const hasTakeable = (npc.inventory || []).some(s =>
+      (s?.qty || 0) > 0 && !(s.meta?.keyItem || ITEM_DEFS[s.defId]?.keyItem));
+    if (hasTakeable) socialChips.push({ label: `Pickpocket ${name}`, action: 'pickpocket', npcId });
+    if (activeSuspicionWindow(gs, npc)) socialChips.push({ label: `Play It Cool with ${name}`, action: 'cover-tracks', npcId });
   }
+  // Phase 6 (D11): the explicit release — free, shown for anyone currently
+  // following, resident or guest (ASK_FOLLOW itself carries no residency
+  // gate, so the chip doesn't invent one either).
+  for (const npcId of presentNpcIds) {
+    const npc = gs.npcs[npcId];
+    if (npc.follow?.leader === 'player') {
+      socialChips.push({ label: `Ask ${npc.bible?.name || 'Them'} to Stop Following`, action: 'stop-following', npcId });
+    }
+  }
+  // 'Make a Move' chip retired (actions-and-activities-overhaul-plan.md
+  // Phase 2, D5): "the chip row gains nothing back." Initiation now lives in
+  // the chat modal's Ask ▸ Affection category (Talk to someone, then Ask) —
+  // the paired acts (quickie/sex/cuddle/share a shower) are reached through
+  // an accepted, awake "Be Intimate" ask (doConvSend's pass2), not a room
+  // chip.
   // Intimacy & Voyeurism Phase 17 (D14): the three-way act. Two residents
   // present is the surface; the GATE (all three parties' willingness +
   // desire) lives in boundary.js's resolveBoundaryThroupleGate and is read
-  // at execution time — the chip never pre-filters on it, exactly like
-  // Make-a-Move lets the gate say no with a person's voice. The flow picks
-  // the two partners, so the chip is one generic row.
+  // at execution time — the chip never pre-filters on it, letting the gate
+  // say no with a person's voice. The flow picks the two partners, so the
+  // chip is one generic row.
   if (presentNpcIds.length >= 2) {
     socialChips.push({ label: 'Propose a Threesome', action: 'boundary.throuple' });
   }
@@ -4041,7 +4112,19 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
   groups.push({ id: 'social', label: 'Social', chips: socialChips });
 
   // More
-  groups.push({ id: 'misc', label: 'More', chips: [{ label: 'Wait', action: 'wait' }] });
+  // P1B (D34): the Sneaking toggle. A stance, not an act — free at any
+  // energy (isActionExemptFromEnergyGate), it just changes how the NEXT
+  // move behaves (emitPlayerFootsteps) and gives pickpocketing a detection
+  // discount while it's on.
+  // Phase 3 (D15): the one house rule this engine ships — a free toggle,
+  // same shape as Sneaking. flags.js's checkHouseRules reads
+  // gs.world.houseRules at the moment the rule's act (eating) resolves.
+  const houseRuleActive = (gs.world?.houseRules || []).some(r => r.id === 'no_eating_living_room');
+  groups.push({ id: 'misc', label: 'More', chips: [
+    { label: 'Wait', action: 'wait' },
+    { label: player.sneaking ? 'Stop Sneaking' : 'Start Sneaking', action: 'sneak.toggle' },
+    { label: houseRuleActive ? 'Rescind House Rule: No Eating in the Living Room' : 'Set House Rule: No Eating in the Living Room', action: 'house-rule.toggle' },
+  ] });
 
   return groups;
 }
@@ -4125,6 +4208,18 @@ function renderSceneReader(gs, sceneState) {
       el.textContent = sentence(sig.here
         ? sig.phrase
         : `${sig.phrase}, drifting in from the ${sig.sourceRoomName}`);
+      est.appendChild(el);
+    }
+    // Continuous-cadence-closure Phase 8 (D9): the ambient "meanwhile"
+    // ticker — a real recorded event in a NEARBY room, not a live signal, so
+    // it reads after the sensory layer rather than folded into it (different
+    // data shape, same establishing passage per the plan's own Open
+    // Question). Never the player's own room — meanwhile.js's own header
+    // explains why (surfaceRoomEvidence owns that, race-free).
+    if (scene.meanwhile) {
+      const el = document.createElement('div');
+      el.className = 'sr-meanwhile';
+      el.textContent = sentence(scene.meanwhile.line);
       est.appendChild(el);
     }
     if (est.childElementCount === 0) {

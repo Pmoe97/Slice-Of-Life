@@ -39,6 +39,14 @@ let clockLoopRunning = false;
 let clockLastFrameMs = 0;
 let clockAccumulatedMinutes = 0;  // game-minutes since last checkpoint
 let clockHeartbeatMinutes = 0;    // game-minutes since last needs heartbeat (Phase 2)
+// continuous-cadence-closure Phase 7 (D16): the absolute minute the NEXT
+// checkpoint should fire at, per nextWakeAbs (sim.js) — cached rather than
+// recomputed every frame since nothing it reads changes between checkpoints;
+// null means "stale, recompute against current state before next use" (set
+// whenever currentGameState could have changed out from under it: on
+// (re)start and on resume-from-pause, since a discrete action may have run
+// while the loop was paused).
+let nextCheckpointWakeAbs = null;
 let clockRafId = null;
 // Generation counter: every pause/stop bumps it, so any rAF callback still
 // queued from an older generation recognises itself as stale and dies
@@ -244,10 +252,43 @@ async function clockFrame(gen) {
       if (typeof renderStatusStrip === 'function') renderStatusStrip(currentGameState);
     }
 
-    // Check if we've crossed a sim checkpoint
-    if (clockAccumulatedMinutes >= TIME_DILATION.simCheckpointMinutes) {
-      const checkpointMinutes = Math.floor(clockAccumulatedMinutes / TIME_DILATION.simCheckpointMinutes) * TIME_DILATION.simCheckpointMinutes;
-      clockAccumulatedMinutes -= checkpointMinutes;
+    // continuous-cadence-closure Phase 7 (D16/D17): the checkpoint trigger is
+    // no longer the flat TIME_DILATION.simCheckpointMinutes poll alone —
+    // nextWakeAbs (sim.js), called with includeHeartbeat:false, names the
+    // next REAL absolute minute anything needs attention (a commitment/
+    // window completing), or +Infinity when nothing real is scheduled;
+    // min()'d against the OLD flat simCheckpointMinutes cadence so a
+    // checkpoint still fires at the old cadence when nothing real is due
+    // sooner. NOT the raw (heartbeat-included) nextWakeAbs default — that
+    // would fire a checkpoint at least every HEARTBEAT_MINUTES regardless,
+    // re-running resolveTick's Pass 1 for every uncommitted NPC far more
+    // often than the old cadence (dueForDecision: no commitment = always
+    // due) — the exact wander-churn regression D17's own comment (sim.js,
+    // nextWakeAbs) documents finding in resolveBatch's own stepping, which
+    // this checkpoint gate would reproduce identically if wired the same
+    // naive way. Computed once right after the previous checkpoint resolved
+    // and cached until then (nothing it reads changes between checkpoints).
+    if (nextCheckpointWakeAbs === null) {
+      const nowAbsAtCompute = currentGameState.meta.clock.day * 1440 + currentGameState.meta.clock.minutes;
+      nextCheckpointWakeAbs = Math.min(
+        nextWakeAbs(currentGameState, { includeHeartbeat: false }),
+        nowAbsAtCompute + TIME_DILATION.simCheckpointMinutes
+      );
+    }
+    const nowAbsThisFrame = currentGameState.meta.clock.day * 1440 + currentGameState.meta.clock.minutes;
+    const checkpointDue = clockAccumulatedMinutes > 0 && nowAbsThisFrame >= nextCheckpointWakeAbs;
+    if (checkpointDue) {
+      const checkpointMinutes = clockAccumulatedMinutes;
+      clockAccumulatedMinutes = 0;
+      // Cleared so the line above recomputes on the next frame. The
+      // checkpoint itself is fire-and-forget (fireSimCheckpoint below), so a
+      // frame or two may recompute against still-pre-checkpoint state before
+      // the result lands in currentGameState — harmless: it just means this
+      // block may fire again immediately, which fireSimCheckpoint's own
+      // checkpointInProgress guard folds into pendingCheckpointMinutes
+      // rather than losing or double-counting anything (runSimCheckpoint,
+      // above).
+      nextCheckpointWakeAbs = null;
 
       // Run the checkpoint asynchronously — don't block the rAF.
       // fireSimCheckpoint is fire-and-forget; it sets a guard so
@@ -333,13 +374,22 @@ async function advanceAndResolveMinutes(minutes) {
     // not start on a tick boundary (this audit's gap-fix, D1).
     await advanceAndResolve(ticks, { needsMinutes: minutes });
   } else {
-    // No tick boundary crossed at all — advanceAndResolve never runs, so
-    // phone battery/memory decay have to be driven here directly, exactly
-    // as decayPlayerNeeds already is below. Without this, any action under
-    // CLOCK.tickMinutes that doesn't cross a boundary (a note read, a door
-    // lock, a short walk leg) silently skipped both for its whole span.
+    // No tick boundary crossed at all — advanceAndResolve (and so
+    // resolveBatch) never runs, so phone battery/memory decay have to be
+    // driven here directly, exactly as decayPlayerNeeds already is below.
+    // Without this, any action under CLOCK.tickMinutes that doesn't cross a
+    // boundary (a note read, a door lock, a short walk leg) silently
+    // skipped both for its whole span.
     advancePhoneBattery(currentGameState, minutes);
     currentGameState = decayAllMemories(currentGameState, minutes);
+    // continuous-cadence-closure Phase 3 (D11): NPC needs used to live
+    // entirely inside resolveBatch's per-tick loop, so a sub-tick action
+    // that crossed no grid boundary left every NPC's needs completely
+    // frozen for its whole span — the same gap phone battery/memory decay
+    // already had before the fix above. Player needs stay out of this call
+    // (player: false) since decayPlayerNeeds below already owns the player
+    // on this path, exactly as resolveBatch's own per-tick call excludes it.
+    currentGameState = applyNeedsHeartbeat(currentGameState, minutes, { player: false });
   }
 
   // Settle the clock on the exact target. resolveBatch lands on a tick
@@ -368,11 +418,27 @@ async function runSimCheckpoint(minutes) {
     // accumulator already owns every one of these minutes at per-minute
     // cadence with the idle multiplier (D6), and running the per-tick pass
     // here too would double every need's movement on the continuous path.
+    // continuous-cadence-closure Phase 7 (D16): `ticks` itself is now
+    // vestigial on this path (resolveBatch's own advanceClock:false branch
+    // resolves needsMinutes directly, not ticks*CLOCK.tickMinutes) — kept
+    // only as a harmless positional filler for advanceAndResolve's own
+    // signature. needsMinutes carries the TRUE span (this checkpoint's real
+    // accumulated minutes, no longer lossily rounded to a tick-count
+    // multiple of CLOCK.tickMinutes first) through to resolveTick's own
+    // minutesThisTick — the whole point of removing CLOCK.tickMinutes' role
+    // as the resolution trigger (this phase's Files note) on this path.
     const ticks = Math.max(1, Math.round(minutes / CLOCK.tickMinutes));
-    await advanceAndResolve(ticks, { advanceClock: false, fromClockLoop: true, suppressNeeds: true });
+    await advanceAndResolve(ticks, { advanceClock: false, fromClockLoop: true, suppressNeeds: true, needsMinutes: minutes });
   } finally {
     checkpointInProgress = false;
-    if (pendingCheckpointMinutes >= TIME_DILATION.simCheckpointMinutes) {
+    // D16: was `>= TIME_DILATION.simCheckpointMinutes` — correct only while
+    // every checkpoint carried exactly 30 minutes. Now that checkpoints fire
+    // as soon as nextWakeAbs says something is due (clockFrame, below,
+    // typically well under 30), a queued checkpoint could sit in
+    // pendingCheckpointMinutes forever waiting to cross a 30-minute floor it
+    // may never reach on its own. Any leftover pending minutes must resolve
+    // once the in-flight checkpoint clears, not just a full-tick's worth.
+    if (pendingCheckpointMinutes > 0) {
       const next = pendingCheckpointMinutes;
       pendingCheckpointMinutes = 0;
       runSimCheckpoint(next);
@@ -408,6 +474,9 @@ function startClockLoop() {
   clockLastFrameMs = performance.now();
   clockAccumulatedMinutes = 0;
   clockHeartbeatMinutes = 0;
+  // continuous-cadence-closure Phase 7 (D16): the cached wake target may
+  // have been computed against a DIFFERENT save/state entirely.
+  nextCheckpointWakeAbs = null;
   // Adopt the current day so a fresh session doesn't replay a rollover for
   // the day it loaded into.
   lastRolledOverDay = currentGameState?.meta?.clock?.day ?? null;
@@ -438,6 +507,14 @@ function resumeClockLoop() {
   if (clockLoopRunning) return;
   clockLoopRunning = true;
   clockLastFrameMs = performance.now();
+  // continuous-cadence-closure Phase 7 (D16): unlike clockAccumulatedMinutes
+  // (which correctly PERSISTS partial accumulation across a pause), a cached
+  // wake target genuinely goes stale across one — pausing is exactly what
+  // every discrete action does (advanceAndResolve), and a discrete action is
+  // exactly what can create/complete a commitment nextWakeAbs would need to
+  // know about. Recompute fresh on the next frame instead of resolving
+  // against whatever was true before the pause.
+  nextCheckpointWakeAbs = null;
   const gen = ++clockGeneration;
   clockRafId = requestAnimationFrame(() => clockFrame(gen));
 }

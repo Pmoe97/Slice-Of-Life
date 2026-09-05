@@ -1129,9 +1129,16 @@ body {
   /* A DEFINITE height (not max-height): flex items are sized to fit the
      panel instead of being laid out at their natural height and then
      clipped by the box — the history summary was ending up under the
-     panel's bottom edge. The beats region (flex 1 1 auto, min-height 0)
-     is what absorbs the slack either way. */
-  height: 40%;
+     panel's bottom edge. The beats region (flex 1 1 auto, with a real
+     min-height as of the 2026-09-01 legibility fix below) is what absorbs
+     the slack either way. */
+  /* Bug report (2026-09-01): was 40% (the D16 glass tune's original figure).
+     At 40% glass transparency the backdrop is doing most of the legibility
+     work already (see the scrim/halo block comment below) — the panel can
+     afford a bit more of the column without the image disappearing, and the
+     establishing/beats regions need the room (see their own min/max-height
+     fixes just below). */
+  height: 46%;
   min-height: 0;
   z-index: 2;
   display: flex;
@@ -1240,7 +1247,13 @@ body {
      this layout exists to guarantee. It sizes to its content, capped, and the
      beats region takes whatever is left. */
   flex: 0 0 auto;
-  max-height: 56%;
+  /* Bug report (2026-09-01): was 56% — with `.sr-beats` below only getting
+     leftovers (`flex: 1 1 auto`), a run of 3-4 sensory lines here (routine on
+     a busy room) could eat past 56% of a panel that's already the smaller
+     40% share, leaving `.sr-beats` with next to nothing before its own new
+     min-height guarantee existed. Capped tighter so the two regions split
+     the panel's real estate instead of one starving the other. */
+  max-height: 46%;
   overflow-y: auto;
   padding: var(--space-3);
   display: flex;
@@ -1290,12 +1303,30 @@ body {
 .sr-door-cue[data-kind="ajar"] { color: var(--sr-dim); }
 .sr-door-cue[data-kind="sound"] { color: var(--color-text); }
 
+/* The ambient "meanwhile" ticker (continuous-cadence-closure Phase 8, D9):
+   a real recorded event surfacing after the fact, not a live signal — dim
+   like sensory prose, but never italic, since it is a plain statement of
+   something that happened rather than an impression of something ongoing. */
+.sr-meanwhile { color: var(--sr-dim); }
+
 /* Beats: what has happened since you walked in. This is the ONLY band that
    scrolls, which is what keeps the heading and establishing passage in
    view. */
+/* Bug report (2026-09-01): the "big bright anchor" comment on .log-entry.
+   is-latest below promised the freshest line prominence, but `min-height: 0`
+   here meant it got NONE of that promise in practice — a long establishing
+   passage (several sensory/signal lines, `.sr-establishing`'s own
+   `max-height: 56%` letting it grow that far) routinely squeezed this flex
+   region down to a sliver a few px tall, well under one line of its own
+   `is-latest` text. `overflow-y: auto` hid the shortfall instead of fixing
+   it: the text was never actually smaller, just clipped to almost nothing.
+   A real min-height — two full is-latest lines' worth, computed from the
+   same tokens that size the text, not a magic number — guarantees the
+   anchor line stays legible no matter how much the establishing passage
+   grows above it. */
 .sr-beats {
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: calc((var(--fs-md) * 1.1) * var(--lh-loose) * 2 + var(--space-3) * 2);
   overflow-y: auto;
   padding: var(--space-3);
   display: flex;
@@ -2716,6 +2747,778 @@ body {
 .ctr-detail-fresh[data-state="spoiled"] { color: var(--color-warm); }
 .ctr-detail-fresh[data-state="rotten"] { color: var(--color-negative); }
 .ctr-action-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+
+/* ===== Night Scene (night-scene-sleeping-npc-plan Phase 3b, D15) ==========
+   The Living Tableau. Drawn from ref/wip/night-scene-ui-mockups/Main.dc.html
+   and CTableauPhone*.dc.html, with every hex in those artboards mapped back to
+   a token — that folder's README carries the mapping, and the reason is that
+   an artboard has no access to this stylesheet while the game ships 14 themes
+   over the :root block. An inline #232342 here would look right in `midnight`
+   and broken in the other thirteen.
+
+   D15's "the same anatomy at both widths; mobile is not a reduced desktop" is
+   ONE DOM tree in two arrangements. Above the breakpoint the panel is always
+   open, the compact bar is hidden, and the narration sits in the panel; below
+   it the frame IS the screen, the narration sits in a scrim over its lower
+   edge, the compact bar carries the current action, and "Change…" raises the
+   panel as a sheet through data-tray="open". */
+
+/* The two colours the artboards introduced that had no token. Defined as
+   tokens rather than inlined so all 14 themes get a coherent version: both are
+   derived from tokens the themes already set, with a flat fallback declaration
+   first for browsers without color-mix (the pattern the scene-reader tokens
+   already use). --color-stirring is the permanent floor drawn INSIDE the
+   wakefulness track — D26 makes it a band in the same bar, never a second bar
+   — and --color-evidence edges the outstanding-evidence chips. */
+:root {
+  --color-stirring: #6d1f36;
+  --color-stirring: color-mix(in srgb, var(--color-negative) 50%, var(--color-border-strong));
+  --color-evidence: #b8455f;
+  --color-evidence: color-mix(in srgb, var(--color-negative) 78%, var(--color-border-strong));
+}
+
+/* A live session is not a report, so the backdrop is NOT the D1 dismiss
+   target it is for every other body. The overlay's own dark radial ground is
+   already theme-neutral (hardcoded rgba, the same in all 14 themes), so it is
+   deliberately left alone — only the cursor lie is corrected. */
+.aw-overlay[data-body=night] {
+  cursor: default;
+  padding: var(--space-2);
+  /* The outcome card is a small pane over a legible game, so its backdrop is
+     deliberately thin. The tableau is full-bleed and the whole screen is the
+     scene — at the outcome window's own opacity the apartment HUD reads
+     straight through the frame. This is the same dark ground, taken up to
+     opaque, and it is built from --color-bg so it follows the theme instead
+     of pinning one night. */
+  background:
+    radial-gradient(ellipse at center,
+      color-mix(in srgb, var(--color-bg) 88%, #000) 0%,
+      color-mix(in srgb, var(--color-bg) 40%, #000) 62%,
+      #05050a 100%);
+}
+.aw-overlay[data-body="night"] .aw-stage {
+  width: min(1200px, 98vw);
+  height: min(96vh, 98dvh);
+  max-height: min(96vh, 98dvh);
+  overflow-y: hidden;
+  gap: var(--space-2);
+  justify-content: flex-start;
+}
+.night-content {
+  position: relative;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  /* The vertical budget the frame may spend (D19). Desktop: the stage's 96vh
+     less the bars row, the tray panel and the gaps, and never more than the
+     512px that makes a 768x512 generation native pixels. The shape rules below
+     convert this into a WIDTH, which is the only way to hold an aspect-ratio
+     and two caps at once. */
+  --night-frame-h: min(512px, calc(96vh - 320px));
+}
+.night-content[hidden] { display: none !important; }
+
+/* --- the two bars (D26, amended by D38) --------------------------------- */
+.night-bars {
+  width: min(1024px, 100%);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+.night-bar { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.night-bar[data-meter="wake"] { flex: 1 1 auto; }
+.night-bar[data-meter="heat"] { flex: 0 1 320px; }
+.night-bar-label {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-dim);
+  flex-shrink: 0;
+}
+.night-track {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 12px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-bg) 72%, var(--color-surface));
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+.night-fill {
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  transition: width var(--transition-med);
+}
+.night-fill[data-fill="wake"] {
+  background: linear-gradient(90deg, var(--color-evidence), var(--color-negative));
+}
+/* D26: Heat is NEVER coloured or worded as a danger — it is the one pure win
+   track in the scene, so it takes the desire hue and nothing red. */
+.night-fill[data-fill="heat"] {
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--color-desire) 55%, var(--color-bg)), var(--color-desire));
+}
+/* Stirring: painted OVER the wakefulness fill, from the same origin, so the
+   permanent floor reads as a deeper region of the one bar rather than a
+   second track (D2/D26). */
+.night-band {
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  background: var(--color-stirring);
+  transition: width var(--transition-med);
+}
+.night-tick { position: absolute; top: 0; bottom: 0; }
+.night-tick[data-tick="stir"] { width: 2px; background: var(--color-text); opacity: 0.6; }
+.night-tick[data-tick="willing"] { width: 1px; background: var(--color-desire); opacity: 0.8; }
+.night-bar-value {
+  font-size: var(--fs-base);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  width: 26px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.night-bar[data-meter="wake"] .night-bar-value { color: var(--color-negative); }
+.night-bar[data-meter="heat"] .night-bar-value { color: var(--color-desire); }
+.night-bar-sub {
+  font-size: var(--fs-xs);
+  color: var(--color-text-faint);
+  width: 92px;
+  flex-shrink: 0;
+}
+/* D38: one pip per climax reached, so the bar stays a bar (it fills on
+   heat mod 100) and the count stays legible beside it. */
+.night-pips { display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
+.night-pip { width: 6px; height: 6px; border-radius: 50%; background: var(--color-desire); }
+
+/* --- the frame ---------------------------------------------------------- */
+/* D19: THE BOX IS THE PICTURE'S SHAPE. `data-shape` (set by the painter from
+   the frame actually on screen, never from the window's current aspect) locks
+   the box to the resolution that frame was generated at, so object-fit:contain
+   produces neither a crop nor a letterbox. The three shapes are the three
+   generateImage sizes the night scene uses — 768x512, 768x768, 512x768 — with
+   D19's caps: upscaling is accepted, absurd upscaling is not, and on a very
+   wide monitor the surplus width becomes dark ground rather than stretch.
+
+   `object-fit: cover` is BANNED on this surface. It is the one line a later
+   session will be tempted to add and it would silently reintroduce the crop
+   D19 exists to forbid. */
+.night-frame {
+  position: relative;
+  aspect-ratio: 3 / 2;
+  width: min(720px, 100%);
+  min-height: 0;
+  /* NOT flex-shrink. The width below already accounts for the height budget,
+     and letting flex squash the height instead would break the aspect-ratio
+     and letterbox the picture inside a box that is no longer its shape --
+     precisely what D19 forbids. */
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: radial-gradient(120% 95% at 50% 34%,
+    color-mix(in srgb, var(--color-surface-hover) 65%, var(--color-bg)) 0%,
+    var(--color-surface) 52%,
+    var(--color-bg) 100%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-warm) 26%, transparent),
+              0 24px 64px var(--color-shadow);
+}
+/* D19's caps, applied through the WIDTH rather than as a max-height, because
+   `aspect-ratio` + an explicit width + a max-height is over-constrained: the
+   height cap wins, the box stops being the picture's shape, and contain
+   letterboxes inside it. Found on the Phase 4 layout pass, where the landscape
+   frame drew 1024x512 (2:1) around a 3:2 image. Converting the height budget
+   through the aspect keeps ONE constraint on the box, so the aspect always
+   holds: on a 1440x900 desktop the height term binds and the landscape frame
+   lands at 768x512 -- native pixels, D19's stated intent. On a very wide
+   monitor the 1024 term binds and the surplus width becomes dark ground.
+   --night-frame-h is the vertical space the bars and the tray leave. */
+.night-frame[data-shape="landscape"] { aspect-ratio: 3 / 2; width: min(1024px, 100%, calc(var(--night-frame-h) * 3 / 2)); }
+.night-frame[data-shape="square"]    { aspect-ratio: 1 / 1; width: min(900px,  100%, var(--night-frame-h)); }
+.night-frame[data-shape="portrait"]  { aspect-ratio: 2 / 3; width: min(640px,  100%, calc(var(--night-frame-h) * 2 / 3)); }
+.night-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;   /* D19 — never `cover` */
+  display: block;
+}
+.night-img[hidden] { display: none !important; }
+/* The ActionWindow's own shimmer, which is the sim's established "this picture
+   is on its way" language (.aw-shimmer, same sweep keyframes). The tap it
+   belongs to has ALREADY resolved — design invariant 3 — so this never reads
+   as a blocked interaction. */
+.night-shimmer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(115deg, transparent 20%, rgba(255,255,255,0.10) 42%, rgba(255,255,255,0.16) 50%, rgba(255,255,255,0.10) 58%, transparent 80%);
+  background-size: 240% 100%;
+  animation: peek-shimmer-sweep 1.4s ease-in-out infinite;
+}
+.night-shimmer[hidden] { display: none !important; }
+/* D24's elapsed readout, over the frame's top-right the way a clock sits in a
+   room. Small on purpose: time is a cost the player should feel, not a HUD
+   they play against. */
+.night-clock {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-3);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  color: var(--color-text-dim);
+  text-shadow: 0 1px 3px var(--color-shadow);
+  pointer-events: none;
+}
+/* Phase 5 (D14/D38): the climax beat. Heat's own colour, never the danger
+   colour — D26 is explicit that Heat is never drawn or worded as a risk, and
+   this is the moment that rule matters most. One short pulse in, then it
+   holds until the next action clears it. */
+.night-climax {
+  position: absolute;
+  top: var(--space-2);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  padding: var(--space-1) var(--space-4);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-desire);
+  background: color-mix(in srgb, var(--color-desire) 24%, var(--color-bg));
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: night-climax-in 420ms ease-out;
+}
+.night-climax[hidden] { display: none !important; }
+@keyframes night-climax-in {
+  0%   { opacity: 0; transform: translateX(-50%) scale(0.86); }
+  60%  { opacity: 1; transform: translateX(-50%) scale(1.06); }
+  100% { opacity: 1; transform: translateX(-50%) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .night-climax { animation: none; }
+}
+.night-plate {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  text-align: center;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-faint);
+}
+/* The plate is the frame's dark GROUND, not a caption: it carries D34's pose +
+   covers while there is no picture (the Move tab is unreadable without that)
+   and gets out of the way the moment one lands — the picture says where she is
+   far better than the words do, which is D18's whole argument. */
+.night-frame[data-has-image] .night-plate { display: none; }
+
+/* The phone's narration lives here, over the frame's lower edge; the desktop
+   reads it off the panel instead, so this is hidden above the breakpoint. */
+.night-scrim { display: none; }
+
+/* --- the panel: narration + the whole tray ------------------------------ */
+.night-panel {
+  width: min(1200px, 100%);
+  flex-shrink: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-strong);
+  background: color-mix(in srgb, var(--color-surface) 80%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.night-narration-row { display: flex; align-items: flex-start; gap: var(--space-4); }
+.night-line {
+  margin: 0;
+  flex: 1 1 auto;
+  font-size: var(--fs-md);
+  line-height: var(--lh-loose);
+  color: var(--color-text);
+  min-height: 3em;
+  text-wrap: pretty;
+}
+.night-empty {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--color-text-dim);
+  padding: var(--space-3) 0;
+}
+.night-evidence { display: flex; flex-wrap: wrap; gap: var(--space-1); flex-shrink: 0; padding-top: var(--space-1); }
+.night-evidence-chip {
+  font-size: var(--fs-xs);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-evidence);
+  background: color-mix(in srgb, var(--color-negative) 12%, transparent);
+  color: var(--color-negative);
+  white-space: nowrap;
+}
+
+/* Region tabs (D16 slot 1a). Move and Cleanup are pushed to the far end
+   because they bracket the pleasure regions: Move opens access up, Cleanup
+   closes evidence down, and neither is a touch (D36). */
+/* flex-shrink:0 is load-bearing, not tidiness. .night-panel is a flex COLUMN,
+   and on mobile it is a sheet pinned between `top: 27%` and the bottom edge —
+   a constrained column. Without this the tab row is the most compressible
+   child in it (it has no intrinsic height of its own, only padding, and
+   overflow-x:auto lets it give up its width too), so under pressure it
+   collapsed to nothing and the tabs vanished. Reported 2026-09-05; the row had
+   always been able to do this and the Phase 7 blocked-region tabs, which are
+   much wider, are what finally made it happen. min-height keeps a row that
+   momentarily has no children from closing up. */
+.night-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+  overflow-x: auto;
+  scrollbar-width: thin;
+  flex-shrink: 0;
+  min-height: 2.25rem;
+}
+.night-tab {
+  flex-shrink: 0;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--color-text-dim);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.night-tab[data-kind="move"] { color: var(--color-cool); margin-left: auto; }
+.night-tab[data-kind="cleanup"] { color: var(--color-negative); }
+.night-tab[data-kind="move"] + .night-tab[data-kind="cleanup"] { margin-left: 0; }
+.night-tab[data-on] { color: var(--color-text); border-bottom-color: var(--color-accent); }
+.night-tab:hover { color: var(--color-text); }
+
+.night-slot { display: flex; align-items: center; gap: var(--space-3); }
+.night-slot-label {
+  flex-shrink: 0;
+  width: 52px;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-faint);
+}
+.night-slot-label[data-tone="accent"] { color: var(--color-warm); }
+.night-sep { width: 1px; height: 22px; background: var(--color-border); flex-shrink: 0; }
+.night-chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.night-chip {
+  height: 34px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.night-chip:hover { border-color: var(--color-border-strong); }
+.night-chip[data-on] {
+  border-color: var(--color-accent);
+  background: var(--color-surface-hover);
+  font-weight: 600;
+}
+.night-seg {
+  display: flex;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.night-seg-btn {
+  height: 34px;
+  padding: 0 var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--color-text-dim);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.night-seg-btn[data-on] { background: var(--color-accent); color: #fff; font-weight: 600; }
+.night-seg-pace { border-radius: var(--radius-md); }
+.night-seg-pace .night-seg-btn { height: 44px; padding: 0 var(--space-4); }
+/* Pace is the one control whose three positions carry a direction, so they
+   are tinted rather than left uniform: gentle is the safe end (and the only
+   pace that can soothe at all, D17), firm the earned one. */
+.night-seg-pace .night-seg-btn[data-pace="gentle"] { color: var(--color-positive); }
+.night-seg-pace .night-seg-btn[data-pace="firm"] { color: var(--color-negative); }
+.night-seg-pace .night-seg-btn[data-on] { color: #fff; }
+
+/* Motions are THE TRIGGER (D16 slot 4) and are rendered left to right in
+   ascending intensity, because D33 makes the row order itself information:
+   the leftmost verb on any part is the safe approach and the rightmost has to
+   be earned. That is how the tray teaches D27 without a tutorial — and the
+   dashed chip is the same lesson stated outright for the action that would
+   overshoot her right now. */
+.night-motions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.night-motion {
+  height: 44px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-card);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.night-motion:hover { background: var(--color-surface-hover); }
+.night-motion[data-verdict="overshoot"] {
+  border-style: dashed;
+  border-color: var(--color-evidence);
+  background: color-mix(in srgb, var(--color-negative) 8%, transparent);
+  color: var(--color-negative);
+}
+.night-motion[data-verdict="soothe"] {
+  border-color: color-mix(in srgb, var(--color-positive) 60%, var(--color-border-strong));
+  color: var(--color-positive);
+}
+.night-motion[data-last] { box-shadow: inset 0 -2px 0 var(--color-accent); }
+.night-order-hint { font-size: var(--fs-xs); color: var(--color-text-faint); white-space: nowrap; }
+.night-leave {
+  flex-shrink: 0;
+  height: 44px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+  color: var(--color-text-dim);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.night-leave:hover { color: var(--color-text); border-color: var(--color-border-strong); }
+
+.night-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--fs-xs);
+  color: var(--color-text-faint);
+}
+.night-state { flex-shrink: 0; color: var(--color-text-dim); }
+.night-hint { flex: 1 1 auto; min-width: 0; }
+/* night-scene Phase 7: a region she has that is closed right now. Dim, inert
+   and carrying the reason — the tray tells you a part of her exists and what
+   is in the way, without ever offering an action that cannot happen. */
+.night-tab-blocked {
+  opacity: 0.45;
+  cursor: default;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  white-space: nowrap;
+  /* Same reason as the row itself: a flex child defaults to shrinking, and
+     these carry their reason inline so they are the widest items in the row.
+     Without this they compress into illegibility and squeeze the real tabs. */
+  flex-shrink: 0;
+}
+.night-tab-why {
+  font-size: var(--fs-xs);
+  color: var(--color-text-dim);
+}
+
+/* night-scene Phase 6 (D28): the learned-preference marker. Deliberately
+   quiet — a glyph, never a word, and only on a preference the player has
+   actually worked out by repetition. An unmarked chip is ambiguous on
+   purpose: it means "not learned", not "neutral". */
+.night-known {
+  font-size: var(--fs-xs);
+  line-height: 1;
+  margin-left: var(--space-1);
+  opacity: 0.85;
+}
+.night-chip[data-known="loved"] .night-known,
+.night-motion[data-known="loved"] .night-known { color: var(--color-desire); }
+.night-chip[data-known="disliked"] .night-known,
+.night-motion[data-known="disliked"] .night-known { color: var(--color-text-dim); }
+
+/* night-scene Phase 6: the shadow layer's receipt. It rides the narration
+   row rather than the footer because the footer names the player's own last
+   action and offers to repeat it. */
+.night-cue-deltas { padding-top: var(--space-1); }
+.night-deltas { display: flex; gap: var(--space-2); flex-shrink: 0; }
+.night-delta { font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.night-delta[data-tone="risk"] { color: var(--color-negative); }
+.night-delta[data-tone="good"] { color: var(--color-positive); }
+.night-delta[data-tone="stir"] { color: var(--color-stirring); }
+.night-delta[data-tone="heat"] { color: var(--color-desire); }
+
+/* --- the phone's compact bar (hidden above the breakpoint) -------------- */
+.night-compact { display: none; }
+
+/* --- the Leave confirmation (D22) --------------------------------------- */
+.night-confirm {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: color-mix(in srgb, var(--color-bg) 78%, transparent);
+}
+.night-confirm[hidden] { display: none !important; }
+.night-confirm-card {
+  width: min(440px, 100%);
+  padding: var(--space-5);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.night-confirm-text { margin: 0; font-size: var(--fs-base); line-height: var(--lh-normal); }
+.night-confirm-actions { display: flex; gap: var(--space-3); justify-content: flex-end; }
+.night-confirm-actions .btn { min-height: 44px; }
+
+/* --- the end of a session ----------------------------------------------- */
+.night-end { display: flex; flex-direction: column; gap: var(--space-3); align-items: center; text-align: center; }
+.night-end-heading {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--color-warm);
+}
+.night-end .night-line { min-height: 0; max-width: 52ch; text-align: center; }
+.night-end-note { margin: 0; font-size: var(--fs-sm); color: var(--color-text-dim); max-width: 52ch; }
+/* Phase 5's receipt: one chip per thing the ending actually did. Same tone
+   vocabulary as the in-session delta chips, so "risk" is the same colour here
+   as it is mid-scene. */
+.night-end-rows { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: center; }
+.night-end-chip {
+  font-size: var(--fs-xs);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-text-dim);
+  white-space: nowrap;
+}
+.night-end-chip[data-tone="risk"] { border-color: var(--color-evidence); color: var(--color-negative); }
+.night-end-chip[data-tone="good"] { border-color: var(--color-positive); color: var(--color-positive); }
+.night-end-chip[data-tone="heat"] { border-color: var(--color-desire); color: var(--color-desire); }
+.night-end .btn { min-height: 44px; min-width: 160px; }
+
+/* --- phone (D15): the frame IS the screen ------------------------------- */
+/* Every control here is >= 44px, which is D15's rule and NOT what the phone
+   artboards drew (they used 40px chips and a 36px side toggle). The locked
+   decision wins over the sketch. */
+@media (max-width: 720px) {
+  .aw-overlay[data-body="night"] { padding: 0; }
+  .aw-overlay[data-body="night"] .aw-stage {
+    width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    gap: 0;
+  }
+  .night-content { gap: var(--space-2); padding: var(--space-3) 0 0; }
+  .night-bars { flex-direction: column; align-items: stretch; gap: var(--space-2); padding: 0 var(--space-4); }
+  .night-bar[data-meter="heat"] { flex: 0 0 auto; }
+  /* Wide enough for the full word: D26 makes "Wakefulness" the player-facing
+     vocabulary, and the phone artboard clipped it to "Wake" only because it
+     was a sketch. A fixed width on BOTH labels also lines the two stacked
+     tracks up with each other. */
+  .night-bar-label { width: 92px; white-space: nowrap; }
+  .night-bar-sub { display: none; }
+  /* The frame IS the screen here, but the ASPECT still comes from data-shape
+     (D19) — a phone box is portrait by nightFrameShape's own reckoning, so
+     this is normally 2/3, and on a wide phone the box stays honest about the
+     picture inside it instead of letterboxing it into the column. The budget
+     is the viewport less the bars and the compact action bar; the shape rules
+     above turn it into a width exactly as they do on desktop. */
+  .night-content { --night-frame-h: calc(100dvh - 260px); }
+  .night-frame { margin: 0 var(--space-4); }
+  .night-frame[data-shape="landscape"] { width: min(calc(100% - var(--space-4) * 2), calc(var(--night-frame-h) * 3 / 2)); }
+  .night-frame[data-shape="square"]    { width: min(calc(100% - var(--space-4) * 2), var(--night-frame-h)); }
+  .night-frame[data-shape="portrait"]  { width: min(calc(100% - var(--space-4) * 2), calc(var(--night-frame-h) * 2 / 3)); }
+  .night-scrim {
+    display: block;
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    padding: var(--space-6) var(--space-4) var(--space-4);
+    background: linear-gradient(180deg,
+      transparent 0%,
+      color-mix(in srgb, var(--color-bg) 86%, transparent) 45%,
+      color-mix(in srgb, var(--color-bg) 96%, transparent) 100%);
+  }
+  .night-scrim .night-line { font-size: var(--fs-base); min-height: 0; }
+  /* Collapsed is the default: the panel is a sheet that only exists once
+     "Change…" has raised it. */
+  .night-panel { display: none; }
+  .night-content[data-tray="open"] .night-panel {
+    display: flex;
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    top: 27%;
+    z-index: 1;
+    width: 100%;
+    max-height: none;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    background: var(--color-surface);
+    padding: var(--space-3) var(--space-4) var(--space-5);
+  }
+  .night-content[data-tray="open"] .night-frame,
+  .night-content[data-tray="open"] .night-bars { opacity: 0.4; }
+  .night-content[data-tray="open"] .night-compact { display: none; }
+  /* PHASE 5. The end block lives inside the panel, and on the phone the panel
+     is a sheet that only exists while "Change…" has raised it — so a resolved
+     session showed the player nothing at all, with no Continue button to leave
+     by and no compact bar either (nightPaintCompact empties on an ending).
+     An ended session has no tray to raise, so the sheet comes back
+     unconditionally the moment renderNightScene stamps data-ended. Same
+     arrangement as the raised tray, so it reads as the surface the player
+     already knows. */
+  .night-content[data-ended] .night-panel {
+    display: flex;
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    top: auto;
+    z-index: 1;
+    width: 100%;
+    max-height: none;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    background: var(--color-surface);
+    padding: var(--space-3) var(--space-4) var(--space-5);
+  }
+  /* The end block repeats the closing narration, so the scrim's copy of it
+     would read as the same sentence printed twice. */
+  .night-content[data-ended] .night-scrim { display: none; }
+  .night-narration-row { display: none; }
+  .night-content[data-tray="open"] .night-footer { display: none; }
+  .night-slot { flex-direction: column; align-items: stretch; gap: var(--space-2); }
+  .night-slot-label { width: auto; }
+  /* D15: every control on the phone is >= 44px. The region tabs are the one
+     row the artboard left at 35px, and a tab strip is exactly the thing a
+     thumb misses. */
+  .night-tab { min-height: 44px; }
+  .night-tabs, .night-chips { scrollbar-color: var(--color-border-strong) transparent; }
+  /* On a phone the tab row WRAPS instead of scrolling. The Phase 7 blocked
+     tabs carry their reason inline ("Pussy — The covers are in the way."), so
+     a scrolling row put the thing the player most needs to read off the right
+     edge of a 390px screen. Wrapping costs a little height in a sheet that has
+     it and guarantees every tab is on screen. */
+  .night-tabs {
+    flex-wrap: wrap;
+    overflow-x: visible;
+    row-gap: var(--space-1);
+  }
+  /* ...and with the row wrapping, a blocked tab may take the full width, so
+     its reason drops under its label rather than forcing a wide single line. */
+  .night-tab-blocked {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+    white-space: normal;
+    max-width: 100%;
+  }
+  .night-tab-blocked .night-tab-why { margin-left: 0; }
+  .night-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; padding-bottom: var(--space-1); }
+  .night-chip { height: 44px; flex-shrink: 0; }
+  .night-seg { align-self: flex-start; }
+  .night-seg-btn { height: 44px; padding: 0 var(--space-4); }
+  .night-sep { display: none; }
+  /* "How — tap to do it": a 3-up grid, so the ascending-intensity order still
+     reads left to right and top to bottom rather than wrapping unpredictably. */
+  .night-motions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); }
+  .night-motion { height: 48px; padding: 0 var(--space-2); }
+  .night-order-hint { grid-column: 1 / -1; text-align: center; }
+  .night-panel .night-seg-pace { align-self: stretch; }
+  .night-panel .night-seg-pace .night-seg-btn { flex: 1 1 0; height: 48px; }
+  .night-leave { height: 48px; }
+  .night-compact {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    width: 100%;
+    flex-shrink: 0;
+    padding: var(--space-2) var(--space-4) var(--space-5);
+    border-top: 1px solid var(--color-border-strong);
+    background: color-mix(in srgb, var(--color-surface) 90%, transparent);
+  }
+  .night-grab {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 44px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+  }
+  .night-grab-bar { width: 38px; height: 4px; border-radius: var(--radius-sm); background: var(--color-border-strong); }
+  .night-compact-row { display: flex; align-items: center; gap: var(--space-3); }
+  .night-compact-summary { flex: 1 1 auto; min-width: 0; }
+  .night-compact-line {
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--color-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .night-compact-actions { display: flex; gap: var(--space-2); }
+  .night-again, .night-change, .night-compact .night-leave {
+    height: 52px;
+    border-radius: var(--radius-md);
+    font-family: inherit;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .night-again {
+    flex: 1 1 auto;
+    border: none;
+    background: var(--color-accent);
+    color: #fff;
+    font-size: var(--fs-base);
+  }
+  .night-again[disabled] { background: var(--color-surface-alt); color: var(--color-text-faint); cursor: default; }
+  .night-change {
+    width: 110px;
+    border: 1px solid var(--color-border-strong);
+    background: var(--color-card);
+    color: var(--color-text);
+  }
+  .night-compact .night-leave { width: 84px; }
+}
 
 /* Wardrobe panel (intimacy-voyeurism Phase 5; moved into the action window's
    chrome by audit finding #9). Reuses the container panel's two-column body
@@ -4754,11 +5557,13 @@ body {
 }
 
 /* D8 + VN refactor (D15) + glass tune (D16): on portrait phones the reader
-   matches the desktop 40% share — the scene backdrop gets the top 60% of a
+   matches the desktop share — the scene backdrop gets the rest of a
    portrait column, right where object-position's upper-third faces band
-   sits. */
+   sits. Bug report (2026-09-01): kept in sync with the desktop rule's 40%
+   -> 46% legibility fix above; this is what governs the phone screenshot
+   the report was filed against, so it's the one that mattered most. */
 @media (max-width: 600px) and (orientation: portrait) {
-  .scene-reader { height: 40%; }
+  .scene-reader { height: 46%; }
 }
 
 /* --- BrineOS Phase 3: phone shell --- */
@@ -6303,6 +7108,47 @@ body {
 .bank-owed-value { font-size: var(--fs-sm); font-weight: 700; }
 .bank-owed-row.cutoff .bank-owed-value { color: var(--color-negative); }
 
+/* DailyGrid (actions-and-activities-overhaul-plan.md Phase 14, D23) */
+.pz-solved-banner { color: var(--color-positive, #6cf6a9); font-weight: 700; }
+.pz-layout { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: flex-start; }
+.pz-grid { display: grid; gap: 2px; background: var(--color-border); border: 1px solid var(--color-border); width: fit-content; }
+.pz-cell { position: relative; width: 28px; height: 28px; background: var(--color-bg); }
+.pz-cell.pz-black { background: var(--color-border); }
+.pz-cell-num { position: absolute; top: 1px; left: 2px; font-size: 8px; opacity: 0.6; pointer-events: none; line-height: 1; }
+.pz-cell input {
+  width: 100%; height: 100%; box-sizing: border-box; padding: 0;
+  text-align: center; text-transform: uppercase; font-weight: 700; font-size: var(--fs-sm);
+  border: 1px solid var(--color-border); background: var(--color-bg); color: var(--color-text);
+}
+.pz-cell input.pz-revealed { color: var(--color-warning, #e0a83a); }
+.pz-cell input.pz-correct { background: rgba(108, 246, 169, 0.18); }
+.pz-cell input.pz-wrong { background: rgba(246, 109, 140, 0.18); }
+.pz-clues { display: flex; flex-direction: column; gap: var(--space-3); min-width: 220px; flex: 1; }
+.pz-clue-group-title { font-weight: 700; margin-bottom: var(--space-1); }
+.pz-clue-row { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); padding: var(--space-1) 0; }
+.pz-clue-row.pz-clue-solved { opacity: 0.55; text-decoration: line-through; }
+
+/* Chatter (actions-and-activities-overhaul-plan.md Phase 15, D24) */
+.cht-compose { display: flex; gap: var(--space-2); align-items: flex-start; margin-bottom: var(--space-3); }
+.cht-compose-input { flex: 1; min-height: 44px; resize: vertical; padding: var(--space-2); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg); color: var(--color-text); font: inherit; }
+.cht-feed { display: flex; flex-direction: column; gap: var(--space-3); }
+.cht-post { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); background: var(--color-surface-hover); }
+.cht-post-header { display: flex; align-items: center; gap: var(--space-2); }
+.cht-author-btn { background: none; border: none; padding: 0; font-weight: 700; cursor: pointer; color: var(--color-text); }
+.cht-author-btn:disabled { cursor: default; }
+.cht-post-meta { margin-left: auto; }
+.cht-post-text { margin: var(--space-1) 0 var(--space-2); white-space: pre-wrap; word-wrap: break-word; }
+.cht-post-actions { display: flex; gap: var(--space-2); }
+.cht-post-actions .cht-liked { color: var(--color-negative, #f66d8c); }
+.cht-comments { margin-top: var(--space-2); display: flex; flex-direction: column; gap: 2px; }
+.cht-comment { font-size: var(--fs-sm); }
+.cht-comment-author { font-weight: 700; }
+.cht-comment-compose { display: flex; gap: 4px; margin-top: var(--space-2); }
+.cht-comment-input { flex: 1; padding: 4px var(--space-1); border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-bg); color: var(--color-text); }
+.cht-profile-header { text-align: center; margin-bottom: var(--space-3); }
+.cht-profile-tags { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; margin-top: var(--space-1); }
+.cht-tag { border: 1px solid var(--color-border); border-radius: 999px; padding: 2px 8px; font-size: var(--fs-sm); }
+
 /* Menu overhaul Phase 10: responsive + reduced-motion for the menu. */
 @media (max-width: 600px) {
   .menu-screen { padding: 0 20px; max-width: 320px; }
@@ -6988,6 +7834,50 @@ body {
       </div>
       <button id="peek-stop-btn" class="btn btn-secondary">Stop Watching</button>
     </div>
+
+    <!-- Night Scene (night-scene-sleeping-npc-plan Phase 3b, D15): the Living
+         Tableau — the sim's third overlay body, beside picker / wardrobe /
+         dream. Like the peek hold above it this is a LIVE session rather than
+         an outcome or a question, so it opens through render.nightscene.js's
+         openNightOverlay and NEVER through openActionWindow: that pauses the
+         clock and waits for an answer, and D24 says this scene runs at one
+         game-second per real second with no answer to give. Two bars (D26 —
+         Wakefulness with Stirring as a band inside the same track, Heat
+         separate), the frame, and a frosted panel carrying the narration and
+         the whole four-slot action tray (D16). Everything inside is painted
+         by renderNightScene; nightscene.js owns the ONE delegated click
+         handler that reads the data-night attributes it writes, which is why
+         the tray can be thrown away and rebuilt on every tap. -->
+    <div class="night-content" id="night-content" hidden>
+      <div class="night-bars" id="night-bars"></div>
+      <div class="night-frame" id="night-frame" data-shape="landscape">
+        <!-- Phase 4 (D18/D19/D20/D21): one generated frame per (state x
+             action), aspect-locked via data-shape so object-fit:contain
+             neither crops nor letterboxes — `cover` is BANNED on this surface
+             (D19). The plate is the dark ground behind it, carrying D34's
+             tracked pose + covers until a frame lands (the Move tab is
+             unreadable without that) and hidden once one has. The shimmer is
+             the picture catching up, never a wait: the tap that asked for it
+             already resolved (design invariant 3). -->
+        <img class="night-img" id="night-img" alt="" hidden>
+        <div class="night-plate" id="night-plate"></div>
+        <div class="night-shimmer" id="night-shimmer" hidden></div>
+        <!-- D24: the scene runs live at one game-second per real second, so
+             it shows the time it is spending. Painted by its own one-second
+             loop, which READS the clock and never advances it. -->
+        <div class="night-clock" id="night-clock"></div>
+        <!-- Phase 5 (D14/D38): the climax beat. Purely positive, fires once
+             per hundred of Heat crossed and NEVER ends the session; it marks
+             the repaint after the crossing and clears on the next action. On
+             the frame rather than in either narration element because desktop
+             reads its line from the panel and the phone from the scrim. -->
+        <div class="night-climax" id="night-climax" hidden></div>
+        <div class="night-scrim"><p class="night-line" id="night-line-frame"></p></div>
+      </div>
+      <div class="night-panel" id="night-panel"></div>
+      <div class="night-compact" id="night-compact"></div>
+      <div class="night-confirm" id="night-confirm" hidden></div>
+    </div>
     <!-- Wardrobe (Intimacy & Voyeurism Phase 5, D11; moved into the action
          window's chrome by audit finding #9 — D2 named this picker by name
          as UI that belongs inside ActionWindow, not its own untouched
@@ -7420,7 +8310,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=158"></script>
+<script src="src/src/srcfiles/config.js?v=172"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -7428,15 +8318,15 @@ body {
      order. -->
 <script src="src/src/srcfiles/defs.settings.js?v=10"></script>
 <script src="src/src/srcfiles/settings.js?v=8"></script>
-<script src="src/src/srcfiles/icons.js?v=31"></script>
+<script src="src/src/srcfiles/icons.js?v=34"></script>
 <!-- FIELDS — shared form-control builders (comboControl / customChipInput).
      AI-Assisted Character Generation Phase 1: must load before menu.js,
      render.computer.js and studio.js, all of which build controls with it.
      Registered in dev/verify/loadgame.js's ORDER in the same commit. -->
 <script src="src/src/srcfiles/fields.js?v=1"></script>
-<script src="src/src/srcfiles/defs.world.js?v=45"></script>
-<script src="src/src/srcfiles/defs.actions.js?v=47"></script>
-<script src="src/src/srcfiles/defs.computer.js?v=32"></script>
+<script src="src/src/srcfiles/defs.world.js?v=50"></script>
+<script src="src/src/srcfiles/defs.actions.js?v=52"></script>
+<script src="src/src/srcfiles/defs.computer.js?v=36"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
      at runtime; IMAGE's titleGallery consumes genTitlePrompt. -->
@@ -7454,7 +8344,7 @@ body {
        anchor resolution. Lives here — after defs.design.js (ROOM_DECOR) and
        before render.js (which merges FP_FOOTPRINTS at load) — and is
        registered in loadgame.js's ORDER in the same commit (invariant 6). -->
-  <script src="src/src/srcfiles/defs.placement.js?v=1"></script>
+  <script src="src/src/srcfiles/defs.placement.js?v=2"></script>
 <!-- Dream Engine Phase 1: the dream component tables (defs.dreams.js) — the
      forms, perspectives, tempos, registers, lenses, distortions, motifs and
      every tuning number a dream is assembled from. Pure data with no
@@ -7466,14 +8356,14 @@ body {
 <!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/src/srcfiles/orbital.js?v=12"></script>
-<script src="src/src/srcfiles/state.js?v=63"></script>
-<script src="src/src/srcfiles/sim.js?v=92"></script>
+<script src="src/src/srcfiles/state.js?v=65"></script>
+<script src="src/src/srcfiles/sim.js?v=98"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
-<script src="src/src/srcfiles/commitments.js?v=13"></script>
+<script src="src/src/srcfiles/commitments.js?v=15"></script>
 <script src="src/src/srcfiles/world.js?v=31"></script>
-<script src="src/src/srcfiles/movement.js?v=2"></script>
+<script src="src/src/srcfiles/movement.js?v=4"></script>
 <!-- NPC avatar liveliness Phase 1 (movement.present.js): the presentation
      layer — per-avatar TRACK-vs-CATCH-UP animation on REAL time, its own rAF
      (D23), and the D18 dotted-route overlay. Owns no sim state (invariant 1).
@@ -7482,20 +8372,26 @@ body {
      whose renderFloorPlanLive delegates to presentFrame. Registered in
      dev/verify/loadgame.js's ORDER in the same commit (invariant 6). -->
 <script src="src/src/srcfiles/movement.present.js?v=5"></script>
-<script src="src/src/srcfiles/signals.js?v=19"></script>
-<script src="src/src/srcfiles/scene.js?v=17"></script>
-<script src="src/src/srcfiles/items.js?v=29"></script>
+<script src="src/src/srcfiles/signals.js?v=20"></script>
+<!-- continuous-cadence-closure Phase 8 (D9): the ambient "meanwhile" ticker
+     (meanwhile.js) — sits directly after signals.js (calls its
+     reachMultipliers at runtime) and before scene.js, whose composeScene
+     calls composeMeanwhileTicker. Registered in dev/verify/loadgame.js's
+     ORDER in the same commit (invariant 6). -->
+<script src="src/src/srcfiles/meanwhile.js?v=1"></script>
+<script src="src/src/srcfiles/scene.js?v=18"></script>
+<script src="src/src/srcfiles/items.js?v=30"></script>
 <!-- Inventory overhaul Phase 1: pure inventory query/sort/describe helpers
      (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
      time) and before render.js/ui.js, which call it at runtime. -->
-<script src="src/src/srcfiles/inventory.js?v=22"></script>
-<script src="src/src/srcfiles/effects.js?v=37"></script>
+<script src="src/src/srcfiles/inventory.js?v=23"></script>
+<script src="src/src/srcfiles/effects.js?v=41"></script>
 <!-- Food-overhaul Phase 5: the pure cooking engine (cooking.js) — after
      effects.js (uses clamp) and items.js (makePlate/freshnessOf); its
      functions are called at runtime by defs.actions.js and render.js. -->
 <script src="src/src/srcfiles/cooking.js?v=4"></script>
 <script src="src/src/srcfiles/taste.js?v=1"></script>
-<script src="src/src/srcfiles/drives.js?v=44"></script>
+<script src="src/src/srcfiles/drives.js?v=45"></script>
 <!-- NPC utility scoring (npc-cognition-plan.md). Loads after drives.js: it
      reuses driveGateValue / isOnCooldown / DRIVE_COOLDOWN_KEY from it. -->
 <script src="src/src/srcfiles/cognition.js?v=30"></script>
@@ -7506,18 +8402,40 @@ body {
 <script src="src/src/srcfiles/actions.js?v=36"></script>
 <script src="src/src/srcfiles/intent.js?v=18"></script>
 <script src="src/src/srcfiles/skills.js?v=19"></script>
-<script src="src/src/srcfiles/stealth.js?v=20"></script>
+<script src="src/src/srcfiles/stealth.js?v=23"></script>
 <script src="src/src/srcfiles/time.js?v=30"></script>
-<script src="src/src/srcfiles/computer.js?v=67"></script>
+<script src="src/src/srcfiles/computer.js?v=71"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
-<script src="src/src/srcfiles/tracker.js?v=17"></script>
+<script src="src/src/srcfiles/tracker.js?v=18"></script>
 <script src="src/src/srcfiles/debuglog.js?v=2"></script>
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
-<script src="src/src/srcfiles/phone.js?v=20"></script>
-<script src="src/src/srcfiles/npc.js?v=54"></script>
+<script src="src/src/srcfiles/phone.js?v=22"></script>
+<script src="src/src/srcfiles/npc.js?v=58"></script>
+<!-- Actions & Activities Overhaul Phase 3 (D15): the flags & conditions
+     engine (flags.js) — after npc.js (addMemoryFact/MEMORY_IMPORTANCE) and
+     effects.js/sim.js above it (applyEffects/buildEffectContext/
+     parseEffectDSL, getPresentNpcIds), before anything that calls
+     checkHouseRules at runtime (effects.js's applyEatItem calls it, but only
+     inside a function body — load order doesn't gate that, this is for
+     documentation-convention consistency with the rest of this file). -->
+<script src="src/src/srcfiles/flags.js?v=2"></script>
+<!-- Actions & Activities Overhaul Phase 8 (D16): the thermostat's pure math
+     (temperature.js) — after sim.js (getSeasonIndex) and before anything
+     that calls ambientTempC/npcComfortBandC/temperatureClothingBiasWeight
+     at runtime (npc.js's npcOutfitForContext, sim.js's resolveTick,
+     computer.js's accrueHvacForDay — all below it, called at runtime only). -->
+<script src="src/src/srcfiles/temperature.js?v=1"></script>
+<!-- Actions & Activities Overhaul Phase 9 (D17/D49): the ambient per-room
+     dirt layer's write path + pure signal-intensity helper (dirt.js) — after
+     world.js (refreshRoomCleanliness) and effects.js (clamp), both above it;
+     before anything that calls bumpRoomDirt/dustSignalIntensity at runtime
+     (sim.js's resolveTick, effects.js's applyEatItem/applyAddRoomDirt,
+     defs.actions.js's self.cook/self.clean, computer.js's cleanRoomObjects,
+     signals.js's deriveStandingSignals — all called at runtime only). -->
+<script src="src/src/srcfiles/dirt.js?v=1"></script>
 <!-- Intimacy & Voyeurism Phase 9 (D13): the willingness gate — the ONLY door
      into any intimacy act. Pure function + tuning (willingness.js); reads
      npc.js's shared clothing reads at call time, consumed by cognition.js's
@@ -7556,7 +8474,7 @@ body {
      ui.js; x5.js itself is pure and calls no model. -->
 <script src="src/src/srcfiles/x5.js?v=17"></script>
 <script src="src/src/srcfiles/interruption.js?v=23"></script>
-<script src="src/src/srcfiles/image.js?v=37"></script>
+<script src="src/src/srcfiles/image.js?v=38"></script>
 <!-- Avatars & Sprite Studio Phase 1: the permanent override store (kv.sprites)
      and resolveSprite, the ONE function allowed to read a sprite blob. After
      image.js because the resolver falls through to cutoutKey / getCachedImage
@@ -7607,10 +8525,30 @@ body {
      writers) and codex.js (ledger), so it loads after all of them and after
      peek.js (reuses its willingness/prose/undressed patterns), but before
      render.js/ui.js which call its resolvers/applys at runtime only. -->
-<script src="src/src/srcfiles/boundary.js?v=2"></script>
+<script src="src/src/srcfiles/boundary.js?v=3"></script>
+<!-- Night Scene Phase 3b (night-scene-sleeping-npc-plan.md): the Living
+     Tableau's DECIDER half — the session cursor, the selection repair that
+     keeps D31 true across a state change, the pure view model, and the one
+     delegated click handler. Directly after boundary.js, which owns every
+     resolver it calls (nightPalette / nightActionValid / nightStepAction /
+     applyNightStep / composeNightLine) and is where the mechanics live;
+     before render.js/render.nightscene.js, which paint what this decides at
+     runtime only. Its load-time surface is module state plus pure functions,
+     and its one DOM touch is inside a function body guarded on
+     `typeof document`, so the whole file loads in the bare vm — registered in
+     dev/verify/loadgame.js's ORDER in the same commit, because shipping a
+     file to only one of the two lists is the rumination.js scar. -->
+<script src="src/src/srcfiles/nightscene.js?v=1"></script>
 <script src="src/src/srcfiles/pregnancy.js?v=1"></script>
-<script src="src/src/srcfiles/render.js?v=82"></script>
-<script src="src/src/srcfiles/render.computer.js?v=56"></script>
+<script src="src/src/srcfiles/render.js?v=89"></script>
+<!-- Night Scene Phase 3b: the Living Tableau's PAINTER. After render.js
+     (shares its rules: idempotent, no state mutation, no rolls) and after
+     actionwindow.js, whose awShow/awHide it calls to claim the overlay. NOT
+     in dev/verify/loadgame.js's ORDER — it is pure view code, and that
+     loader deliberately stops before the render layer, exactly as
+     render.spritestudio.js does. -->
+<script src="src/src/srcfiles/render.nightscene.js?v=1"></script>
+<script src="src/src/srcfiles/render.computer.js?v=59"></script>
 <!-- Avatars & Sprite Studio Phase 4: the studio's verbs and its screens.
      render.spritestudio.js extends COMPUTER_RENDERERS, so it must load AFTER
      render.computer.js declares it; spritestudio.js holds the actions and is
@@ -7647,9 +8585,50 @@ body {
      time), x5.js, and the renderers; before ui.js (doConvSend runs the
      pipeline at runtime). Every dependency is a call-time one, so this slot
      is flexible within that range. -->
-<script src="src/src/srcfiles/asks.js?v=12"></script>
-<script src="src/src/srcfiles/ui.js?v=146"></script>
-<script src="src/src/srcfiles/ui.computer.js?v=53"></script>
+<!-- actions-and-activities-overhaul-plan.md Phase 4 (D9): the bidirectional
+     money ledger (money.js) — pure reads plus a mutating adjustMoneyLedger,
+     no load-time dependencies of its own. Sits directly before asks.js, its
+     only caller (ask_loan/ask_repay/$GiveMoney/$CollectMoney all read/write
+     it), so real position and dev/verify/loadgame.js's ORDER agree — no
+     divergence to document, unlike asks.js's own three-file exception list
+     above. -->
+<script src="src/src/srcfiles/money.js?v=1"></script>
+<!-- Actions & Activities Overhaul Phase 12 (D21): the mailbox + door event
+     (mail.js) — pure reads plus mutating helpers over world.mailbox/
+     world.deliveries/world.doorEvent, no load-time dependencies of its own
+     (calls addStack/gameDaysNow from items.js, seededRng from sim.js,
+     clockToAbsolute from time.js, ITEM_DEFS from config.js — all already
+     loaded above it). Sits directly after money.js: both are world-ledger
+     modules with no UI dependency, and neither is asks.js's own caller. -->
+<script src="src/src/srcfiles/mail.js?v=1"></script>
+<!-- actions-and-activities-overhaul-plan.md Phase 14 (D23): DailyGrid, the
+     seeded daily crossword (puzzles.js) — pure reads plus mutating
+     fillPuzzleCell/revealHintForWord/generatePuzzleForDay, no load-time
+     dependencies of its own (seededRng/pickUnique from sim.js,
+     awardSkillXp from skills.js, pushMoodImpulse from sim.js, MOOD_PAYOUTS
+     from config.js — all already loaded above it). Sits beside money.js/
+     mail.js for the same reason: a domain module called at runtime only by
+     computer.js (openApp), phone.js (phoneOpenApp), render.computer.js
+     (renderPuzzlesToday) and ui.computer.js (its do* handlers), none of
+     which need it to exist yet at THEIR load time. -->
+<script src="src/src/srcfiles/puzzles.js?v=1"></script>
+<!-- actions-and-activities-overhaul-plan.md Phase 15 (D24): Chatter, the
+     in-house social feed (chatter.js) — pure reads plus mutating
+     generateChatterForDay/postChatterAsPlayer/toggleChatterLike/
+     addChatterComment, no load-time dependencies of its own (factRecency/
+     factEmotionalWeight/factPersonalityBias/talkativeness/clamp01 from
+     npc.js, pairKey from relationships.js, seededRng/weightedPick/
+     pushMoodImpulse from sim.js, clamp from effects.js, EVENT_IMPORTANCE/
+     MEMORY_IMPORTANCE/BELIEF/MOOD_PAYOUTS from config.js — all already
+     loaded above it). Sits beside money.js/mail.js/puzzles.js for the same
+     reason: a domain module called at runtime only by computer.js (openApp),
+     phone.js (phoneOpenApp), render.computer.js (renderChatterFeed/
+     renderChatterProfile) and ui.computer.js (its do* handlers), none of
+     which need it to exist yet at THEIR load time. -->
+<script src="src/src/srcfiles/chatter.js?v=1"></script>
+<script src="src/src/srcfiles/asks.js?v=18"></script>
+<script src="src/src/srcfiles/ui.js?v=159"></script>
+<script src="src/src/srcfiles/ui.computer.js?v=55"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
      site header with fake address bar + internal back/forward, footer, 404,

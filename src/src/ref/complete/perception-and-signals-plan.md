@@ -6,7 +6,7 @@ plans.
 Last updated 2026-08-10.
 
 Companions:
-- `src/src/ref/wip/SENSORY-AND-SOCIAL-ROADMAP.md` (the umbrella — this is Plan 1 of six and the substrate Plans 2–5 all consume).
+- `src/src/ref/complete/SENSORY-AND-SOCIAL-ROADMAP.md` (the umbrella — this is Plan 1 of six and the substrate Plans 2–5 all consume).
 - `src/src/ref/complete/npc-correctness-fixes-plan.md` (Plan 0 — **complete**; this plan builds on a working relationship and memory layer).
 - `src/src/ref/complete/apartment-expansion-plan.md` (owns `ROOM_ADJACENCY`, which the propagation model walks).
 - `src/src/ref/complete/inventory-needs-menu-saves-plan.md` (owns spoilage and `room.odor`, which Phase 2 subsumes into the signal model).

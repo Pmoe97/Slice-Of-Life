@@ -44,6 +44,13 @@ const activeImageUrls = new Map(); // sceneKey → objectURL
 // entry could ever be correctly served against the new prompt shape — the
 // whole scene namespace turns over again with it.
 const IMAGE_PROMPT_VERSION = 'pv4';
+// Peek frames only. The 2026-09-05 framing audit changed every peek prompt
+// (per-act posture, staging and negative), so every cached peek frame is stale
+// — but nothing else is, and bumping IMAGE_PROMPT_VERSION would throw away
+// every portrait, plate, dream panel and avatar in the save to fix a keyhole.
+// Bump this instead whenever PEEK_FRAMING/PEEK_STAGING or an act's image-only
+// fields change.
+const PEEK_PROMPT_VERSION = 'k2';
 
 // VN refactor (D15): the scene backdrop's box follows the viewport's aspect,
 // so generate toward it — a portrait phone should not cram a 3:2 landscape
@@ -52,6 +59,60 @@ const IMAGE_PROMPT_VERSION = 'pv4';
 // never share a cache entry (they would, and both would crop badly).
 function sceneOrientation() {
   return innerWidth >= innerHeight ? 'landscape' : 'portrait';
+}
+
+// --- Night Scene: the frame's box (night-scene-sleeping-npc-plan Phase 4) ---
+// D19's three-way split, and DELIBERATELY NOT a third return value on
+// sceneOrientation() above, which the plan's D19 assumed it would be. Growing
+// that function to three values would have changed nineteen call sites at
+// once: `IMAGE_CACHE.resolutions.scene[...]` has no `square` entry so every
+// plate, dream panel and outcome frame on a near-square window would have
+// asked for `undefined`; the `=== 'landscape'` framing branches would all have
+// fallen to their portrait wording on a square window; and every scene key
+// composed on such a window would have turned over at once — the eviction
+// storm Q9/D37 exist to avoid. The night frame is the only surface that wants
+// a square box, so the three-way classifier is its own function and
+// sceneOrientation stays at two. PURE apart from reading the window.
+//
+// The ratio is the AVAILABLE BOX's, not the viewport's: the tableau's frame is
+// the overlay's centre column, roughly the full width against the height left
+// over once the bars and the panel have taken theirs. NIGHT_FRAME_BOX below is
+// that reservation, and the shape it yields drives both the generated
+// resolution and (through data-shape) the CSS that locks the box to it.
+const NIGHT_FRAME_BOX = {
+  // Fractions of the viewport the frame can actually have. Desktop: full
+  // width inside the stage, minus the bars row and the tray panel. Phone: the
+  // frame IS the screen, with the compact bar under it.
+  desktopWidthFrac: 0.86, desktopHeightFrac: 0.46,
+  phoneWidthFrac: 0.92, phoneHeightFrac: 0.56,
+  phoneMaxWidth: 720,      // matches the stylesheet's @media (max-width: 720px)
+  portraitBelow: 0.85,     // taller than this ratio -> 512x768
+  landscapeAbove: 1.2,     // wider than this ratio -> 768x512; between -> square
+};
+
+// The available box's aspect (width / height). Split out from nightFrameShape
+// so the harness can drive it with explicit numbers rather than a fake window.
+// PURE.
+function nightFrameBoxAspect(vw, vh) {
+  const B = NIGHT_FRAME_BOX;
+  const phone = vw <= B.phoneMaxWidth;
+  const w = vw * (phone ? B.phoneWidthFrac : B.desktopWidthFrac);
+  const h = vh * (phone ? B.phoneHeightFrac : B.desktopHeightFrac);
+  return h > 0 ? w / h : 1;
+}
+
+// 'portrait' | 'square' | 'landscape' — D19's table, keyed on the box aspect.
+// PURE.
+function nightFrameShapeFor(aspect) {
+  const B = NIGHT_FRAME_BOX;
+  if (aspect < B.portraitBelow) return 'portrait';
+  if (aspect > B.landscapeAbove) return 'landscape';
+  return 'square';
+}
+
+function nightFrameShape() {
+  if (typeof innerWidth === 'undefined') return 'landscape';
+  return nightFrameShapeFor(nightFrameBoxAspect(innerWidth, innerHeight));
 }
 
 // composeSceneKey / composeSceneSeed are GONE (character-cutout Phase 3,
@@ -1266,7 +1327,7 @@ function composePeekKey(gs, roomId, npc, actKey) {
   // prompt actually names; the peek key now does too, so a state change
   // generates fresh art and the stale towel frames are orphaned in the LRU
   // (they age out at the cap, never shown again).
-  const base = `peek_${IMAGE_PROMPT_VERSION}_${roomId}_${npc.bible.genSeed}_${phase}_${npc.clothing || 'dressed'}_${actKey || 'none'}`;
+  const base = `peek_${IMAGE_PROMPT_VERSION}${PEEK_PROMPT_VERSION}_${roomId}_${npc.bible.genSeed}_${phase}_${npc.clothing || 'dressed'}_${actKey || 'none'}`;
   return stylePart ? `${base}_${stylePart}` : base;
 }
 
@@ -1287,11 +1348,31 @@ function composePeekPrompt(gs, roomId, npc, actKey, npcId) {
   // pointed anywhere but the door. Those words go in the positive prompt
   // and the anti-pose terms go in the negative (IMAGE_NEGATIVE.peek), so
   // the act's own verb is what the frame shows, not a posed subject.
-  return `Interior of the ${roomName.toLowerCase()} in a shared apartment, ${light}, ` +
+  // Audit 2026-09-05: the tail used to be ONE unconditional clause, and for 17
+  // of the 58 acts it contradicted the act. `posture` and `staging` are the
+  // act's own (PEEK_FRAMING/PEEK_VIEW_ACT); an act that declares neither
+  // composes byte-for-byte what it always did.
+  const posture = actDef.posture || PEEK_FRAMING.defaultPosture;
+  const staging = actDef.staging ? `${actDef.staging}, ` : '';
+  return `Interior of the ${roomName} in a shared apartment, ${light}, ` +
     `glimpsed through a narrow gap in a slightly open door from the hallway, a private candid moment. ` +
-    `${desc} is ${act}, mid-motion, absorbed in what they are doing, completely unaware of being watched, ` +
-    `body angled away from the door, not looking at the viewer, natural unposed body language, ` +
+    `${desc} is ${act}, ${posture}, completely unaware of being watched, ` +
+    `${staging}body angled away from the door, not looking at the viewer, natural unposed body language, ` +
     'warm tones, cinematic composition, slice-of-life atmosphere. Anime-inspired illustration style.';
+}
+
+// The negative for ONE act. The base list minus what this act's own framing
+// needs back, plus its own failure modes. Subtraction is why the camera acts
+// can be painted at all and why a sleeping subject is allowed to be still;
+// 'looking at the viewer' is never droppable, because it is the one term that
+// keeps the subject unaware of the PEEKER rather than of their own camera.
+// PURE.
+function composePeekNegative(actKey) {
+  const actDef = PEEK_VIEW_ACT[actKey || ''] || PEEK_VIEW_ACT._default;
+  const drop = new Set((actDef.dropNegative || []).filter(t => t !== 'looking at the viewer'));
+  const terms = PEEK_FRAMING.negative.filter(t => !drop.has(t));
+  for (const t of (actDef.addNegative || [])) if (terms.indexOf(t) < 0) terms.push(t);
+  return terms.join(', ');
 }
 
 // Cache-keyed peek frame. `cached` in the result lets peek.js spend its
@@ -1308,7 +1389,7 @@ async function getPeekImage(gs, roomId, npc, npcId, frameKey) {
     const prompt = applyImageStyle(composePeekPrompt(gs, roomId, npc, actKey, npcId));
     const result = await generateImageTracked(prompt, {
       resolution: IMAGE_CACHE.resolutions.char, // 512x768 portrait — fits the keyhole
-      negativePrompt: IMAGE_NEGATIVE.peek,
+      negativePrompt: composePeekNegative(actKey),
     });
     const blob = await canvasToBlob(result.canvas);
     await setCachedImage(key, blob);
@@ -1424,6 +1505,151 @@ async function getActionWindowImage(gs, plan) {
   }
 }
 
+// --- Night-scene frames (night-scene-sleeping-npc-plan Phase 4) ------------
+// D18: ONE FRAME PER (STATE x ACTION), not per state. The point of imagery in
+// the Night Scene is seeing WHAT YOU ARE DOING, so the frame changes on every
+// tap that names a different action and a repeat in an unchanged state shows
+// the same picture back. There is no per-session and no per-day budget — the
+// cache is the only gate.
+//
+// D37 — READ THIS BEFORE "FIXING" ANYTHING HERE. Night frames are SESSION-
+// LOCAL and never enter kv.images. That is a deliberate deviation from this
+// file's design invariant 2 ("every image goes through image.js's cache/budget
+// machinery"), and the reason is arithmetic: D18's cadence would evict every
+// scene plate, portrait and dream panel in a 500-entry LRU inside one long
+// session. A session cannot be minimised, cannot be saved mid-way and is
+// closed out on load by sweepStaleNightScenes, so its frames have nothing to
+// outlive it for. Composition still lives here — only the STORE is different,
+// and it hangs off nightSession in nightscene.js, which revokes the object
+// URLs when the session resolves. Do NOT route these through
+// getCachedImage/setCachedImage.
+
+// The "state" half of D18's key: where she is, what is over her, and what she
+// is wearing. Pose and covers are D34's tracked state; the clothing state is
+// folded for the same reason every other key in this file folds it (the
+// prompt names it, so a change must not be served the old pixels). PURE.
+function nightFrameStateToken(target, frame) {
+  // Phase 7: the clothing half comes off the SESSION RECORD (frame.clothingToken)
+  // and not off npc.clothing any more. The sim pins a sleeper to 'sleepwear'
+  // and never changes it, so before D34's third axis existed every frame of an
+  // entire session was keyed 'sleepwear' however far the scene had gone — the
+  // picture could not show what had happened. The fallback keeps an axes object
+  // built before this change (or by an older harness) addressable.
+  const clothing = frame.clothingToken || target?.clothing || 'sleepwear';
+  return `${frame.pose}_${frame.covers}_${clothing}`;
+}
+
+// D18's image key: `state x part x side x instrument x motion`, with PACE
+// DELIBERATELY DROPPED — gently and firmly squeezing the same breast is the
+// same picture, and dropping it is what makes the key space affordable (order
+// hundreds per state rather than thousands). Everything else every key in this
+// file folds is folded here too: the prompt version, both identities, the
+// clothing/stage state, the intimate gate, the active style — plus the frame
+// SHAPE, because the three D19 boxes generate at three different resolutions
+// and must never share an entry. PURE.
+function composeNightFrameKey(gs, targetId, frame) {
+  const target = gs?.npcs?.[targetId];
+  const gate = (typeof intimateAllowed === 'function' && intimateAllowed(gs)) ? 'i1' : 'i0';
+  const stylePart = imageStyleToken();
+  const base = `night_${IMAGE_PROMPT_VERSION}_${cutoutIdentityToken(target, false)}`
+    + `_${playerIdentityToken(gs?.player)}_${nightFrameStateToken(target, frame)}`
+    + `_${frame.partId}_${frame.side}_${frame.instrumentId}_${frame.motionId}`
+    + `_${gate}_${frame.shape || nightFrameShape()}`;
+  return stylePart ? `${base}_${stylePart}` : base;
+}
+
+// Same key, same picture — the plateKey/composePlateSeed contract, which is
+// what makes D21's reroll meaningful (leave the seed alone and you get the
+// same frame back; change it and you get a different one). PURE.
+function composeNightFrameSeed(key) {
+  return hashStr(key);
+}
+
+// PURE. The frame's prompt. Deterministic — no rng, and no state read the key
+// above does not also fold.
+//
+// The act's words come from the SAME tables the mechanics and the prose come
+// from (D33's vocabulary): the instrument's `standalone`, the motion's
+// `gerund`, and the part's standalone label spliced with its side through
+// boundary.js's nightTargetPhrase. The image can therefore never describe an
+// act the resolver would refuse — the caller composed both from one action id.
+function composeNightFramePrompt(gs, targetId, frame) {
+  const cfg = BOUNDARY.nightScene;
+  const target = gs?.npcs?.[targetId];
+  const part = cfg.parts[frame.partId];
+  const motion = cfg.motions[frame.motionId];
+  if (!part || !motion) return '';
+  const instrument = nightInstrumentDef(gs, frame.instrumentId);
+  const pose = cfg.poses[frame.pose];
+  const covers = cfg.covers[frame.covers];
+  const her = buildVisualCharacterClause(target, { gameState: gs, intimate: true, npcId: targetId });
+  const you = buildVisualCharacterClause(gs?.player, { gameState: gs, isPlayer: true, intimate: true });
+
+  // A move is not a touch: its own authored `phrase` already reads as the act
+  // ("draw the sheet back off her"), so it is used verbatim rather than run
+  // through the instrument/part frame, which would produce the nonsense "your
+  // whole hand drawing her hair".
+  const act = (motion.family === 'move' && motion.phrase)
+    ? `you ${motion.phrase}`
+    : `${instrument ? instrument.standalone : 'your hand'} ${motion.gerund} `
+      + `${nightTargetPhrase(part, frame.side)}`;
+
+  const staging = [
+    pose ? pose.label.toLowerCase() : '',
+    covers ? covers.label.toLowerCase() : '',
+    // Phase 7: and what she is wearing, from the record rather than from the
+    // sim's frozen 'sleepwear'. nightClothingClause is shared with the image
+    // KEY's token above, so the prompt and the key can never disagree.
+    frame.clothing ? nightClothingClause(frame.clothing) : '',
+  ].filter(Boolean).join(', ');
+
+  // Named rather than pronouned. Every OTHER "her" reaching this prompt comes
+  // out of the tables (the pose labels, nightTargetPhrase's standalone forms,
+  // which do carry his/her per part) and is Phase 3a's authored register; this
+  // clause is the prompt's own, and a bare pronoun here would contradict the
+  // sex the visual clause above states outright whenever the target is not a
+  // woman. See the plan's Handoff on the register question.
+  const herName = (target && target.bible && target.bible.name) || 'her';
+  return `${her}, deeply asleep in bed, eyes closed, ${staging}. `
+    + `${you} beside ${herName} in the dark, ${act}. `
+    + 'Close intimate framing on the contact, dim night light, moonlight through the blinds, '
+    + 'deep shadows, a quiet bedroom at night, '
+    + 'anime-inspired illustration, warm tones, cinematic composition, '
+    + (frame.shape === 'portrait'
+      ? 'tall vertical composition.'
+      : frame.shape === 'square' ? 'square composition.' : 'wide composition.');
+}
+
+// The blob for one (state x action) frame. Returns the raw blob and the
+// recipe that produced it; the CALLER owns the store and the object URL (D37).
+// Nothing here touches getCachedImage/setCachedImage, and nothing here is on
+// an interaction path — nightscene.js chains this with .then() and never
+// awaits it (design invariant 3).
+async function generateNightFrame(gs, targetId, frame, override) {
+  const shape = frame.shape || nightFrameShape();
+  const full = { ...frame, shape };
+  const key = composeNightFrameKey(gs, targetId, full);
+  const prompt = (override && override.prompt)
+    || applyImageStyle(composeNightFramePrompt(gs, targetId, full));
+  const seed = (override && override.seed != null) ? override.seed : composeNightFrameSeed(key);
+  const negativePrompt = (override && override.negativePrompt) || IMAGE_NEGATIVE.night;
+  const recipe = { key, prompt, seed, negativePrompt, shape };
+  if (!prompt) return { ...recipe, blob: null, error: 'no prompt' };
+  try {
+    const result = await generateImageTracked(prompt, {
+      resolution: IMAGE_CACHE.resolutions.night[shape],
+      seed,
+      negativePrompt,
+    });
+    const blob = await canvasToBlob(result.canvas);
+    if (!blob) return { ...recipe, blob: null, error: 'empty frame' };
+    return { ...recipe, blob, error: null };
+  } catch (e) {
+    console.warn('Night frame generation failed:', e.message);
+    return { ...recipe, blob: null, error: e.message };
+  }
+}
+
 // --- Canvas to Blob ---
 // Bug report (2026-08-26): "Character cutout generation failed: canvas.
 // toBlob is not a function". cleanCutout (above) crops into a fresh
@@ -1461,12 +1687,44 @@ function canvasToBlob(canvas) {
 // rather than a special case with an exception in it.
 let imageGenerationsInFlight = 0;
 function imageBusy() { return imageGenerationsInFlight > 0; }
+
+// --- The in-flight cap (night-scene-sleeping-npc-plan Phase 4, D20) --------
+// The counter above answered ONE question ("is the player waiting on
+// something?") and gated nothing. D18's per-action night frames plus D20's
+// speculative prefetch can ask for a dozen at once from a single tap, so the
+// counter grows a semaphore: at most IMAGE_CACHE.maxInFlight (8) generations
+// actually run, and the rest WAIT here rather than being dropped.
+//
+// Waiting, not refusing, is the point: no caller ever discovers a cap. A tap
+// still resolves instantly against the pure resolver (design invariant 3) —
+// the frame simply arrives when a slot frees. A speculative caller that would
+// rather not queue at all checks imageFreeSlots() first, which is how
+// nightPrefetchFrames spends only the slots nobody is waiting on.
+const imageGenWaiters = [];
+function imageFreeSlots() {
+  return Math.max(0, IMAGE_CACHE.maxInFlight - imageGenerationsInFlight);
+}
+function acquireImageSlot() {
+  if (imageGenerationsInFlight < IMAGE_CACHE.maxInFlight) {
+    imageGenerationsInFlight++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => imageGenWaiters.push(resolve));
+}
+function releaseImageSlot() {
+  const next = imageGenWaiters.shift();
+  // Hand the slot straight to the next waiter rather than decrementing and
+  // letting it re-check: decrementing first would let a caller arriving in
+  // between jump the queue and push the count back over the cap.
+  if (next) next();
+  else imageGenerationsInFlight--;
+}
 async function generateImageTracked(prompt, opts) {
-  imageGenerationsInFlight++;
+  await acquireImageSlot();
   try {
     return await root.generateImage(prompt, opts);
   } finally {
-    imageGenerationsInFlight--;
+    releaseImageSlot();
   }
 }
 
@@ -1661,18 +1919,35 @@ async function generateConversationSceneImage(gameState, npc, panelIndex) {
 // A dedicated one-off — a single discovered photo, not something meant to
 // reproduce identically on a later view, so it stays a fresh uncached
 // generation (unlike the conversation-scene panel, which chat persistence
-// now makes deterministic). Deliberately SFW/candid (the asks.js
+// now makes deterministic). Deliberately SFW/candid by default (the asks.js
 // buildAskPhotoRecord selfie style, not the intimate-layer opt-in
 // buildActionMomentPrompt uses) — keeps the "found a photo on their phone"
 // beat as a light discovery, not automatically an explicit find on its own.
-function buildPhoneSnoopPhotoPrompt(npc) {
+//
+// P1B (D35): `explicit` is npc.js's composePhoneFind pre-deciding this
+// PARTICULAR saved photo is the sometimes-branch. Generation re-checks
+// intimateAllowed itself (never trusts the caller's flag alone) and, when
+// open, reuses the SAME three-condition gate buildVisualCharacterClause's
+// peek path already applies elsewhere in this file (opts.intimate +
+// intimateAllowed + a naked clothing state) — no new gate. The npc's LIVE
+// clothing state is irrelevant to a photo already saved on their phone, so
+// the naked-state condition is satisfied the same way boundary.js already
+// does when it needs to describe a state the live object doesn't carry: a
+// shallow clone with clothing forced to 'nude'.
+function buildPhoneSnoopPhotoPrompt(npc, gameState, explicit) {
+  if (explicit && intimateAllowed(gameState)) {
+    const subject = { ...npc, clothing: 'nude' };
+    const clause = buildVisualCharacterClause(subject, { npcId: npc.id, gameState, intimate: true });
+    return `${clause}, a private intimate photo saved on their phone, candid, soft natural light, `
+      + (sceneOrientation() === 'landscape' ? 'wide composition.' : 'tall vertical composition, upper-body framing.');
+  }
   const clause = buildVisualCharacterClause(npc, { npcId: npc.id });
   return `${clause}, a candid selfie, soft natural light, casual clothing, relaxed, `
     + (sceneOrientation() === 'landscape' ? 'wide composition.' : 'tall vertical composition, upper-body framing.');
 }
 
-async function generatePhoneSnoopPhotoImage(npc) {
-  const prompt = buildPhoneSnoopPhotoPrompt(npc);
+async function generatePhoneSnoopPhotoImage(npc, gameState, explicit) {
+  const prompt = buildPhoneSnoopPhotoPrompt(npc, gameState, explicit);
   try {
     const result = await generateImageTracked(applyImageStyle(prompt), {
       resolution: IMAGE_CACHE.resolutions.char,
@@ -1837,7 +2112,11 @@ const IMAGE_NEGATIVE = {
   // The peek frame is CANDID by design (2026-08-30): the anti-pose terms
   // here are what stop the model from painting the subject looking at the
   // viewer — a keyhole is a window, not a studio.
-  peek: 'blurry, distorted, extra limbs, low quality, text, watermark, keyhole, door hardware, posing for the camera, looking at the viewer, facing the camera, standing straight, static portrait, studio pose',
+  // Audit 2026-09-05: PEEK_FRAMING.negative (config.js) is now the source of
+  // truth, and composePeekNegative(actKey) is what the peek path actually
+  // sends -- the base minus what the act's own framing needs back. This entry
+  // stays as the un-subtracted base for any caller that has no act.
+  peek: PEEK_FRAMING.negative.join(', '),
   // The outcome window (action-outcome-window-plan Phase 1): a single-subject
   // moment, so a crowd is as wrong here as a watermark.
   actionWindow: 'blurry, distorted, extra limbs, low quality, text, watermark, crowd, multiple people',
@@ -1854,6 +2133,15 @@ const IMAGE_NEGATIVE = {
   // (D4), not the picture's.
   dream: 'extra limbs, deformed hands, low quality, text, watermark, signature, caption, '
     + 'speech bubble, comic panel, panel border, split screen, collage, grid of images',
+  // A night-scene frame (night-scene-sleeping-npc-plan D18). Two families on
+  // top of the usual list, both of which the positive prompt actively invites
+  // the model to get wrong: she is ASLEEP, so open eyes and a returned gaze
+  // are the failure this surface is most prone to (the peek frame's own
+  // anti-pose terms, for the same reason and a different cause); and the frame
+  // is TWO people in one bed, so a crowd is as wrong here as a watermark.
+  night: 'blurry, distorted, extra limbs, deformed hands, low quality, text, watermark, '
+    + 'open eyes, awake, looking at the viewer, facing the camera, posing for the camera, '
+    + 'smiling at the viewer, studio pose, crowd, group, third person',
 };
 
 // Photo reroll: re-freezes the memory — the edited prompt (verbatim,
@@ -1901,7 +2189,7 @@ async function rerollPeekFrame(gs, roomId, npc, npcId, imgEl, fields, frameKey) 
     const result = await generateImageTracked(fields.prompt, {
       resolution: IMAGE_CACHE.resolutions.char,
       seed: fields.seed ?? Math.floor(Math.random() * 2147483647),
-      negativePrompt: fields.negativePrompt || IMAGE_NEGATIVE.peek,
+      negativePrompt: fields.negativePrompt || composePeekNegative(actKey),
     });
     const blob = await canvasToBlob(result.canvas);
     if (!blob) return { error: 'The model returned an empty frame.' };
@@ -2554,11 +2842,21 @@ async function initTitleGallery() {
 // Orientation flip (portrait↔landscape) while the menu is open: swap the
 // gallery to the matching frame. initTitleGallery re-filters the buffer and
 // ring by orientation, so a flip cold-restarts with the right mix.
-window.addEventListener('resize', () => {
-  if (titleGallery.orientation && titleGallery.orientation !== menuViewportOrientation()) {
-    titleGallery.orientation = menuViewportOrientation();
-    initTitleGallery();
-  }
-});
+//
+// GUARDED, spritestudio.js's idiom, and the guard is load-bearing rather than
+// defensive: this is the only top-level DOM touch in the file, and without it
+// the WHOLE FILE threw on load in dev/verify's bare vm ("window.addEventListener
+// is not a function") — so image.js sat in loadgame.js's ORDER, documented as
+// "the pure half is directly testable here", and had never once loaded there.
+// Found by night-scene Phase 4, whose frame key/prompt composers live in this
+// file and are exactly that pure half. It was the only skipped file in ORDER.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('resize', () => {
+    if (titleGallery.orientation && titleGallery.orientation !== menuViewportOrientation()) {
+      titleGallery.orientation = menuViewportOrientation();
+      initTitleGallery();
+    }
+  });
+}
 
 // ===== /SECTION: IMAGE =====

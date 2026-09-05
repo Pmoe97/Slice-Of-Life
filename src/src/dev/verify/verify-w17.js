@@ -169,7 +169,7 @@ await check('sleepingOccupantInRoom finds the sleeper (prefers the room\'s owner
 
 console.log('\n2. MANDATORY gate check — the willingness function is the only door');
 
-await check('boundary.js has EXACTLY THREE resolveWillingnessGate call sites, all inside the gate helpers (no second, softer door)',
+await check('boundary.js has EXACTLY FOUR resolveWillingnessGate call sites, all inside the gate helpers (no second, softer door)',
   new Promise((resolve) => {
     const src = fs.readFileSync(path.join(__dirname, '..', '..', 'srcfiles', 'boundary.js'), 'utf8');
     const lines = src.split('\n');
@@ -182,9 +182,15 @@ await check('boundary.js has EXACTLY THREE resolveWillingnessGate call sites, al
       for (const [fn, start] of starts) if (start <= line) name = fn;
       return name;
     };
-    const inHelpers = calls.every(l => ['resolveBoundaryGate', 'resolveBoundaryThroupleGate', 'resolveBoundaryAwakeGate'].includes(fnAt(l)));
-    resolve(calls.length === 3 && inHelpers);
-  }), 'resolveWillingnessGate must appear exactly three times, all inside resolveBoundaryGate/resolveBoundaryThroupleGate/resolveBoundaryAwakeGate');
+    // night-scene-sleeping-npc-plan.md Phase 2 (D13): resolveNightSceneGate
+    // is a FOURTH legitimate gate helper, added the same way
+    // resolveBoundaryThroupleGate/resolveBoundaryAwakeGate were — it always
+    // consults resolveWillingnessGate and returns the floor read even on
+    // its own happy path (invariant 1's audit trail, verify-night-p2.js
+    // section 0), never a second/softer door.
+    const inHelpers = calls.every(l => ['resolveBoundaryGate', 'resolveBoundaryThroupleGate', 'resolveBoundaryAwakeGate', 'resolveNightSceneGate'].includes(fnAt(l)));
+    resolve(calls.length === 4 && inHelpers);
+  }), 'resolveWillingnessGate must appear exactly four times, all inside resolveBoundaryGate/resolveBoundaryThroupleGate/resolveBoundaryAwakeGate/resolveNightSceneGate');
 
 await check('the three-way gate refuses a single unwilling partner with that partner\'s voice, and a negative-willingness (asleep) partner never fires',
   api(`(() => {
@@ -431,7 +437,16 @@ await check('cold-shouldering NPCs are excluded (COLD_SHOULDER.suppressedDrives)
     return cold === false && open === true;
   })()`));
 
-await check('the resolver: silent success leaves the NPC beside you, sated, an unmade bed, and NO event; a caught attempt lands relPlayer consequences + suspicion + a seen-by-player event; a locked/reawakened premise returns null',
+// actions-and-activities-overhaul-plan.md Phase 5 (D31): 'caught' no longer
+// resolves relPlayer/suspicion consequences here at all — it stamps a
+// npc.flags._sleepAdvance pending record instead, and the player's own real
+// choice (into it / decline / angry) decides which of three outcomes lands,
+// via boundary.js's resolveSleepAdvanceChoice. See verify-aa-p5.js section 4
+// (this exact deferred contract) and section 5 (the three resolved
+// outcomes, including 'angry' reusing this file's own caughtRelDeltas/
+// caughtSuspicion figures) for the up-to-date coverage; this assertion is
+// updated in place rather than left describing behavior that no longer ships.
+await check('the resolver: silent success leaves the NPC beside you, sated, an unmade bed, and NO event; a caught attempt stamps a pending sleep-advance record and applies NOTHING yet (D31 — the player\'s own choice decides, not this roll); a locked/reawakened premise returns null',
   api(`(() => {
     const sneakState = (seed, cons) => {
       const h = house(seed, 2);
@@ -463,16 +478,17 @@ await check('the resolver: silent success leaves the NPC beside you, sated, an u
       && hs.npcs[rs].needs.desire === 80 + BOUNDARY.npcSneak.desireRelease
       && +((after.affection || 0) - (before.affection || 0)).toFixed(3) === BOUNDARY.npcSneak.relDeltas.affection
       && bed?.state?.made === 'unmade';
-    // caught
+    // caught — D31: a pending record now, no relPlayer/suspicion consequence
+    // fires until the player's own choice resolves it (verify-aa-p5.js).
     const hc = caught.h; const [rc] = residentsOf(hc);
-    const beforeC = hc.npcs[rc].relPlayer;
+    const beforeC = JSON.stringify(hc.npcs[rc].relPlayer);
     const resC = trySneakIntoBed(hc.npcs[rc], rc, { location: 'hallway_a' }, hc);
-    const afterC = hc.npcs[rc].relPlayer;
-    const caughtOk = resC.caught === true && resC.activityOverride === 'sneaking back out'
-      && resC.locationOverride === hc.player.location
-      && resC.event?.seenByPlayer === true && resC.event?.type === 'boundary'
-      && +((afterC.tension || 0) - (beforeC.tension || 0)).toFixed(3) === BOUNDARY.npcSneak.caughtRelDeltas.tension
-      && hc.npcs[rc].suspicion?.boundary_violation === BOUNDARY.npcSneak.caughtSuspicion;
+    const afterC = JSON.stringify(hc.npcs[rc].relPlayer);
+    const caughtOk = resC.caught === true && resC.activityOverride === 'waking you'
+      && resC.locationOverride === hc.player.location && resC.event === null
+      && beforeC === afterC // no relPlayer delta fires here any more
+      && !(hc.npcs[rc].suspicion?.boundary_violation > 0) // no suspicion bump either
+      && hasPendingSleepAdvance(hc.npcs[rc]) === true;
     // locked premise -> null
     const hL = sneakState(9100, 0.2);
     const [rl] = residentsOf(hL);

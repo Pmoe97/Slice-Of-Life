@@ -637,9 +637,21 @@ function recomputeRoomCleanliness(bucketObjects) {
 // Recompute and write back cleanliness for one room from its current
 // object bucket — the hook future phases (P2 cooking, P6 cleaning) call
 // after any effect changes an object's dirty-relevant state.
+//
+// Actions & Activities Overhaul Phase 9 (D17/D49): blended with the ambient
+// per-room dirt.js layer (world.rooms[roomId].dirt — foot traffic, dust,
+// cooking, eating; NOT derived from any object's state, so it can't be
+// folded into recomputeRoomCleanliness's object walk above) as an extra
+// penalty on top of the object-derived score. A spotless kitchen with heavy
+// foot traffic still reads a little worse; a filthy stove in an empty
+// hallway... doesn't happen, but a filthy stove in a heavily-walked kitchen
+// still dominates over a light dust penalty either way (both are additive
+// off the same 0-100 scale, capped by DIRT_TUNING.cleanlinessPenaltyMax).
 function refreshRoomCleanliness(gameState, roomId) {
   const bucket = gameState.objects?.[`room_${roomId}`];
-  const cleanliness = recomputeRoomCleanliness(bucket);
+  const objectCleanliness = recomputeRoomCleanliness(bucket);
+  const dirt = gameState.world.rooms?.[roomId]?.dirt ?? 0;
+  const cleanliness = Math.round(clamp(objectCleanliness - dirt * DIRT_TUNING.cleanlinessPenaltyMax, 0, 100));
   if (gameState.world.rooms[roomId]) gameState.world.rooms[roomId].cleanliness = cleanliness;
   return cleanliness;
 }

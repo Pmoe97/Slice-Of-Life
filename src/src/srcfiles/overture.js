@@ -375,7 +375,18 @@ function scoreOvertures(npc, npcId, gameState, ctx) {
       proposal = proposeTerms(npc, def, gameState);
       if (!proposal) continue;
     }
-    out[overtureId] = { ...motive, channel: def.channel, overtureId, ...(proposal ? { proposal } : {}) };
+    // D10: `requests` is `proposes`'s sibling field — same "no candidacy
+    // without a real thing to name" rule, carried on the record as `request`
+    // rather than a second `proposal`.
+    let request = null;
+    if (def.requests) {
+      request = requestTerms(npc, def, gameState);
+      if (!request) continue;
+    }
+    out[overtureId] = {
+      ...motive, channel: def.channel, overtureId,
+      ...(proposal ? { proposal } : {}), ...(request ? { request } : {}),
+    };
   }
   return out;
 }
@@ -479,6 +490,36 @@ function proposeTerms(npc, def, gameState) {
   return null;
 }
 
+// --- The request's terms (actions-and-activities-overhaul-plan.md Phase 5,
+// D10, pure) --------------------------------------------------------------
+// `proposeTerms`'s sibling: a request has to name WHAT is being asked for, or
+// it is a mood rather than an ask — same "no candidacy without a real thing
+// to name" rule, same reason (an NPC with nothing to ask for is not a
+// candidate at all, so the record never opens). Returns { kind, amount } |
+// { kind, defId } | null.
+function requestTerms(npc, def, gameState) {
+  const kind = def && def.requests && def.requests.kind;
+  if (kind === 'money') {
+    // D10, whole: no gate on whether the player CAN grant it — the amount is
+    // fixed (ASK_TUNING.loan's own default, the same figure the player's own
+    // loan ask reaches for), never scaled down to what the player happens to
+    // have on hand. A player with nothing on hand can still be asked.
+    return { kind: 'money', amount: ASK_TUNING.loan.defaultAmount };
+  }
+  if (kind === 'borrow_item') {
+    // The one request with a real candidacy gate: borrowableStacks only
+    // reads `.inventory` (items.js/inventory.js), so it works unchanged
+    // against the player's own bag despite being written for an npc's.
+    // First stack, not a weighted pick — same determinism proposeTerms uses
+    // for its own "earliest slot", no rng this function does not otherwise
+    // need.
+    const stacks = borrowableStacks(gameState, gameState.player);
+    if (!stacks.length) return null;
+    return { kind: 'borrow_item', defId: stacks[0].defId };
+  }
+  return null;
+}
+
 // The record the plan's data model describes, with one substitution: `ticksLeft`
 // and `openedDay` in place of the sketched `openedTick` (D26). A tick index is
 // 0..47 and wraps at midnight, so it cannot measure an age — which is exactly
@@ -497,6 +538,7 @@ function openOverture(gameState, npcId, choice) {
   const def = OVERTURE_DEFS[choice.overtureId];
   if (!def) return null;
   if (def.proposes && !choice.proposal) return null;
+  if (def.requests && !choice.request) return null;
   npc.overture = {
     overtureId: choice.overtureId,
     channel: def.channel,
@@ -508,6 +550,7 @@ function openOverture(gameState, npcId, choice) {
     status: 'pending',
     tone: choice.tone || 'warm',
     ...(choice.proposal ? { proposal: choice.proposal } : {}),
+    ...(choice.request ? { request: choice.request } : {}),
   };
   return npc.overture;
 }

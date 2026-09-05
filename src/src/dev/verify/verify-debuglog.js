@@ -6,9 +6,12 @@
 // real vm engine, plus the registration hazards the plan called out by
 // name: the file must be listed in BOTH index.html and loadgame.js's ORDER
 // (README rule 6 — this is the exact rumination.js failure mode), and
-// world.debugLog must be listed in all THREE of state.js's SAVE_KEYS,
-// WORLD_KEY_FALLBACKS, and loadGameState's hand-list, or it writes fine all
-// session and silently reads back empty next load.
+// world.debugLog must be listed in both state.js's SAVE_KEYS and
+// WORLD_KEY_FALLBACKS, or it writes fine all session and silently reads
+// back empty next load. loadGameState USED to need a hand-list entry too
+// (a real third place this exact key got missed, per this comment's own
+// history) — it now reads every world key generically off SAVE_KEYS, so
+// debugLog rides along for free and there is no third place left to forget.
 //
 // What this file does NOT cover: a live resolveTick/evaluateDrives pass
 // producing a real 'movement' entry for a forced sneak_into_bed scenario.
@@ -39,8 +42,10 @@ check('debuglog.js is loaded by index.html', /debuglog\.js\?v=\d+/.test(mainHtml
 check('debuglog.js is listed in loadgame.js ORDER', /'debuglog\.js'/.test(loadgameSrc));
 check('debugLog is listed in state.js SAVE_KEYS (world folder)', /'debugLog',/.test(stateSrc));
 check('debugLog has a WORLD_KEY_FALLBACKS default', /debugLog: \(\) => \[\]/.test(stateSrc));
-check('loadGameState reads debugLog back from kv', /getWorld\('debugLog'\)/.test(stateSrc));
-check('loadGameState assembles debugLog into the world object it returns', /world: \{[^}]*\bdebugLog\b/.test(stateSrc));
+check('loadGameState reads every world key back from kv generically off SAVE_KEYS (debugLog needs no individual read line any more)',
+  /SAVE_KEYS\.find\(e => e\.folder === 'world'\)/.test(stateSrc) && /await getWorld\(key\)/.test(stateSrc));
+check('loadGameState assembles the world object generically too (debugLog needs no individual mention there either)',
+  /world\[key\] = WORLD_KEY_NORMALIZERS\[key\]/.test(stateSrc));
 check('exportSaveRecord strips debugLog before it leaves the device', /debugLog: undefined/.test(stateSrc));
 check('importSaveRecord resets debugLog on a device that already had one', /record\.payload\.world\.debugLog = \[\]/.test(stateSrc));
 

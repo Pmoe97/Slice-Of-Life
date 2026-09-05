@@ -162,7 +162,7 @@ budget left. One phase per session is the point.
    both the plan and this prompt to `src/src/ref/complete/`, and update the
    indexes in the same step — `src/src/ref/README.md`,
    `src/src/ref/structural/ARCHITECTURE.md`, and the Plan 4 row in
-   `src/src/ref/wip/SENSORY-AND-SOCIAL-ROADMAP.md`. House rules 3 and 4.
+   `src/src/ref/complete/SENSORY-AND-SOCIAL-ROADMAP.md`. House rules 3 and 4.
 
 Do not end a session without doing this. A half-finished phase with a precise
 Handoff note is recoverable; a half-finished phase with no note is not.

@@ -18,6 +18,42 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "8736"],
       "port": 8736
+    },
+    {
+      "name": "slice-of-life-aa-p7",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8737"],
+      "port": 8737
+    },
+    {
+      "name": "slice-of-life-aa-p8",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8738"],
+      "port": 8738
+    },
+    {
+      "name": "slice-of-life-aa-p9",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8739"],
+      "port": 8739
+    },
+    {
+      "name": "slice-of-life-aa-p15",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8740"],
+      "port": 8740
+    },
+    {
+      "name": "slice-of-life-aa-p16",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8741"],
+      "port": 8741
+    },
+    {
+      "name": "slice-of-life-aa-p17",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8742"],
+      "port": 8742
     }
   ]
 }

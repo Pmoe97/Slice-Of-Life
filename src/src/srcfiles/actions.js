@@ -494,11 +494,30 @@ function resolveActionAnchor(gameState, actionId, actorId) {
   else if (def.source.kind === 'self' && actor?.location) rooms = [actor.location];
 
   // Deterministic pick: the actor's own room when it is one of the
-  // candidates (that is where the action is already happening), else the
-  // source's first room. Phase 4's physical layer owns which candidate is
-  // NEAREST; this phase resolves the anchor, not the route.
+  // candidates (that is where the action is already happening); else the
+  // actor's own BEDROOM when that's a candidate (a resident napping from the
+  // kitchen should land in their own bed, not whoever's bed the object scan
+  // happens to find first); else the source's first room. Phase 4's physical
+  // layer owns which candidate is NEAREST; this phase resolves the anchor,
+  // not the route.
+  //
+  // Bug report (2026-09-01): before the ownRoom tier existed, EVERY resident
+  // whose current room wasn't itself a candidate (self.nap's source is
+  // `{kind:'object', objDefs:['bed','sofa']}`, so `rooms` is every bedroom
+  // plus every sofa'd common room) fell straight to `rooms[0]` —
+  // `roomsContainingObject`'s Object.entries iteration order, which puts
+  // `room_bedroom_player` first for every generated house. Confirmed live: a
+  // resident with a real bed in their own bedroom, napping from the kitchen,
+  // anchored in the PLAYER's bedroom on the player's bed, every time,
+  // regardless of whose bed was actually nearest. sleep_recover's `moveToRoom`
+  // (config.js) does not fix this on its own — it only steers which common
+  // room the drive settles in when it declines a bedroom nap in the first
+  // place, and does nothing once the resolver is choosing a bedroom.
   const actorRoom = actor?.location;
-  const roomId = rooms.includes(actorRoom) ? actorRoom : rooms[0];
+  const ownRoom = actor?.residency?.room || (actorId === 'player' || !actorId ? 'bedroom_player' : null);
+  const roomId = rooms.includes(actorRoom) ? actorRoom
+    : (ownRoom && rooms.includes(ownRoom)) ? ownRoom
+    : rooms[0];
   if (!roomId || !ROOMS[roomId]) return null;
 
   const bucket = (gameState.objects && gameState.objects[`room_${roomId}`]) || {};

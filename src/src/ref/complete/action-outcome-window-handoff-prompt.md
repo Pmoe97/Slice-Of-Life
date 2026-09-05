@@ -18,7 +18,7 @@ told which phase to work on — find it yourself using the steps below.
 ## Step 0 — find out where you are (cheap: the Status table, not the full doc)
 
 Read only the `## Handoff — read this first` section and the `## Status`
-table in `src/src/ref/wip/action-outcome-window-plan.md`.
+table in `src/src/ref/complete/action-outcome-window-plan.md`.
 
 The first phase not marked "Done" is your phase. The six phases run in
 this order, with two named exceptions: **Phase 5** (the AfterHours/

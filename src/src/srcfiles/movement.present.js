@@ -1,5 +1,5 @@
 // ===== SECTION: PRESENTATION (NPC avatar liveliness, Phase 1) =====
-// (src/src/ref/wip/npc-avatar-liveliness-and-movement-plan.md, Phase 1 — D1–D8,
+// (src/src/ref/complete/npc-avatar-liveliness-and-movement-plan.md, Phase 1 — D1–D8,
 // D18, D23.)
 //
 // The sim knows where every avatar is down to the pixel, but nothing in the

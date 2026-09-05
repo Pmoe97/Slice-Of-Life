@@ -24,7 +24,7 @@ Companions:
   against it.
 - `src/src/ref/complete/player-creation-and-intro-plan.md` (built) —
   `player.portrait.seed` is the player's identity anchor and stays so.
-- `src/src/ref/wip/settings-and-pause-overhaul-plan.md` (planned) — its D9 image
+- `src/src/ref/complete/settings-and-pause-overhaul-plan.md` (planned) — its D9 image
   style fold is the reason D4 exists. Read D4 before touching either.
 
 This plan is complete — all 8 phases built and verified — and lives in

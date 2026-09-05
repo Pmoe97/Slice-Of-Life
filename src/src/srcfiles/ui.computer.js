@@ -2243,3 +2243,108 @@ function buildNpcCaughtPeepingFallback(npc) {
 }
 
 // ===== /SECTION: NPC CAUGHT PEEPING BUBBLE =====
+
+// ===== SECTION: DAILYGRID HANDLERS =====
+// actions-and-activities-overhaul-plan.md Phase 14 (D23). doPuzzleFillCell
+// is the per-keystroke path — deliberately not async-awaited by its caller
+// (the cell input's own 'input' listener, render.computer.js) and skips
+// rendering/saving entirely except on the rare event a letter completes the
+// puzzle (see renderPuzzlesToday's header comment for why: the phone shell's
+// render always rebuilds the DOM, which would fight the player mid-type).
+// Hint and Check are ordinary deliberate button clicks and behave like every
+// other app's do* handler — mutate (Hint only), render both shells, save.
+async function doPuzzleFillCell(row, col, letter) {
+  if (!currentGameState) return;
+  const result = fillPuzzleCell(currentGameState, row, col, letter);
+  if (!result.ok || !result.completed) return;
+  addLogEntry('system', `DailyGrid solved for today! ${result.rewardNote}`.trim());
+  // The completing keystroke's own input is still focused at this point;
+  // blur it so renderComputerScreen's typingHere guard (render.desktop.js)
+  // doesn't skip the redraw that shows the solved banner.
+  if (document.activeElement && typeof document.activeElement.blur === 'function') document.activeElement.blur();
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('puzzle-complete', currentGameState);
+}
+
+async function doPuzzleRevealHint(wordIndex) {
+  if (!currentGameState || wordIndex == null) return;
+  const result = revealHintForWord(currentGameState, wordIndex);
+  if (!result.ok) return;
+  if (result.completed) addLogEntry('system', `DailyGrid solved for today! ${result.rewardNote}`.trim());
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('puzzle-hint', currentGameState);
+}
+
+// Nothing to mutate — correctness highlighting (renderPuzzlesToday) is
+// computed live from filledCells on every render, so "Check Answers" is
+// just a deliberate redraw the player asks for instead of one triggered by
+// the next incidental action.
+function doPuzzleCheck() {
+  if (!currentGameState) return;
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+}
+// ===== /SECTION: DAILYGRID HANDLERS =====
+
+// ===== SECTION: CHATTER HANDLERS =====
+// actions-and-activities-overhaul-plan.md Phase 15 (D24). Thin UI shell over
+// chatter.js's pure domain logic: read a typed value from the DOM (same
+// "handler reads its own input by id" shape doImSend uses, not a value
+// carried through `extra`), call, re-render both surfaces, save. Text inputs
+// are read directly rather than through the [data-action] delegation, same
+// reasoning as im-input above — only the deliberate Post/Reply/Like clicks
+// (and Enter-to-send) route through handleAction.
+function chatterScopeForDevice(device) {
+  return device === 'phone' ? document.getElementById('phone-screen') : document;
+}
+
+async function doChatterPost(device) {
+  if (!currentGameState) return;
+  const scope = chatterScopeForDevice(device);
+  const input = scope?.querySelector('#cht-compose-input');
+  const text = input?.value.trim();
+  if (!text) return;
+  const result = postChatterAsPlayer(currentGameState, text, currentGameState.meta.clock.day);
+  if (!result.ok) return;
+  if (input) input.value = '';
+  input?.blur();
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('chatter-post', currentGameState);
+}
+
+async function doChatterLike(postId) {
+  if (!currentGameState || !postId) return;
+  const result = toggleChatterLike(currentGameState, postId);
+  if (!result.ok) return;
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('chatter-like', currentGameState);
+}
+
+async function doChatterComment(postId, device) {
+  if (!currentGameState || !postId) return;
+  const scope = chatterScopeForDevice(device);
+  const input = scope?.querySelector(`#cht-comment-input-${postId}`);
+  const text = input?.value.trim();
+  if (!text) return;
+  const result = addChatterComment(currentGameState, postId, text);
+  if (!result.ok) return;
+  if (input) input.value = '';
+  input?.blur();
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('chatter-comment', currentGameState);
+}
+
+// Mirrors doCodexOpenNpc exactly, including the device-parameterised
+// switchScreen for phone vs computer — pure navigation, nothing to save.
+function doChatterOpenProfile(npcId, device) {
+  if (!currentGameState || !npcId) return;
+  switchScreen(currentGameState, 'social_feed', 'profile', { npcId }, device === 'phone' ? 'phone' : 'computer');
+  if (device === 'phone') renderPhoneScreen(currentGameState);
+  else renderComputerScreen(currentGameState);
+}
+// ===== /SECTION: CHATTER HANDLERS =====

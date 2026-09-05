@@ -19,7 +19,7 @@ which phase to work on — find it yourself using the steps below.
 
 Read only the `## Handoff — read this first` section (including its **Audit
 corrections** list) and the `## Status` table in
-`src/src/ref/wip/npc-avatar-liveliness-and-movement-plan.md`.
+`src/src/ref/complete/npc-avatar-liveliness-and-movement-plan.md`.
 
 **The design gate is CLOSED.** The design session ran on 2026-08-28 and
 locked D15–D21; a code audit the same day added D22/D23 and amended

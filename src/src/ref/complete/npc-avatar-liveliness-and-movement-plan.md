@@ -33,7 +33,7 @@ This is a living document, worked one phase per session. **Read the Handoff
 section immediately below before anything else** — it is the single source
 of truth for where the last session left off. Update it, and the Status
 table near the bottom, as the very last thing you do each session — see
-`src/src/ref/wip/npc-avatar-liveliness-and-movement-handoff-prompt.md` for the
+`src/src/ref/complete/npc-avatar-liveliness-and-movement-handoff-prompt.md` for the
 full session protocol.
 
 ---

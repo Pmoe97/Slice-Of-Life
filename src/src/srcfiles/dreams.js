@@ -140,6 +140,7 @@ const RESIDUE_ACT_CLAUSES = {
   peeked_masturbation: '{name} alone in {room}, not knowing the door was open',
   boundary_sleep_with: "getting into {name}'s bed while they slept, and staying",
   boundary_watch_sleeper: 'standing over {name} while they slept, longer than you meant to',
+  night_scene: 'a whole night with {name} asleep under your hands, and the morning that never asked about it',
   throuple: 'three of you in {room}, and nobody keeping count',
   cuck: 'three of you in {room}, and nobody keeping count',
 };

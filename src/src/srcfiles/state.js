@@ -28,7 +28,7 @@ function assert(cond, msg, context) {
 // --- Folder versions (independent migration) ---
 const FOLDER_VERSIONS = {
   meta: 2,
-  player: 7,
+  player: 8,
   world: 5,
   npcs: 8,
   images: 1,
@@ -79,6 +79,11 @@ const SAVE_KEYS = [
     // castWeb failure this whole table exists to prevent, and gameplayOptions
     // above hit it again a day ago.
     'dreams',
+    // Actions & Activities Overhaul Phase 12 (D21): the mailbox (mail.js's
+    // processMailForDay/pushMailEntry) and the single pending door event
+    // (mail.js's queueDeliveryDoorEvent/sweepDoorEvent). Additive-default
+    // precedent — see WORLD_KEY_FALLBACKS below.
+    'mailbox', 'doorEvent',
   ] },
   { folder: 'npcs', all: true },
   { folder: 'objects', all: true },
@@ -127,18 +132,51 @@ const WORLD_KEY_FALLBACKS = {
   gameplayOptions: () => ({ needDecayScale: 1, needDecayDisabled: false, willingnessBaseline: 0, phoneBatteryScale: 1, phoneBatteryAlwaysCharged: false }),
   events: () => [],
   deliveries: () => [],
+  // Renovation overhaul: active/completed contracted jobs. Falls back to an
+  // empty array for saves written before renovationJobs existed.
   renovationJobs: () => [],
+  // Visit spine (external-world plan Phase 1): the "who is onsite and why"
+  // queue. Falls back to an empty array for saves written before visits
+  // existed — an in-flight job on such a save gets its crew visits via
+  // processVisitsForDay's rollover backstop, no migration needed.
   visits: () => [],
+  // Meal commitments (inventory overhaul Phase 7): the resident-side
+  // schedule-override queue. Empty for saves written before Phase 7 — a
+  // commitment is created live at invite time, so there is nothing to
+  // backfill (same pattern as moveInOffers).
   commitments: () => [],
+  // Food delivery (external-world plan Phase 5): placed DoorDrop orders.
+  // Empty for saves written before food existed; an order in flight
+  // survives a reload because its driver's visit is in `visits` alongside
+  // it. Same story for groceryOrders just below.
   foodOrders: () => [],
   groceryOrders: () => [],
+  // Friends of roommates (external-world plan Phase 6): the friend-stub
+  // table. Empty for saves written before Phase 6 — ensureSocialCircles
+  // refills it at the next day rollover, so no migration is needed.
   externalStubs: () => ({}),
+  // Escorts (external-world plan Phase 7): the persistent roster and
+  // booking ledger. Empty for saves written before Phase 7 —
+  // ensureEscortRoster backfills the roster on first browse/day rollover,
+  // so no migration. Same for escortBookings just below.
   escortRoster: () => [],
   escortBookings: () => [],
+  // Hot Singles (AfterHours Site Expansion Phase 7): roster membership.
+  // Empty for saves written before Phase 7 — ensureHotSinglesRoster
+  // backfills on first browse/day rollover, so no migration.
   hotSinglesRoster: () => [],
+  // Move-in offers (external-world plan Phase 8): pending vouches for an
+  // external NPC to move in. Empty for saves written before Phase 8 — an
+  // offer is created live in conversation, so there is nothing to backfill.
   moveInOffers: () => [],
+  // Contractor tutorial (contractor doc Phase 3): one-shot tutorial/
+  // milestone flags.
   flags: () => ({}),
   quests: () => ({ active: [], completed: [] }),
+  // playerShare replaced perResident when rent stopped being an even split
+  // (see SIM's computeRent). A save written before that has the old field;
+  // it's recomputed from live residency on the next computeRent call, so
+  // this fallback shape just needs to be sane, not a migration.
   rent: () => ({ total: ECONOMY.rent.total, playerShare: ECONOMY.rent.total, roommateShares: {}, coveredByRoommates: 0, contributorCount: 0 }),
   computer: () => defaultComputerState(),
   taxes: () => ({ quarterGross: 0, lastQuarterBilled: -1, unpaid: 0, autoReserve: false, reserve: 0, quarterDeductions: 0, lastQuarterOwed: 0, lastQuarterPaid: 0 }),
@@ -162,6 +200,31 @@ const WORLD_KEY_FALLBACKS = {
   // that is fine and deliberate, per this table's comment above: these are
   // called at RUNTIME only.
   dreams: () => defaultDreamState(),
+  // Actions & Activities Overhaul Phase 12 (D21): empty mailbox / no one at
+  // the door is exactly what a save from before this existed should read
+  // as — no migration, same additive-default precedent as relationships/
+  // signals above.
+  mailbox: () => [],
+  doorEvent: () => null,
+};
+
+// World keys whose on-disk value needs more than a bare "absent → default"
+// fallback — a real shape migration (old field names, missing sub-fields, a
+// hand-edited save) that WORLD_KEY_FALLBACKS' plain defaults can't express.
+// Each function already handles an absent/falsy raw value itself (falls
+// through to its own default*State()), so loadGameState below calls these
+// directly with no `|| fallback()` wrapped around them — see each
+// function's own comment (computer.js, sim.js, world.js, state.js,
+// dreams.js) for why that specific key needs real normalization rather than
+// just an absent-key default. Referenced by name only inside these
+// wrapper functions, not called at module-load time, for the same
+// cross-script load-order reason WORLD_KEY_FALLBACKS above is.
+const WORLD_KEY_NORMALIZERS = {
+  computer: (raw) => normalizeComputerState(raw),
+  upgrades: (raw) => normalizeUpgrades(raw),
+  phone: (raw) => normalizePhoneState(raw),
+  afterHours: (raw) => normalizeAfterHoursState(raw),
+  dreams: (raw) => normalizeDreamState(raw),
 };
 
 // --- Migration functions (per folder). Stubbed for day-one; iterate here. ---
@@ -290,6 +353,19 @@ const MIGRATIONS = {
           activityEvents: player.meta?.activityEvents ?? [],
         },
       };
+    } },
+    // player 7->8 (night-scene Phase 6, D28): the learned-preference store.
+    // `player.nightKnown[npcId] = { parts: {...}, motions: {...} }` — what
+    // the PLAYER has worked out about a character by playing, never what the
+    // character is (the preferences themselves stay derived and unstored,
+    // which is the whole of D28's no-migration property). Deliberately not
+    // folded into player.ledger: that is an array of day-stamped ACTS with a
+    // spent flag, read by the codex's confront/spread verbs, and a
+    // preference is not an act. Additive safe default, same shape as the 5->6
+    // ledger backfill above.
+    { from: 7, to: 8, fn: (player) => {
+      if (!player || typeof player !== 'object') return player;
+      return { ...player, nightKnown: player.nightKnown ?? {} };
     } },
   ],
   world: [
@@ -1129,126 +1205,35 @@ async function loadGameState() {
   // the WORLD_KEY_FALLBACKS above: absent key, safe default at read time.
   if (player && !player.appearance) player.appearance = generatePlayerAppearance(meta.seed, null);
   const npcs = await getAllNpcs();
-  const rooms = await getWorld('rooms') || {};
-  const castWeb = await getWorld('castWeb') || {};
-  // Intimacy & Voyeurism Phase 12: the relationship store. Empty for saves
-  // written before Phase 12 — records form live from co-location, so there
-  // is nothing to backfill (same additive-default pattern as moveInOffers).
-  const relationships = await getWorld('relationships') || {};
-  const quests = await getWorld('quests') || { active: [], completed: [] };
-  const events = await getWorld('events') || [];
-  const deliveries = await getWorld('deliveries') || [];
-  // playerShare replaced perResident when rent stopped being an even split
-  // (see SIM's computeRent). A save written before that has the old field;
-  // it's recomputed from live residency on the next computeRent call, so
-  // the fallback here just needs a sane shape, not a migration.
-  const rent = await getWorld('rent')
-    || { total: ECONOMY.rent.total, playerShare: ECONOMY.rent.total, roommateShares: {}, coveredByRoommates: 0, contributorCount: 0 };
-  // A new kv key rather than a version bump — defaultComputerState()
-  // (COMPUTER) is exactly what a save from before the computer existed
-  // should read as. A save from after the computer existed but before its
-  // windowed-desktop rework has a `computer` key in the old single-`view`
-  // shape though, so a real normalizer is needed here, not just a
-  // fallback — see COMPUTER's normalizeComputerState.
-  const computer = normalizeComputerState(await getWorld('computer'));
-  // Phase 6 taxes state — falls back to a fresh quarter accumulator for
-  // a save written before taxes existed. quarterDeductions, lastQuarterOwed,
-  // and lastQuarterPaid are new in Phase 6; old saves get zeros.
-  const taxes = await getWorld('taxes') || { quarterGross: 0, lastQuarterBilled: -1, unpaid: 0, autoReserve: false, reserve: 0, quarterDeductions: 0, lastQuarterOwed: 0, lastQuarterPaid: 0 };
-  // Phase 3 bills — falls back to a fresh initBillState() for a save from
-  // before bills existed. Old saves had no `bills` key; the clean-break
-  // migration (when it lands) will discard them entirely, but this keeps
-  // the game playable for now.
-  const bills = await getWorld('bills') || initBillState();
-  // Phase 4 upgrades — falls back to a fresh initUpgradesState() for a
-  // save from before upgrades existed. Old saves get a disrepair state
-  // (everything broken) which the player then restores. This is a
-  // playable but harsh fallback; the clean-break migration will discard
-  // old saves entirely when it lands.
-  // Renovation overhaul + Phase 9: normalize the persisted upgrades —
-  // prunes the dead shared `bedroom_habitability` key (its state maps onto
-  // the four per-bedroom facilities), backfills facilities a save predates
-  // from FACILITY_STARTING_TIERS so the RenoFix dashboard renders every
-  // facility, and backfills the `condition` field for pre-maintenance saves.
-  // See normalizeUpgrades (SIM).
-  const upgrades = normalizeUpgrades(await getWorld('upgrades'));
-  // Phase 5 utility meters — falls back to fresh counters for a save from
-  // before metering existed. Old saves had no `utilities` key; the flat
-  // bill amounts still apply as a fallback in computeBillAmount when
-  // utilities is absent.
-  const utilities = await getWorld('utilities') || initUtilitiesState();
-  // Renovation overhaul: active/completed contracted jobs. Falls back to an
-  // empty array for saves written before renovationJobs existed.
-  const renovationJobs = await getWorld('renovationJobs') || [];
-  // Visit spine (external-world plan Phase 1): the "who is onsite and why"
-  // queue. Falls back to an empty array for saves written before visits
-  // existed — an in-flight job on such a save gets its crew visits via
-  // processVisitsForDay's rollover backstop, no migration needed.
-  const visits = await getWorld('visits') || [];
-  // Meal commitments (inventory overhaul Phase 7): the resident-side
-  // schedule-override queue. Empty for saves written before Phase 7 — a
-  // commitment is created live at invite time, so there is nothing to
-  // backfill (same pattern as moveInOffers).
-  const commitments = await getWorld('commitments') || [];
-  // Food delivery (external-world plan Phase 5): placed DoorDrop orders.
-  // Empty for saves written before food existed; an order in flight survives
-  // a reload because its driver's visit is in `visits` alongside it.
-  const foodOrders = await getWorld('foodOrders') || [];
-  const groceryOrders = await getWorld('groceryOrders') || [];
-  // Friends of roommates (external-world plan Phase 6): the friend-stub table.
-  // Empty for saves written before Phase 6 — ensureSocialCircles refills it at
-  // the next day rollover, so no migration is needed.
-  const externalStubs = await getWorld('externalStubs') || {};
-  // Escorts (external-world plan Phase 7): the persistent roster and booking
-  // ledger. Empty for saves written before Phase 7 — ensureEscortRoster
-  // backfills the roster on first browse/day rollover, so no migration.
-  const escortRoster = await getWorld('escortRoster') || [];
-  const escortBookings = await getWorld('escortBookings') || [];
-  // Hot Singles (AfterHours Site Expansion Phase 7): roster membership.
-  // Empty for saves written before Phase 7 — ensureHotSinglesRoster
-  // backfills on first browse/day rollover, so no migration.
-  const hotSinglesRoster = await getWorld('hotSinglesRoster') || [];
-  // Outside partners (Intimacy & Voyeurism Phase 14): the residentId →
-  // { npcId, sinceDay, lastVisitDay } index. Empty for saves written before
-  // Phase 14 — ensureOutsidePartners backfills at the next day rollover, so
-  // no migration (the partner NPCs themselves persist in the npcs folder).
-  const outsidePartners = await getWorld('outsidePartners') || {};
-  // Intimacy & Voyeurism Phase 18: the pregnancy lifecycle store. Read via
-  // the SAME additive-default pattern as relationships/outsidePartners — an
-  // absent key on an old save loads as [], no migration.
-  const pregnancies = await getWorld('pregnancies') || [];
-  // Food-overhaul Phase 6 (D14): auto-cook mastery proofs (recipeId → best
-  // grade cooked). Same additive-default pattern as relationships — absent
-  // on an old save, and instant cook is gated behind the proof anyway.
-  const autoCookCleared = await getWorld('autoCookCleared') || {};
-  // Move-in offers (external-world plan Phase 8): pending vouches for an
-  // external NPC to move in. Empty for saves written before Phase 8 — an
-  // offer is created live in conversation, so there is nothing to backfill.
-  const moveInOffers = await getWorld('moveInOffers') || [];
-  // Contractor tutorial (contractor doc Phase 3): one-shot tutorial/milestone flags.
-  const flags = await getWorld('flags') || {};
-  // BrineOS Phase 2: phone shell nav state (Phase 3). Presence is derived
-  // from the object bucket, so this is the whole persisted shape.
-  const phone = normalizePhoneState(await getWorld('phone'));
-  // AfterHours (Site Expansion Phase 6): durable site data. Empty for saves
-  // written before Phase 6 — lazy-init by defaultAfterHoursState, filled as
-  // the player browses, so no migration.
-  const afterHours = normalizeAfterHoursState(await getWorld('afterHours'));
-  // F1 (Discord feedback, 2026-08-23): New Game/Sandbox's per-save gameplay
-  // options. Empty for saves written before this existed — same
-  // additive-default pattern as autoCookCleared/relationships above.
-  const gameplayOptions = await getWorld('gameplayOptions') || WORLD_KEY_FALLBACKS.gameplayOptions();
-  // Troubleshooting export log — SAVE_KEYS governs what gets WRITTEN;
-  // this hand-list governs what gets READ BACK. Both must list the key or
-  // it writes fine all session and silently reads back empty next load —
-  // the exact failure gameplayOptions' own comment above warns about.
-  const debugLog = await getWorld('debugLog') || WORLD_KEY_FALLBACKS.debugLog();
-  // Dream Engine Phase 1 — the OTHER half of the SAVE_KEYS entry above. Read
-  // through normalizeDreamState (dreams.js) rather than a bare `|| {}` so a
-  // hand-edited or half-written subtree degrades to "no dreams yet" instead
-  // of throwing on the sleep path, exactly as normalizePhoneState /
-  // normalizeAfterHoursState do two lines up.
-  const dreams = normalizeDreamState(await getWorld('dreams'));
+  // Night Scene Phase 2: close out any session left open across a reload —
+  // see boundary.js's sweepStaleNightScenes for why abandon (not resume) is
+  // the correct load-time behavior here. Guarded like the other cross-file
+  // optional calls in this codebase (boundary.js loads after state.js).
+  if (typeof sweepStaleNightScenes === 'function') sweepStaleNightScenes(npcs);
+
+  // Walk the SAME SAVE_KEYS table the write paths (writeGeneratedGameState,
+  // the autosave/snapshot loop, exportSaveRecord/importSaveRecord) already
+  // walk, instead of a hand-listed const-per-key plus a hand-assembled
+  // `world: { ... }` object literal. That hand list used to be a FOURTH
+  // place a new world key had to be wired in on top of SAVE_KEYS and
+  // WORLD_KEY_FALLBACKS, and it's the exact spot gameplayOptions, dreams,
+  // and mailbox/doorEvent all got missed — caught only by a live
+  // save/load run, never by the SAVE_KEYS invariant itself. See the
+  // SAVE_KEYS and WORLD_KEY_FALLBACKS comments above. A key needing more
+  // than a bare fallback (a real shape migration on the value, not just an
+  // absent-key default) goes in WORLD_KEY_NORMALIZERS instead of here.
+  // `||` (not `??`) is deliberate: doorEvent's real "absent key" and real
+  // "no one's here" values are both null, so `||` collapses them to the
+  // same right answer with no ambiguity — and no other world value is a
+  // legitimate falsy that isn't also "unset."
+  const worldKeys = SAVE_KEYS.find(e => e.folder === 'world').keys;
+  const world = {};
+  for (const key of worldKeys) {
+    const raw = await getWorld(key);
+    world[key] = WORLD_KEY_NORMALIZERS[key]
+      ? WORLD_KEY_NORMALIZERS[key](raw)
+      : (raw || WORLD_KEY_FALLBACKS[key]?.());
+  }
 
   const gameState = {
     meta,
@@ -1262,7 +1247,7 @@ async function loadGameState() {
     npcIds: Object.keys(npcs).filter(id => id.startsWith('npc_')),
     // droppedConstraints is persisted in meta by writeGeneratedGameState.
     droppedConstraints: meta.droppedConstraints || [],
-    world: { rooms, castWeb, relationships, quests, events, deliveries, renovationJobs, visits, commitments, foodOrders, groceryOrders, externalStubs, escortRoster, escortBookings, moveInOffers, rent, computer, taxes, bills, upgrades, utilities, phone, afterHours, hotSinglesRoster, flags, outsidePartners, pregnancies, autoCookCleared, gameplayOptions, debugLog, dreams },
+    world,
   };
   // Rebuild the live room graph from base + whichever structural upgrades
   // this save has built (floorplan plan Phase 6). MUST run before anything
@@ -1285,6 +1270,13 @@ async function loadGameState() {
     gameState.world.rooms[roomId] = {
       capacity: ROOMS[roomId].capacity,
       cleanliness: recomputeRoomCleanliness(gameState.objects[`room_${roomId}`]),
+      // Actions & Activities Overhaul Phase 9 (D17/D49): the ambient dirt.js
+      // layer starts clean, same as a freshly-derived cleanliness. Every
+      // reader already falls back to 0 for a save written before this field
+      // existed (dirt.js/world.js/signals.js all read `?? 0`), so this
+      // explicit init is for freshly-created room shells only, not a
+      // required migration.
+      dirt: 0,
       lastEvent: null,
     };
     queueWrite('world', 'rooms', gameState.world.rooms);

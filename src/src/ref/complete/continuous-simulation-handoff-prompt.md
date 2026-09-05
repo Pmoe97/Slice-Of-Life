@@ -91,7 +91,7 @@ sections, which are explicitly parked, not queued.
 You should never need to fully read more than **one** of the five documents
 in a given session, and never the whole roadmap.
 
-**The sixth document, `src/src/ref/wip/CONTINUOUS-SIMULATION-ROADMAP.md`, has no
+**The sixth document, `src/src/ref/complete/CONTINUOUS-SIMULATION-ROADMAP.md`, has no
 phases of its own** — it's an index. Open it only if a phase's own doc
 tells you to (cross-cutting decisions `C1`–`C8` live there, referenced by
 name from every plan) or per Step 3's closing instruction below.

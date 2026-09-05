@@ -17,7 +17,7 @@ This is a living document, worked one phase per session. **Read the Handoff
 section immediately below before anything else** — it is the single source of
 truth for where the last session left off. Update it, and the Status table
 near the bottom, as the very last thing you do each session — see
-`src/src/ref/wip/settings-and-pause-overhaul-handoff-prompt.md` for the full
+`src/src/ref/complete/settings-and-pause-overhaul-handoff-prompt.md` for the full
 session protocol.
 
 ---

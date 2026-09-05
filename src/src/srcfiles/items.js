@@ -26,6 +26,10 @@
 //                 same item never fuse.
 //   keyItem       true = cannot be dropped, trashed, or given
 //   servingsLeft  partial meals (Phase 3); absent = whole
+//   laundryState  Actions & Activities Overhaul Phase 11 (D20): clothing
+//                 stacks only. 'dirty'|'washed'|'dried'|'folded'; absent (or
+//                 'stored') = clean, sitting in a wardrobe. See ITEMS'
+//                 laundryStateOf/dirtyWornOutfitForResident.
 //   frozen        food-overhaul Phase 1 (D17/D29): { frozenAtAbs,
 //                 thawStartAbs, agedFraction } — see the frozen/thaw block
 //                 below. Absent = normal storage, the common case.
@@ -316,6 +320,143 @@ function resolveDishwasherCycle(dw, now) {
   dw.dishwasher = { load: {}, cycleActiveUntilAbs: 0 };
   if (dw.state) dw.state = { ...dw.state, cycle: 'idle' };
   return dw;
+}
+
+// --- Laundry chain (Actions & Activities Overhaul Phase 11, D20) ---
+// Clothing carries meta.laundryState — one of 'dirty'|'washed'|'dried'|
+// 'folded', or absent/'stored' for a clean garment sitting in a wardrobe.
+// Unlike the dishwasher's abstract unit map, individual garments keep their
+// identity through the whole chain (they physically move between the
+// shared hamper/washer/dryer and each resident's own bedroom wardrobe), so
+// composeOutfit/npcWardrobeItems (ITEMS/NPC) never need to know about
+// laundryState at all — a garment sitting in a wardrobe IS clean and
+// available; a garment dirtied is physically gone from there until Put
+// Away brings it back. laundryState only matters to the chain's own
+// requirement checkers and to Snoop's narration.
+function laundryStateOf(stack) {
+  return stack?.meta?.laundryState || 'stored';
+}
+function isClothingStack(stack) {
+  return !!(stack && CLOTHING_DEFS[stack.defId]);
+}
+
+// hamper.state.fill is a derived display/signal cache (read by
+// signals.js's 'stale_laundry' emit and the hamperNotEmpty requirement
+// checker) — recomputed from the hamper's real dirty-garment count rather
+// than written ad hoc, so it can never drift from what's actually inside.
+function hamperFillLevel(hamper) {
+  const dirtyCount = (hamper?.contents || []).filter(s => laundryStateOf(s) === 'dirty')
+    .reduce((n, s) => n + (s.qty || 0), 0);
+  if (dirtyCount >= LAUNDRY_TUNING.fillFullAt) return 'full';
+  if (dirtyCount >= LAUNDRY_TUNING.fillPartialAt) return 'partial';
+  return 'empty';
+}
+function refreshHamperFill(hamper) {
+  if (!hamper) return;
+  hamper.state = { ...(hamper.state || {}), fill: hamperFillLevel(hamper) };
+}
+
+// Lazy washer/dryer-cycle reader, same shape as dishwasherCycleProgress:
+// 'empty' (no load, no cycle), 'running', or 'done' (cycle's anchor has
+// passed — the load is ready to move on but is still physically sitting in
+// the machine, unlike the dishwasher's load which the resolver clears).
+function laundryCycleProgress(obj, now) {
+  const rec = obj?.laundry;
+  if (!rec || !(rec.cycleActiveUntilAbs > 0)) {
+    return (obj?.contents || []).length > 0 ? 'done' : 'empty';
+  }
+  return (now != null && now >= rec.cycleActiveUntilAbs) ? 'done' : 'running';
+}
+// Write-path resolver: once a washer's cycle is done, every 'dirty' garment
+// inside becomes 'washed'; once a dryer's cycle is done, every 'washed'
+// garment inside becomes 'dried'. Idempotent — a second call against an
+// already-resolved machine (rec cleared, contents already advanced) is a
+// no-op. Called from the chain's own requirement checkers/prepare (so the
+// UI always reads a fresh state) and from processDayRollover's laundry
+// sweep (so an NPC/maid-started cycle resolves even off-screen).
+function resolveLaundryCycle(obj, now) {
+  if (laundryCycleProgress(obj, now) !== 'done') return obj;
+  if (obj.laundry?.cycleActiveUntilAbs > 0) {
+    const fromState = obj.defId === 'washer' ? 'dirty' : 'washed';
+    const toState = obj.defId === 'washer' ? 'washed' : 'dried';
+    obj.contents = (obj.contents || []).map(s => (isClothingStack(s) && laundryStateOf(s) === fromState)
+      ? { ...s, meta: { ...(s.meta || {}), laundryState: toState } } : s);
+    obj.laundry = { cycleActiveUntilAbs: 0 };
+  }
+  if (obj.state) obj.state = { ...obj.state, cycle: (obj.contents || []).length > 0 ? 'done' : 'empty' };
+  return obj;
+}
+
+// This resident's own bedroom wardrobe — the player's is the one fixed
+// 'bedroom_player' room; an NPC's is wherever their residency.room says
+// (same lookup NPC's npcWardrobeItems uses).
+function wardrobeObjectForOwner(gameState, ownerId) {
+  const roomId = ownerId === 'player' ? 'bedroom_player' : gameState?.npcs?.[ownerId]?.residency?.room;
+  const bucket = roomId ? gameState?.objects?.[`room_${roomId}`] : null;
+  if (!bucket) return null;
+  return Object.values(bucket).find(o => o?.defId === 'wardrobe') || null;
+}
+
+// Moves every clothing stack whose laundryState matches `matchState` from
+// fromObj.contents to toObj.contents, unchanged otherwise (ownerId and
+// laundryState both ride along — the caller decides if either should
+// change once the items land). Returns the number of garments moved.
+function moveGarmentStacks(fromObj, toObj, matchState) {
+  if (!fromObj || !toObj) return 0;
+  const moving = (fromObj.contents || []).filter(s => isClothingStack(s) && laundryStateOf(s) === matchState);
+  if (moving.length === 0) return 0;
+  fromObj.contents = (fromObj.contents || []).filter(s => !(isClothingStack(s) && laundryStateOf(s) === matchState));
+  toObj.contents = [...(toObj.contents || []), ...moving];
+  return moving.reduce((n, s) => n + (s.qty || 0), 0);
+}
+
+// Day-rollover write path (called from SIM's processLaundryWearForDay, the
+// same hook point as the dishwasher's resolveDishwasherCycle): a day of
+// actually being worn dirties an outfit. For each occupied slot's defId,
+// moves ONE clean ('stored') stack of that defId from ownerId's own
+// wardrobe into the shared hamper, stamped dirty and owned — a no-op per
+// slot if that garment isn't in the wardrobe (already dirtied, or never
+// physically owned). Deterministic — no roll, matches invariant 1: wearing
+// clothes is a certainty, not a chance.
+function dirtyWornOutfitForResident(gameState, ownerId, outfit, hamperObj) {
+  if (!hamperObj || !outfit) return 0;
+  const wardrobe = wardrobeObjectForOwner(gameState, ownerId);
+  if (!wardrobe?.contents) return 0;
+  let dirtied = 0;
+  for (const defId of Object.values(outfit)) {
+    if (!defId || !CLOTHING_DEFS[defId]) continue;
+    const idx = wardrobe.contents.findIndex(s => s.defId === defId && laundryStateOf(s) === 'stored');
+    if (idx < 0) continue;
+    const [stack] = wardrobe.contents.splice(idx, 1);
+    hamperObj.contents = [...(hamperObj.contents || []),
+      { ...stack, ownerId, meta: { ...(stack.meta || {}), laundryState: 'dirty' } }];
+    dirtied++;
+  }
+  if (dirtied > 0) refreshHamperFill(hamperObj);
+  return dirtied;
+}
+
+// Starts a real wash cycle from whatever's dirty in the shared hamper right
+// now — shared by the do_laundry NPC drive and the paid maid's laundry
+// add-on (both used to just reset hamper.state.fill to 'empty' directly,
+// a leftover from before anything ever filled it for real; against this
+// phase's physical hamper.contents that would silently delete the actual
+// dirty garments instead of washing them). Same gate as the player's own
+// Wash action (self.laundry): the washer must be empty and idle. Returns
+// whether a load actually started.
+function runHamperIntoWasher(gameState, now) {
+  const hamper = findObjectByDefIdLive(gameState, 'laundry_hamper');
+  const washer = findObjectByDefIdLive(gameState, 'washer');
+  if (!hamper || !washer) return false;
+  resolveLaundryCycle(washer, now);
+  if (laundryCycleProgress(washer, now) !== 'empty') return false; // running, or done and not yet unloaded
+  const moved = moveGarmentStacks(hamper, washer, 'dirty');
+  if (moved === 0) return false;
+  const minutes = LAUNDRY_TUNING.washCycleMinutes / (CLOCK.ticksPerDay * 30);
+  washer.laundry = { cycleActiveUntilAbs: (now || 0) + minutes };
+  washer.state = { ...(washer.state || {}), power: 'on', cycle: 'running' };
+  refreshHamperFill(hamper);
+  return true;
 }
 
 // --- makePlate: the D5 sum-of-parts plate builder (food-overhaul Phase 3).

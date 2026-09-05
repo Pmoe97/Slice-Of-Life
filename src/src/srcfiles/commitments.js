@@ -8,10 +8,14 @@
 // together).
 //
 // Record shape (see the plan's Data model):
-//   { id, kind, startAbs, endAbs, roomId,
+//   { id, kind, startAbs, endAbs, roomId, host,
 //     invitedIds, acceptedIds, declinedIds, status }
 // status: 'scheduled' (invite out, meal not yet held) → 'held' (the meal
 // happened during its window) | 'missed' (the window passed with no meal).
+//
+// `host` (actions-and-activities-overhaul-plan.md Phase 1, D2): 'player' or
+// an npcId — who this plan belongs to. See createCommitment's header for why
+// it's a real param and not derived from `proposerId`.
 //
 // startAbs/endAbs are clockToAbsolute-space (day*1440 + minutes), the same
 // convention world.visits[] uses (external-world-retiming-plan D6) — a
@@ -113,6 +117,24 @@ function activeMealCommitmentsInRoom(gameState, roomId) {
   );
 }
 
+// Phase 17 (D26) — the live 'party' commitment in a given room right now, or
+// null. Singular (find, not filter): unlike a dinner, two overlapping party
+// bookings in the same room aren't a real case this needs to union. Read by
+// SIM's per-tick party noise/mess pass — present-based (mealAttendees'
+// convention, not acceptedIds), so the pass itself decides who counts as
+// "at the party" by who is physically in this room, not by this function.
+function activePartyCommitmentInRoom(gameState, roomId) {
+  const clock = gameState?.meta?.clock;
+  if (!clock || clock.day == null) return null;
+  const nowAbs = clockToAbsolute(clock);
+  return (gameState?.world?.commitments || []).find(c =>
+    c.kind === 'party' &&
+    c.roomId === roomId &&
+    c.status === 'scheduled' &&
+    nowAbs >= c.startAbs && nowAbs < c.endAbs
+  ) || null;
+}
+
 // Create one commitment and immediately resolve each invitee's answer (you
 // ask, they say yes/no on the spot). Dedupes an overlapping same-slot
 // invitation to the same NPC instead of stacking a second dinner on top of
@@ -129,7 +151,27 @@ function activeMealCommitmentsInRoom(gameState, roomId) {
 // against their schedule by OVERTURE's proposeTerms, using this file's own
 // busyBlocks bar — so the one thing respondToCommitment would have caught has
 // been caught upstream, where it belongs.
-function createCommitment(gameState, { kind, startAbs, endAbs, roomId, invitedIds, proposerId }) {
+//
+// `host` (actions-and-activities-overhaul-plan.md Phase 1, D2) is who this
+// plan belongs to: 'player' or an npcId. It is NOT derivable from
+// `proposerId` — that param is overloaded (initiative-plan proposals pass the
+// true proposer, but the asks-plan schedule flow ALSO passes proposerId for a
+// player-initiated ask, purely to skip re-rolling an NPC who already said yes
+// in stage 1 — see runAskScheduleFlow, ui.js). Every call site must say who's
+// hosting explicitly; it is never guessed from proposerId. Defaults to
+// 'player' because that's every pre-Phase-1 caller (doInviteDinner,
+// runAskScheduleFlow); only the true NPC-proposal path (doOvertureRespond)
+// passes an npcId. Read by tracker.js's trackerCommitments to phrase the
+// Agenda entry ("Dinner, hosted by you" vs "Marcus invited you to hang out").
+//
+// D2's `eventType`/`roster`/`confirmed`/`durationMinutes` are deliberately
+// NOT separate stored fields: `kind` (a COMMITMENT_KINDS key, each with a
+// human label) already IS the event type; invitedIds/acceptedIds already ARE
+// the roster/confirmed lists; durationMinutes is `endAbs - startAbs` on
+// demand. Storing a second copy of any of these would be state with no
+// independent reader (invariant 6) — D2's intent is satisfied by the fields
+// that already existed here before this plan.
+function createCommitment(gameState, { kind, startAbs, endAbs, roomId, invitedIds, proposerId, host }) {
   const list = gameState.world.commitments || (gameState.world.commitments = []);
   kind = kind || 'meal';
   const existing = list.find(c =>
@@ -169,6 +211,7 @@ function createCommitment(gameState, { kind, startAbs, endAbs, roomId, invitedId
     id: `commit_${startAbs}_${list.length}`,
     kind,
     startAbs, endAbs, roomId,
+    host: host || 'player',
     invitedIds: [...(invitedIds || [])],
     acceptedIds: proposerId ? [proposerId] : [],
     declinedIds: [],
@@ -225,6 +268,34 @@ function mealAttendees(gameState, roomId) {
     npc: gameState.npcs[id],
     committed: committedIds.has(id),
   }));
+}
+
+// Phase 1 (actions-and-activities-overhaul-plan.md, D2) — every commitment
+// still on the books, soonest first. The one read both tracker.js's
+// trackerCommitments Agenda adapter and the Calendar app's `commitments`
+// screen source share, so "what's coming up" has exactly one definition.
+function upcomingCommitments(gameState) {
+  return (gameState?.world?.commitments || [])
+    .filter(c => c.status === 'scheduled')
+    .sort((a, b) => a.startAbs - b.startAbs);
+}
+
+// Phase 1 (D2) — "Clear the Calendar": the player's explicit cancel, not a
+// decline. No relationship consequence and no belief write — the plan scopes
+// this to "the explicit escape hatch, not silent abandonment" (invariant 5),
+// and nothing in this phase's Verification asks for a social cost on top of
+// that. A cancelled plan is simply gone (spliced, not soft-deleted): unlike
+// held/missed records, there is no reader anywhere for "a commitment that was
+// cancelled" (invariant 6), so there is no 'cancelled' status to invent.
+// Returns the removed record, or null if the id wasn't found (or wasn't
+// still 'scheduled' — a commitment whose window already ran can't be
+// cleared out from under it).
+function cancelCommitment(gameState, commitmentId) {
+  const list = gameState?.world?.commitments;
+  if (!Array.isArray(list)) return null;
+  const idx = list.findIndex(c => c.id === commitmentId && c.status === 'scheduled');
+  if (idx < 0) return null;
+  return list.splice(idx, 1)[0];
 }
 
 // ===== /SECTION: COMMITMENTS =====

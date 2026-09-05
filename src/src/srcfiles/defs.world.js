@@ -56,6 +56,17 @@ const OBJECT_DEFS = {
     dirtyWhen: { made: { unmade: 0.15 } }, cleanlinessWeight: 2,
     emits: { made: { unmade: { signal: 'unmade_bed', intensity: 0.5 } } },
     affords: ['bed.sleep', 'inspect.object'],
+    // night-scene-sleeping-npc-plan Phase 5 (D25): the Night Scene's
+    // leftover evidence needs a carrier in the shared LEAVE_EVIDENCE model,
+    // and the bed is the object every one of its five tags is physically ON
+    // (sheets mussed, her clothes pulled out of place, the mess).
+    // SIDE EFFECT, chosen rather than stumbled into: `bed` is `private`, so
+    // STEALTH's pickEvidenceObject now counts it too -- a caught room-entry
+    // sneak in a bedroom that holds no diary/computer/phone used to leave no
+    // trace at all and now leaves a disturbed bed. That is the mechanic
+    // working better, not a night-scene leak; verify-night-p5.js section 6
+    // asserts it deliberately so a later session finds it named.
+    evidenceKinds: ['disturbed_bed'],
     imagePhrase: 'a single bed with rumpled sheets',
   },
   desk: {
@@ -171,7 +182,11 @@ const OBJECT_DEFS = {
     id: 'hobby_bookshelf', label: 'Bookshelf', nouns: ['bookshelf', 'bookcase'],
     portable: false, breakable: false, container: false, private: false,
     states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 1,
-    affords: ['hobby.bookshelf', 'inspect.object'],
+    // Actions & Activities Overhaul Phase 16 (D25): a bought bookshelf
+    // affords research too, same as the two seeded bookshelf-shaped
+    // fixtures below (bookshelf/study_bookshelf) — "any bookshelf lets you
+    // study." See RESEARCHABLE_SKILLS (defs.actions.js) for the five leaves.
+    affords: ['hobby.bookshelf', 'research.cooking', 'research.cleaning', 'research.fitness', 'research.tech', 'research.art', 'inspect.object'],
     imagePhrase: 'a bookshelf crammed with paperbacks and dog-eared novels',
   },
   hobby_record_player: {
@@ -355,7 +370,7 @@ const OBJECT_DEFS = {
     portable: false, breakable: true, container: false, private: false,
     states: { power: ['off', 'on'] }, defaultState: { power: 'off' },
     dirtyWhen: {}, cleanlinessWeight: 1,
-    affords: ['inspect.object'],
+    affords: ['self.brew', 'inspect.object'],
     imagePhrase: 'a coffee maker',
   },
   kitchen_table: {
@@ -385,7 +400,7 @@ const OBJECT_DEFS = {
     emits: { ...EMITS_ROT,
              fill: { partial: { signal: 'rot', intensity: 0.25 },
                      full:    { signal: 'rot', intensity: 0.5 } } },
-    affords: ['container.open', 'container.take', 'container.put', 'clean.object', 'inspect.object'],
+    affords: ['container.open', 'container.take', 'container.put', 'clean.object', 'trash.take_out', 'inspect.object'],
     imagePhrase: 'a kitchen trash can',
   },
 
@@ -404,13 +419,20 @@ const OBJECT_DEFS = {
   // contested bathrooms, and only convenient if you are already on the pool
   // side. That conditionality is the point — it relieves bathroom
   // contention without flatly removing it.
+  // East Wing Phase 13 (D22): "store swim gear / change — a wardrobe hook".
+  // `container: true` (a bare boolean, not the { capacity, label } shape
+  // every other container object uses) plus a missing container.open/take/
+  // put triad meant the lockers were storage in name only — nothing could
+  // ever be put in or taken out. Both fixed here; lockers.change_outfit
+  // (defs.actions.js) reuses whatever CLOTHING_DEFS stock ends up inside,
+  // exactly like wardrobe.change_outfit does for the bedroom wardrobe.
   lockers: {
     id: 'lockers', label: 'Lockers', nouns: ['lockers', 'locker'],
-    portable: false, breakable: false, container: true, private: false,
+    portable: false, breakable: false, container: { capacity: null, label: 'Lockers' }, private: false,
     states: { clutter: ['tidy', 'cluttered'] }, defaultState: { clutter: 'tidy' },
     dirtyWhen: { clutter: { cluttered: 0.35 } }, cleanlinessWeight: 1,
     emits: { clutter: { cluttered: { signal: 'clutter', intensity: 0.35 } } },
-    affords: ['clean.object', 'inspect.object'],
+    affords: ['container.open', 'container.take', 'container.put', 'clean.object', 'inspect.object'],
     imagePhrase: 'a bank of narrow metal lockers',
   },
   changing_bench: {
@@ -428,7 +450,7 @@ const OBJECT_DEFS = {
     states: { clean: ['clean', 'dirty'] }, defaultState: { clean: 'clean' },
     dirtyWhen: { clean: { dirty: 0.7 } }, cleanlinessWeight: 2,
     emits: { clean: { dirty: { signal: 'bathroom_grime', intensity: 0.7 } } },
-    affords: ['clean.object', 'inspect.object'],
+    affords: ['toilet.use', 'toilet.clean', 'clean.object', 'inspect.object'],
     imagePhrase: 'a toilet',
   },
   sink_bathroom: {
@@ -437,14 +459,14 @@ const OBJECT_DEFS = {
     states: { clutter: ['tidy', 'cluttered'] }, defaultState: { clutter: 'tidy' },
     dirtyWhen: { clutter: { cluttered: 0.4 } }, cleanlinessWeight: 1,
     emits: { clutter: { cluttered: { signal: 'clutter', intensity: 0.4 } } },
-    affords: ['clean.object', 'inspect.object'],
+    affords: ['sink.wash_hands', 'clean.object', 'inspect.object'],
     imagePhrase: 'a bathroom sink with a foggy mirror above it',
   },
   bathroom_mirror: {
     id: 'bathroom_mirror', label: 'Mirror', nouns: ['mirror'],
     portable: false, breakable: true, container: false, private: false,
     states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 1,
-    affords: ['inspect.object'],
+    affords: ['mirror.groom', 'inspect.object'],
     imagePhrase: 'a mirror',
   },
   // --- Notes (perception plan Phase 4) ---
@@ -511,7 +533,11 @@ const OBJECT_DEFS = {
     portable: false, breakable: false, container: { capacity: null, label: 'Bookshelf' }, private: false,
     states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
     emits: EMITS_ROT,
-    affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
+    // Actions & Activities Overhaul Phase 16 (D25): the living room's
+    // seeded, always-present bookshelf — self-directed research (D25) is
+    // available from day one, no purchase required. See RESEARCHABLE_SKILLS
+    // (defs.actions.js).
+    affords: ['container.open', 'container.take', 'container.put', 'research.cooking', 'research.cleaning', 'research.fitness', 'research.tech', 'research.art', 'inspect.object'],
     imagePhrase: 'a bookshelf crammed with paperbacks',
   },
   lamp_lr: {
@@ -552,6 +578,19 @@ const OBJECT_DEFS = {
     emits: EMITS_ROT,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a coat rack by the door',
+  },
+  // Actions & Activities Overhaul Phase 8 (D16): the household's one
+  // thermostat — a real player-adjustable object at last (world.thermostat,
+  // temperature.js). No `states` of its own: the target temperature is
+  // world-level state (one shared dial, not a per-object instance state),
+  // read/written through the ADJUST_THERMOSTAT effect rather than
+  // SET_OBJECT_STATE.
+  thermostat: {
+    id: 'thermostat', label: 'Thermostat', nouns: ['thermostat', 'temperature dial'],
+    portable: false, breakable: false, container: false, private: false,
+    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 0,
+    affords: ['thermostat.raise', 'thermostat.lower', 'inspect.object'],
+    imagePhrase: 'a wall-mounted thermostat',
   },
   bedroom_door: {
     id: 'bedroom_door', label: 'Door', nouns: ['door', 'bedroom door'],
@@ -606,6 +645,18 @@ const OBJECT_DEFS = {
     emits: EMITS_ROT,
     affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
     imagePhrase: 'a shoe rack by the door',
+  },
+  // Actions & Activities Overhaul Phase 12 (D21): the mailbox holds
+  // world.mailbox records (bills/flyers/letters), not physical stacks — it's
+  // world-level state, not a container's contents, same shape as the
+  // thermostat's world.thermostat above. self.get_mail (defs.actions.js) is
+  // its one real affordance.
+  mailbox: {
+    id: 'mailbox', label: 'Mailbox', nouns: ['mailbox', 'mail'],
+    portable: false, breakable: false, container: false, private: false,
+    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 0,
+    affords: ['self.get_mail', 'inspect.object'],
+    imagePhrase: 'a small mailbox mounted by the door, its little flag sometimes up',
   },
 
   // --- Game Room ---
@@ -677,7 +728,7 @@ const OBJECT_DEFS = {
       clarity: { cloudy: { signal: 'stagnant_water', intensity: 0.4, when: { water: 'filled' } },
                  green:  { signal: 'stagnant_water', intensity: 0.85, when: { water: 'filled' } } },
     },
-    affords: ['self.swim', 'clean.object', 'inspect.object'],
+    affords: ['self.swim', 'self.pool_games', 'clean.object', 'inspect.object'],
     imagePhrase: 'an indoor swimming pool',
   },
   pool_pump: {
@@ -688,25 +739,50 @@ const OBJECT_DEFS = {
     affords: ['inspect.object'],
     imagePhrase: 'a pool pump and filter housing in the corner',
   },
+  // East Wing Phase 13 (D22, Q2): "the sauna upgrade" — a subroom in the
+  // pool room's south-west corner with a north-facing door, existing
+  // entirely inside pool_room's own footprint. Deliberately NOT a new
+  // floor-plan node or ROOMS entry (see the plan's "Not a new-rooms plan"
+  // section and D58): it is gated exactly like every other renovation
+  // (FACILITY_DEFS.pool_sauna, config.js), sourced object-first
+  // (self.sauna, defs.actions.js) so it reads as its own fixture rather
+  // than "anywhere in the pool room", the same way wardrobe.change_outfit
+  // is object-sourced without needing a bedroom-within-a-bedroom. The
+  // corner/door detail is flavor (imagePhrase) — SW-corner/north-door
+  // placement is not an enforced coordinate (resolveAutoPlacements packs
+  // the room's perimeter automatically; hand-authoring one object's exact
+  // spot would mean building ROOM_DECOR support for this one fixture,
+  // out of scope for a one-off subroom per invariant 6).
+  sauna: {
+    id: 'sauna', label: 'Sauna', nouns: ['sauna'],
+    portable: false, breakable: false, container: false, private: false,
+    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 1,
+    affords: ['self.sauna', 'inspect.object'],
+    imagePhrase: 'a small cedar sauna tucked in the corner, its door shut',
+  },
+  // self.relax's own source (defs.actions.js) never listed pool_room, so
+  // this afford was dead documentation — East Wing Phase 13 (D22) gives it a
+  // real, pool-flavored sibling verb instead of quietly wiring pool_room
+  // into self.relax's cross-room narration.
   pool_loungers: {
     id: 'pool_loungers', label: 'Loungers', nouns: ['loungers', 'deck chairs', 'lounger'],
     portable: false, breakable: false, container: false, private: false,
     states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 1,
-    affords: ['self.relax', 'inspect.object'],
+    affords: ['self.sunbathe', 'inspect.object'],
     imagePhrase: 'a row of loungers along the poolside',
   },
   weight_set: {
     id: 'weight_set', label: 'Weight Set', nouns: ['weights', 'weight set', 'dumbbells'],
     portable: false, breakable: false, container: false, private: false,
     states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 1,
-    affords: ['self.workout', 'inspect.object'],
+    affords: ['self.lift_weights', 'inspect.object'],
     imagePhrase: 'a rack of dumbbells and a weight bench',
   },
   yoga_mat: {
     id: 'yoga_mat', label: 'Yoga Mat', nouns: ['yoga mat', 'mat'],
     portable: true, breakable: false, container: false, private: false,
     states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 0,
-    affords: ['self.workout', 'self.relax', 'inspect.object'],
+    affords: ['self.yoga', 'inspect.object'],
     imagePhrase: 'a rolled yoga mat in the corner',
   },
 
@@ -723,7 +799,9 @@ const OBJECT_DEFS = {
     portable: false, breakable: false, container: { capacity: null, label: 'Bookshelf' }, private: false,
     states: { rotten_food: ['none', 'rotten'] }, defaultState: { rotten_food: 'none' }, dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
     emits: EMITS_ROT,
-    affords: ['container.open', 'container.take', 'container.put', 'inspect.object'],
+    // Actions & Activities Overhaul Phase 16 (D25): the study's own seeded
+    // bookshelf — same research affordances as the living room's.
+    affords: ['container.open', 'container.take', 'container.put', 'research.cooking', 'research.cleaning', 'research.fitness', 'research.tech', 'research.art', 'inspect.object'],
     imagePhrase: 'floor-to-ceiling bookshelves lined with well-worn books',
   },
   armchair: {
@@ -735,11 +813,17 @@ const OBJECT_DEFS = {
   },
 
   // --- Balcony ---
+  // East Wing Phase 13 (D22): "balcony_table sit/eat" — self.eat's roomIds
+  // now include 'balcony' (defs.actions.js), so the table needs the same
+  // dishes/clutter mess shape dining_table/kitchen_table already carry —
+  // otherwise a balcony meal would look identical to a bare table forever.
   balcony_table: {
     id: 'balcony_table', label: 'Bistro Table', nouns: ['table', 'bistro table'],
     portable: false, breakable: true, container: false, private: false,
-    states: {}, defaultState: {}, dirtyWhen: {}, cleanlinessWeight: 0,
-    affords: ['inspect.object'],
+    states: { dishes: ['clean', 'few', 'many'], clutter: ['tidy', 'cluttered'] }, defaultState: { dishes: 'clean', clutter: 'tidy' },
+    dirtyWhen: { dishes: { few: 0.3, many: 0.6 }, clutter: { cluttered: 0.2 } }, cleanlinessWeight: 2,
+    emits: { clutter: { cluttered: { signal: 'clutter', intensity: 0.4 } } },
+    affords: ['inspect.object', 'clean.object'],
     imagePhrase: 'a small bistro table with two chairs',
   },
   plant_balcony: {
@@ -747,7 +831,7 @@ const OBJECT_DEFS = {
     portable: false, breakable: false, container: false, private: false,
     states: { health: ['thriving', 'wilting'] }, defaultState: { health: 'thriving' },
     dirtyWhen: {}, cleanlinessWeight: 0,
-    affords: ['inspect.object'],
+    affords: ['self.tend_balcony_plant', 'inspect.object'],
     imagePhrase: 'potted plants along the railing',
   },
 
@@ -769,7 +853,7 @@ const OBJECT_DEFS = {
     defaultState: { rotten_food: 'none', power: 'off', cycle: 'empty' },
     dirtyWhen: { rotten_food: { rotten: ROT.rottenMessGrime } }, cleanlinessWeight: 1,
     emits: EMITS_ROT,
-    affords: ['container.open', 'container.take', 'inspect.object'],
+    affords: ['dryer.dry', 'dryer.fold', 'dryer.putaway', 'container.open', 'container.take', 'inspect.object'],
     imagePhrase: 'a dryer next to the washer',
   },
   // Dropped items (inventory overhaul Phase 1): every room gets one floor
@@ -794,7 +878,19 @@ const OBJECT_DEFS = {
 // puts the stand-point on the object's centre (lie-on/sit-in surfaces, where
 // standing ON the surface is the point). Read only by resolveObjectStandPoint
 // (defs.placement.js); a full OBJECT_DEFS sweep is an HDS-adjacent job.
-Object.assign(OBJECT_DEFS, {
+//
+// Actions & Activities Overhaul Phase 10 bug fix (discovered building D19's
+// toilet.use/toilet.clean, unrelated to D18/D19 itself): this used to be
+// `Object.assign(OBJECT_DEFS, { bed: {anchorMode:'center'}, ... })`, which
+// REPLACES each named key's whole OBJECT_DEFS entry rather than adding to
+// it — Object.assign is a shallow merge at the top level, so `bed`,
+// `shower`, `toilet`, `stove`, `sink_kitchen` and the other 9 objects here
+// lost their real id/label/states/affords/dirtyWhen/emits entirely, down to
+// just this one anchor field. resolveObjectStandPoint (defs.placement.js:200)
+// reads `OBJECT_DEFS[obj.defId].anchorMode/.standInset` off the SAME def as
+// every other reader — the fix is a per-key merge onto the existing entry,
+// not a table replacement.
+for (const [defId, anchor] of Object.entries({
   bed: { anchorMode: 'center' },
   sofa: { anchorMode: 'center' },
   armchair: { anchorMode: 'center' },
@@ -809,7 +905,9 @@ Object.assign(OBJECT_DEFS, {
   tv: { standInset: 5 },
   stove: { standInset: 4 },
   sink_kitchen: { standInset: 4 },
-});
+})) {
+  if (OBJECT_DEFS[defId]) Object.assign(OBJECT_DEFS[defId], anchor);
+}
 
 // --- Apartment layout: what's in each room at new-game spawn ---
 // `ownerFrom: 'roomResident'` resolves at spawn time to whichever npc (or
@@ -825,7 +923,8 @@ Object.assign(OBJECT_DEFS, {
 // seven new rooms.) Removing a fixture needs no bump — the back-fill only
 // ever adds, and never deletes what a save already has.
 // (v4 = inventory overhaul Phase 1: a `floor` in every room for Drop.)
-const APARTMENT_LAYOUT_VERSION = 8;
+// (v9 = Actions & Activities Overhaul Phase 13, D22: the sauna in pool_room.)
+const APARTMENT_LAYOUT_VERSION = 9;
 
 const APARTMENT_LAYOUT = {
   bedroom_player: [
@@ -892,6 +991,9 @@ const APARTMENT_LAYOUT = {
   ],
   hallway_a: [
     { defId: 'coat_rack' },
+    // Actions & Activities Overhaul Phase 8 (D16): one thermostat for the
+    // whole apartment, mounted where residents pass through constantly.
+    { defId: 'thermostat' },
     { defId: 'floor' },
   ],
   hallway_b: [
@@ -902,6 +1004,10 @@ const APARTMENT_LAYOUT = {
     { defId: 'front_door' },
     { defId: 'doormat' },
     { defId: 'shoe_rack' },
+    // Actions & Activities Overhaul Phase 12 (D21): the front door becomes
+    // real — a mailbox to check alongside the doormat it's been sitting
+    // next to unused.
+    { defId: 'mailbox' },
     { defId: 'floor' },
   ],
   dining: [
@@ -926,6 +1032,7 @@ const APARTMENT_LAYOUT = {
   ],
   pool_room: [
     { defId: 'swimming_pool' }, { defId: 'pool_pump' }, { defId: 'pool_loungers' },
+    { defId: 'sauna' },
     { defId: 'floor' },
   ],
   study: [

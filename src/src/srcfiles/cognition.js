@@ -695,13 +695,19 @@ function openCommitment(gameState, npcId, choice) {
     anchorPoint = { x: cx, y: cy };
   }
   let arrived = true;
-  if (anchorPoint) {
-    const planned = planWalk(gameState, npc, startRoom, { roomId: anchor.roomId, point: anchorPoint });
-    if (planned) {
-      npc.pos = { ...planned.path[0] };
-      npc.walk = planned;
-      arrived = false;
-    }
+  let planned = anchorPoint ? planWalk(gameState, npc, startRoom, { roomId: anchor.roomId, point: anchorPoint }) : null;
+  if (planned) {
+    npc.pos = { ...planned.path[0] };
+    npc.walk = planned;
+    arrived = false;
+  } else {
+    // Continuous-cadence-closure-plan Phase 4 (D5): npc.walk is no longer
+    // commitment-exclusive — an uncommitted wander can leave one in flight
+    // (sim.js pass 1). A commitment landing here with nothing of its own to
+    // walk (already at the anchor, or no anchor at all) must not inherit
+    // that stray walk: arrived is true, so a leftover walk toward the old
+    // wander target would contradict it outright.
+    npc.walk = null;
   }
   npc.commitment = {
     id: choice.driveId,
@@ -879,37 +885,40 @@ function frontDoorAnchor(gameState) {
 
 // Code-review fix: the end-of-work-block computation used to be duplicated
 // verbatim between openWorkCommitment and openHomeWorkCommitment (same
-// SCHEDULES lookup, same daySched derivation, same workEndTick loop, same
-// `day*1440 + tick*CLOCK.tickMinutes` formula) — a future change to how this
-// is computed would have to be made in both places or the two sibling
-// commitment-openers would silently diverge on completion time. One shared
-// reader now, called by both.
+// SCHEDULES lookup, same daySched derivation, same workEndMinute loop, same
+// `day*1440 + minute` formula) — a future change to how this is computed
+// would have to be made in both places or the two sibling commitment-openers
+// would silently diverge on completion time. One shared reader now, called
+// by both.
 //
-// Also fixes the falsy-zero sentinel both copies shared: `workEndTick`
+// Also fixes the falsy-zero sentinel both copies shared: `workEndMinute`
 // started at 0 as the "no work range found" marker, but 0 is also a
-// legitimate tick value (midnight) — night_shift's own `work` range starts
-// at tick 0 in this config, so 0 is already a normal in-range boundary here,
+// legitimate boundary (midnight) — night_shift's own `work` range starts at
+// minute 0 in this config, so 0 is already a normal in-range boundary here,
 // not something that can safely stand for "absent". A `found` flag replaces
 // it, so a work block that genuinely ends at midnight is no longer
 // indistinguishable from a day with no work block at all.
 //
 // Returns the absolute minute the work block ends, or null if there is no
-// work block in today's schedule.
+// work block in today's schedule. continuous-cadence-closure-plan Phase 2
+// (D3): SCHEDULES' ranges are minute-of-day now, so no `* CLOCK.tickMinutes`
+// conversion is needed here any more — mirrors resolveScheduleActivity's own
+// reindex (sim.js).
 function workBlockEndAbs(npc, clock) {
   const template = SCHEDULES[npc.bible.scheduleTemplate] || SCHEDULES.standard;
   const dayType = isWeekend(clock.day) ? 'weekend' : 'weekday';
   const daySched = template[dayType] || template.weekday;
-  let workEndTick = 0;
+  let workEndMinute = 0;
   let found = false;
   for (const [blockName, ranges] of Object.entries(daySched)) {
     if (blockName !== 'work') continue;
     for (const [, end] of ranges) {
       found = true;
-      workEndTick = Math.max(workEndTick, end);
+      workEndMinute = Math.max(workEndMinute, end);
     }
   }
   if (!found) return null;
-  return clock.day * 1440 + workEndTick * CLOCK.tickMinutes;
+  return clock.day * 1440 + workEndMinute;
 }
 
 // The one builder of the work commitment (D5). `npc.commitment` is off-limits
@@ -944,19 +953,24 @@ function openWorkCommitment(gameState, npcId) {
 
   const anchor = frontDoorAnchor(gameState);
   let arrived = true;
-  if (anchor.point) {
-    const planned = planWalk(gameState, npc, npc.location || null, anchor);
-    if (planned) {
-      npc.pos = { ...planned.path[0] };
-      npc.walk = planned;
-      arrived = false;
-    }
+  const planned = anchor.point ? planWalk(gameState, npc, npc.location || null, anchor) : null;
+  if (planned) {
+    npc.pos = { ...planned.path[0] };
+    npc.walk = planned;
+    arrived = false;
   }
   if (arrived) {
     // Already standing at the door: the walk is skipped and the NPC is
     // off-map from the moment the commitment opens.
+    //
+    // Continuous-cadence-closure-plan Phase 4 (D5): npc.walk is no longer
+    // commitment-exclusive — an uncommitted wander can leave one in flight
+    // (sim.js pass 1). A stray wander walk surviving into an off-map worker
+    // would contradict pos/location both going null, so it is cleared here
+    // too, the same fix openCommitment's own no-walk branch needed.
     npc.pos = null;
     npc.location = null;
+    npc.walk = null;
   }
   npc.commitment = {
     id: 'go_work',
@@ -1375,27 +1389,28 @@ function isPrivacyRoom(roomId, npc) {
   return roomId.startsWith('bathroom') || roomId === npc?.residency?.room;
 }
 
-// The next schedule block boundary after the current tick, in absolute game-
-// minutes. Mirrors resolveScheduleActivity's template/dayType resolution
-// (sim.js). The sleepRhythm adjustment only moves the WAKE boundary, which is
-// never a departure signal (and a sleeping NPC cannot be in a conversation),
-// so the raw template ranges are authoritative here. Wraps to the next day's
-// sleep when no range starts later today — an NPC in wind_down at 23:30 is
-// heading to bed, not nowhere.
+// The next schedule block boundary after the current minute, in absolute
+// game-minutes. Mirrors resolveScheduleActivity's template/dayType
+// resolution (sim.js) — including its Phase 2 reindex (D3): SCHEDULES'
+// ranges are minute-of-day, checked directly against clock.minutes, no
+// getTickIndex collapse. The sleepRhythm adjustment only moves the WAKE
+// boundary, which is never a departure signal (and a sleeping NPC cannot be
+// in a conversation), so the raw template ranges are authoritative here.
+// Wraps to the next day's sleep when no range starts later today — an NPC in
+// wind_down at 23:30 is heading to bed, not nowhere.
 function nextScheduleBoundary(npc, clock) {
   const template = SCHEDULES[npc?.bible?.scheduleTemplate] || SCHEDULES.standard;
   const dayType = isWeekend(clock.day) ? 'weekend' : 'weekday';
   const daySched = template[dayType] || template.weekday;
-  const tick = getTickIndex(clock.minutes);
   let bestBlock = null;
   let bestStart = Infinity;
   for (const [blockName, ranges] of Object.entries(daySched)) {
     for (const [start] of ranges) {
-      if (start > tick && start < bestStart) { bestStart = start; bestBlock = blockName; }
+      if (start > clock.minutes && start < bestStart) { bestStart = start; bestBlock = blockName; }
     }
   }
   if (!bestBlock) return { block: 'sleep', boundaryAbs: (clock.day + 1) * 1440 };
-  return { block: bestBlock, boundaryAbs: clock.day * 1440 + bestStart * CLOCK.tickMinutes };
+  return { block: bestBlock, boundaryAbs: clock.day * 1440 + bestStart };
 }
 
 // Phase 3 (D12/D13): does this NPC have an imminent departure from their

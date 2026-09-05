@@ -315,9 +315,175 @@ function advanceClock(clock, ticks) {
   return { day, weekday: getWeekday(day), minutes, phase: getPhase(minutes) };
 }
 
+// Continuous-cadence-closure Phase 7 (D16): resolveBatch's own per-step
+// advance, now that a step is no longer always exactly one CLOCK.tickMinutes
+// tick (advanceClock's own ticks*CLOCK.tickMinutes shape no longer fits a
+// variable-length step). Same day-rollover math as advanceClock above,
+// generalized from a tick count to raw minutes; forward-only (resolveBatch
+// never steps backward), so unlike time.js's advanceClockMinutes this
+// doesn't need negative-minutes handling. Kept here rather than calling
+// time.js's version: sim.js never calls into time.js (nextWakeAbs's own
+// precedent, above — time.js loads after it).
+function advanceClockByMinutes(clock, minutes) {
+  let { day, minutes: m } = clock;
+  m = Math.floor(m) + minutes;
+  while (m >= 1440) {
+    m -= 1440;
+    day++;
+  }
+  return { day, weekday: getWeekday(day), minutes: m, phase: getPhase(m) };
+}
+
 // Get the tick index within a day (0-47)
 function getTickIndex(minutes) {
   return Math.floor(minutes / CLOCK.tickMinutes);
+}
+
+// Continuous-cadence-closure Phase 5 (D6): a chance that used to be rolled
+// ONCE per flat CLOCK.tickMinutes-long tick, rescaled to the equivalent
+// chance of firing at least once over `minutes` of real elapsed time —
+// 1-(1-p)^30 draws over 30 one-minute spans is NOT the same distribution as
+// one draw at p, so this is a real compounding inverse, not a linear scale.
+// `perMinuteChance` must already be the PER-MINUTE rate (i.e. what a raw
+// per-tick chance becomes after `1 - (1 - perTickChance) ** (1 /
+// CLOCK.tickMinutes)`); this function only does the second half — compounding
+// that rate back up over the actual span. At minutes === CLOCK.tickMinutes
+// this reproduces the original perTickChance exactly (mod floating point);
+// at any other span it scales correctly instead of silently over/under-
+// firing once resolveTick stops always resolving exactly one flat tick
+// (Phase 7 — Design Invariant 3, the whole reason this phase exists).
+function chanceOverMinutes(perMinuteChance, minutes) {
+  return 1 - Math.pow(1 - perMinuteChance, minutes);
+}
+
+// Continuous-cadence-closure Phase 6 (D7): the soonest absolute minute
+// anything in the world needs attention. Pure — reads gameState, writes
+// nothing — and NOTHING calls it yet; wiring it into resolveBatch/
+// advanceAndResolveMinutes so they resolve up to this answer instead of a
+// flat tick is Phase 7's job (Design Invariant 3: never cut that in before
+// this primitive is independently verified). This session only proves it
+// correct in isolation, per the plan's own Phase 6 Verification bullet.
+//
+// Reuses the SAME active-NPC index resolveTick itself iterates
+// (getActiveVisits/getActiveNpcIds, both above) rather than re-deriving
+// "who's active" a second way — Design Invariant 4's "call the existing
+// reader" discipline, applied here to activity/commitment state exactly
+// the way Phase 1 already applied it to scene presence.
+//
+// D14 (new) — two corrections to D7's literal wording, made against the
+// live code rather than guessed:
+//   1. Broadened "every active RESIDENT's commitment" to every ACTIVE
+//      npc's commitment (residents AND active visitors). resolveTick's own
+//      Pass 1 comment already establishes that a visiting NPC can hold a
+//      real npc.commitment exactly like a resident ("pinned to it like any
+//      committed NPC until their own completion") — nextDecisionAbs/
+//      dueForDecision (cognition.js) already read npc.commitment uniformly
+//      across both. Excluding a visitor's own commitment completion here
+//      would miss the exact "discovered late" bug class this plan's
+//      Phase 7 exists to close, just for a visitor instead of a resident.
+//   2. Narrowed D7's "world.{commitments,visits,deliveries}" list to just
+//      commitments and visits. Read live: world.deliveries[] (computer.js)
+//      — and world.renovationJobs[], riding the same rollover path — are
+//      DAY-granular (etaDay/startDay), never clockToAbsolute-minute-space;
+//      they carry no startAbs/endAbs to read at all. They also aren't part
+//      of the problem Phase 7 solves:
+//      midnight is already detected independently, every single frame, by
+//      clockFrame's own day-crossing check (time.js, `currentGameState.
+//      meta.clock.day !== prevDay`) — a mechanism Phase 7 does not touch
+//      (Invariant 2: only resolveTick's SPAN changes, never what triggers
+//      day rollover). Folding day-granular records into a minute-level
+//      wake primitive would be wrong, not just redundant surface. D7's own
+//      premise ("deliveries... already clockToAbsolute-space") does not
+//      hold for the live code — the one piece of that locked decision this
+//      session found unworkable, resolved the same way D10-D13 resolved
+//      their own plan-vs-code gaps: scope to what the live data actually
+//      is, not what the plan guessed it would be.
+//
+// Every candidate is required to be STRICTLY future (> nowAbs): an
+// already-overdue commitment/window means an NPC is already due for a
+// decision on THIS tick — dueForDecision's own domain, not this function's.
+// nextWakeAbs answers "how far can we safely skip forward from here,"
+// never "what's overdue right now." The heartbeat term is unconditionally
+// future by construction and never gated on any other state existing, so
+// the required fallback (no-one-has-anything-scheduled still returns the
+// heartbeat boundary, never null/undefined) falls out for free rather than
+// needing a special case.
+// continuous-cadence-closure Phase 7 (D17, new): opts.includeHeartbeat
+// (default true) — found wiring this into resolveBatch. The unconditional
+// heartbeat fallback is exactly right for nextWakeAbs's OWN stated purpose
+// (never null/undefined), but it makes the DEFAULT return value <= HEARTBEAT_
+// MINUTES (5) almost always, since it's the min() of everything including a
+// term that is itself never more than 5 minutes out. A caller that uses the
+// raw default as a STEPPING BOUND therefore never steps by more than ~5
+// minutes even when nothing real is scheduled anywhere near that soon — which
+// re-evaluates every uncommitted NPC's Pass 1 (dueForDecision: no commitment
+// = always due) far more often than the old flat 30-minute cadence did,
+// discovered because it broke wander movement's "roll a target, walk there,
+// stay" behavior (Phase 4's own verify-ccc-p4.js: a wander walk lands almost
+// immediately — it's tens of real seconds long — then a SUBSEQUENT ~5-minute
+// step re-rolls a fresh target from the just-arrived position, repeatedly,
+// within what used to be a single 30-minute decision). includeHeartbeat:false
+// lets a caller ask for "the soonest REAL thing due, or never" (Infinity when
+// nothing qualifies — Math.min() of an empty array, deliberately not special-
+// cased, since every caller of this branch is about to min() it against its
+// own flat-cadence fallback anyway) so it can combine that with its OWN flat-
+// cadence bound instead of being forced onto the heartbeat's cadence. Every
+// EXISTING call site (including this file's own default calls, and every one
+// of verify-ccc-p6.js's 31 checks) omits opts entirely, so this default
+// leaves D7/D14's original, independently-verified behavior untouched.
+function nextWakeAbs(gameState, opts = {}) {
+  const { meta } = gameState;
+  // clockToAbsolute's own formula, kept inline: sim.js never calls a
+  // time.js function (time.js loads after sim.js in index.html) — the same
+  // precedent visitDay/getActiveVisits (above) already established for
+  // this exact arithmetic.
+  const nowAbs = meta.clock.day * 1440 + meta.clock.minutes;
+  const candidates = [];
+
+  const activeVisits = getActiveVisits(gameState);
+  for (const id of getActiveNpcIds(gameState, activeVisits)) {
+    const npc = gameState.npcs[id];
+    const completesAtAbs = npc && npc.commitment && npc.commitment.completesAtAbs;
+    if (Number.isFinite(completesAtAbs) && completesAtAbs > nowAbs) candidates.push(completesAtAbs);
+  }
+
+  // world.commitments[] (commitments.js) — only a 'scheduled' record's
+  // window is still live-relevant; 'held'/'missed' are resolved history.
+  // Both ends of the window matter: startAbs is when a resident relocates
+  // into the room (resolveScheduleActivity's override binds at the window
+  // open), endAbs is when the window closes and status resolves.
+  for (const c of (gameState.world && gameState.world.commitments) || []) {
+    if (c.status !== 'scheduled') continue;
+    if (Number.isFinite(c.startAbs) && c.startAbs > nowAbs) candidates.push(c.startAbs);
+    if (Number.isFinite(c.endAbs) && c.endAbs > nowAbs) candidates.push(c.endAbs);
+  }
+
+  // world.visits[] (sim.js, above) — same reasoning, mirroring
+  // getActiveVisits' own status filter (not 'done', not 'deferred').
+  for (const v of (gameState.world && gameState.world.visits) || []) {
+    if (v.status === 'done' || v.status === 'deferred') continue;
+    if (Number.isFinite(v.startAbs) && v.startAbs > nowAbs) candidates.push(v.startAbs);
+    if (Number.isFinite(v.endAbs) && v.endAbs > nowAbs) candidates.push(v.endAbs);
+  }
+
+  // The guaranteed fallback: the next TIME_DILATION.HEARTBEAT_MINUTES
+  // boundary strictly after now. nowAbs already sitting exactly on a
+  // boundary (remainder 0) falls out of the same formula as any other
+  // remainder — the subtraction yields HEARTBEAT_MINUTES itself, never 0,
+  // so this is always present and always > nowAbs with no special case.
+  // D17: skipped when the caller explicitly doesn't want it (see above) —
+  // every other caller (opts omitted, the default) keeps this unconditional.
+  if (opts.includeHeartbeat !== false) {
+    const hb = TIME_DILATION.HEARTBEAT_MINUTES;
+    candidates.push(nowAbs + (hb - (nowAbs % hb)));
+  }
+
+  // D17: Math.min() of an empty array is +Infinity, deliberately not special-
+  // cased to null — includeHeartbeat:false with nothing else scheduled means
+  // "nothing real, ever" for THIS call's purposes, and every such caller
+  // immediately min()s the result against its own flat-cadence bound, where
+  // Infinity is exactly the identity value that changes nothing.
+  return Math.min(...candidates);
 }
 
 // --- Player vulnerable state (Phase 6): determines what an NPC can peep
@@ -1239,14 +1405,16 @@ function resolveScheduleActivity(npc, clock, gameState, npcId) {
   const template = SCHEDULES[npc.bible.scheduleTemplate] || SCHEDULES.standard;
   const dayType = isWeekend(clock.day) ? 'weekend' : 'weekday';
   const sched = template[dayType] || template.weekday;
-  const tick = getTickIndex(clock.minutes);
 
-  // Find which block this tick falls into
+  // continuous-cadence-closure-plan Phase 2 (D3): SCHEDULES' ranges are now
+  // minute-of-day, checked directly against clock.minutes — no getTickIndex
+  // collapse first. Every boundary is still tick-aligned, so the block this
+  // resolves to at any given moment is unchanged from the pre-Phase-2 lookup.
   let currentBlock = 'leisure';
   let currentWeight = 0.5;
   for (const [blockName, ranges] of Object.entries(sched)) {
     for (const [start, end, weight] of ranges) {
-      if (tick >= start && tick < end) {
+      if (clock.minutes >= start && clock.minutes < end) {
         currentBlock = blockName;
         currentWeight = weight;
         break;
@@ -1271,17 +1439,20 @@ function resolveScheduleActivity(npc, clock, gameState, npcId) {
   let effectiveSleepEnd = null;
   if (sleepRhythm && sleepRhythm !== 'regular' && sleepEntry) {
     const [sleepStart, sleepBaseEnd] = sleepEntry;
+    // SLEEP_RHYTHM's own values stay tick-scale (config.js) — scaled to
+    // minutes here, the one call site that applies them, now that sleepStart/
+    // sleepBaseEnd are minute-of-day (Phase 2).
     if (sleepRhythm === 'early') {
-      effectiveSleepEnd = Math.max(sleepStart, sleepBaseEnd - SLEEP_RHYTHM.earlyTicks);
+      effectiveSleepEnd = Math.max(sleepStart, sleepBaseEnd - SLEEP_RHYTHM.earlyTicks * CLOCK.tickMinutes);
     } else if (sleepRhythm === 'late') {
-      effectiveSleepEnd = sleepBaseEnd + SLEEP_RHYTHM.lateTicks;
+      effectiveSleepEnd = sleepBaseEnd + SLEEP_RHYTHM.lateTicks * CLOCK.tickMinutes;
     } else if (sleepRhythm === 'erratic') {
       // per-day jitter of the wake boundary, derived (rolled per day, stored
       // nowhere). rounded to a whole tick, seeded by (npc id + day) so it is
       // stable for the whole day and differs across days and people.
       const jitterSeed = String(npc.id ?? 'npc') + '|' + (clock?.day ?? 0);
       const j = (hashStr(jitterSeed) % (SLEEP_RHYTHM.erraticTicks * 2 + 1)) - SLEEP_RHYTHM.erraticTicks;
-      effectiveSleepEnd = Math.max(sleepStart, sleepBaseEnd + j);
+      effectiveSleepEnd = Math.max(sleepStart, sleepBaseEnd + j * CLOCK.tickMinutes);
     }
   }
   // For every rhythm the sleep span is just [sleepStart, effectiveSleepEnd): an early
@@ -1294,10 +1465,10 @@ function resolveScheduleActivity(npc, clock, gameState, npcId) {
   if (effectiveSleepEnd !== null) {
     const sleepStart = sleepEntry[0];
     const sleepBaseEnd = sleepEntry[1];
-    if (tick >= sleepStart && tick < effectiveSleepEnd) {
+    if (clock.minutes >= sleepStart && clock.minutes < effectiveSleepEnd) {
       currentBlock = 'sleep';
       currentWeight = sleepEntry[2] ?? currentWeight;
-    } else if (effectiveSleepEnd < sleepBaseEnd && tick >= effectiveSleepEnd && tick < sleepBaseEnd) {
+    } else if (effectiveSleepEnd < sleepBaseEnd && clock.minutes >= effectiveSleepEnd && clock.minutes < sleepBaseEnd) {
       // early riser (or a negative erratic jitter): woke BEFORE the template
       // wake — they are UP, in the block that follows sleep (their morning),
       // not still asleep.
@@ -1362,10 +1533,10 @@ function resolveScheduleActivity(npc, clock, gameState, npcId) {
       if (currentBlock === 'work' || currentBlock === 'commute_home' || nextBlock === 'work') {
         const commuteHomeBlock = sortedBlocks.find(e => e.blockName === 'commute_home');
         if (commuteHomeBlock) {
-          willReturnAt = commuteHomeBlock.end * 30; // when they arrive home
+          willReturnAt = commuteHomeBlock.end; // when they arrive home (minute-of-day, Phase 2)
         } else {
           const workBlock = sortedBlocks.find(e => e.blockName === 'work');
-          if (workBlock) willReturnAt = workBlock.end * 30; // fallback: end of work
+          if (workBlock) willReturnAt = workBlock.end; // fallback: end of work (minute-of-day, Phase 2)
         }
       }
     }
@@ -1686,8 +1857,16 @@ function npcInitiativeGate(npc, contentFlags) {
   };
 }
 
-// Resolve all NPCs for a single tick (deterministic, zero LLM)
-function resolveTick(gameState) {
+// Resolve all NPCs for a single tick (deterministic, zero LLM).
+// continuous-cadence-closure Phase 7 (D16): minutesThisTick is now a real
+// parameter, not a hoisted CLOCK.tickMinutes constant — resolveBatch is the
+// only caller that ever passes a non-default value (variable-length
+// resolution, D16). Defaulting to CLOCK.tickMinutes keeps every OTHER
+// existing single-argument call site (dozens, across unrelated verify
+// harnesses and dev tooling) byte-identical to before — Design Invariant 2:
+// resolveTick's own Pass 1/2/3 contract never changes, only the span it's
+// asked to resolve.
+function resolveTick(gameState, minutesThisTick = CLOCK.tickMinutes) {
   const { meta, npcs } = gameState;
   // Continuous-behavior Phase 5 (D7): seeding moves from tick-index to
   // absolute-minute. The ambient per-tick rolls below (room preferences,
@@ -1768,6 +1947,7 @@ function resolveTick(gameState) {
     if (npc.commitment && npc.commitment.kind === 'work') {
       const scheduleResult = resolveScheduleActivity(npc, meta.clock, gameState, id);
       returnHome(gameState, id);
+      npc.walk = null;
       resolved[id] = {
         ...scheduleResult,
         location: 'entry',
@@ -1779,11 +1959,39 @@ function resolveTick(gameState) {
 
     const scheduleResult = resolveScheduleActivity(npc, meta.clock, gameState, id);
     const { block } = scheduleResult;
+
+    // Phase 6 of actions-and-activities-overhaul-plan.md (D11): sleep or an
+    // off-site work shift ends a follow relationship outright — an NPC's own
+    // bedtime/job is not something a follow request can hold open
+    // indefinitely. Checked before npc.follow is read below, so a released
+    // follower falls through to its ordinary schedule resolution THIS tick
+    // rather than carrying a stale record into sleep/work. (A privacy-room
+    // refusal, an explicit release, and stopping to actually talk are the
+    // other three lifecycle ends — movement.js's advanceFollowers, ui.js's
+    // doStopFollowing/doTalk.)
+    if (npc.follow && npc.follow.leader === 'player') {
+      const offsite = (block === 'work' || block === 'commute' || block === 'commute_home')
+        && npcIsOffsite(npc, block, meta.clock, id);
+      if (block === 'sleep' || offsite) { delete npc.follow; delete npc.touring; } // Phase 17 (D27): a tour ends here too
+    }
+
     let location = null;
     let activity = block;
     let transit = npc.transit || null;
 
-    if (scheduleResult.commitmentRoomId) {
+    if (npc.follow && npc.follow.leader === 'player') {
+      // D11: a follower's location IS the leader's, full stop — the highest
+      // priority this loop resolves, one tier above even a bound event
+      // commitment. This is the per-tick backstop for spans doMove never
+      // sees (a `wait`, sleep, batch catch-up) — doMove's own
+      // advanceFollowers (movement.js) already keeps this in sync room-by-
+      // room on every actual move, so this mostly just re-confirms what is
+      // already true.
+      location = gameState.player.location;
+      activity = 'following';
+      transit = null;
+      npc.walk = null;
+    } else if (scheduleResult.commitmentRoomId) {
       // Phase 7 (D7): a committed dinner binds — the attendee is at the
       // table for the whole window, not wherever the template would put
       // them. The location comes straight from the commitment (the dining
@@ -1798,10 +2006,12 @@ function resolveTick(gameState) {
       location = scheduleResult.commitmentRoomId || npc.residency.room;
       activity = COMMITMENT_KINDS[scheduleResult.commitmentKind]?.boundActivity || activity;
       transit = null;
+      npc.walk = null;
     } else if (block === 'sleep') {
       location = npc.residency.room;
       activity = 'sleeping';
       transit = null;
+      npc.walk = null;
     } else if (block === 'work' || block === 'commute' || block === 'commute_home') {
       // D12: the work block no longer implies off-screen. `npcIsOffsite` is
       // the only thing that decides it, so an at-home worker falls through to
@@ -1810,48 +2020,49 @@ function resolveTick(gameState) {
         location = null; // off-screen
         activity = ACTIVITY_TABLES[block] ? ACTIVITY_TABLES[block][0] : block;
         transit = null;
+        npc.walk = null;
       } else {
         const home = resolveHomeWorkPlacement(npc, id, npcs, rng, gameState);
         location = home.location;
         activity = home.activity;
         transit = null;
+        npc.walk = null;
       }
     } else {
-      // If already in transit, keep heading to the same destination rather
-      // than picking a new random activity/room each tick (which would make
-      // the NPC forever restart their journey and never arrive).
+      // Continuous-cadence-closure-plan Phase 4 (D5): wander movement (no
+      // active commitment) routes through the SAME npc.walk/planWalk
+      // continuous system commitment-anchored movement already uses — never
+      // the old flat one-room-per-tick npc.transit jump. settleWalks (top of
+      // resolveTick) already landed or proportionally advanced any walk in
+      // flight before this loop ran, so npc.location/npc.walk read here are
+      // already this tick's real position — planWalk itself is pure, so the
+      // mutation is done here, the same way openCommitment (cognition.js)
+      // mutates npc.pos/npc.walk directly for a committed walk.
       const { location: target, activity: pickedActivity } = resolveRoomForActivity(block, id, npcs, rng, meta.clock, gameState);
-      if (npc.transit) {
-        // Continue toward the existing destination
-        const existingTarget = npc.transit.destination;
-        activity = pickedActivity;
-        let path = npc.transit.path;
-        let step = npc.transit.progress || 0;
-        if (path && existingTarget) {
-          const nextStep = Math.min(step + 1, path.length - 1);
-          location = path[nextStep];
-          if (nextStep < path.length - 1) {
-            activity = `heading to ${roomPhrase(existingTarget)}`;
-          }
-          transit = { path, progress: nextStep, destination: existingTarget };
-          if (nextStep >= path.length - 1) transit = null;
-        } else {
-          location = existingTarget || npc.location;
-          transit = null;
+      activity = pickedActivity;
+      if (npc.walk) {
+        // Already walking toward a destination — keep heading there rather
+        // than picking a new random activity/room each tick (which would
+        // make the NPC forever restart their journey and never arrive).
+        location = npc.location;
+        const destRoomId = walkDestRoom(npc);
+        if (destRoomId && destRoomId !== location) {
+          activity = `heading to ${roomPhrase(destRoomId)}`;
         }
       } else if (target && target !== npc.location) {
-        // Start new transit
-        activity = pickedActivity;
-        let path = findPath(npc.location, target);
-        if (path && path.length > 1) {
-          const nextStep = 1;
-          location = path[nextStep];
-          if (nextStep < path.length - 1) {
-            activity = `heading to ${roomPhrase(target)}`;
-          }
-          transit = { path, progress: nextStep, destination: target };
-          if (nextStep >= path.length - 1) transit = null;
+        // Start a new walk. A wander target names only a room, not a
+        // specific stand-point, so its centroid is the anchor point — the
+        // same fallback openCommitment uses for a plain drive anchor.
+        const [cx, cy] = roomCentre(target);
+        const planned = planWalk(gameState, npc, npc.location, { roomId: target, point: { x: cx, y: cy } });
+        if (planned) {
+          npc.pos = { ...planned.path[0] };
+          npc.walk = planned;
+          location = npc.location;
+          activity = `heading to ${roomPhrase(target)}`;
         } else {
+          // No plannable route (e.g. already standing at the target's
+          // centroid) — land instantly, same as the old single-hop fallback.
           location = target;
         }
       } else {
@@ -1867,7 +2078,11 @@ function resolveTick(gameState) {
       }
     }
 
-    resolved[id] = { block, location, activity, transit };
+    // Phase 4 (D5): npc.walk reflects this tick's wander state by now — every
+    // non-wander branch above nulled it, the wander branch set/kept it — so
+    // it doubles as pass 3's "is this NPC mid-wander" marker below, the same
+    // role transit used to play.
+    resolved[id] = { block, location, activity, transit, walk: npc.walk || null };
 
     // Troubleshooting export log: a schedule-driven room change, tagged with
     // which branch above decided it. Drive-driven overrides (sneak_into_bed
@@ -1884,6 +2099,16 @@ function resolveTick(gameState) {
       });
     }
   }
+
+  // Continuous-cadence-closure Phase 5 (D6): every flat per-tick rate below
+  // is a per-minute rate scaled by minutesThisTick (now the function's own
+  // parameter, Phase 7/D16 — see the function signature). Every chance-based
+  // roll's own per-resolution probability is computed once here, above the
+  // Pass 2 loop, since it is the same for every NPC this call resolves.
+  const ambientEventChance = chanceOverMinutes(OFFSCREEN_EVENT_TUNING.chancePerMinute, minutesThisTick);
+  const musicKeepItDownChance = chanceOverMinutes(SOUND_DEVICE_DEFS.music.keepItDown.chancePerMinute, minutesThisTick);
+  const thermostatComplainChance = chanceOverMinutes(THERMOSTAT_TUNING.complainChancePerMinute, minutesThisTick);
+  const partyComplainChance = chanceOverMinutes(PARTY_TUNING.complainChancePerMinute, minutesThisTick);
 
   // Pass 2: needs, events, mood — using this tick's resolved locations.
   for (const id of activeNpcIds) {
@@ -1933,7 +2158,7 @@ function resolveTick(gameState) {
 
     // Random event chance (weighted by stress + low needs)
     let moodDelta = 0;
-    if (rng() < 0.15 && block !== 'sleep' && block !== 'work') {
+    if (rng() < ambientEventChance && block !== 'sleep' && block !== 'work') {
       const otherIds = Object.keys(npcs).filter(oid => oid !== id && npcs[oid].residency.status === 'resident');
       const evt = drawOffscreenEvent(rng, id, npc, otherIds);
       evt.day = meta.clock.day;
@@ -1978,9 +2203,16 @@ function resolveTick(gameState) {
         if (rec.signalId === 'music' && rec.intensity > loudestMusic) loudestMusic = rec.intensity;
       }
       if (loudestMusic > 0) {
-        moodDelta += Math.min(SOUND_DEVICE_DEFS.music.npcMoodCap, loudestMusic * SOUND_DEVICE_DEFS.music.npcMoodPerIntensity);
+        // Continuous-cadence-closure Phase 5 (D13, found alongside D6's named
+        // keepItDown chance below — same guard block, same mechanic): both
+        // the coefficient and its cap are per-minute now, scaled by the
+        // actual span resolved.
+        moodDelta += Math.min(
+          SOUND_DEVICE_DEFS.music.npcMoodCapPerMinute * minutesThisTick,
+          loudestMusic * SOUND_DEVICE_DEFS.music.npcMoodPerIntensityPerMinute * minutesThisTick
+        );
         const kd = SOUND_DEVICE_DEFS.music.keepItDown;
-        if (loudestMusic >= kd.threshold && rng() < kd.chancePerTick) {
+        if (loudestMusic >= kd.threshold && rng() < musicKeepItDownChance) {
           newEvents.push({
             day: meta.clock.day, tick: getTickIndex(meta.clock.minutes), roomId: location, npcId: id,
             type: 'music_too_loud', moodDelta: kd.npcMood,
@@ -1996,8 +2228,105 @@ function resolveTick(gameState) {
       // outfit rather than trusting the predicate's return).
       if (wearsSoundBlocking(gameState, id)) {
         const acc = (gameState.npcs?.[id]?.outfit?.accessory) || '';
-        const gain = SOUND_DEVICE_DEFS[acc]?.npcMoodGainPerTick;
-        if (gain) moodDelta += gain;
+        const gain = SOUND_DEVICE_DEFS[acc]?.npcMoodGainPerMinute;
+        if (gain) moodDelta += gain * minutesThisTick;
+      }
+    }
+
+    // Actions & Activities Overhaul Phase 8 (D16): a resident outside their
+    // own comfort band gets annoyed (a small per-tick mood malus, same
+    // capped shape as the loud-music block above) and, past a real margin,
+    // occasionally complains (a genuine narrated/memory event, temperature.js
+    // + THERMOSTAT_TUNING's authored lines) or tries to fix it themselves —
+    // nudging the shared thermostat toward their own preference, personality
+    // -weighted (thermostatSelfAdjustChance). A sleeping NPC is skipped for
+    // the same reason the music block above skips one: asleep is not
+    // experiencing the room. D16's third self-adjust ("change clothes") is
+    // NOT here — it is unconditional and continuous already, via
+    // npcOutfitForContext's own thermal bias (npc.js), not a per-tick roll.
+    if (block !== 'sleep' && location && ROOMS[location]) {
+      const discomfort = temperatureDiscomfort(gameState, npc, id);
+      const outside = Math.abs(discomfort);
+      if (outside > 0) {
+        const cold = discomfort < 0;
+        // Continuous-cadence-closure Phase 5 (D13, found alongside D6's named
+        // complainChancePerTick — same guard block, same mechanic): the
+        // deterministic malus and its cap are per-minute now.
+        moodDelta -= Math.min(
+          THERMOSTAT_TUNING.annoyanceMoodDeltaCapPerMinute * minutesThisTick,
+          outside * THERMOSTAT_TUNING.annoyanceMoodDeltaPerDegreePerMinute * minutesThisTick
+        );
+        if (outside >= THERMOSTAT_TUNING.complainThresholdC && rng() < thermostatComplainChance) {
+          const lines = cold ? THERMOSTAT_TUNING.coldComplaintLines : THERMOSTAT_TUNING.hotComplaintLines;
+          newEvents.push({
+            day: meta.clock.day, tick: getTickIndex(meta.clock.minutes), roomId: location, npcId: id,
+            type: 'temperature_complaint', moodDelta: 0,
+            template: lines[Math.floor(rng() * lines.length)],
+            data: {}, seenByPlayer: false,
+          });
+        }
+        // D13: thermostatSelfAdjustChance(npc) is still a raw PER-TICK chance
+        // (THERMOSTAT_TUNING.selfAdjustChancePerTick stays unrenamed — see its
+        // own comment in config.js for why) — personality-scaled per NPC
+        // before any minute conversion can happen, so the conversion has to
+        // run on this already-scaled result, not on the raw base rate.
+        if (rng() < chanceOverMinutes(1 - Math.pow(1 - thermostatSelfAdjustChance(npc), 1 / CLOCK.tickMinutes), minutesThisTick)) {
+          const current = gameState.world.thermostat?.targetC ?? THERMOSTAT_TUNING.defaultC;
+          gameState.world.thermostat = {
+            targetC: clamp(current + (cold ? THERMOSTAT_TUNING.stepC : -THERMOSTAT_TUNING.stepC), THERMOSTAT_TUNING.minC, THERMOSTAT_TUNING.maxC),
+          };
+        }
+      }
+    }
+
+    // Actions & Activities Overhaul Phase 9 (D17/D49): ambient room dirt —
+    // foot traffic and dust, the two D17-named sources with no discrete act
+    // to hook (cooking/eating already bump the same field at their own real
+    // funnels — buildCookEffects, applyEatItem). A resident awake and
+    // present nudges their room's dirt up a small amount each tick, same
+    // guard as the temperature/music blocks above (asleep is not tracking
+    // mud in). D43's own precedent (Phase 7) is why this rides the existing
+    // per-NPC Pass 2 loop rather than a new whole-room-every-tick pass: the
+    // narrowest real hook, not a sprawling new one, for two sources this
+    // small.
+    if (block !== 'sleep' && location && ROOMS[location]) {
+      bumpRoomDirt(gameState, location, DIRT_TUNING.footTrafficPerMinute * minutesThisTick);
+    }
+
+    // Actions & Activities Overhaul Phase 17 (D26): a live house party —
+    // PARTY_TUNING's own header has the full design. Two branches on the
+    // SAME per-tick check, mirroring music_too_loud/the thermostat block
+    // above but split across who's actually at the party versus who isn't:
+    // an ATTENDEE (physically in the booked party's room right now, present-
+    // based like mealAttendees, not acceptedIds-based) gets a small mood
+    // lift and adds real dirt/noise; anyone ELSE who can perceive the noise
+    // through the signal layer gets annoyed past a threshold and sometimes
+    // complains, same threshold/chance/event shape as the music block.
+    if (block !== 'sleep' && location && ROOMS[location]) {
+      const liveParty = activePartyCommitmentInRoom(gameState, location);
+      if (liveParty) {
+        bumpRoomDirt(gameState, location, PARTY_TUNING.dirtPerMinutePerGuest * minutesThisTick);
+        emitTransient(gameState, { id: 'party_noise', roomId: location, intensity: SIGNALS_EMIT.partyNoise, sourceId: id });
+        moodDelta += PARTY_TUNING.attendeeMoodPerMinute * minutesThisTick;
+      } else {
+        let loudestParty = 0;
+        for (const rec of perceiveSignals(gameState, id, location)) {
+          if (rec.signalId === 'party_noise' && rec.intensity > loudestParty) loudestParty = rec.intensity;
+        }
+        if (loudestParty > 0) {
+          moodDelta -= Math.min(
+            PARTY_TUNING.annoyanceMoodCapPerMinute * minutesThisTick,
+            loudestParty * PARTY_TUNING.annoyanceMoodPerIntensityPerMinute * minutesThisTick
+          );
+          if (loudestParty >= PARTY_TUNING.complainThreshold && rng() < partyComplainChance) {
+            newEvents.push({
+              day: meta.clock.day, tick: getTickIndex(meta.clock.minutes), roomId: location, npcId: id,
+              type: 'party_loud', moodDelta: PARTY_TUNING.complainMoodDelta,
+              template: PARTY_TUNING.complaintLines[Math.floor(rng() * PARTY_TUNING.complaintLines.length)],
+              data: {}, seenByPlayer: false,
+            });
+          }
+        }
       }
     }
 
@@ -2011,14 +2340,36 @@ function resolveTick(gameState) {
     // UI's advanceAndResolve event loop alongside the memory-episode write
     // every other event type already gets there — resolveTick stays
     // synchronous/LLM-free either way.
-    if (location && roomOwnerId(location, npcs) === id) {
+    // night-scene Phase 6: ...and is AWAKE to do it. Without this the scan
+    // fires on a sleeping owner, which is merely odd for a sneak's evidence
+    // and absurd for the night scene's -- she is definitionally asleep in the
+    // bed the disturbed-bed record is stamped on at the moment it is written,
+    // and would otherwise be able to notice it in her sleep. Strictly a
+    // correction: it delays discovery until she could actually look, and
+    // changes nothing about the odds once she can.
+    const awakeToNotice = !['sleeping', 'napping'].includes(String(npc.activity || '').toLowerCase());
+    if (location && awakeToNotice && roomOwnerId(location, npcs) === id) {
       const bucket = gameState.objects?.[`room_${location}`] || {};
       const undiscovered = Object.values(bucket).find(o => o.evidence && !o.evidence.discovered);
-      if (undiscovered && rng() < (STEALTH_TUNING.baseEvidenceDiscoveryChance + undiscovered.evidence.strength * STEALTH_TUNING.evidenceStrengthDiscoveryFactor)) {
+      // Continuous-cadence-closure Phase 7: evidenceDiscoveryChancePerTick/
+      // evidenceStrengthDiscoveryFactor combine additively into ONE effective
+      // per-tick chance that varies per OBJECT (evidence.strength) — the same
+      // shape as thermostatSelfAdjustChance(npc)'s personality scaling (D13),
+      // so the minute conversion applies to that already-combined per-object
+      // result at this call site, not to either raw constant.
+      const evidenceTickChance = STEALTH_TUNING.evidenceDiscoveryChancePerTick
+        + (undiscovered ? undiscovered.evidence.strength * STEALTH_TUNING.evidenceStrengthDiscoveryFactor : 0);
+      if (undiscovered && rng() < chanceOverMinutes(1 - Math.pow(1 - evidenceTickChance, 1 / CLOCK.tickMinutes), minutesThisTick)) {
         undiscovered.evidence.discovered = true;
         newEvents.push({
           day: meta.clock.day, tick: getTickIndex(meta.clock.minutes), roomId: location, npcId: id,
-          type: 'evidence_discovered', moodDelta: 0, data: { kind: undiscovered.evidence.kind },
+          // night-scene Phase 6 (Q2): the STRENGTH rides along, because it is
+          // the term that says how obvious the trace was and therefore how
+          // much finding it teaches. UI's handler scales the suspicion write
+          // by it (STEALTH_TUNING.sneakEvidenceStrength is the reference), so
+          // this event carries both halves of what the discovery means.
+          type: 'evidence_discovered', moodDelta: 0,
+          data: { kind: undiscovered.evidence.kind, strength: undiscovered.evidence.strength },
           template: EVIDENCE_KIND_TEXT[undiscovered.evidence.kind], seenByPlayer: false,
         });
       }
@@ -2075,6 +2426,16 @@ function resolveTick(gameState) {
     const isVisitor = visitingIds.has(id);
     if (!isVisitor && npc.residency.status !== 'resident') continue;
 
+    // Phase 6 of actions-and-activities-overhaul-plan.md (D11): following
+    // holds full attention — no drive re-scoring while glued to the leader's
+    // side, so a follower never opens a new commitment that would walk them
+    // away. Their location is already resolved (Pass 1, above) and needs
+    // still decay normally (Pass 2); only THIS pass — chores/self-care/
+    // social commitments — is what following pre-empts. Sleep and off-site
+    // work already end the relationship in Pass 1, so a following npc
+    // reaching here is always genuinely still following.
+    if (npc.follow && npc.follow.leader === 'player') continue;
+
     // Cognition plan Phase 2 (D4): age the held commitment by one tick BEFORE
     // anything is scored, so anything evaluateDrives still sees is one with
     // time left to run. This runs ahead of the sleep skip below on purpose —
@@ -2118,6 +2479,15 @@ function resolveTick(gameState) {
     if (isOverturePending(npcs[id]) && !(npc.commitment && npc.commitment.kind === 'work')) {
       const { roomId: waitRoom, activity: waitActivity } = overtureWaitRoom(gameState, npcs[id]);
       npcUpdates[id].transit = null;
+      // Phase 4 (D5): only a genuine wander walk (resolved[id].walk — never
+      // set for a held-commitment NPC, see deriveHeldRecord) gets cancelled
+      // here, never a commitment's own in-flight walk — waiting on an answer
+      // should stop a wander cold, the same way it already stopped .transit,
+      // but must not cut short a chore commitment's walk to its own anchor.
+      if (resolved[id].walk) {
+        npc.walk = null;
+        npcUpdates[id].walk = null;
+      }
       if (waitRoom) npcUpdates[id].location = waitRoom;
       if (waitActivity) npcUpdates[id].activity = waitActivity;
       continue;
@@ -2172,22 +2542,27 @@ function resolveTick(gameState) {
     // journey the NPC chose, it was the schedule wandering, and they are busy.
     //
     // Phase 6 (tuning pass): an UNCOMMITTED NPC in transit used to `continue`
-    // here — skip the decision until the wander reached its destination. The
-    // schedule transit steps one room per tick, so a long wander (the Gym is
-    // six rooms from Hallway B) locked the scorer out for the whole walk, and
-    // needs could not pull the NPC out of it: measured live, an 08:00
-    // "heading to the Gym" ran 6 ticks straight through the breakfast window
-    // with hunger at 30, and the household ate ~0.42 meals/day. The wander is
-    // the schedule's, not a commitment's — nothing should hold the scorer
-    // hostage to it. Fall through and let the decision run; if a drive wins,
-    // the merge below cancels the transit and the commitment's own walk takes
-    // over from where they stand, and if nothing clears the threshold the
-    // pass-2 transit record stands and the wander carries on.
-    if (resolved[id].transit) {
+    // here — skip the decision until the wander reached its destination. A
+    // long wander (the Gym is six rooms from Hallway B) locked the scorer out
+    // for the whole walk, and needs could not pull the NPC out of it:
+    // measured live, an 08:00 "heading to the Gym" ran 6 ticks straight
+    // through the breakfast window with hunger at 30, and the household ate
+    // ~0.42 meals/day. The wander is the schedule's, not a commitment's —
+    // nothing should hold the scorer hostage to it. Fall through and let the
+    // decision run; if a drive wins, the check below cancels the wander walk
+    // and the commitment's own walk (opened further down, by evaluateDrives)
+    // takes over from where they stand, and if nothing clears the threshold
+    // the pass-1 walk record stands and the wander carries on.
+    //
+    // Continuous-cadence-closure-plan Phase 4 (D5): reads resolved[id].walk
+    // now (pass 1's planWalk-based wander marker), not the old .transit —
+    // same trigger, same reasoning, renamed with the mechanism it rides.
+    if (resolved[id].walk) {
       if (commitment) {
         const stay = (commitment.anchor && commitment.anchor.roomId) || resolved[id].location;
-        resolved[id] = { ...resolved[id], transit: null, location: stay };
-        npcUpdates[id].transit = null;
+        npc.walk = null;
+        resolved[id] = { ...resolved[id], walk: null, location: stay };
+        npcUpdates[id].walk = null;
         npcUpdates[id].location = stay;
       }
     }
@@ -2332,14 +2707,20 @@ function resolveTick(gameState) {
       // the one the NPC just finished. Absent means no commitment, so
       // undefined is the right value and JSON drops the key on save.
       npcUpdates[id].commitment = postDrive.commitment;
-      // Phase 6 (tuning pass): an uncommitted NPC in schedule transit who
-      // just opened a commitment cancels the wander — the commitment's own
-      // planned walk takes over from where they stand, and a "heading to the
-      // Kitchen" label must not coexist with "cooking" (the clash the transit
-      // block above exists to prevent). See that block for the measured case.
-      if (postDrive.commitment && npcUpdates[id].transit) {
-        npcUpdates[id].transit = null;
-      }
+      // Continuous-cadence-closure-plan Phase 4 (D5): npc.pos/npc.walk carry
+      // the exact same replace-hazard as commitment/needs/memory above —
+      // openCommitment (cognition.js) mutates them directly on
+      // gameState.npcs[id] exactly like it does commitment, so a wholesale
+      // replace mid-drive would silently drop them the same way. Carried
+      // unconditionally and read AFTER evaluateDrives has fully run, so this
+      // already reflects whichever walk actually won: a commitment opened
+      // over pass 1's wander walk takes over from where they stand (a
+      // "heading to the Kitchen" label must not coexist with "cooking" — the
+      // clash the pass-1 walk-cancel block above exists to prevent for the
+      // held-commitment case), an uncommitted NPC's own wander walk survives
+      // untouched, and no commitment/no walk carries through as null.
+      npcUpdates[id].pos = postDrive.pos;
+      npcUpdates[id].walk = postDrive.walk;
       // Initiative plan Phase 3 (D19): the same carry for `npc.overture`, and
       // unconditional for the same reason — a record that lapsed or was opened
       // this tick must survive resolveBatch's `{ ...state.npcs[id], ...update }`
@@ -2553,46 +2934,141 @@ function resolveTick(gameState) {
 // NPC activity without moving meta.clock. The continuous clock loop (TIME)
 // passes false because it has already walked the clock through this span
 // itself; advancing here too ran the whole game at double speed.
+// opts.needsMinutes (continuous-cadence-closure Phase 3, D11) — the batch's
+// TRUE elapsed minutes, when it differs from `ticks * CLOCK.tickMinutes`
+// (threaded from advanceAndResolve, same value advancePhoneBattery already
+// gets). Undefined for every whole-tick caller (sleep, gig blocks, etc.).
 function resolveBatch(gameState, ticks, opts = {}) {
   const shouldAdvanceClock = opts.advanceClock !== false;
-  // needs-and-heartbeat Phase 3 (D4/D7): the DISCRETE path's needs move via
-  // the heartbeat's closed form (applyNeedsHeartbeat), applied once per tick
-  // AFTER that tick's updates are merged — so restore keys on the block and
-  // location the tick actually resolved to. An end-of-batch single call
-  // would key on only the FINAL block, which loses sleep restore entirely
-  // (an 8h sleep ending at 08:00 reads a 'morning' final block and restores
-  // nothing). The per-tick net-rate form is the closed form of per-minute
-  // interleaving (D7), exact against the old per-tick block in steady state.
-  // The CONTINUOUS path (suppressNeeds, threaded from TIME's runSimCheckpoint)
-  // skips this — clockFrame's heartbeat accumulator owns every one of those
-  // minutes at per-minute cadence already.
   const shouldApplyNeeds = opts.suppressNeeds !== true;
   const allEvents = [];
   const allPeepResults = [];
   let state = gameState;
-  for (let i = 0; i < ticks; i++) {
-    if (shouldAdvanceClock) {
-      state = { ...state, meta: { ...state.meta, clock: advanceClock(state.meta.clock, 1) } };
-    }
-    const result = resolveTick(state);
+
+  // Merges one resolveTick() result's npcUpdates onto `state`, runs the
+  // boundary-flag check for whoever changed room, and applies that step's
+  // own needs share — the exact per-step merge this function has always
+  // done, shared by both branches below (continuous-cadence-closure Phase 7,
+  // D16) so neither duplicates it.
+  function applyStepResult(result, stepNeedsMinutes) {
     allEvents.push(...result.newEvents);
     if (result.peepResults) allPeepResults.push(...result.peepResults);
-    // Apply NPC updates
     const newNpcs = { ...state.npcs };
+    // Phase 7 of actions-and-activities-overhaul-plan.md (D13): which npcs
+    // actually changed ROOM this step, and where — captured here
+    // (prevLocation reads newNpcs[id] BEFORE it's overwritten below) rather
+    // than as a second pass, so this never re-derives anything resolveTick
+    // already decided. Deliberately narrow to "did location change," not
+    // "why": npcUpdates can carry a location every step whether or not it
+    // moved (visitor carry-through etc — see the Explore note this was
+    // scoped from), so an inequality check is the only safe test.
+    const boundaryChecks = [];
     for (const [id, update] of Object.entries(result.npcUpdates)) {
+      const prevLocation = newNpcs[id] && newNpcs[id].location;
       const merged = { ...newNpcs[id], ...update };
       // Phase 4 (physical layer, D8): keep pos in step with the location the
-      // tick just applied — an NPC who teleported (schedule wander, off-map
+      // step just applied — an NPC who teleported (schedule wander, off-map
       // return, visitor) must stand in the room the record says they are in.
       // A walk owns pos and is never touched here.
       reconcileNpcPos(merged);
       newNpcs[id] = merged;
+      if (update.location && update.location !== prevLocation) {
+        boundaryChecks.push({ id, roomId: update.location });
+      }
     }
     state = { ...state, npcs: newNpcs };
+    // Phase 7 of actions-and-activities-overhaul-plan.md (D13) — an NPC's
+    // own promised boundary flag, checked against their own just-applied
+    // move (flags.js's checkBoundaryRules). Guarded on `_boundaryRules`
+    // being non-empty BEFORE the call so the overwhelmingly common case (no
+    // active boundary flags at all) costs one property read, not a function
+    // call, per npc-that-moved this step.
+    for (const bc of boundaryChecks) {
+      const npc = state.npcs[bc.id];
+      if (npc && npc.flags && npc.flags._boundaryRules && npc.flags._boundaryRules.length) {
+        checkBoundaryRules(state, { act: 'enter_room', roomId: bc.roomId, actorId: bc.id });
+      }
+    }
     // Player needs are deliberately NOT moved here — every discrete action's
     // own decayPlayerNeeds call site (ui.js/ui.computer.js/ui.phone.js) owns
     // the player on the discrete path, so this pass is NPCs only.
-    if (shouldApplyNeeds) state = applyNeedsHeartbeat(state, CLOCK.tickMinutes, { player: false });
+    if (shouldApplyNeeds && stepNeedsMinutes > 0) state = applyNeedsHeartbeat(state, stepNeedsMinutes, { player: false });
+  }
+
+  if (!shouldAdvanceClock) {
+    // Continuous-cadence-closure Phase 7: the checkpoint path (TIME's
+    // runSimCheckpoint). meta.clock was already advanced by clockFrame's
+    // rAF loop before this ever runs, so there is no "forward" for
+    // nextWakeAbs to bound a step toward — nowAbs is fixed for this whole
+    // call. One resolveTick call over the TRUE elapsed span
+    // (opts.needsMinutes, now threaded through from runSimCheckpoint even
+    // though suppressNeeds is true on this path — see time.js) replaces the
+    // old loop of `ticks` IDENTICAL CLOCK.tickMinutes-sized calls, which (a)
+    // used the exact same rng seed every time since meta.clock never moved
+    // between them (seededRng keys on day/minutes, resolveTick's own top),
+    // silently correlating what were supposed to be independent per-30-
+    // minute chance draws, and (b) is no longer needed now that resolveTick
+    // can resolve any real span in one call (Phase 5's per-minute rates) —
+    // Design Invariant 2 (Pass 1/2/3's own contract is untouched either way).
+    const spanMinutes = opts.needsMinutes != null ? opts.needsMinutes : (ticks * CLOCK.tickMinutes);
+    if (spanMinutes > 0) {
+      const result = resolveTick(state, spanMinutes);
+      applyStepResult(result, spanMinutes);
+    }
+    return { state, events: allEvents, peepResults: allPeepResults };
+  }
+
+  // D16 — the discrete/advancing path. Total clock advance stays EXACTLY
+  // ticks*CLOCK.tickMinutes (every existing caller's contract — Invariant
+  // 1's own sibling for this cutover: same total, finer internal grain)
+  // and total needs stays opts.needsMinutes when given, else the same
+  // total (needs-and-heartbeat Phase 3, D4/D7/D11's own precedent) — only
+  // the NUMBER and SIZE of intermediate resolveTick calls changes. Each
+  // step now covers the smaller of (a) how far a REAL scheduled event is
+  // (nextWakeAbs with its heartbeat fallback excluded, D17), (b) the old
+  // flat CLOCK.tickMinutes cadence, and (c) what's left in this batch — a
+  // commitment/window completing mid-batch (an 8-hour sleep, say) is
+  // resolved at its own real minute, with its own correctly-scaled Pass 2
+  // rates for the sub-span before it and the sub-span after, rather than
+  // smeared across whichever 30-minute lump it happened to fall inside
+  // (Design Invariant 3 — the exact silent-mistuning shape Phase 5's
+  // per-minute rates exist to prevent, now that spans stop always being 30).
+  // D17: NOT nextWakeAbs's raw default — its unconditional heartbeat
+  // fallback (<=5 minutes, always) would make EVERY step heartbeat-sized
+  // even when nothing real is scheduled anywhere near that soon, which
+  // re-evaluates every uncommitted NPC's Pass 1 (dueForDecision: no
+  // commitment = always due) far more often than the old flat 30-minute
+  // cadence — found breaking wander movement (verify-ccc-p4.js): a wander
+  // walk lands within seconds, then a subsequent ~5-minute step re-rolls a
+  // fresh target from the just-arrived position, over and over, inside what
+  // used to be a single decision. Falling back to the flat cadence when
+  // nothing real is sooner reproduces the OLD per-NPC decision frequency
+  // exactly (Invariant 1's own spirit, even though this isn't a numbered
+  // conversion phase) while still landing exactly on a real completion
+  // whenever one falls inside the current flat window.
+  const totalMinutes = ticks * CLOCK.tickMinutes;
+  const totalNeedsMinutes = opts.needsMinutes != null ? opts.needsMinutes : totalMinutes;
+  let remaining = totalMinutes;
+  let remainingNeeds = totalNeedsMinutes;
+  while (remaining > 0) {
+    const nowAbs = state.meta.clock.day * 1440 + state.meta.clock.minutes;
+    const realWakeAt = nextWakeAbs(state, { includeHeartbeat: false }); // Infinity if nothing real is scheduled
+    const boundAbs = Math.min(realWakeAt, nowAbs + CLOCK.tickMinutes, nowAbs + remaining);
+    const stepMinutes = Math.max(1, boundAbs - nowAbs);
+    state = { ...state, meta: { ...state.meta, clock: advanceClockByMinutes(state.meta.clock, stepMinutes) } };
+    const result = resolveTick(state, stepMinutes);
+    // D16: this step's own share of the batch's TRUE needs minutes,
+    // proportional to its share of the CLOCK minutes remaining — generalizes
+    // needs-and-heartbeat Phase 3/D11's "equal division across ticks" (which
+    // assumed every tick was the same CLOCK.tickMinutes size; that no longer
+    // holds once steps vary). Computed before `remaining`/`remainingNeeds`
+    // are decremented so later steps keep getting their own correct
+    // proportional share of what's left, by induction the SUM across every
+    // step in the batch is exactly totalNeedsMinutes (mod floating point).
+    const stepNeedsMinutes = (stepMinutes / remaining) * remainingNeeds;
+    applyStepResult(result, stepNeedsMinutes);
+    remaining -= stepMinutes;
+    remainingNeeds -= stepNeedsMinutes;
   }
   return { state, events: allEvents, peepResults: allPeepResults };
 }
@@ -3356,6 +3832,28 @@ function processSpoilageForDay(gameState, day) {
       // until some future transfer happened to retime it.
       obj.contents = kept;
     }
+  }
+}
+
+// Actions & Activities Overhaul Phase 11 (D20): a day of actually being worn
+// dirties an outfit. Same day-rollover hook point as processSpoilageForDay's
+// dishwasher resolution above (called right after it from UI's
+// processDayRollover) — for the player and every resident NPC, the garments
+// occupying their CURRENT outfit's slots move from their own bedroom
+// wardrobe into the shared hamper (ITEMS' dirtyWornOutfitForResident),
+// dirtied and owner-stamped. Deterministic, no roll (invariant 1): wearing
+// clothes for a day is a certainty. Silently no-ops with no hamper (a
+// minimal-state harness) or an empty outfit (nothing worn yet).
+function processLaundryWearForDay(gameState, day) {
+  if (!gameState?.objects) return;
+  const hamper = findObjectByDefIdLive(gameState, 'laundry_hamper');
+  if (!hamper) return;
+  if (gameState.player?.outfit) {
+    dirtyWornOutfitForResident(gameState, 'player', gameState.player.outfit, hamper);
+  }
+  for (const [npcId, npc] of Object.entries(gameState.npcs || {})) {
+    if (npc?.residency?.status !== 'resident' || !npc.outfit) continue;
+    dirtyWornOutfitForResident(gameState, npcId, npc.outfit, hamper);
   }
 }
 
@@ -4779,7 +5277,8 @@ function buildGameState(seed, cast, clock, droppedConstraints, economyCfg) {
   for (const roomId of ALL_ROOMS) {
     const bucket = objects[`room_${roomId}`];
     // `odor` was a field here until perception plan Phase 2 (D10) — now derived.
-    rooms[roomId] = { capacity: ROOMS[roomId].capacity, cleanliness: recomputeRoomCleanliness(bucket), lastEvent: null };
+    // `dirt` (Actions & Activities Overhaul Phase 9, D17/D49) starts clean.
+    rooms[roomId] = { capacity: ROOMS[roomId].capacity, cleanliness: recomputeRoomCleanliness(bucket), dirt: 0, lastEvent: null };
   }
 
   // Intimacy & Voyeurism Phase 6 (D11): NPCs start dressed in their daily
@@ -4963,6 +5462,13 @@ function buildGameState(seed, cast, clock, droppedConstraints, economyCfg) {
       quests: { active: [], completed: [] },
       events: [],
       deliveries: [],
+      // Actions & Activities Overhaul Phase 12 (D21): the mailbox (bills tied
+      // to the real bill system, plus flavor flyers/letters — see mail.js's
+      // processMailForDay) and the single pending "who's there" door event
+      // (mail.js's queueDeliveryDoorEvent/sweepDoorEvent). Empty/null by
+      // default, like deliveries/visits above.
+      mailbox: [],
+      doorEvent: null,
       // Renovation overhaul: active/completed contracted jobs, one entry
       // per job booked through bookRenovationJob (see
       // src/src/ref/complete/renovation-occupancy-overhaul-plan.md).

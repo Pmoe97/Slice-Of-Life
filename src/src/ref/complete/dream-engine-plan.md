@@ -18,7 +18,7 @@ live model has ever written a dream and no diffusion model has ever drawn a
 panel. That is a play-test, and the Handoff says what to watch for.
 Last updated 2026-08-25.
 Companions:
-- `src/src/ref/wip/action-outcome-window-plan.md` — its **D11** carved out an
+- `src/src/ref/complete/action-outcome-window-plan.md` — its **D11** carved out an
   unconditional Tier C window for sleep and nap and left the `image` field on
   `ACTION_DEFS['self.nap']` deliberately empty, commented "the Dream Engine's
   hook". This plan fills that hook and closes the last open item on that plan.
@@ -31,7 +31,7 @@ Companions:
   copies `callAssessor`/`callChronicler`'s call shape: one JSON pass, one retry
   only on a definitive parse failure, results stripped of anything the writer is
   not allowed to decide.
-- `src/src/ref/wip/settings-and-pause-overhaul-plan.md` — owns `SETTINGS_DEFAULTS`
+- `src/src/ref/complete/settings-and-pause-overhaul-plan.md` — owns `SETTINGS_DEFAULTS`
   and `sfwMode`. This plan adds three flat cycle fields to that schema and
   nothing else; it does not touch the settings shell.
 - `src/src/ref/wip/character-cutout-scene-rendering-plan.md` — the plate/cutout

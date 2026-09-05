@@ -5,7 +5,7 @@ Design session complete 2026-08-11; all decisions locked.
 Last updated 2026-08-11.
 
 Companions:
-- `src/src/ref/wip/SENSORY-AND-SOCIAL-ROADMAP.md` (the umbrella — this is Plan 3 of six, and the one that makes the cast behave like people rather than scenery).
+- `src/src/ref/complete/SENSORY-AND-SOCIAL-ROADMAP.md` (the umbrella — this is Plan 3 of six, and the one that makes the cast behave like people rather than scenery).
 - `src/src/ref/complete/perception-and-signals-plan.md` (Plan 1 — **complete**. `perceiveSignals` already runs for every NPC every tick at `drives.js`'s `evaluateDrives`; this plan turns its output from a boolean gate into a scored term).
 - `src/src/ref/complete/npc-correctness-fixes-plan.md` (Plan 0 — **complete**. Its Phase 4 rebalanced the need economy; the two unreachable drive gates this plan fixes are the same defect class it found in the relationship model, and its `dev/verify/measure.js` is the instrument that spots them).
 - `src/src/ref/complete/scene-reader-ui-plan.md` (Plan 2 — **complete**. The scene reader's presence lines are where an NPC's chosen activity becomes visible, so this plan's output has a reader from day one).

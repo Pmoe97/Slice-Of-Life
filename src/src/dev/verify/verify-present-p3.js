@@ -238,7 +238,7 @@ api(`
   };
 `);
 
-console.log('\\n1. Signal 1 — walk-out (D12 destType tiers)');
+console.log('\n1. Signal 1 — walk-out (D12 destType tiers)');
 const ws = api('__t_walkShared()');
 check(`mid-walk bedroom_1 -> kitchen is a departure (${ws.reason})`,
   ws.got && ws.reason === 'walk-out', JSON.stringify(ws));
@@ -268,7 +268,7 @@ check('walk to own bedroom -> privacy', wr2.got && wr2.type === 'privacy',
 check('walk into a walk that stays put -> null (same-room walk guard)',
   api('__t_walkSameRoom()').got === false);
 
-console.log('\\n2. Signal 2 — work boundary (D12 offflat)');
+console.log('\n2. Signal 2 — work boundary (D12 offflat)');
 const wb = api('__t_workBoundary(\'on_site\')');
 check(`on_site mid-shift (10:00, tick 20) -> work-boundary, offflat`,
   wb.got && wb.reason === 'work-boundary' && wb.type === 'offflat', JSON.stringify(wb));
@@ -279,7 +279,7 @@ check('remote mid-shift -> null (home worker is not departing)',
 check('on_site outside a work block -> null',
   api('__t_workBoundaryOffBlock()').got === false);
 
-console.log('\\n3. Signal 3 — next room within the window (deterministic, no rng)');
+console.log('\n3. Signal 3 — next room within the window (deterministic, no rng)');
 const nr1 = api(`__t_nextRoom(535, 'living_room')`);   // tick 17, morning -> morning@tick18
 check(`morning boundary in 5 min -> schedule-boundary, shared, kitchen`,
   nr1.got && nr1.reason === 'schedule-boundary' && nr1.type === 'shared' && nr1.room === 'kitchen',
@@ -297,12 +297,12 @@ check('boundary outside the 8-min window -> null', nr4.got === false, JSON.strin
 const nr5 = api(`__t_nextRoom(200, 'living_room')`);    // tick 6, deep sleep, wake in 280 min
 check('deep sleep (boundary hours away) -> null', nr5.got === false, JSON.stringify(nr5));
 
-console.log('\\n4. Invariant 1 — imminentDeparture writes NO sim state');
+console.log('\n4. Invariant 1 — imminentDeparture writes NO sim state');
 const nw = api('__t_nowrite()');
 check('npc record, player and clock byte-identical after the probe', nw.same,
   `got probe=${nw.got}`);
 
-console.log('\\n5. D14 — reconcileScenePresence');
+console.log('\n5. D14 — reconcileScenePresence');
 const rc = api('__t_reconcile()');
 check('returns a NEW scene state', rc.notSame);
 check('present keeps the co-located pair, drops the departed one',
@@ -314,7 +314,7 @@ check('ambient keeps the co-located pair',
 check('engagement object identity preserved (never recomputed)', rc.keepsEngagement);
 check('input scene state untouched', rc.inputUntouched);
 
-console.log('\\n6. D12 — conversationDepartureLine tiers');
+console.log('\n6. D12 — conversationDepartureLine tiers');
 const lShare = api(`__t_line('aware', {destType:'shared', destRoomId:'kitchen', minutesAway:5})`);
 check('shared invite says "join me" and names the room',
   lShare.line.indexOf('join me') !== -1 && lShare.line.indexOf('Kitchen') !== -1, lShare.line);
@@ -329,10 +329,10 @@ const lAck = api(`__t_line('ack', {destType:'shared', destRoomId:'kitchen'})`);
 check('ack line is the FINAL exchange', lAck.line.indexOf('FINAL') !== -1, lAck.line);
 check('empty when neither flag is set', api('__t_line(\'none\', null)').line === '');
 
-console.log('\\n7. Save/load round-trip — probe is serialization-stable');
+console.log('\n7. Save/load round-trip — probe is serialization-stable');
 const rt = api('__t_roundtrip()');
 check('identical probe result after JSON.stringify -> parse', rt.same && rt.got,
   `reason=${rt.reason}`);
 
-console.log(`\\n${'='.repeat(46)}\\n  ${pass} passed, ${fail} failed\\n${'='.repeat(46)}`);
+console.log(`\n${'='.repeat(46)}\n  ${pass} passed, ${fail} failed\n${'='.repeat(46)}`);
 process.exit(fail > 0 ? 1 : 0);

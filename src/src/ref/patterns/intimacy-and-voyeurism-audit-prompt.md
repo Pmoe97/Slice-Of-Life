@@ -430,7 +430,7 @@ audit, does the repairing).
   (archived 2026-08-16, all 19 phases Done) with its session protocol at
   `src/src/ref/complete/intimacy-and-voyeurism-handoff-prompt.md`. Companion
   plans live in `src/src/ref/complete/`; the signal/drive substrate umbrella is
-  `src/src/ref/wip/SENSORY-AND-SOCIAL-ROADMAP.md`. House conventions: 40-line
+  `src/src/ref/complete/SENSORY-AND-SOCIAL-ROADMAP.md`. House conventions: 40-line
   functions, `hidden`-attribute UI, id suffixes (`Btn`/`El`/`Ctn`/`Input`),
   CRLF-or-mixed files edited only via execute_js string replacement.
 - Attention spots this audit should not miss (each documented in the plan's

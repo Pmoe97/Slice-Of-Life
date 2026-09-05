@@ -1,0 +1,84 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
+    a { color: #f6a96c; } a:hover { color: #f6d76c; }
+  </style>
+</helmet>
+<div style="position:relative;width:390px;height:844px;background:#1a1a2e;color:#e0e0f0;overflow:hidden;display:flex;flex-direction:column">
+
+  <div style="padding:12px 16px 10px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid #3a3a5c">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:#8888aa;width:44px">Detect</span>
+      <div style="position:relative;flex-grow:1;height:14px;border-radius:4px;background:#2a2a4a;border:1px solid #3a3a5c;overflow:hidden">
+        <div style="position:absolute;top:0;bottom:0;left:0;width:62%;background:linear-gradient(90deg,#b8455f,#f66c8c)"></div>
+        <div style="position:absolute;top:0;bottom:0;left:0;width:24%;background:#6d1f36"></div>
+        <div style="position:absolute;top:0;bottom:0;left:24%;width:2px;background:#e0e0f0;opacity:0.6"></div>
+      </div>
+      <span style="font-size:13px;font-weight:700;color:#f66c8c;width:22px;text-align:right;font-variant-numeric:tabular-nums">62</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:#8888aa;width:44px">Heat</span>
+      <div style="position:relative;flex-grow:1;height:14px;border-radius:4px;background:#2a2a4a;border:1px solid #3a3a5c;overflow:hidden">
+        <div style="position:absolute;top:0;bottom:0;left:0;width:48%;background:linear-gradient(90deg,#8e3f6b,#e26ca6)"></div>
+      </div>
+      <span style="font-size:13px;font-weight:700;color:#e26ca6;width:22px;text-align:right;font-variant-numeric:tabular-nums">48</span>
+    </div>
+  </div>
+
+  <div style="padding:12px 16px 0;display:flex;flex-direction:column;gap:6px">
+    <div style="position:relative;width:100%;height:150px;border-radius:8px;background:radial-gradient(120% 90% at 50% 32%,#3b3050,#1c1728);overflow:hidden;border:1px solid #3a3a5c">
+      <div style="position:absolute;top:12px;left:0;right:0;text-align:center;font-size:9px;letter-spacing:0.14em;text-transform:uppercase;color:#5a5a7c">[ milestone frame ]</div>
+      <div style="position:absolute;left:0;right:0;bottom:0;padding:8px 10px;display:flex;gap:8px;align-items:center;background:linear-gradient(180deg,rgba(18,15,26,0),rgba(18,15,26,0.9))">
+        <button style="height:30px;padding:0 12px;border:1px solid #4a4a7c;border-radius:4px;background:rgba(26,26,46,0.9);color:#e0e0f0;font-size:12px;font-family:inherit">Keep</button>
+        <button style="height:30px;padding:0 12px;border:1px solid #4a4a7c;border-radius:4px;background:rgba(26,26,46,0.9);color:#8888aa;font-size:12px;font-family:inherit">Redraw</button>
+      </div>
+    </div>
+  </div>
+
+  <div style="flex-grow:1;padding:10px 16px 0;display:flex;flex-direction:column;gap:8px">
+    <svg viewBox="0 0 358 300" width="358" height="300" xmlns="http://www.w3.org/2000/svg">
+      <g stroke="#4a4a7c" stroke-width="1.5">
+        <rect x="42" y="8" width="86" height="52" rx="26" fill="rgba(226,108,166,0.10)"/>
+        <rect x="30" y="70" width="110" height="62" rx="20" fill="rgba(226,108,166,0.30)"/>
+        <rect x="34" y="142" width="102" height="48" rx="18" fill="rgba(226,108,166,0.14)"/>
+        <rect x="30" y="200" width="110" height="48" rx="18" fill="rgba(226,108,166,0.46)" stroke="#f66c8c" stroke-width="2.5"/>
+        <rect x="34" y="258" width="102" height="36" rx="16" fill="rgba(226,108,166,0.06)"/>
+      </g>
+      <g font-family="Segoe UI, system-ui, sans-serif" font-size="13" fill="#8888aa">
+        <text x="158" y="32">Face &amp; mouth</text>
+        <text x="158" y="48" font-size="10" fill="#5a5a7c">+3 heat · +14 detect</text>
+        <text x="158" y="96">Chest</text>
+        <text x="158" y="112" font-size="10" fill="#5a5a7c">+6 heat · +11 detect</text>
+        <text x="158" y="166">Stomach</text>
+        <text x="158" y="182" font-size="10" fill="#5a5a7c">+2 heat · +3 detect</text>
+        <text x="158" y="222" fill="#f66c8c" font-weight="600">Between her legs</text>
+        <text x="158" y="238" font-size="10" fill="#f66c8c">+9 heat · +13 detect · leaves 2</text>
+        <text x="158" y="282">Thighs &amp; calves</text>
+      </g>
+    </svg>
+    <p style="margin:0;font-size:15px;line-height:1.6;color:#e0e0f0;text-wrap:pretty">She shifts an inch toward your hand and settles again.</p>
+  </div>
+
+  <div style="padding:10px 16px;display:flex;gap:8px;flex-wrap:wrap;border-top:1px solid #3a3a5c">
+    <button style="height:40px;padding:0 12px;border:1px solid #b8455f;border-radius:16px;background:rgba(246,108,140,0.10);color:#f66c8c;font-size:12px;font-family:inherit">Panties +5</button>
+    <button style="height:40px;padding:0 12px;border:1px solid #b8455f;border-radius:16px;background:rgba(246,108,140,0.10);color:#f66c8c;font-size:12px;font-family:inherit">Sheets +3</button>
+  </div>
+
+  <div style="padding:10px 16px 18px;display:flex;gap:8px;background:#161628">
+    <button style="flex-grow:1;height:48px;border:none;border-radius:8px;background:#7b6cf6;color:#fff;font-size:13px;font-weight:600;font-family:inherit">Quell</button>
+    <button style="flex-grow:1;height:48px;border:1px solid #3a3a5c;border-radius:8px;background:#2a2a4a;color:#8888aa;font-size:13px;font-weight:600;font-family:inherit">Slip out</button>
+    <button style="flex-grow:1;height:48px;border:1px solid #4a4a7c;border-radius:8px;background:transparent;color:#f6a96c;font-size:13px;font-weight:600;font-family:inherit">Bail</button>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

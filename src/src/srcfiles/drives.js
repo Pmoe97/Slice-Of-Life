@@ -760,27 +760,23 @@ function resolveStandardDrive(driveId, drive, c) {
     cleanRoomObjects(gameState, location);
   }
 
-  // Empty the shared laundry hamper, wherever it is — do_laundry has no
-  // location requirement of its own (an NPC can decide to do laundry
-  // from any room), so this searches every bucket rather than just the
-  // current room.
+  // Start a real wash load from the shared laundry hamper (Actions &
+  // Activities Overhaul Phase 11, D20) — do_laundry has no location
+  // requirement of its own (an NPC can decide to do laundry from any room),
+  // so runHamperIntoWasher (ITEMS) finds the hamper/washer itself rather
+  // than needing this drive to search a room.
   //
-  // Cognition Phase 2: this used to `continue` when the hamper was already
-  // empty, which suppressed the log line ONLY — the effects, the meter charge,
-  // the machine_running signal and the activity label had all already been
-  // applied above, so "skip this drive entirely" was never what it did. Nothing
-  // in the game fills the hamper today (Phase 4 is where NPC actions start
-  // leaving traces), so keeping the guard would have made do_laundry — the
-  // second most eligible drive in the cast — unreachable the moment selection
-  // moved. The chore now happens either way and reads consistently.
+  // Cognition Phase 2's note on this block, now resolved: it used to reset
+  // hamper.state.fill to 'empty' directly regardless of whether anything was
+  // actually in it, because nothing filled the hamper for real at the time.
+  // Phase 11 is what starts filling it (SIM's processLaundryWearForDay) —
+  // against a REAL hamper.contents, that same blind reset would have
+  // deleted the physical dirty garments instead of washing them.
+  // runHamperIntoWasher is a no-op (not a delete) when there's nothing dirty
+  // or the washer isn't free, so the chore still always "happens" the same
+  // way the old unconditional reset did.
   if (drive.emptiesHamper) {
-    for (const bucket of Object.values(gameState.objects || {})) {
-      for (const obj of Object.values(bucket)) {
-        if (obj.defId === 'laundry_hamper' && obj.state?.fill !== 'empty') {
-          obj.state = { ...obj.state, fill: 'empty' };
-        }
-      }
-    }
+    runHamperIntoWasher(gameState, gameDaysNow(gameState.meta.clock));
   }
 
   // NPC-to-NPC social interaction

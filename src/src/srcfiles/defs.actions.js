@@ -26,6 +26,64 @@
 // self.eat is item-driven (INVENTORY's edibleStacks + EAT_ITEM serving
 // math) — see prepareEat/buildEatEffects/eatNarration below.
 
+// --- Self-directed research (Actions & Activities Overhaul Phase 16, D25)
+// --- "Spend time reading/studying a NAMED skill" — the browser half of
+// this already existed (SITE_DEFS effects fire on every visit, not just the
+// first, so chefs_corner/fitcast/codeflow/recipes/tidyhome were already a
+// working, repeatable research loop); this is the bookshelf half, the real
+// Phase 16 gap. One factory-generated leaf per skill (mirrors
+// createHobbyAction's shape, defined below and called from inside
+// ACTION_DEFS the same way) rather than one action with a runtime topic
+// picker (self.cook's async prepare()-driven modal is the alternative
+// shape) — "named skill" is the chip's own label, so the whole feature stays
+// data plus the existing generic def.skill/timeCost/effects machinery, with
+// no new render.js code and no DOM dependency, fully Node-testable per
+// invariant 7. cooking/fitness/tech already had SOME skill-XP source before
+// this phase (browser only); cleaning and art had none until this session
+// (cleaning gains a browser site too — tidyhome, defs.computer.js — so
+// research coverage is even across the two channels the D25 goal names).
+// Declared here, ahead of ACTION_DEFS, because ACTION_DEFS' own object
+// literal calls createResearchAction eagerly at const-evaluation time —
+// unlike a `function` declaration (hoisted whole), a `const` referenced
+// before its own line throws, so this can't sit down near createHobbyAction
+// the way HOBBY_NARRATION does for a function ACTION_DEFS never calls early.
+const RESEARCHABLE_SKILLS = [
+  { id: 'cooking', label: 'Study Cooking', verbs: ['study cooking', 'read about cooking', 'research recipes'] },
+  { id: 'cleaning', label: 'Study Cleaning', verbs: ['study cleaning', 'read about cleaning', 'research cleaning tips'] },
+  { id: 'fitness', label: 'Study Fitness', verbs: ['study fitness', 'read about fitness', 'research workouts'] },
+  { id: 'tech', label: 'Study Tech', verbs: ['study tech', 'read about tech', 'research programming'] },
+  { id: 'art', label: 'Study Art', verbs: ['study art', 'read about art', 'research technique'] },
+];
+const RESEARCH_NARRATION = {
+  cooking: 'You work through a cookbook chapter, filing a few real techniques away for next time.',
+  cleaning: 'You read up on stain removal and the right order to actually clean a room in. Oddly satisfying.',
+  fitness: 'You work through a training guide, marking a few things worth actually trying.',
+  tech: 'You work through a chapter of a programming book, testing the odd snippet in your head.',
+  art: "You study someone else's technique, breaking down how they built the piece up layer by layer.",
+};
+function createResearchAction(skillId, label, verbs) {
+  const id = `research.${skillId}`;
+  return {
+    [id]: {
+      id, label, verbs,
+      source: { kind: 'object', objDefs: ['bookshelf', 'study_bookshelf', 'hobby_bookshelf'] },
+      group: 'study', chipPriority: 26,
+      requires: [],
+      timeCost: { base: RESEARCH_TUNING.minutes },
+      skill: { id: skillId, xp: RESEARCH_TUNING.xp },
+      effects: [
+        `ADJUST_NEED player mood +${RESEARCH_TUNING.moodGain}`,
+        `ADJUST_NEED player energy -${RESEARCH_TUNING.energyCost}`,
+      ],
+      narration: { mode: 'template', templates: [RESEARCH_NARRATION[skillId] || 'You spend a real stretch of time studying.'] },
+      outcomeWindow: {
+        tier: 'C', trigger: 'player', dismissal: 'tap',
+        image: { kind: 'archetype', variant: 'research', phrase: 'bent over a book at the shelf, taking real notes' },
+      },
+    },
+  };
+}
+
 const ACTION_DEFS = {
   'self.eat': {
     // Inventory overhaul Phase 3: item-driven eating. The old flat
@@ -38,7 +96,9 @@ const ACTION_DEFS = {
     // INVENTORY_TUNING.useTimeMinutes — same table the inventory panel's
     // Use verb reads, so the chip and the panel can never disagree.
     id: 'self.eat', label: 'Eat', verbs: ['eat', 'snack', 'grab a bite'],
-    source: { kind: 'room', roomIds: ['kitchen', 'dining'] },
+    // East Wing Phase 13 (D22): "balcony_table sit/eat" — 'balcony' joins
+    // the source list. buildEatEffects' table lookup below grows to match.
+    source: { kind: 'room', roomIds: ['kitchen', 'dining', 'balcony'] },
     group: 'kitchen', chipPriority: 30,
     requires: ['hasEdibleFood'],
     timeCost: { byItemCategory: true },
@@ -211,6 +271,31 @@ const ACTION_DEFS = {
       image: { kind: 'instance', subject: reheatWindowSubject, phrase: microwaveWindowPhrase },
     },
   },
+  // Actions & Activities Overhaul Phase 10 (D18): coffee_maker's brew verb.
+  // dish_fresh_coffee already exists (defs.world.js, energy/hunger/kcal —
+  // "a caffeinated drink item — energy/mood effects" per D18) and was never
+  // producible outside a restaurant purchase; brewing is the missing kitchen
+  // source. Mirrors self.cook's ingredient-consumption shape (kitchenSources/
+  // ingredientDestroyLines, the fridge-or-bag SPAWN_ITEM target) at a single-
+  // ingredient, no-picker scale — there is exactly one thing a coffee maker
+  // makes, so prepareCook's recipe-choice machinery would be pure overhead
+  // here. Not facility-gated on kitchen_appliances: that tier's 'broken'
+  // starting rung is the FRIDGE quality ladder (its own tiers are literally
+  // "Old Fridge"/"Working Fridge"/"Premium Kitchen"), and coffee_maker is
+  // already present in the base kitchen layout from day one — gating brewing
+  // behind a fridge upgrade would block a basic appliance the object model
+  // says already exists. Still gated on the power bill, since a drip machine
+  // is electric.
+  'self.brew': {
+    id: 'self.brew', label: 'Brew Coffee', verbs: ['brew coffee', 'make coffee', 'brew a pot'],
+    source: { kind: 'object', objDef: 'coffee_maker' },
+    group: 'kitchen', chipPriority: 33,
+    requires: ['hasCoffeeBeans', 'powerNotCutoff'],
+    timeCost: { base: ACTION_TUNING.brewMinutes },
+    prepare: prepareBrew,
+    buildEffects: buildBrewEffects,
+    narration: { mode: 'dynamic', build: brewNarration },
+  },
   'self.shower': {
     id: 'self.shower', label: 'Shower', verbs: ['shower', 'wash up', 'bathe'],
     source: { kind: 'room', roomIds: ['bathroom_a', 'bathroom_b'] },
@@ -257,6 +342,66 @@ const ACTION_DEFS = {
         phrase: 'freshly showered and wrapped in a towel, damp hair, steam still hanging in the air',
       },
     },
+  },
+  // Actions & Activities Overhaul Phase 10 (D19): bathroom & grooming. The
+  // Handoff note for this phase flagged the same pattern Phase 9 found for
+  // dirt — several of these objects already declare dirtyWhen/emits states
+  // (toilet's clean/dirty, already read by refreshRoomCleanliness and the
+  // bathroom_grime signal) with no verb anywhere ever writing them. toilet
+  // and sink_bathroom's affords already listed the generic clean.object
+  // (still unwired everywhere, per the Phase 9 handoff — not this phase's
+  // job to fix in general), so toilet.use/toilet.clean below are the real,
+  // toilet-specific verbs that close the loop for this one object rather
+  // than reaching for that unwired generic hook. sink_bathroom's own dirty
+  // state is `clutter` (toiletries left out), which washing hands doesn't
+  // cause, so sink.wash_hands stays a flat hygiene beat with no object
+  // write. bathroom_mirror carries no dirtyWhen at all — mirror.groom is a
+  // flat mood/hygiene beat too; see groomMoodGain's config.js comment for
+  // why "appearance/confidence" needed no new stat or field (D46's "no new
+  // mechanism" precedent from Phase 8's clothing work, generalized here).
+  'toilet.use': {
+    id: 'toilet.use', label: 'Use the Toilet', verbs: ['use the toilet', 'go to the bathroom', 'use the bathroom'],
+    source: { kind: 'object', objDef: 'toilet' },
+    group: 'bathroom', chipPriority: 15,
+    requires: ['waterNotCutoff'],
+    timeCost: { base: ACTION_TUNING.toiletMinutes },
+    prepare: prepareToiletUse,
+    buildEffects: buildToiletUseEffects,
+    narration: { mode: 'dynamic', build: toiletUseNarration },
+  },
+  'toilet.clean': {
+    id: 'toilet.clean', label: 'Clean the Toilet', verbs: ['clean the toilet', 'scrub the toilet'],
+    source: { kind: 'object', objDef: 'toilet' },
+    group: 'bathroom', chipPriority: 14,
+    requires: ['toiletDirty', 'waterNotCutoff'],
+    timeCost: { base: ACTION_TUNING.toiletCleanMinutes },
+    skill: { id: 'cleaning', xp: 3 },
+    prepare: prepareToiletClean,
+    buildEffects: buildToiletCleanEffects,
+    narration: { mode: 'dynamic', build: toiletCleanNarration },
+  },
+  'sink.wash_hands': {
+    id: 'sink.wash_hands', label: 'Wash Hands', verbs: ['wash your hands', 'wash hands'],
+    source: { kind: 'object', objDef: 'sink_bathroom' },
+    group: 'bathroom', chipPriority: 16,
+    requires: ['waterNotCutoff'],
+    timeCost: { base: ACTION_TUNING.washHandsMinutes },
+    effects: [
+      `ADJUST_NEED player hygiene +${ACTION_TUNING.washHandsHygieneGain}`,
+    ],
+    narration: { mode: 'template', templates: ['You wash your hands.'] },
+  },
+  'mirror.groom': {
+    id: 'mirror.groom', label: 'Groom', verbs: ['groom', 'brush your teeth', 'fix your hair', 'freshen up'],
+    source: { kind: 'object', objDef: 'bathroom_mirror' },
+    group: 'bathroom', chipPriority: 17,
+    requires: [],
+    timeCost: { base: ACTION_TUNING.groomMinutes },
+    effects: [
+      `ADJUST_NEED player hygiene +${ACTION_TUNING.groomHygieneGain}`,
+      `ADJUST_NEED player mood +${ACTION_TUNING.groomMoodGain}`,
+    ],
+    narration: { mode: 'template', templates: ['You brush your teeth and fix your hair in the mirror. You look more put-together.'] },
   },
   'self.watch_tv': {
     id: 'self.watch_tv', label: 'Watch TV', verbs: ['watch tv', 'watch television', 'put on a show'],
@@ -355,6 +500,26 @@ const ACTION_DEFS = {
       image: { kind: 'archetype', variant: 'dishwasher', phrase: 'loading the dishwasher, stacking plates into the rack' },
     },
   },
+  // Actions & Activities Overhaul Phase 10 (D18): trash_kitchen's fill/
+  // rotten_food states are already a real, already-WRITTEN accumulation —
+  // NPC eating drives (config.js's kitchen eat-drive `leaves: { trash_kitchen:
+  // { fill: 1 } }`) already step the bin's fill ladder up. What was missing
+  // was ever resetting it — the exact "verbs, not data" gap this phase's
+  // Handoff note flagged. SET_OBJECT_STATE on a room object auto-triggers
+  // actions.js's touchedRooms → refreshRoomCleanliness sweep, so clearing
+  // these two states is the whole fix; no manual cleanliness recompute
+  // needed here.
+  'trash.take_out': {
+    id: 'trash.take_out', label: 'Take Out the Trash', verbs: ['take out the trash', 'empty the trash', 'take out the garbage'],
+    source: { kind: 'object', objDef: 'trash_kitchen' },
+    group: 'kitchen', chipPriority: 24,
+    requires: ['trashNeedsTakingOut'],
+    timeCost: { base: ACTION_TUNING.trashOutMinutes },
+    skill: { id: 'cleaning', xp: 3 },
+    prepare: prepareTrashOut,
+    buildEffects: buildTrashOutEffects,
+    narration: { mode: 'dynamic', build: trashOutNarration },
+  },
   'self.lock_door': {
     id: 'self.lock_door', label: 'Lock Door', verbs: ['lock the door', 'lock door'],
     source: { kind: 'object', objDefs: ['bedroom_door', 'bathroom_door'] },
@@ -375,6 +540,107 @@ const ACTION_DEFS = {
     prepare: prepareDoor,
     buildEffects: buildUnlockDoorEffects,
     narration: { mode: 'dynamic', build: unlockDoorNarration },
+  },
+  // Actions & Activities Overhaul Phase 12 (D21): the front door becomes
+  // real. self.get_mail is object-sourced off the new mailbox (defs.world.js);
+  // self.answer_door/self.refuse_door are room-sourced off 'entry' — a door
+  // event is world-level state (world.doorEvent), not tied to any one object
+  // instance, same reasoning as self.clean being room-sourced off the
+  // ambient dirt.js layer rather than an object. Both share prepareDoorEvent
+  // (mail.js's world.doorEvent read), the same "one prepare, two verbs"
+  // shape self.lock_door/self.unlock_door use above with prepareDoor.
+  'self.get_mail': {
+    id: 'self.get_mail', label: 'Get Mail', verbs: ['get the mail', 'check the mailbox', 'get mail'],
+    source: { kind: 'object', objDef: 'mailbox' },
+    group: 'mail', chipPriority: 20,
+    requires: ['hasUnclaimedMail'],
+    timeCost: { base: MAIL_TUNING.getMailMinutes },
+    prepare: prepareGetMail,
+    buildEffects: buildGetMailEffects,
+    narration: { mode: 'dynamic', build: getMailNarration },
+  },
+  'self.answer_door': {
+    id: 'self.answer_door', label: 'Answer the Door', verbs: ['answer the door', 'open the door', 'see who it is'],
+    source: { kind: 'room', roomIds: ['entry'] },
+    group: 'door', chipPriority: 50,
+    requires: ['doorEventPending'],
+    timeCost: { base: MAIL_TUNING.answerDoorMinutes },
+    prepare: prepareDoorEvent,
+    buildEffects: buildAnswerDoorEffects,
+    narration: { mode: 'dynamic', build: answerDoorNarration },
+  },
+  'self.refuse_door': {
+    id: 'self.refuse_door', label: 'Ignore the Door', verbs: ['ignore the door', "don't answer the door", 'let it be'],
+    source: { kind: 'room', roomIds: ['entry'] },
+    group: 'door', chipPriority: 49,
+    requires: ['doorEventPending'],
+    timeCost: { base: MAIL_TUNING.refuseDoorMinutes },
+    prepare: prepareDoorEvent,
+    buildEffects: buildRefuseDoorEffects,
+    narration: { mode: 'dynamic', build: refuseDoorNarration },
+  },
+  // Actions & Activities Overhaul Phase 8 (D16): the thermostat becomes a
+  // real, player-adjustable object. Two verbs (not a slider — no UI chrome
+  // for one exists, and a stepped raise/lower dial mirrors lock/unlock's own
+  // two-verb shape) gated by ACTION_REQUIREMENT_CHECKERS so the chip that
+  // would do nothing never lights up.
+  'thermostat.raise': {
+    id: 'thermostat.raise', label: 'Raise the Thermostat', verbs: ['raise the thermostat', 'turn up the heat'],
+    source: { kind: 'object', objDefs: ['thermostat'] },
+    group: 'thermostat', chipPriority: 35,
+    requires: ['thermostatBelowMax'],
+    timeCost: { base: 1 },
+    buildEffects: () => [`ADJUST_THERMOSTAT +${THERMOSTAT_TUNING.stepC}`],
+    narration: { mode: 'dynamic', build: thermostatRaiseNarration },
+  },
+  'thermostat.lower': {
+    id: 'thermostat.lower', label: 'Lower the Thermostat', verbs: ['lower the thermostat', 'turn down the heat'],
+    source: { kind: 'object', objDefs: ['thermostat'] },
+    group: 'thermostat', chipPriority: 35,
+    requires: ['thermostatAboveMin'],
+    timeCost: { base: 1 },
+    buildEffects: () => [`ADJUST_THERMOSTAT -${THERMOSTAT_TUNING.stepC}`],
+    narration: { mode: 'dynamic', build: thermostatLowerNarration },
+  },
+  // Actions & Activities Overhaul Phase 9 (D17/D49): the ambient dirt.js
+  // layer's cleaning verb — room-sourced across EVERY room (not object-
+  // anchored, unlike thermostat.raise/lower just above), because this is
+  // exactly what "Clean Hallway" needs: hallway_a/hallway_b own no
+  // dirtyable furniture at all, so the only thing a cleaning action there
+  // CAN point at is the room-level ambient field. Every other room gets the
+  // same chip for the same reason (D17's "each room gets dirt"); the
+  // per-object clean.object affordance (stove grease, fridge rot, etc.,
+  // already declared on 13 OBJECT_DEFS entries but never wired to any
+  // action) is a separate, real, still-open gap — see the Phase 9 Handoff.
+  'self.clean': {
+    id: 'self.clean', label: 'Clean Up', verbs: ['clean up', 'clean the room', 'sweep up', 'tidy up'],
+    source: { kind: 'room', roomIds: ALL_ROOMS },
+    group: 'clean', chipPriority: 22,
+    requires: ['roomHasDirt'],
+    timeCost: { base: 12 },
+    skill: { id: 'cleaning', xp: 4 },
+    prepare: prepareClean,
+    buildEffects: buildCleanEffects,
+    narration: { mode: 'dynamic', build: cleanNarration },
+  },
+  // Actions & Activities Overhaul Phase 16 (D25): the first real consumer of
+  // ACTION_REQUIREMENT_CHECKERS.skillAtLeast — declared (defs.actions.js)
+  // with zero callers until now. A thorough pass that clears a room's dirt
+  // in one go rather than self.clean's partial step, gated behind cleaning
+  // level 2 so the payoff for actually developing the skill (research +
+  // practice) is a genuinely better verb, not just a faster number.
+  // chipPriority sorts it just above self.clean so it's the preferred chip
+  // once it's unlocked.
+  'self.deep_clean': {
+    id: 'self.deep_clean', label: 'Deep Clean', verbs: ['deep clean', 'deep clean the room', 'do a proper clean'],
+    source: { kind: 'room', roomIds: ALL_ROOMS },
+    group: 'clean', chipPriority: 23,
+    requires: ['roomHasDirt', 'skillAtLeast:cleaning:2'],
+    timeCost: { base: ACTION_TUNING.deepCleanMinutes },
+    skill: { id: 'cleaning', xp: 6 },
+    prepare: prepareDeepClean,
+    buildEffects: buildDeepCleanEffects,
+    narration: { mode: 'dynamic', build: deepCleanNarration },
   },
   // --- Intimacy & Voyeurism Overhaul Phase 1 (D5): expandable submenus ---
   // A multi-verb object renders as ONE "X ▸" chip that expands a one-level
@@ -712,7 +978,27 @@ const ACTION_DEFS = {
   'bed.interact': {
     id: 'bed.interact', label: 'Bed',
     group: 'boundary', chipPriority: 45,
-    submenu: ['boundary.sleep_with', 'boundary.sleep_watch'],
+    submenu: ['boundary.night_scene', 'boundary.sleep_with', 'boundary.sleep_watch'],
+  },
+  // night-scene-sleeping-npc-plan D13 / Phase 6: THE front door to the Night
+  // Scene, and the only one. It sits first in the bed submenu because it is
+  // the interesting verb of the three; the other two keep their own
+  // one-roll mechanisms, which are different acts (sliding in to sleep
+  // beside someone, and watching them) rather than lighter versions of this
+  // one. Like every other row here it is intercepted in ui.js before the
+  // registered-action bridge — nothing about it goes through executeAction,
+  // and it deliberately does NOT open through openActionWindow, which would
+  // pause the clock D24 says must keep running.
+  //
+  // Unlike its two siblings this row is CONDITIONAL: render.js drops it
+  // unless resolveNightSceneGate(gs, sleeperId).allowed, so a cold-shouldered
+  // target, a non-resident or an already-open session simply has no chip
+  // rather than a chip that refuses. The gate is still re-run on entry
+  // (openNightScene), because a chip's visibility is not a lock.
+  'boundary.night_scene': {
+    id: 'boundary.night_scene', label: 'Touch {name} While They Sleep',
+    source: { kind: 'paired' },   // rejected by actionSourceMatches — never a flat chip
+    group: 'boundary',
   },
   'boundary.sleep_with': {
     id: 'boundary.sleep_with', label: 'Slide Into Bed With {name}',
@@ -857,11 +1143,221 @@ const ACTION_DEFS = {
       image: { kind: 'archetype', variant: 'games', phrase: 'focused on a game, controller in hand, into it' },
     },
   },
+  // --- East Wing (Actions & Activities Overhaul Phase 13, D22) ---
+  // "The East Wing is the hotspot" — self.swim/self.workout/self.play_games
+  // already existed; everything below is new. Same room-vs-object sourcing
+  // conventions as their siblings above: a shared-activity verb that only
+  // makes sense with company (self.pool_games) is object-sourced from the
+  // pool AND gated on someone actually being there (residentsPresent,
+  // below) rather than left to fire solo.
+  'self.sunbathe': {
+    id: 'self.sunbathe', label: 'Sunbathe', verbs: ['sunbathe', 'lounge by the pool', 'read by the pool', 'relax poolside'],
+    source: { kind: 'object', objDef: 'pool_loungers' },
+    group: 'pool_room', chipPriority: 20,
+    requires: ['facilityFunctional:pool_systems'],
+    timeCost: { base: ACTION_TUNING.sunbatheMinutes },
+    effects: [
+      `ADJUST_NEED player mood +${ACTION_TUNING.sunbatheMoodGain}`,
+      `ADJUST_NEED player energy +${ACTION_TUNING.sunbatheEnergyGain}`,
+    ],
+    shared: {
+      rate: 'companionable',
+      fact: 'You and {name} lounged by the pool together.',
+      templates: [
+        'You stretch out on a lounger next to {name}. Nobody says much; nobody has to.',
+        '{name} takes the lounger next to yours, book in hand. You doze more than you read.',
+      ],
+    },
+    narration: { mode: 'template', templates: ['You stretch out on a lounger and let the afternoon go by.'] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'sunbathe', phrase: 'stretched out on a poolside lounger, sunglasses on, completely unbothered' },
+    },
+  },
+  'self.pool_games': {
+    id: 'self.pool_games', label: 'Pool Games', verbs: ['play pool games', 'water volleyball', 'play marco polo', 'mess around in the pool'],
+    source: { kind: 'object', objDef: 'swimming_pool' },
+    group: 'pool_room', chipPriority: 35,
+    // A game of Marco Polo with nobody else in the room is just swimming
+    // with extra steps — residentsPresent (below) is the real gate; it
+    // reuses sharedActivityParticipants (actions.js) so this chip and the
+    // `shared` delta it feeds can never disagree about who counts as here.
+    requires: ['facilityFunctional:pool_systems', 'residentsPresent'],
+    vulnerableState: 'swimming',
+    transientClothing: 'undressed',
+    afterClothing: 'towel',
+    timeCost: { base: ACTION_TUNING.poolGamesMinutes },
+    skill: { id: 'fitness', xp: 6 },
+    effects: [
+      `ADJUST_NEED player mood +${ACTION_TUNING.poolGamesMoodGain}`,
+      `ADJUST_NEED player energy -${ACTION_TUNING.poolGamesEnergyCost}`,
+    ],
+    meters: [['devices', 1.5], ['waterHeating', 1]],
+    shared: {
+      rate: 'companionable',
+      fact: 'You and {name} played games in the pool.',
+      templates: [
+        'You and {name} keep a game of Marco Polo going way past the point it stops making sense.',
+        'You and {name} bat a ball back and forth across the water until you are both laughing too hard to keep score.',
+      ],
+    },
+    narration: { mode: 'template', templates: ['You splash around in the pool, not really keeping score.'] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'pool_games', clothing: 'undressed', phrase: 'in the pool mid-game, splashing, laughing' },
+    },
+  },
+  'self.yoga': {
+    id: 'self.yoga', label: 'Do Yoga', verbs: ['do yoga', 'practice yoga', 'stretch on the mat'],
+    source: { kind: 'object', objDef: 'yoga_mat' },
+    group: 'gym', chipPriority: 30,
+    requires: ['facilityFunctional:gym_equipment'],
+    timeCost: { base: ACTION_TUNING.yogaMinutes },
+    skill: { id: 'fitness', xp: 8 },
+    effects: [
+      `ADJUST_NEED player mood +${ACTION_TUNING.yogaMoodGain}`,
+      `ADJUST_NEED player energy +${ACTION_TUNING.yogaEnergyGain}`,
+    ],
+    shared: {
+      rate: 'parallel',
+      fact: 'You and {name} did yoga together.',
+      templates: [
+        'You and {name} work through a slow flow side by side, breathing more or less in time.',
+        '{name} unrolls a mat next to yours without asking. Neither of you talks until you are both done.',
+      ],
+    },
+    narration: { mode: 'template', templates: ['You work through a slow flow and come out of it looser than you went in.'] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'yoga', phrase: 'mid-pose on a yoga mat, calm and focused' },
+    },
+  },
+  'self.lift_weights': {
+    id: 'self.lift_weights', label: 'Lift Weights', verbs: ['lift weights', 'hit the weights', 'strength train'],
+    source: { kind: 'object', objDef: 'weight_set' },
+    group: 'gym', chipPriority: 30,
+    requires: ['facilityFunctional:gym_equipment'],
+    timeCost: { base: ACTION_TUNING.liftWeightsMinutes },
+    skill: { id: 'fitness', xp: 10 },
+    effects: [
+      `ADJUST_NEED player mood +${ACTION_TUNING.liftWeightsMoodGain}`,
+      `ADJUST_NEED player energy -${ACTION_TUNING.liftWeightsEnergyCost}`,
+      `ADJUST_NEED player hygiene -${ACTION_TUNING.liftWeightsHygieneCost}`,
+    ],
+    shared: {
+      rate: 'parallel',
+      fact: 'You and {name} lifted weights together.',
+      templates: [
+        'You and {name} trade off sets on the bench, mostly counting reps out loud for each other.',
+        '{name} spots you without being asked. You return the favor. It is the whole conversation.',
+      ],
+    },
+    narration: { mode: 'template', templates: ['You grind through a set until your arms give out. Worth it.'] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'weights', phrase: 'mid-lift with the weight set, straining, focused' },
+    },
+  },
+  // The sauna upgrade (D22, Q2). vulnerableState/transientClothing mirror
+  // self.swim/self.shower — a towel-only act, not a locked-room one; see the
+  // `sauna` OBJECT_DEFS entry and D58 for why this is source:'object'
+  // rather than a new private room.
+  'self.sauna': {
+    id: 'self.sauna', label: 'Use the Sauna', verbs: ['use the sauna', 'sit in the sauna', 'sweat it out'],
+    source: { kind: 'object', objDef: 'sauna' },
+    group: 'pool_room', chipPriority: 36,
+    requires: ['facilityFunctional:pool_sauna'],
+    vulnerableState: 'sauna',
+    transientClothing: 'undressed',
+    afterClothing: 'towel',
+    timeCost: { base: ACTION_TUNING.saunaMinutes },
+    effects: [
+      `ADJUST_NEED player mood +${ACTION_TUNING.saunaMoodGain}`,
+      `ADJUST_NEED player energy +${ACTION_TUNING.saunaEnergyGain}`,
+      `ADJUST_NEED player hygiene +${ACTION_TUNING.saunaHygieneGain}`,
+    ],
+    meters: [['devices', 2]],
+    shared: {
+      rate: 'confiding',
+      fact: 'You and {name} sat in the sauna together.',
+      templates: [
+        'You and {name} sit through the heat in the small cedar room, saying less than you would anywhere else in the apartment — and somehow meaning more of it.',
+        '{name} is already in there when you open the door, and waves you in rather than out. The heat makes silence easy.',
+      ],
+    },
+    narration: { mode: 'template', templates: ['You sit in the heat until your thoughts slow down. Worth every cent of the renovation.'] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'sauna', clothing: 'towel', phrase: 'sitting in the sauna wrapped in a towel, steam curling around them, completely relaxed' },
+    },
+  },
+  // "plant_balcony tend" (D22). Mirrors hobby_houseplant's tend exactly —
+  // mood/energy only, no health-state write, because `health` is decorative
+  // on every plant object in the game (nothing has ever set it to
+  // 'wilting'); giving plant_balcony a tend loop that reads a state nothing
+  // writes would be its own orphan field, not a fix for one that already
+  // exists on plant_lr/hobby_houseplant (out of this phase's scope).
+  'self.tend_balcony_plant': {
+    id: 'self.tend_balcony_plant', label: 'Tend the Plants', verbs: ['tend the plants', 'water the plants', 'care for the plants'],
+    source: { kind: 'object', objDef: 'plant_balcony' },
+    group: 'chill', chipPriority: 15,
+    requires: [],
+    timeCost: { base: ACTION_TUNING.tendBalconyPlantMinutes },
+    effects: [
+      `ADJUST_NEED player mood +${ACTION_TUNING.tendBalconyPlantMoodGain}`,
+    ],
+    narration: { mode: 'template', templates: ['You water the balcony plants and pull a few dead leaves. Small, satisfying work.'] },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: 'tend_balcony_plant', phrase: 'tending the potted plants on the balcony, watering can in hand' },
+    },
+  },
+  // --- Lockers (D22): "store swim gear / change — a wardrobe hook" ---
+  // Byte-identical shape to wardrobe.interact/wardrobe.change_outfit/
+  // wardrobe.open (see that block's comment) — a container:true object with
+  // its own Change Outfit + Open submenu, so a swimsuit stashed in a locker
+  // never needs a bedroom trip to put on.
+  'lockers.interact': {
+    id: 'lockers.interact', label: 'Lockers',
+    group: 'lockers', chipPriority: 45,
+    submenu: ['lockers.change_outfit', 'lockers.open'],
+  },
+  'lockers.change_outfit': {
+    id: 'lockers.change_outfit', label: 'Change Outfit', verbs: ['change clothes at the lockers', 'change into swim gear', 'get changed'],
+    source: { kind: 'object', objDef: 'lockers' },
+    group: 'lockers', chipPriority: 50,
+    requires: ['hasLockerClothes'],
+    timeCost: { base: ACTION_TUNING.changeOutfitMinutes },
+    writesOutfit: true,
+    prepare: prepareLockerChangeOutfit,
+    narration: { mode: 'dynamic', build: changeOutfitNarration },
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: {
+        kind: 'instance',
+        subject: changeOutfitWindowSubject,
+        clothing: (view) => {
+          const o = view?.prepared?.outfit;
+          return actionWindowSlug((o && Object.values(o).filter(Boolean).join(' ')) || 'dressed') || 'dressed';
+        },
+        phrase: changeOutfitWindowPhrase,
+      },
+    },
+  },
+  'lockers.open': {
+    id: 'lockers.open', label: 'Open the Lockers',
+    source: { kind: 'object', objDef: 'lockers' },
+    group: 'lockers', chipPriority: 40,
+    delegate: 'container.open',
+  },
   'self.laundry': {
     id: 'self.laundry', label: 'Do Laundry', verbs: ['do laundry', 'laundry', 'wash clothes'],
     source: { kind: 'object', objDef: 'washer' },
     group: 'laundry', chipPriority: 30,
-    requires: ['hamperNotEmpty', 'waterNotCutoff', 'facilityFunctional:laundry_machines'],
+    // Actions & Activities Overhaul Phase 11 (D20): washerReadyToWash is the
+    // real gate now — the washer must not already be mid-cycle or holding a
+    // finished load someone forgot to move to the dryer.
+    requires: ['hamperNotEmpty', 'washerReadyToWash', 'waterNotCutoff', 'facilityFunctional:laundry_machines'],
     timeCost: { base: 20 },
     meters: [['laundry', 1], ['devices', 0.5]],
     emitsSignal: { signal: 'machine_running', intensity: SIGNALS_EMIT.laundry },
@@ -872,6 +1368,43 @@ const ACTION_DEFS = {
       tier: 'C', trigger: 'player', dismissal: 'tap',
       image: { kind: 'archetype', variant: 'laundry', phrase: 'loading clothes into the washing machine' },
     },
+  },
+  // Actions & Activities Overhaul Phase 11 (D20): the rest of the chain.
+  // Wash (self.laundry above) -> Dry -> Fold -> Put Away. Each is
+  // object-sourced off the dryer (same "chip appears when the object is in
+  // the room" convention as toilet.use/toilet.clean), gated by its own
+  // requirement checker so the chip only lights up at the right chain step.
+  'dryer.dry': {
+    id: 'dryer.dry', label: 'Move Wash to the Dryer', verbs: ['dry the laundry', 'move laundry to the dryer', 'start the dryer'],
+    source: { kind: 'object', objDef: 'dryer' },
+    group: 'laundry', chipPriority: 29,
+    requires: ['dryerReadyForLoad', 'powerNotCutoff', 'facilityFunctional:laundry_machines'],
+    timeCost: { base: LAUNDRY_TUNING.dryMinutes },
+    meters: [['laundry', 1], ['devices', 0.5]],
+    emitsSignal: { signal: 'machine_running', intensity: SIGNALS_EMIT.laundry },
+    prepare: prepareDryerDry,
+    buildEffects: buildDryerDryEffects,
+    narration: { mode: 'dynamic', build: dryerDryNarration },
+  },
+  'dryer.fold': {
+    id: 'dryer.fold', label: 'Fold the Laundry', verbs: ['fold the laundry', 'fold clothes'],
+    source: { kind: 'object', objDef: 'dryer' },
+    group: 'laundry', chipPriority: 28,
+    requires: ['dryerLoadReadyToFold'],
+    timeCost: { base: LAUNDRY_TUNING.foldMinutes },
+    prepare: prepareDryerFold,
+    buildEffects: buildDryerFoldEffects,
+    narration: { mode: 'dynamic', build: dryerFoldNarration },
+  },
+  'dryer.putaway': {
+    id: 'dryer.putaway', label: 'Put Away the Laundry', verbs: ['put away the laundry', 'put clothes away'],
+    source: { kind: 'object', objDef: 'dryer' },
+    group: 'laundry', chipPriority: 27,
+    requires: ['foldedLaundryReady'],
+    timeCost: { base: LAUNDRY_TUNING.putawayMinutes },
+    prepare: prepareDryerPutaway,
+    buildEffects: buildDryerPutawayEffects,
+    narration: { mode: 'dynamic', build: dryerPutawayNarration },
   },
   'self.study': {
     id: 'self.study', label: 'Study', verbs: ['study', 'hit the books'],
@@ -1022,8 +1555,24 @@ const ACTION_DEFS = {
   ...createHobbyAction('hobby_bookshelf', 'Read', ['read', 'curl up with a book', 'read a book']),
   ...createHobbyAction('hobby_record_player', 'Listen to Records', ['listen to records', 'put on a record', 'spin some vinyl']),
   ...createHobbyAction('hobby_console', 'Play Console', ['play the console', 'play video games', 'game']),
-  ...createHobbyAction('hobby_sketchpad', 'Sketch', ['sketch', 'draw', 'doodle']),
+  // Actions & Activities Overhaul Phase 16 (D25): the 'art' entry in
+  // SKILL_IDS (config.js) had zero consumers anywhere in the codebase until
+  // now — sketching is the obvious practice verb for it (D32's "the real
+  // gap is XP, not architecture" pattern, same shape as Phase 1B's stealth
+  // fix, applied to a second orphaned skill id).
+  ...createHobbyAction('hobby_sketchpad', 'Sketch', ['sketch', 'draw', 'doodle'], { id: 'art', xp: 6 }),
   ...createHobbyAction('hobby_houseplant', 'Tend Plant', ['tend the plant', 'water the plant', 'care for the plant']),
+  // --- Self-directed research (Actions & Activities Overhaul Phase 16,
+  // D25) --- One leaf per researchable skill, all sourced from any
+  // bookshelf-shaped object (the seeded living-room `bookshelf`, the seeded
+  // `study_bookshelf`, or a bought `hobby_bookshelf`) — "spend time reading/
+  // studying a NAMED skill" is the chip's own label, not a runtime picker
+  // (see RESEARCHABLE_SKILLS/createResearchAction below for why). Deliberately
+  // excludes 'stealth' (D32 already settled stealth XP as practice-only —
+  // sneaking well is not something a book teaches) and 'social'/'writing'/
+  // 'focus' (SKILL_IDS reserves them; no natural object exists yet for
+  // either — see the Phase 16 Handoff note).
+  ...RESEARCHABLE_SKILLS.reduce((acc, s) => Object.assign(acc, createResearchAction(s.id, s.label, s.verbs)), {}),
   // --- BrineOS phone object actions (Phase 2) ---
   // Pickup / set-down / plug-in / unplug. These are the first-ever callers
   // of the long-dormant MOVE_OBJECT effect (effects.js) and run as trusted
@@ -1147,16 +1696,30 @@ const ACTION_ANCHOR_OBJS = {
   'self.dishwasher': ['dishwasher'],
   'self.lock_door': ['bedroom_door', 'bathroom_door'],
   'self.unlock_door': ['bedroom_door', 'bathroom_door'],
+  'self.get_mail': ['mailbox'],
+  'self.answer_door': ['front_door'],
+  'self.refuse_door': ['front_door'],
   'self.read_note': ['note'],
   'self.bin_note': ['note'],
   'self.workout': ['treadmill'],
   'self.swim': ['swimming_pool'],
   'self.play_games': ['pool_table', 'game_console', 'dartboard'],
   'self.laundry': ['washer'],
+  'dryer.dry': ['dryer'],
+  'dryer.fold': ['dryer'],
+  'dryer.putaway': ['dryer'],
   'self.study': ['desk', 'desktop_computer'],
   'self.listen_music': ['sofa', 'sofa_basic', 'armchair'],
   'self.balcony_sit': ['plant', 'plant_lr'],
   'self.take_walk': [],
+  'self.sunbathe': ['pool_loungers'],
+  'self.pool_games': ['swimming_pool'],
+  'self.yoga': ['yoga_mat'],
+  'self.lift_weights': ['weight_set'],
+  'self.sauna': ['sauna'],
+  'self.tend_balcony_plant': ['plant_balcony'],
+  'lockers.change_outfit': ['lockers'],
+  'lockers.open': ['lockers'],
 };
 
 // Name→predicate registry, mirroring SIM's CAST_REQUIREMENT_CHECKERS
@@ -1184,6 +1747,13 @@ const ACTION_REQUIREMENT_CHECKERS = {
   moneyAtLeast: (ctx, amt) => ctx.gameState.player.money >= Number(amt) || `Can't afford it (need $${amt}).`,
   phaseIn: (ctx, ...phases) => phases.includes(ctx.gameState.meta.clock.phase) || 'Not the right time of day.',
   alone: (ctx) => ctx.presentNpcIds.length === 0 || 'Not alone right now.',
+  // East Wing Phase 13 (D22): self.pool_games' gate — a shared-only activity
+  // (water volleyball, Marco Polo) needs actual company. Reuses
+  // sharedActivityParticipants (actions.js), the exact list `shared` itself
+  // draws its delta from, so the chip and the consequence can never
+  // disagree about who counts as "here" (residents only, excluding
+  // sleeping/showering).
+  residentsPresent: (ctx) => sharedActivityParticipants(ctx).length > 0 || 'Nobody around to play with.',
   roomIs: (ctx, ...roomIds) => roomIds.includes(ctx.gameState.player.location) || 'Wrong room for that.',
   skillAtLeast: (ctx, skillId, lvl) => skillLevelSafe(ctx.gameState.player, skillId) >= Number(lvl) || `Requires ${skillId} level ${lvl}.`,
   hasFlag: (ctx, who, key) => !!resolveFlagBagSafe(ctx, who)[key] || 'Conditions not met.',
@@ -1233,6 +1803,16 @@ const ACTION_REQUIREMENT_CHECKERS = {
     const hasClothes = (wardrobe.contents || []).some(s => (s?.qty || 0) > 0 && CLOTHING_DEFS[s.defId]);
     return hasClothes || 'The wardrobe is empty — nothing to change into yet.';
   },
+  // East Wing Phase 13 (D22): lockers.change_outfit's own gate — the locker
+  // "wardrobe hook" starts empty like a bought-clothing wardrobe once did;
+  // the player has to stash something there first via the generic
+  // container.put verb (lockers now affords container.open/take/put).
+  hasLockerClothes: (ctx) => {
+    const lockers = findObjectInRoom(ctx, 'lockers');
+    if (!lockers) return 'No lockers here.';
+    const hasClothes = (lockers.contents || []).some(s => (s?.qty || 0) > 0 && CLOTHING_DEFS[s.defId]);
+    return hasClothes || 'The lockers are empty — stash some clothes here first.';
+  },
   dishesDirty: (ctx) => {
     // Food-overhaul Phase 4 (D9): "dirty" means dish units in the wash
     // scope — the kitchen sink plus the kitchen/dining tables (eating
@@ -1255,6 +1835,49 @@ const ACTION_REQUIREMENT_CHECKERS = {
     if (!door) return 'No door to lock here.';
     return (door.state?.lock !== 'locked') || 'The door is already locked.';
   },
+  // Actions & Activities Overhaul Phase 8 (D16): the thermostat.raise/lower
+  // chips only light up when there's still room to move in that direction.
+  thermostatBelowMax: (ctx) => {
+    const targetC = ctx.gameState.world.thermostat?.targetC ?? THERMOSTAT_TUNING.defaultC;
+    return targetC < THERMOSTAT_TUNING.maxC || 'Already at the highest setting.';
+  },
+  thermostatAboveMin: (ctx) => {
+    const targetC = ctx.gameState.world.thermostat?.targetC ?? THERMOSTAT_TUNING.defaultC;
+    return targetC > THERMOSTAT_TUNING.minC || 'Already at the lowest setting.';
+  },
+  // Actions & Activities Overhaul Phase 9 (D17/D49): self.clean's chip only
+  // lights up when the ambient dirt.js layer actually has something in it —
+  // a spotless room has nothing for a room-level sweep to do (the object-level
+  // clean.object affordance, still unwired — see the Phase 9 Handoff note —
+  // is a separate, real gap for a future session).
+  roomHasDirt: (ctx) => {
+    return roomDirtOf(ctx.gameState, ctx.roomId) > DIRT_TUNING.visibleFloor || 'Nothing here needs cleaning.';
+  },
+  // Actions & Activities Overhaul Phase 10 (D18): reads the SAME pool
+  // self.cook draws from (bag + kitchen fridge/pantry/freezer), so the Brew
+  // chip and the actual consumption can't disagree about whether there's
+  // coffee on hand.
+  hasCoffeeBeans: (ctx) => {
+    return stackQty(kitchenIngredientPool(ctx.gameState, ctx), 'coffee_beans') > 0
+      || 'No coffee beans on hand — check the pantry.';
+  },
+  // Actions & Activities Overhaul Phase 10 (D18): the take-out-the-trash
+  // chip only lights up when the bin actually has something in it — fed by
+  // the pre-existing NPC eat-drive leaves (config.js) that were already
+  // stepping trash_kitchen's fill ladder with nothing to reset it.
+  trashNeedsTakingOut: (ctx) => {
+    const bin = findObjectInRoom(ctx, 'trash_kitchen');
+    if (!bin) return 'No trash can here.';
+    return (bin.state?.fill !== 'empty' || bin.state?.rotten_food === 'rotten')
+      || 'Nothing to take out — the trash is empty.';
+  },
+  // Actions & Activities Overhaul Phase 10 (D19): the Clean the Toilet chip
+  // only lights up once toilet.use (or anything else) has actually dirtied it.
+  toiletDirty: (ctx) => {
+    const toilet = findObjectInRoom(ctx, 'toilet');
+    if (!toilet) return 'No toilet here.';
+    return toilet.state?.clean === 'dirty' || 'The toilet is already clean.';
+  },
   // A note the player hasn't taken in yet — the whole point of the Read chip.
   unreadNoteHere: (ctx) => {
     const note = firstNoteInRoom(ctx, 'unread');
@@ -1271,11 +1894,75 @@ const ACTION_REQUIREMENT_CHECKERS = {
     if (!door) return 'No door to unlock here.';
     return (door.state?.lock === 'locked') || 'The door is already unlocked.';
   },
+  // Actions & Activities Overhaul Phase 12 (D21): self.get_mail only lights
+  // up when the mailbox actually holds something unclaimed — reads the same
+  // world.mailbox array the action itself claims from.
+  hasUnclaimedMail: (ctx) => {
+    return (ctx.gameState.world.mailbox || []).some(m => !m.claimed) || 'No new mail.';
+  },
+  // self.answer_door/self.refuse_door only light up while world.doorEvent
+  // is both created (the clock has reached its createdAbs — a solicitor
+  // scheduled for 11:00 isn't ringing at 08:00) and not yet expired (the
+  // tick-driven sweepDoorEvent, mail.js, clears a stale one before this
+  // could read it — this bound is a defensive belt-and-suspenders, not the
+  // primary control).
+  doorEventPending: (ctx) => {
+    const evt = ctx.gameState.world.doorEvent;
+    if (!evt) return 'No one is at the door.';
+    const nowAbs = clockToAbsolute(ctx.gameState.meta.clock);
+    if (nowAbs < evt.createdAbs || nowAbs >= evt.expiresAbs) return 'No one is at the door.';
+    return true;
+  },
   hamperNotEmpty: (ctx) => {
     const hamper = findObjectInRoom(ctx, 'laundry_hamper');
     if (!hamper) return 'No hamper here.';
     const fill = hamper.state?.fill;
     return (fill === 'partial' || fill === 'full') || 'The hamper is empty — nothing to wash.';
+  },
+  // Actions & Activities Overhaul Phase 11 (D20): the laundry chain's own
+  // step gates. Each reads the real physical load (ITEMS' laundryCycleProgress/
+  // laundryStateOf) rather than a flat flag, and opportunistically resolves a
+  // finished cycle first (same "read path can trigger the lazy resolver"
+  // convention as the dishwasher's cleanRoomObjects call) so the chip is
+  // never stuck showing 'running' after the clock has already passed it.
+  washerReadyToWash: (ctx) => {
+    const washer = findObjectInRoom(ctx, 'washer');
+    if (!washer) return 'No washer here.';
+    const now = gameDaysNow(ctx.gameState.meta.clock);
+    resolveLaundryCycle(washer, now);
+    if (laundryCycleProgress(washer, now) === 'running') return 'The washer is already running.';
+    if ((washer.contents || []).length > 0) return 'The washer is full of a finished load — move it to the dryer first.';
+    return true;
+  },
+  dryerReadyForLoad: (ctx) => {
+    const washer = findObjectInRoom(ctx, 'washer');
+    const dryer = findObjectInRoom(ctx, 'dryer');
+    if (!washer || !dryer) return 'No washer and dryer here.';
+    const now = gameDaysNow(ctx.gameState.meta.clock);
+    resolveLaundryCycle(washer, now);
+    resolveLaundryCycle(dryer, now);
+    if (laundryCycleProgress(washer, now) === 'running') return 'The wash cycle is still running.';
+    if (!(washer.contents || []).some(s => isClothingStack(s) && laundryStateOf(s) === 'washed')) {
+      return 'Nothing washed and waiting to move to the dryer.';
+    }
+    if (laundryCycleProgress(dryer, now) === 'running') return 'The dryer is already running.';
+    if ((dryer.contents || []).length > 0) return 'The dryer already has a finished load — fold it first.';
+    return true;
+  },
+  dryerLoadReadyToFold: (ctx) => {
+    const dryer = findObjectInRoom(ctx, 'dryer');
+    if (!dryer) return 'No dryer here.';
+    const now = gameDaysNow(ctx.gameState.meta.clock);
+    resolveLaundryCycle(dryer, now);
+    if (laundryCycleProgress(dryer, now) === 'running') return 'The dryer is still running.';
+    return (dryer.contents || []).some(s => isClothingStack(s) && laundryStateOf(s) === 'dried')
+      || 'Nothing dry and waiting to be folded.';
+  },
+  foldedLaundryReady: (ctx) => {
+    const dryer = findObjectInRoom(ctx, 'dryer');
+    if (!dryer) return 'No dryer here.';
+    return (dryer.contents || []).some(s => isClothingStack(s) && laundryStateOf(s) === 'folded')
+      || 'No folded laundry waiting to be put away.';
   },
   // Phase 3 bill cutoffs: a utility whose bill is unpaid past grace blocks
   // the actions/apps that depend on it. waterBlocks/gasBlocks check the
@@ -1537,6 +2224,21 @@ async function prepareChangeOutfit(ctx) {
   return { outfit, previousOutfit };
 }
 
+// East Wing Phase 13 (D22): lockers.change_outfit's prepare — identical to
+// prepareChangeOutfit above except it finds 'lockers' instead of 'wardrobe'.
+// openWardrobePanel itself is already generic (it takes the container's
+// objId as a parameter, not a hardcoded def), so nothing there needed to
+// change; changeOutfitNarration is reused as-is for the same reason.
+async function prepareLockerChangeOutfit(ctx) {
+  const lockers = findObjectInRoom(ctx, 'lockers');
+  if (!lockers) return { cancelled: true };
+  const player = ctx.gameState.player;
+  const previousOutfit = player?.outfit || {};
+  const outfit = await openWardrobePanel(ctx.gameState, lockers.id, previousOutfit, 'Lockers');
+  if (!outfit) return { cancelled: true };
+  return { outfit, previousOutfit };
+}
+
 // Names what actually changed, slot by slot — never a canned "you changed
 // clothes" line (D4's spirit: the wardrobe is a system, so the prose is
 // specific). Reads the prepared pick against the previous outfit, so the
@@ -1651,6 +2353,10 @@ function buildCookEffects(ctx, prepared) {
     }
   }
   for (const leave of recipe.leaves || []) lines.push(expandCookLeaveLine(leave, ctx));
+  // Actions & Activities Overhaul Phase 9 (D17/D49): cooking is one of D17's
+  // named dirt sources — a real bump to the ambient per-room layer, on top of
+  // (not instead of) the stove/sink object-level mess already added above.
+  lines.push(`ADD_ROOM_DIRT ${gs.player.location} ${DIRT_TUNING.cookingDirtPerCook}`);
   return lines;
 }
 
@@ -1807,31 +2513,38 @@ function buildWatchTvEffects(ctx, prepared) {
 // object id suffix; sourcing from the object is what scopes the hobby to
 // the room it was placed in. The social layer rides along: a liked
 // resident watching you play makes it better.
-function createHobbyAction(objDef, label, verbs) {
+// `skill` (Actions & Activities Overhaul Phase 16, D25) is optional and
+// omitted for hobbies that stay pure vibe (guitar/bookshelf-read/record
+// player/console/houseplant) — only hobby_sketchpad passes one today, to
+// wire the previously-orphaned 'art' SKILL_IDS entry to a real practice
+// verb. `def.skill` is the same declarative field every other skill-
+// granting ACTION_DEFS entry uses (ACTIONS' executeAction applies it
+// unconditionally); nothing here duplicates that logic.
+function createHobbyAction(objDef, label, verbs, skill) {
   const id = `hobby.${objDef.slice('hobby_'.length)}`;
   // The closure captures objDef so buildEffects/narration know which hobby
   // this is — executeAction only hands prepare/buildEffects the ctx and the
   // prepared result, not the def (see ACTIONS' two-step contract).
   const prepare = (ctx) => ({ key: objDef, affection: presentResidentAffection(ctx) });
-  return {
-    [id]: {
-      id, label, verbs,
-      source: { kind: 'object', objDef },
-      group: 'hobby', chipPriority: 25,
-      requires: [],
-      timeCost: { base: HOBBY_TUNING.useMinutes[objDef] ?? 20 },
-      prepare,
-      buildEffects: buildHobbyEffects,
-      narration: { mode: 'dynamic', build: hobbyNarration },
-      // Action outcome window Phase 6 (D3/D5): one representative frame per
-      // hobby OBJECT (archetype, reused) — the point is the mood/delta, not
-      // "which song" or "which page".
-      outcomeWindow: {
-        tier: 'C', trigger: 'player', dismissal: 'tap',
-        image: { kind: 'archetype', variant: objDef, phrase: (view) => HOBBY_WINDOW_PHRASE[objDef] || 'engrossed in a hobby' },
-      },
+  const def = {
+    id, label, verbs,
+    source: { kind: 'object', objDef },
+    group: 'hobby', chipPriority: 25,
+    requires: [],
+    timeCost: { base: HOBBY_TUNING.useMinutes[objDef] ?? 20 },
+    prepare,
+    buildEffects: buildHobbyEffects,
+    narration: { mode: 'dynamic', build: hobbyNarration },
+    // Action outcome window Phase 6 (D3/D5): one representative frame per
+    // hobby OBJECT (archetype, reused) — the point is the mood/delta, not
+    // "which song" or "which page".
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      image: { kind: 'archetype', variant: objDef, phrase: (view) => HOBBY_WINDOW_PHRASE[objDef] || 'engrossed in a hobby' },
     },
   };
+  if (skill) def.skill = skill;
+  return { [id]: def };
 }
 
 function buildHobbyEffects(ctx, prepared) {
@@ -1997,7 +2710,7 @@ function buildEatEffects(ctx, prepared) {
   // from the live gameState, not the pre-await ctx capture.
   const gs = (typeof currentGameState !== 'undefined' && currentGameState) || ctx.gameState;
   const table = Object.values(gs.objects?.[`room_${ctx.roomId}`] || {})
-    .find(o => o.defId === 'kitchen_table' || o.defId === 'dining_table');
+    .find(o => o.defId === 'kitchen_table' || o.defId === 'dining_table' || o.defId === 'balcony_table');
   if (table) {
     for (const [dishType, qty] of Object.entries(DISH_TUNING.eatFootprint)) {
       lines.push(`ADD_DISHES ${table.id} ${dishType} ${qty}`);
@@ -2946,6 +3659,53 @@ function dishwasherNarration(ctx, prepared) {
   return `You stack${done} the ${summary} into the dishwasher and start it. It hums to life.`;
 }
 
+// --- self.brew's runtime logic (Actions & Activities Overhaul Phase 10,
+// D18) — a single-ingredient, no-picker cousin of self.cook's ingredient
+// consumption. Reuses kitchenSources/ingredientDestroyLines/
+// findObjectByDefIdLive wholesale (same file, self.cook's own helpers)
+// rather than re-deriving a second copy of "where in the kitchen does this
+// ingredient/output live."
+function prepareBrew(ctx) {
+  const gs = ctx.gameState;
+  const have = stackQty(kitchenIngredientPool(gs, ctx), 'coffee_beans');
+  if (have < 1) return { cancelled: true, reason: 'no-beans' };
+  return { ok: true };
+}
+function buildBrewEffects(ctx, prepared) {
+  if (!prepared?.ok) return [];
+  const gs = (typeof currentGameState !== 'undefined' && currentGameState) || ctx.gameState;
+  const sources = kitchenSources(gs, ctx);
+  const lines = ingredientDestroyLines({ defId: 'coffee_beans', qty: 1 }, sources);
+  const fridge = findObjectByDefIdLive(gs, 'fridge');
+  const into = fridge ? fridge.id : 'player';
+  lines.push(`SPAWN_ITEM dish_fresh_coffee 1 ${into}`);
+  return lines;
+}
+function brewNarration(ctx, prepared) {
+  if (!prepared?.ok) return 'No coffee beans on hand to brew.';
+  return 'You brew a fresh pot of coffee.';
+}
+
+// --- trash.take_out's runtime logic (Actions & Activities Overhaul Phase
+// 10, D18) ---
+function prepareTrashOut(ctx) {
+  const bin = findObjectInRoom(ctx, 'trash_kitchen');
+  if (!bin) return { cancelled: true };
+  return { bin };
+}
+function buildTrashOutEffects(ctx, prepared) {
+  if (!prepared?.bin) return [];
+  return [
+    `SET_OBJECT_STATE ${prepared.bin.id} fill empty`,
+    `SET_OBJECT_STATE ${prepared.bin.id} rotten_food none`,
+    `ADJUST_NEED player mood +${ACTION_TUNING.trashOutMoodGain}`,
+  ];
+}
+function trashOutNarration(ctx, prepared) {
+  if (!prepared?.bin) return 'No trash can here.';
+  return 'You tie off the bag and take out the trash. The kitchen smells better already.';
+}
+
 // --- Notes runtime logic (perception plan Phase 4) ---
 // Rooms can hold several notes, unlike every other object def, so these can't
 // use findObjectInRoom's "first instance of this def" shortcut — they pick by
@@ -3016,21 +3776,201 @@ function unlockDoorNarration(ctx, prepared) {
   return 'You unlock the door. Click.';
 }
 
-// --- self.laundry runtime logic ---
-// Moves clothes from hamper → washer, starts the wash cycle. The washer
-// becomes 'running', hamper becomes 'empty'. A full cycle is abstracted
-// to a single action for simplicity.
+// --- self.get_mail / self.answer_door / self.refuse_door runtime logic
+// (Actions & Activities Overhaul Phase 12, D21) ---
+function prepareGetMail(ctx) {
+  return { entries: (ctx.gameState.world.mailbox || []).filter(m => !m.claimed) };
+}
+function buildGetMailEffects(ctx, prepared) {
+  if (!prepared?.entries?.length) return [];
+  return ['CLAIM_MAIL player'];
+}
+const MAIL_KIND_LABELS = { bill: 'a bill', flyer: 'a flyer', letter: 'a letter' };
+function getMailNarration(ctx, prepared) {
+  const entries = prepared?.entries || [];
+  if (entries.length === 0) return 'Nothing in the mailbox.';
+  const parts = entries.map(m => `${MAIL_KIND_LABELS[m.kind] || 'something'}${m.from ? ` from ${m.from}` : ''}`);
+  return `You check the mailbox: ${joinList(parts)}.`;
+}
+
+// Shared prepare for both door verbs — same "one prepare, two verbs" shape
+// as prepareDoor above. Reads world.doorEvent and, for a delivery, the
+// referenced world.deliveries record + the doormat's own object id (needed
+// by buildRefuseDoorEffects' SPAWN_ITEM target) so admit and refuse can't
+// disagree about what's actually at the door.
+function prepareDoorEvent(ctx) {
+  const evt = ctx.gameState.world.doorEvent;
+  if (!evt) return { cancelled: true };
+  const delivery = evt.kind === 'delivery' ? (ctx.gameState.world.deliveries || []).find(d => d.id === evt.refId) : null;
+  const doormat = findObjectInRoom(ctx, 'doormat');
+  return { evt, delivery, doormatId: doormat?.id || null };
+}
+function buildAnswerDoorEffects(ctx, prepared) {
+  if (!prepared?.evt) return [];
+  const lines = [`RESOLVE_DOOR_EVENT admit`];
+  if (prepared.evt.kind === 'delivery' && prepared.delivery) {
+    lines.push(`SPAWN_ITEM ${prepared.delivery.defId} ${prepared.delivery.qty || 1} player`);
+  } else if (prepared.evt.kind === 'solicitor') {
+    lines.push(`MOOD_DELTA player ${MAIL_TUNING.solicitorAdmitMoodDelta}`);
+  }
+  return lines;
+}
+function buildRefuseDoorEffects(ctx, prepared) {
+  if (!prepared?.evt) return [];
+  const lines = [`RESOLVE_DOOR_EVENT refuse`];
+  if (prepared.evt.kind === 'delivery' && prepared.delivery && prepared.doormatId) {
+    lines.push(`SPAWN_ITEM ${prepared.delivery.defId} ${prepared.delivery.qty || 1} ${prepared.doormatId}`);
+  }
+  return lines;
+}
+function answerDoorNarration(ctx, prepared) {
+  const evt = prepared?.evt;
+  if (!evt) return 'No one is at the door.';
+  if (evt.kind === 'delivery') {
+    const label = ITEM_DEFS[prepared.delivery?.defId]?.label || 'the package';
+    return prepared.delivery
+      ? `You open the door. ${evt.label} hands over ${label} — signed, sealed, delivered.`
+      : 'You open the door, but whatever it was is already gone.';
+  }
+  if (evt.kind === 'solicitor') {
+    return `${evt.label} is at the door. ${SOLICITOR_ADMIT_TEMPLATES[Math.floor(orbitalRandom() * SOLICITOR_ADMIT_TEMPLATES.length)]}`;
+  }
+  return 'You open the door.';
+}
+function refuseDoorNarration(ctx, prepared) {
+  const evt = prepared?.evt;
+  if (!evt) return 'No one is at the door.';
+  if (evt.kind === 'delivery') {
+    return "You don't answer. From outside: \"No worries, I'll leave it.\" Footsteps recede — it's on the doormat now.";
+  }
+  return "You don't answer. After a moment, whoever it was gives up and leaves.";
+}
+
+// --- toilet.use / toilet.clean runtime logic (Actions & Activities
+// Overhaul Phase 10, D19) — same shape as prepareDoor/buildLockDoorEffects
+// just above: find the one object instance, write its state by id. ---
+function prepareToiletUse(ctx) {
+  const toilet = findObjectInRoom(ctx, 'toilet');
+  if (!toilet) return { cancelled: true };
+  return { toilet };
+}
+function buildToiletUseEffects(ctx, prepared) {
+  if (!prepared?.toilet) return [];
+  return [
+    `SET_OBJECT_STATE ${prepared.toilet.id} clean dirty`,
+    `ADJUST_NEED player hygiene +${ACTION_TUNING.toiletHygieneGain}`,
+  ];
+}
+function toiletUseNarration(ctx, prepared) {
+  if (!prepared?.toilet) return 'No toilet here.';
+  return 'You use the toilet.';
+}
+function prepareToiletClean(ctx) {
+  const toilet = findObjectInRoom(ctx, 'toilet');
+  if (!toilet) return { cancelled: true };
+  return { toilet };
+}
+function buildToiletCleanEffects(ctx, prepared) {
+  if (!prepared?.toilet) return [];
+  return [
+    `SET_OBJECT_STATE ${prepared.toilet.id} clean clean`,
+    `ADJUST_NEED player mood +${ACTION_TUNING.toiletCleanMoodGain}`,
+  ];
+}
+function toiletCleanNarration(ctx, prepared) {
+  if (!prepared?.toilet) return 'No toilet here.';
+  return 'You scrub the toilet clean.';
+}
+
+// Actions & Activities Overhaul Phase 8 (D16): deliberately does not state
+// the exact new °C — narration.build's timing relative to the effect apply
+// isn't a contract this file documents anywhere else, so stating a number
+// that might read pre- or post-apply depending on that order is a real risk
+// for a one-line cosmetic gain. "A notch" is honest either way.
+function thermostatRaiseNarration() {
+  return 'You nudge the thermostat up a notch.';
+}
+function thermostatLowerNarration() {
+  return 'You nudge the thermostat down a notch.';
+}
+
+// --- self.clean's runtime logic (Actions & Activities Overhaul Phase 9,
+// D17/D49) — the ambient dirt.js layer's cleaning verb. prepare() reads how
+// dirty the room actually is and whether the player is carrying
+// all_purpose_cleaner — a pre-existing ITEM_DEFS entry (defs.world.js,
+// "Cleaning supplies") that was purchasable but had NO reader anywhere in
+// the codebase before this; using it here (consumed, not just checked, via
+// DESTROY_ITEM in buildEffects) closes that real invariant-6 gap rather than
+// inventing a new item, and is a better fit for D17's "purchasable supplies"
+// than a fresh one would have been. buildEffects/narration both read
+// prepare()'s pick, the two-step contract every dynamic action here follows.
+function prepareClean(ctx) {
+  const gs = ctx.gameState;
+  const dirt = roomDirtOf(gs, ctx.roomId);
+  const hasCleaner = (gs.player.inventory || []).some(s => s.defId === 'all_purpose_cleaner' && (s.qty || 0) > 0);
+  const step = Math.min(dirt, hasCleaner ? DIRT_TUNING.cleanStepVacuum : DIRT_TUNING.cleanStepBase);
+  return { dirt, usedCleaner: hasCleaner, step };
+}
+function buildCleanEffects(ctx, prepared) {
+  if (!prepared?.step) return [];
+  const lines = [
+    `ADD_ROOM_DIRT ${ctx.roomId} -${prepared.step}`,
+    `ADJUST_NEED player mood +${ACTION_TUNING.cleanMoodGain}`,
+  ];
+  if (prepared.usedCleaner) lines.push('DESTROY_ITEM all_purpose_cleaner 1 player');
+  return lines;
+}
+function cleanNarration(ctx, prepared) {
+  if (!prepared?.step) return "There's nothing here that needs cleaning.";
+  const roomName = ROOMS[ctx.roomId]?.name || 'the room';
+  const tool = prepared.usedCleaner ? 'scrub down' : 'sweep and tidy';
+  if (prepared.step >= prepared.dirt) return `You ${tool} ${roomName} until it's spotless.`;
+  return `You ${tool} ${roomName}. It's better, but there's more to do.`;
+}
+
+// self.deep_clean's runtime logic (Actions & Activities Overhaul Phase 16,
+// D25) — mirrors prepareClean/buildCleanEffects/cleanNarration's shape
+// exactly, but the step IS the room's whole dirt reading rather than a
+// capped partial step: the skillAtLeast:cleaning:2 gate is what earns a
+// player the one-pass clear, not an owned item (self.clean's cleaner
+// branch already covers the item-based route).
+function prepareDeepClean(ctx) {
+  const dirt = roomDirtOf(ctx.gameState, ctx.roomId);
+  return { dirt };
+}
+function buildDeepCleanEffects(ctx, prepared) {
+  if (!prepared?.dirt) return [];
+  return [
+    `ADD_ROOM_DIRT ${ctx.roomId} -${prepared.dirt}`,
+    `ADJUST_NEED player mood +${ACTION_TUNING.deepCleanMoodGain}`,
+  ];
+}
+function deepCleanNarration(ctx, prepared) {
+  if (!prepared?.dirt) return "There's nothing here that needs cleaning.";
+  const roomName = ROOMS[ctx.roomId]?.name || 'the room';
+  return `You give ${roomName} a real once-over — every surface, every corner, done properly. It's spotless.`;
+}
+
+// --- Laundry chain runtime logic (Actions & Activities Overhaul Phase 11,
+// D20). self.laundry (Wash) really moves the hamper's dirty garments into
+// the washer and starts a real, lazily-resolved cycle (ITEMS'
+// laundryCycleProgress/resolveLaundryCycle — same shape as the dishwasher).
+// dirtyCount is captured at prepare time (before the move) purely for
+// narration — buildEffects/narration both read prepare()'s one pick, same
+// two-step contract every dynamic action here follows. ---
 function prepareLaundry(ctx) {
   const hamper = findObjectInRoom(ctx, 'laundry_hamper');
   const washer = findObjectInRoom(ctx, 'washer');
-  return { hamper, washer };
+  const dirtyCount = (hamper?.contents || []).filter(s => isClothingStack(s) && laundryStateOf(s) === 'dirty')
+    .reduce((n, s) => n + (s.qty || 0), 0);
+  return { hamper, washer, dirtyCount };
 }
 
 function buildLaundryEffects(ctx, prepared) {
   if (!prepared?.hamper || !prepared?.washer) return [];
   return [
-    `SET_OBJECT_STATE ${prepared.hamper.id} fill empty`,
-    `SET_OBJECT_STATE ${prepared.washer.id} cycle running`,
+    `MOVE_GARMENTS ${prepared.hamper.id} ${prepared.washer.id} dirty`,
+    `START_LAUNDRY_CYCLE ${prepared.washer.id} ${LAUNDRY_TUNING.washCycleMinutes}`,
     `SET_OBJECT_STATE ${prepared.washer.id} power on`,
     `ADJUST_NEED player mood +${ACTION_TUNING.laundryMoodGain}`,
   ];
@@ -3038,7 +3978,69 @@ function buildLaundryEffects(ctx, prepared) {
 
 function laundryNarration(ctx, prepared) {
   if (!prepared?.hamper || !prepared?.washer) return 'No washer or hamper here.';
-  return 'You load the washer and start a cycle. The machine hums to life.';
+  const n = prepared.dirtyCount || 0;
+  return n > 1
+    ? `You load ${n} loads' worth of dirty clothes into the washer and start a cycle. The machine hums to life.`
+    : 'You load the washer and start a cycle. The machine hums to life.';
+}
+
+// Dry: the washer's finished ('washed') load moves into the dryer, which
+// starts its own cycle. dryerReadyForLoad already guaranteed the washer
+// isn't still running and the dryer is empty.
+function prepareDryerDry(ctx) {
+  const washer = findObjectInRoom(ctx, 'washer');
+  const dryer = findObjectInRoom(ctx, 'dryer');
+  return { washer, dryer };
+}
+function buildDryerDryEffects(ctx, prepared) {
+  if (!prepared?.washer || !prepared?.dryer) return [];
+  return [
+    `MOVE_GARMENTS ${prepared.washer.id} ${prepared.dryer.id} washed`,
+    `START_LAUNDRY_CYCLE ${prepared.dryer.id} ${LAUNDRY_TUNING.dryCycleMinutes}`,
+    `SET_OBJECT_STATE ${prepared.dryer.id} power on`,
+  ];
+}
+function dryerDryNarration(ctx, prepared) {
+  if (!prepared?.washer || !prepared?.dryer) return 'No washer and dryer here.';
+  return 'You move the wet wash into the dryer and start it tumbling.';
+}
+
+// Fold: flips the dryer's finished ('dried') load to 'folded' in place —
+// no container move, the stack just sits in the dryer until Put Away.
+function prepareDryerFold(ctx) {
+  return { dryer: findObjectInRoom(ctx, 'dryer') };
+}
+function buildDryerFoldEffects(ctx, prepared) {
+  if (!prepared?.dryer) return [];
+  return [
+    `FOLD_GARMENTS ${prepared.dryer.id}`,
+    `ADJUST_NEED player mood +${LAUNDRY_TUNING.foldMoodGain}`,
+  ];
+}
+function dryerFoldNarration(ctx, prepared) {
+  if (!prepared?.dryer) return 'No dryer here.';
+  return 'You fold the warm, dry laundry into a neat stack.';
+}
+
+// Put Away: every 'folded' garment routes to ITS OWNER's own bedroom
+// wardrobe (stack.ownerId, stamped when the garment was dirtied — see
+// ITEMS' dirtyWornOutfitForResident) and becomes wearable again. A garment
+// whose owner's wardrobe is full or missing is left in the dryer rather
+// than lost (applyPutawayGarments) — nothing here needs to know that; the
+// narration is the same either way, a future Put Away just finishes the job.
+function prepareDryerPutaway(ctx) {
+  return { dryer: findObjectInRoom(ctx, 'dryer') };
+}
+function buildDryerPutawayEffects(ctx, prepared) {
+  if (!prepared?.dryer) return [];
+  return [
+    `PUTAWAY_GARMENTS ${prepared.dryer.id}`,
+    `ADJUST_NEED player mood +${LAUNDRY_TUNING.putawayMoodGain}`,
+  ];
+}
+function dryerPutawayNarration(ctx, prepared) {
+  if (!prepared?.dryer) return 'No dryer here.';
+  return 'You carry the folded laundry around the house and put it away.';
 }
 
 // --- BrineOS phone action runtime (Phase 2) ---

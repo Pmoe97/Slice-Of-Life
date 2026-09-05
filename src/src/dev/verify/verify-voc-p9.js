@@ -97,29 +97,34 @@ const sleep = api(`(function () {
     { id: 't1', bible: { scheduleTemplate: 'standard', occupation: { sleepRhythm: lean } } },
     { minutes: mins, day: 5 }, null, null).block;
   const sched = SCHEDULES.standard.weekday;
-  const [ss, se] = sched.sleep[0];           // sleep span = ticks [ss, se)
+  // continuous-cadence-closure-plan Phase 2 (D3): SCHEDULES ranges are now
+  // minute-of-day, so [ss, se) is already in minutes — no more *30 tick
+  // conversion. SLEEP_RHYTHM itself stays tick-scale (config.js), so its
+  // offsets are scaled by CLOCK.tickMinutes here, mirroring the one real
+  // call site (resolveScheduleActivity, sim.js).
+  const [ss, se] = sched.sleep[0];           // sleep span = minutes [ss, se)
   const base = { id: 't1', bible: { scheduleTemplate: 'standard' } };
-  const tick = (t) => t * 30;              // tick = floor(minutes/30)
+  const step = CLOCK.tickMinutes;
   // All rhythms are in their own SPAN: early wakes into the block that follows
   // sleep; late keeps sleeping past the template end; regular is byte-identical.
   const regularWin = [];
-  for (let t = ss; t < se + 4; t++) regularWin.push(b(undefined, tick(t)));
-  const early = b('early', tick(se - 1));   // an early riser wakes a tick before se
-  const late  = b('late',  tick(se + 1));  // a late riser sleeps a tick past se
+  for (let t = ss; t < se + 4 * step; t += step) regularWin.push(b(undefined, t));
+  const early = b('early', se - step);   // an early riser wakes a tick before se
+  const late  = b('late',  se + step);  // a late riser sleeps a tick past se
   // erratic: per-day jitter of the wake boundary, seeded by (id | day)
-  const jitter = (day, t) => {
+  const jitter = (day, m) => {
     const seed = String('t1') + '|' + day;
     const j = (hashStr(seed) % (SLEEP_RHYTHM.erraticTicks * 2 + 1)) - SLEEP_RHYTHM.erraticTicks;
-    const eff = Math.max(ss, se + j);
+    const eff = Math.max(ss, m + j * step);
     return resolveScheduleActivity({ id:'t1', bible:{ scheduleTemplate:'standard', occupation:{ sleepRhythm:'erratic' } } },
-      { minutes: tick(eff - 1), day }, null, null).block === 'sleep'
+      { minutes: eff - step, day }, null, null).block === 'sleep'
       && resolveScheduleActivity({ id:'t1', bible:{ scheduleTemplate:'standard', occupation:{ sleepRhythm:'erratic' } } },
-      { minutes: tick(eff), day }, null, null).block;
+      { minutes: eff, day }, null, null).block;
   };
   // regular must reproduce the template exactly: at every tick around the boundary it
   // equals the raw template span (the phase's "byte-for-byte" guarantee).
   const raw = [];
-  for (let t = ss; t < se + 4; t++) {
+  for (let t = ss; t < se + 4 * step; t += step) {
     let blk = 'leisure';
     for (const [name, ranges] of Object.entries(sched)) for (const [a, e] of ranges) if (t >= a && t < e) blk = name;
     raw.push(blk);

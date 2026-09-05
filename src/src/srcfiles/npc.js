@@ -458,6 +458,19 @@ function getUnresolvedGrievances(npc) {
   return (npc.relPlayer?.grievances || []).filter(g => !g.resolved);
 }
 
+// actions-and-activities-overhaul-plan.md Phase 7 (D12) — marks a grievance
+// as apologized for WITHOUT resolving it (too late, or a repeat attempt on a
+// still-unresolved wrong): ask_apologize's own "sincere means the FIRST,
+// timely try" rule (asks.js) reads this back next time, so a second attempt
+// on the same grievance never reads as sincere either. Index-based, like
+// resolveGrievance's numeric branch — the caller already found the exact
+// record via getUnresolvedGrievances, so there's nothing to fuzzy-match.
+function noteGrievanceApologyAttempt(npc, index, day) {
+  const grievances = [...(npc.relPlayer?.grievances || [])];
+  if (grievances[index]) grievances[index] = { ...grievances[index], apologizedDay: day };
+  return { ...npc, relPlayer: { ...npc.relPlayer, grievances } };
+}
+
 // NPC Overhaul — Add a recent exchange to the conversation buffer.
 // Correctness plan Phase 1 (D5/D6): the cap moved to MEMORY_BUDGET.maxRecent,
 // and every entry now records which `channel` it belongs to — 'scene' for an
@@ -1397,10 +1410,14 @@ function resolveShamingReaction(gameState, npc, ctx = {}) {
 // what's already been found so a repeat search surfaces something new.
 const PHONE_FIND_KINDS = ['want', 'wound', 'blindSpot', 'boundary', 'relationship', 'photo'];
 
-// PURE — no rng, no state reads beyond the npc/gameState handed in, so the
-// same (npc, day) always offers the same next finding regardless of when
-// it's called; only npc.flags._phoneFindsSeen (mutated by the caller once
-// the find is actually taken) advances the cycle.
+// PURE — no rng object threaded through, no state reads beyond the
+// npc/gameState handed in, so the same (npc, day) always offers the same
+// next finding regardless of when it's called; only npc.flags._phoneFindsSeen
+// (mutated by the caller once the find is actually taken) advances the
+// cycle. P1B (D35): the 'photo' kind's explicit/SFW split below is a hash of
+// (npc, day, save seed) rather than a seededRng draw — same determinism,
+// no generator object to thread — so this stays a pure function of its
+// arguments, never a hidden roll that reorders other mechanics' rng calls.
 function composePhoneFind(npc, gameState) {
   const seen = new Set((npc.flags && npc.flags._phoneFindsSeen) || []);
   const b = npc.bible || {};
@@ -1423,7 +1440,18 @@ function composePhoneFind(npc, gameState) {
       return { kind, sensitive: false, text: relationshipFindLine(npc, name) };
     }
     if (kind === 'photo') {
-      return { kind, sensitive: true, isPhoto: true, caption: `A photo saved on ${name}'s phone.` };
+      // D35: SFW candid selfie stays the default; explicit is the
+      // sometimes-branch, gated by the mature flag AND a deterministic roll
+      // (never by mature alone — a mature-on save still mostly finds the
+      // safe photo). The actual rendering gate (image.js's
+      // buildPhoneSnoopPhotoPrompt) re-checks intimateAllowed itself, so
+      // this flag is advisory, not the last word.
+      const roll = mulberry32(hashStr(`phone_photo_explicit|${npc.id}|${gameState?.meta?.clock?.day ?? 0}`) + (gameState?.meta?.seed || 0))();
+      const explicit = intimateAllowed(gameState) && roll < PHONE_SNOOP_TUNING.explicitPhotoChance;
+      return {
+        kind, sensitive: true, isPhoto: true, explicit,
+        caption: explicit ? `A private photo saved on ${name}'s phone.` : `A photo saved on ${name}'s phone.`,
+      };
     }
   }
   return null; // every kind already found (or the fields behind them are all empty)
@@ -1493,6 +1521,25 @@ function demoteToAmbient(sceneState, npcId) {
   const engagement = { ...(sceneState.engagement || {}) };
   delete engagement[npcId];
   return { ...sceneState, active, ambient, engagement };
+}
+
+// continuous-cadence-closure-plan.md Phase 1 (D2): demoteToAmbient's sibling
+// for when the NPC isn't just stepping back from active conversation — they
+// have actually left the room (or were never really present). The ambient
+// tier has no location filter anywhere it's read (layoutSceneCutouts,
+// image.js), so pushing a departed NPC into it via demoteToAmbient left a
+// ghost cutout with no way to ever clear. Drops from BOTH tiers and from
+// `present`, unlike demoteToAmbient which only ever re-tiers within them.
+function removeFromScene(sceneState, npcId) {
+  const engagement = { ...(sceneState.engagement || {}) };
+  delete engagement[npcId];
+  return {
+    ...sceneState,
+    present: (sceneState.present || []).filter(id => id !== npcId),
+    active: sceneState.active.filter(id => id !== npcId),
+    ambient: sceneState.ambient.filter(id => id !== npcId),
+    engagement,
+  };
 }
 
 // Advance engagement tracking after a scene turn: everyone active drifts
@@ -2468,10 +2515,18 @@ function npcOutfitForContext(npc, gameState, block, activity, npcId) {
   // quiet. A lean that shifted TYPES would thrash that drive, so it deliberately
   // does not.
   const lean = npc?.bible?.occupation?.styleLean;
+  // Actions & Activities Overhaul Phase 8 (D16): a cold or hot ambient
+  // temperature tilts the within-type pick toward/away from high-'thermal'
+  // items, through composeOutfit's own documented bias.stats extension point
+  // — zero (the comfort-band default) is byte-identical to pre-Phase-8
+  // behavior, since bias.stats.thermal simply isn't set when nothing is
+  // uncomfortable. Never changes the TYPE, same non-thrashing guarantee the
+  // styleLean comment above already relies on.
+  const thermalBias = temperatureClothingBiasWeight(gameState, npc, npcId);
   return composeOutfit(
     outfitTypeForContext(npc, block, activity, gameState?.meta?.clock, npcId),
     npcWardrobeItems(gameState, npc),
-    { styleLean: Array.isArray(lean) ? lean : [] }
+    { styleLean: Array.isArray(lean) ? lean : [], stats: thermalBias ? { thermal: thermalBias } : {} }
   );
 }
 

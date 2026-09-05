@@ -152,7 +152,10 @@ function composePeekViewLine(gs, session, focus) {
   const actDef = PEEK_VIEW_ACT[desc.activity] || PEEK_VIEW_ACT._default;
   const act = gateOpen && actDef.explicit ? actDef.explicit : actDef.safe;
   const stateClause = PEEK_VIEW_CLOTHING[desc.clothing] || '';
-  const name = focus.npc.bible?.name || 'they';
+  // Audit 2026-09-05: the frames read "{name} is ...", so a 'they' fallback
+  // composed "they is asleep in bed". 'someone' agrees with the frames'
+  // singular verb and reads naturally in all of them.
+  const name = focus.npc.bible?.name || 'someone';
   const seed = hashStr(`view|${session.roomId}|${desc.actKey}|${gs.meta.clock.day}`) + (gs.meta.seed || 0);
   const rng = mulberry32(seed);
   const frame = PEEK_PROSE.viewFrames[Math.floor(rng() * PEEK_PROSE.viewFrames.length)];

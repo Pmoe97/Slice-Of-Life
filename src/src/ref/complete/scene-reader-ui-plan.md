@@ -6,7 +6,7 @@ Phase 5 built 2026-08-11.
 Last updated 2026-08-11.
 
 Companions:
-- `src/src/ref/wip/SENSORY-AND-SOCIAL-ROADMAP.md` (the umbrella — this is Plan 2 of six, and the first one the player will actually *feel*).
+- `src/src/ref/complete/SENSORY-AND-SOCIAL-ROADMAP.md` (the umbrella — this is Plan 2 of six, and the first one the player will actually *feel*).
 - `src/src/ref/complete/perception-and-signals-plan.md` (Plan 1 — **complete**; this plan is its first real consumer. `perceiveSignals`, `signalPhrase` and the `salience` field on every perceived record were all built for this).
 - `src/src/ref/complete/npc-correctness-fixes-plan.md` (Plan 0 — **complete**; its Phase 1 turned `memory.recent` into a 40-entry channel-tagged buffer, which is what makes Phase 5's conversation history possible at all).
 

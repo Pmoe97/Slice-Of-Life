@@ -3,9 +3,17 @@
 Not part of the shipped game. `index.html` never loads any of this.
 
 ```bash
-node src/src/dev/verify/run-all.js        # everything, with a total
+node src/src/dev/verify/run-all.js        # everything, with a total (~90s)
+node src/src/dev/verify/run-all.js w6 w9  # only names containing "w6" or "w9" (seconds)
 node src/src/dev/verify/verify-s3.js      # one harness on its own
 ```
+
+`run-all.js` runs matched harnesses in parallel (bounded by CPU count) —
+each is its own subprocess with no shared state, so this is safe. It used
+to run all 111 harnesses strictly sequentially (~30+ min, since every
+harness reloads the whole engine from scratch); fixed 2026-08-31. During
+iteration, filter to what you're touching; run the full unfiltered sweep
+once before ending a session, not on every save.
 
 ## Why this works at all
 
@@ -29,7 +37,7 @@ It stops before `render.js`/`ui.js`, which need a DOM. Those are verified in
 | File | Covers |
 |---|---|
 | `loadgame.js` | The loader. Everything else requires it. **Its `ORDER` array must list every file `index.html` loads** — see rule 6. |
-| `run-all.js` | Runs every `verify-*.js`, totals, exits non-zero on failure. |
+| `run-all.js` | Runs every `verify-*.js` (or a filtered subset by name substring), in parallel, totals, exits non-zero on failure. |
 | `verify-p1..p5.js` | Plan 0 — NPC correctness fixes |
 | `verify-s1..s5.js` | Plan 1 — perception & signals |
 | `verify-r1.js`, `verify-r34.js`, `verify-r5.js` | Plan 2 — the scene reader (Phases 1, 3+4, 5) |

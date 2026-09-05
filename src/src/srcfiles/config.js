@@ -787,11 +787,62 @@ const UTILITY_HVAC_SEASONAL = [
   8.5,  // winter — heating peak
 ];
 
-// Thermostat: the household's current setting (1.0 = baseline). Higher
-// means more heating in winter, more cooling in summer. The player can't
-// change this yet (a household-decision UI is an open question in the
-// plan); for now it's a fixed baseline that the meter reads.
-const UTILITY_THERMOSTAT = 1.0;
+// Actions & Activities Overhaul Phase 8 (D16): the thermostat is now real —
+// world.thermostat.targetC is player-set (thermostat.raise/lower,
+// defs.actions.js) and read by temperature.js's thermostatHvacMultiplier,
+// which REPLACES the old flat UTILITY_THERMOSTAT=1.0 multiplier below
+// (accrueHvacForDay, computer.js). Billing scales with the player's chosen
+// DELTA from THERMOSTAT_TUNING.neutralC, not with the setting itself — 21°C
+// costs baseline whichever season it is; 28°C in any season costs more.
+const THERMOSTAT_TUNING = {
+  defaultC: 21, minC: 15, maxC: 28, stepC: 1,
+  neutralC: 21,           // billing baseline — no extra HVAC cost at this setting
+  costPerDegreeC: 0.12,   // HVAC rate multiplier per °C away from neutralC
+  // How far the thermostat setting actually pulls the apartment's ambient
+  // temperature away from the season's unconditioned outdoor baseline below
+  // (1.0 would mean the HVAC perfectly hits the target every time; real
+  // systems don't, and the shortfall is what makes an old apartment's
+  // heating genuinely lag a hard winter rather than erase it outright).
+  hvacEfficiency: 0.85,
+  // Unconditioned baseline C, by CALENDAR.seasons index (spring/summer/
+  // autumn/winter) — what the apartment would sit at with the HVAC off.
+  seasonOutdoorC: [18, 27, 15, 6],
+  // An NPC's comfort band before jitter (D16: "npc.comfort = { minC, maxC }
+  // // derived from temperament" — checked against the real bible schema,
+  // Phase 3's D39 precedent: warmth/conscientiousness/volatility/
+  // assertiveness have no real physiological link to cold/heat tolerance,
+  // so the band itself is a fixed physical range, not a fake trait mapping;
+  // personality instead scales the REACTION below, exactly like D39's own
+  // ruleCareWeight/ruleReactionSeverity split care from severity).
+  baseMinC: 19, baseMaxC: 25,
+  comfortJitterC: 2,        // deterministic per-NPC spread (temperature.js hashes npcId)
+  clothingBiasWeight: 3,    // composeOutfit bias weight on the existing 'thermal' stat
+  // Continuous-cadence-closure Phase 5 (D13 — found alongside D6's named
+  // complainChancePerTick, same guard block, same mechanic): the deterministic
+  // per-tick discomfort malus becomes a per-minute rate, scaled by minutes
+  // resolved (sim.js resolveTick Pass 2) instead of always assuming 30.
+  annoyanceMoodDeltaPerDegreePerMinute: 0.01 / 30,
+  annoyanceMoodDeltaCapPerMinute: 0.08 / 30,
+  complainThresholdC: 3,     // must be at least this far outside the band to complain
+  complainChancePerMinute: 1 - Math.pow(1 - 0.08, 1 / 30), // was complainChancePerTick: 0.08
+  // selfAdjustChancePerTick (D13): stays PER-TICK and unrenamed, same reason
+  // D10 left SLEEP_RHYTHM tick-scale — its one reader (thermostatSelfAdjustChance,
+  // temperature.js) already personality-scales it BEFORE any minute conversion
+  // can happen (the scaling factor varies per NPC), so the minutes conversion
+  // has to run on the already-scaled per-NPC result, not on this raw base rate;
+  // converting the table itself would just be more edited surface for the same
+  // math. sim.js's call site wraps thermostatSelfAdjustChance(npc)'s result in
+  // chanceOverMinutes, exactly like every other chance roll here.
+  selfAdjustChancePerTick: 0.05,
+  coldComplaintLines: [
+    '{name} pulls their sleeves down over their hands. "Is it always this cold in here?"',
+    '{name} shivers and mutters something about the heat being broken.',
+  ],
+  hotComplaintLines: [
+    '{name} fans themselves with a hand. "It is roasting in here."',
+    '{name} complains about the heat and cracks a window.',
+  ],
+};
 
 // Base costs — the fixed per-cycle floor on each utility bill (the
 // connection charge / infrastructure cost), added to the metered total.
@@ -1431,6 +1482,18 @@ const COMMITMENT_KINDS = {
     // `block === 'meal'` branch, so the generalisation moved it without
     // changing it.
     boundActivity: 'sitting down to dinner',
+    // Actions-and-activities-overhaul-plan.md Phase 1 (D1/D2): the shared
+    // table doInviteDinner/ASK_MEAL both already hardcode at their call
+    // sites, restated here so ASK_INVITE can read one generic
+    // COMMITMENT_KINDS[kind].roomId instead of special-casing meal.
+    roomId: 'dining',
+    // playerInvitable + inviteWords: what the generic $Invite ask leaf
+    // (asks.js) offers. A future eventType with bespoke judging/narration
+    // (cook-off, tour, party — Phases 13/14/17) is not obligated to opt in
+    // here; it can ship its own leaf instead, exactly as ASK_MEAL/ASK_HANGOUT
+    // already do for these two. This only serves the generic case.
+    playerInvitable: true,
+    inviteWords: ['dinner', 'meal', 'lunch', 'breakfast'],
   },
   hangout: {
     block: 'leisure',
@@ -1444,6 +1507,8 @@ const COMMITMENT_KINDS = {
     // Today and tomorrow. Further out than that and the player has forgotten
     // by the time the window opens.
     maxAheadDays: 2,
+    playerInvitable: true,
+    inviteWords: ['hangout', 'hang out'],
   },
   // Vocation plan D18 (Phase 6): what accepting a creator's ask books.
   //
@@ -1460,6 +1525,38 @@ const COMMITMENT_KINDS = {
     roomId: 'own_bedroom',
     slots: [{ id: 'late', startMinute: 1290, endMinute: 1410 }],  // 21:30-23:30
     maxAheadDays: 2,
+  },
+  // East Wing Phase 13 (D22): "East-Wing events (pool party) through the
+  // invitation system." A pool party has no bespoke judging or narration —
+  // unlike the cook-off (D14) or the full house party (D26) — so it opts
+  // into the generic $Invite leaf (ASK_INVITE, asks.js) exactly the way the
+  // header comment above invites a future eventType to, rather than
+  // shipping a dedicated ask leaf that would just re-implement ASK_INVITE's
+  // own affection/tension formula for no reason.
+  pool_party: {
+    block: 'leisure',
+    label: 'a pool party',
+    boundActivity: 'hanging out at the pool',
+    roomId: 'pool_room',
+    playerInvitable: true,
+    inviteWords: ['pool party', 'swim party', 'the pool'],
+  },
+  // Actions & Activities Overhaul Phase 17 (D26): the flagship event, and the
+  // one this file's own comment above named as needing bespoke narration
+  // (unlike pool_party) — booked through its own leaf, ASK_PARTY (asks.js),
+  // not the generic $Invite. NOT `playerInvitable` for that reason: opting
+  // into $Invite's inviteWords parsing would let a bare $Invite silently book
+  // a party with none of ASK_PARTY's own bespoke effects/leafNote wording.
+  // `block: 'leisure'` reused rather than a new 'party' block, same reasoning
+  // as `hangout` above: a block name absent from every OVERTURE_DEFS
+  // blockFilter silently zeroes NPC-initiated overtures for the whole window
+  // (confirmed live in overture.js/cognition.js's hard block-string checks) —
+  // 'leisure' is already wired everywhere that matters.
+  party: {
+    block: 'leisure',
+    label: 'a house party',
+    boundActivity: 'partying',
+    roomId: 'living_room',
   },
 };
 
@@ -1526,6 +1623,96 @@ const ASK_TUNING = {
     relDeltas: { interest: 0.12, want: 0.10, wound: 0.10, miss: 0 },
     relAxis: 'affection',
   },
+  // actions-and-activities-overhaul-plan.md Phase 4 (D9) — $GiveMoney (player
+  // hands money over, capped by what's on hand only — no phase cap, unlike
+  // ask_loan's REQUEST cap, since giving away your own money needs no
+  // plausibility ceiling) and $CollectMoney (calling in what an NPC owes YOU
+  // — the npcOwes mirror of ask_repay, always accepted, no NPC wallet to cap
+  // against, same "no NPC cash field exists" reasoning as ask_loan).
+  // giftRelDelta only applies to a no-strings gift (a loan carries no
+  // relationship delta of its own — the trust is already priced into having
+  // been asked).
+  giveMoney: {
+    giftRelDelta: 0.05,
+  },
+  // Phase 4 (D8) — $BorrowItem (temporary transfer, due back in dueDays) and
+  // $ReturnItem (always accepted, mirrors ask_repay's "no 'no' to a returned
+  // debt"). accept/decline for the borrow itself reuses ask_loan's own
+  // affection+trust shape (asks.js's ASK_BORROW.decide) — lending a
+  // possession is the same closeness-and-reliability question as lending
+  // cash, just against a different tuning bucket for the due window.
+  borrow: {
+    dueDays: 3,
+    returnTrustDelta: 0.05,
+  },
+  // actions-and-activities-overhaul-plan.md Phase 7 (D12) — $Apologize.
+  // Belief-gated: decide() (asks.js) reads getUnresolvedGrievances (npc.js) —
+  // an NPC only accepts an apology for a real, remembered wrong. The FIRST
+  // attempt on a given grievance, made within timelyWindowDays of when it was
+  // recorded, is sincere and repairs part of it (repairFraction × severity on
+  // trust, tensionReliefMult of that same magnitude off tension) and resolves
+  // it. Any later attempt on the same still-unresolved grievance, or a first
+  // attempt made too late, reads as insincere — no repair, tension rises by
+  // insincereTensionDelta instead, and the grievance is marked attempted so a
+  // further try never reads as sincere either. "Reusing the ladder mechanics"
+  // (D12's own words) is the EXISTING per-category ask-repeat ladder
+  // (askLadderPenalty) — same-day apology spam already costs score/trust
+  // through that shared mechanism, so nothing bespoke was needed for that half.
+  apology: {
+    timelyWindowDays: 3,
+    repairFraction: 0.6,
+    tensionReliefMult: 0.5,
+    insincereTensionDelta: 0.05,
+    relAxis: 'trust',
+  },
+  // actions-and-activities-overhaul-plan.md Phase 7 (D13) — $AskForSpace: a
+  // light receptivity check, the SAME shape affectionReceptivityScore (below)
+  // uses, on the trust axis rather than affection — this is a request, never
+  // a physical act, so it never touches the willingness gate.
+  boundary: {
+    tensionPenaltyWeight: 0.8,
+    moodWeight: 0.3,
+    acceptNoiseRange: 0.3,
+    acceptThreshold: 0.0,
+  },
+};
+
+// --- Affection ladder (actions-and-activities-overhaul-plan.md Phase 2, D7) --
+// Hug / Kiss (cheek) / Kiss (lips) / Cuddle — the casual-physical asks. Each
+// decides by a LIGHT receptivity check, never the willingness gate (D7's
+// hard line): affection − tension×tensionPenaltyWeight + npc.mood×moodWeight
+// − seedCtx.ladderPenalty (the shared 'affection'-category repeat ladder IS
+// the "recent history" term D7 asks for — no bespoke cooldown needed), plus
+// seeded noise, accept when the sum clears the act's own threshold. The
+// thresholds climb with the ladder (hug easiest, cuddle hardest before
+// RequestIntimacy's real willingness gate takes over). `privacyBonus` is the
+// "location-gated" half of D7 for the two most intimate rungs — isPrivacyRoom
+// (cognition.js: the NPC's own room, or a bathroom) adds to the score rather
+// than hard-blocking, so a public kiss is just a harder sell, not impossible.
+const AFFECTION_TUNING = {
+  tensionPenaltyWeight: 0.8,
+  moodWeight: 0.3,
+  acceptNoiseRange: 0.3,
+  privacyBonus: 0.15,
+  ladder: {
+    hug:        { threshold: -0.3, locationGated: false },
+    kiss_cheek: { threshold: -0.1, locationGated: false },
+    kiss_lips:  { threshold: 0.1,  locationGated: true },
+    cuddle:     { threshold: 0.15, locationGated: true },
+  },
+  // Small, deliberately below INTIMACY's magnitudes (config.js's own
+  // ~4700-line block) — these are gestures, not the paired acts.
+  relDeltas: {
+    hug:        { affection: 0.03, comfort: 0.03, tension: -0.02 },
+    kiss_cheek: { affection: 0.05, comfort: 0.04, tension: -0.03 },
+    kiss_lips:  { affection: 0.08, comfort: 0.05, trust: 0.02, desire: -0.05, tension: -0.04 },
+    cuddle:     { affection: 0.08, comfort: 0.10, trust: 0.03, tension: -0.06 },
+  },
+  playerMoodGain: { hug: 0.05, kiss_cheek: 0.06, kiss_lips: 0.10, cuddle: 0.12 },
+  npcMoodGain:    { hug: 0.05, kiss_cheek: 0.06, kiss_lips: 0.08, cuddle: 0.10 },
+  // D30's undisturbed branch: a small, solitary payoff for the player only —
+  // the NPC never knows, so they get nothing.
+  undisturbedPlayerMoodFactor: 0.4,
 };
 
 // Weekend rush (src/src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 4). Del's
@@ -1895,7 +2082,11 @@ const FACILITY_DEFS = {
   // --- Gym equipment ---
   gym_equipment: {
     id: 'gym_equipment', label: 'Gym Equipment', room: 'gym',
-    qualityWeight: 2, gatesActions: ['self.workout'],
+    // East Wing Phase 13 (D22): the yoga_mat/weight_set objects finally get
+    // verbs of their own (self.yoga, self.lift_weights) instead of riding
+    // only on the generic treadmill-flavored self.workout — same equipment,
+    // same gate.
+    qualityWeight: 2, gatesActions: ['self.workout', 'self.yoga', 'self.lift_weights'],
     appeal: { 'fitness': 2.0, 'yoga': 1.5, 'hiking': 1.0, '*': 0.2 },
     tiers: [
       { tier: 'broken', label: 'Broken Equipment', qualityValue: 0, cost: 0, durationDays: 0,
@@ -1954,10 +2145,30 @@ const FACILITY_DEFS = {
         desc: 'Heating, proper lighting, and a filtration system that runs itself. Swimmable year round.' },
     ],
   },
+  // --- Pool room: the sauna upgrade (Actions & Activities Overhaul Phase
+  // 13, D22/Q2) ---
+  // A subroom entirely inside pool_room's own footprint (no new floor-plan
+  // node — see the `sauna` OBJECT_DEFS entry's comment) gated the same way
+  // every other renovation is: broken means the nook is empty, functional
+  // means there's a working sauna to sit in. Priced as a wing amenity, well
+  // under the pool itself — the flagship spend already went to pool_systems.
+  pool_sauna: {
+    id: 'pool_sauna', label: 'Sauna', room: 'pool_room',
+    qualityWeight: 2, gatesActions: ['self.sauna'],
+    appeal: { 'fitness': 1.0, 'yoga': 1.5, '*': 0.6 },
+    tiers: [
+      { tier: 'broken', label: 'Empty Nook', qualityValue: 0, cost: 0, durationDays: 0,
+        desc: 'A tiled, empty alcove in the corner — wired and plumbed for a sauna that was never installed.' },
+      { tier: 'functional', label: 'Cedar Sauna', qualityValue: 0.5, cost: 3200, durationDays: 4,
+        desc: 'A proper cedar sauna, heater and all, behind its own door.' },
+      { tier: 'upgraded', label: 'Infrared Sauna Suite', qualityValue: 1.0, cost: 9000, durationDays: 6,
+        desc: 'Infrared panels, a bench for two, and towels stacked and warm.' },
+    ],
+  },
   // --- Laundry: washer/dryer ---
   laundry_machines: {
     id: 'laundry_machines', label: 'Laundry Machines', room: 'laundry',
-    qualityWeight: 2, gatesActions: ['self.laundry'],
+    qualityWeight: 2, gatesActions: ['self.laundry', 'dryer.dry'],
     appeal: { '*': 0.8 }, // everyone needs laundry
     tiers: [
       { tier: 'broken', label: 'Broken Machines', qualityValue: 0, cost: 0, durationDays: 0,
@@ -2118,7 +2329,7 @@ const ROOM_FACILITIES = {
   living_room: ['living_room_entertainment'],
   gym: ['gym_equipment'],
   changing_room: ['changing_fixtures'],
-  pool_room: ['pool_systems'],
+  pool_room: ['pool_systems', 'pool_sauna'],
   laundry: ['laundry_machines'],
   game_room: ['game_room_setup'],
   study: ['study_setup'],
@@ -2165,6 +2376,7 @@ const FACILITY_STARTING_TIERS = {
   living_room_entertainment: 'broken',
   gym_equipment: 'broken',
   pool_systems: 'broken',
+  pool_sauna: 'broken',
   laundry_machines: 'broken',
   game_room_setup: 'broken',
   study_setup: 'broken',
@@ -3036,6 +3248,8 @@ const MOOD_PAYOUTS = {
   goodSleep: 0.05,          // a full night on schedule, alarm-free
   cleanApartmentPerItem: 0.01, // housecleaning pass, scaled by how much there was to do
   cleanApartmentCap: 0.08,
+  puzzleComplete: 0.04,     // DailyGrid finished for the day (actions-and-activities-overhaul Phase 14, D23); halved by grantPuzzleCompletionReward when a hint was used
+  chatterPost: 0.02,        // player posts to Chatter (actions-and-activities-overhaul Phase 15, D24) — modest next to puzzleComplete since posting is a trivial-effort action
 };
 
 // --- Need consequences (P7 gameplay loops). When a need hits 0, real
@@ -3508,6 +3722,16 @@ const TIME_DILATION = {
     // session loop (peek.js) READS the clock this scale produces; it never
     // advances it itself (single clock owner — TIME's file header).
     peeking: 60,
+    // Night Scene (night-scene-sleeping-npc-plan Phase 4, D24): one game-
+    // second per real second -- the same scale `conversation` uses, given its
+    // own key so Phase 6 can retune the scene without moving conversation
+    // with it. The scene is NOT paused (it deliberately does not open through
+    // openActionWindow, which pauses the clock): a paused world would make
+    // every time cost free and soothing strictly optimal, which is exactly
+    // the incoherence D24 corrects. nightscene.js READS the clock this scale
+    // produces and never advances it (single clock owner -- TIME's header),
+    // exactly as peek.js does with `peeking`.
+    nightscene: 1,
   },
   // How often the NPC sim runs (in game-minutes of accumulated time).
   // 30 = same granularity as the old tick system. This is already the
@@ -3687,6 +3911,22 @@ const SIGNAL_DEFS = {
       strong: ['the bathroom smells genuinely bad'],
     },
   },
+  // Actions & Activities Overhaul Phase 9 (D17/D49): the ambient per-room
+  // dirt layer's own signal — a ROOM condition (dust, foot traffic), not an
+  // object's. Emitted by deriveStandingSignals' room loop (signals.js) off
+  // world.rooms[roomId].dirt directly, the one standing signal with no
+  // OBJECT_DEFS.emits entry behind it, because there is no single object to
+  // hang it on — that is exactly the gap this phase closes (a hallway with a
+  // coat rack and a thermostat has nothing else that could ever smell).
+  dust: {
+    channel: 'smell',
+    salience: 0.35,
+    phrases: {
+      faint:  ['a faint staleness, the smell of a room that hasn’t been aired out'],
+      clear:  ['the flat, dusty smell of a room that needs a real clean'],
+      strong: ['the air in here is thick with dust and old use'],
+    },
+  },
   unmade_bed: {
     channel: 'sight',
     salience: 0.2,
@@ -3773,6 +4013,19 @@ const SIGNAL_DEFS = {
       faint:  ['the murmur of a conversation somewhere'],
       clear:  ['two people talking, not far off'],
       strong: ['a conversation going on right there'],
+    },
+  },
+  // Actions & Activities Overhaul Phase 17 (D26): a house party's own
+  // presence-driven noise — its own signal id rather than reusing 'voices'
+  // so an ordinary two-person chat can never accidentally read as (or
+  // threshold-tune against) a party. Emitted per attendee per tick (sim.js
+  // Pass 2, SIGNALS_EMIT.partyNoise), so several guests keep it topped up.
+  party_noise: {
+    channel: 'sound', salience: 0.5, decayPerTick: 0.2,
+    phrases: {
+      faint:  ['noise from a gathering somewhere in the apartment'],
+      clear:  ['a party going, not far off — talk and laughter over music'],
+      strong: ['the party is right there — loud, crowded, going strong'],
     },
   },
   door_close: {
@@ -4099,6 +4352,12 @@ const SIGNALS_EMIT = {
   cookingAction:    0.7,   // the player actually cooking a recipe
   voices:           0.5,
   doorClose:        0.55,
+  // Actions & Activities Overhaul Phase 17 (D26): a live house party is
+  // louder than an ordinary two-person chat_with_roommate 'voices' emission
+  // (0.5) — deliberately above it, and refreshed once per attendee per tick
+  // (sim.js Pass 2), so a real gathering reads as louder than routine
+  // chatter without needing a separate aggregate headcount.
+  partyNoise:       0.65,
 
   // --- The emotional channel (initiative plan Phase 1) -------------------
   // Placed by the propagation arithmetic rather than by feel, against the
@@ -4299,30 +4558,38 @@ const SOUND_DEVICE_DEFS = {
   },
   headphones: {
     label: 'Headphones', sourceItemDef: 'headphones', carried: true, blocksSound: true,
-    npcMoodGainPerTick: 0.003,
+    // Continuous-cadence-closure Phase 5 (D13, found alongside D6's named
+    // music.keepItDown.chancePerTick): a flat per-tick mood gain, same
+    // conversion — per-minute rate × minutes resolved (sim.js Pass 2).
+    npcMoodGainPerMinute: 0.003 / 30,
   },
   mp3_player: {
     label: 'MP3 Player', sourceItemDef: 'mp3_player', carried: true, blocksSound: true,
-    npcMoodGainPerTick: 0.004,
+    npcMoodGainPerMinute: 0.004 / 30,
   },
   // Consumer tuning. All placed against the SOUND channel's 0.5-per-hop
   // attenuation and 0.45 unlocked-door factor: a volume-2 stereo (0.5)
   // reaches the adjacent room at ~0.11, one hop further at ~0.055.
   music: {
-    // NPC per-tick (30 game-minute) mood lift from the LOUDEST perceived
-    // music signal, scaled by its arrived intensity - in-room at volume 2
-    // that is ~0.02/tick, through a closed door ~0.0045.
-    npcMoodPerIntensity: 0.04,
-    npcMoodCap: 0.03,
+    // NPC per-MINUTE mood lift from the LOUDEST perceived music signal,
+    // scaled by its arrived intensity - in-room at volume 2 that is
+    // ~0.02/tick (0.02/30 per minute), through a closed door ~0.0045/tick.
+    // Continuous-cadence-closure Phase 5 (D13): converted from the old flat
+    // npcMoodPerIntensity/npcMoodCap per-tick pair, same reasoning as the
+    // keepItDown chance just below (D6) — same guard block, same mechanic.
+    npcMoodPerIntensityPerMinute: 0.04 / 30,
+    npcMoodCapPerMinute: 0.03 / 30,
     // The player's mood-target term from the same read, scaled far smaller
-    // (the target is an equilibrium, not a per-tick delta).
+    // (the target is an equilibrium, not a per-tick delta — NOT converted,
+    // same reason: resolveMoodTarget already reads this as a steady-state
+    // target, never as a per-resolution accumulation).
     playerMoodScale: 0.05,
     playerMoodCap: 0.04,
     // The wearer's own music term - the one sound that survives the filter.
     wornPlayerMoodTarget: 0.02,
     keepItDown: {
       threshold: 0.45,       // arrived intensity that starts provoking
-      chancePerTick: 0.05,   // per awake loud-music NPC-tick
+      chancePerMinute: 1 - Math.pow(1 - 0.05, 1 / 30), // was chancePerTick: 0.05
       npcMood: -0.04,        // the reaction's own mood swing
       lines: [
         '{name} bangs on the wall. "Keep it down in there!"',
@@ -4471,8 +4738,16 @@ const WORK_BLOCKS = ['prep', 'commute', 'work', 'commute_home', 'morning'];
 //                the single modestyDampen number shared by every reader.
 //   comfort    — prose flavor only ("dressed for comfort"); never enters the
 //                attraction/desire/willingness math.
-//   thermal    — prose flavor only (reserved for Phase 19's seasonal reads);
-//                no reader today, by design.
+//   thermal    — the warmth of the garment. Never read by attraction/desire/
+//                willingness (same as comfort — this stat is not about how
+//                someone reads to others). Actions & Activities Overhaul
+//                Phase 8 (D16) gave it its first real reader: temperature.js's
+//                temperatureClothingBiasWeight feeds composeOutfit's own
+//                bias.stats extension point (ITEMS, "later phases push the
+//                scoring"), so a cold or hot ambient temperature tilts an
+//                NPC's wardrobe pick toward/away from high-thermal items —
+//                the exact "reserved for later" stat this comment used to
+//                flag as reader-less.
 const CLOTHING_EFFECTS = {
   // How strongly a modest outfit's sum cancels the reveal sum, everywhere.
   modestyDampen: 0.7,
@@ -4824,6 +5099,758 @@ const BOUNDARY = {
     // that applies whatever the tier prose says.
     caughtTensionSpike: 0.08,
   },
+  // --- The Affection ladder's sleeping-target branch (Phase 2, D30) -------
+  // D7's Hug/Kiss/Cuddle/RequestIntimacy leaves branch here instead of the
+  // normal receptivity/willingness check whenever the target is asleep —
+  // the SAME wake-chance shape as sleepRoom above (dynamic-tier table minus
+  // stealth, plus perception), bucketed by how likely each rung is to wake
+  // someone (a hug barely stirs; RequestIntimacy is sleepRoom's own 'high'
+  // table, unchanged). What happens on a wake is NOT the sleepRoom formula,
+  // per D30's explicit text: no relationship-stage term at all — only
+  // willingnessAttraction (how drawn to the player they are) and npcDeviancy
+  // (how willing their own construct is to go along with it), so a stranger
+  // can theoretically wake receptive and a beloved partner can wake furious.
+  affectionLadder: {
+    catchRisk: { hug: 'low', kiss_cheek: 'low', kiss_lips: 'med', cuddle: 'med', RequestIntimacy: 'high' },
+    wakeChanceByRisk: {
+      low:  { cold: 0.5,  neutral: 0.3,  warm: 0.12, hostile: 0.6 },
+      med:  { cold: 0.75, neutral: 0.5,  warm: 0.2,  hostile: 0.8 },
+      high: { cold: 0.92, neutral: 0.65, warm: 0.30, hostile: 0.95 },  // == sleepRoom.wakeChanceByDynamic
+    },
+    attractionWeight: 0.6,
+    deviancyWeight: 0.4,
+    receptiveNoiseRange: 0.15,
+    receptiveThreshold: 0.5,
+  },
+  // --- Night Scene: the sleeping-NPC free-play minigame ---------------------
+  // (night-scene-sleeping-npc-plan.md, Phase 3a). Replaces affectionLadder's
+  // RequestIntimacy branch for the in-room case (D13) with real agency.
+  //
+  // REVISED 2026-09-04 by the UI + design passes. What changed from Phase 1:
+  //   - the flat 13-entry `zones` map is GONE, replaced by the D16/D33 action
+  //     grammar: regions -> parts -> instruments -> motions, plus one Pace
+  //     control. An action id is `part.side.instrument.motion.pace`.
+  //   - `quell` is GONE (D17). Soothing is emergent: a soothing-capable part x
+  //     a calming motion x gentle pace.
+  //   - the four-outcome `xp` bucket is GONE (D23). XP is per action.
+  //   - `thresholds.heatWillingMin` is GONE (D29). The willing/hostile bar is
+  //     a per-NPC derived number, not a constant.
+  //   - heat is UNBOUNDED and every 100 is a climax (D38); Intensity
+  //     Acceleration Resistance (D27) reads the WITHIN-CYCLE position
+  //     (heat mod iar.cycle), which is what makes those two compatible.
+  //
+  // The coupling rules a future session must not "tidy":
+  //   - wakefulness/stirring NEVER influence heat. One direction, always.
+  //   - heat influences wakefulness in exactly TWO blessed places, both about
+  //     the player's JUDGEMENT rather than about pursuing heat (that was D7,
+  //     and D7 is deleted): the D27 overshoot multiplier (misjudging an
+  //     escalation rouses her) and D36's move discount (a warm NPC moves with
+  //     you, which only ever makes the player SAFER). Never mirror the move
+  //     discount into a penalty.
+  // Illustrative numbers only -- Phase 6 (Q5) lands the real tuning pass.
+  nightScene: {
+    // ---- D16/D33: the action grammar ------------------------------------
+    // Tray tabs, in `order`. `genital` regions are attached per entry in the
+    // TARGET's `physical.intimate.genitals` array (D35) -- never from
+    // `gender`, exactly as GENITAL_TYPE_FIELDS' other readers do. `kind`
+    // marks the two tabs that are not touches: Move (D36) opens access up,
+    // Cleanup (D12/D22) closes evidence down. `reach` is the default pose
+    // gate for the region (D34); a part may override it with its own, and
+    // `reach: null` means "reachable in every pose".
+    regions: {
+      head:    { label: 'Head',    order: 1,  reach: ['back', 'back_parted', 'side_toward', 'side_away', 'curled', 'front'] },
+      chest:   { label: 'Tits',    order: 2,  flatLabel: 'Chest', reach: ['back', 'back_parted', 'side_toward', 'side_away'] },
+      belly:   { label: 'Belly',   order: 3,  reach: ['back', 'back_parted', 'side_toward'] },
+      pussy:   { label: 'Pussy',   order: 4,  genital: 'vagina', reach: ['back', 'back_parted', 'side_toward'] },
+      cock:    { label: 'Cock',    order: 5,  genital: 'penis',  reach: ['back', 'back_parted', 'side_toward'] },
+      ass:     { label: 'Ass',     order: 6,  reach: ['front', 'side_toward', 'side_away', 'curled'] },
+      legs:    { label: 'Legs',    order: 7,  reach: null },
+      feet:    { label: 'Feet',    order: 8,  reach: null },
+      back:    { label: 'Back',    order: 9,  reach: ['front', 'side_toward', 'side_away', 'curled'] },
+      move:    { label: 'Move',    order: 10, kind: 'move',    reach: null },
+      cleanup: { label: 'Cleanup', order: 11, kind: 'cleanup', reach: null },
+      // Phase 6's shadow layer. `kind: 'ambient'` is the one region the tray
+      // NEVER renders (nightPalette skips it outright) -- it exists so an
+      // EXOGENOUS risk source is a real composed action id that pays the same
+      // tier multiplier, the same skill scaling, the same [Stirring, 100]
+      // clamp and the same monotonic Stirring every player action pays.
+      // Invariant 6's rule is that the world's own noise must not reach her
+      // through a parallel channel, and this is what makes that literally
+      // true rather than merely intended.
+      ambient: { label: 'The house', order: 99, kind: 'ambient', reach: null },
+    },
+
+    // D33's breasted/flat chest split, read from the bible and never from
+    // `gender`: `intimate.breasts.size` first (always rolled, from
+    // PHYS_POOL_BREAST_SIZE / _MASC), `body.chestSize` as the fallback for a
+    // hand-authored character that only filled the body group. The region
+    // label follows (Tits / Chest) and so does which chest part is offered
+    // (breast+cleavage / pecs); nipples are universal and never swapped.
+    flatBreastSizes: ['flat', 'barely-there', 'slight'],
+    flatChestSizes:  ['flat', 'broad', 'barrel'],
+
+    // The five base instruments are a CONTACT FOOTPRINT scale (D33) -- the
+    // label carries the mechanic. The player's own genitals are appended per
+    // entry in the PLAYER's genitals array (genitalInstruments below, D35),
+    // which is why there is no "your body weight" instrument: straddling and
+    // grinding are motions belonging to those.
+    instruments: {
+      fingertip: { label: 'One fingertip', standalone: 'a fingertip',     footprint: 1, wakeMult: 0.70, heatMult: 0.80 },
+      fingers:   { label: 'Two fingers',   standalone: 'two fingers',     footprint: 2, wakeMult: 0.85, heatMult: 1.00 },
+      hand:      { label: 'Whole hand',    standalone: 'your whole hand', footprint: 3, wakeMult: 1.00, heatMult: 1.05 },
+      lips:      { label: 'Lips',          standalone: 'your lips',       footprint: 2, wakeMult: 1.00, heatMult: 1.30 },
+      tongue:    { label: 'Tongue',        standalone: 'your tongue',     footprint: 2, wakeMult: 1.10, heatMult: 1.50 },
+    },
+    // Appended to the instrument row, one per entry in the PLAYER's genitals
+    // array (D35). `base` is the id a part's `acc` table keys on, so a player
+    // carrying two of a type gets two disambiguated chips that share one
+    // validity row and the tray never renders two identical chips.
+    genitalInstruments: {
+      penis:  { base: 'cock', label: 'Cock', standalone: 'your cock', footprint: 4, wakeMult: 1.25, heatMult: 1.80 },
+      vagina: { base: 'cunt', label: 'Cunt', standalone: 'your cunt', footprint: 4, wakeMult: 1.25, heatMult: 1.80 },
+    },
+
+    // Phase 6: the shadow layer's instrument. Deliberately NOT in
+    // `instruments` -- nightInstruments builds the tray row from that map and
+    // this must never appear as a chip. nightInstrumentDef falls back to this
+    // bucket, which is the whole of what makes an exogenous cue a legal
+    // composed action id rather than a special case in the resolver.
+    ambientInstruments: {
+      world: { label: 'The house', standalone: 'the house', footprint: 0, wakeMult: 1.00, heatMult: 0 },
+    },
+
+    // D33: plain verbs in four families, and the ROW ORDER IS INFORMATION --
+    // motions render left-to-right by ascending `intensityOffset`, so the
+    // leftmost verb on any part is the safe approach and the rightmost has to
+    // be earned. That is how the tray teaches D27 without a tutorial.
+    // `calming: true` marks the motions that can soothe (D17) -- soothing is
+    // never a button, it is a soothing-capable part x one of these x gentle.
+    // Two further families are not touches: `cleanup` clears an evidence tag,
+    // `move` walks the D36 pose graph and carries its transition here.
+    motions: {
+      // -- contact
+      brush:       { label: 'Brush',       verb: 'brush',        gerund: 'brushing',       family: 'contact', intensityOffset: -8, wakeMult: 0.50, heatMult: 0.55, calming: true },
+      trace:       { label: 'Trace',       verb: 'trace',        gerund: 'tracing',        family: 'contact', intensityOffset: -6, wakeMult: 0.60, heatMult: 0.70, calming: true },
+      stroke:      { label: 'Stroke',      verb: 'stroke',       gerund: 'stroking',       family: 'contact', intensityOffset: -4, wakeMult: 0.70, heatMult: 0.85, calming: true },
+      tap:         { label: 'Tap',         verb: 'tap',          gerund: 'tapping',        family: 'contact', intensityOffset: -2, wakeMult: 0.85, heatMult: 0.75 },
+      rub:         { label: 'Rub',         verb: 'rub',          gerund: 'rubbing',        family: 'contact', intensityOffset:  0, wakeMult: 1.00, heatMult: 1.00 },
+      circle:      { label: 'Circle',      verb: 'circle',       gerund: 'circling',       family: 'contact', intensityOffset:  2, wakeMult: 1.00, heatMult: 1.15 },
+      press:       { label: 'Press',       verb: 'press',        gerund: 'pressing',       family: 'contact', intensityOffset:  4, wakeMult: 1.15, heatMult: 1.10 },
+      drag:        { label: 'Drag',        verb: 'drag',         gerund: 'dragging',       family: 'contact', intensityOffset:  6, wakeMult: 1.20, heatMult: 1.20 },
+      // -- grip
+      hold:        { label: 'Hold',        verb: 'hold',         gerund: 'holding',        family: 'grip',    intensityOffset: -2, wakeMult: 0.55, heatMult: 0.60, calming: true },
+      cup:         { label: 'Cup',         verb: 'cup',          gerund: 'cupping',        family: 'grip',    intensityOffset:  0, wakeMult: 0.90, heatMult: 1.00 },
+      squeeze:     { label: 'Squeeze',     verb: 'squeeze',      gerund: 'squeezing',      family: 'grip',    intensityOffset:  4, wakeMult: 1.20, heatMult: 1.15 },
+      knead:       { label: 'Knead',       verb: 'knead',        gerund: 'kneading',       family: 'grip',    intensityOffset:  6, wakeMult: 1.20, heatMult: 1.25 },
+      roll:        { label: 'Roll',        verb: 'roll',         gerund: 'rolling',        family: 'grip',    intensityOffset:  8, wakeMult: 1.25, heatMult: 1.35 },
+      tug:         { label: 'Tug',         verb: 'tug',          gerund: 'tugging',        family: 'grip',    intensityOffset: 10, wakeMult: 1.40, heatMult: 1.30 },
+      spread:      { label: 'Spread',      verb: 'spread',       gerund: 'spreading',      family: 'grip',    intensityOffset: 12, wakeMult: 1.45, heatMult: 1.30 },
+      pinch:       { label: 'Pinch',       verb: 'pinch',        gerund: 'pinching',       family: 'grip',    intensityOffset: 14, wakeMult: 1.55, heatMult: 1.40 },
+      // -- mouth
+      breathe_on:  { label: 'Breathe on',  verb: 'breathe on',   gerund: 'breathing on',   family: 'mouth',   intensityOffset: -6, wakeMult: 0.45, heatMult: 0.85, calming: true },
+      nuzzle:      { label: 'Nuzzle',      verb: 'nuzzle',       gerund: 'nuzzling',       family: 'mouth',   intensityOffset: -4, wakeMult: 0.65, heatMult: 1.00, calming: true },
+      kiss:        { label: 'Kiss',        verb: 'kiss',         gerund: 'kissing',        family: 'mouth',   intensityOffset:  0, wakeMult: 0.90, heatMult: 1.20 },
+      lick:        { label: 'Lick',        verb: 'lick',         gerund: 'licking',        family: 'mouth',   intensityOffset:  4, wakeMult: 1.05, heatMult: 1.40 },
+      mouth:       { label: 'Mouth',       verb: 'mouth',        gerund: 'mouthing',       family: 'mouth',   intensityOffset:  6, wakeMult: 1.15, heatMult: 1.45 },
+      flick:       { label: 'Flick',       verb: 'flick',        gerund: 'flicking',       family: 'mouth',   intensityOffset:  8, wakeMult: 1.20, heatMult: 1.50 },
+      suck:        { label: 'Suck',        verb: 'suck',         gerund: 'sucking',        family: 'mouth',   intensityOffset: 10, wakeMult: 1.30, heatMult: 1.60 },
+      bite:        { label: 'Bite',        verb: 'bite',         gerund: 'biting',         family: 'mouth',   intensityOffset: 14, wakeMult: 1.70, heatMult: 1.45 },
+      // -- rhythm
+      dip:         { label: 'Dip',         verb: 'dip into',     gerund: 'dipping into',   family: 'rhythm',  intensityOffset:  6, wakeMult: 1.10, heatMult: 1.35 },
+      curl:        { label: 'Curl',        verb: 'curl inside',  gerund: 'curling inside', family: 'rhythm',  intensityOffset:  8, wakeMult: 1.15, heatMult: 1.55 },
+      slide_in:    { label: 'Slide in',    verb: 'slide into',   gerund: 'sliding into',   family: 'rhythm',  intensityOffset: 12, wakeMult: 1.35, heatMult: 1.70 },
+      grind:       { label: 'Grind',       verb: 'grind against', gerund: 'grinding against', family: 'rhythm', intensityOffset: 14, wakeMult: 1.40, heatMult: 1.65 },
+      pump:        { label: 'Pump',        verb: 'pump',         gerund: 'pumping',        family: 'rhythm',  intensityOffset: 16, wakeMult: 1.50, heatMult: 1.75 },
+      straddle:    { label: 'Straddle',    verb: 'straddle',     gerund: 'straddling',     family: 'rhythm',  intensityOffset: 18, wakeMult: 1.60, heatMult: 1.70 },
+      thrust:      { label: 'Thrust',      verb: 'thrust into',  gerund: 'thrusting into', family: 'rhythm',  intensityOffset: 20, wakeMult: 1.75, heatMult: 1.85 },
+      ride:        { label: 'Ride',        verb: 'ride',         gerund: 'riding',         family: 'rhythm',  intensityOffset: 22, wakeMult: 1.80, heatMult: 1.90 },
+      // -- cleanup (D12/D22): clears exactly one evidence tag, on the same
+      //    wake/stir formula as a touch. Never a free undo.
+      straighten:  { label: 'Straighten',  verb: 'straighten',   gerund: 'straightening',  family: 'cleanup', intensityOffset: 0, wakeMult: 1.00, heatMult: 0 },
+      pull_up:     { label: 'Pull up',     verb: 'pull up',      gerund: 'pulling up',     family: 'cleanup', intensityOffset: 0, wakeMult: 1.00, heatMult: 0 },
+      fix:         { label: 'Fix',         verb: 'fix',          gerund: 'fixing',         family: 'cleanup', intensityOffset: 0, wakeMult: 1.00, heatMult: 0 },
+      smooth:      { label: 'Smooth',      verb: 'smooth',       gerund: 'smoothing',      family: 'cleanup', intensityOffset: 0, wakeMult: 1.00, heatMult: 0 },
+      wipe:        { label: 'Wipe away',   verb: 'wipe away',    gerund: 'wiping away',    family: 'cleanup', intensityOffset: 0, wakeMult: 1.00, heatMult: 0 },
+      // -- move (D36): the EDGES of the pose graph. `pose.from` lists the
+      //    nodes the edge leaves, `pose.to` the node it lands on; `covers`
+      //    does the same for the sheet chain. Rolling her from her front to
+      //    her back has no direct edge -- it routes through her side, and
+      //    planning that route is real play. `magnitude` is how much of her
+      //    you are moving and scales the cost. Moves carry no heat of their
+      //    own; Heat instead scales their COST down (see `move` below).
+      uncurl:          { label: 'Ease {o} out of it', phrase: 'ease {o} out of her curl',  verb: 'ease',  gerund: 'easing',   family: 'move', intensityOffset: 0, wakeMult: 1.00, heatMult: 0, magnitude: 0.80, pose: { from: ['curled'], to: 'side_toward' } },
+      turn_toward:     { label: 'Turn toward you', phrase: 'turn {o} toward you',     verb: 'turn',  gerund: 'turning',  family: 'move', intensityOffset: 0, wakeMult: 1.00, heatMult: 0, magnitude: 0.70, pose: { from: ['side_away'], to: 'side_toward' } },
+      turn_away:       { label: 'Turn away', phrase: 'turn {o} away from you',           verb: 'turn',  gerund: 'turning',  family: 'move', intensityOffset: 0, wakeMult: 1.00, heatMult: 0, magnitude: 0.70, pose: { from: ['side_toward'], to: 'side_away' } },
+      roll_to_back:    { label: 'Roll onto her back', phrase: 'roll {o} onto her back',  verb: 'roll',  gerund: 'rolling',  family: 'move', intensityOffset: 0, wakeMult: 1.00, heatMult: 0, magnitude: 1.00, pose: { from: ['side_toward', 'side_away'], to: 'back' } },
+      roll_to_front:   { label: 'Roll onto her front', phrase: 'roll {o} onto her front', verb: 'roll',  gerund: 'rolling',  family: 'move', intensityOffset: 0, wakeMult: 1.00, heatMult: 0, magnitude: 1.20, pose: { from: ['back', 'back_parted'], to: 'front' } },
+      roll_off_front:  { label: 'Roll {o} off it', phrase: 'roll {o} off her front',     verb: 'roll',  gerund: 'rolling',  family: 'move', intensityOffset: 0, wakeMult: 1.00, heatMult: 0, magnitude: 1.20, pose: { from: ['front'], to: 'side_toward' } },
+      part_thighs:     { label: 'Part them', phrase: 'part her thighs',           verb: 'part',  gerund: 'parting',  family: 'move', intensityOffset: 0, wakeMult: 1.00, heatMult: 0, magnitude: 0.60, pose: { from: ['back'], to: 'back_parted' }, evidence: ['sheets'] },
+      close_thighs:    { label: 'Close them', phrase: 'close her thighs',          verb: 'close', gerund: 'closing',  family: 'move', intensityOffset: 0, wakeMult: 1.00, heatMult: 0, magnitude: 0.50, pose: { from: ['back_parted'], to: 'back' } },
+      draw_sheet_back: { label: 'Draw it back', phrase: 'draw the sheet back off {o}',        verb: 'draw',  gerund: 'drawing',  family: 'move', intensityOffset: 0, wakeMult: 1.00, heatMult: 0, magnitude: 0.40, covers: { from: ['covered'], to: 'turned_back' }, evidence: ['sheets'] },
+      pull_sheet_off:  { label: 'Pull it off {o}', phrase: 'pull the sheet off {o} entirely',     verb: 'pull',  gerund: 'pulling',  family: 'move', intensityOffset: 0, wakeMult: 1.00, heatMult: 0, magnitude: 0.55, covers: { from: ['turned_back'], to: 'off' }, evidence: ['sheets'] },
+      // -- move / garments (Phase 7). The same family as the pose and sheet
+      //    edges, so they pay the same costs, take D36's heat discount and
+      //    carry no heat of their own -- but they walk the CLOTHING axis
+      //    instead of the pose graph. Each one writes its own evidence tag,
+      //    which is where the tag always belonged: displacing the garment is
+      //    the act, and a touch merely happening afterwards is not.
+      push_shirt_up:      { label: 'Push it up',     phrase: 'push her shirt up',      verb: 'push', gerund: 'pushing', family: 'move', intensityOffset: 0, wakeMult: 1.00, heatMult: 0, magnitude: 0.65, garment: { id: 'shirt',   from: ['on'], to: 'displaced' }, evidence: ['shirt'] },
+      pull_bottoms_down:  { label: 'Pull them down', phrase: 'pull her bottoms down',  verb: 'pull', gerund: 'pulling', family: 'move', intensityOffset: 0, wakeMult: 1.00, heatMult: 0, magnitude: 0.85, garment: { id: 'bottoms', from: ['on'], to: 'displaced' }, evidence: ['bottoms'] },
+      pull_panties_aside: { label: 'Pull them aside', phrase: 'pull her panties aside', verb: 'pull', gerund: 'pulling', family: 'move', intensityOffset: 0, wakeMult: 1.00, heatMult: 0, magnitude: 0.55, garment: { id: 'panties', from: ['on'], to: 'displaced' }, evidence: ['panties'] },
+      open_towel:         { label: 'Open it',        phrase: 'open her towel',         verb: 'open', gerund: 'opening', family: 'move', intensityOffset: 0, wakeMult: 1.00, heatMult: 0, magnitude: 0.60, garment: { id: 'towel',   from: ['on'], to: 'displaced' }, evidence: ['towel'] },
+      // -- ambient (Phase 6): the shadow layer's one motion. Carries no heat
+      //    and no evidence; it exists so a cue the PLAYER did not choose is
+      //    still a composed action id the one resolver can resolve.
+      cue:             { label: 'Noise',           verb: 'disturb',      gerund: 'disturbing',     family: 'ambient', intensityOffset: 0, wakeMult: 1.00, heatMult: 0 },
+    },
+
+    // A persistent three-position control that modulates EVERY action -- the
+    // cheapest possible source of real granularity (D16). Its real job is
+    // D27's: `intensityOffset` is how you APPROACH a part whose full
+    // intensity she is not ready for. Note that pace pushing wakefulness and
+    // heat in opposite directions is EMERGENT, not a raw multiplier pair --
+    // firm raises both raw numbers, but a firm touch on a cold NPC overshoots
+    // her IAR window and the heat comes back negative.
+    pace: {
+      gentle: { label: 'Gently', adverb: 'slowly',   intensityOffset: -8, wakeMult: 0.60, heatMult: 0.75 },
+      steady: { label: 'Steady', adverb: 'steadily', intensityOffset:  0, wakeMult: 1.00, heatMult: 1.00 },
+      firm:   { label: 'Firmly', adverb: 'hard',     intensityOffset:  8, wakeMult: 1.50, heatMult: 1.35 },
+    },
+
+    // D34: position is real, tracked state, and it GATES what you can reach.
+    // A part's `minExposure` is checked against the LOWER of the pose's own
+    // exposure and the covers' -- an unreachable part is not offered, exactly
+    // as an invalid instrument is not offered (D31).
+    poses: {
+      curled:      { label: 'Curled up',                  exposure: 0 },
+      side_away:   { label: 'On her side, facing away',   exposure: 1 },
+      side_toward: { label: 'On her side, facing you',    exposure: 1 },
+      back:        { label: 'On her back',                exposure: 2 },
+      back_parted: { label: 'On her back, thighs parted', exposure: 2 },
+      // Face-down with the covers off is her MOST exposed back half, not her
+      // least -- exposure 1 here left every minExposure-2 part (cleft, taint,
+      // asshole) unreachable on her front, and `cleft` unreachable anywhere.
+      front:       { label: 'On her front',               exposure: 2 },
+    },
+    covers: {
+      covered:     { label: 'Under the covers',   exposure: 0 },
+      turned_back: { label: 'Covers turned back', exposure: 1 },
+      off:         { label: 'Covers off',         exposure: 2 },
+    },
+
+    // ---- Phase 7: D34's THIRD axis, which Phase 3a dropped ---------------
+    // D34 names three tracked pieces -- pose, covers and "clothing (per
+    // garment, the existing evidence tags)". Only the first two were built,
+    // so for six phases the player could not undress anybody: a covered part
+    // was gated on pose and the bedsheet alone, and touching it silently
+    // displaced the garment and recorded an evidence tag. The tell was that
+    // Cleanup could put clothes back that nothing had ever taken off.
+    //
+    // The vocabulary is deliberately the SAME as the evidence tags, because
+    // the tag IS the garment -- that is what lets Cleanup keep working with no
+    // change and stops the two halves naming one thing two ways.
+    //
+    // `zones` is what a garment is in the way OF, and a part's zone is derived
+    // from the garments its own `evidence` list names (nightPartZones), so
+    // adding this axis needed no per-part churn at all. `layer` orders the
+    // ones sharing a zone: panties are under bottoms, so bottoms come down
+    // first, and the tray teaches that by only offering what is next.
+    // `motion` names the Move-family edge that displaces it.
+    // `displaced` is how the IMAGE PROMPT names the garment once it has been
+    // moved, and it is also the response fragment the composer emits on the
+    // turn that moves it -- one string, both jobs, so the picture and the
+    // prose can never describe her differently.
+    garments: {
+      shirt:   { label: 'Her shirt',   standalone: 'her shirt',   displaced: 'her shirt pushed up',      zones: ['top'],            layer: 0, motion: 'push_shirt_up' },
+      bottoms: { label: 'Her bottoms', standalone: 'her bottoms', displaced: 'her bottoms pulled down',  zones: ['bottom'],         layer: 0, motion: 'pull_bottoms_down' },
+      panties: { label: 'Her panties', standalone: 'her panties', displaced: 'her panties pulled aside', zones: ['bottom'],         layer: 1, motion: 'pull_panties_aside' },
+      towel:   { label: 'Her towel',   standalone: 'her towel',   displaced: 'her towel fallen open',    zones: ['top', 'bottom'],  layer: 0, motion: 'open_towel' },
+    },
+    // What the prompt says when nothing has been moved either way.
+    garmentStaging: { none: 'naked', intact: 'still dressed for bed' },
+    // What she is actually wearing when the session OPENS, keyed on the sim's
+    // own `npc.clothing`. Read once, at open, and frozen onto the record --
+    // the scene must never re-read it, because changing it is the scene's job.
+    // A NUDE target starts exposed: no garments, no Move rows for them, and
+    // therefore no Cleanup rows either (a Cleanup part is offered only while
+    // its tag is outstanding, so that falls out for free rather than needing a
+    // special case). The user's ruling, 2026-09-05.
+    garmentSets: {
+      nude:      [],
+      undressed: [],
+      towel:     ['towel'],
+      default:   ['shirt', 'bottoms', 'panties'],
+    },
+
+    // ---- D16/D31/D33: the parts -----------------------------------------
+    // Every part carries TWO labels (D33): `label` is used inside the tray,
+    // where the region is already selected and visible ("Head" under Cock);
+    // `standalone` is used everywhere the region is NOT established -- prose,
+    // the phone's action summary, the image prompt, a codex entry ("glans").
+    // Neither is derived from the other; do not collapse them into one field.
+    //
+    // `acc` is D31's validity table: which instruments this part accepts and,
+    // per instrument, which motions. An entry is a motion id or a '@family'
+    // token that expands to that whole family. The tray renders only what is
+    // valid, so an impossible action is unreachable rather than refused --
+    // and the resolver refuses an id that is not in here rather than
+    // resolving it to something.
+    //
+    // `wakeDelta` is the seeded base range (a range, not a flat number, so
+    // repeats never feel identical). `intensity` is D27's 0-100 axis.
+    // `heat` is the flat per-part heat rate, NOT skill-scaled -- skill
+    // governs risk, never how good it feels. `soothing: true` marks a part
+    // that CAN soothe when paired with a calming motion at gentle pace (D17).
+    // `minExposure` gates on pose+covers (D34); `reach` overrides the
+    // region's pose gate.
+    parts: {
+      // -- Head
+      hair:        { region: 'head', label: 'Hair',     standalone: 'her hair',     intensity: 5,  heat: 1, wakeDelta: [2, 3],   soothing: true, acc: { fingertip: ['@contact'], fingers: ['@contact', 'tug'], hand: ['@contact', 'hold'], lips: ['breathe_on', 'nuzzle', 'kiss'] } },
+      scalp:       { region: 'head', label: 'Scalp',    standalone: 'her scalp',    intensity: 6,  heat: 1, wakeDelta: [2, 3],   soothing: true, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'hold'] } },
+      forehead:    { region: 'head', label: 'Forehead', standalone: 'her forehead', intensity: 4,  heat: 0, wakeDelta: [3, 4],   soothing: true, reach: ['back', 'back_parted', 'side_toward', 'side_away', 'curled'], acc: { fingertip: ['@contact'], hand: ['@contact', 'hold'], lips: ['breathe_on', 'nuzzle', 'kiss'] } },
+      cheek:       { region: 'head', label: 'Cheek',    standalone: 'her cheek', plural: 'her cheeks',    intensity: 8,  heat: 1, wakeDelta: [4, 6],   soothing: true, paired: true, reach: ['back', 'back_parted', 'side_toward', 'side_away', 'curled'], acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'cup', 'hold'], lips: ['breathe_on', 'nuzzle', 'kiss'], tongue: ['lick'] } },
+      ear:         { region: 'head', label: 'Ear',      standalone: 'her ear', plural: 'her ears',      intensity: 14, heat: 3, wakeDelta: [8, 11],  paired: true, acc: { fingertip: ['@contact'], fingers: ['@contact', 'pinch', 'roll'], lips: ['breathe_on', 'nuzzle', 'kiss', 'suck'], tongue: ['trace', 'circle', 'lick', 'flick'] } },
+      mouth:       { region: 'head', label: 'Mouth',    standalone: 'her mouth',    intensity: 22, heat: 5, wakeDelta: [14, 18], reach: ['back', 'back_parted', 'side_toward', 'side_away', 'curled'], acc: { fingertip: ['@contact'], fingers: ['@contact', 'dip'], lips: ['@mouth'], tongue: ['@mouth'], cock: ['brush', 'drag', 'press', 'dip', 'slide_in', 'pump', 'thrust'] } },
+      neck:        { region: 'head', label: 'Neck',     standalone: 'her neck',     intensity: 12, heat: 3, wakeDelta: [6, 9],   acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'hold'], lips: ['@mouth'], tongue: ['trace', 'drag', 'lick', 'flick'] } },
+      nape:        { region: 'head', label: 'Nape',     standalone: 'the nape of her neck', intensity: 10, heat: 2, wakeDelta: [4, 6], soothing: true, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'hold'], lips: ['breathe_on', 'nuzzle', 'kiss'], tongue: ['trace', 'lick'] } },
+      throat:      { region: 'head', label: 'Throat',   standalone: 'her throat',   intensity: 16, heat: 3, wakeDelta: [10, 13], reach: ['back', 'back_parted', 'side_toward', 'side_away'], acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'hold'], lips: ['@mouth'], tongue: ['trace', 'drag', 'lick'] } },
+      // -- Chest. `variant` is D33's breasted/flat split, read from
+      //    bible.physical.intimate.breasts / body.chestSize. Nipples are
+      //    universal and are never swapped.
+      breast:      { region: 'chest', label: 'Breast',       standalone: 'her breast', plural: 'her breasts',  intensity: 30, heat: 6, wakeDelta: [16, 20], paired: true, variant: 'breasted', evidence: ['shirt'], minExposure: 1, acc: { fingertip: ['@contact'], fingers: ['@contact', '@grip'], hand: ['@contact', '@grip'], lips: ['@mouth'], tongue: ['@mouth'], cock: ['drag', 'press', 'rub', 'grind', 'slide_in', 'thrust'] } },
+      pecs:        { region: 'chest', label: 'Pecs',         standalone: 'his chest', plural: 'his chest',   intensity: 22, heat: 4, wakeDelta: [12, 16], paired: true, variant: 'flat', evidence: ['shirt'], minExposure: 1, acc: { fingertip: ['@contact'], fingers: ['@contact', 'squeeze', 'knead'], hand: ['@contact', 'cup', 'squeeze', 'knead', 'hold'], lips: ['@mouth'], tongue: ['@mouth'] } },
+      nipple:      { region: 'chest', label: 'Nipple',       standalone: 'her nipple', plural: 'her nipples',  intensity: 38, heat: 8, wakeDelta: [20, 24], paired: true, evidence: ['shirt'], minExposure: 1, acc: { fingertip: ['@contact'], fingers: ['@contact', 'squeeze', 'roll', 'tug', 'pinch'], hand: ['@contact'], lips: ['@mouth'], tongue: ['@mouth'] } },
+      areola:      { region: 'chest', label: 'Areola',       standalone: 'her areola', plural: 'her areolae',  intensity: 34, heat: 7, wakeDelta: [18, 22], paired: true, evidence: ['shirt'], minExposure: 1, acc: { fingertip: ['@contact'], fingers: ['@contact'], lips: ['@mouth'], tongue: ['@mouth'] } },
+      cleavage:    { region: 'chest', label: 'Between them', standalone: 'the valley between her tits', intensity: 24, heat: 5, wakeDelta: [14, 18], variant: 'breasted', evidence: ['shirt'], minExposure: 1, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'hold'], lips: ['@mouth'], tongue: ['trace', 'drag', 'lick'], cock: ['drag', 'press', 'slide_in', 'pump', 'thrust'] } },
+      ribs:        { region: 'chest', label: 'Ribs',         standalone: 'her ribs',    intensity: 14, heat: 2, wakeDelta: [8, 11], minExposure: 1, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'hold'], lips: ['nuzzle', 'kiss'], tongue: ['trace', 'drag'] } },
+      // -- Belly
+      stomach:     { region: 'belly', label: 'Stomach',   standalone: 'her stomach',     intensity: 12, heat: 3, wakeDelta: [5, 7],   minExposure: 1, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'hold'], lips: ['@mouth'], tongue: ['trace', 'drag', 'lick'] } },
+      navel:       { region: 'belly', label: 'Navel',     standalone: 'her navel',       intensity: 16, heat: 3, wakeDelta: [7, 10],  minExposure: 1, acc: { fingertip: ['@contact', 'dip'], fingers: ['@contact'], lips: ['@mouth'], tongue: ['@mouth', 'dip'] } },
+      lower_belly: { region: 'belly', label: 'Low belly', standalone: 'her lower belly', intensity: 22, heat: 5, wakeDelta: [11, 14], minExposure: 1, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'hold'], lips: ['@mouth'], tongue: ['trace', 'drag', 'lick'] } },
+      hip:         { region: 'belly', label: 'Hip',       standalone: 'her hip', plural: 'her hips',         intensity: 12, heat: 3, wakeDelta: [6, 8],   paired: true, minExposure: 1, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'cup', 'squeeze', 'hold'], lips: ['nuzzle', 'kiss'], tongue: ['trace', 'drag'] } },
+      waist:       { region: 'belly', label: 'Waist',     standalone: 'her waist',       intensity: 10, heat: 2, wakeDelta: [5, 7],   minExposure: 1, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'hold'], lips: ['nuzzle', 'kiss'] } },
+      // -- Pussy (attached per `vagina` entry in HER genitals array, D35)
+      mound:       { region: 'pussy', label: 'Mound',    standalone: 'her mound',    intensity: 34, heat: 7,  wakeDelta: [18, 22], evidence: ['panties'], minExposure: 2, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'cup', 'hold'], lips: ['@mouth'], tongue: ['@mouth'] } },
+      pussy_lips:  { region: 'pussy', label: 'Lips',     standalone: 'her labia',    intensity: 46, heat: 9,  wakeDelta: [22, 26], evidence: ['panties'], minExposure: 2, acc: { fingertip: ['@contact'], fingers: ['@contact', 'spread', 'pinch'], hand: ['@contact', 'cup'], lips: ['@mouth'], tongue: ['@mouth'], cock: ['brush', 'drag', 'press', 'rub', 'grind'] } },
+      clit:        { region: 'pussy', label: 'Clit',     standalone: 'her clit',     intensity: 58, heat: 12, wakeDelta: [26, 30], evidence: ['panties', 'fluids'], minExposure: 2, acc: { fingertip: ['@contact'], fingers: ['@contact', 'roll', 'pinch'], lips: ['@mouth'], tongue: ['@mouth'], cock: ['brush', 'drag', 'press', 'rub', 'grind'] } },
+      entrance:    { region: 'pussy', label: 'Entrance', standalone: 'her entrance', intensity: 62, heat: 12, wakeDelta: [27, 31], evidence: ['panties', 'fluids'], minExposure: 2, reach: ['back_parted'], acc: { fingertip: ['@contact', 'dip'], fingers: ['@contact', 'dip', 'spread'], lips: ['@mouth'], tongue: ['@mouth', 'dip'], cock: ['brush', 'press', 'rub', 'dip', 'grind'] } },
+      // The standalone MUST be a noun phrase, not a prepositional one. It was
+      // 'inside her', which reads correctly alone but composes to "You slide
+      // into inside her" / "You thrust into inside her" against the five
+      // motions whose verb already ends in a preposition -- i.e. against the
+      // most important action in the scene. verify-night-p6.js section 18
+      // guards the whole grammar against that class now.
+      inside:      { region: 'pussy', label: 'Inside',   standalone: 'her cunt',     intensity: 78, heat: 15, wakeDelta: [30, 36], evidence: ['panties', 'fluids'], minExposure: 2, reach: ['back_parted'], acc: { fingers: ['dip', 'curl', 'slide_in', 'pump', 'spread'], tongue: ['dip', 'curl', 'slide_in'], cock: ['dip', 'slide_in', 'grind', 'pump', 'straddle', 'thrust', 'ride'] } },
+      // -- Cock (attached per `penis` entry in HER genitals array, D35)
+      shaft:       { region: 'cock', label: 'Shaft', standalone: 'his shaft', intensity: 50, heat: 10, wakeDelta: [22, 26], evidence: ['bottoms'], minExposure: 2, acc: { fingertip: ['@contact'], fingers: ['@contact', '@grip'], hand: ['@contact', '@grip', 'pump'], lips: ['@mouth'], tongue: ['@mouth'], cunt: ['brush', 'drag', 'press', 'rub', 'grind', 'straddle', 'ride'] } },
+      glans:       { region: 'cock', label: 'Head',  standalone: 'his glans', intensity: 62, heat: 12, wakeDelta: [26, 30], evidence: ['bottoms', 'fluids'], minExposure: 2, acc: { fingertip: ['@contact'], fingers: ['@contact', 'squeeze', 'roll'], lips: ['@mouth'], tongue: ['@mouth'], cunt: ['brush', 'press', 'rub', 'dip', 'grind', 'slide_in', 'ride'] } },
+      balls:       { region: 'cock', label: 'Balls', standalone: 'his balls', intensity: 44, heat: 8,  wakeDelta: [20, 24], evidence: ['bottoms'], minExposure: 2, acc: { fingertip: ['@contact'], fingers: ['@contact', 'roll'], hand: ['@contact', 'cup', 'hold', 'squeeze'], lips: ['@mouth'], tongue: ['@mouth'] } },
+      base:        { region: 'cock', label: 'Base',  standalone: 'the base of his cock', intensity: 42, heat: 8, wakeDelta: [19, 23], evidence: ['bottoms'], minExposure: 2, acc: { fingertip: ['@contact'], fingers: ['@contact', 'squeeze', 'hold'], hand: ['@contact', '@grip'], lips: ['@mouth'], tongue: ['trace', 'drag', 'lick'] } },
+      // -- Ass
+      ass_cheek:   { region: 'ass', label: 'Cheek',   standalone: 'her ass cheek', plural: 'her ass cheeks',       intensity: 22, heat: 4, wakeDelta: [10, 14], paired: true, evidence: ['bottoms'], minExposure: 1, acc: { fingertip: ['@contact'], fingers: ['@contact', '@grip'], hand: ['@contact', '@grip'], lips: ['@mouth'], tongue: ['trace', 'drag', 'lick'] } },
+      cleft:       { region: 'ass', label: 'Cleft',   standalone: 'the cleft of her ass', intensity: 30, heat: 5, wakeDelta: [15, 19], evidence: ['bottoms'], minExposure: 2, reach: ['front', 'side_away', 'back_parted'], acc: { fingertip: ['@contact'], fingers: ['@contact', 'spread'], hand: ['@contact', 'spread'], tongue: ['trace', 'drag', 'lick'], cock: ['drag', 'press', 'rub', 'grind'] } },
+      taint:       { region: 'ass', label: 'Taint',   standalone: 'her taint',           intensity: 40, heat: 7, wakeDelta: [20, 25], evidence: ['bottoms'], minExposure: 2, reach: ['front', 'side_away', 'back_parted'], acc: { fingertip: ['@contact'], fingers: ['@contact'], lips: ['@mouth'], tongue: ['@mouth'] } },
+      asshole:     { region: 'ass', label: 'Asshole', standalone: 'her asshole',         intensity: 48, heat: 8, wakeDelta: [26, 32], evidence: ['bottoms', 'fluids'], minExposure: 2, reach: ['front', 'side_away', 'back_parted'], acc: { fingertip: ['@contact', 'dip'], fingers: ['@contact', 'dip', 'curl', 'slide_in', 'pump'], lips: ['@mouth'], tongue: ['@mouth', 'dip'], cock: ['brush', 'press', 'dip', 'slide_in', 'grind', 'pump', 'thrust'] } },
+      // -- Legs
+      thigh:        { region: 'legs', label: 'Thigh',        standalone: 'her thigh', plural: 'her thighs',            intensity: 18, heat: 3, wakeDelta: [7, 9],   paired: true, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'cup', 'squeeze', 'knead', 'hold'], lips: ['@mouth'], tongue: ['trace', 'drag', 'lick'] } },
+      inner_thigh:  { region: 'legs', label: 'Inner thigh',  standalone: 'her inner thigh', plural: 'her inner thighs',      intensity: 28, heat: 6, wakeDelta: [14, 18], paired: true, evidence: ['bottoms'], minExposure: 1, acc: { fingertip: ['@contact'], fingers: ['@contact', 'spread'], hand: ['@contact', 'spread', 'squeeze', 'hold'], lips: ['@mouth'], tongue: ['@mouth'] } },
+      knee:         { region: 'legs', label: 'Knee',         standalone: 'her knee', plural: 'her knees',             intensity: 8,  heat: 1, wakeDelta: [3, 5],   paired: true, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'cup', 'hold'], lips: ['nuzzle', 'kiss'] } },
+      calf:         { region: 'legs', label: 'Calf',         standalone: 'her calf', plural: 'her calves',             intensity: 6,  heat: 1, wakeDelta: [3, 5],   paired: true, soothing: true, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'squeeze', 'knead', 'hold'], lips: ['nuzzle', 'kiss'] } },
+      back_of_knee: { region: 'legs', label: 'Back of knee', standalone: 'the back of her knee', plural: 'the backs of her knees', intensity: 12, heat: 2, wakeDelta: [6, 8],   paired: true, acc: { fingertip: ['@contact'], fingers: ['@contact'], lips: ['@mouth'], tongue: ['trace', 'drag', 'lick'] } },
+      // -- Feet
+      foot:        { region: 'feet', label: 'Foot',  standalone: 'her foot', plural: 'her feet',              intensity: 8,  heat: 1, wakeDelta: [6, 9],   paired: true, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'cup', 'squeeze', 'knead', 'hold'], lips: ['@mouth'] } },
+      sole:        { region: 'feet', label: 'Sole',  standalone: 'the sole of her foot', plural: 'the soles of her feet',  intensity: 12, heat: 1, wakeDelta: [8, 12],  paired: true, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'knead'], tongue: ['trace', 'drag', 'lick'] } },
+      toes:        { region: 'feet', label: 'Toes',  standalone: 'her toes', plural: 'her toes',              intensity: 16, heat: 2, wakeDelta: [9, 13],  paired: true, acc: { fingertip: ['@contact'], fingers: ['@contact', 'roll', 'tug', 'spread'], lips: ['@mouth'], tongue: ['@mouth'] } },
+      ankle:       { region: 'feet', label: 'Ankle', standalone: 'her ankle', plural: 'her ankles',             intensity: 5,  heat: 1, wakeDelta: [3, 5],   paired: true, soothing: true, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'hold'], lips: ['nuzzle', 'kiss'] } },
+      arch:        { region: 'feet', label: 'Arch',  standalone: 'the arch of her foot', plural: 'the arches of her feet',  intensity: 10, heat: 1, wakeDelta: [7, 10],  paired: true, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'knead'], tongue: ['trace', 'drag', 'lick'] } },
+      // -- Back. The soothing heartland: `reach: null` on the four cheapest
+      //    parts so a player is never posed into a corner with no way to buy
+      //    wakefulness back.
+      shoulders:      { region: 'back', label: 'Shoulders',         standalone: 'her shoulders',         intensity: 5,  heat: 1, wakeDelta: [2, 3], soothing: true, reach: null, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'squeeze', 'knead', 'hold'], lips: ['breathe_on', 'nuzzle', 'kiss'] } },
+      shoulder_blade: { region: 'back', label: 'Shoulder blade',    standalone: 'her shoulder blade', plural: 'her shoulder blades',    intensity: 7,  heat: 1, wakeDelta: [3, 4], soothing: true, paired: true, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'knead', 'hold'], lips: ['breathe_on', 'nuzzle', 'kiss'] } },
+      spine:          { region: 'back', label: 'Spine',             standalone: 'her spine',             intensity: 9,  heat: 2, wakeDelta: [4, 6], soothing: true, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'hold'], lips: ['breathe_on', 'nuzzle', 'kiss'], tongue: ['trace', 'drag'] } },
+      lower_back:     { region: 'back', label: 'Small of her back', standalone: 'the small of her back', intensity: 13, heat: 3, wakeDelta: [7, 9], minExposure: 1, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'knead', 'hold'], lips: ['@mouth'], tongue: ['trace', 'drag', 'lick'] } },
+      arm:            { region: 'back', label: 'Arm',               standalone: 'her arm', plural: 'her arms',               intensity: 4,  heat: 0, wakeDelta: [2, 3], soothing: true, paired: true, reach: null, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'hold'], lips: ['breathe_on', 'nuzzle', 'kiss'] } },
+      her_hand:       { region: 'back', label: 'Hand',              standalone: 'her hand', plural: 'her hands',              intensity: 5,  heat: 1, wakeDelta: [2, 3], soothing: true, paired: true, reach: null, acc: { fingertip: ['@contact'], fingers: ['@contact'], hand: ['@contact', 'hold'], lips: ['breathe_on', 'nuzzle', 'kiss'] } },
+      // -- Move (D36). The most expensive actions in the game.
+      her_body:    { region: 'move', label: 'Her whole body', standalone: '{o}',        intensity: 0, heat: 0, wakeDelta: [14, 20], reach: null, acc: { hand: ['uncurl', 'turn_toward', 'turn_away', 'roll_to_back', 'roll_to_front', 'roll_off_front'] } },
+      her_thighs:  { region: 'move', label: 'Her thighs',     standalone: 'her thighs', intensity: 0, heat: 0, wakeDelta: [8, 12],  reach: null, acc: { hand: ['part_thighs', 'close_thighs'] } },
+      the_sheet:   { region: 'move', label: 'The sheet',      standalone: 'the sheet',  intensity: 0, heat: 0, wakeDelta: [5, 8],   reach: null, acc: { hand: ['draw_sheet_back', 'pull_sheet_off'] } },
+      // -- Move / garments (Phase 7). `garment` marks the part as belonging to
+      //    the clothing axis: it is offered only while that garment is in this
+      //    session's set, still on, and nothing it is UNDER is still in the
+      //    way (nightGarmentAvailable). A nude session has none of these rows,
+      //    and neither does it have their Cleanup counterparts.
+      g_shirt:     { region: 'move', label: 'Her shirt',      standalone: 'her shirt',   garment: 'shirt',   intensity: 0, heat: 0, wakeDelta: [6, 9],  reach: null, acc: { hand: ['push_shirt_up'] } },
+      g_bottoms:   { region: 'move', label: 'Her bottoms',    standalone: 'her bottoms', garment: 'bottoms', intensity: 0, heat: 0, wakeDelta: [8, 12], reach: null, acc: { hand: ['pull_bottoms_down'] } },
+      g_panties:   { region: 'move', label: 'Her panties',    standalone: 'her panties', garment: 'panties', intensity: 0, heat: 0, wakeDelta: [5, 8],  reach: null, acc: { hand: ['pull_panties_aside'] } },
+      g_towel:     { region: 'move', label: 'Her towel',      standalone: 'her towel',   garment: 'towel',   intensity: 0, heat: 0, wakeDelta: [4, 7],  reach: null, acc: { hand: ['open_towel'] } },
+      // -- Cleanup (D12/D22). One part per evidence tag; `clears` names it.
+      //    Cleanup is the only thing that changes what an exit COSTS.
+      // Phase 7: `restores` puts the garment back ON as well as clearing the
+      // tag, which is what makes Cleanup a real mid-scene decision rather than
+      // free tidying -- straightening her panties closes off everything under
+      // them again, so you do it at the END or you do it twice.
+      panties:     { region: 'cleanup', label: 'Her panties', standalone: 'her panties', intensity: 0, heat: 0, wakeDelta: [4, 6], clears: 'panties', restores: 'panties', reach: null, acc: { hand: ['straighten'] } },
+      bottoms:     { region: 'cleanup', label: 'Her bottoms', standalone: 'her bottoms', intensity: 0, heat: 0, wakeDelta: [4, 6], clears: 'bottoms', restores: 'bottoms', reach: null, acc: { hand: ['pull_up'] } },
+      shirt:       { region: 'cleanup', label: 'Her shirt',   standalone: 'her shirt',   intensity: 0, heat: 0, wakeDelta: [3, 5], clears: 'shirt',   restores: 'shirt',   reach: null, acc: { hand: ['fix'] } },
+      towel:       { region: 'cleanup', label: 'Her towel',   standalone: 'her towel',   intensity: 0, heat: 0, wakeDelta: [3, 5], clears: 'towel',   restores: 'towel',   reach: null, acc: { hand: ['straighten'] } },
+      sheets:      { region: 'cleanup', label: 'The sheets',  standalone: 'the sheets',  intensity: 0, heat: 0, wakeDelta: [2, 4], clears: 'sheets',  reach: null, acc: { hand: ['smooth'] } },
+      fluids:      { region: 'cleanup', label: 'The mess',    standalone: 'the mess',    intensity: 0, heat: 0, wakeDelta: [6, 9], clears: 'fluids',  reach: null, acc: { hand: ['wipe'] } },
+      // -- Ambient (Phase 6, the shadow layer). Never in the tray: these are
+      //    the three DISTANCES a third party can be at while the scene runs,
+      //    and the picker chooses one from where people actually are. They
+      //    carry no heat, no intensity and no evidence -- only a wakefulness
+      //    cost and, through it, the same permanent Stirring every action
+      //    pays. `noise_here` is somebody in the room with you, which is why
+      //    it costs more than any touch in the game.
+      noise_far:   { region: 'ambient', label: 'Distant',      standalone: 'somewhere out in the flat', intensity: 0, heat: 0, wakeDelta: [1, 3],   reach: null, acc: { world: ['cue'] } },
+      noise_near:  { region: 'ambient', label: 'Close',        standalone: 'just outside the door',     intensity: 0, heat: 0, wakeDelta: [4, 8],   reach: null, acc: { world: ['cue'] } },
+      noise_here:  { region: 'ambient', label: 'In the room',  standalone: 'in the room with you',      intensity: 0, heat: 0, wakeDelta: [12, 20], reach: null, acc: { world: ['cue'] } },
+    },
+
+    // Phase 3b: the short name a still-outstanding evidence tag wears on the
+    // narration row's chip and in the Leave confirmation (D22 names what you
+    // are about to leave behind). Deliberately NOT the Cleanup part's own
+    // `label` -- that one answers "what do I touch to fix this" ("Her shirt")
+    // while this one answers "what is wrong right now" ("shirt up"), and the
+    // tray shows both at once. Every tag any part or motion can leave must
+    // have an entry here; verify-night-p3.js asserts the coverage.
+    evidenceLabels: {
+      panties: 'panties pulled aside',
+      bottoms: 'bottoms down',
+      shirt:   'shirt up',
+      towel:   'her towel open',
+      sheets:  'sheets mussed',
+      fluids:  'the mess',
+    },
+
+    // ---- the numbers ----------------------------------------------------
+    // Reuses the shaming tiers (resolveShamingTier via boundaryTierFor) --
+    // the SAME dynamic read sleepRoom/affectionLadder use, so this can't
+    // disagree with them about what a sleeper's tier is.
+    tierRiskMult: { cold: 1.5, neutral: 1.0, warm: 0.6, hostile: 1.5 },
+    // Indexed by stealth skillLevel (0..10, skills.js). Both curves shrink
+    // toward their tail value as skill rises -- a DOUBLED skill benefit on
+    // Stirring growth specifically (D2): skillMult shrinks the raw
+    // Wakefulness cost, and stirringRate independently shrinks how much of
+    // that cost sticks permanently. The explicit design goal is that a
+    // maxed-stealth player's Stirring barely moves at all ("free play").
+    skillMult:    [1.00, 0.92, 0.84, 0.76, 0.68, 0.60, 0.52, 0.44, 0.36, 0.26, 0.15],
+    stirringRate: [0.35, 0.31, 0.27, 0.23, 0.19, 0.15, 0.11, 0.08, 0.05, 0.03, 0.02],
+
+    // D17: soothing is emergent, never a button. A soothing-capable part x a
+    // calming motion x gentle pace DRAINS the magnitude it would otherwise
+    // have added (drainMult amplifies it, because soothing parts are cheap by
+    // construction). Stirring still rises -- that is the anti-spam rule:
+    // soothing buys back current wakefulness at a PERMANENT cost, so
+    // soothe-forever is not a strategy. And it cools her slightly, because
+    // calming her down cools her down. The drain must stay small enough that
+    // pursuing heat still wins outright.
+    soothe: { drainMult: 5.0, stirMult: 1.0, heat: -1 },
+
+    // D27 Intensity Acceleration Resistance -- what makes Heat a resource
+    // rather than a counter. Heat gain is a function of the GAP between an
+    // action's intensity and where she currently is, NOT of the action alone.
+    // `cycle` is D38's load-bearing fix: the gap reads the WITHIN-CYCLE
+    // position (heat mod cycle), so unbounded heat and IAR stay compatible
+    // and the escalation curve RESTARTS after every climax.
+    iar: {
+      cycle: 100,
+      idealPeak: 12,            // the gap that gains the most -- "the next step up"
+      tooFastAt: 25,            // past this she tenses: heat goes NEGATIVE
+      staleAt: -20,             // below this it is regression, decaying toward zero
+      atLevelFactor: 0.60,      // gain factor at gap 0 ("at her level")
+      edgeFactor: 0.50,         // gain factor at exactly tooFastAt
+      maintainFloor: 0.25,      // gain factor at staleAt ("maintenance")
+      overshootHeatLoss: 0.35,  // heat lost per point past tooFastAt
+      overshootWakeMax: 2.5,    // wakeDelta multiplier at a full overshoot
+      overshootWakeRamp: 25,    // points past tooFastAt to reach that max
+    },
+
+    // D28: per-NPC touch preferences, DERIVED and never stored -- a pure
+    // function of the character's genSeed on its own seed stream, exactly the
+    // TASTE_TUNING / taste.js model, so old saves need no migration and the
+    // same save always reproduces the same preferences. Discovery is the
+    // game: nothing here is shown up front.
+    // D35: an authored `sensitivity` on a genital entry or on `breasts` WINS
+    // for the parts it covers -- the night scene must never silently
+    // contradict a character's own bible.
+    prefs: {
+      seedSalt: 0x4e494748,
+      lovedParts: 3, dislikedParts: 2, lovedMotions: 1, dislikedMotions: 1,
+      // D28's second half: DISCOVERY IS THE GAME. Nothing is shown up front.
+      // A preference becomes KNOWN once the player has worked that part (or
+      // used that motion) `learnAfter` times inside one session -- the number
+      // of repeats it takes before "she likes this" is a read rather than a
+      // guess. What is learned is remembered per character on
+      // `player.nightKnown` and surfaces as a quiet marker on the chip
+      // (`knownMark`); an unlearned preference shows nothing at all, and a
+      // NEUTRAL part is never marked no matter how many times it is worked,
+      // so the absence of a marker stays ambiguous rather than becoming a
+      // "confirmed nothing" tell.
+      learnAfter: 3,
+      knownMark: { loved: '♥', disliked: '·' },
+      loved:    { heatMult: 1.35, windowMult: 1.40, wakeMult: 0.85 },
+      disliked: { heatMult: 0.60, windowMult: 0.65, wakeMult: 1.25 },
+      sensitivityLoved:    ['high', 'exquisite'],
+      sensitivityDisliked: ['low', 'muted'],
+    },
+
+    // D29: the willing/hostile bar is a per-NPC moving target, not a
+    // constant. A warm, adventurous partner needs very little heat; a cold,
+    // conservative near-stranger needs almost all of it. Deterministic -- a
+    // read, not a roll (D6's "earned, never rolled for free" is unchanged),
+    // and it reads ABSOLUTE heat, not the IAR cycle position (D38).
+    willing: {
+      base: 80, relWeight: 30, deviancyWeight: 20, min: 20, max: 90,
+      affectionWeight: 0.4, desireWeight: 0.4, intimacyWeight: 0.2,
+    },
+
+    // D36: Heat makes her pliant, and that is the SECOND thing Heat is for.
+    // A warm NPC moves with you semi-consciously, so heat scales a move's
+    // cost DOWN. This coupling only ever makes the player safer -- never
+    // mirror it into a penalty (that would be D7, which is deleted). Cost is
+    // deliberately NOT scaled by current wakefulness: that reads as the more
+    // physical model but it is a positive feedback loop (high wake -> dearer
+    // move -> higher wake) and would spiral a session into an unrecoverable
+    // state through no decision the player made.
+    move: { heatPliancyFull: 100, heatDiscountMax: 0.6 },
+
+    // Phase 6: the shadow layer's cadence and its distance table. The world
+    // does not stop while the scene runs (D24), so a third party moving
+    // around out there is a risk the player did not choose and cannot undo --
+    // the one exogenous pressure in a game that is otherwise entirely about
+    // the player's own judgement. It resolves through nightStepAction like
+    // everything else (see `regions.ambient`), so it can never disagree with
+    // a touch about what Stirring is.
+    //
+    // `chance` is rolled once per `everyMinutes` of ELAPSED SESSION TIME, on
+    // the session's own seed stream, and only when somebody who is not the
+    // player and not the target is actually close enough to make the noise --
+    // an empty flat is silent, and a full one is not. `parts` maps the
+    // proximity the picker found to the ambient part that pays for it.
+    ambient: {
+      everyMinutes: 15,
+      chance: 0.55,
+      parts: { here: 'noise_here', near: 'noise_near', far: 'noise_far' },
+    },
+
+    thresholds: {
+      // Wakefulness instant-wakes here. Stirring can never let current
+      // Wakefulness sit below itself (D2), so a Stirring at this value
+      // already forces the same event -- there's no separate check.
+      detectionWake: 100,
+      // D38: heat is UNBOUNDED and every `climaxEvery` crossed is another
+      // climax beat. climaxCount is monotone, so falling back down and
+      // climbing again does not re-arm a spent checkpoint. Purely positive,
+      // never a wake trigger (D14).
+      climaxEvery: 100,
+    },
+
+    // D23: XP is per action completed, at per-action rates -- fully fucking
+    // someone is a more impressive feat than touching them and pays
+    // accordingly. Derived from the action's own intensity rather than a
+    // hand-authored column, so it can never drift out of step with the
+    // grammar. awardSkillXp(player, 'stealth', ...) is still the sink; the
+    // four-outcome bucket (ghostComplete/bailClean/wakeWilling/caught) is
+    // superseded and gone.
+    // exitMult scales the WHOLE bank at payout. Phase 5 pays the bank out at
+    // every real ending -- exit, wake_willing AND wake_hostile -- and only
+    // `abandon` forfeits it. That reads D23 ("the body of the reward is
+    // earned action by action, DURING play") over the flat clean-branch-only
+    // convention D32 set for the one-roll stealth verbs: those award a fixed
+    // lump for a binary outcome, which is exactly the shape D23 superseded
+    // here. The stake of a forced wake is the shaming and the cold shoulder,
+    // not the skill you demonstrated on the way there.
+    xp: { perAction: 0.5, perIntensity: 0.06, exitMult: 1.0 },
+
+    // D5/D25 -- what an exit COSTS (Phase 5). There is no private roll any
+    // more: rollGhostSuspicion and its `suspicion: { base, perEvidence, cap }`
+    // bucket are DELETED, and whatever evidence is still outstanding is
+    // stamped on the room's bed through the shared LEAVE_EVIDENCE primitive.
+    // The game's own per-tick discovery scan (sim.js Pass 2, gated on the
+    // room's owner being in it) is what then rolls whether she ever puts it
+    // together, and UI's advanceAndResolve writes the suspicion -- the same
+    // channel every other stealth consequence in the game runs through.
+    //
+    // STRENGTH is the term that scales with the leftover count, because
+    // strength is exactly what that scan weights its per-tick chance by
+    // (STEALTH_TUNING.evidenceStrengthDiscoveryFactor). That is D5's locked
+    // shape -- evidence-weighted, not depth-weighted -- expressed in the
+    // shared system's own units instead of a private curve. An empty evidence
+    // array writes NO evidence at all, which is "rolls at or near zero"
+    // exactly. Real numbers are Q5/Phase 6.
+    //
+    // Q2 ANSWERED (Phase 6). Phase 5 measured the leftover count against the
+    // DISCOVERY probability and found it nearly inert: the shared scan's flat
+    // `evidenceDiscoveryChancePerTick` (0.15) already discovers anything at
+    // all over a night in the owner's own room, so no strength this bucket
+    // can express moves "does she ever find out" more than a percentage
+    // point. Widening the strength range against that base -- the other
+    // option the plan offered -- was measured too and does the same nothing.
+    // The answer is that strength was only being read by ONE of the two
+    // terms it should drive: it weighted the probability and not the
+    // CONSEQUENCE. sneakCaughtSuspicionDelta was flat, so a five-tag mess and
+    // a single crooked shirt taught her exactly as much. That is fixed in the
+    // shared system in the shared system's own units (see
+    // STEALTH_TUNING.sneakEvidenceStrength) and it is what makes the
+    // intermediate Cleanup actions stop being ornamental: each tag you clear
+    // is a linear cut in what she concludes when she finds what is left, and
+    // clearing the LAST one still removes the record entirely.
+    exit: {
+      evidenceKind: 'disturbed_bed',   // OBJECT_DEFS.bed.evidenceKinds declares it
+      evidencePerTag: 0.18,            // strength per outstanding tag -- five tags saturates the cap below
+      evidenceStrengthMax: 0.9,        // <= EFFECT_LIMITS.evidenceStrengthCap (1)
+    },
+
+    // D30/D32: narration is AUTHORED, never generated -- no LLM call sits on
+    // the action path at all. Every line has TWO halves: what you did, and
+    // what she did back. The second half is keyed on STATE rather than on the
+    // action, which is what makes a repeated touch read as a scene
+    // progressing rather than a button being pressed, and it is where the D27
+    // verdict, the heat band, the wakefulness band and any pose change become
+    // legible without a number. Fragment composition under a seeded pick --
+    // composePeekViewLine is the working precedent.
+    prose: {
+      // ---- THE REGISTER (Phase 6) -----------------------------------------
+      // Every authored string in this whole bucket -- these pools, the part
+      // labels, the pose labels, the Move phrases -- is written in the
+      // FEMININE and swapped at read time by nightRegister (boundary.js),
+      // which is the single choke point between this data and the player.
+      // Write new prose in the feminine and it works for a masculine target
+      // for free.
+      //
+      // The one thing you must mark by hand is the OBJECT case, because
+      // English spells "her" two ways and the masculine does not: possessive
+      // "her hair" -> "his hair", but object "touching her" -> "touching
+      // him". Write the object case as the token `{o}` and leave every other
+      // her/she/hers/herself exactly as it reads. There is no token for the
+      // possessive on purpose -- tokenising the common case would make this
+      // whole bucket unreadable to the person writing the prose, which is the
+      // only reason it is authored rather than generated.
+      //
+      // Every frame is a complete sentence on its own -- {manner} always
+      // arrives space-prefixed and every pool below is non-empty, so a frame
+      // never composes to a dangling clause.
+      actFrames: [
+        'You are {gerund} {target}{manner}.',
+        '{Manner}, you {verb} {target}.',
+        'You {verb} {target} with {instrument}{manner}.',
+        'You {verb} {target}{manner}.',
+      ],
+      manner: {
+        gentle: [' barely touching {o}', ' slowly', ' so lightly it is almost nothing', ' with the patience of someone who has all night'],
+        steady: [' steadily', ' in an unhurried rhythm', ' without changing pace', ' at the pace you set'],
+        firm:   [' hard', ' firmly', ' with real pressure', ' with nothing held back'],
+      },
+      side: { left: 'her left ', right: 'her right ', both: 'both her ' },
+      // Half two, part one -- the D27 verdict. A player learns the whole
+      // acceleration system from these lines and never needs a tutorial.
+      verdict: {
+        overshoot:  ['She tenses under you, and it is the wrong kind of tense.', 'Too much, too fast — her whole body pulls tight.', 'Something in {o} flinches away from it.', 'She stiffens, and whatever was building in {o} goes out.'],
+        step:       ['She leans into it before she knows she is doing it.', 'That is exactly the next thing she wanted.', 'Her body answers it like it had been waiting.', 'She gives all at once and asks for more of it.'],
+        level:      ['She takes it easily, right where she already is.', 'It lands square on where she is at.', 'She settles into it without effort.'],
+        maintain:   ['It keeps {o} exactly where she was.', 'She stays warm under it, no further along.', 'Enough to hold {o} there, not enough to move {o}.'],
+        regression: ['She barely registers it now.', 'It does not reach {o} — she is well past this.', 'A softer thing than she is currently interested in.'],
+        soothe:     ['She settles under your hand.', 'She sinks a little deeper into the pillow.', 'Whatever was surfacing in {o} sinks back down.'],
+        neutral:    ['She does not stir.', 'Nothing changes in her face.'],
+      },
+      // Half two, part two -- her state. Keyed on the BANDS, never on the
+      // action, so the same touch reads differently at heat 10 and heat 80.
+      heatBand: {
+        cold:    ['She is still entirely asleep with it.', 'Nothing in {o} has woken up yet.'],
+        warm:    ['Her breathing has changed, shallower than it was.', 'There is colour coming up her throat.'],
+        hot:     ['She is wet enough that you can hear it.', 'Her hips have started moving on their own.', 'A sound comes out of {o} that is not a sleeping sound.'],
+        burning: ['She is right at the edge of something and still under.', 'Every part of {o} is straining toward it now.'],
+      },
+      wakeBand: {
+        still:     ['She has not moved at all.', 'She is dead to the world.'],
+        shifting:  ['She shifts, and settles.', 'One hand moves and stops.'],
+        surfacing: ['Her breathing breaks its rhythm.', 'She is closer to the surface than she was.'],
+        brink:     ['Her eyelids move. She is nearly up.', 'One more of those and she is awake.'],
+      },
+      poseChange: ['She {poseLine}.', 'You move {o}, and she {poseLine}.'],
+      poseLines: {
+        curled:      'draws herself into a curl',
+        side_away:   'rolls onto her side, facing away from you',
+        side_toward: 'rolls onto her side, facing you',
+        back:        'settles onto her back',
+        back_parted: 'lets her thighs fall open',
+        front:       'turns face-down into the pillow',
+      },
+      // Phase 7, the coverLines precedent applied to the clothing axis: the
+      // act half already reads "You pull her panties aside" (the motion's own
+      // phrase), so this is the state half — what is true about her now.
+      garmentLines: {
+        shirt:   'Her shirt is up around her collarbone.',
+        bottoms: 'Her bottoms are down around her thighs.',
+        panties: 'Her panties are pulled aside.',
+        towel:   'The towel has fallen open.',
+      },
+      garmentRestored: {
+        shirt:   'Her shirt is back down.',
+        bottoms: 'Her bottoms are back up.',
+        panties: 'Her panties are straight again.',
+        towel:   'The towel is closed around her again.',
+      },
+      coverLines: {
+        covered:     'The covers are back over {o}.',
+        turned_back: 'The covers are turned back off {o}.',
+        off:         'The covers are off {o} entirely.',
+      },
+      // Phase 6: the three player-visible strings the PAINTER used to hold
+      // as literals. They moved here for one reason -- they said "she" and
+      // "her", and the painter has no target to register them against. Every
+      // authored night-scene word now lives in this bucket, which is what
+      // makes "the register is one function" a checkable claim rather than an
+      // intention (verify-night-p6.js scans both night files for a bare
+      // she/her and fails on one).
+      // Phase 7: why a region is closed. A region with nothing reachable used
+      // to vanish from the tray entirely, which is D31 applied one level too
+      // far -- D31 says an impossible ACTION is unreachable rather than
+      // refused, and a whole region silently absent is not that, it is the
+      // game hiding that she HAS a part of her body. It cost a player the
+      // ability to find penetration at all: `inside` needs pose back_parted
+      // AND the covers fully off, five Move actions from a typical opening,
+      // and until all five are done the Pussy tab does not exist to hint at
+      // it. These name the NEXT thing in the way, never the whole chain.
+      // Authored in the feminine like every other pool here (nightRegister
+      // swaps it); `{garment}` takes the garment's own label, and the phrasing
+      // deliberately avoids a verb so it agrees with both "Her shirt" and
+      // "Her bottoms" without a plurality table.
+      blocked: {
+        pose:          'Not from the way she is lying.',
+        covers:        'The covers are in the way.',
+        garment:       '{garment} first.',
+        garment_layer: '{garment} first.',
+      },
+      ui: {
+        willingTick: 'she would wake willing from here',
+        climax:      'She comes',
+        climaxAgain: 'She comes again',
+        unreachable: 'Nothing on her is reachable from here. Nothing is offered that cannot happen.',
+        asleep:      'is asleep.',
+      },
+      // Phase 6's shadow layer. The act half of an ambient cue is not
+      // something YOU did, so it never uses actFrames -- it is keyed on the
+      // distance part instead, and the response half (verdict/band/pose) is
+      // composed exactly as it is for a touch, which is the point: the player
+      // reads the cost of the world's noise in the same words they read the
+      // cost of their own hand.
+      ambient: {
+        noise_far:  ['Somewhere out in the flat a door goes.', 'Water moves in the pipes behind the wall.', 'Someone crosses a floor two rooms away.', 'A cupboard shuts somewhere out there.'],
+        noise_near: ['Footsteps stop just outside the door.', 'A shadow breaks the light under the door.', 'The handle moves, a little, and stops.', 'Someone is standing on the other side of that door.'],
+        noise_here: ['The door opens. Someone is in the room.', 'A floorboard goes off, right there, in here with you.', 'Someone else is breathing in this room.'],
+      },
+      climax: ['She comes in her sleep, silently, her whole body going rigid and then loose.', 'It takes {o} under — a long shudder and a sound she does not wake up for.'],
+      woke:    ['Her eyes open.'],
+      // The fallback. If any pool comes up empty the mechanics still stand
+      // and the player still gets a line -- a phrasing failure is never
+      // allowed to become a mechanics failure (invariant 2).
+      fallback: 'You touch {o}, and she does not wake.',
+    },
+  },
   // --- Three-way acts (throuple / cuck, D14) ---
   // `cuck_dynamic` is the same all-three-willing act as a throuple, named by
   // configuration: when two of the three hold a committed/seeing record, the
@@ -4879,6 +5906,21 @@ const BOUNDARY = {
     caughtSuspicion: 0.2,     // the NPC's suspicion of the player (boundary_violation) — they now watch YOU
     eventTemplateSilent: '{name} slipped into your bed while you were asleep.',
     eventTemplateCaught: '{name} got caught sneaking into your room.',
+    // actions-and-activities-overhaul-plan.md Phase 5 (D31): the wake-up roll
+    // above only ever decided whether the player wakes at all — "caught" used
+    // to resolve caughtRelDeltas/caughtSuspicion unconditionally the instant
+    // it woke them, with no player say in it, which is exactly the
+    // roll-decides-feelings shape D31 forbids. `caught` now only STAMPS a
+    // pending record (boundary.js's trySneakIntoBed) and the player's real
+    // in-the-moment choice — into it / decline / get angry — decides which of
+    // three outcomes lands (boundary.js's resolveSleepAdvanceChoice): 'into it'
+    // reuses BOUNDARY.throuple's own needs/mood effects + INTIMACY.relDeltas.sex
+    // (a completed act is costed like any other), 'angry' reuses this same
+    // caughtRelDeltas/caughtSuspicion pair (what used to fire unconditionally
+    // now fires only when the player actually chooses anger), and 'decline'
+    // is the one genuinely new outcome — a real no, gently taken, costing
+    // far less than being caught out.
+    declineRelDeltas: { tension: 0.05, comfort: -0.03 },
   },
 };
 
@@ -4997,6 +6039,9 @@ const EVENT_IMPORTANCE = {
   // Intimacy & Voyeurism Phase 19: a 'keep it down' beat is a real social
   // moment between neighbours, worth remembering.
   music_too_loud:      'social',
+  // Actions & Activities Overhaul Phase 17 (D26): the same shape as
+  // music_too_loud — a party-noise complaint is a real social beat.
+  party_loud:          'social',
   npc_chat:            'social',
   eat:                 'social',
   guest:               'social',
@@ -5042,6 +6087,10 @@ const EVENT_EMOTION = {
   gift:                'warmth',
   breakage:            'embarrassment',
   burnt_food:          'embarrassment',
+  // Actions & Activities Overhaul Phase 8 (D16): a temperature complaint is a
+  // small domestic gripe — the same theme house-rule violations use
+  // (flags.js), never 'argument' (nobody's angry, just uncomfortable).
+  temperature_complaint: 'domestic',
   // Intimacy & Voyeurism Phase 13: masturbation is a private moment that
   // landed on the event log — tagged embarrassment so a witnessed one can
   // form a theme, sitting in the same band as the other private beats.
@@ -5069,6 +6118,8 @@ const EVENT_EMOTION = {
   // Intimacy & Voyeurism Phase 19: music-too-loud beats group as argument
   // themes, like the other noise-driven irritations.
   music_too_loud:      'argument',
+  // Actions & Activities Overhaul Phase 17 (D26): same noise-irritation theme.
+  party_loud:          'argument',
 };
 
 // --- Infidelity (Intimacy & Voyeurism Phase 14, D14) -----------------------
@@ -5455,7 +6506,27 @@ const DEMOTION_BEATS = [
 // --- Image cache ---
 const IMAGE_CACHE = {
   cap: 500,               // LRU max entries (D2, character-cutout-scene-rendering-plan: 200 -> 500 to hold the plate+cutout namespace split)
-  resolutions: { bg: '768x512', char: '512x768', scene: { landscape: '768x512', portrait: '512x768' }, cutout: '512x768' },
+  resolutions: {
+    bg: '768x512', char: '512x768', scene: { landscape: '768x512', portrait: '512x768' }, cutout: '512x768',
+    // night-scene-sleeping-npc-plan D19: the night frame is aspect-locked to
+    // the image it holds, so `object-fit: contain` produces neither a crop nor
+    // a letterbox -- the box IS the picture's shape, and `cover` is banned on
+    // that surface. generateImage accepts only these four sizes, so the box is
+    // chosen from the space actually available (nightFrameShape, image.js) and
+    // the frame is then locked to it. A THIRD shape is why this is its own
+    // entry rather than reusing `scene`: a near-square window wants 768x768,
+    // which the two-value scene split has no room for.
+    night: { portrait: '512x768', square: '768x768', landscape: '768x512' },
+  },
+  // night-scene-sleeping-npc-plan D20: at most this many generations in
+  // flight at once, enforced by generateImageTracked's semaphore. Before D18
+  // nothing needed a cap -- surfaces generated one frame at a time and the
+  // in-flight COUNT existed only so the background sprite queue could yield to
+  // the player (D14). D18's per-action cadence plus D20's speculative prefetch
+  // can ask for a dozen frames from one tap, and the cap is what keeps that
+  // from becoming a thundering herd. Global on purpose: the queue, the plates
+  // and the night scene all draw on the same quota.
+  maxInFlight: 8,
 };
 
 // ===== CHARACTER CUTOUTS (character-cutout-scene-rendering-plan, Phase 1) =====
@@ -6282,103 +7353,117 @@ const OCCUPATION_POOL = [
     affinity: { temperament: { conscientiousness: -0.35, volatility: 0.2 } }, traitAffinity: { lazy: 1.6, easygoing: 1.4, chaotic: 1.3, restless: 1.3 } },
 ];
 
-// --- Schedule templates: [weekday/weekend] → tick → activity weight table ---
+// --- Schedule templates: [weekday/weekend] → minute-of-day → activity
+// weight table. continuous-cadence-closure-plan Phase 2 (D3): ranges are
+// minutes-of-day (start inclusive, end exclusive), the same convention
+// COMMITMENT_TUNING.mealSlots/COMMITMENT_KINDS.hangout.slots already use —
+// resolveScheduleActivity (sim.js) and its two mirrors, nextScheduleBoundary
+// and workBlockEndAbs (cognition.js), check `clock.minutes` against these
+// directly and no longer collapse it through getTickIndex first. The block
+// this reindex resolves at any given moment is unchanged (every boundary
+// below is still tick-aligned, i.e. a multiple of CLOCK.tickMinutes) — only
+// the representation moved off the tick index.
 const SCHEDULES = {
   day_shift: {
-    weekday: {  // 0-47 (30-min ticks)
-      sleep:    [[0, 15, 1.0]],
-      morning:  [[16, 18, 0.8], [18, 19, 0.5]],
-      commute:  [[19, 20, 1.0]],
-      work:     [[20, 34, 1.0]],
-      commute_home: [[34, 35, 1.0]],
-      evening:  [[36, 42, 0.6]],
-      wind_down:[[42, 47, 0.8]],
+    weekday: {
+      sleep:    [[0, 450, 1.0]],                        // 00:00-07:30
+      morning:  [[480, 540, 0.8], [540, 570, 0.5]],      // 08:00-09:00, 09:00-09:30
+      commute:  [[570, 600, 1.0]],                       // 09:30-10:00
+      work:     [[600, 1020, 1.0]],                      // 10:00-17:00
+      commute_home: [[1020, 1050, 1.0]],                 // 17:00-17:30
+      evening:  [[1080, 1260, 0.6]],                     // 18:00-21:00
+      wind_down:[[1260, 1410, 0.8]],                     // 21:00-23:30
     },
     weekend: {
-      sleep:    [[0, 18, 0.9]],
-      leisure:  [[18, 36, 0.7]],
-      evening:  [[36, 47, 0.6]],
+      sleep:    [[0, 540, 0.9]],                         // 00:00-09:00
+      leisure:  [[540, 1080, 0.7]],                      // 09:00-18:00
+      evening:  [[1080, 1410, 0.6]],                     // 18:00-23:30
     }
   },
   morning_shift: {
     weekday: {
-      sleep:    [[0, 10, 1.0]],
-      prep:     [[10, 12, 0.8]],
-      commute:  [[12, 13, 1.0]],
-      work:     [[13, 28, 1.0]],
-      commute_home: [[28, 29, 1.0]],
-      evening:  [[30, 42, 0.6]],
-      wind_down:[[42, 47, 0.8]],
+      sleep:    [[0, 300, 1.0]],                         // 00:00-05:00
+      prep:     [[300, 360, 0.8]],                       // 05:00-06:00
+      commute:  [[360, 390, 1.0]],                       // 06:00-06:30
+      work:     [[390, 840, 1.0]],                       // 06:30-14:00
+      commute_home: [[840, 870, 1.0]],                   // 14:00-14:30
+      evening:  [[900, 1260, 0.6]],                      // 15:00-21:00
+      wind_down:[[1260, 1410, 0.8]],                     // 21:00-23:30
     },
     weekend: {
-      sleep:    [[0, 16, 0.9]],
-      leisure:  [[16, 36, 0.7]],
-      evening:  [[36, 47, 0.6]],
+      sleep:    [[0, 480, 0.9]],                         // 00:00-08:00
+      leisure:  [[480, 1080, 0.7]],                      // 08:00-18:00
+      evening:  [[1080, 1410, 0.6]],                     // 18:00-23:30
     }
   },
   evening_shift: {
     weekday: {
-      sleep:    [[0, 16, 1.0]],
-      leisure:  [[16, 31, 0.6]],
-      prep:     [[31, 32, 0.8]],
-      commute:  [[32, 33, 1.0]],
-      work:     [[33, 45, 1.0]],
-      commute_home: [[45, 46, 1.0]],
-      wind_down:[[46, 47, 0.7]],
+      sleep:    [[0, 480, 1.0]],                         // 00:00-08:00
+      leisure:  [[480, 930, 0.6]],                       // 08:00-15:30
+      prep:     [[930, 960, 0.8]],                       // 15:30-16:00
+      commute:  [[960, 990, 1.0]],                       // 16:00-16:30
+      work:     [[990, 1350, 1.0]],                      // 16:30-22:30
+      commute_home: [[1350, 1380, 1.0]],                 // 22:30-23:00
+      wind_down:[[1380, 1410, 0.7]],                     // 23:00-23:30
     },
     weekend: {
-      sleep:    [[0, 20, 0.9]],
-      leisure:  [[20, 40, 0.7]],
-      evening:  [[40, 47, 0.6]],
+      sleep:    [[0, 600, 0.9]],                         // 00:00-10:00
+      leisure:  [[600, 1200, 0.7]],                      // 10:00-20:00
+      evening:  [[1200, 1410, 0.6]],                     // 20:00-23:30
     }
   },
   night_shift: {
     weekday: {
-      work:     [[0, 14, 1.0]],
-      commute_home: [[14, 15, 1.0]],
-      sleep:    [[15, 38, 1.0]],
-      evening:  [[38, 47, 0.6]],
+      work:     [[0, 420, 1.0]],                         // 00:00-07:00
+      commute_home: [[420, 450, 1.0]],                   // 07:00-07:30
+      sleep:    [[450, 1140, 1.0]],                      // 07:30-19:00
+      evening:  [[1140, 1410, 0.6]],                     // 19:00-23:30
     },
     weekend: {
-      sleep:    [[0, 20, 0.9]],
-      leisure:  [[20, 40, 0.7]],
-      evening:  [[40, 47, 0.6]],
+      sleep:    [[0, 600, 0.9]],                         // 00:00-10:00
+      leisure:  [[600, 1200, 0.7]],                      // 10:00-20:00
+      evening:  [[1200, 1410, 0.6]],                     // 20:00-23:30
     }
   },
   irregular: {
     weekday: {
-      sleep:    [[0, 14, 0.7]],
-      work:     [[14, 30, 0.5]],
-      leisure:  [[30, 42, 0.6]],
-      wind_down:[[42, 47, 0.7]],
+      sleep:    [[0, 420, 0.7]],                         // 00:00-07:00
+      work:     [[420, 900, 0.5]],                       // 07:00-15:00
+      leisure:  [[900, 1260, 0.6]],                      // 15:00-21:00
+      wind_down:[[1260, 1410, 0.7]],                     // 21:00-23:30
     },
     weekend: {
-      sleep:    [[0, 16, 0.8]],
-      leisure:  [[16, 36, 0.7]],
-      evening:  [[36, 47, 0.6]],
+      sleep:    [[0, 480, 0.8]],                         // 00:00-08:00
+      leisure:  [[480, 1080, 0.7]],                      // 08:00-18:00
+      evening:  [[1080, 1410, 0.6]],                     // 18:00-23:30
     }
   },
   standard: {
     weekday: {
-      sleep:    [[0, 15, 1.0]],
-      morning:  [[16, 20, 0.6]],
-      midday:   [[20, 32, 0.5]],
-      evening:  [[32, 42, 0.6]],
-      wind_down:[[42, 47, 0.8]],
+      sleep:    [[0, 450, 1.0]],                         // 00:00-07:30
+      morning:  [[480, 600, 0.6]],                       // 08:00-10:00
+      midday:   [[600, 960, 0.5]],                       // 10:00-16:00
+      evening:  [[960, 1260, 0.6]],                      // 16:00-21:00
+      wind_down:[[1260, 1410, 0.8]],                     // 21:00-23:30
     },
     weekend: {
-      sleep:    [[0, 18, 0.9]],
-      leisure:  [[18, 36, 0.7]],
-      evening:  [[36, 47, 0.6]],
+      sleep:    [[0, 540, 0.9]],                         // 00:00-09:00
+      leisure:  [[540, 1080, 0.7]],                      // 09:00-18:00
+      evening:  [[1080, 1410, 0.6]],                     // 18:00-23:30
     }
   },
 };
 
 // --- Sleep-rhythm tuning (vocation plan's captured Dimension 3). The unit is
-// sim ticks (30 min). Early/late shift the END of this NPC's template sleep
-// window; erratic jitters it per day. The block name stays `sleep` (D1) — the
-// NPC just occupies it for a different span, and the whole adjustment lives on the
-// game's own clock, never the player's alarm system (that path is off-limits).
+// sim ticks (30 min) — deliberately NOT reindexed by the continuous-cadence-
+// closure-plan's Phase 2 (SCHEDULES itself moved to minute-of-day ranges;
+// this table's values are a tick-scale DURATION knob, not a position in that
+// table, so they stay as authored and get scaled by CLOCK.tickMinutes at the
+// one call site that applies them, resolveScheduleActivity). Early/late
+// shift the END of this NPC's template sleep window; erratic jitters it per
+// day. The block name stays `sleep` (D1) — the NPC just occupies it for a
+// different span, and the whole adjustment lives on the game's own clock,
+// never the player's alarm system (that path is off-limits).
 const SLEEP_RHYTHM = {
   earlyTicks: 2,      // 'early' wakes this many ticks before the template wake
   lateTicks: 2,       // 'late' sleeps this many ticks past the template wake
@@ -6494,6 +7579,14 @@ const ACTIVITY_ROOM_PREFERENCES = {
 };
 
 // --- Off-screen event tables (deterministic, no LLM) ---
+// Continuous-cadence-closure Phase 5 (D6): the chance an active, awake,
+// non-working NPC draws an OFFSCREEN_EVENTS entry this resolution. Used to be
+// a bare `0.15` literal rolled once per flat 30-minute tick (sim.js
+// resolveTick Pass 2); now a named per-minute rate, applied via
+// chanceOverMinutes at the real span resolved.
+const OFFSCREEN_EVENT_TUNING = {
+  chancePerMinute: 1 - Math.pow(1 - 0.15, 1 / 30), // was the inline `rng() < 0.15`
+};
 const OFFSCREEN_EVENTS = [
   { type: 'cooking', roomId: 'kitchen', weight: 4, text: '{name} cooked {dish} and left leftovers.', moodDelta: 0.05, dataFields: ['dish'] },
   { type: 'breakage', roomId: 'kitchen', weight: 1, text: '{name} broke a {item} in the kitchen.', moodDelta: -0.1, dataFields: ['item'] },
@@ -6964,6 +8057,8 @@ const EFFECT_LIMITS = {
   objectConditionCap: 25,
   suspicionDeltaCap: 0.4,
   evidenceStrengthCap: 1,
+  thermostatDeltaCap: 2,
+  roomDirtDeltaCap: 1,
 };
 
 // --- Stealth (P6): suspicion subjects, tuning, and narration text.
@@ -6983,8 +8078,28 @@ const STEALTH_TUNING = {
   confrontDecayFactor: 0.5,             // suspicion multiplied by this after confronting, so it doesn't refire every talk
   witnessedTensionDelta: 0.1,           // REL_DELTA tension bump on direct witness
   sneakEvidenceStrength: 0.4,           // fixed strength trusted producers use for LEAVE_EVIDENCE
-  baseEvidenceDiscoveryChance: 0.15,    // per-tick roll when the owner is in their own room
-  evidenceStrengthDiscoveryFactor: 0.5, // added to base, scaled by evidence.strength
+  // night-scene Phase 6 (Q2): strength is ALSO the reference point for what a
+  // discovery teaches. UI's evidence_discovered handler used to write a flat
+  // sneakCaughtSuspicionDelta, so how obvious a trace was changed the odds of
+  // being found and nothing about the conclusion drawn -- which is what left
+  // the night scene's partial-cleanup actions ornamental (a five-tag mess and
+  // one crooked shirt both taught 0.15). The delta now scales linearly with
+  // the record's own strength, referenced to THIS constant: a sneak's fixed
+  // 0.4 still writes exactly sneakCaughtSuspicionDelta, so nothing about the
+  // stealth path moves, while a night scene's count-scaled strength now
+  // spends its whole range. Clamped by EFFECT_LIMITS.suspicionDeltaCap.
+  // continuous-cadence-closure Phase 7 (D15, top-of-phase blocker carried
+  // from the Phase 5 handoff): this used to be ONE constant, baseEvidenceDiscoveryChance,
+  // shared by two unrelated readers — resolveTick's Pass 2 (sim.js, a
+  // per-NPC-tick roll) and performCleaningVisit (computer.js, a per-
+  // cleaning-visit-per-room roll with no tick relationship at all). Split so
+  // Pass 2's copy can be minute-converted (D13's exact technique) without
+  // touching the cleaning-visit roll, mirroring D10's SLEEP_RHYTHM precedent
+  // in reverse — two readers, one tick-scoped, one not.
+  roomSearchEvidenceDiscoveryChance: 0.15, // performCleaningVisit (computer.js) ONLY — per-visit-per-room roll, never minute-converted
+  evidenceDiscoveryChancePerTick: 0.15,    // resolveTick Pass 2 (sim.js) ONLY — raw per-30-min-tick rate; evidence.strength varies per object, so
+  evidenceStrengthDiscoveryFactor: 0.5,    // this is combined with the factor above THEN minute-converted at the sim.js call site (same shape as
+                                            // thermostatSelfAdjustChance, D13) rather than pre-converting either raw number here.
   // Phase 8 (NPC inventories): the player's room-search. SEARCHING an
   // NPC's room surfaces their possessions (free, like browsing a chest);
   // TAKING one costs game time and routes through the same
@@ -6994,6 +8109,16 @@ const STEALTH_TUNING = {
   searchTimeMinutes: 5,
   takeTimeMinutes: 1,
   possessionTakeSuspicionDelta: 0.2,
+  // P1B (D32): the real gap in this mechanic was never architecture — it was
+  // that nothing ever called awardSkillXp for a clean sneak. This is that XP.
+  xpCleanSneak: 12,
+  // Phase 7 (D12): a DIRECT witness (the owner is home, no roll) is a real,
+  // certain transgression — worth a grievance an apology can later target.
+  // The sneak-caught branch (evidence left, owner absent) is deliberately
+  // NOT one: it's suspicion, not a certain belief, and D12's apology is
+  // belief-gated on things the NPC actually knows happened.
+  witnessedGrievanceSeverity: 0.3,
+  witnessedGrievanceText: 'The player walked into my room like they owned it.',
 };
 
 // F6 (Discord feedback, 2026-08-23/24): the player-side mirror of
@@ -7016,6 +8141,17 @@ const PHONE_SNOOP_TUNING = {
   // knob layered on top, mirroring BOUNDARY.sleepRoom.caughtTensionSpike's
   // own extra-tension-on-top-of-the-tier pattern.
   sensitiveExtraTension: 0.1,
+  // P1B (D32): unwitnessed phone-snoop XP — same rationale as
+  // STEALTH_TUNING.xpCleanSneak above, this mechanic's own clean branch.
+  xpUnwitnessed: 10,
+  // P1B (D35): the SFW candid selfie stays the default find; this is how
+  // often the 'photo' finding is the explicit branch instead, gated at
+  // generation time by the SAME three-condition gate the intimacy layer
+  // already uses (image.js's buildVisualCharacterClause: explicit request +
+  // intimateAllowed + naked state) — no new gate, just a lower-probability
+  // branch through it. "Sometimes", not "usually": the SFW find is still
+  // what most searches turn up.
+  explicitPhotoChance: 0.35,
 };
 
 // --- Peeping (P7 adult content). Tuning for the spy/peep action that lets
@@ -7031,6 +8167,163 @@ const PEEP_TUNING = {
   detectionNpcAwake: 0.6,      // detection chance if NPC is awake
   detectionNpcAsleep: 0.1,     // detection chance if NPC is sleeping
   suspectedChance: 0.2,        // chance of a "someone might have noticed" near-miss when not caught
+  // P1B (D32): clean-peep XP — same rationale as the other two mechanics'
+  // xpCleanSneak/xpUnwitnessed above.
+  xpClean: 10,
+  // Phase 7 (D12) — a DIRECT catch (detected === true) is a certain, real
+  // transgression, not the softer "suspected" near-miss below it (which
+  // fires no effects at all and stays unbelieved).
+  grievanceSeverity: 0.25,
+  grievanceText: 'The player was watching me through the door.',
+};
+
+// --- Pickpocketing (P1B, D33): a covert take directly off an aware target's
+// person — the one stealth mechanic where the target is PRESENT and awake,
+// unlike room-entry/peep/phone-snoop above (which only fire when the owner is
+// absent or the object is unattended). Same shape as those three: seeded
+// roll, skillMod-gated chance, its own tuning table, clean/suspected/caught
+// branches — but the base detection chance starts high, because lifting
+// something off someone standing next to you is inherently riskier than
+// sneaking through an empty room. sneakingDetectionMultiplier is D34's
+// connective tissue: Sneaking further lowers detection while attempting this,
+// same read as "Sneaking is what makes pickpocketing possible at all."
+const PICKPOCKET_TUNING = {
+  timeMinutes: 1,
+  baseDetectionChance: 0.5,
+  stealthSkillFactor: 0.6,
+  sneakingDetectionMultiplier: 0.7,
+  suspectedChance: 0.3,               // chance the target still senses something on an otherwise-clean take
+  caughtSuspicionDelta: 0.4,          // direct catch — steeper than a witnessed room-entry (0.35)
+  caughtTensionDelta: 0.15,
+  suspectedSuspicionDelta: 0.12,      // the softer bump D36's cover-tracks window is about
+  coverTracksWindowTicks: 2,          // ~1 hour (CLOCK.tickMinutes × 2) to play it off before the moment passes
+  coverTracksMinutes: 2,
+  coverTracksRelief: 0.7,             // fraction of suspectedSuspicionDelta a successful cover-tracks undoes
+  xpClean: 15,
+  // Phase 7 (D12) — a direct catch (caught === true) is certain, unlike the
+  // softer "suspected" outcome below it, which fires no effects and never
+  // hardens into a belief on its own.
+  caughtGrievanceSeverity: 0.35,
+  caughtGrievanceText: 'The player tried to pick my pocket, right there in the room with me.',
+};
+
+// --- Laundry chain (Actions & Activities Overhaul Phase 11, D20) ---
+// self.laundry used to be a single closed-form verb (hamper -> washer,
+// nothing ever moved on). This splits it into a real chain: clothes carry
+// meta.laundryState (dirty|washed|dried|folded|stored — see ITEMS'
+// laundryStateOf) and physically move between the shared hamper/washer/dryer
+// and each resident's own bedroom wardrobe. cycleMinutes mirror the
+// dishwasher's cycleActiveUntilAbs pattern (ITEMS' laundryCycleProgress) —
+// lazily resolved, never a per-tick loop.
+const LAUNDRY_TUNING = {
+  washCycleMinutes: 40,
+  dryCycleMinutes: 35,
+  dryMinutes: 3,        // time cost of the "start the dryer" action itself
+  foldMinutes: 8,
+  putawayMinutes: 6,
+  foldMoodGain: 0.02,
+  putawayMoodGain: 0.02,
+  // hamper.state.fill is a derived display/signal cache (ITEMS'
+  // hamperFillLevel) — thresholds are dirty-garment counts, not a magic ladder.
+  fillPartialAt: 1,
+  fillFullAt: 5,
+};
+
+// --- Laundry snoop (Phase 11, D20): reading a resident's laundry for gossip
+// potential — its own instance of the P1B stealth pattern (stealth.js's
+// resolveLaundrySnoop), distinct from the already-shipped phone/room snoop.
+// The laundry room has no single "owner" to be witnessed by (it's common),
+// so detection is keyed on whether the TARGET resident (whose garment got
+// picked) happens to be in the laundry room right now — same shape as
+// resolvePeep's witnessed check, just against a different presence set.
+const LAUNDRY_SNOOP_TUNING = {
+  searchTimeMinutes: 4,
+  witnessedSuspicionDelta: 0.2,
+  witnessedTensionDelta: 0.1,
+  moodGain: 0.05,
+  // P1B (D32)'s own convention, generalized to this phase's new mechanic:
+  // the clean/unwitnessed branch is the one that awards stealth XP.
+  xpClean: 8,
+  // Same shape as PEEP_TUNING.suspectedChance: unwitnessed is still clean in
+  // the moment (no effects fire below), but the target might notice their
+  // laundry was disturbed later — a near-miss, not a caught.
+  suspectedChance: 0.15,
+  suspectedSuspicionDelta: 0.1,
+  // Phase 7 (D12) — a direct witness (the owner walks in on you) is certain,
+  // same "worth a grievance" treatment as every other stealth mechanic here.
+  witnessedGrievanceSeverity: 0.2,
+  witnessedGrievanceText: 'The player was going through my laundry.',
+};
+
+// --- Flags & Conditions engine (Phase 3, D15): the freeuseofficeclicker
+// pattern. A flag is a named rule checked at decision time: this phase ships
+// one source (player-set house rules, world.houseRules) and one condition
+// shape (`{ act, roomId }`, matched against an event the trusted producer
+// that resolves the act reports). Detection reuses the SAME co-presence
+// check resolveRoomEntryStealth/resolvePeep already use for an overtly
+// witnessed act (getPresentNpcIds) rather than a signals.js round-trip —
+// sight barely leaves its own room anyway (SIGNAL_TUNING.attenuation.sight
+// = 0.10), so for an act nobody is hiding, presence already answers "did
+// they perceive it." See flags.js.
+//
+// The rule DEF lives here (the def/instance split every other mechanic in
+// this plan keeps — PICKPOCKET_TUNING above, COMMITMENT_KINDS, ITEM_DEFS);
+// world.houseRules stores only which ids are active + when, never a copy of
+// the condition/weight/label.
+const HOUSE_RULE_DEFS = {
+  no_eating_living_room: {
+    id: 'no_eating_living_room',
+    label: 'No eating in the living room',
+    condition: { act: 'eat', roomId: 'living_room' },
+    weight: 0.4,
+  },
+};
+
+// actions-and-activities-overhaul-plan.md Phase 7 (D13) — boundary flags: an
+// "Ask for Space" leaf (asks.js's ASK_BOUNDARY) an NPC can agree to, written
+// as an instance on THEIR OWN npc.flags._boundaryRules (D38's sub-keyed-array
+// convention — never npc.flags itself, and never world.houseRules, which is
+// house-WIDE, not per-NPC). Same def/instance split, same matcher
+// (houseRuleConditionMet, flags.js) as HOUSE_RULE_DEFS above — Phase 3's own
+// engine was built generic enough for this to read through unchanged (D38's
+// note). Ships ONE template, same discipline as HOUSE_RULE_DEFS' own single
+// entry: "don't come into my room uninvited" (bedroom_player, ROOMS' id for
+// the player's own room) is D13's flagship, quoted example. Checked against
+// the BOUND NPC'S OWN act (they're the one who promised), never a witness's
+// reaction to someone else — see flags.js's checkBoundaryRules.
+const BOUNDARY_RULE_DEFS = {
+  no_enter_room: {
+    id: 'no_enter_room',
+    label: "Don't come into my room unless I'm there",
+    condition: { act: 'enter_room', roomId: 'bedroom_player' },
+    weight: 0.5,
+  },
+};
+
+// D15's compliance formula. npc.bible.temperament has no trait literally
+// named "agreeableness" or "disinhibition" (the plan's own words) — warmth
+// is the closest existing stand-in for agreeableness (a warm person lets
+// more slide), and volatility (emotional reactivity / low impulse control)
+// is the closest stand-in for disinhibition (how sharp the reaction runs
+// once it fires). Both already carry comparable weight in this file
+// (npcDeviancy, the shaming-reaction tiers) for exactly this kind of
+// personality-scaled read.
+const FLAGS_TUNING = {
+  careBase: 0.4,
+  careConscientiousnessWeight: 0.4,   // a maxed-out conscientious NPC minds up to +0.4 more
+  careWarmthWeight: -0.15,            // a maxed-out warm NPC lets up to 0.15 more slide
+  minCareToReact: 0.25,               // below this the violation is let go entirely — no memory, no deltas
+  severityBase: 0.5,
+  severityVolatilityWeight: 0.5,      // how sharp the reaction runs, once it fires
+  reactionCareWeight: 0.6,            // the two terms above combine as a weighted average, not a product,
+  reactionSeverityWeight: 0.4,        // so a low-care/high-severity NPC still lands somewhere in the middle
+  moodDeltaAtFullStrength: -0.3,      // × rule.weight × reactionStrength — see applyHouseRuleViolations
+  tensionDeltaAtFullStrength: 0.2,
+  // Phase 7 (D13) — a boundary flag's own consequence: self-directed (the
+  // bound NPC crossed their OWN promised line), so it's tension-only, no
+  // mood/memory-fact-severity term of its own — smaller than a witness's
+  // reaction above, since nobody else saw it happen.
+  boundaryTensionAtFullStrength: 0.15,
 };
 
 // Clothing states visible during peeping, by NPC activity
@@ -7061,6 +8354,28 @@ const PEEP_CAUGHT_TEMPLATES = [
 const PEEP_SUSPECTED_TEMPLATES = [
   '{name} pauses, looking toward the door as if they heard something, then shrugs it off.',
   '{name} glances at the door briefly, frowning, before going back to what they were doing.',
+];
+
+// --- Laundry snoop (Actions & Activities Overhaul Phase 11, D20): what the
+// player learns going through a resident's dirty/washing/drying/folded
+// laundry, keyed by the found garment's CLOTHING_DEFS traits — a deterministic
+// pick (invariant 1), not a coin flip on top of the mechanic's own roll.
+const LAUNDRY_SNOOP_DESC = {
+  sexy: "Buried in {name}'s laundry: something a lot more revealing than you'd have guessed.",
+  work: "Mostly {name}'s work clothes, still creased from the day.",
+  sport: "{name}'s gym clothes — still faintly sweaty.",
+  formal: "One of {name}'s good outfits, saved for something.",
+  comfortable: "Just {name}'s cozy, worn-in favorites.",
+  default: "Nothing remarkable — just {name}'s ordinary clothes.",
+};
+const LAUNDRY_SNOOP_CAUGHT_TEMPLATES = [
+  '{name} walks in on you elbow-deep in their laundry. "...Can I help you?"',
+  '"Is there a REASON you\'re going through my clothes?" {name} isn\'t amused.',
+  '{name} freezes in the doorway, watching you drop their laundry like it\'s on fire.',
+];
+const LAUNDRY_SNOOP_SUSPECTED_TEMPLATES = [
+  "Later, {name} eyes the laundry pile like something's out of place, then lets it go.",
+  '{name} mentions offhand that their laundry looked "gone through." You say nothing.',
 ];
 
 // --- Peek & Listen (Intimacy & Voyeurism Phase 10, D6/D7) -----------------
@@ -7204,19 +8519,86 @@ const PEEK_OUTCOMES = {
 // `safe` form used whenever the intimate gate is CLOSED — the same fail-
 // closed split as getPhysicalDescriptionForPrompt's own. `explicit` is only
 // reachable through the gate (mature flag + naked state) in image.js.
+// --- Peek framing (audit 2026-09-05) ----------------------------------------
+// The act phrase below is shared by the NARRATION (peek.js's
+// composePeekViewLine) and the IMAGE (image.js's composePeekPrompt), and that
+// part was always fine. What was not: composePeekPrompt wrapped every act in
+// ONE unconditional framing clause -- "mid-motion, absorbed in what they are
+// doing" -- and one unconditional negative that bans "static portrait",
+// "facing the camera" and "posing for the camera". For 17 of the 58 acts that
+// framing contradicts the act outright. A sleeping woman was described to the
+// model as "asleep in bed, mid-motion", with nothing anywhere saying eyes
+// closed or lying down, and someone filming themselves was asked to face a
+// camera in the positive and forbidden from it in the negative.
+//
+// So an act row may now carry three IMAGE-ONLY fields. A row with none of them
+// behaves exactly as it always did, which is why only the rows that need it
+// changed:
+//   `posture`      replaces PEEK_FRAMING.defaultPosture for this act.
+//   `staging`      an extra positive clause -- the props, light and wetness
+//                  the act implies and two words of verb cannot carry.
+//   `dropNegative` terms removed from the negative for this act, because for
+//                  this act they are fighting the act rather than the pose.
+//   `addNegative`  terms added for this act -- its own failure modes.
+const PEEK_FRAMING = {
+  defaultPosture: 'mid-motion, absorbed in what they are doing',
+  // The base list. composePeekNegative subtracts/adds per act.
+  negative: [
+    'blurry', 'distorted', 'extra limbs', 'low quality', 'text', 'watermark',
+    'keyhole', 'door hardware',
+    'posing for the camera', 'looking at the viewer', 'facing the camera',
+    'standing straight', 'static portrait', 'studio pose',
+  ],
+};
+
+// Reusable staging, so the eight camera-facing acts and the two sleep acts do
+// not drift apart one row at a time.
+//
+// The camera rows do NOT simply delete the anti-camera negatives: those are
+// what stop the subject posing for the PEEKER. They drop only the term that
+// names the act ("facing the camera" / "posing for the camera") and replace it
+// with GEOMETRY in the positive -- the camera is over there, the subject is
+// side-on to the door -- so the model has somewhere to put a camera that is
+// not the keyhole. "looking at the viewer" always stays banned.
+const PEEK_STAGING = {
+  ownCamera: 'set up facing their own camera on a tripod across the room, the camera between them and the far wall, their body side-on to the door',
+  atScreen: 'sitting at a desk facing a laptop screen, the screen between them and the far wall, their body side-on to the door',
+  // The user's brief, 2026-09-05: a sleeping subject does not have to be an
+  // INTERESTING subject, but they must be a LEGIBLE one -- read as a body at
+  // rest, not as a dark shape under a duvet. Seeing a nude sleeper's form is
+  // the reward for looking; that is achieved by making them visible, not by
+  // posing them. Nothing here is sexualised on purpose: the words are about
+  // light and legibility, and the clothing clause already says what there is
+  // to see.
+  asleep: 'eyes closed, lying on their side, face and body clearly visible and well lit in soft light, the covers pushed down and away from them, breathing slow, deeply asleep',
+};
+
 const PEEK_VIEW_ACT = {
   masturbating: { safe: 'lying in bed', explicit: 'masturbating' },
   'masturbating in bed': { safe: 'lying in bed', explicit: 'masturbating' },
   'having sex': { safe: 'in bed', explicit: 'having sex' },
   sex: { safe: 'in bed', explicit: 'having sex' },
   quickie: { safe: 'in bed', explicit: 'having a quickie' },
-  showering: { safe: 'in the shower', explicit: 'in the shower' },
+  // Nothing in the old prompt asked for water, so nothing painted any.
+  showering: { safe: 'in the shower', explicit: 'in the shower',
+    staging: 'under running water, wet skin and soaked hair, water droplets running down them, steam in the air, soap suds, fogged glass' },
   changing: { safe: 'changing', explicit: 'changing' },
-  sleeping: { safe: 'asleep in bed', explicit: 'asleep in bed' },
-  napping: { safe: 'dozing', explicit: 'dozing' },
+  // A sleeping subject is STILL. "mid-motion" is not a softening here, it is
+  // a contradiction, and the base negative's "static portrait" bans exactly
+  // what a sleeping person is. The addNegative list is the failure this frame
+  // actually has: awake, upright, or lost under the bedding.
+  sleeping: { safe: 'asleep in bed', explicit: 'asleep in bed',
+    posture: 'still and at rest', staging: PEEK_STAGING.asleep,
+    dropNegative: ['static portrait', 'standing straight'],
+    addNegative: ['awake', 'eyes open', 'sitting up', 'standing', 'silhouette', 'hidden under blankets', 'obscured by bedding', 'backlit', 'pitch dark'] },
+  napping: { safe: 'dozing', explicit: 'dozing',
+    posture: 'still and at rest', staging: PEEK_STAGING.asleep,
+    dropNegative: ['static portrait', 'standing straight'],
+    addNegative: ['awake', 'eyes open', 'sitting up', 'standing', 'silhouette', 'obscured', 'backlit', 'pitch dark'] },
   'watching TV': { safe: 'watching TV', explicit: 'watching TV' },
   'reading': { safe: 'reading', explicit: 'reading' },
-  'reading in bed': { safe: 'reading in bed', explicit: 'reading in bed' },
+  'reading in bed': { safe: 'reading in bed', explicit: 'reading in bed',
+    posture: 'settled, propped up against the pillows', dropNegative: ['standing straight'] },
   'scrolling social media': { safe: 'on their phone', explicit: 'on their phone' },
   'playing games': { safe: 'playing games', explicit: 'playing games' },
   'doing yoga': { safe: 'doing yoga', explicit: 'doing yoga' },
@@ -7225,32 +8607,39 @@ const PEEK_VIEW_ACT = {
   // here, which is the whole reason PEEK_VIEW_ACT has two columns: at a
   // glance through a gap in a door this reads as someone set up with a light
   // and a camera, and only a real look tells you what is being filmed.
-  filming:                  { safe: 'set up with a camera', explicit: 'filming themselves' },
-  'filming by the pool':    { safe: 'by the pool with a camera set up', explicit: 'filming themselves at the pool' },
-  'filming together':       { safe: 'in there with someone, a camera set up', explicit: 'filming with someone' },
+  filming:                  { safe: 'set up with a camera', explicit: 'filming themselves',
+    staging: PEEK_STAGING.ownCamera, dropNegative: ['facing the camera', 'posing for the camera'] },
+  'filming by the pool':    { safe: 'by the pool with a camera set up', explicit: 'filming themselves at the pool',
+    staging: PEEK_STAGING.ownCamera, dropNegative: ['facing the camera', 'posing for the camera'] },
+  'filming together':       { safe: 'in there with someone, a camera set up', explicit: 'filming with someone',
+    staging: PEEK_STAGING.ownCamera, dropNegative: ['facing the camera', 'posing for the camera'] },
 
   // Vocation plan D5/Phase 3 — the at-home workday. Every string in
   // HOME_WORK_ACTIVITIES needs a row here or peeking at a remote worker
   // returns `_default` ("just in there"), which is how a whole new class of
   // visible behaviour arrives invisible. Work is not a private act, so safe
   // and explicit read the same: there is nothing to soften.
-  'on a video call':        { safe: 'on a video call', explicit: 'on a video call' },
+  'on a video call':        { safe: 'on a video call', explicit: 'on a video call',
+    staging: PEEK_STAGING.atScreen, dropNegative: ['facing the camera'] },
   'debugging something':    { safe: 'hunched over a laptop', explicit: 'hunched over a laptop' },
-  'in a standup':           { safe: 'on a call with their team', explicit: 'on a call with their team' },
+  'in a standup':           { safe: 'on a call with their team', explicit: 'on a call with their team',
+    staging: PEEK_STAGING.atScreen, dropNegative: ['facing the camera'] },
   'staring at a terminal':  { safe: 'staring at a screen', explicit: 'staring at a screen' },
   'reviewing code':         { safe: 'reading something on a laptop', explicit: 'reading something on a laptop' },
   'sketching':              { safe: 'sketching', explicit: 'sketching' },
   'editing a draft':        { safe: 'editing something', explicit: 'editing something' },
   'colour-matching something': { safe: 'squinting at colour swatches', explicit: 'squinting at colour swatches' },
   'at the drawing tablet':  { safe: 'at a drawing tablet', explicit: 'at a drawing tablet' },
-  'recording a take':       { safe: 'recording something', explicit: 'recording something' },
+  'recording a take':       { safe: 'recording something', explicit: 'recording something',
+    staging: PEEK_STAGING.ownCamera, dropNegative: ['facing the camera'] },
   'editing audio':          { safe: 'in headphones at a laptop', explicit: 'in headphones at a laptop' },
   'on a call with a source': { safe: 'on the phone', explicit: 'on the phone' },
   'writing up notes':       { safe: 'writing something up', explicit: 'writing something up' },
   'chasing a quote':        { safe: 'on the phone', explicit: 'on the phone' },
   'buried in a spreadsheet': { safe: 'buried in a spreadsheet', explicit: 'buried in a spreadsheet' },
   'reconciling something':  { safe: 'working through paperwork', explicit: 'working through paperwork' },
-  'on a client call':       { safe: 'on a client call', explicit: 'on a client call' },
+  'on a client call':       { safe: 'on a client call', explicit: 'on a client call',
+    staging: PEEK_STAGING.atScreen, dropNegative: ['facing the camera'] },
   'marking papers':         { safe: 'marking papers', explicit: 'marking papers' },
   'reading a paper':        { safe: 'reading a paper', explicit: 'reading a paper' },
   'writing lecture notes':  { safe: 'writing notes', explicit: 'writing notes' },
@@ -7263,7 +8652,8 @@ const PEEK_VIEW_ACT = {
   'answering emails':       { safe: 'answering emails', explicit: 'answering emails' },
   'on the phone with a supplier': { safe: 'on the phone', explicit: 'on the phone' },
   'mixing a track':         { safe: 'mixing a track', explicit: 'mixing a track' },
-  'laying down a take':     { safe: 'recording something', explicit: 'recording something' },
+  'laying down a take':     { safe: 'recording something', explicit: 'recording something',
+    staging: PEEK_STAGING.ownCamera, dropNegative: ['facing the camera'] },
   'on headphones at the desk': { safe: 'in headphones at a desk', explicit: 'in headphones at a desk' },
   'writing something':      { safe: 'writing something', explicit: 'writing something' },
   'on a call':              { safe: 'on a call', explicit: 'on a call' },
@@ -7405,6 +8795,11 @@ const EVIDENCE_KIND_TEXT = {
   personal_item: "{name} noticed their things had been gone through.",
   // BrineOS Phase 9 (9.4): a discovered, unlocked phone left somewhere.
   phone_contents: "{name} noticed their phone had been picked up and gone through.",
+  // night-scene-sleeping-npc-plan Phase 5 (D5/D25): whatever a Night Scene
+  // left behind -- mussed sheets, clothing pulled out of place, a mess. The
+  // line is deliberately about the BED and not about the act: this is the
+  // moment she half-notices something, not the moment she knows.
+  disturbed_bed: "{name} noticed the state of their bed, and their clothes, and could not account for either.",
 };
 
 // Stored verbatim as memory-episode text (not re-templated at read time,
@@ -7439,6 +8834,117 @@ const CHARGED_TENSION_TEMPLATES = [
 // cleanliness-relevant objects (weight 0 across the board). ---
 const CLEANLINESS = { baseline: 50 };
 
+// --- Actions & Activities Overhaul Phase 9 (D17/D49): ambient per-room dirt,
+// orthogonal to the CLEANLINESS/dirtyWhen system just above — that system
+// tracks mess tied to a SPECIFIC object's state (a greasy stove, a full
+// hamper); this tracks the mess that has no object to be dirty ON: dust
+// settling and foot traffic through a room, which every room accumulates
+// (dirt.js), including ones that own no dirtyable furniture at all
+// (hallway_a/hallway_b — the user's "Clean Hallway" ask). Blended into
+// refreshRoomCleanliness (world.js) as an additional penalty on top of the
+// object-derived score, so a spotless kitchen with heavy foot traffic still
+// reads a little worse, and a filthy stove still dominates a kitchen nobody
+// walks through.
+const DIRT_TUNING = {
+  // Continuous-cadence-closure Phase 5 (D6): per resident present & awake,
+  // per MINUTE, scaled by the actual span resolved (sim.js resolveTick
+  // Pass 2) instead of always assuming a flat 30-minute tick.
+  footTrafficPerMinute: 0.003 / 30,
+  cookingDirtPerCook: 0.05,    // self.cook's buildCookEffects (kitchen)
+  eatingDirtPerAct: 0.02,      // applyEatItem, wherever the eater actually is
+  cleanStepBase: 0.5,          // self.clean, barehanded/broom
+  cleanStepVacuum: 0.85,       // self.clean, player owns a vacuum
+  visibleFloor: 0.05,          // below this, self.clean has nothing to do
+  cleanlinessPenaltyMax: 35,   // at dirt=1, up to -35 cleanliness points
+  dustSignalFloor: 0.12,       // below this, no standing 'dust' smell signal
+  dustSignalScale: 0.5,        // at dirt=1, the standing 'dust' signal's intensity
+};
+
+// --- House parties (Actions & Activities Overhaul Phase 17, D26) ----------
+// Rides sim.js resolveTick's existing per-NPC Pass 2 loop (same "narrowest
+// real hook" precedent DIRT_TUNING's foot-traffic bump above documents),
+// split into two sides read from opposite ends of the same emission:
+//   - the ATTENDEE side: anyone physically in the party's room while an
+//     ASK_PARTY-booked 'party' commitment's window is live (present-based,
+//     same read `mealAttendees` uses for a dinner table — not accepted-
+//     based, so a resident who simply wandered in counts too) gets a small
+//     per-tick mood lift and adds real dirt/noise to the room.
+//   - the LISTENER side: everyone else, anywhere else, who can perceive the
+//     'party_noise' signal through the signal layer gets annoyed past a
+//     threshold and occasionally complains — same threshold/chance/lines
+//     shape as sim.js's music_too_loud block, D26's own "(neighbors/
+//     roommates react)" read as roommates specifically since the engine
+//     has never modeled anyone outside the apartment (D28's own boundary:
+//     the player cannot leave home at all) — SOUND_DEVICE_DEFS.music's own
+//     comment already uses "neighbours" loosely for whoever is in earshot,
+//     which is the same reading applied here.
+const PARTY_TUNING = {
+  // Continuous-cadence-closure Phase 5 (D6): every rate below converted from
+  // a flat per-30-minute-tick amount to a per-MINUTE rate, scaled by the
+  // actual span resolved (sim.js resolveTick Pass 2).
+  dirtPerMinutePerGuest: 0.006 / 30,      // ~2x plain foot traffic per attendee — a party makes more mess than someone just standing around
+  attendeeMoodPerMinute: 0.01 / 30,       // the fun of it; bounded by the booked window's own length, no separate cap needed
+  // D13 (found alongside D6's named complainChancePerTick, same guard block):
+  // the listener-side annoyance malus is the same flat-per-tick shape as the
+  // attendee mood lift just above, so it gets the same conversion.
+  annoyanceMoodPerIntensityPerMinute: 0.06 / 30, // listener side, scaled by arrived party_noise intensity
+  annoyanceMoodCapPerMinute: 0.05 / 30,
+  // Arrived intensity that starts provoking a reaction. Deliberately lower
+  // than music's own kd.threshold (0.45, calibrated for "blasting in your
+  // own room/right next door") — a party is meant to be the louder, more
+  // pervasive case D26 asks for: SIGNALS_EMIT.partyNoise (0.65) crosses ONE
+  // open hop (0.5 base attenuation × 1.0 openMultiplier) at ~0.325, so this
+  // sits just under that real, measured arrival rather than under the plain
+  // in-room case music's threshold assumes.
+  complainThreshold: 0.2,
+  complainChancePerMinute: 1 - Math.pow(1 - 0.12, 1 / 30), // was complainChancePerTick: 0.12 — per awake, non-attendee, in-range NPC-minute
+  complainMoodDelta: -0.02,        // the complaint's own mood swing (same shape as music's keepItDown.npcMood)
+  complaintLines: [
+    '{name} pounds on a wall. "Some of us are trying to sleep!"',
+    '{name} mutters something about the noise and shuts a door hard.',
+    '{name} sticks their head in just long enough to glare toward the racket.',
+    '{name} shouts down the hall, "Could you keep it down?!"',
+  ],
+};
+
+// --- Touring (Actions & Activities Overhaul Phase 17, D27) -----------------
+// A guided walk, riding the existing Follow presentation (movement.js's
+// advanceFollowers/reconcileNpcPos) rather than a new scripted multi-stop
+// walk system — none exists (confirmed absent before this phase), and D27's
+// own wording ("riding the walk/movement presentation") reads as reusing it,
+// not building a parallel one. npc.touring = { visited: [roomId,...] } rides
+// alongside npc.follow (asks.js's ASK_TOUR sets both on accept); movement.js's
+// advanceTouring reads it from ui.js's doMove on arrival at each new room and
+// fires the room's beat once. Deterministic authored lines per stop
+// (invariant 1 — flavor finishes the wording, never decides); {name}
+// substitution is the same convention SOUND_DEVICE_DEFS.music's keepItDown
+// lines use. Curated to the rooms a tour actually shows off: every common
+// room except the two bathrooms (isPrivacyRoom already treats a bathroom as
+// private regardless of who's in it, so a tour walking into one would just
+// end the Follow relationship on the spot — better not to route one there at
+// all) plus the player's own bedroom as the closing stop. Deliberately NOT
+// every ROOMS entry — other residents' bedrooms stay out of a tour, same
+// spirit as Follow's own privacy gate.
+const TOUR_STOPS = {
+  entry: 'You start by the door. "And this is where everyone dumps their shoes," you tell {name}, only half apologizing for the pile.',
+  living_room: 'You walk {name} into the living room — the real center of the place, you explain, where the household actually spends its evenings.',
+  dining: '"And this is where we actually sit down to eat," you say, walking {name} past the dining table.',
+  kitchen: 'You show {name} the kitchen, narrating the stove/fridge/counter tour everyone gives without quite meaning to.',
+  study: 'You lead {name} into the study — quiet, a little cluttered, exactly what a study should be.',
+  laundry: '"And here\'s the laundry room," you tell {name}, in the flat tone reserved for showing someone a genuinely unglamorous room.',
+  game_room: 'You bring {name} through to the game room, gesturing at whatever\'s set up like it\'s the highlight of the tour.',
+  changing_room: 'You point {name} through the changing room on the way to the gym — quick, functional, nothing to linger on.',
+  gym: 'You show {name} the gym, and for a second consider whether you actually use it as much as you\'re implying.',
+  balcony: 'You step out onto the balcony with {name}, the air a little different out here, the view doing some of the talking for you.',
+  pool_room: 'You lead {name} into the pool room, and their reaction to the water is worth the whole detour.',
+  bedroom_player: 'Last stop — you bring {name} into your own room, the tour finally getting a little more personal.',
+};
+const TOUR_TUNING = {
+  completeMoodDelta: 0.08,
+  completeRelDelta: { affection: 0.03, trust: 0.02 },
+  completeLine: '"That\'s the whole place," you say, and {name} looks genuinely glad to have seen it.',
+};
+
 // --- Small numeric tuning for the registered apartment actions (ACTIONS/
 // DEFS.ACTIONS), pulled out of doCook/doWatchTV/doRelax's old inline
 // literals so nothing magic lives in the action bodies. ---
@@ -7448,6 +8954,15 @@ const ACTION_TUNING = {
   relaxMoodGain: 0.16,
   relaxEnergyGain: 5,
   dishesMoodGain: 0.05,
+  cleanMoodGain: 0.05,
+  // Actions & Activities Overhaul Phase 16 (D25): Deep Clean — the
+  // skillAtLeast-gated verb self.clean's own header comment left as a "real
+  // gap" (skillAtLeast was declared in ACTION_REQUIREMENT_CHECKERS with zero
+  // consumers until now). A slower, thorough pass that clears a room's dirt
+  // in one go rather than self.clean's partial step, unlocked once cleaning
+  // skill actually means something.
+  deepCleanMinutes: 20,
+  deepCleanMoodGain: 0.09,
   // Bug report (2026-08-26): eating and showering both leave you feeling
   // more energized in real life, not less — sized well under a Relax (5) or
   // a Nap (15) since neither verb is *about* resting the way those are.
@@ -7476,6 +8991,34 @@ const ACTION_TUNING = {
   swimMoodGain: 0.18,
   swimEnergyCost: 9,
   swimHygieneGain: 10,
+  // East Wing Phase 13 (D22): the rest of the wing's own verbs, sized
+  // against the treadmill/pool siblings above. sunbathe is a lighter
+  // self.relax cousin (companionable poolside downtime); pool games is the
+  // wing's shared-activity showpiece, pitched a touch above solo swimming;
+  // yoga is a genuine energy-RESTORING counterpart to lifting weights (the
+  // gym already has cardio via self.workout — yoga is recovery, weights are
+  // effort); the sauna is the flagship perk, priced above everything else
+  // in the wing on mood/hygiene since the real cost already sits in the
+  // FACILITY_DEFS.pool_sauna unlock, not in the verb itself.
+  sunbatheMinutes: 20,
+  sunbatheMoodGain: 0.14,
+  sunbatheEnergyGain: 4,
+  poolGamesMinutes: 35,
+  poolGamesMoodGain: 0.16,
+  poolGamesEnergyCost: 6,
+  yogaMinutes: 30,
+  yogaMoodGain: 0.14,
+  yogaEnergyGain: 3,
+  liftWeightsMinutes: 35,
+  liftWeightsMoodGain: 0.10,
+  liftWeightsEnergyCost: 12,
+  liftWeightsHygieneCost: 9,
+  saunaMinutes: 20,
+  saunaMoodGain: 0.20,
+  saunaEnergyGain: 6,
+  saunaHygieneGain: 5,
+  tendBalconyPlantMinutes: 8,
+  tendBalconyPlantMoodGain: 0.04,
   studyMoodGain: 0.08,
   studyMinutes: 60,
   laundryMoodGain: 0.03,
@@ -7517,6 +9060,30 @@ const ACTION_TUNING = {
   // that earns a betterHot plate its mood bonus at the table. Phase 6's
   // microwave replaces this as the fast reheat.
   reheatMinutes: 10,
+  // Actions & Activities Overhaul Phase 10 (D18/D19): kitchen & dining +
+  // bathroom & grooming. Brewing produces an existing dish_fresh_coffee
+  // stack (no new item), so it has no restore numbers of its own — just
+  // time. Taking out the trash mirrors self.clean's cleanMoodGain, sized
+  // down (a bin is a smaller job than a whole room). The bathroom trio is
+  // sized against the shower ladder (washRestore 60, longShowerHygieneGain
+  // 20): each is a small top-up, not a substitute for actually showering.
+  brewMinutes: 6,
+  trashOutMinutes: 5,
+  trashOutMoodGain: 0.03,
+  toiletMinutes: 3,
+  toiletHygieneGain: 6,
+  toiletCleanMinutes: 6,
+  toiletCleanMoodGain: 0.03,
+  washHandsMinutes: 2,
+  washHandsHygieneGain: 10,
+  groomMinutes: 8,
+  groomHygieneGain: 8,
+  // groomMoodGain is grooming's whole "appearance/confidence" hook (D19) —
+  // see the Phase 10 Handoff note for why no new stat or system was needed:
+  // ADJUST_NEED mood already pushes a decaying impulse (effects.js's
+  // applyAdjustNeed), which is the real, already-wired appearance-adjacent
+  // social read (llm.js's per-scene "Current mood" line every NPC sees).
+  groomMoodGain: 0.06,
 };
 
 // --- Shared activities (initiative plan Phase 5, D16/D17) ---
@@ -7601,6 +9168,21 @@ const HOBBY_TUNING = {
   moodGain:   { hobby_guitar: 0.07, hobby_bookshelf: 0.06, hobby_record_player: 0.05, hobby_console: 0.06, hobby_sketchpad: 0.08, hobby_houseplant: 0.04 },
   energyCost: { hobby_guitar: 3, hobby_bookshelf: 0, hobby_record_player: 0, hobby_console: 2, hobby_sketchpad: 2, hobby_houseplant: 0 },
 };
+
+// --- Self-directed research (Actions & Activities Overhaul Phase 16, D25) ---
+// "Spend time reading/studying a NAMED skill" — one flat rate for every
+// researchable skill (RESEARCHABLE_SKILLS, defs.actions.js), read a
+// bookshelf-shaped object rather than picking a topic through a runtime
+// picker (self.cook's async prepare()-driven modal is the alternative
+// shape; this is the simpler, fully Node-testable one). A single, more
+// deliberate session than any one hobby action: costs more time and energy
+// than hobby.bookshelf's leisure Read, and pays real skill XP where Read
+// pays none. xp sits at EFFECT_LIMITS.skillXpCap's own ceiling (15) — fine
+// either side of it, since that cap only binds the LLM-tier producer path
+// (validateEffects); config-authored def.skill XP is the trusted-producer
+// path (ACTIONS' executeAction), same as every other skill-granting action
+// in this file.
+const RESEARCH_TUNING = { minutes: 40, xp: 15, moodGain: 0.05, energyCost: 3 };
 
 // --- Inventory panel tuning (inventory overhaul Phase 1) ---
 // Time costs for acting on items from the inventory panel, in game
@@ -9540,6 +11122,32 @@ const OVERTURE_KNOCK_REFUSAL_FACTS = {
   charged: 'You left {name} standing at your door.',
 };
 
+// actions-and-activities-overhaul-plan.md Phase 5 (D10) — the request half of
+// "NPCs initiate too". Riding the propose channel exactly as collab_ask does
+// (D18): stand in front of you, wait for an answer — the difference is what
+// is being asked, carried by `requests` (overture.js's requestTerms) rather
+// than `proposes`. {amount}/{item} are filled by ui.js's fillOvertureLine
+// from the record's `request` (the sibling of `proposal`).
+const OVERTURE_REQUEST_MONEY_TEMPLATES = {
+  warm: [
+    '{name} catches you, a little sheepish. "This is awkward, but — could you spot me ${amount}? Just until I sort myself out."',
+    '{name} comes over. "Hey. I hate asking, but is there any chance you could lend me ${amount}?"',
+    '"Okay, don\'t judge me," {name} says, "but could you lend me ${amount}? I am genuinely stuck."',
+  ],
+};
+const OVERTURE_REQUEST_BORROW_TEMPLATES = {
+  warm: [
+    '{name} comes over. "Any chance I could borrow your {item} for a bit? I will get it back to you."',
+    '{name} finds you. "Random question — could I use your {item}? Just for now."',
+  ],
+};
+const OVERTURE_REQUEST_MONEY_REFUSAL_FACTS = {
+  warm: 'You told {name} no when they asked to borrow money.',
+};
+const OVERTURE_REQUEST_BORROW_REFUSAL_FACTS = {
+  warm: 'You told {name} no when they asked to borrow something of yours.',
+};
+
 // D8's four channels. Phase 3 shipped `approach`; Phase 4 adds the other
 // three, and they are new ENTRIES rather than new machinery — the same scorer
 // ranks them, the same four named writers commit them, the same motive readers
@@ -9751,7 +11359,9 @@ const OVERTURE_DEFS = {
   collab_ask: {
     channel: 'propose',
     motives: ['affection'],
-    blockFilter: ['evening', 'wind_down'],
+    // propose_player's own three blocks (D10's asks are as casual as a
+    // hangout proposal, unlike collab_ask's evening-only work favor).
+    blockFilter: ['leisure', 'evening', 'wind_down'],
     cooldownMinutes: 4320,   // three days — this is not a thing you get asked twice a week
     proximity: 'adjacent',
     doNotDisturb: ['sleeping', 'showering', 'masturbating', 'in_conversation', 'locked_door'],
@@ -9772,6 +11382,73 @@ const OVERTURE_DEFS = {
       holdTicks: OVERTURE.lapseTicks,
       // Asking this takes nerve, and an unguarded person asks sooner.
       temperamentWeights: { assertiveness: 0.3, openness: 0.2 },
+    },
+  },
+
+  // --- actions-and-activities-overhaul-plan.md Phase 5 (D10): the requests -
+  // Two more rows riding `propose` (the collab_ask precedent): a real
+  // affection floor, stand in front of you, wait for an answer, resolve on
+  // accept. What differs from a proposal is that accepting does not book a
+  // commitment — it transacts money.js's ledger or an item stack directly
+  // (ui.js's doOvertureRespond, the `def.requests` branch) — so `requests`
+  // is `proposes`'s sibling field, never a second copy of it.
+  //
+  // D10, read closely: "no gate on whether the player can grant it." The
+  // money ask is unconditional candidacy (requestTerms always names an
+  // amount) — a player with nothing on hand can still be asked, and either
+  // declines (the ordinary refusal economy) or accepts into a $0 transfer
+  // (money.js's own floor-at-0 clamp, the same one giveMoneyAmountFor already
+  // relies on). The borrow ask is the one exception with a REAL candidacy
+  // gate: requestTerms returns null when the player owns nothing borrowable,
+  // because there is no version of "asked to borrow nothing" — the same
+  // "no candidacy without a real thing to name" rule proposeTerms follows.
+  request_money_player: {
+    channel: 'propose',
+    motives: ['affection'],
+    // propose_player's own three blocks (D10's asks are as casual as a
+    // hangout proposal, unlike collab_ask's evening-only work favor).
+    blockFilter: ['leisure', 'evening', 'wind_down'],
+    cooldownMinutes: OVERTURE.proposeCooldownMinutes,
+    proximity: 'adjacent',
+    doNotDisturb: ['sleeping', 'showering', 'masturbating', 'in_conversation', 'locked_door'],
+    awaitsAnswer: true,
+    waitAt: 'player',
+    activityOverride: 'waiting on your answer',
+    requests: { kind: 'money' },
+    arrivalTemplates: OVERTURE_REQUEST_MONEY_TEMPLATES,
+    respond: { accept: 'Help {name} out', decline: 'Turn {name} down' },
+    refusalFacts: OVERTURE_REQUEST_MONEY_REFUSAL_FACTS,
+    utility: {
+      // Below propose_player's 0.34 — asking to borrow money is a bigger ask
+      // than proposing to spend time together, so it should not out-compete
+      // an ordinary hangout invite at equal motive strength.
+      baseAppeal: 0.28,
+      motive: { weight: OVERTURE.motiveWeight },
+      holdTicks: OVERTURE.lapseTicks,
+      temperamentWeights: { assertiveness: 0.2 },
+    },
+  },
+  request_borrow_player: {
+    channel: 'propose',
+    motives: ['affection'],
+    // propose_player's own three blocks (D10's asks are as casual as a
+    // hangout proposal, unlike collab_ask's evening-only work favor).
+    blockFilter: ['leisure', 'evening', 'wind_down'],
+    cooldownMinutes: OVERTURE.proposeCooldownMinutes,
+    proximity: 'adjacent',
+    doNotDisturb: ['sleeping', 'showering', 'masturbating', 'in_conversation', 'locked_door'],
+    awaitsAnswer: true,
+    waitAt: 'player',
+    activityOverride: 'waiting on your answer',
+    requests: { kind: 'borrow_item' },
+    arrivalTemplates: OVERTURE_REQUEST_BORROW_TEMPLATES,
+    respond: { accept: 'Lend it to {name}', decline: 'Turn {name} down' },
+    refusalFacts: OVERTURE_REQUEST_BORROW_REFUSAL_FACTS,
+    utility: {
+      baseAppeal: 0.28,
+      motive: { weight: OVERTURE.motiveWeight },
+      holdTicks: OVERTURE.lapseTicks,
+      temperamentWeights: { assertiveness: 0.2 },
     },
   },
 
@@ -9960,6 +11637,75 @@ const SAVE_TUNING = {
   // folders (writing a full snapshot on ~60 different reasons would rotate
   // the ring mid-session and bury every meaningful point).
   recordReasons: ['timer'],
+};
+
+// --- The front door (Actions & Activities Overhaul Phase 12, D21) ---
+// Two mechanics that share this block because both are "what shows up at
+// the apartment's one entrance": the mailbox (world.mailbox[] — bills tied
+// to the real bill system, plus flavor-only flyers/letters, all rolled once
+// per day at rollover — see mail.js's processMailForDay) and the door event
+// (world.doorEvent — a single pending "who's there", at most one caller at
+// a time). Deliberately excludes the existing friend-of-roommate/outside-
+// partner visit systems — see mail.js's file header for why folding those
+// into this same admit/refuse beat is a real but separate follow-up.
+const MAIL_TUNING = {
+  flyerChance: 0.35,               // per-day roll, seeded by day
+  letterChance: 0.08,
+  // A claimed mail entry survives this many days before processMailForDay
+  // prunes it — VISIT_TUNING.retainDoneDays' exact reasoning: the array is
+  // written into the save in full on every boundary, and an unclaimed-then-
+  // claimed entry is inert forever after (nothing re-reads a claimed one).
+  retainClaimedDays: 5,
+  getMailMinutes: 3,
+  // Nile/Home package retiming: at the ETA, the old behavior (instant, silent
+  // doormat placement) becomes the FALLBACK, not the default — a door event
+  // opens first and stays answerable for this long before falling back to
+  // exactly that old placement, so an AFK player loses nothing.
+  deliveryKnockWindowMinutes: 240,
+  answerDoorMinutes: 2,
+  refuseDoorMinutes: 1,
+  // Solicitor: a pure-flavor knock with no NPC record — a canvasser has no
+  // reason to be a persistent character. Rolled once per day at rollover
+  // (seeded by day); the window is a fixed time of day, not randomized, so
+  // a Node harness can assert the exact ring window without depending on
+  // when a tick-driven sweep happens to first run.
+  solicitorChance: 0.12,
+  solicitorStartMinute: 660,       // 11:00
+  solicitorWindowMinutes: 240,     // rings until 15:00, then gives up
+  solicitorAdmitMinutes: 6,
+  solicitorAdmitMoodDelta: -0.02,  // hearing out a pitch you didn't ask for
+};
+
+const MAIL_FLYER_SENDERS = [
+  'a pizza place two blocks over', 'a mattress outlet', 'a local gym',
+  'a real estate agent', 'a lawn care service', 'a credit card offer',
+  'a carpet cleaning service', 'a new mattress startup', 'a food delivery app',
+];
+
+const MAIL_LETTER_SENDERS = [
+  'an old friend', 'a relative', 'a pen pal', 'someone from your hometown',
+];
+
+// SOLICITOR_LABELS double as the door event's `label` (the "who's there"
+// text) — no NPC record backs any of them.
+const SOLICITOR_LABELS = [
+  'A magazine subscription canvasser', 'A door-to-door fundraiser',
+  'A home security salesperson', 'Someone collecting for a local cause',
+  'A religious canvasser',
+];
+
+const SOLICITOR_ADMIT_TEMPLATES = [
+  'You hear them out. It takes a few minutes to get a word in edgewise.',
+  'You let them finish the pitch before politely declining.',
+  'You nod along through the whole spiel, then say you\'re not interested.',
+];
+
+// The one-line log entry when a pending door event first becomes answerable
+// (mail.js's sweepDoorEvent). Kept generic — the chip itself (self.answer_door/
+// self.refuse_door) shows who it actually is.
+const DOOR_KNOCK_LINES = {
+  delivery: 'There\'s a knock at the door — sounds like a delivery.',
+  solicitor: 'The doorbell rings.',
 };
 
 // ===== /SECTION: CONFIG =====

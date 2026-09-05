@@ -378,6 +378,41 @@ function giftableStacks(gs) {
   });
 }
 
+// --- Borrow/Return (actions-and-activities-overhaul-plan.md Phase 4, D8) ---
+// What the player can borrow from a given NPC: the same not-a-key-item rule
+// giftableStacks uses, read off THEIR belongings instead of the player's own
+// bag. The borrow ask's picker (ui.js openConvBorrowPicker) and its
+// availability gate both read this.
+function borrowableStacks(gs, npc) {
+  const inv = (npc && npc.inventory) || [];
+  return inv.filter(s => {
+    const def = stackDef(s);
+    const keyItem = !!(s && s.meta && s.meta.keyItem) || !!(def && def.keyItem);
+    return !keyItem && (s && s.qty || 0) > 0;
+  });
+}
+
+// Stacks in the player's OWN bag currently borrowed FROM the given npcId
+// (stamped by asks.js's ASK_BORROW.postEffects: meta.borrowed = { from,
+// dueDay }). Scoped to one lender so the Return picker can never offer back
+// the wrong person's thing.
+function borrowedFromStacks(gs, npcId) {
+  const inv = (gs && gs.player && gs.player.inventory) || [];
+  return inv.filter(s => s && s.meta && s.meta.borrowed && s.meta.borrowed.from === npcId && (s.qty || 0) > 0);
+}
+
+// The first (any) borrowed stack past its due day, regardless of lender —
+// read by ui.js's doTalk to raise the "can I get that back?" beat when the
+// player opens a conversation with whoever it's owed to. Pure; day is
+// CONTINUOUS-agnostic (a whole-number game day, same granularity dueDay was
+// stamped in).
+function firstOverdueBorrowedStack(gs, npcId) {
+  const day = gs && gs.meta && gs.meta.clock && gs.meta.clock.day;
+  const inv = (gs && gs.player && gs.player.inventory) || [];
+  return inv.find(s => s && s.meta && s.meta.borrowed && s.meta.borrowed.from === npcId
+    && s.meta.borrowed.dueDay <= day && (s.qty || 0) > 0) || null;
+}
+
 // --- Description (for the panel's detail pane) ---
 // Returns { label, qty, sublabel, description, freshness, freshnessText,
 // tooltip }. Tolerates un-migrated legacy shapes (a bare string, or an

@@ -385,6 +385,41 @@ function trackerTension(gs) {
   return out;
 }
 
+// Booked commitments (actions-and-activities-overhaul-plan.md Phase 1, D2)
+// — the "scheduler hook" the plan's Phase 1 asked for: before this, a
+// booked dinner/hangout was invisible everywhere except at the moment it
+// actually ran (SIM's resolveScheduleActivity already relocates every
+// accepted attendee for the window with no help from here — this adapter
+// only makes the plan itself visible ahead of time, on the Agenda and, once
+// urgent, as a real notification). Reuses upcomingCommitments (commitments.js)
+// — the same read the Calendar app's `commitments` screen source uses
+// (render.computer.js), so "what's on the calendar" has one definition.
+// `acceptedIds` (not invitedIds) names who's actually coming — someone who
+// hasn't answered yet doesn't belong in "who's coming to dinner."
+function trackerCommitments(gs) {
+  const day = gs.meta.clock.day;
+  return upcomingCommitments(gs).map(c => {
+    const def = COMMITMENT_KINDS[c.kind] || {};
+    const kindLabel = def.label || 'plans';
+    const names = (c.acceptedIds || []).map(id => gs.npcs[id]?.bible?.name).filter(Boolean);
+    const who = names.length ? names.join(', ') : 'no one yet';
+    const cDay = commitmentDay(c);
+    const daysUntil = cDay - day;
+    const at = formatTime(absoluteToClock(c.startAbs).minutes);
+    const hostNote = c.host !== 'player' ? ` — ${gs.npcs[c.host]?.bible?.name || 'they'} set it up` : '';
+    return {
+      key: `commitment:${c.id}`,
+      kind: 'commitment',
+      urgency: trackerUrgencyFromDaysUntil(daysUntil),
+      title: `${kindLabel.charAt(0).toUpperCase()}${kindLabel.slice(1)} with ${who}`,
+      detail: `${daysUntil === 0 ? 'today' : formatDate(cDay)} at ${at}${hostNote}`,
+      dueDay: cDay,
+      daysUntil,
+      deepLink: { appId: 'calendar', screenId: 'upcoming', params: {} },
+    };
+  });
+}
+
 // --- The one derived pass (plan 4.1) ---
 // Every source above, flattened, in a fixed order. Deterministic: no
 // randomness, no LLM, no persistence — same save, same entries.
@@ -392,7 +427,7 @@ function buildTrackerEntries(gs) {
   const adapters = [
     trackerRent, trackerBills, trackerTaxes, trackerGigs, trackerQuests,
     trackerDeliveries, trackerRenovationJobs, trackerServices, trackerImUnread,
-    trackerCourses, trackerFacilities, trackerTension,
+    trackerCourses, trackerFacilities, trackerTension, trackerCommitments,
   ];
   const out = [];
   for (const fn of adapters) {

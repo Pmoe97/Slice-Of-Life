@@ -50,7 +50,18 @@ async function advanceAndResolve(ticks, opts = {}) {
   // Initiative plan Phase 3: who was already waiting on the player, so the
   // arrival narration below fires only for records this batch OPENED.
   const overturesBefore = pendingOvertureIds(currentGameState);
-  const { state: newState, events, peepResults } = resolveBatch(currentGameState, ticks, { advanceClock: advanceClockToo, suppressNeeds: opts.suppressNeeds });
+  // needsMinutes defaults to ticks*CLOCK.tickMinutes (exact for every direct
+  // caller here, which all pass whole tick counts for an exact-minutes
+  // span) but advanceAndResolveMinutes overrides it with the TRUE requested
+  // span — ticks is a grid-boundary-crossing count, not a duration, so for
+  // a span that does not land on a tick boundary the two can diverge in
+  // either direction (this audit's gap-fix: D1's "one heartbeat, every
+  // consumer" applies here exactly as it does to decayPlayerNeeds below).
+  // Computed before resolveBatch (continuous-cadence-closure Phase 3, D11)
+  // so NPC needs inside the batch can be scaled by the same true span the
+  // phone battery already uses, instead of a flat CLOCK.tickMinutes/tick.
+  const needsMinutes = opts.needsMinutes ?? (ticks * CLOCK.tickMinutes);
+  const { state: newState, events, peepResults } = resolveBatch(currentGameState, ticks, { advanceClock: advanceClockToo, suppressNeeds: opts.suppressNeeds, needsMinutes });
   currentGameState = newState;
   appendWorldEvents(events);
 
@@ -62,15 +73,6 @@ async function advanceAndResolve(ticks, opts = {}) {
   // already owns every one of those minutes at per-minute cadence; running
   // it here too would double the drain. An 8-hour sleep must still drain
   // the battery (decision C) — on the discrete path it does, right here.
-  //
-  // needsMinutes defaults to ticks*CLOCK.tickMinutes (exact for every direct
-  // caller here, which all pass whole tick counts for an exact-minutes
-  // span) but advanceAndResolveMinutes overrides it with the TRUE requested
-  // span — ticks is a grid-boundary-crossing count, not a duration, so for
-  // a span that does not land on a tick boundary the two can diverge in
-  // either direction (this audit's gap-fix: D1's "one heartbeat, every
-  // consumer" applies here exactly as it does to decayPlayerNeeds below).
-  const needsMinutes = opts.needsMinutes ?? (ticks * CLOCK.tickMinutes);
   if (!opts.suppressNeeds) {
     advancePhoneBattery(currentGameState, needsMinutes);
   }
@@ -111,7 +113,19 @@ async function advanceAndResolve(ticks, opts = {}) {
     // in this file that calls applyEffects directly.
     if (evt.type === 'evidence_discovered') {
       const effCtx = buildEffectContext(currentGameState, [evt.npcId], [evt.npcId], {}, []);
-      applyEffects(parseEffectDSL(`ADJUST_SUSPICION ${evt.npcId} boundary_violation +${STEALTH_TUNING.sneakCaughtSuspicionDelta}`), effCtx);
+      // night-scene Phase 6 (Q2): how much finding it teaches scales with how
+      // OBVIOUS it was. This used to be flat, which meant strength weighted
+      // only the odds of discovery — and since the per-tick base already makes
+      // discovery near-certain over a night in the owner's own room, a
+      // five-tag mess and one crooked shirt taught exactly the same thing.
+      // Referenced to sneakEvidenceStrength so the stealth path is unmoved: a
+      // sneak's fixed 0.4 still writes exactly sneakCaughtSuspicionDelta. An
+      // older record with no strength falls back to that same reference.
+      const strength = typeof evt.data?.strength === 'number'
+        ? evt.data.strength : STEALTH_TUNING.sneakEvidenceStrength;
+      const delta = Math.min(EFFECT_LIMITS.suspicionDeltaCap,
+        STEALTH_TUNING.sneakCaughtSuspicionDelta * (strength / STEALTH_TUNING.sneakEvidenceStrength));
+      applyEffects(parseEffectDSL(`ADJUST_SUSPICION ${evt.npcId} boundary_violation +${delta.toFixed(4)}`), effCtx);
     }
   }
 
@@ -148,6 +162,40 @@ async function advanceAndResolve(ticks, opts = {}) {
   // middle of a batch the player is asleep for.
   narrateOvertureArrivals(overturesBefore);
 
+  // continuous-cadence-closure-plan.md Phase 1 (D1): currentSceneState was,
+  // before this, only ever refreshed at specific call sites (room entry, an
+  // OPEN conversation's own turn, one teleport-away branch) — a background
+  // relocation during THIS batch (discrete or the idle clock-loop's own
+  // checkpoint) left a departed NPC's cutout/chip stale until whichever of
+  // those specific sites next happened to run, which could be arbitrarily
+  // later. reconcileScenePresence (llm.js) already exists for exactly this
+  // filter (pure, keeps engagement/tiers intact, drops only who's no longer
+  // co-located) — it was just never called from the one place that covers
+  // EVERY relocation path. Renders here (not just returns the new state) so
+  // an NPC leaving mid-idle visibly updates the screen without waiting on
+  // the player's next action — cheap and safe even when a caller is about
+  // to render again momentarily (render() is idempotent against the current
+  // state, same reasoning the flush* calls below already rely on).
+  const reconciled = reconcileScenePresence(currentSceneState, currentGameState);
+  const presenceChanged = reconciled.active.length !== currentSceneState.active.length
+    || reconciled.ambient.length !== currentSceneState.ambient.length
+    || reconciled.present.length !== currentSceneState.present.length;
+  currentSceneState = reconciled;
+  if (presenceChanged) render(currentGameState, currentSceneState);
+
+  // continuous-cadence-closure Phase 8 (D9): the SAME-ROOM half of the
+  // ambient "meanwhile" ticker's Goal ("...or simply idling") — the ticker
+  // itself (composeMeanwhileTicker, meanwhile.js) deliberately only ever
+  // considers NEARBY rooms, never the player's own, precisely so it can
+  // never race THIS function's other caller-side same-room mechanism
+  // (surfaceRoomEvidence, called explicitly from doMove/doLookAround at the
+  // correct narrative position — see meanwhile.js's own header for the race
+  // this scoping avoids). Idling-in-your-own-room coverage is instead this
+  // one direct call, reusing that same already race-free mechanism (Design
+  // Invariant 4), gated to the idle/continuous checkpoint path only — the
+  // discrete path already calls surfaceRoomEvidence itself.
+  if (!advanceClockToo) surfaceRoomEvidence(currentGameState.player.location);
+
   // Phase 3 (D11): a conversation partner who walked out during this batch
   // must not stay in an active session — the talk dies, quietly when the
   // player can't see them, with a narration line when they can. No save
@@ -182,6 +230,13 @@ async function advanceAndResolve(ticks, opts = {}) {
     await processDayRollover(d);
   }
 
+  // Actions & Activities Overhaul Phase 12 (D21): sweep world.doorEvent
+  // after the rollover loop (not before) so a door event created BY today's
+  // rollover (a delivery's ETA hitting, or a solicitor's roll landing) gets
+  // its "there's a knock" announcement in the same advance call, rather
+  // than waiting a full extra tick.
+  sweepDoorEventNow();
+
   // Resume the continuous clock loop if we paused it.
   if (wasRunning) resumeClockLoop();
 
@@ -191,6 +246,12 @@ async function advanceAndResolve(ticks, opts = {}) {
   // Phase 2 (D7): the same reasoning for an overture opened while the player
   // was simply standing still — no action ran, so no hideLoading is coming.
   flushPendingOvertureGate();
+  // Phase 5 (D31): symmetry with the overture flush above. In practice this
+  // call is a no-op for a sleep-advance gate specifically — doSleep's own
+  // loading overlay is still up when advanceAndResolve returns to it, so
+  // overtureGateBlocked() defers to hideLoading()'s flush below, the same
+  // deferral the overture gate itself relies on for exactly this reason.
+  flushPendingSleepAdvanceGate();
 
   return events; // the events objects are the same references stored in
                  // currentGameState.world.events, so a caller marking one
@@ -221,6 +282,10 @@ async function processDayRollover(day) {
   processAutopayForDayUi(day);
   processTaxesForDayUi(day);
   processDeliveriesForDay(day);
+  // Actions & Activities Overhaul Phase 12 (D21): the mailbox's own daily
+  // roll — grouped with deliveries above since both are "what arrives at
+  // the entry today".
+  processMailForDayUi(day);
   // Spoilage (inventory overhaul Phase 4): stacks past shelf life +
   // graceDays convert to a mess — ROTTEN_FOOD on their container + room
   // container state — feeding the cleanliness machinery and, since Phase 2,
@@ -228,6 +293,10 @@ async function processDayRollover(day) {
   // a visit hired for today can clean a mess that formed at this
   // rollover.
   processSpoilageForDay(currentGameState, day);
+  // Actions & Activities Overhaul Phase 11 (D20): a day of wear dirties
+  // whatever the player/NPCs actually had on — see SIM's own comment for
+  // why this rides the same rollover hook as the dishwasher resolution above.
+  processLaundryWearForDay(currentGameState, day);
   // Renovation overhaul: materials "arrive" with the day's deliveries, then
   // any job whose ETA is today wraps up — grouping renovations next to
   // deliveries keeps the day-rollover narrative order sensible.
@@ -572,12 +641,20 @@ function narrateOvertureArrivals(before) {
 // The substitutions every channel's templates may carry. `{name}` is the only
 // one Phase 3 needed; a proposal has to be able to say WHEN and WHERE or it is
 // a mood rather than a plan, and those come off the record's terms.
+// D10 (Phase 5) added {amount}/{item}, filled from the record's `request` —
+// `proposal`'s sibling field, same substitution pass.
 function fillOvertureLine(template, npc, record) {
   const p = record.proposal;
-  return template
+  const req = record.request;
+  let line = template
     .replace('{name}', npc.bible?.name || 'Someone')
     .replace('{when}', p ? proposalWhen(p) : 'sometime')
     .replace('{where}', p ? (ROOMS[p.roomId]?.name || 'flat') : 'flat');
+  if (req && req.kind === 'money') line = line.replace('{amount}', String(req.amount));
+  if (req && req.kind === 'borrow_item') {
+    line = line.replace('{item}', (ITEM_DEFS[req.defId]?.label || 'thing').toLowerCase());
+  }
+  return line;
 }
 
 // "tonight at 19:00" / "tomorrow at 19:00" — the same today/tomorrow/date
@@ -721,6 +798,7 @@ function queueOvertureGate(npcId, line) {
 // that just finished, a live conversation, a peek hold, or a gate already up.
 function overtureGateBlocked() {
   if (presentingOvertureGate) return true;
+  if (presentingSleepAdvanceGate) return true;
   if (document.querySelector('.loading-overlay:not(.hidden)')) return true;
   if (typeof actionWindowActive === 'function' && actionWindowActive()) return true;
   if (typeof peekSessionActive === 'function' && peekSessionActive()) return true;
@@ -807,6 +885,80 @@ async function presentOvertureGate(npcId, line) {
   }
 }
 
+// --- actions-and-activities-overhaul-plan.md Phase 5 (D31): the sleeping-
+// player advance's real choice --------------------------------------------
+// boundary.js's trySneakIntoBed runs mid-tick, inside doSleep's batch, behind
+// the loading overlay for the whole night — exactly the D7 problem the
+// overture gate above already solved, so this borrows its screen-is-free
+// gate (overtureGateBlocked()) and its flush-site trio rather than inventing
+// a fourth shape. It does NOT borrow the overture gate's queue-a-payload
+// pattern, though: a pending sleep-advance is a LIVE SCAN over gameState.npcs
+// (hasPendingSleepAdvance), not a remembered npcId. That is deliberately more
+// robust than a remembered slot — the overture gate can afford to drop a
+// second simultaneous record (nothing was written to state, so dropping it
+// is silence, not a leak); this one has already written npc.flags
+// ._sleepAdvance, so a scan-based flush self-heals even the one-in-a-house
+// edge case of two NPCs both crossing the sneak roll the same night — the
+// second one's pending flag simply survives to the NEXT flush, never stuck.
+// Unlike the overture gate this is never engaged from a chip — the roll that
+// put it here already decided the player woke; what happens next is the one
+// thing the gate exists to ask for.
+let presentingSleepAdvanceGate = false;
+
+function flushPendingSleepAdvanceGate() {
+  if (presentingSleepAdvanceGate) return;
+  if (overtureGateBlocked()) return; // retried by the next flush site
+  const npcs = (currentGameState && currentGameState.npcs) || {};
+  const npcId = Object.keys(npcs).find(id => hasPendingSleepAdvance(npcs[id]));
+  if (!npcId) return;
+  presentingSleepAdvanceGate = true;
+  setTimeout(() => { void presentSleepAdvanceGate(npcId); }, 0);
+}
+
+// Three real choices, never a roll (D31's own text). `presentWorldGate`'s
+// `choices` array is already generic over N entries — the "third rung" the
+// plan asks for is exactly one more entry, not new chrome.
+async function presentSleepAdvanceGate(npcId) {
+  try {
+    const npc = currentGameState && currentGameState.npcs ? currentGameState.npcs[npcId] : null;
+    if (!hasPendingSleepAdvance(npc)) return;
+    if (typeof presentWorldGate !== 'function') return;
+    const name = npc.bible?.name || 'Someone';
+    const answer = await presentWorldGate(currentGameState, {
+      tier: 'B',
+      heading: name,
+      narration: `You wake to find ${name} beside you, close, mid-attempt at something you never agreed to.`,
+      defaultChoice: 'angry',
+      choices: [
+        { id: 'into_it', label: 'Pull them closer', tone: 'primary' },
+        { id: 'decline', label: 'Gently say no' },
+        { id: 'angry', label: 'Push them off, furious', tone: 'danger' },
+      ],
+    });
+    // null means the window could not open — leave the pending flag exactly
+    // as it is (never cleared) so the next flush's scan finds it again,
+    // rather than silently deciding for the player.
+    if (answer === null) return;
+    const choice = (answer === 'into_it' || answer === 'decline') ? answer : 'angry';
+    const result = resolveSleepAdvanceChoice(currentGameState, npcId, choice);
+    if (result) {
+      const lines = {
+        into_it: `You pull ${name} closer. Neither of you says much of anything afterward.`,
+        decline: `You say no, gently. ${name} backs off without a fuss.`,
+        angry: `You push ${name} off, furious. They scramble back, and it is very clear how badly this went.`,
+      };
+      addLogEntry('narration', lines[result.outcome] || lines.angry);
+    }
+    render(currentGameState, currentSceneState);
+    await saveAtBoundary('sleep-advance', currentGameState);
+  } catch (e) {
+    console.warn('Sleep advance gate failed:', e && e.message);
+  } finally {
+    presentingSleepAdvanceGate = false;
+    flushPendingSleepAdvanceGate();
+  }
+}
+
 // --- Phase 4: the channels that DO need a button ---------------------------
 // An approach is answered by doTalk and refused by doMove, which is why Phase 3
 // shipped without a surface (D8): both are things the player already does with
@@ -864,9 +1016,49 @@ async function doOvertureRespond(npcId, accepted) {
   if (p) {
     createCommitment(currentGameState, {
       kind: p.kind, startAbs: p.startAbs, endAbs: p.endAbs,
-      roomId: p.roomId, invitedIds: [], proposerId: npcId,
+      roomId: p.roomId, invitedIds: [], proposerId: npcId, host: npcId,
     });
     addLogEntry('narration', `You tell ${name} yes. ${proposalWhen(p)}, in ${roomPhrase(p.roomId)} — it is in the diary now.`);
+  }
+  // actions-and-activities-overhaul-plan.md Phase 5 (D10) — `request` is
+  // `proposal`'s sibling: accepting does not book a commitment, it transacts
+  // money.js's ledger or an item stack directly. No gate on whether the
+  // player CAN grant it (D10, whole) — the money side just clamps to what is
+  // actually on hand, the same floor-at-0 clamp every other money leaf uses,
+  // rather than a soft-locked or broken accept.
+  const req = record && record.request;
+  if (req && req.kind === 'money') {
+    const amount = Math.max(0, Math.min(req.amount, currentGameState.player.money || 0));
+    if (amount > 0) {
+      currentGameState.player.money = (currentGameState.player.money || 0) - amount;
+      adjustMoneyLedger(currentGameState, npcId, 'npcOwes', amount);
+      currentGameState.npcs[npcId] = addMemoryFact(currentGameState.npcs[npcId], {
+        text: `The player lent them $${amount} when they asked.`,
+        day: currentGameState.meta.clock.day,
+        importance: MEMORY_IMPORTANCE.social,
+        category: 'relationship', provenance: 'witnessed', confidence: 0.9,
+      });
+      addLogEntry('narration', `You hand ${name} $${amount}.`);
+    } else {
+      addLogEntry('narration', `You want to help ${name} out, but you're just as broke right now.`);
+    }
+  } else if (req && req.kind === 'borrow_item') {
+    const { stacks, removed } = removeStack(currentGameState.player.inventory || [], req.defId, 1);
+    if (removed > 0) {
+      currentGameState.player.inventory = stacks;
+      // ownerId stays 'player' (the lender) — the same "possession without
+      // ownership" borrow contract ASK_BORROW's postEffects uses, mirrored
+      // onto the npc's own bag. No meta.borrowed stamp: nothing reads a due
+      // day off an NPC-held stack this phase (there is no reverse "give it
+      // back" flow yet), and stamping one would be a field with no reader.
+      currentGameState.npcs[npcId] = {
+        ...currentGameState.npcs[npcId],
+        inventory: addStack(currentGameState.npcs[npcId].inventory || [], req.defId, 1,
+          'player', {}, currentGameState.meta.clock.day),
+      };
+      const itemDef = ITEM_DEFS[req.defId] || ITEM_DEFS._unknown;
+      addLogEntry('narration', `You let ${name} take the ${itemDef.label || 'thing'}.`);
+    }
   }
   await advanceAndResolve(1);
   render(currentGameState, currentSceneState);
@@ -893,15 +1085,26 @@ function refuseOverturesInRoom(roomId) {
 }
 
 // --- Intimacy & Voyeurism Phase 11 (D3/D13): Make a Move ------------------
-// The player's mirror of the NPC intimacy overture, and the ONLY surface for
-// the paired acts. The flow: pick a partner (when several are present) → pick
-// an act → run it through the registered-action pipeline with
-// ctx.actTargetNpcId set. The act's `willingness:<act>` requirement is the
-// SAME Phase 9 gate an NPC-initiated intimacy act passes (invariant 2 —
-// symmetric initiation), with the same thresholds and the same refusal prose.
-// An unwilling target refuses with prose and no effects; a conscious soft no
-// additionally puts the target on the actively-refusing lockout (the refusal
-// writer inside executeAction), so a no means no for a while.
+// The player's mirror of the NPC intimacy overture — the act picker for the
+// paired acts (quickie/sex/cuddle/share a shower). The flow: pick a partner
+// (when several are present) → pick an act → run it through the registered-
+// action pipeline with ctx.actTargetNpcId set. The act's `willingness:<act>`
+// requirement is the SAME Phase 9 gate an NPC-initiated intimacy act passes
+// (invariant 2 — symmetric initiation), with the same thresholds and the
+// same refusal prose. An unwilling target refuses with prose and no effects;
+// a conscious soft no additionally puts the target on the actively-refusing
+// lockout (the refusal writer inside executeAction), so a no means no for a
+// while.
+//
+// actions-and-activities-overhaul-plan.md Phase 2 (D5/D6): no longer a
+// standalone room chip — "the chip row gains nothing back." This is now
+// doConvSend's pass2 for an ACCEPTED, awake RequestIntimacy ask (the chat
+// "Be Intimate" leaf consents; this picks what that consent turns into),
+// exactly the way runAskScheduleFlow/runAskPhotoFlow are pass2 for their own
+// leaves. Called with npcId already known (who you're talking to), so the
+// partner-picker branch below never fires in that path — it only still
+// matters if this is ever invoked with several people present and no npcId,
+// which no live call site does today.
 async function doMakeAMove(npcId) {
   if (!currentGameState) return;
   const roomId = currentGameState.player.location;
@@ -1545,6 +1748,12 @@ function processBillsForDayUi(day) {
   for (const r of processBillsForDay(currentGameState, day)) {
     if (r.posted != null) {
       addLogEntry('system', `${r.label} bill: ${r.posted} posted. (Balance: ${r.balance})`);
+      // Actions & Activities Overhaul Phase 12 (D21): the mailbox never
+      // invents a bill on its own — this is the one and only place a
+      // 'bill' mail entry gets pushed, the exact moment the real bill
+      // system posts a charge, so the mailbox can't disagree with the
+      // bills app about what's due.
+      pushMailEntry(currentGameState, 'bill', r.label, day);
     }
     if (r.activated) {
       const eff = BILL_CUTOFF_EFFECTS[r.cutoff];
@@ -1600,24 +1809,47 @@ function processTaxesForDayUi(day) {
   }
 }
 
-// Deliveries land on the entry doormat (WORLD/ITEMS), not straight into
-// the player's pockets — "you have to go get your package, and a
-// roommate could get to it first" is the whole point of routing this
-// through SPAWN_ITEM instead of pushing directly into player.inventory.
+// Deliveries used to land on the entry doormat the instant their ETA hit —
+// silent, no player involvement. Actions & Activities Overhaul Phase 12
+// (D21) retimes that: the ETA now opens a door event (mail.js's
+// queueDeliveryDoorEvent) instead of placing the item directly. The old
+// instant-doormat behavior survives as the FALLBACK — mail.js's
+// sweepDoorEvent resolves an unanswered event to exactly that placement
+// once its window closes, so an AFK player loses nothing. A delivery that
+// can't queue today (the one door-event slot is already busy) simply
+// retries at tomorrow's rollover — its status stays 'ordered'.
 function processDeliveriesForDay(day) {
   const deliveries = currentGameState.world.deliveries || [];
-  const doormat = Object.values(currentGameState.objects?.room_entry || {}).find(o => o.defId === 'doormat');
   for (const d of deliveries) {
     if (d.status !== 'ordered' || day < d.etaDay) continue;
-    d.status = 'delivered';
-    const label = ITEM_DEFS[d.defId]?.label || d.defId || 'a package';
-    if (doormat && d.defId) {
-      doormat.contents = addStack(doormat.contents, d.defId, d.qty || 1, null, {}, gameDaysNow(currentGameState.meta.clock));
-      addLogEntry('narration', `A delivery has arrived: ${label}. It's waiting by the front door.`);
-    } else {
-      addLogEntry('narration', `A delivery has arrived: ${label}.`);
-    }
+    queueDeliveryDoorEvent(currentGameState, d, day);
   }
+}
+
+// Actions & Activities Overhaul Phase 12 (D21): the mailbox's daily roll
+// (flyers/letters — bills are pushed separately, from inside
+// processBillsForDayUi above, the moment a real bill posts) plus the
+// solicitor's daily roll (folded into the same pure function — see
+// mail.js's processMailForDay). Narrates only the flyer/letter arrivals;
+// a solicitor is narrated later, by sweepDoorEventNow, the moment their
+// scheduled window actually opens.
+function processMailForDayUi(day) {
+  if (!currentGameState) return;
+  const created = processMailForDay(currentGameState, day);
+  if (created.length === 0) return;
+  const kindLabel = { flyer: 'a flyer', letter: 'a letter' };
+  addLogEntry('narration', `Mail arrives: ${joinList(created.map(m => kindLabel[m.kind] || 'something'))}.`);
+}
+
+// Tick-driven sweep of world.doorEvent (mail.js's sweepDoorEvent) — same
+// "every path that moves the clock goes through here" reasoning as
+// processFoodOrdersNow. Announces a pending event the moment the clock
+// reaches its createdAbs, and resolves an unanswered one to its fallback
+// once its window closes.
+function sweepDoorEventNow() {
+  if (!currentGameState) return;
+  const line = sweepDoorEvent(currentGameState);
+  if (line) addLogEntry('narration', line);
 }
 
 // Renovation overhaul: complete any active contracted job whose ETA day has
@@ -2350,7 +2582,7 @@ async function doInviteDinner(npcId) {
   if (!choice) return;
   const { record, responses } = createCommitment(currentGameState, {
     startAbs: choice.startAbs, endAbs: choice.endAbs,
-    roomId: 'dining', invitedIds: [npcId],
+    roomId: 'dining', invitedIds: [npcId], host: 'player',
   });
   const resp = responses?.[npcId];
   const choiceDay = Math.floor(choice.startAbs / 1440);
@@ -2398,6 +2630,30 @@ async function doInviteDinner(npcId) {
       },
     },
   }, { applied: [], narration, minutesSpent: CLOCK.tickMinutes });
+}
+
+// Phase 1 (D2, actions-and-activities-overhaul-plan.md) — "Clear the
+// Calendar": the Calendar app's row action on an upcoming commitment
+// (defs.computer.js's `calendar` app, rowAction 'calendar.cancel'). Free —
+// cancelling a plan is a phone-tap, not a scene, and cancelCommitment
+// (commitments.js) already refuses anything that isn't still 'scheduled', so
+// there's nothing here to recheck. No relationship consequence (see
+// cancelCommitment's header): this is the explicit escape hatch, not a
+// decline.
+async function doCancelCommitment(commitmentId) {
+  if (!commitmentId) return;
+  const removed = cancelCommitment(currentGameState, commitmentId);
+  if (!removed) return;
+  const kindLabel = (COMMITMENT_KINDS[removed.kind] || {}).label || 'plans';
+  const names = (removed.acceptedIds || [])
+    .map(id => currentGameState.npcs?.[id]?.bible?.name)
+    .filter(Boolean);
+  const who = names.length ? ` with ${names.join(' and ')}` : '';
+  addLogEntry('system', `You cleared ${kindLabel}${who} off the calendar.`);
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('calendar-cancel', currentGameState);
 }
 
 // Daily goals sourced from resident wants/wounds/interests (brief §Identity:
@@ -3506,6 +3762,9 @@ async function doSearchPhone(ownerId) {
     const snoopResult = applyEffects(snoopEffects, effCtx);
     phoneApplied = (snoopResult && snoopResult.applied) || [];
     narration = `You go through ${npc.bible.name}'s phone. They're none the wiser — for now.`;
+    // P1B (D32): this mechanic's own clean/unwitnessed branch — the third of
+    // the three dead XP paths, all fixed the same way.
+    awardSkillXp(currentGameState.player, 'stealth', PHONE_SNOOP_TUNING.xpUnwitnessed, day);
   }
 
   await advanceAndResolveMinutes(PHONE_SNOOP_TUNING.searchTimeMinutes);
@@ -3564,7 +3823,10 @@ async function showPhoneFindModal(npc, finding) {
   overlay.setAttribute('data-open', '');
 
   try {
-    const result = await generatePhoneSnoopPhotoImage(npc);
+    // P1B (D35): explicit is the sometimes-branch composePhoneFind already
+    // decided (gated at generation time by the SAME three-condition gate
+    // the intimacy layer uses); the SFW candid selfie stays the default.
+    const result = await generatePhoneSnoopPhotoImage(npc, currentGameState, finding.explicit);
     if (!overlay.hasAttribute('data-open')) return; // dismissed while generating
     if (result?.url) {
       img.src = result.url;
@@ -3578,6 +3840,149 @@ async function showPhoneFindModal(npc, finding) {
   } catch (e) {
     console.warn('Phone snoop photo failed:', e);
   }
+}
+
+// --- Pickpocketing (P1B, D33) -----------------------------------------------
+// A covert take directly off a present, aware NPC's person — resolvePickpocket
+// (stealth.js) does the actual roll; this is the narration/time/render shell,
+// same job doPeep/doSearchPhone do for their own mechanics.
+async function doPickpocket(npcId) {
+  if (!currentGameState) return;
+  const result = resolvePickpocket(currentGameState, npcId);
+  if (!result.ok) {
+    addLogEntry('system', result.reason);
+    return;
+  }
+  const npc = currentGameState.npcs[npcId];
+  const name = npc?.bible?.name || 'They';
+  let narration;
+  if (result.caught) {
+    narration = `${name} feels your hand and jerks back. "What do you think you're doing?"`;
+  } else {
+    const def = ITEM_DEFS[result.itemDefId];
+    const label = def?.label || 'something';
+    narration = result.suspected
+      ? `You slip ${name}'s ${label} into your pocket. They go quiet for a second, eyes narrowing — did they feel that?`
+      : `You slip ${name}'s ${label} into your pocket without them noticing a thing.`;
+  }
+  await advanceAndResolveMinutes(PICKPOCKET_TUNING.timeMinutes);
+  addLogEntry('narration', narration);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('pickpocket', currentGameState);
+  await presentActionOutcome(currentGameState, {
+    id: 'pickpocket', label: 'Pickpocket',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: result.caught ? `Caught by ${name}` : 'Lifted clean',
+      image: { kind: 'instance', phrase: result.caught ? 'a hand caught mid-reach for someone\'s pocket, indignant stare' : 'a quick, unnoticed hand slipping something from a pocket' },
+    },
+  }, { applied: result.applied || [], narration, minutesSpent: PICKPOCKET_TUNING.timeMinutes });
+}
+
+// --- Laundry snoop (Actions & Activities Overhaul Phase 11, D20) -----------
+// Reading a resident's laundry in the shared hamper/washer/dryer for gossip
+// potential — resolveLaundrySnoop (stealth.js) picks the garment and does
+// the actual roll; this is the narration/time/render shell, same job
+// doPeep/doSearchPhone do for their own mechanics. No npcId param — the
+// laundry room has no single owner, so the resolver itself picks whose
+// laundry got found.
+async function doSnoopLaundry() {
+  if (!currentGameState) return;
+  const result = resolveLaundrySnoop(currentGameState);
+  if (!result.ok) {
+    addLogEntry('system', result.reason);
+    return;
+  }
+  await advanceAndResolveMinutes(LAUNDRY_SNOOP_TUNING.searchTimeMinutes);
+  addLogEntry('narration', result.narration);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('snoop-laundry', currentGameState);
+  const owner = currentGameState.npcs[result.ownerId];
+  const ownerName = owner?.bible?.name || 'Someone';
+  await presentActionOutcome(currentGameState, {
+    id: 'snoop-laundry', label: 'Snoop Through the Laundry',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: result.caught ? `Caught by ${ownerName}` : result.suspected ? `${ownerName} might have noticed` : 'A quick look',
+    },
+  }, { applied: result.applied || [], narration: result.narration, minutesSpent: LAUNDRY_SNOOP_TUNING.searchTimeMinutes });
+}
+
+// --- Cover your tracks (P1B, D36) -------------------------------------------
+// The contextual action a "suspected" stealth outcome's window offers — see
+// stealth.js's openSuspicionWindow/resolveCoverTracks for the mechanism.
+// This phase's one concrete instance is pickpocketing's suspected branch;
+// later phases' sleeping-NPC/search contexts read the same window under
+// their own labels (Redress, Clean Evidence, ...).
+async function doCoverTracks(npcId) {
+  if (!currentGameState) return;
+  const result = resolveCoverTracks(currentGameState, npcId);
+  if (!result.ok) {
+    addLogEntry('system', result.reason);
+    return;
+  }
+  const npc = currentGameState.npcs[npcId];
+  const name = npc?.bible?.name || 'them';
+  const narration = `You play it cool with ${name} — a joke, a shrug, nothing to see here. Whatever they half-noticed, it fades.`;
+  await advanceAndResolveMinutes(PICKPOCKET_TUNING.coverTracksMinutes);
+  addLogEntry('narration', narration);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('cover-tracks', currentGameState);
+}
+
+// --- Follow: explicit release (Phase 6, D11) --------------------------------
+// The escape hatch alongside ASK_FOLLOW's accept (asks.js) — free,
+// immediate, no relationship cost, same "explicit escape hatch, not silent
+// abandonment" shape as Clear the Calendar's cancelCommitment (D2).
+async function doStopFollowing(npcId) {
+  if (!currentGameState) return;
+  const npc = currentGameState.npcs[npcId];
+  if (!npc || !npc.follow || npc.follow.leader !== 'player') return;
+  delete npc.follow;
+  delete npc.touring; // Phase 17 (D27): the explicit release ends a tour along with plain Follow
+  const name = npc.bible?.name || 'They';
+  addLogEntry('narration', `${name} stops trailing after you.`);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('stop-following', currentGameState);
+}
+
+// --- Sneaking (P1B, D34) -----------------------------------------------------
+// A free stance toggle — no time cost, same shape as the "trying for a baby"
+// toggle (doPregnancySetTrying). While on, doMove suppresses the player's
+// own footsteps signal (signals.js's emitPlayerFootsteps) and pickpocketing
+// gets a detection discount (stealth.js's resolvePickpocket).
+async function doToggleSneaking() {
+  if (!currentGameState) return;
+  currentGameState.player.sneaking = !currentGameState.player.sneaking;
+  addLogEntry('narration', currentGameState.player.sneaking
+    ? 'You slow down and move quietly.'
+    : 'You stop tiptoeing around.');
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('sneak-toggle', currentGameState);
+}
+
+// --- Flags & Conditions (Phase 3, D15) ---------------------------------
+// A free toggle, same shape as Sneaking above — only one house rule is
+// shipped this phase (HOUSE_RULE_DEFS.no_eating_living_room, config.js), so
+// this hardcodes it rather than threading a ruleId param through the chip
+// wiring for a list of one; a second rule is whichever future phase's call
+// to make that generic.
+async function doToggleHouseRule() {
+  if (!currentGameState) return;
+  const ruleId = 'no_eating_living_room';
+  const def = HOUSE_RULE_DEFS[ruleId];
+  const world = currentGameState.world;
+  world.houseRules = world.houseRules || [];
+  const idx = world.houseRules.findIndex(r => r.id === ruleId);
+  if (idx >= 0) {
+    world.houseRules.splice(idx, 1);
+    addLogEntry('narration', `You take down the house rule: "${def.label}."`);
+  } else {
+    world.houseRules.push({ id: ruleId, setDay: currentGameState.meta.clock.day });
+    addLogEntry('narration', `You set a new house rule: "${def.label}."`);
+  }
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('house-rule-toggle', currentGameState);
 }
 
 // Give item: gives a meal/food/gift item from inventory to an NPC.
@@ -4507,6 +4912,12 @@ function isActionExemptFromEnergyGate(action) {
   // D17: the scene-art info/reroll controls are viewing tools, not actions —
   // exhaustion never blocks reading a prompt or rerolling art.
   if (action === 'scene.image-info' || action === 'scene.image-reroll') return true;
+  // P1B (D34): flipping a stance costs nothing to do even exhausted, same
+  // reasoning as the pregnancy 'trying' toggle never needing this list.
+  if (action === 'sneak.toggle') return true;
+  // Phase 3 (D15): setting/rescinding a house rule is a declaration, not an
+  // act — same reasoning as sneak.toggle just above.
+  if (action === 'house-rule.toggle') return true;
   return false;
 }
 
@@ -4579,6 +4990,23 @@ async function handleAction(action, npcId, extra) {
   // 'boundary.' prefix is stripped here.
   if (action === 'boundary.sleep_with' || action === 'boundary.sleep_watch') {
     await doBoundarySleepRoom(action.split('.').pop(), npcId);
+    return;
+  }
+  // night-scene-sleeping-npc-plan D13 / Phase 6: the Night Scene's entry.
+  // Same interception as its two bed siblings, but nothing after this line is
+  // a discrete action at all — startNightScene claims the overlay itself and
+  // runs a LIVE session against the continuous clock (D24), so there is no
+  // advance-and-resolve here and deliberately no openActionWindow (which
+  // would pause the very clock that makes soothing cost something). The chip
+  // render.js built has already passed resolveNightSceneGate; a false back
+  // from here is a genuine race (she woke between the paint and the tap), and
+  // the honest thing to say about it is that the moment is gone.
+  if (action === 'boundary.night_scene') {
+    if (!npcId) return;
+    if (!startNightScene(currentGameState, npcId, { location: currentGameState.player.location })) {
+      addLogEntry('narration', 'The moment has passed.');
+      renderAll(currentGameState);
+    }
     return;
   }
   // Intimacy & Voyeurism Phase 17 (D14): the three-way act. It IS an
@@ -4725,6 +5153,32 @@ async function handleAction(action, npcId, extra) {
     // shell that owns the node.
     case 'dreams.open-entry':
       doDreamOpenEntry(extra?.rowId, extra?.device);
+      break;
+    // actions-and-activities-overhaul-plan.md Phase 14 (D23): DailyGrid.
+    // Cell typing bypasses this delegation entirely (its own listener,
+    // render.computer.js) — only the deliberate Hint/Check buttons route
+    // through here, same as every other app's row actions.
+    case 'puzzle.hint':
+      await doPuzzleRevealHint(extra?.index);
+      break;
+    case 'puzzle.check':
+      doPuzzleCheck();
+      break;
+    // actions-and-activities-overhaul-plan.md Phase 15 (D24): Chatter.
+    // Compose/comment typing bypasses this delegation (each input reads
+    // itself on Enter, same as puzzle cells above) — only the deliberate
+    // Post/Like/Reply buttons and the profile-nav name/avatar route here.
+    case 'chatter.post':
+      await doChatterPost(extra?.device);
+      break;
+    case 'chatter.like':
+      await doChatterLike(extra?.rowId);
+      break;
+    case 'chatter.comment':
+      await doChatterComment(extra?.rowId, extra?.device);
+      break;
+    case 'chatter.open-profile':
+      doChatterOpenProfile(npcId, extra?.device);
       break;
     case 'gig.accept':
       await doGigAccept(extra?.rowId);
@@ -5156,15 +5610,10 @@ async function handleAction(action, npcId, extra) {
     case 'talk':
       if (npcId) await doTalk(npcId);
       break;
-    // Intimacy & Voyeurism Phase 11 (D3): Make a Move — the player's mirror
-    // of the NPC intimacy overture. The chip is offered once when someone is
-    // present; doMakeAMove picks a partner (when several are present) and an
-    // act, then runs the chosen act through the registered-action pipeline
-    // with ctx.actTargetNpcId set — the willingness gate (same threshold,
-    // same refusal prose as the NPC side) is that act's requirement.
-    case 'make_a_move':
-      await doMakeAMove(npcId);
-      break;
+    // 'make_a_move' retired (actions-and-activities-overhaul-plan.md Phase 2,
+    // D5) — no chip dispatches it anymore. doMakeAMove is still a real
+    // function, now called directly from doConvSend's pass2 for an accepted
+    // RequestIntimacy ask.
     // Intimacy & Voyeurism Phase 18 (D16): the player's "trying" toggle.
     case 'pregnancy.start-trying':
       if (npcId) await doPregnancySetTrying(npcId, true);
@@ -5183,6 +5632,9 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'im.invite-dinner':
       if (extra?.rowId) await doInviteDinner(extra.rowId);
+      break;
+    case 'calendar.cancel':
+      await doCancelCommitment(extra?.rowId);
       break;
     case 'step-away':
       if (npcId) await doStepAway(npcId);
@@ -5215,6 +5667,28 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'search-phone':
       if (npcId) await doSearchPhone(npcId);
+      break;
+    // P1B (D33/D34/D36): pickpocket, its cover-tracks follow-up, and the
+    // Sneaking stance toggle.
+    case 'pickpocket':
+      if (npcId) await doPickpocket(npcId);
+      break;
+    case 'cover-tracks':
+      if (npcId) await doCoverTracks(npcId);
+      break;
+    // Actions & Activities Overhaul Phase 11 (D20): laundry snoop — no
+    // npcId, the resolver picks whose laundry got found.
+    case 'snoop-laundry':
+      await doSnoopLaundry();
+      break;
+    case 'stop-following':
+      if (npcId) await doStopFollowing(npcId);
+      break;
+    case 'sneak.toggle':
+      await doToggleSneaking();
+      break;
+    case 'house-rule.toggle':
+      await doToggleHouseRule();
       break;
     case 'write-note':
       openWriteNoteModal();
@@ -6155,8 +6629,26 @@ async function maybeShowConversationScene(npc) {
   // npc.flags and only ever increments within an OPEN conversation.
   const panelN = (npc.flags._convSceneN = (npc.flags._convSceneN || 0) + 1);
   const removeGen = convShowGeneratingImage();
-  const result = await generateConversationSceneImage(currentGameState, npc, panelN);
-  if (removeGen) removeGen();
+  // Bug report (2026-09-01): this await used to be bare. generateConversation
+  // SceneImage guards its OWN generateImageTracked call in a try/catch and
+  // always resolves — but the cache read just above that try/catch
+  // (state.js's getCachedImage, a real root.kv.images/root.kv.meta await) is
+  // NOT guarded, so a storage hiccup there threw straight out of this
+  // function. Fire-and-forget from doConvSend means nothing here was
+  // awaiting the rejection either, so it died silently in the console and
+  // left `removeGen` never called — the "generating image" bubble stuck in
+  // the chat log forever (until the conversation was closed and reopened,
+  // which rebuilds the log from scratch). Same try/finally shape
+  // runAskPhotoFlow already uses for its own convShowGeneratingImage call.
+  let result;
+  try {
+    result = await generateConversationSceneImage(currentGameState, npc, panelN);
+  } catch (e) {
+    console.warn('Conversation scene generation failed:', e);
+    result = { url: null };
+  } finally {
+    if (removeGen) removeGen();
+  }
   if (!convState || convState.npcId !== npcId) return; // conversation closed/switched mid-generation
   if (result.url) {
     const record = {
@@ -6528,7 +7020,15 @@ function askMenuIsOpen() {
 
 function openAskMenu() {
   if (!convState || convState.sending || !currentGameState) return;
-  askMenuPath = [];
+  // actions-and-activities-overhaul-plan.md Phase 2 (D6): "the chat modal's
+  // Ask button pre-expands the new Affection category when the conversation
+  // is with someone present" — a live conversation partner is present by
+  // construction, so this is the every-open default; the existing Back
+  // button (askMenuGoBack) reaches the top-level category list in one tap.
+  // A UX shortcut to the same tree, never a separate flow — the category
+  // that replaced the old standalone Make-a-Move chip is the one that opens
+  // first.
+  askMenuPath = ['affection'];
   askMenuRender();
   const m = document.getElementById('conv-ask-menu');
   if (m) m.hidden = false;
@@ -6626,6 +7126,19 @@ function askMenuInsertLeaf(askId) {
     openConvGiftPicker().then(pick => { if (pick) doConvGiveGift(pick.defId); });
     return;
   }
+  // Phase 4 of actions-and-activities-overhaul-plan.md (D8) — Borrow/Return
+  // are picker-first leaves too, same shape as gift: true above, just
+  // sourced from the OTHER side's belongings.
+  if (leaf.borrow) {
+    closeAskMenu();
+    openConvBorrowPicker().then(pick => { if (pick) doConvBorrowItem(pick.defId); });
+    return;
+  }
+  if (leaf.returnItem) {
+    closeAskMenu();
+    openConvReturnPicker().then(pick => { if (pick) doConvReturnItem(pick.defId); });
+    return;
+  }
   const input = document.getElementById('conv-input');
   if (!input) return;
   input.value = leaf.template;
@@ -6664,6 +7177,24 @@ function updateAskHint() {
 async function doTalk(npcId) {
   if (!npcId || !currentGameState) return;
 
+  // continuous-cadence-closure-plan.md Phase 1 (D1): a stale "Talk to X"
+  // chip (rendered before X actually left) or a resumed session pointing at
+  // someone who's gone can both reach here with an npcId no longer
+  // co-located with the player. conversationPartnerPresent already exists
+  // for exactly this read (checkConversationWalkOut uses it mid-
+  // conversation) — doTalk itself had no presence gate of its own before
+  // this, so it would promoteToActive (a silent no-op for someone not even
+  // in the scene state) and open the overlay regardless. Reconciles the
+  // scene here too so a stale chip's click also clears the ghost, not just
+  // refuses the one click.
+  if (!conversationPartnerPresent(currentGameState, npcId)) {
+    const name = currentGameState.npcs[npcId]?.bible?.name || 'They';
+    currentSceneState = reconcileScenePresence(currentSceneState, currentGameState);
+    addLogEntry('narration', `${name} isn't here.`);
+    render(currentGameState, currentSceneState);
+    return;
+  }
+
   // Cognition plan Phase 2 (D5, COGNITION.alwaysBreak.playerAddress): being
   // spoken to always ends whatever the NPC had committed to. This is the half
   // of the break list that cannot live in the tick — the player addressing
@@ -6673,6 +7204,14 @@ async function doTalk(npcId) {
   // amount of tuning should be able to produce it. Before the tension check,
   // because someone who refuses to talk to you has still noticed you.
   notePlayerAddressed(currentGameState, npcId);
+
+  // P6 (D11): stopping to actually talk ends the escort — the same
+  // lifecycle end as a privacy-room refusal or an explicit release
+  // (movement.js's advanceFollowers / doStopFollowing above). No narration
+  // line of its own; the conversation overlay about to open is the beat.
+  if (currentGameState.npcs[npcId]?.follow?.leader === 'player') {
+    delete currentGameState.npcs[npcId].follow;
+  }
 
   // Relationship consequences (P7): high tension may cause NPC to refuse
   // to talk or avoid the player entirely.
@@ -6764,6 +7303,18 @@ async function doTalk(npcId) {
     applyEffects(parseEffectDSL(`ADJUST_SUSPICION ${npcId} boundary_violation ${(target - suspicion).toFixed(2)}`), effCtx);
   }
 
+  // actions-and-activities-overhaul-plan.md Phase 4 (D8) — a borrowed item
+  // past its due day: the lender brings it up the next time you talk, same
+  // "a real, deterministic beat before the LLM runs" shape as the confront
+  // check just above (firstOverdueBorrowedStack is pure — inventory.js).
+  // Repeats every talk while still overdue (a nag, not a gate) — nothing is
+  // consumed here; only $ReturnItem clears it.
+  const overdueBorrow = firstOverdueBorrowedStack(currentGameState, npcId);
+  if (overdueBorrow) {
+    const label = (ITEM_DEFS[overdueBorrow.defId] || ITEM_DEFS._unknown).label || 'thing';
+    convAddBeat(`${npc.bible.name || 'They'} raises an eyebrow. "Hey — can I get my ${label} back?"`);
+  }
+
   // Time slows to real-time for the conversation
   pushTimeContext('conversation');
 
@@ -6835,7 +7386,12 @@ function endDepartureConversation(npcId, mode, opts = {}) {
     if (currentGameState) popTimeContext();
   }
   endConversationSession(currentGameState);
-  currentSceneState = demoteToAmbient(currentSceneState, npcId);
+  // Phase 1 (continuous-cadence-closure-plan.md, D2): this function only
+  // ever runs when conversationPartnerPresent already returned false — the
+  // NPC is genuinely gone, not just stepped-away-from. removeFromScene
+  // (not demoteToAmbient) so they don't linger as a ghost cutout in the
+  // ambient tier, which has no location filter of its own.
+  currentSceneState = removeFromScene(currentSceneState, npcId);
   if (mode === 'silent') {
     // no narration — the partner left a room the player cannot see
   } else if (mode === 'handoff' && dep) {
@@ -6899,7 +7455,10 @@ function convRenderJoinButton(dep) {
     closeConversationOverlay();
     if (currentGameState) popTimeContext();
     endConversationSession(currentGameState);
-    currentSceneState = demoteToAmbient(currentSceneState, npcId);
+    // Phase 1 (continuous-cadence-closure-plan.md, D2): they're mid-walk-out
+    // to destRoomId right now, same "genuinely gone" reasoning as
+    // endDepartureConversation above — removeFromScene, not demoteToAmbient.
+    currentSceneState = removeFromScene(currentSceneState, npcId);
     addLogEntry('narration', `You head for ${roomPhrase(destRoomId)} with ${name}.`);
     render(currentGameState, currentSceneState);
     await saveAtBoundary('conv-join', currentGameState);
@@ -6915,7 +7474,13 @@ function convRenderJoinButton(dep) {
 // deterministic match → MOVE_ITEM/REL_DELTA/MEMORY_FACT through the ask
 // pipeline). The item is a STRUCTURED input — like the calendar slot, it
 // decides the match; flavor text never does (D1/invariant 2).
-async function doConvSend(forcedText, giftDefId) {
+// actions-and-activities-overhaul-plan.md Phase 4 (D8) — `borrowDefId`/
+// `returnDefId` are the same shape for BorrowItem/ReturnItem, added as their
+// own params (not folded into giftDefId's branch) rather than generalized
+// into one structured-pick parameter: three short, independent branches read
+// more plainly here than a shared shape built for a third caller that may
+// never need a fourth.
+async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId) {
   if (!convState || convState.sending) return;
   // Bug report (2026-08-27): the LLM call below takes up to a minute, and a
   // player who closes the overlay (or moves rooms) mid-flight runs
@@ -6933,6 +7498,21 @@ async function doConvSend(forcedText, giftDefId) {
     const name = currentGameState?.npcs?.[convState?.npcId]?.bible?.name || 'them';
     text = `You hand ${name} the ${def.label || 'gift'}.`;
     if (input) input.value = '';
+  } else if (borrowDefId) {
+    const npc = currentGameState?.npcs?.[convState?.npcId];
+    const stack = (npc?.inventory || []).find(s => s.defId === borrowDefId && (s.qty || 0) > 0);
+    if (!stack) return; // item vanished between the picker and the send
+    const def = ITEM_DEFS[borrowDefId] || ITEM_DEFS._unknown;
+    const name = npc?.bible?.name || 'them';
+    text = `You ask to borrow ${name}'s ${def.label || 'thing'}.`;
+    if (input) input.value = '';
+  } else if (returnDefId) {
+    const stack = (currentGameState?.player?.inventory || []).find(s => s.defId === returnDefId && (s.qty || 0) > 0);
+    if (!stack) return; // item vanished between the picker and the send
+    const def = ITEM_DEFS[returnDefId] || ITEM_DEFS._unknown;
+    const name = currentGameState?.npcs?.[convState?.npcId]?.bible?.name || 'them';
+    text = `You give back ${name}'s ${def.label || 'thing'}.`;
+    if (input) input.value = '';
   } else {
     text = forcedText || input?.value.trim();
     if (!text) return;
@@ -6944,9 +7524,14 @@ async function doConvSend(forcedText, giftDefId) {
 
   // Asks plan Phase 1 (D3): `$AskId <flavor>` parses once here. An unknown
   // $Tag falls through to the plain free-text path — it gets no chip and no
-  // decision, just a normal turn. A gift turn carries no $-text at all.
-  const parsedAsk = (forcedText || giftDefId) ? null : parseAskInput(text);
-  const askLeaf = giftDefId ? ASK_TYPES.RequestGift : (parsedAsk ? ASK_TYPES[parsedAsk.askId] || null : null);
+  // decision, just a normal turn. A gift/borrow/return turn carries no
+  // $-text at all.
+  const structuredDefId = giftDefId || borrowDefId || returnDefId;
+  const parsedAsk = (forcedText || structuredDefId) ? null : parseAskInput(text);
+  const askLeaf = giftDefId ? ASK_TYPES.RequestGift
+    : borrowDefId ? ASK_TYPES.BorrowItem
+    : returnDefId ? ASK_TYPES.ReturnItem
+    : (parsedAsk ? ASK_TYPES[parsedAsk.askId] || null : null);
 
   // Player's message appears instantly in the conversation log. Forced
   // opening text (e.g. "You approach Hana to talk") is shown as a scene
@@ -7041,12 +7626,12 @@ async function doConvSend(forcedText, giftDefId) {
     // pure — decision + stance + directive + effect lines, no model call,
     // no state writes. Called after advanceAndResolve so the seed reads the
     // exact state this turn will save, which is what reload-reproducibility
-    // (D1/D6) requires. A gift turn passes the chosen item as the structured
-    // `extra` payload — never through the flavor (D1/invariant 2).
+    // (D1/D6) requires. A gift/borrow/return turn passes the chosen item as
+    // the structured `extra` payload — never through the flavor (D1/invariant 2).
     const askTurn = askLeaf
       ? resolveAsk(currentGameState, myNpcId, askLeaf.id,
-          giftDefId ? text : parsedAsk.flavor, context,
-          giftDefId ? { giftDefId } : undefined)
+          structuredDefId ? text : parsedAsk.flavor, context,
+          giftDefId ? { giftDefId } : borrowDefId ? { borrowDefId } : returnDefId ? { returnDefId } : undefined)
       : null;
 
     const result = await callLLM(
@@ -7125,6 +7710,16 @@ async function doConvSend(forcedText, giftDefId) {
         if (askTurn.ask.photo && askTurn.decision.accept) {
           await runAskPhotoFlow(askTurn, context);
         }
+        // actions-and-activities-overhaul-plan.md Phase 2 (D5/D6): an
+        // accepted, AWAKE "Be Intimate" ask is doMakeAMove's pass2 — the
+        // consent already landed in words above; this is what it turns into.
+        // Excluded: the D30 sleep branch's wake_receptive (decision.accept is
+        // also true there, but it resolved its own modest, self-contained
+        // outcome already — see ASK_INTIMACY's postEffects — and must not
+        // cascade into a second, full act picker on someone who just woke up).
+        if (askTurn.ask.id === 'RequestIntimacy' && askTurn.decision.accept && !askTurn.decision.sleepAttempt) {
+          await doMakeAMove(myNpcId);
+        }
         askTurn.applyEffects();
         applied.updatedNpcIds.push(myNpcId);
       }
@@ -7197,6 +7792,15 @@ async function runAskScheduleFlow(askTurn, context, playerAction) {
   const npc = currentGameState.npcs?.[convNpcId];
   if (!npc) return null;
   const name = npc.bible?.name || 'they';
+  // Phase 1 (D2, actions-and-activities-overhaul-plan.md): $Invite parses its
+  // own kind (and any extra invitees) out of the flavor and rides them on
+  // the decision (asks.js's ASK_INVITE) — every other schedule:true leaf has
+  // no decision.inviteKind, so this falls back to the leaf's own static
+  // kind/roomId exactly as before.
+  const resolvedKind = (askTurn.decision && askTurn.decision.inviteKind) || askTurn.ask.kind || 'hangout';
+  const resolvedRoomId = (COMMITMENT_KINDS[resolvedKind] && COMMITMENT_KINDS[resolvedKind].roomId)
+    || askTurn.ask.roomId || 'living_room';
+  const extraInvitedIds = (askTurn.decision && askTurn.decision.inviteExtraIds) || [];
   // Loop so a recheck failure (state moved since the probe) reopens the
   // modal instead of silently committing to a hard-blocked window.
   let slot = null;
@@ -7204,7 +7808,7 @@ async function runAskScheduleFlow(askTurn, context, playerAction) {
     slot = await openAskScheduleModal({
       title: `${askTurn.ask.label} — when works for ${name}?`,
       npcId: convNpcId,
-      mealLabels: askTurn.ask.kind === 'meal', // Phase 5 (D10): label rows that land in a meal slot
+      mealLabels: resolvedKind === 'meal', // Phase 5 (D10): label rows that land in a meal slot
     });
     if (!slot) return null;
     const nowAbs = clockToAbsolute(currentGameState.meta.clock);
@@ -7219,12 +7823,15 @@ async function runAskScheduleFlow(askTurn, context, playerAction) {
   // as proposerId: createCommitment honors that by putting them straight
   // into acceptedIds instead of re-rolling them through respondToCommitment
   // (whose noise draw could flip the answer — same-save-same-answer, D1).
-  createCommitment(currentGameState, {
-    kind: askTurn.ask.kind || 'hangout',
+  // Any extra names $Invite parsed out of the flavor ride as ordinary
+  // invitedIds — each rolls their own real accept/decline the normal way.
+  const { responses: extraResponses } = createCommitment(currentGameState, {
+    kind: resolvedKind,
     startAbs: slot.startAbs, endAbs: slot.endAbs,
-    roomId: askTurn.ask.roomId || 'living_room',
-    invitedIds: [],
+    roomId: resolvedRoomId,
+    invitedIds: extraInvitedIds,
     proposerId: convNpcId,
+    host: 'player',
   });
   askTurn.setSlot(slot);
   const when = askWhenPhrase(slot, currentGameState.meta.clock.day);
@@ -7232,9 +7839,22 @@ async function runAskScheduleFlow(askTurn, context, playerAction) {
   // a bare time ("Breakfast, tomorrow at 08:30"). The label rides on
   // dayLabel so the template fallback line reads the same way; a window
   // outside every meal slot keeps the plain day/time phrase.
-  const meal = askTurn.ask.kind === 'meal'
+  const meal = resolvedKind === 'meal'
     ? mealLabelForWindow(slot.startAbs % 1440, slot.endAbs % 1440) : null;
   const dayLabel = meal ? `${meal.label}, ${when.dayLabel}` : when.dayLabel;
+  // Phase 1 (D2): narrate the extra invitees' own answers — a deterministic
+  // system line, not a second LLM pass, matching invariant 1 (decide before
+  // decorate: the writer below only ever speaks for convNpcId).
+  if (extraInvitedIds.length) {
+    for (const extraId of extraInvitedIds) {
+      const extraNpc = currentGameState.npcs?.[extraId];
+      const extraName = extraNpc?.bible?.name || 'They';
+      const accepted = extraResponses?.[extraId]?.accept;
+      addLogEntry('narration', accepted
+        ? `${extraName} is in too.`
+        : `${extraName} isn't up for it.`);
+    }
+  }
 
   const removeTyping = convShowTyping();
   convSetStatus('Thinking…');
@@ -7450,6 +8070,112 @@ function doConvGiveGift(defId) {
   return doConvSend(null, defId);
 }
 
+// actions-and-activities-overhaul-plan.md Phase 4 (D8) — the borrow/return
+// pickers. Same shared-modal + grid shape as openConvGiftPicker above, just
+// sourced from the other side's belongings (borrowableStacks reads the NPC
+// you're talking to; borrowedFromStacks reads the player's own bag, scoped
+// to things borrowed from THAT npc). Resolves { defId } or null on cancel.
+function openConvBorrowPicker() {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const titleEl = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !titleEl || !body || !actions) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (pick) => { overlay.removeAttribute('data-open'); resolve(pick); };
+    const npc = currentGameState?.npcs?.[convState?.npcId];
+    const stacks = npc ? borrowableStacks(currentGameState, npc) : [];
+    if (stacks.length === 0) { resolve(null); return; }
+    titleEl.textContent = 'Borrow Something';
+    body.textContent = '';
+    const grid = document.createElement('div');
+    grid.className = 'conv-gift-picker';
+    for (const stack of stacks) {
+      const def = stackDef(stack);
+      const label = def.id === '_unknown' ? (stack?.meta?.origName || def.label) : def.label;
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'conv-gift-pick';
+      tile.setAttribute('aria-label', `Borrow ${label}`);
+      const nameEl = document.createElement('span');
+      nameEl.className = 'conv-gift-pick-name';
+      nameEl.textContent = label;
+      tile.appendChild(nameEl);
+      const metaEl = document.createElement('span');
+      metaEl.className = 'conv-gift-pick-meta';
+      const group = (SORT_GROUPS[def.sortGroup] || {}).label || def.category || 'Item';
+      metaEl.textContent = (stack.qty > 1 ? `×${stack.qty} · ` : '') + group;
+      tile.appendChild(metaEl);
+      tile.addEventListener('click', () => finish({ defId: stack.defId }));
+      grid.appendChild(tile);
+    }
+    body.appendChild(grid);
+    actions.textContent = '';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    actions.appendChild(cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+
+function doConvBorrowItem(defId) {
+  return doConvSend(null, undefined, defId);
+}
+
+function openConvReturnPicker() {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const titleEl = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !titleEl || !body || !actions) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (pick) => { overlay.removeAttribute('data-open'); resolve(pick); };
+    const stacks = borrowedFromStacks(currentGameState, convState?.npcId);
+    if (stacks.length === 0) { resolve(null); return; }
+    titleEl.textContent = 'Give It Back';
+    body.textContent = '';
+    const grid = document.createElement('div');
+    grid.className = 'conv-gift-picker';
+    for (const stack of stacks) {
+      const def = stackDef(stack);
+      const label = def.id === '_unknown' ? (stack?.meta?.origName || def.label) : def.label;
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'conv-gift-pick';
+      tile.setAttribute('aria-label', `Return ${label}`);
+      const nameEl = document.createElement('span');
+      nameEl.className = 'conv-gift-pick-name';
+      nameEl.textContent = label;
+      tile.appendChild(nameEl);
+      const metaEl = document.createElement('span');
+      metaEl.className = 'conv-gift-pick-meta';
+      const group = (SORT_GROUPS[def.sortGroup] || {}).label || def.category || 'Item';
+      metaEl.textContent = group;
+      tile.appendChild(metaEl);
+      tile.addEventListener('click', () => finish({ defId: stack.defId }));
+      grid.appendChild(tile);
+    }
+    body.appendChild(grid);
+    actions.textContent = '';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    actions.appendChild(cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+
+function doConvReturnItem(defId) {
+  return doConvSend(null, undefined, undefined, defId);
+}
+
 // Asks plan Phase 8 — share one of the player's camera-roll photos into the
 // conversation. Same shape as doConvSend's plain-text path (advance →
 // callLLM → applyProposal → session log → assess → save), with the photo
@@ -7650,6 +8376,13 @@ async function doMove(targetRoomId) {
     // room being LEFT, so this has to run before the move — after it, there is
     // no record of where the player was standing when they turned away.
     refuseOverturesInRoom(currentGameState.player.location);
+    // P6 (D11): followers make the SAME room-by-room trip, in one shot,
+    // before the player's own per-room loop below reassigns
+    // player.location — advanceFollowers reads currentRoom as "the room the
+    // leader and follower started this move together in". A follower who
+    // balks at a room (isPrivacyRoom) is left standing one room short; the
+    // released npcIds are narrated once the arrival line lands.
+    const followReleases = advanceFollowers(currentGameState, 'player', currentRoom, walk.crossed);
     // Stealth fires for EVERY room crossed, not just the destination (D10):
     // being seen letting yourself through someone's bedroom is a boundary
     // crossing whether or not you stopped to look around. The destination's
@@ -7657,6 +8390,9 @@ async function doMove(targetRoomId) {
     for (const mid of walk.crossed.slice(0, -1)) {
       currentGameState.player.location = mid;
       resolveRoomEntryStealth(currentGameState, mid);
+      // P1B (D34): the player's own footsteps, same signal NPCs already
+      // emit on movement (sim.js) — suppressed entirely while Sneaking.
+      emitPlayerFootsteps(currentGameState, mid, true);
     }
     currentGameState.player.location = roomId;
     // Boundary-crossing check runs on entry, before any time passes, so
@@ -7664,6 +8400,7 @@ async function doMove(targetRoomId) {
     // walked in (see STEALTH's resolveRoomEntryStealth). Trusted producer,
     // no LLM — safe to run unconditionally on every move.
     const stealthResult = resolveRoomEntryStealth(currentGameState, roomId);
+    emitPlayerFootsteps(currentGameState, roomId, false);
     // Recompute scene participants for the new room — active starts
     // populated (see getSceneParticipants) rather than empty.
     currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
@@ -7687,6 +8424,18 @@ async function doMove(targetRoomId) {
     openScene(currentGameState, roomId);
     const sceneClosed = (currentGameState.meta.scene.id !== closingSceneId);
     addLogEntry('narration', walkNarration(walk, targetRoomId));
+    // P6 (D11): narrate anyone advanceFollowers left behind, once per
+    // released npc, right after the player's own arrival beat.
+    for (const releasedId of followReleases) {
+      const releasedName = currentGameState.npcs[releasedId]?.bible?.name || 'They';
+      addLogEntry('narration', `${releasedName} stops at the doorway — not going in there.`);
+    }
+    // Phase 17 (D27): a touring guest's beat for the room just arrived in,
+    // once per stop — advanceTouring already skips anyone advanceFollowers
+    // released above, so this only narrates guests who actually made it here.
+    for (const beat of advanceTouring(currentGameState, 'player', roomId)) {
+      addLogEntry('narration', beat.line);
+    }
     // Renovation overhaul Phase 3: entering a room with an active contracted
     // job gets a deterministic construction-scene line — template keyed by
     // job type + current stage, no LLM call.
@@ -8832,6 +9581,11 @@ function hideLoading() {
   // runRegisteredAction awaits that before this runs), so the gate can present
   // without interrupting anything.
   flushPendingOvertureGate();
+  // Phase 5 (D31): the real flush site — doSleep's own loading overlay comes
+  // down here, at the end of the whole night's batch, which is exactly where
+  // trySneakIntoBed's pending record (opened mid-batch, behind that same
+  // overlay) needs to surface.
+  flushPendingSleepAdvanceGate();
 }
 
 // --- Deferred caught-peeping bubble (Phase 6) ---
@@ -8889,6 +9643,7 @@ function addLogEntry(type, text, speaker) {
   const composedScene = renderSceneReader(currentGameState, currentSceneState);
   markCalloutsShouted(currentGameState, composedScene);
   markDoorCuesShown(currentGameState, composedScene);
+  markMeanwhileShown(currentGameState, composedScene?.meanwhile);
   renderSceneMoodles(currentGameState);
 }
 

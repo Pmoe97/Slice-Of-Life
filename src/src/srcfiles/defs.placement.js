@@ -56,6 +56,7 @@ const FP_FOOTPRINTS = {
   swimming_pool: { w: 70, h: 50 },
   pool_loungers: { w: 8, h: 18 },
   pool_pump: { w: 8, h: 7 },
+  sauna: { w: 24, h: 22 },
   plant_lr: { w: 7, h: 7 },
   plant_balcony: { w: 7, h: 7 },
   lamp_lr: { w: 6, h: 6 },

@@ -5,7 +5,7 @@ Status: **complete** — all five phases implemented and verified, 2026-08-10.
 Last updated 2026-08-10.
 
 Companions:
-- `src/src/ref/wip/SENSORY-AND-SOCIAL-ROADMAP.md` (the umbrella — this is Plan 0 of six, and every later plan assumes these fixes have landed).
+- `src/src/ref/complete/SENSORY-AND-SOCIAL-ROADMAP.md` (the umbrella — this is Plan 0 of six, and every later plan assumes these fixes have landed).
 - `src/src/ref/complete/npc-overhaul-plan.md` (built the systems this repairs; kept for the original design rationale).
 - `src/src/ref/complete/inventory-needs-menu-saves-plan.md` (owns `NEEDS` and the eat drive that Phase 4 rebalances against).
 

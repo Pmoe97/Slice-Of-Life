@@ -216,7 +216,7 @@ api(`
   };
 `);
 
-console.log('\\n1. Stationary NPC — walk to their room, player tier, no feedback');
+console.log('\n1. Stationary NPC — walk to their room, player tier, no feedback');
 const st = api('__t_stationary()');
 check(`targets the NPC's room (${st.expected})`, st.got && st.room === st.expected,
   `got ${st.room}`);
@@ -224,7 +224,7 @@ check('arriveSec is the player-tier walk to that room', st.tierMatches,
   `arriveSec=${st.arriveSec.toFixed(2)}`);
 check('no "gone" feedback for a stationary NPC', st.noFeedback);
 
-console.log('\\n2. Mid-walk NPC — walk to their DESTINATION, faster player tier (D19)');
+console.log('\n2. Mid-walk NPC — walk to their DESTINATION, faster player tier (D19)');
 const mw = api('__t_midwalk()');
 check(`targets the destination room (${mw.expected}), not the room they are still in (${mw.npcCurrent})`,
   mw.got && mw.targetsDestNotCurrent, `got ${mw.destRoom}`);
@@ -234,32 +234,32 @@ check('player tier is genuinely faster than the NPC tier (catching up is the nor
   mw.playerFaster, `player=${mw.arriveSec.toFixed(2)} npc tier > player tier`);
 check('no "gone" feedback for an ordinary mid-walk', mw.noFeedback);
 
-console.log('\\n3. Off-map-bound (work walk), player arrives after they leave — entry + feedback');
+console.log('\n3. Off-map-bound (work walk), player arrives after they leave — entry + feedback');
 const wg = api('__t_workGone()');
 check(`travels to the entry room (${wg.expected})`, wg.got && wg.room === wg.expected, `got ${wg.room}`);
 check('"gone before you could reach them" feedback fires', wg.hasGoneFeedback,
   `feedback=${wg.feedback}`);
 
-console.log('\\n4. Off-map-bound, player beats the off-map time — meet at the door');
+console.log('\n4. Off-map-bound, player beats the off-map time — meet at the door');
 const wm = api('__t_workMeet()');
 check(`travels to the entry room (${wm.expected})`, wm.got && wm.room === wm.expected, `got ${wm.room}`);
 check('no "gone" feedback — they will still be there', wm.noFeedback, `feedback=${wm.feedback}`);
 
-console.log('\\n5. No-ops (D20): already off-map, already co-located, unknown id');
+console.log('\n5. No-ops (D20): already off-map, already co-located, unknown id');
 check('already off-map NPC -> null', api('__t_offmap()').isNull);
 check('already co-located stationary NPC -> null', api('__t_colocated()').isNull);
 check('unknown npcId -> null', api('__t_unknown()').isNull);
 
-console.log('\\n6. Invariant 1 — resolveMoveToNpc writes NO sim state');
+console.log('\n6. Invariant 1 — resolveMoveToNpc writes NO sim state');
 const nw = api('__t_nowrite()');
 check('npc record, player and clock byte-identical after the call', nw.same,
   `got plan=${nw.got}`);
 
-console.log('\\n7. D22 — settleWalks advances an INCOMPLETE walk proportionally (batch regime)');
+console.log('\n7. D22 — settleWalks advances an INCOMPLETE walk proportionally (batch regime)');
 const d22 = api('__t_d22()');
 check('mid-span: coveredUnits = totalUnits x elapsed/span, pos on the path, walk kept',
   d22.midOk, `covered=${d22.coveredAfter.toFixed(3)} expected=${d22.expected.toFixed(3)}`);
 check('past completion: walk null, arrived=true, pos at the final waypoint', d22.landedOk);
 
-console.log(`\\n${'='.repeat(46)}\\n  ${pass} passed, ${fail} failed\\n${'='.repeat(46)}`);
+console.log(`\n${'='.repeat(46)}\n  ${pass} passed, ${fail} failed\n${'='.repeat(46)}`);
 process.exit(fail > 0 ? 1 : 0);

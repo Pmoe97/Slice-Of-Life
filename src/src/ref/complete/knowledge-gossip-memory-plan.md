@@ -9,7 +9,7 @@ longer-horizon feature, measured — see Handoff) and Phase 5 (the Character
 Studio) are all implemented and verified. Last updated 2026-08-12.
 
 Companions:
-- `src/src/ref/wip/SENSORY-AND-SOCIAL-ROADMAP.md` (the umbrella — this is Plan 4 of six, and the plan that turns perception into belief. It carries R1–R8 and RI1–RI6, which this plan inherits).
+- `src/src/ref/complete/SENSORY-AND-SOCIAL-ROADMAP.md` (the umbrella — this is Plan 4 of six, and the plan that turns perception into belief. It carries R1–R8 and RI1–RI6, which this plan inherits).
 - `src/src/ref/complete/perception-and-signals-plan.md` (Plan 1 — **complete**. What an NPC perceives is the raw material this plan converts into facts with provenance).
 - `src/src/ref/complete/npc-cognition-plan.md` (Plan 3 — **complete**. `npc.pursuit` is where rumination's output will eventually become initiative, in Plan 5; its `COGNITION` tuning discipline is the model for this plan's constants).
 - `src/src/ref/complete/scene-reader-ui-plan.md` (Plan 2 — **complete**. The scene line and conversation pane are the surfaces gossip can become visible on; `recallSceneExchanges` is the precedent for the player's view of NPC-held knowledge).

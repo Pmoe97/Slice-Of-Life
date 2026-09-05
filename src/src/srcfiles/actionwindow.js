@@ -736,6 +736,15 @@ function renderActionWindow(s) {
   // either one over it.
   awHide('peek-content');
   awHide('wardrobe-content');
+  // The Night Scene's Living Tableau (night-scene-sleeping-npc-plan Phase 3b,
+  // D15) is the same kind of thing as the peek hold and gets the same two
+  // lines here: it is a LIVE session rather than an outcome or a question, so
+  // it never opens through openActionWindow (that pauses the clock, and D24
+  // says the scene runs at one game-second per real second) — render.nightscene.js
+  // claims the overlay itself and sets data-body="night". All this file owes
+  // it is the guarantee every body kind gets: a later window never leaks
+  // #night-content over itself.
+  awHide('night-content');
   // The dream's panel dots, hidden HERE rather than in each body branch: the
   // picker returns before reaching any shared hide, so a picker opened after
   // a dream would otherwise paint the last dream's dots over its slot list.
@@ -1141,6 +1150,7 @@ function closeActionWindow() {
   const overlay = document.getElementById('action-window-overlay');
   if (overlay) overlay.setAttribute('hidden', '');
   awHide('peek-content');
+  awHide('night-content');
 }
 
 // ===== /SECTION: ACTION OUTCOME WINDOW =====

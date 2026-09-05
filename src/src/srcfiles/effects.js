@@ -309,6 +309,24 @@ function applyRelDeltaEffect(p, ctx) {
 function applySpendMoney(p, ctx) { ctx.gameState.player.money -= Number(p.amount); }
 function applyEarnMoney(p, ctx) { ctx.gameState.player.money += Number(p.amount); }
 function applyNpcMove(p, ctx) { const npc = ctx.gameState.npcs[p.npcId]; if (npc) npc.location = p.roomId; }
+// Actions & Activities Overhaul Phase 8 (D16): world.thermostat is lazily
+// initialised here (same convention as ui.js's doToggleHouseRule initialising
+// world.houseRules on first write) — a fresh save that never touches the
+// thermostat still reads THERMOSTAT_TUNING.defaultC from temperature.js's
+// readers without ever needing a world-gen-time field.
+function applyAdjustThermostat(p, ctx) {
+  const world = ctx.gameState.world;
+  const current = world.thermostat?.targetC ?? THERMOSTAT_TUNING.defaultC;
+  world.thermostat = { targetC: clamp(current + Number(p.delta), THERMOSTAT_TUNING.minC, THERMOSTAT_TUNING.maxC) };
+}
+// Actions & Activities Overhaul Phase 9 (D17/D49): the ambient dirt.js
+// layer's one write path, exposed as a DSL line so a trusted producer
+// (self.cook's buildCookEffects, self.clean's buildEffects) can push it
+// without a direct dirt.js call — bumpRoomDirt itself does the clamp and the
+// refreshRoomCleanliness follow-up, same as ADJUST_THERMOSTAT's own applier.
+function applyAddRoomDirt(p, ctx) {
+  bumpRoomDirt(ctx.gameState, p.roomId, Number(p.amount));
+}
 function applyNpcActivity(p, ctx) {
   const npc = ctx.gameState.npcs[p.npcId];
   if (npc) npc.activity = p.text.slice(0, EFFECT_LIMITS.npcActivityMaxLength);
@@ -662,6 +680,18 @@ function applyEatItem(p, ctx) {
     applyAdjustNeed({ who: 'player', need: 'hunger', delta: '0', kcal: kcalEaten }, ctx);
   }
   writeLocationStackList(p.from, ctx.gameState, out);
+  // Flags & Conditions (Phase 3, D15): eating is overt — nobody here is
+  // hiding it — so a house rule against it (e.g. "no eating in the living
+  // room") checks the same way resolveRoomEntryStealth checks a witnessed
+  // boundary crossing: who's actually standing in the room right now. A
+  // no-op whenever no matching rule is active (flags.js).
+  const eaterRoom = who === 'player' ? ctx.gameState.player.location : ctx.gameState.npcs[who]?.location;
+  if (eaterRoom) checkHouseRules(ctx.gameState, { act: 'eat', roomId: eaterRoom, actorId: who });
+  // Actions & Activities Overhaul Phase 9 (D17/D49): eating is one of D17's
+  // named dirt sources — a small ambient bump wherever the eater actually is,
+  // separate from the object-level mess (dishes/rot) the rest of this
+  // function already leaves via the object system.
+  if (eaterRoom) bumpRoomDirt(ctx.gameState, eaterRoom, DIRT_TUNING.eatingDirtPerAct);
 }
 // Food-overhaul Phase 3 (D25): DESTROY_ITEM on a PLATE stack destroys
 // SERVINGS off the instance's ledger, not whole qty — binning one leftover
@@ -896,6 +926,74 @@ function applyRunDishwasher(p, ctx) {
   rec.cycleActiveUntilAbs = now + minutes;
   if (dw.state) dw.state = { ...dw.state, cycle: 'running' };
 }
+
+// --- Laundry chain (Actions & Activities Overhaul Phase 11, D20). Four
+// trusted-only effects: MOVE_GARMENTS/START_LAUNDRY_CYCLE cover Wash
+// (hamper -> washer) and Dry (washer -> dryer) — same lazy-cycle shape as
+// RUN_DISHWASHER above, just against obj.laundry instead of obj.dishwasher,
+// and the load's items keep their own identity instead of collapsing into a
+// unit count. FOLD_GARMENTS flips a dryer's finished load in place;
+// PUTAWAY_GARMENTS is the one that fans out — each folded garment routes to
+// ITS OWNER's own bedroom wardrobe (stack.ownerId, stamped when the
+// garment was dirtied), not one shared destination. ---
+function applyMoveGarments(p, ctx) {
+  const fromObj = findObjectById(ctx.gameState, p.fromObjId);
+  const toObj = findObjectById(ctx.gameState, p.toObjId);
+  if (!fromObj || !toObj) return;
+  moveGarmentStacks(fromObj, toObj, p.matchState);
+  if (fromObj.defId === 'laundry_hamper') refreshHamperFill(fromObj);
+  if (toObj.defId === 'laundry_hamper') refreshHamperFill(toObj);
+}
+function applyStartLaundryCycle(p, ctx) {
+  const obj = findObjectById(ctx.gameState, p.objId);
+  if (!obj) return;
+  const rec = obj.laundry || (obj.laundry = { cycleActiveUntilAbs: 0 });
+  if (rec.cycleActiveUntilAbs > 0) return; // already cycling
+  const now = gameDaysNow(ctx.gameState.meta.clock);
+  if (now == null) return;
+  const minutes = Number(p.minutes) / (CLOCK.ticksPerDay * 30);
+  rec.cycleActiveUntilAbs = now + minutes;
+  if (obj.state) obj.state = { ...obj.state, cycle: 'running' };
+}
+function applyFoldGarments(p, ctx) {
+  const obj = findObjectById(ctx.gameState, p.objId);
+  if (!obj) return;
+  obj.contents = (obj.contents || []).map(s => (isClothingStack(s) && laundryStateOf(s) === 'dried')
+    ? { ...s, meta: { ...(s.meta || {}), laundryState: 'folded' } } : s);
+}
+function applyPutawayGarments(p, ctx) {
+  const obj = findObjectById(ctx.gameState, p.objId);
+  if (!obj) return;
+  const remaining = [];
+  for (const s of (obj.contents || [])) {
+    if (!(isClothingStack(s) && laundryStateOf(s) === 'folded')) { remaining.push(s); continue; }
+    const ownerId = s.ownerId || 'player';
+    const wardrobe = wardrobeObjectForOwner(ctx.gameState, ownerId);
+    const check = wardrobe ? wardrobePutCheck(wardrobe, s.defId, s.qty || 1) : { ok: false };
+    if (!wardrobe || !check.ok) { remaining.push(s); continue; } // no room / no wardrobe — leave it, don't lose it
+    wardrobe.contents = [...(wardrobe.contents || []),
+      { ...s, ownerId: null, meta: { ...(s.meta || {}), laundryState: 'stored' } }];
+  }
+  obj.contents = remaining;
+}
+// --- The front door (Actions & Activities Overhaul Phase 12, D21). Two
+// trusted-only effects, thin wrappers over mail.js's real functions (same
+// shape as applyMoveGarments/moveGarmentStacks above): CLAIM_MAIL marks
+// every unclaimed world.mailbox entry claimed (self.get_mail's whole
+// effect); RESOLVE_DOOR_EVENT clears world.doorEvent and flips the
+// referenced delivery's bookkeeping — the actual item hand-off (to the
+// player or to the doormat) is a separate SPAWN_ITEM line the action's own
+// buildEffects builds from what prepare() already read. ---
+function applyClaimMail(p, ctx) {
+  const mailbox = ctx.gameState.world.mailbox || (ctx.gameState.world.mailbox = []);
+  for (const m of mailbox) {
+    if (!m.claimed) m.claimed = true;
+  }
+}
+function applyResolveDoorEvent(p, ctx) {
+  resolveDoorEventDecision(ctx.gameState, p.decision);
+}
+
 // SPAWN_OBJECT (inventory overhaul Phase 6): place a buyable hobby OBJECT_DEFS// instance into a room bucket — the second half of the Place verb (the first
 // is DESTROY_ITEM removing the shipped ITEM_DEFS stack from the bag). The
 // object is created with makeObjectInstance (WORLD) so it carries the exact
@@ -995,6 +1093,28 @@ const EFFECT_DEFS = {
     paramShape: ['roomId'], llm: true, implemented: true,
     validate: (p) => !!ROOMS[p.roomId] || `No such room: ${p.roomId}`,
     apply: (p, ctx) => { ctx.gameState.player.location = p.roomId; },
+  },
+  // Actions & Activities Overhaul Phase 8 (D16): the thermostat.raise/lower
+  // verbs' effect (defs.actions.js). llm:false — a deterministic dial step,
+  // not something the freeform narrator's effects vocab should invent
+  // (same trust tier as EARN_MONEY above). `delta` is always ±stepC from a
+  // trusted producer; validateMagnitude is still real defense-in-depth
+  // against a malformed line reaching here some other way.
+  ADJUST_THERMOSTAT: {
+    paramShape: ['delta'], llm: false, implemented: true,
+    validate: (p) => validateMagnitude(p.delta, EFFECT_LIMITS.thermostatDeltaCap, 'thermostat'),
+    apply: applyAdjustThermostat,
+  },
+  // Actions & Activities Overhaul Phase 9 (D17/D49): the ambient dirt.js
+  // layer's write path. llm:false — a deterministic per-action/per-tick bump
+  // or drain from a trusted producer (self.cook, self.clean, applyEatItem's
+  // direct bumpRoomDirt call, sim.js's foot-traffic hook), never something the
+  // freeform narrator's effects vocab should invent, same trust tier as
+  // ADJUST_THERMOSTAT just above.
+  ADD_ROOM_DIRT: {
+    paramShape: ['roomId', 'amount'], llm: false, implemented: true,
+    validate: (p) => firstFailure(!!ROOMS[p.roomId] || `No such room: ${p.roomId}`, () => validateMagnitude(p.amount, EFFECT_LIMITS.roomDirtDeltaCap, 'room dirt')),
+    apply: applyAddRoomDirt,
   },
   NPC_MOVE: {
     paramShape: ['npcId', 'roomId'], llm: true, implemented: true,
@@ -1173,6 +1293,48 @@ const EFFECT_DEFS = {
     validate: (p, ctx) => firstFailure(validateReachableObject(p.objId, ctx),
       () => findObjectById(ctx.gameState, p.objId)?.defId === 'dishwasher' || 'Not the dishwasher.'),
     apply: applyRunDishwasher,
+  },
+  // Actions & Activities Overhaul Phase 11 (D20) — see applyMoveGarments'
+  // header comment above for the four-effect shape.
+  MOVE_GARMENTS: {
+    paramShape: ['fromObjId', 'toObjId', 'matchState'], llm: false, implemented: true,
+    validate: (p, ctx) => (!!findObjectById(ctx.gameState, p.fromObjId) && !!findObjectById(ctx.gameState, p.toObjId))
+      || 'Unknown laundry object.',
+    apply: applyMoveGarments,
+  },
+  START_LAUNDRY_CYCLE: {
+    paramShape: ['objId', 'minutes'], llm: false, implemented: true,
+    validate: (p, ctx) => (!!findObjectById(ctx.gameState, p.objId)) || 'Unknown laundry object.',
+    apply: applyStartLaundryCycle,
+  },
+  FOLD_GARMENTS: {
+    paramShape: ['objId'], llm: false, implemented: true,
+    validate: (p, ctx) => (!!findObjectById(ctx.gameState, p.objId)) || 'Unknown laundry object.',
+    apply: applyFoldGarments,
+  },
+  PUTAWAY_GARMENTS: {
+    paramShape: ['objId'], llm: false, implemented: true,
+    validate: (p, ctx) => (!!findObjectById(ctx.gameState, p.objId)) || 'Unknown laundry object.',
+    apply: applyPutawayGarments,
+  },
+  // Actions & Activities Overhaul Phase 12 (D21) — see applyClaimMail/
+  // applyResolveDoorEvent's header comment above.
+  // paramShape carries one unused token (`who`, always 'player') rather
+  // than an empty shape: parseEffectDSL's line regex requires at least one
+  // space after the type name, so a truly zero-token line would silently
+  // fail to match and the effect would never apply.
+  CLAIM_MAIL: {
+    paramShape: ['who'], llm: false, implemented: true,
+    validate: () => true,
+    apply: applyClaimMail,
+  },
+  RESOLVE_DOOR_EVENT: {
+    paramShape: ['decision'], llm: false, implemented: true,
+    validate: (p, ctx) => firstFailure(
+      () => !!ctx.gameState.world.doorEvent || 'No one is at the door.',
+      () => ['admit', 'refuse'].includes(p.decision) || 'Bad door decision.',
+    ),
+    apply: applyResolveDoorEvent,
   },
   SPAWN_OBJECT: {
     // Phase 6 hobby placement — see applySpawnObject. Trusted-only: the

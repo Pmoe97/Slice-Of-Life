@@ -446,7 +446,7 @@ check('the proposer never proposes a slot their own schedule is busy for',
         // A template whose every slot is work: proposeTerms must find nothing
         // rather than proposing one anyway.
         const always = { ...__probe(), bible: { ...__probe().bible, scheduleTemplate: '__allwork' } };
-        SCHEDULES.__allwork = { weekday: { work: [[0, 48, 1]] }, weekend: { work: [[0, 48, 1]] } };
+        SCHEDULES.__allwork = { weekday: { work: [[0, 1440, 1]] }, weekend: { work: [[0, 1440, 1]] } };
         const none = proposeTerms(always, OVERTURE_DEFS.propose_player, g);
         delete SCHEDULES.__allwork;
         const free = proposeTerms(__probe(), OVERTURE_DEFS.propose_player, g);
@@ -457,7 +457,7 @@ check('an NPC with no free slot is not a CANDIDATE — it never wins a tick it c
         const g = __mk(); const id = __ids(g)[0];
         g.npcs[id].relPlayer.affection = 1;
         const before = __open(g, id, g.player.location).includes('propose_player');
-        SCHEDULES.__allwork = { weekday: { work: [[0, 48, 1]] }, weekend: { work: [[0, 48, 1]] } };
+        SCHEDULES.__allwork = { weekday: { work: [[0, 1440, 1]] }, weekend: { work: [[0, 1440, 1]] } };
         g.npcs[id].bible = { ...g.npcs[id].bible, scheduleTemplate: '__allwork' };
         const after = __open(g, id, g.player.location).includes('propose_player');
         delete SCHEDULES.__allwork;

@@ -121,6 +121,13 @@ function phoneOpenApp(gameState, appId) {
   // Contractor tutorial (contractor doc Phase 3): the first RenoFix open
   // fires the how-to-book hint, phone or computer (idempotent one-shot).
   if (appId === 'upgrades') fireContractorMilestone(gameState, 'renofixOpened');
+  // DailyGrid (Phase 14, D23): same on-open generation hook as COMPUTER's
+  // openApp — this function is phone.js's own separate app-open path (it
+  // does not call openApp), so the hook has to be duplicated here rather
+  // than shared, same as the upgrades hint above it.
+  if (appId === 'puzzles') generatePuzzleForDay(gameState, gameState.meta.clock.day);
+  // Chatter (Phase 15, D24): same duplicated on-open hook, same reason.
+  if (appId === 'social_feed') generateChatterForDay(gameState, gameState.meta.clock.day);
 }
 
 // Phase 4: the Tracker's player intents. Mutate world.phone only — the

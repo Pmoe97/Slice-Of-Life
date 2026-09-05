@@ -339,6 +339,75 @@ const APP_DEFS = {
       entry: { label: 'Dream', renderer: 'dreamentry', hideFromNav: true },
     },
   },
+  // Calendar (actions-and-activities-overhaul-plan.md Phase 1, D2): "what's
+  // on the calendar" for every booked commitment (a dinner, a hangout, and
+  // whatever future eventTypes ride the same createCommitment spine) —
+  // TRACKER's Agenda already deep-links here via trackerCommitments
+  // (tracker.js). Reuses the generic `list` renderer over the live
+  // 'commitments' source (resolveScreenSource, RENDER.COMPUTER) exactly like
+  // Shop's cart reuses it over 'state:apps.shop.cart' — one more row action
+  // (`calendar.cancel`, ui.js's doCancelCommitment) is "Clear the Calendar."
+  calendar: {
+    id: 'calendar', label: 'Calendar', category: 'personal', requires: [],
+    devices: ['computer', 'phone'],
+    entryScreen: 'upcoming',
+    screens: {
+      upcoming: {
+        label: 'Upcoming', renderer: 'list', source: 'commitments',
+        emptyText: 'Nothing on the calendar.',
+        labelFn: (row, gs) => {
+          const kindLabel = (COMMITMENT_KINDS[row.kind] || {}).label || 'plans';
+          // acceptedIds, not invitedIds: the host (proposerId) is never in
+          // invitedIds (createCommitment puts them straight into
+          // acceptedIds — see its own header), so a dinner you're hosting
+          // would otherwise list every guest EXCEPT the person you're
+          // actually eating with. trackerCommitments (tracker.js) reads the
+          // same field for the same reason.
+          const names = (row.acceptedIds || []).map(id => gs.npcs?.[id]?.bible?.name).filter(Boolean);
+          const who = names.length ? names.join(', ') : 'no one yet';
+          const day = Math.floor(row.startAbs / 1440);
+          const at = formatTime(absoluteToClock(row.startAbs).minutes);
+          const hostedBy = row.host === 'player' ? 'you' : (gs.npcs?.[row.host]?.bible?.name || 'them');
+          return `${kindLabel} with ${who} — ${formatDate(day)} ${at} (hosted by ${hostedBy})`;
+        },
+        rowAction: 'calendar.cancel', rowActionLabel: 'Clear',
+      },
+    },
+  },
+  // DailyGrid (actions-and-activities-overhaul-plan.md Phase 14, D23): a
+  // seeded daily crossword. One screen — the grid + clue list — since
+  // there's no second view worth a sub-nav tab (contrast Streamly, which
+  // also got away with one screen). puzzles.js owns the word bank, grid
+  // build, and fill/reveal/reward logic; 'puzzles-today' (RENDER.COMPUTER)
+  // just draws whatever generatePuzzleForDay already put in
+  // computer.apps.puzzles.
+  puzzles: {
+    id: 'puzzles', label: 'DailyGrid', category: 'entertainment', requires: [],
+    devices: ['computer', 'phone'],
+    entryScreen: 'today',
+    screens: {
+      today: { label: "Today's Puzzle", renderer: 'puzzles-today' },
+    },
+  },
+  // Chatter (actions-and-activities-overhaul-plan.md Phase 15, D24): grows
+  // from the old SITE_DEFS.social_feed flavor page (removed above — the SAME
+  // id, "grows" per D24, not a second parallel entry point) into a real
+  // in-house feed. Two screens: `feed` (the scrolling timeline + compose
+  // box) and `profile` (hideFromNav — an author's bio + their own posts,
+  // reached by tapping their name/avatar in the feed; also doubles as the
+  // player's own profile when npcId is 'player', so D24's "a player profile"
+  // goal doesn't need a third screen). chatter.js owns post generation,
+  // NPC reactions, and the player post/like/comment verbs; render.computer.js
+  // just draws whatever's in computer.apps.social_feed.posts.
+  social_feed: {
+    id: 'social_feed', label: 'Chatter', category: 'social', requires: [],
+    devices: ['computer', 'phone'],
+    entryScreen: 'feed',
+    screens: {
+      feed: { label: 'Feed', renderer: 'chatter-feed' },
+      profile: { label: 'Profile', renderer: 'chatter-profile', hideFromNav: true },
+    },
+  },
 };
 
 // --- Decor catalog: what the Home app sells (decor-economy plan) ---
@@ -532,15 +601,21 @@ const SITE_DEFS = {
     body: "Five meals you can make with what's probably already in your pantry. Number 3 will surprise you (it's pasta).",
     effects: ['ADD_SKILL_XP cooking 8'],
   },
+  // Actions & Activities Overhaul Phase 16 (D25): cooking/fitness/tech each
+  // already had a browser research site (chefs_corner+recipes/fitcast/
+  // codeflow); cleaning had none. Same shape as its siblings — a real visit
+  // reapplies effects every time (COMPUTER's visitSite pushes a fresh
+  // history entry per visit), so this is already a repeatable research loop,
+  // not a one-shot bonus.
+  tidyhome: {
+    id: 'tidyhome', label: 'TidyHome', url: 'tidyhome.example', category: 'tutorial',
+    body: "This week: the seven-minute reset that actually works, and the one product everyone swears by that you probably already own.",
+    effects: ['ADD_SKILL_XP cleaning 6'],
+  },
   budget_tracker: {
     id: 'budget_tracker', label: 'CoinJar', url: 'coinjar.example', category: 'utility',
     body: "Your spending this week: $47 on takeout (yikes), $12 on coffee, $200 on groceries. The app gently suggests you maybe cook at home more.",
     effects: ['ADJUST_NEED player mood -0.02'],
-  },
-  social_feed: {
-    id: 'social_feed', label: 'Chatter', url: 'chatter.example', category: 'social',
-    body: "Your friend just posted a photo of their brunch. Someone you haven't talked to in three years got a promotion. A stranger is going viral for a very bad take about pizza.",
-    effects: ['ADJUST_NEED player mood +0.02', 'ADJUST_NEED player energy -2'],
   },
   job_listings: {
     id: 'job_listings', label: 'CareerHub', url: 'careerhub.example', category: 'utility',

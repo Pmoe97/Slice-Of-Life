@@ -88,6 +88,21 @@ const ASK_REASON_PHRASES = {
   // being settled is the ask's own content. This is the reason phrase behind
   // that yes, so the writer never re-decides it.
   repay: "they're settling what they owe",
+  // actions-and-activities-overhaul-plan.md Phase 2 (D30): the Affection
+  // ladder's sleeping-target branch — every leaf on the ladder shares these
+  // three codes rather than each leaf inventing its own.
+  sleep_undisturbed: "they're fast asleep and never stir",
+  sleep_wake_hostile: "it just woke them, and they are furious",
+  sleep_wake_receptive: "it woke them, and they leaned into it, sleepy and warm",
+  // Phase 7 (D12): ask_apologize's own outcome codes.
+  apology_unknown: "they have no idea what that's even about",
+  apology_sincere: "it's real, and it lands",
+  apology_repeat: "nothing about it has actually changed",
+  apology_late: "it comes far too late to mean much",
+  // Phase 7 (D13): ask_boundary's own outcome codes.
+  boundary_already: "you've already agreed on this",
+  boundary_accept: "it's a reasonable ask, and they respect it",
+  boundary_decline: "they're not ready to promise that right now",
 };
 
 function askReasonPhrase(reason) {
@@ -200,6 +215,12 @@ function askSeed(gameState, npcId, category, day, count) {
 // normal phase-based soft stance.
 function askStanceFor(decision, rel) {
   const phase = (rel && rel.conversationPhase) || 'early';
+  // Phase 2 (D30): the sleeping-branch outcomes read the same regardless of
+  // relationship phase — the formula behind them (attraction × deviancy)
+  // deliberately has no phase term, so the stance shouldn't invent one either.
+  if (decision.reason === 'sleep_wake_receptive') return 'drowsy and warm';
+  if (decision.reason === 'sleep_wake_hostile') return 'stern';
+  if (decision.reason === 'sleep_undisturbed') return 'unaware — still asleep';
   if (decision.accept) {
     // Phase 9 — a gift is accepted by definition, but the stance tracks the
     // MATCH: a landed gift is warm (or measured early on), a miss is
@@ -339,11 +360,12 @@ function loanAmountFromFlavor(flavor, rel) {
 // Phase 10 — the amount a repayment actually settles. `$20` in the flavor
 // repays that much; a bare ask repays the whole debt. Capped by BOTH what's
 // owed to this NPC and what the player has on hand. The cap is on the WRITES
-// (SPEND_MONEY + the flag reduction), never a decision input — the accept is
-// never at stake (D21's precedent: the loan amount feeds only writes).
-// Pure.
+// (SPEND_MONEY + the ledger reduction), never a decision input — the accept
+// is never at stake (D21's precedent: the loan amount feeds only writes).
+// Pure — moneyOwedByPlayer (money.js) reads the ledger (falling back to the
+// not-yet-migrated legacy flag), never writes it.
 function repayAmountFor(gs, npcId, flavor) {
-  const owed = (gs?.player?.flags?._loanOwed && gs.player.flags._loanOwed[npcId]) || 0;
+  const owed = moneyOwedByPlayer(gs, npcId);
   const money = Math.max(0, gs?.player?.money || 0);
   const m = String(flavor || '').match(/\$(\d+)/);
   const want = m ? Number(m[1]) : owed;
@@ -516,6 +538,282 @@ const ASK_MEAL = {
   },
 };
 
+// --- actions-and-activities-overhaul-plan.md Phase 1 (D1/D2): $Invite ---
+// The multi-person half ASK_HANGOUT/ASK_MEAL structurally can't do — both are
+// pinned to whoever the player is talking to. $Invite reads an event type
+// ("dinner"/"hangout") and any OTHER resident names out of the flavor text
+// the same way intent.js's classifyIntent already resolves a bedroom owner's
+// name out of free text (longest-phrase match against a normalized string),
+// and folds the extras into the SAME commitment as ordinary invitedIds —
+// each rolls their own real accept/decline through createCommitment's
+// existing per-invitee loop (respondToCommitment), exactly like a second
+// person reached by an overture proposal. Parsing only ever feeds the WRITE
+// (which kind/room, who else) — never decide()'s own accept/decline for the
+// PRIMARY partner, matching loanAmountFromFlavor's precedent (D1/invariant 2):
+// flavor can shape what gets booked, never whether this leaf itself is
+// accepted.
+
+// Only COMMITMENT_KINDS entries that opted in (playerInvitable: true) are
+// candidates — today that's 'meal' and 'hangout'. A future eventType needing
+// bespoke judging or narration (cook-off, tour, party — Phases 13/14/17) is
+// not obligated to extend this list; it can ship its own dedicated leaf
+// instead, exactly as these two already do. $Invite only serves the generic
+// "affection/tension decides, no special rules" case.
+function inviteKindFromFlavor(flavor) {
+  const norm = normalizeIntentText(flavor);
+  let best = null;
+  for (const [kindId, def] of Object.entries(COMMITMENT_KINDS)) {
+    if (!def.playerInvitable) continue;
+    const phrase = matchVerbPhrase(norm, def.inviteWords || []);
+    if (phrase && (!best || phrase.length > best.phrase.length)) best = { kindId, phrase };
+  }
+  // Falls back to 'hangout' — the same default ASK_HANGOUT's own
+  // defaultFlavor implies — when nothing recognizable is named, including a
+  // bare `$Invite` with no flavor at all.
+  return best ? best.kindId : 'hangout';
+}
+
+// Additional residents named in the flavor ("...with Elena"), resolved
+// against their bible.name with the same whole-word, case-insensitive match
+// intent.js's matchRoomIntent uses for a bedroom owner's name. Never the
+// conversation partner (already the primary invitee via the normal ask
+// pipeline) or a non-resident (D5: a guest arrives through the visits system,
+// not a commitment). Iterates gs.npcs' own key order, not the flavor text's,
+// so several names in one flavor resolve deterministically.
+function inviteExtraGuestsFromFlavor(gameState, flavor, excludeNpcId) {
+  const norm = normalizeIntentText(flavor);
+  if (!norm) return [];
+  const out = [];
+  for (const [npcId, npc] of Object.entries(gameState.npcs || {})) {
+    if (npcId === excludeNpcId || npc.residency?.status !== 'resident') continue;
+    const name = normalizeIntentText(npc.bible?.name || '');
+    if (!name) continue;
+    const re = new RegExp(`\\b${escapeIntentRegExp(name)}\\b`);
+    if (re.test(norm)) out.push(npcId);
+  }
+  return out;
+}
+
+// ask_invite — the Phase 1 leaf itself. Same accept/decline formula as
+// ASK_HANGOUT/ASK_MEAL (affection − tension, seeded noise, D7's ladder
+// penalty) for the PRIMARY partner; the parsed kind/extra-guest ids ride on
+// the returned decision (like ASK_GIFT's giftMatch/giftLabel) for
+// runAskScheduleFlow (ui.js) to read before the commitment is created.
+// Resident-only (D5) and schedule:true (D8/D9), like its siblings.
+const ASK_INVITE = {
+  id: 'Invite',
+  category: 'invite',
+  label: 'Invite',
+  help: '<event + who else — e.g. dinner with Elena>',
+  template: '$Invite <Optional>',
+  defaultFlavor: 'Want to make plans?',
+  schedule: true,
+  available: (gs, npc) =>
+    npc.residency?.status === 'resident' && hasFreeSlotsAhead(gs, npc),
+  decide(gs, npc, npcId, flavor, ctx, seedCtx) {
+    if (!this.available(gs, npc, ctx)) return { accept: false, reason: 'unavailable' };
+    const rel = npc.relPlayer || {};
+    const score = (rel.affection || 0) - (rel.tension || 0) * ASK_TUNING.tensionPenaltyWeight
+      - ((seedCtx && seedCtx.ladderPenalty) || 0);
+    const rng = askSeed(gs, npcId, this.category, seedCtx.day, seedCtx.count);
+    const noise = (rng() - 0.5) * 2 * ASK_TUNING.acceptNoiseRange;
+    const accept = score + noise >= ASK_TUNING.acceptThreshold;
+    return {
+      accept, reason: accept ? 'accept' : 'cool',
+      inviteKind: inviteKindFromFlavor(flavor),
+      inviteExtraIds: inviteExtraGuestsFromFlavor(gs, flavor, npcId),
+    };
+  },
+  // D12 — accepted/declined both remembered, same shape as ASK_HANGOUT/
+  // ASK_MEAL. Extra invitees each get their own createCommitment-driven
+  // response (narrated separately by runAskScheduleFlow) rather than a
+  // second MEMORY_FACT here — this leaf only speaks for the PRIMARY partner,
+  // same as every other ask.
+  effects(gs, npc, npcId, decision, data) {
+    const kindLabel = (COMMITMENT_KINDS[decision.inviteKind] || COMMITMENT_KINDS.hangout).label;
+    const slot = data && data.slot;
+    const when = slot ? ` — ${askWhenPhrase(slot, askDay(gs)).phrase}` : '';
+    const extraNote = (decision.inviteExtraIds && decision.inviteExtraIds.length) ? ' (others invited too)' : '';
+    return [
+      decision.accept
+        ? `MEMORY_FACT ${npcId} The player invited them to ${kindLabel}${extraNote} and they agreed${when}.`
+        : `MEMORY_FACT ${npcId} The player invited them to ${kindLabel}${extraNote} and they declined.`,
+    ];
+  },
+  leafNote(decision) {
+    return decision.accept
+      ? "- They asked you to make plans together and you're into it. Be warmly agreeable — the exact time is settled next, so don't invent one yet."
+      : "- They're inviting you to make plans and you don't feel like it right now. Decline in character, matching your stance, without being harsh.";
+  },
+};
+
+// ask_party — Phase 17 of actions-and-activities-overhaul-plan.md (D26): the
+// house party's OWN leaf, not $Invite — COMMITMENT_KINDS.party is
+// deliberately not `playerInvitable` (see its own comment, config.js) for
+// exactly the reason this file's ASK_INVITE header names: a future eventType
+// needing bespoke narration ships its own leaf instead of opting into the
+// generic one. Decide/schedule machinery is byte-identical to ASK_INVITE
+// (affection − tension, seeded noise, D7's ladder penalty, schedule:true's
+// calendar-modal flow) — what's bespoke is the WORDING (a party, not "plans")
+// and the fixed `kind: 'party'` (no inviteKindFromFlavor parsing needed, it's
+// always a party). Extra guests still parse from the flavor exactly like
+// $Invite (inviteExtraGuestsFromFlavor, above) — runAskScheduleFlow (ui.js)
+// reads decision.inviteExtraIds off ANY leaf's decision object, not just
+// ASK_INVITE's, so this leaf gets multi-guest booking for free by returning
+// the same field.
+const ASK_PARTY = {
+  id: 'HouseParty',
+  category: 'invite',
+  label: 'Throw a Party',
+  help: '<optional: who else — e.g. with Elena and Marcus>',
+  template: '$HouseParty <Optional>',
+  defaultFlavor: 'Want to throw a party?',
+  schedule: true,
+  kind: 'party',
+  roomId: COMMITMENT_KINDS.party.roomId,
+  available: (gs, npc) =>
+    npc.residency?.status === 'resident' && hasFreeSlotsAhead(gs, npc),
+  decide(gs, npc, npcId, flavor, ctx, seedCtx) {
+    if (!this.available(gs, npc, ctx)) return { accept: false, reason: 'unavailable' };
+    const rel = npc.relPlayer || {};
+    const score = (rel.affection || 0) - (rel.tension || 0) * ASK_TUNING.tensionPenaltyWeight
+      - ((seedCtx && seedCtx.ladderPenalty) || 0);
+    const rng = askSeed(gs, npcId, this.category, seedCtx.day, seedCtx.count);
+    const noise = (rng() - 0.5) * 2 * ASK_TUNING.acceptNoiseRange;
+    const accept = score + noise >= ASK_TUNING.acceptThreshold;
+    return {
+      accept, reason: accept ? 'accept' : 'cool',
+      inviteExtraIds: inviteExtraGuestsFromFlavor(gs, flavor, npcId),
+    };
+  },
+  effects(gs, npc, npcId, decision, data) {
+    const slot = data && data.slot;
+    const when = slot ? ` — ${askWhenPhrase(slot, askDay(gs)).phrase}` : '';
+    const extraNote = (decision.inviteExtraIds && decision.inviteExtraIds.length) ? ' (others invited too)' : '';
+    return [
+      decision.accept
+        ? `MEMORY_FACT ${npcId} The player asked them to help throw a party${extraNote} and they're in${when}.`
+        : `MEMORY_FACT ${npcId} The player asked them to help throw a party${extraNote} and they weren't into it.`,
+    ];
+  },
+  leafNote(decision) {
+    return decision.accept
+      ? "- They're throwing a party and want you there. Be genuinely excited — the exact time is settled next, so don't invent one yet."
+      : "- They're proposing a party and you're not feeling it right now. Decline in character, matching your stance, without being harsh.";
+  },
+};
+
+// ask_follow — Phase 6 of actions-and-activities-overhaul-plan.md (D11): "come
+// with me". Decide by AFFECTION, byte-identical to ASK_HANGOUT/ASK_MEAL/
+// ASK_INVITE's formula (D1 — flavor never moves the verdict). On accept,
+// postEffects (below) sets npc.follow = { leader: 'player', sinceDay } — the
+// ONE write that CREATES a follow relationship; everything that ENDS one
+// (a privacy-room refusal, starting a real conversation, an explicit release,
+// sleep/off-site work) lives outside this file (movement.js's
+// advanceFollowers, ui.js's doTalk/doStopFollowing, sim.js's Pass 1), per
+// D11's "the walk presentation never writes it" — this leaf is the one
+// exception, and only in the direction of beginning the relationship.
+// available() blocks re-asking someone already following and asking a
+// sleeping/napping NPC to get up and walk (the same activity check
+// willingnessFloorReasons uses for its 'asleep' floor, willingness.js) —
+// Follow has no sleeping-target branch the way the D30 affection ladder does;
+// there is nothing metaphorical about needing to be on your feet for this one.
+const ASK_FOLLOW = {
+  id: 'FollowMe',
+  category: 'follow',
+  label: 'Follow Me',
+  help: '<optional — e.g. come with me?>',
+  template: '$FollowMe <Optional>',
+  defaultFlavor: 'Come with me?',
+  available: (gs, npc) => {
+    if (npc.follow && npc.follow.leader === 'player') return false;
+    const activity = (npc.activity || '').toLowerCase();
+    return activity !== 'sleeping' && activity !== 'napping';
+  },
+  decide(gs, npc, npcId, flavor, ctx, seedCtx) {
+    if (!this.available(gs, npc, ctx)) return { accept: false, reason: 'unavailable' };
+    const rel = npc.relPlayer || {};
+    const score = (rel.affection || 0) - (rel.tension || 0) * ASK_TUNING.tensionPenaltyWeight
+      - ((seedCtx && seedCtx.ladderPenalty) || 0);
+    const rng = askSeed(gs, npcId, this.category, seedCtx.day, seedCtx.count);
+    const noise = (rng() - 0.5) * 2 * ASK_TUNING.acceptNoiseRange;
+    const accept = score + noise >= ASK_TUNING.acceptThreshold;
+    return { accept, reason: accept ? 'accept' : 'cool' };
+  },
+  effects(gs, npc, npcId, decision, data) {
+    return [
+      decision.accept
+        ? `MEMORY_FACT ${npcId} The player asked them to come along and they fell in step.`
+        : `MEMORY_FACT ${npcId} The player asked them to come along and they stayed put.`,
+    ];
+  },
+  postEffects(gs, npc, npcId, decision, data) {
+    if (!decision.accept) return;
+    npc.follow = { leader: 'player', sinceDay: gs.meta.clock.day };
+  },
+  leafNote(decision) {
+    return decision.accept
+      ? "- You're happy to tag along with them for now. Say so briefly and warmly — don't invent a destination, they're just leading the way."
+      : "- You'd rather stay put right now. Decline in character, matching your stance, without being harsh.";
+  },
+};
+
+// ask_tour — Phase 17 of actions-and-activities-overhaul-plan.md (D27): "want
+// the grand tour?" An immediate leaf, not schedule:true — a tour is a thing
+// you do right now, not a future booking, so it has no commitments.js kind at
+// all (unlike ASK_PARTY below). Decide by AFFECTION, byte-identical to
+// ASK_FOLLOW's formula (D1 — flavor never moves the verdict); on accept,
+// postEffects sets BOTH npc.follow (the same leader/sinceDay record Follow
+// uses — a tour rides Follow's existing room-by-room presentation, per D27's
+// "riding the walk/movement presentation") AND npc.touring = { visited: [] },
+// the flag movement.js's advanceTouring (called from ui.js's doMove on
+// arrival at each new room) reads to fire that room's TOUR_STOPS beat once
+// and to know this Follow is a tour, not a plain one. available() reuses
+// ASK_FOLLOW's exact guards (not already following, not asleep/napping) plus
+// one more: not already touring, so a second $ShowAround mid-tour can't
+// reset the visited list.
+const ASK_TOUR = {
+  id: 'ShowAround',
+  category: 'follow',
+  label: 'Show Them Around',
+  help: '<optional — e.g. want the grand tour?>',
+  template: '$ShowAround <Optional>',
+  defaultFlavor: 'Want the grand tour?',
+  available: (gs, npc) => {
+    if (npc.touring) return false;
+    if (npc.follow && npc.follow.leader === 'player') return false;
+    const activity = (npc.activity || '').toLowerCase();
+    return activity !== 'sleeping' && activity !== 'napping';
+  },
+  decide(gs, npc, npcId, flavor, ctx, seedCtx) {
+    if (!this.available(gs, npc, ctx)) return { accept: false, reason: 'unavailable' };
+    const rel = npc.relPlayer || {};
+    const score = (rel.affection || 0) - (rel.tension || 0) * ASK_TUNING.tensionPenaltyWeight
+      - ((seedCtx && seedCtx.ladderPenalty) || 0);
+    const rng = askSeed(gs, npcId, this.category, seedCtx.day, seedCtx.count);
+    const noise = (rng() - 0.5) * 2 * ASK_TUNING.acceptNoiseRange;
+    const accept = score + noise >= ASK_TUNING.acceptThreshold;
+    return { accept, reason: accept ? 'accept' : 'cool' };
+  },
+  effects(gs, npc, npcId, decision, data) {
+    return [
+      decision.accept
+        ? `MEMORY_FACT ${npcId} The player offered to show them around and they took the tour.`
+        : `MEMORY_FACT ${npcId} The player offered to show them around and they passed.`,
+    ];
+  },
+  postEffects(gs, npc, npcId, decision, data) {
+    if (!decision.accept) return;
+    npc.follow = { leader: 'player', sinceDay: gs.meta.clock.day };
+    npc.touring = { visited: [] };
+  },
+  leafNote(decision) {
+    return decision.accept
+      ? "- You're happy to be shown around. Say so briefly and warmly — don't describe any specific room yet, that comes as you actually walk through it."
+      : "- You don't feel like a tour right now. Decline in character, matching your stance, without being harsh.";
+  },
+};
+
 // ask_loan — the Phase 6 money leaf (D12): \"spot me some cash\". Decide by
 // AFFECTION + TRUST (lending is a closeness-and-reliability question);
 // accepted → EARN_MONEY (real money on the player) + a MEMORY_FACT + the
@@ -559,16 +857,17 @@ const ASK_LOAN = {
         : `MEMORY_FACT ${npcId} The player asked them to lend $${amount}${suffix} and they declined.`,
     ].filter(Boolean);
   },
-  // Phase 6 (D12) — the _loanOwed flag is a structured PLAYER flag (this
-  // player owes amounts, keyed by NPC), written at the same single
-  // effect-application moment as the DSL lines above. An ask-owned player
-  // flag in the same spirit as bumpAskCount's _askCounts on the NPC.
+  // Phase 4 of actions-and-activities-overhaul-plan.md (D9) — the debt now
+  // lives on player.moneyLedger[npcId].playerOwes (money.js's
+  // adjustMoneyLedger), not the old one-way player.flags._loanOwed; the
+  // helper folds any pre-existing legacy debt in on this same write. Written
+  // at the same single effect-application moment as the DSL lines above,
+  // same as every other ask-owned structured write (bumpAskCount's
+  // _askCounts, the D33 pickpocket window).
   postEffects(gs, npc, npcId, decision, data) {
     if (!decision.accept) return;
     const amount = loanAmountFromFlavor(data && data.flavor, (gs.npcs && gs.npcs[npcId] && gs.npcs[npcId].relPlayer) || {});
-    const flags = gs.player.flags || (gs.player.flags = {});
-    const owed = flags._loanOwed || {};
-    flags._loanOwed = { ...owed, [npcId]: (owed[npcId] || 0) + amount };
+    adjustMoneyLedger(gs, npcId, 'playerOwes', amount);
   },
   // The directive already says the money is handled automatically; this only
   // tells the writer how to be in-character about it.
@@ -603,7 +902,7 @@ const ASK_REPAY = {
   // the object.
   available: (gs, npc, ctx) => {
     const npcId = willingnessTargetId(gs, npc, ctx);
-    const owed = npcId && gs?.player?.flags?._loanOwed?.[npcId];
+    const owed = npcId && moneyOwedByPlayer(gs, npcId);
     return !!owed && (gs?.player?.money || 0) > 0;
   },
   decide(gs, npc, npcId, flavor, ctx, seedCtx) {
@@ -630,28 +929,137 @@ const ASK_REPAY = {
       `MEMORY_FACT ${npcId} The player paid them back $${amount}.`,
     ];
   },
-  // Phase 10 — the repayment side of the _loanOwed flag: reduce by the
-  // amount the SPEND_MONEY line just moved. Zero means the debt is settled:
-  // the per-NPC entry is deleted, and once no debts remain the flag itself
-  // goes too (an empty object is not a meaningful state).
+  // Phase 4 of actions-and-activities-overhaul-plan.md (D9) — the repayment
+  // side of the ledger: reduce playerOwes by the amount the SPEND_MONEY line
+  // just moved (money.js's adjustMoneyLedger clamps at 0 and prunes the
+  // per-NPC entry once both sides are settled).
   postEffects(gs, npc, npcId, decision, data) {
     if (!decision.accept) return;
     const amount = (data && data.repayAmount) || 0;
     if (amount <= 0) return;
-    const flags = gs.player.flags || (gs.player.flags = {});
-    const owed = flags._loanOwed || {};
-    const remaining = Math.max(0, (owed[npcId] || 0) - amount);
-    if (remaining > 0) {
-      flags._loanOwed = { ...owed, [npcId]: remaining };
-    } else {
-      const next = { ...owed };
-      delete next[npcId];
-      if (Object.keys(next).length) flags._loanOwed = next;
-      else delete flags._loanOwed;
-    }
+    adjustMoneyLedger(gs, npcId, 'playerOwes', -amount);
   },
   leafNote(decision) {
     return "- They're paying you back what you lent them. Accept it in character — the money itself is already handled; react like someone being paid back (however this character would), without describing a transaction or counting notes.";
+  },
+};
+
+// Phase 4 of actions-and-activities-overhaul-plan.md (D9) — the flavor-only
+// gift/loan mode word. Structured-in-flavor, same precedent as
+// inviteKindFromFlavor (Phase 1): moves what gets BOOKED (which ledger side,
+// if any, ends up written), never whether the hand-over itself lands (D1) —
+// $GiveMoney is always accepted, matching ASK_GIFT/ASK_REPAY's "the
+// deterministic verdict IS the transaction" shape.
+function giveMoneyModeFromFlavor(flavor) {
+  return /\bloan\b/i.test(String(flavor || '')) ? 'loan' : 'gift';
+}
+
+// The amount actually handed over: `$20` in the flavor, or the tuning
+// default, capped by what the player has on hand. No phase cap (unlike
+// ask_loan's REQUEST cap) — giving away your own money needs no plausibility
+// ceiling the way asking a near-stranger for hundreds does. Pure; feeds the
+// writes only (D21's precedent).
+function giveMoneyAmountFor(gs, flavor) {
+  const money = Math.max(0, gs?.player?.money || 0);
+  const m = String(flavor || '').match(/\$(\d+)/);
+  const amount = m ? Number(m[1]) : ASK_TUNING.loan.defaultAmount;
+  return Math.max(0, Math.min(amount, money));
+}
+
+// ask_give_money — Phase 4 (D9): hand money to whoever you're talking to, no
+// request needed. Always accepted (nobody refuses free money — same "the
+// verdict IS the transaction" shape as ask_gift/ask_repay); the flavor's
+// mode word decides whether it's a no-strings gift or a loan the NPC now
+// owes back (npcOwes), never whether it lands.
+const ASK_GIVE_MONEY = {
+  id: 'GiveMoney',
+  category: 'money',
+  label: 'Give Money',
+  help: '<optional: amount and gift/loan — e.g. $20 loan>',
+  template: '$GiveMoney <Optional>',
+  defaultFlavor: 'Here, take this.',
+  available: (gs) => (gs?.player?.money || 0) > 0,
+  decide(gs, npc, npcId, flavor, ctx, seedCtx) {
+    if (!this.available(gs, npc, ctx)) return { accept: false, reason: 'unavailable' };
+    return { accept: true, reason: 'give_money' };
+  },
+  // D12 — the hand-over is remembered either way; a no-strings gift also
+  // moves affection (a loan carries no relationship delta of its own — see
+  // config.js's giveMoney.giftRelDelta comment). data.giveAmount/giveMode are
+  // stashed here so postEffects writes the SAME amount SPEND_MONEY just
+  // moved, never a recomputation against the already-shrunk wallet (D21's
+  // precedent, same reasoning as ask_repay's data.repayAmount).
+  effects(gs, npc, npcId, decision, data) {
+    if (!decision.accept) return [];
+    const amount = giveMoneyAmountFor(gs, data && data.flavor);
+    if (amount <= 0) return [];
+    const mode = giveMoneyModeFromFlavor(data && data.flavor);
+    data.giveAmount = amount;
+    data.giveMode = mode;
+    const who = (npc.bible && npc.bible.name) || 'them';
+    const lines = [
+      `SPEND_MONEY ${amount} given to ${who}`,
+      mode === 'loan'
+        ? `MEMORY_FACT ${npcId} The player lent them $${amount}.`
+        : `MEMORY_FACT ${npcId} The player gave them $${amount}, no strings attached.`,
+    ];
+    if (mode !== 'loan') lines.push(`REL_DELTA ${npcId} affection +${ASK_TUNING.giveMoney.giftRelDelta}`);
+    return lines;
+  },
+  postEffects(gs, npc, npcId, decision, data) {
+    if (!decision.accept || !((data && data.giveAmount) > 0)) return;
+    if (data.giveMode === 'loan') adjustMoneyLedger(gs, npcId, 'npcOwes', data.giveAmount);
+  },
+  leafNote(decision) {
+    if (decision.reason !== 'give_money') {
+      return "- You don't have any money to give them right now. Deflect briefly, in character.";
+    }
+    return "- You just handed them money, no ask involved. Acknowledge it warmly in character — the money itself is already handled; don't describe counting cash or a formal handover.";
+  },
+};
+
+// ask_collect_money — Phase 4 (D9): call in what an NPC owes YOU (npcOwes),
+// the mirror of ask_repay for the other ledger direction. Always accepted —
+// same "no 'no' to a returned debt" shape; no NPC cash field exists (by
+// design, same reasoning ask_loan's own header comment gives), so
+// EARN_MONEY is granted abstractly rather than checked against anything.
+const ASK_COLLECT_MONEY = {
+  id: 'CollectMoney',
+  category: 'money',
+  label: 'Collect a Debt',
+  help: '<optional: amount — e.g. $20; blank collects it all>',
+  template: '$CollectMoney <Optional>',
+  defaultFlavor: "You still owe me, you know.",
+  available: (gs, npc, ctx) => {
+    const npcId = willingnessTargetId(gs, npc, ctx);
+    return !!npcId && moneyOwedToPlayer(gs, npcId) > 0;
+  },
+  decide(gs, npc, npcId, flavor, ctx, seedCtx) {
+    if (!this.available(gs, npc, ctx)) return { accept: false, reason: 'unavailable' };
+    return { accept: true, reason: 'repay' };
+  },
+  effects(gs, npc, npcId, decision, data) {
+    if (!decision.accept) return [];
+    const owed = moneyOwedToPlayer(gs, npcId);
+    const m = String((data && data.flavor) || '').match(/\$(\d+)/);
+    const want = m ? Number(m[1]) : owed;
+    const amount = (want > 0 && owed > 0) ? Math.max(0, Math.min(want, owed)) : 0;
+    if (amount <= 0) return [];
+    data.collectAmount = amount;
+    const who = (npc.bible && npc.bible.name) || 'them';
+    return [
+      `EARN_MONEY ${amount} debt collected from ${who}`,
+      `MEMORY_FACT ${npcId} The player asked to be paid back, and they came up with $${amount}.`,
+    ];
+  },
+  postEffects(gs, npc, npcId, decision, data) {
+    if (!decision.accept) return;
+    const amount = (data && data.collectAmount) || 0;
+    if (amount <= 0) return;
+    adjustMoneyLedger(gs, npcId, 'npcOwes', -amount);
+  },
+  leafNote(decision) {
+    return "- You're paying back money you borrowed from them. Accept it in character — the money itself is already handled; don't describe counting cash.";
   },
 };
 
@@ -1113,6 +1521,247 @@ const ASK_GIFT = {
   },
 };
 
+// ask_borrow — Phase 4 of actions-and-activities-overhaul-plan.md (D8):
+// temporary transfer with a return expectation, the item-shaped sibling of
+// ask_loan. Unlike the gift/repay leaves, lending a POSSESSION is a real
+// trust question (you might not get it back) — decide() reuses ask_loan's
+// exact affection+trust shape rather than an always-accept verdict. The item
+// is a STRUCTURED input (seedCtx.borrowDefId, chosen in the inventory picker
+// — ui.js openConvBorrowPicker → doConvBorrowItem → doConvSend), same
+// contract as ask_gift's giftDefId: it never touches decide() (D1), only
+// which item effects()/postEffects() move.
+//
+// The transfer itself bypasses the generic MOVE_ITEM DSL line on purpose:
+// applyMoveItem (effects.js) hardcodes the destination ownerId to
+// 'player'-or-null, which is wrong here — the whole point of "borrowed" is
+// that ownership does NOT follow possession. postEffects instead calls
+// items.js's removeStack/addStack directly, stamping the moved unit's owner
+// as the LENDER (npcId), never 'player' — addStack's own merge key already
+// requires a matching ownerId to fuse two stacks, so passing the lender's id
+// here (rather than 'player') means the borrowed unit can never merge with
+// the player's own already-owned stack of the same def and smear the
+// borrowed marker across both; it always lands as its own separate entry.
+const ASK_BORROW = {
+  id: 'BorrowItem',
+  category: 'gifts',
+  label: 'Borrow Something',
+  help: 'pick something from their belongings',
+  defaultFlavor: 'Can I borrow this for a bit?',
+  borrow: true, // routes through the picker (ui.js askMenuInsertLeaf), like gift:true
+  available: (gs, npc, ctx) => {
+    const roomId = (npc && npc.location) || (ctx && ctx.scene && ctx.scene.roomId) || null;
+    const present = !roomId || getPresentNpcIds((gs && gs.npcs) || {}, roomId).some(id => gs.npcs[id] === npc);
+    return present && borrowableStacks(gs, npc).length > 0;
+  },
+  decide(gs, npc, npcId, flavor, ctx, seedCtx) {
+    if (!this.available(gs, npc, ctx)) return { accept: false, reason: 'unavailable' };
+    const defId = seedCtx && seedCtx.borrowDefId;
+    if (!defId || !ITEM_DEFS[defId]) return { accept: false, reason: 'unavailable' };
+    // Same shape as ask_loan (D12): affection + trust, minus tension, minus
+    // the shared repeat-ladder penalty, plus seeded noise. The item choice
+    // never enters the score (D1) — it only decides WHAT moves on an accept.
+    const rel = npc.relPlayer || {};
+    const score = (rel.affection || 0) + (rel.trust || 0)
+      - (rel.tension || 0) * ASK_TUNING.tensionPenaltyWeight
+      - ((seedCtx && seedCtx.ladderPenalty) || 0);
+    const rng = askSeed(gs, npcId, this.category, seedCtx.day, seedCtx.count);
+    const noise = (rng() - 0.5) * 2 * ASK_TUNING.acceptNoiseRange;
+    const accept = score + noise >= ASK_TUNING.acceptThreshold;
+    return { accept, reason: accept ? 'accept' : 'cool' };
+  },
+  effects(gs, npc, npcId, decision, data) {
+    if (!decision.accept) return [];
+    const def = ITEM_DEFS[data && data.borrowDefId] || ITEM_DEFS._unknown;
+    const who = (npc.bible && npc.bible.name) || 'them';
+    return [`MEMORY_FACT ${npcId} The player borrowed ${who}'s ${def.label || 'thing'}, promising it back.`];
+  },
+  // The actual transfer — see the file header above for why this bypasses
+  // MOVE_ITEM. Re-reads npc.inventory from the LIVE npc (the `npc` param
+  // here is already the live re-fetch resolveAsk's applyEffects() performs).
+  postEffects(gs, npc, npcId, decision, data) {
+    if (!decision.accept) return;
+    const defId = data && data.borrowDefId;
+    if (!defId) return;
+    const { stacks: fromStacks, removed } = removeStack(npc.inventory || [], defId, 1);
+    if (removed <= 0) return; // vanished between the picker and the send
+    npc.inventory = fromStacks;
+    const day = askDay(gs);
+    const dueDay = day + ASK_TUNING.borrow.dueDays;
+    gs.player.inventory = addStack(gs.player.inventory || [], defId, 1, npcId, { borrowed: { from: npcId, dueDay } }, day);
+  },
+  leafNote(decision) {
+    return decision.accept
+      ? "- You're lending them something of yours, for now. Be warmly agreeable in character — the item itself is already handled, so don't invent when they'll return it."
+      : "- They want to borrow something of yours and you're not comfortable with that right now. Decline in character, matching your stance, without being harsh.";
+  },
+};
+
+// ask_return_item — Phase 4 (D8): give back something borrowed. Always
+// accepted, same "no 'no' to a returned debt" shape as ask_repay — the item
+// is a STRUCTURED input (seedCtx.returnDefId, chosen from
+// inventory.js borrowedFromStacks — only items borrowed FROM whoever you're
+// talking to, so the picker can never offer back the wrong person's thing).
+// Bypasses MOVE_ITEM for the same reason ask_borrow does: the transfer needs
+// to clear the meta.borrowed marker and restore ownerId to the lender, which
+// the generic DSL line can't express.
+const ASK_RETURN_ITEM = {
+  id: 'ReturnItem',
+  category: 'gifts',
+  label: 'Give It Back',
+  help: 'pick something you borrowed from them',
+  defaultFlavor: "Here — I'm done with this, thanks.",
+  returnItem: true, // routes through the picker (ui.js askMenuInsertLeaf)
+  available: (gs, npc, ctx) => {
+    const npcId = willingnessTargetId(gs, npc, ctx);
+    return !!npcId && borrowedFromStacks(gs, npcId).length > 0;
+  },
+  decide(gs, npc, npcId, flavor, ctx, seedCtx) {
+    if (!this.available(gs, npc, ctx)) return { accept: false, reason: 'unavailable' };
+    const defId = seedCtx && seedCtx.returnDefId;
+    if (!defId || !ITEM_DEFS[defId]) return { accept: false, reason: 'unavailable' };
+    return { accept: true, reason: 'return' };
+  },
+  effects(gs, npc, npcId, decision, data) {
+    if (!decision.accept) return [];
+    const def = ITEM_DEFS[data && data.returnDefId] || ITEM_DEFS._unknown;
+    return [
+      `MEMORY_FACT ${npcId} The player gave back the ${def.label || 'thing'} they'd borrowed.`,
+      `REL_DELTA ${npcId} trust +${ASK_TUNING.borrow.returnTrustDelta}`,
+    ];
+  },
+  postEffects(gs, npc, npcId, decision, data) {
+    if (!decision.accept) return;
+    const defId = data && data.returnDefId;
+    if (!defId) return;
+    const { stacks: fromStacks, removed } = removeStack(gs.player.inventory || [], defId, 1);
+    if (removed <= 0) return;
+    gs.player.inventory = fromStacks;
+    npc.inventory = addStack(npc.inventory || [], defId, 1, npcId, {}, askDay(gs));
+  },
+  leafNote() {
+    return "- They're giving back something they borrowed from you. Accept it graciously in character — the item itself is already handled.";
+  },
+};
+
+// --- The Affection ladder (actions-and-activities-overhaul-plan.md Phase 2,
+// D5-D7/D30) --------------------------------------------------------------
+// Hug / Kiss (cheek) / Kiss (lips) / Cuddle: casual-physical asks, deliberately
+// NOT willingness-gated (D7's hard line — that gate stays RequestIntimacy's
+// alone, below). Each decides by the SAME light shape ASK_INFO already
+// proved (an axis, minus tension, minus the shared repeat-ladder penalty,
+// plus seeded noise, against a threshold) — AFFECTION_TUNING just adds a
+// mood term and, for the two most intimate rungs, a privacy bonus (D7's
+// "location-gated" half). A target found asleep never runs this score at
+// all: D30 requires every leaf on this ladder to branch into the existing
+// boundary-act gate instead, extended (boundary.js's
+// resolveAffectionSleepAttempt/applyAffectionSleepAttempt) into a real
+// three-outcome attempt (undisturbed / wake hostile / wake receptive) —
+// never a relaxed willingnessFloorReasons 'asleep' floor.
+function affectionReceptivityScore(npc, gs, roomId, actId, seedCtx, rng) {
+  const rel = npc.relPlayer || {};
+  const mood = typeof npc.mood === 'number' ? npc.mood : 0;
+  let score = (rel.affection || 0) - (rel.tension || 0) * AFFECTION_TUNING.tensionPenaltyWeight
+    + mood * AFFECTION_TUNING.moodWeight - ((seedCtx && seedCtx.ladderPenalty) || 0);
+  if (AFFECTION_TUNING.ladder[actId].locationGated && isPrivacyRoom(roomId, npc)) {
+    score += AFFECTION_TUNING.privacyBonus;
+  }
+  const noise = (rng() - 0.5) * 2 * AFFECTION_TUNING.acceptNoiseRange;
+  return score + noise;
+}
+
+// Non-'asleep' floors (stranger/hostile/cold_shoulder/actively_refusing) are
+// a hard no for the ladder too — reused whole from willingness.js rather
+// than re-invented, exactly like ASK_INTIMACY reuses the gate below. Only
+// 'asleep' gets special handling (D30); every other floor short-circuits to
+// the SAME floor_* reason codes ASK_INTIMACY already carries phrases for.
+function affectionFloorOrSleep(gs, npc, npcId, roomId) {
+  const floors = willingnessFloorReasons(gs, npc, 'player', { location: roomId, npcId });
+  const asleep = floors.includes('asleep');
+  const other = floors.filter(f => f !== 'asleep');
+  if (other.length > 0) return { blocked: true, reason: `floor_${other[0]}` };
+  return { blocked: false, asleep };
+}
+
+function makeAffectionAsk(actId, { id, label, template, defaultFlavor }) {
+  return {
+    id, actId, category: 'affection', label, template, defaultFlavor,
+    help: '<optional>',
+    available: () => true, // presence is true by definition mid-conversation
+    decide(gs, npc, npcId, flavor, ctx, seedCtx) {
+      const roomId = (npc && npc.location) || (ctx && ctx.scene && ctx.scene.roomId) || null;
+      const gate = affectionFloorOrSleep(gs, npc, npcId, roomId);
+      if (gate.blocked) return { accept: false, reason: gate.reason };
+      if (gate.asleep) {
+        const attempt = resolveAffectionSleepAttempt(gs, actId, npcId, { location: roomId, initiatorId: 'player' });
+        return { accept: attempt.outcome === 'wake_receptive', reason: `sleep_${attempt.outcome}`, sleepAttempt: attempt };
+      }
+      const rng = askSeed(gs, npcId, this.category, seedCtx.day, seedCtx.count);
+      const score = affectionReceptivityScore(npc, gs, roomId, actId, seedCtx, rng);
+      const accept = score >= AFFECTION_TUNING.ladder[actId].threshold;
+      return { accept, reason: accept ? 'accept' : 'cool' };
+    },
+    // Player-side + npc-side deltas ride the same DSL path ASK_GIFT uses —
+    // this branch also covers the wake_receptive outcome for free, since its
+    // decision.accept is true by construction (decide() above). The two
+    // sleep-only outcomes (undisturbed / wake_hostile) get their own lines:
+    // undisturbed is a small solitary payoff for the player alone (the NPC
+    // never knows), and wake_hostile applies nothing here — postEffects
+    // below routes it through the boundary-violation consequence instead.
+    effects(gs, npc, npcId, decision, data) {
+      const T = AFFECTION_TUNING;
+      if (decision.reason === 'sleep_wake_hostile') return [];
+      if (decision.reason === 'sleep_undisturbed') {
+        const gain = (T.playerMoodGain[actId] * T.undisturbedPlayerMoodFactor).toFixed(3);
+        return [`ADJUST_NEED player mood +${gain}`];
+      }
+      if (!decision.accept) return [];
+      const lines = [`ADJUST_NEED player mood +${T.playerMoodGain[actId]}`];
+      for (const [axis, v] of Object.entries(T.relDeltas[actId] || {})) {
+        lines.push(`REL_DELTA ${npcId} ${axis} ${v < 0 ? '' : '+'}${v}`);
+      }
+      if (T.npcMoodGain[actId]) lines.push(`MOOD_DELTA ${npcId} +${T.npcMoodGain[actId]}`);
+      return lines;
+    },
+    // The sleeping-branch's hostile wake is a real boundary violation — the
+    // SAME shaming/cold-shoulder consequence a caught sleep_with/sleep_watch
+    // attempt gets (boundary.js's applyAffectionSleepAttempt), never a
+    // second, lighter version of it.
+    postEffects(gs, npc, npcId, decision, data) {
+      if (decision.reason === 'sleep_wake_hostile' && decision.sleepAttempt) {
+        applyAffectionSleepAttempt(gs, npcId, decision.sleepAttempt, {});
+      }
+    },
+    leafNote(decision) {
+      if (decision.reason === 'sleep_undisturbed') {
+        return "- They are fast asleep and never stir. Write this beat as narration only — do not invent dialogue or a reaction for someone who is unconscious and does not know anything happened.";
+      }
+      if (decision.reason === 'sleep_wake_hostile') {
+        return "- Your touch just woke them, and they are shocked and angry — this is a real boundary violation from where they're standing. Write their furious, betrayed reaction in character; do not soften it.";
+      }
+      if (decision.reason === 'sleep_wake_receptive') {
+        return "- Your touch woke them, and instead of pulling away they lean into it, sleepy and warm. Write a soft, drowsy, genuinely receptive reaction in character.";
+      }
+      if (decision.accept) {
+        return `- They welcomed the ${label.toLowerCase()}. Respond warmly and in character, matching how close you two are — do not undersell it, and do not talk them out of their own yes.`;
+      }
+      return `- They are not receptive to a ${label.toLowerCase()} right now. Decline in character, gently — this is a small, low-stakes no, not a wound; do not overplay the refusal.`;
+    },
+  };
+}
+
+const ASK_HUG = makeAffectionAsk('hug', {
+  id: 'Hug', label: 'Hug', template: '$Hug <Optional>', defaultFlavor: 'Can I get a hug?',
+});
+const ASK_KISS_CHEEK = makeAffectionAsk('kiss_cheek', {
+  id: 'KissCheek', label: 'Kiss on the Cheek', template: '$KissCheek <Optional>', defaultFlavor: 'Can I kiss your cheek?',
+});
+const ASK_KISS_LIPS = makeAffectionAsk('kiss_lips', {
+  id: 'KissLips', label: 'Kiss on the Lips', template: '$KissLips <Optional>', defaultFlavor: 'Can I kiss you?',
+});
+const ASK_CUDDLE = makeAffectionAsk('cuddle', {
+  id: 'Cuddle', label: 'Cuddle', template: '$Cuddle <Optional>', defaultFlavor: 'Want to cuddle for a bit?',
+});
+
 // ask_intimacy — the Phase 7 intimacy leaf (D14): the ONLY ask that doesn't
 // score its own way — the willingness gate IS the decision, reused whole,
 // never a second gate. decide() reads resolveWillingnessGate (willingness.js)
@@ -1131,7 +1780,11 @@ const ASK_GIFT = {
 // the note* writers (D12 — asks reuse them instead of a MEMORY_FACT).
 const ASK_INTIMACY = {
   id: 'RequestIntimacy',
-  category: 'intimacy',
+  // Phase 2 (D7): moved into 'affection' — RequestIntimacy is the top rung
+  // of the same ladder Hug/KissCheek/KissLips/Cuddle sit on, sharing their
+  // repeat-ladder streak. It keeps its own gate (the willingness function,
+  // below) — never a second, lighter one.
+  category: 'affection',
   label: 'Be Intimate',
   help: '<optional: what/where — e.g. tonight, in your room>',
   template: '$RequestIntimacy <Optional>',
@@ -1148,9 +1801,19 @@ const ASK_INTIMACY = {
   act: 'default',
   decide(gs, npc, npcId, flavor, ctx, seedCtx) {
     if (!this.available(gs, npc, ctx)) return { accept: false, reason: 'unavailable' };
+    const roomId = (npc && npc.location) || (ctx && ctx.scene && ctx.scene.roomId) || null;
+    // Phase 2 (D30): a sleeping target never reaches the willingness gate at
+    // all — resolveWillingnessGate would just report its own hard 'asleep'
+    // floor (correct, and still what every OTHER floor state below does),
+    // but D30 wants a real three-outcome attempt here instead, the same
+    // extension every other Affection-ladder leaf gets.
+    if (willingnessFloorReasons(gs, npc, 'player', { location: roomId, npcId }).includes('asleep')) {
+      const attempt = resolveAffectionSleepAttempt(gs, this.id, npcId, { location: roomId, initiatorId: 'player' });
+      return { accept: attempt.outcome === 'wake_receptive', reason: `sleep_${attempt.outcome}`, sleepAttempt: attempt };
+    }
     const gate = resolveWillingnessGate(gs, npcId, 'player', this.act, {
       block: null, // mid-conversation: they're awake and present by definition
-      location: (npc && npc.location) || (ctx && ctx.scene && ctx.scene.roomId) || null,
+      location: roomId,
       npcId,
     });
     if (gate.allowed) return { accept: true, reason: 'accept' };
@@ -1161,13 +1824,35 @@ const ASK_INTIMACY = {
     const state = (gate.reasons && gate.reasons[0]) || 'floor';
     return { accept: false, reason: `floor_${state}` };
   },
-  // No DSL effect lines — the durable record IS the note* writers (below),
-  // which can't ride the DSL as lines. accept → noteIntimacyOccurred (the
-  // recency half of the history term); below_threshold → noteIntimacyRefusal
-  // with the default 1-day lockout. Floor refusals write nothing.
-  effects: () => [],
+  // No DSL effect lines for the normal path — the durable record IS the
+  // note* writers (below), which can't ride the DSL as lines. Phase 2's
+  // sleep_undisturbed is the one exception: a small, solitary player-only
+  // payoff, same shape as the rest of the ladder's undisturbed branch.
+  effects(gs, npc, npcId, decision, data) {
+    if (decision.reason === 'sleep_undisturbed') {
+      const T = AFFECTION_TUNING;
+      return [`ADJUST_NEED player mood +${(T.playerMoodGain.cuddle * T.undisturbedPlayerMoodFactor).toFixed(3)}`];
+    }
+    return [];
+  },
   postEffects(gs, npc, npcId, decision, data) {
     const day = askDay(gs);
+    // Phase 2 (D30): a hostile wake is a real boundary violation — the same
+    // shaming/cold-shoulder consequence a caught sleep_with attempt gets.
+    // A receptive wake is a genuine (if modest) intimate moment — reuses
+    // the existing intimacy.cuddle magnitude rather than inventing a new
+    // number or escalating to a full completed sex act off a chat message.
+    if (decision.reason === 'sleep_wake_hostile' && decision.sleepAttempt) {
+      applyAffectionSleepAttempt(gs, npcId, decision.sleepAttempt, {});
+      return;
+    }
+    if (decision.reason === 'sleep_wake_receptive' && decision.sleepAttempt) {
+      applyAffectionSleepAttempt(gs, npcId, decision.sleepAttempt, {
+        relDeltas: INTIMACY.relDeltas.cuddle, npcMoodGain: INTIMACY.npcMoodGain.cuddle,
+      });
+      noteIntimacyOccurred(gs.npcs[npcId] || npc, day, 'player');
+      return;
+    }
     if (decision.accept) {
       noteIntimacyOccurred(npc, day, 'player');
     } else if (decision.reason === 'below') {
@@ -1178,6 +1863,15 @@ const ASK_INTIMACY = {
   // already forbid renegotiation; these make the consent itself the thing
   // the writer must not undermine.
   leafNote(decision) {
+    if (decision.reason === 'sleep_undisturbed') {
+      return "- They are fast asleep and never stir. Write this beat as narration only — do not invent dialogue or a reaction for someone who is unconscious and does not know anything happened.";
+    }
+    if (decision.reason === 'sleep_wake_hostile') {
+      return "- This just woke them, and they are shocked and angry — a real boundary violation from where they're standing. Write their furious, betrayed reaction in character; do not soften it.";
+    }
+    if (decision.reason === 'sleep_wake_receptive') {
+      return "- This woke them, and instead of pulling away they lean into it, sleepy and warm. Write a soft, drowsy, genuinely receptive reaction in character — intimate, not a full scene.";
+    }
     if (decision.accept) {
       return "- They consented, freely and in their own voice. Respond warmly and in character — the game has already handled everything that follows, so only your words and manner belong here. Do not waver, and do not talk them out of their own yes.";
     }
@@ -1185,6 +1879,160 @@ const ASK_INTIMACY = {
       return "- This is a hard no and it is not open to negotiation. Decline in character, matching your stance; do not leave an opening for more persuasion. If the reason is coldness or hostility, let it show in how you hold yourself.";
     }
     return "- They're not willing right now. Decline in character, honestly and without cruelty. A no is a no — do not hint that more persuasion would change it.";
+  },
+};
+
+// actions-and-activities-overhaul-plan.md Phase 7 (D12) — $Apologize.
+// Belief-gated: decide() reads getUnresolvedGrievances (npc.js) — an NPC
+// only accepts an apology for a real, remembered wrong. Targets the OLDEST
+// unresolved grievance (Phase-3 precedent: ship the simple deterministic
+// case, not a picker UI for a list that's usually 0-1 long) — sincere means
+// the FIRST attempt on it, made within ASK_TUNING.apology.timelyWindowDays
+// of when it was recorded; a second try on the same still-unresolved
+// grievance, or a first try made too late, reads as insincere and deepens
+// it instead. The grievance's own text/severity ride the decision (never
+// player flavor, D1) into leafNote(), so the writer names the real wrong,
+// not whatever the player typed.
+const ASK_APOLOGIZE = {
+  id: 'Apologize',
+  category: 'apology',
+  label: 'Apologize',
+  template: '$Apologize <Optional>',
+  defaultFlavor: "I'm sorry — I really am.",
+  help: '<optional>',
+  available: () => true,
+  decide(gs, npc, npcId, flavor, ctx, seedCtx) {
+    const unresolved = getUnresolvedGrievances(npc);
+    if (unresolved.length === 0) return { accept: false, reason: 'apology_unknown' };
+    const target = unresolved.reduce((a, b) => (a.day <= b.day ? a : b));
+    const index = (npc.relPlayer.grievances || []).indexOf(target);
+    const alreadyAttempted = target.apologizedDay != null;
+    const timely = (seedCtx.day - target.day) <= ASK_TUNING.apology.timelyWindowDays;
+    const sincere = !alreadyAttempted && timely;
+    return {
+      accept: sincere,
+      reason: sincere ? 'apology_sincere' : (alreadyAttempted ? 'apology_repeat' : 'apology_late'),
+      grievanceIndex: index,
+      grievanceText: target.text,
+      grievanceSeverity: target.severity,
+    };
+  },
+  effects(gs, npc, npcId, decision, data) {
+    if (decision.reason === 'apology_unknown') return [];
+    const A = ASK_TUNING.apology;
+    if (decision.accept) {
+      const repair = (decision.grievanceSeverity || 0.3) * A.repairFraction;
+      return [
+        `REL_DELTA ${npcId} ${A.relAxis} +${repair.toFixed(3)}`,
+        `REL_DELTA ${npcId} tension -${(repair * A.tensionReliefMult).toFixed(3)}`,
+        `MEMORY_FACT ${npcId} The player apologized for it, and it actually landed — sincere, and about time.`,
+      ];
+    }
+    return [
+      `REL_DELTA ${npcId} tension +${A.insincereTensionDelta}`,
+      `MEMORY_FACT ${npcId} The player offered an apology that didn't land — too little, or too late.`,
+    ];
+  },
+  // Grievance resolution can't ride the DSL (resolveGrievance/
+  // noteGrievanceApologyAttempt return a NEW npc, the same reason
+  // ask_intimacy's noteIntimacy* writers use this hook instead of a
+  // MEMORY_FACT line) — and it reads the grievance by the INDEX decide()
+  // already found, never re-matches by text, since a repeat attempt's whole
+  // point is "the same grievance, still unresolved."
+  postEffects(gs, npc, npcId, decision, data) {
+    if (decision.reason === 'apology_unknown' || decision.grievanceIndex == null || decision.grievanceIndex < 0) return;
+    const day = askDay(gs);
+    if (decision.accept) {
+      gs.npcs[npcId] = resolveGrievance(npc, decision.grievanceIndex);
+    } else {
+      gs.npcs[npcId] = noteGrievanceApologyAttempt(npc, decision.grievanceIndex, day);
+    }
+  },
+  leafNote(decision) {
+    if (decision.reason === 'apology_unknown') {
+      return "- You have no idea what they're apologizing for — nothing comes to mind. React with genuine confusion, not forgiveness; there's nothing here to accept.";
+    }
+    if (decision.reason === 'apology_sincere') {
+      return `- This actually lands: "${decision.grievanceText}" — a real, sincere, timely apology for something you were genuinely carrying. Let yourself soften and mean it.`;
+    }
+    if (decision.reason === 'apology_repeat') {
+      return `- They're apologizing again for "${decision.grievanceText}" without anything having actually changed. It reads hollow — react with real skepticism, not warmth.`;
+    }
+    return `- The apology for "${decision.grievanceText}" comes far too late to feel sincere. React with real skepticism, not warmth — the moment for this passed.`;
+  },
+};
+
+// actions-and-activities-overhaul-plan.md Phase 7 (D13) — $AskForSpace: the
+// social companion to boundary.js's existing (player-violates-NPC) acts, now
+// the other direction — the player asks an NPC to respect a boundary, and if
+// they agree it becomes a real flag the D15 engine checks against their OWN
+// future acts (flags.js's checkBoundaryRules, wired from the one drive-
+// driven room-entry decision point, sim.js's resolveBatch). Ships ONE
+// template (Phase 3's own precedent — HOUSE_RULE_DEFS shipped exactly one):
+// BOUNDARY_RULE_DEFS.no_enter_room, D13's own flagship, quoted example
+// ("don't enter my room"). A light receptivity check — the SAME shape
+// affectionReceptivityScore uses, on the trust axis — never the willingness
+// gate; this is a request, not a physical act.
+function boundaryReceptivityScore(npc, seedCtx, rng) {
+  const rel = npc.relPlayer || {};
+  const mood = typeof npc.mood === 'number' ? npc.mood : 0;
+  const B = ASK_TUNING.boundary;
+  const score = (rel.trust || 0) - (rel.tension || 0) * B.tensionPenaltyWeight
+    + mood * B.moodWeight - ((seedCtx && seedCtx.ladderPenalty) || 0);
+  const noise = (rng() - 0.5) * 2 * B.acceptNoiseRange;
+  return score + noise;
+}
+
+const ASK_BOUNDARY = {
+  id: 'AskForSpace',
+  category: 'boundary',
+  label: 'Ask for Space',
+  template: '$AskForSpace <Optional>',
+  defaultFlavor: 'Hey, can you knock before you come into my room?',
+  help: '<optional>',
+  boundaryDefId: 'no_enter_room',
+  available: () => true,
+  decide(gs, npc, npcId, flavor, ctx, seedCtx) {
+    const active = (npc.flags && npc.flags._boundaryRules) || [];
+    if (active.some(r => r.id === this.boundaryDefId)) {
+      return { accept: true, reason: 'boundary_already' };
+    }
+    const floors = willingnessFloorReasons(gs, npc, 'player', { location: npc.location, npcId });
+    if (floors.length > 0) return { accept: false, reason: `floor_${floors[0]}` };
+    const rng = askSeed(gs, npcId, this.category, seedCtx.day, seedCtx.count);
+    const score = boundaryReceptivityScore(npc, seedCtx, rng);
+    const accept = score >= ASK_TUNING.boundary.acceptThreshold;
+    return { accept, reason: accept ? 'boundary_accept' : 'boundary_decline' };
+  },
+  effects(gs, npc, npcId, decision, data) {
+    if (decision.reason !== 'boundary_accept') return [];
+    const name = (npc.bible && npc.bible.name) || 'them';
+    return [`MEMORY_FACT ${npcId} The player asked ${name} to always knock first before entering their room, and the boundary was agreed to.`];
+  },
+  // The flag instance itself can't ride the DSL (there is no generic
+  // "append to a flags sub-array" effect verb, and inventing one for this
+  // single caller would be invariant-6 plumbing with no second user yet) —
+  // written directly on the live npc, the same D38 sub-keyed-array
+  // convention every other npc.flags._xxx record already follows.
+  postEffects(gs, npc, npcId, decision, data) {
+    if (decision.reason !== 'boundary_accept') return;
+    const day = askDay(gs);
+    npc.flags = npc.flags || {};
+    const existing = npc.flags._boundaryRules || [];
+    if (existing.some(r => r.id === this.boundaryDefId)) return;
+    npc.flags._boundaryRules = [...existing, { id: this.boundaryDefId, setDay: day }];
+  },
+  leafNote(decision) {
+    if (decision.reason === 'boundary_already') {
+      return "- You already agreed to this — a quick, easy reaffirmation. No need to make it a whole conversation.";
+    }
+    if (decision.reason === 'boundary_accept') {
+      return "- They're asking you to respect a real boundary about their room. Agree in character, plainly and without drama — this is a reasonable ask, not a big deal.";
+    }
+    if ((decision.reason || '').startsWith('floor_')) {
+      return "- This isn't a moment where you're going to have a calm conversation about boundaries. React in character to the situation, not the request itself.";
+    }
+    return "- You hear them out, but you're not ready to promise this right now — decline or brush it off in character, matching your current standing with them.";
   },
 };
 
@@ -1197,11 +2045,30 @@ const ASK_INTIMACY = {
 const ASK_CATEGORIES = [
   { id: 'meals', label: '🍽️ Meals & Plans', children: [ASK_MEAL] },
   { id: 'hangouts', label: '🎮 Hangouts', children: [ASK_HANGOUT] },
-  { id: 'money', label: '💰 Money', children: [ASK_LOAN, ASK_REPAY] }, // Phase 10: the _loanOwed repayment side
-  { id: 'gifts', label: '🎁 Gifts', children: [ASK_GIFT] }, // Phase 9: hand an inventory item over
+  // Phase 1 (D1/D2, actions-and-activities-overhaul-plan.md): the
+  // multi-person invite. Sits alongside, not instead of, the two single-
+  // target leaves above — see ASK_INVITE's own header for why.
+  { id: 'invite', label: '📅 Invite', children: [ASK_INVITE, ASK_PARTY] },
+  // Phase 4 of actions-and-activities-overhaul-plan.md (D9): the bidirectional
+  // ledger's other two leaves — GiveMoney (player gives) and CollectMoney
+  // (call in what an NPC owes YOU) — alongside the original loan/repay pair.
+  { id: 'money', label: '💰 Money', children: [ASK_LOAN, ASK_REPAY, ASK_GIVE_MONEY, ASK_COLLECT_MONEY] },
+  // Phase 4 (D8): Borrow/Return join Gift — all three are inventory-picker
+  // leaves over an item, not a typed template.
+  { id: 'gifts', label: '🎁 Gifts', children: [ASK_GIFT, ASK_BORROW, ASK_RETURN_ITEM] },
   { id: 'chores', label: '🧹 Help Around', children: [ASK_CHORE] },
+  // Phase 6 of actions-and-activities-overhaul-plan.md (D11).
+  { id: 'follow', label: '🚶 Follow', children: [ASK_FOLLOW, ASK_TOUR] },
   { id: 'photos', label: '📷 Photos', children: [ASK_PHOTO, ASK_SHARE_PHOTO] }, // Phase 8 (D11)
-  { id: 'intimacy', label: '💋 Intimacy', children: [ASK_INTIMACY] }, // Phase 7 (D11/D14)
+  // actions-and-activities-overhaul-plan.md Phase 2 (D5-D7): the ladder.
+  // RequestIntimacy moved here from its own 'intimacy' category — it keeps
+  // its willingness gate as its whole decision; the other four are the new,
+  // lighter casual-physical asks. This is D6's pre-expand target (openAskMenu,
+  // ui.js) and the surface that replaced the old standalone Make-a-Move chip.
+  { id: 'affection', label: '🤗 Affection', children: [ASK_HUG, ASK_KISS_CHEEK, ASK_KISS_LIPS, ASK_CUDDLE, ASK_INTIMACY] },
+  // Phase 7 of actions-and-activities-overhaul-plan.md (D12/D13).
+  { id: 'apology', label: '🙏 Apologize', children: [ASK_APOLOGIZE] },
+  { id: 'boundary', label: '🛑 Ask for Space', children: [ASK_BOUNDARY] },
   { id: 'info', label: '💬 Ask About Them', children: [ASK_INFO] },
 ];
 

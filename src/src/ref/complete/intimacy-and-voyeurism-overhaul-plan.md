@@ -4,7 +4,7 @@ Status: **ALL 19 PHASES COMPLETE — the full Intimacy & Voyeurism Overhaul is s
 
 Companions:
 - `src/src/ref/complete/player-creation-and-intro-plan.md` (the `physical.intimate` layer and its three-part fail-closed gate — **read D5–D11 before touching anything intimate-adjacent**; this plan's clothing work must keep `undressed` meaning what that gate expects)
-- `src/src/ref/wip/SENSORY-AND-SOCIAL-ROADMAP.md` (the drive/overture/gossip substrate — R1–R8 — everything here rides)
+- `src/src/ref/complete/SENSORY-AND-SOCIAL-ROADMAP.md` (the drive/overture/gossip substrate — R1–R8 — everything here rides)
 - `src/src/ref/complete/perception-and-signals-plan.md` (the signal layer the door-cue, peek, and listen systems read)
 - `src/src/ref/complete/npc-cognition-plan.md` (utility scoring + commitments — desire bias and the intimacy drives slot into it)
 - `src/src/ref/complete/npc-initiative-plan.md` (overtures + the initiative gate + shared activities — the initiation-symmetry and paired-act substrate)

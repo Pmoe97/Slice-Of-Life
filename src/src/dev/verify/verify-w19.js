@@ -305,7 +305,9 @@ await check('a resident pinned in the living room hears a volume-1 stereo at the
     // no beat rolls consume rng anywhere and the two runs share one stream
     // (control-diff isolates the music term from ambient-event noise).
     return withMusic !== null && noMusic !== null
-      && Math.abs((withMusic - noMusic) - 0.25 * SOUND_DEVICE_DEFS.music.npcMoodPerIntensity) < 1e-9;
+      // Continuous-cadence-closure Phase 5: npcMoodPerIntensity renamed
+      // npcMoodPerIntensityPerMinute; ×30 reproduces the one-tick amount.
+      && Math.abs((withMusic - noMusic) - 0.25 * SOUND_DEVICE_DEFS.music.npcMoodPerIntensityPerMinute * 30) < 1e-9;
   })()`));
 
 await check('loud music (volume 3) occasionally produces a music_too_loud beat, deterministically, and never when quiet',
@@ -418,7 +420,8 @@ await check('an NPC wearing headphones gets no apartment-music term but does get
     };
     const worn = run(true), bare = run(false);
     return worn !== null && bare !== null
-      && Math.abs((worn - bare) - SOUND_DEVICE_DEFS.mp3_player.npcMoodGainPerTick) < 1e-9;
+      // Continuous-cadence-closure Phase 5: npcMoodGainPerTick renamed npcMoodGainPerMinute.
+      && Math.abs((worn - bare) - SOUND_DEVICE_DEFS.mp3_player.npcMoodGainPerMinute * 30) < 1e-9;
   })()`));
 
 console.log('\n5. The player mood target');

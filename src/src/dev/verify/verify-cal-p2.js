@@ -68,7 +68,16 @@ const got = api(`
              base: { electric: UTILITY_BASE.electric, water: UTILITY_BASE.water, gas: UTILITY_BASE.gas },
              rent: BILL_DEFS.rent.cadenceDays,
              meter: UTILITY_METER, hvac: UTILITY_HVAC_SEASONAL,
-             thermostat: UTILITY_THERMOSTAT };
+             // Actions & Activities Overhaul Phase 8 (D16): the flat
+             // UTILITY_THERMOSTAT=1.0 constant this line used to read is
+             // GONE — D16's whole point is a real, player-adjustable
+             // thermostat whose delta from neutral now drives the
+             // multiplier (temperature.js's thermostatHvacMultiplier). What
+             // this harness actually cares about (D7's "do not touch the
+             // HVAC math") still holds: a save that never touches the
+             // thermostat (world.thermostat unset) still bills at exactly
+             // the old flat baseline.
+             thermostat: thermostatHvacMultiplier({ world: {} }) };
   })()
 `);
 
@@ -103,7 +112,11 @@ const meterOk = JSON.stringify({
 check('UTILITY_METER per-unit rates unchanged (D7 do-not-touch)', meterOk);
 check('UTILITY_HVAC_SEASONAL unchanged [2.2, 6.8, 2.2, 8.5]',
       JSON.stringify(got.hvac) === '[2.2,6.8,2.2,8.5]');
-check('UTILITY_THERMOSTAT unchanged at 1.0', got.thermostat === 1.0);
+// Actions & Activities Overhaul Phase 8 (D16) superseded the flat
+// UTILITY_THERMOSTAT=1.0 constant this used to check — a real thermostat
+// now exists. The D7 guarantee this line actually protects (untouched HVAC
+// billing math at the default setting) is what's re-asserted here instead.
+check('an untouched thermostat still bills at the old flat baseline (1.0)', got.thermostat === 1.0);
 
 // ---------------------------------------------------------------- 1
 console.log('\n1. The D6 schedule — stagger preserved, cadence 35, no collisions');

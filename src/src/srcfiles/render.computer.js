@@ -65,6 +65,11 @@ const COMPUTER_RENDERERS = {
   // Dream Engine Phase 8 (D42): the dream diary — gallery + per-dream detail.
   'dreamdiary': renderDreamDiary,
   'dreamentry': renderDreamEntry,
+  // actions-and-activities-overhaul-plan.md Phase 14 (D23): DailyGrid.
+  'puzzles-today': renderPuzzlesToday,
+  // actions-and-activities-overhaul-plan.md Phase 15 (D24): Chatter.
+  'chatter-feed': renderChatterFeed,
+  'chatter-profile': renderChatterProfile,
 };
 
 // Rows whose def declares `requiresContentFlag` are hidden from any
@@ -136,6 +141,14 @@ function resolveScreenSource(gs, screen) {
   if (!screen.source) return null;
   if (screen.source === 'residents') {
     return Object.keys(gs.npcs).filter(id => gs.npcs[id].residency.status === 'resident');
+  }
+  // Phase 1 (D2, actions-and-activities-overhaul-plan.md): the Calendar
+  // app's live source — every still-'scheduled' commitment, soonest first.
+  // Reads the same upcomingCommitments (commitments.js) tracker.js's
+  // trackerCommitments Agenda adapter does, so "what's on the calendar"
+  // has one definition read from two surfaces.
+  if (screen.source === 'commitments') {
+    return upcomingCommitments(gs);
   }
   if (screen.source.startsWith('state:')) {
     return screen.source.slice(6).split('.').reduce((cur, key) => cur?.[key], gs.world.computer);
@@ -5863,6 +5876,330 @@ function renderDreamEntry(body, gs, app, screenDef) {
       body.appendChild(wakeEl);
     }
   }
+}
+
+// DailyGrid (actions-and-activities-overhaul-plan.md Phase 14, D23). Cell
+// inputs get their own direct addEventListener (AH_renderSearchBar's
+// pattern in afterhours.js), not the [data-action] delegation — a per-
+// keystroke click-delegated re-render would fight the player mid-type, and
+// render.desktop.js's typingHere guard only protects the computer-window
+// path, not the phone shell (render.phone.js always rebuilds). So
+// doPuzzleFillCell mutates state ONLY on every keystroke and skips
+// rendering entirely; the only redraws are the deliberate, infrequent
+// actions below (Hint, Check Answers, and completion itself), where losing
+// focus is fine because the interaction is already over.
+function renderPuzzlesToday(body, gs, app, screen) {
+  const puzzle = gs.world.computer.apps.puzzles;
+  if (!puzzle.words || puzzle.words.length === 0) {
+    body.appendChild(makePanel('<p class="dim">No puzzle today yet — check back after the day turns over.</p>'));
+    return;
+  }
+  const solved = puzzle.completedDay === puzzle.day;
+  const numByKey = computePuzzleNumbers(puzzle);
+
+  const header = document.createElement('div');
+  header.className = 'wh-header';
+  header.innerHTML = solved
+    ? `<h3>DailyGrid — Day ${puzzle.day}</h3><p class="pz-solved-banner">&#10003; Solved today's puzzle!</p>`
+    : `<h3>DailyGrid — Day ${puzzle.day}</h3><p class="dim tiny">Fill in every word. Stuck? Reveal a letter from a clue below — it halves today's reward.</p>`;
+  body.appendChild(header);
+
+  const layout = document.createElement('div');
+  layout.className = 'pz-layout';
+
+  const gridWrap = document.createElement('div');
+  gridWrap.className = 'pz-grid';
+  gridWrap.style.gridTemplateColumns = `repeat(${puzzle.cols}, 28px)`;
+  gridWrap.style.gridTemplateRows = `repeat(${puzzle.rows}, 28px)`;
+  for (let r = 0; r < puzzle.rows; r++) {
+    for (let c = 0; c < puzzle.cols; c++) {
+      const letter = puzzleAnswerLetterAt(puzzle, r, c);
+      const cell = document.createElement('div');
+      cell.className = 'pz-cell';
+      if (!letter) { cell.classList.add('pz-black'); gridWrap.appendChild(cell); continue; }
+      const key = puzzleCellKey(r, c);
+      const num = numByKey[key];
+      if (num) {
+        const badge = document.createElement('span');
+        badge.className = 'pz-cell-num';
+        badge.textContent = num;
+        cell.appendChild(badge);
+      }
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.maxLength = 1;
+      input.autocomplete = 'off';
+      input.spellcheck = false;
+      const filled = puzzle.filledCells[key] || '';
+      input.value = filled;
+      if (puzzle.revealed[key]) input.classList.add('pz-revealed');
+      if (filled) input.classList.add(filled === letter ? 'pz-correct' : 'pz-wrong');
+      if (solved) input.disabled = true;
+      input.setAttribute('data-row', r);
+      input.setAttribute('data-col', c);
+      input.addEventListener('input', () => {
+        const clean = (input.value || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 1);
+        input.value = clean;
+        doPuzzleFillCell(r, c, clean);
+        if (clean) {
+          const next = gridWrap.querySelector(`input[data-row="${r}"][data-col="${c + 1}"]`);
+          if (next) next.focus();
+        }
+      });
+      cell.appendChild(input);
+      gridWrap.appendChild(cell);
+    }
+  }
+  layout.appendChild(gridWrap);
+
+  const clues = document.createElement('div');
+  clues.className = 'pz-clues';
+  for (const dir of ['across', 'down']) {
+    const group = document.createElement('div');
+    group.className = 'pz-clue-group';
+    const title = document.createElement('div');
+    title.className = 'pz-clue-group-title';
+    title.textContent = dir === 'across' ? 'Across' : 'Down';
+    group.appendChild(title);
+    puzzle.words.forEach((w, idx) => {
+      if (w.dir !== dir) return;
+      const wordSolved = isWordSolved(puzzle, w);
+      const row = document.createElement('div');
+      row.className = 'pz-clue-row' + (wordSolved ? ' pz-clue-solved' : '');
+      const num = numByKey[puzzleCellKey(w.row, w.col)];
+      row.innerHTML = `<span>${num}. ${w.clue} <span class="dim tiny">(${w.answer.length})</span></span>`;
+      if (!wordSolved) {
+        const hintBtn = document.createElement('button');
+        hintBtn.className = 'btn btn-secondary tiny';
+        hintBtn.setAttribute('data-action', 'puzzle.hint');
+        hintBtn.setAttribute('data-index', String(idx));
+        hintBtn.textContent = 'Hint';
+        row.appendChild(hintBtn);
+      }
+      group.appendChild(row);
+    });
+    clues.appendChild(group);
+  }
+  layout.appendChild(clues);
+  body.appendChild(layout);
+
+  if (!solved) {
+    const checkBtn = document.createElement('button');
+    checkBtn.className = 'btn tiny';
+    checkBtn.setAttribute('data-action', 'puzzle.check');
+    checkBtn.textContent = 'Check Answers';
+    body.appendChild(checkBtn);
+  }
+}
+
+// --- Chatter (actions-and-activities-overhaul-plan.md Phase 15, D24) ------
+// Same params pattern as codexScreenParams above: the `profile` screen's
+// npcId lives in the window/navStack params, never in app state itself.
+function chatterScreenParams(gs) {
+  const phone = gs?.world?.phone;
+  if (phone?.openAppId === 'social_feed' && Array.isArray(phone.navStack)) {
+    const top = phone.navStack[phone.navStack.length - 1];
+    if (top && top.appId === 'social_feed' && top.screenId === 'profile') return top.params || {};
+  }
+  const win = gs?.world?.computer?.windows?.social_feed;
+  if (win && win.screenId === 'profile') return win.params || {};
+  return {};
+}
+
+function chatterDayLabel(day, nowDay) {
+  const age = nowDay - day;
+  if (age <= 0) return 'Today';
+  if (age === 1) return 'Yesterday';
+  return `${age} days ago`;
+}
+
+function chatterAuthorWho(gs, authorId) {
+  if (authorId === 'player') return gs.player;
+  return gs.npcs?.[authorId] || null;
+}
+
+function chatterAuthorName(gs, authorId) {
+  if (authorId === 'player') return 'You';
+  return gs.npcs?.[authorId]?.bible?.name || 'Someone';
+}
+
+// One post card: avatar, author name (opens their profile), day label, the
+// source badge (D24's eventRef finally gets a reader here), post text,
+// like button + count, and an inline comment list + composer. Author/text
+// strings are free-typed (player posts/comments) or NPC-templated, so every
+// interpolation into the innerHTML template below goes through avatarEscape
+// (avatar.js) — the same escaper avatarChipHtml itself uses for name/title.
+function renderChatterPost(gs, post, device) {
+  const nowDay = gs.meta.clock.day;
+  const who = chatterAuthorWho(gs, post.author);
+  const name = chatterAuthorName(gs, post.author);
+  const card = document.createElement('div');
+  card.className = 'cht-post';
+
+  const header = document.createElement('div');
+  header.className = 'cht-post-header';
+  header.innerHTML = avatarChipHtml(who, { className: 'cht-avatar', size: 'card', name, isPlayer: post.author === 'player', ring: post.author === 'player' ? 'player' : 'default' });
+  const nameBtn = document.createElement('button');
+  nameBtn.className = 'cht-author-btn';
+  nameBtn.textContent = name;
+  if (post.author !== 'player') {
+    nameBtn.setAttribute('data-action', 'chatter.open-profile');
+    nameBtn.setAttribute('data-npc', post.author);
+  } else {
+    nameBtn.disabled = true;
+  }
+  const meta = document.createElement('span');
+  meta.className = 'cht-post-meta dim tiny';
+  meta.textContent = `${chatterDayLabel(post.day, nowDay)} · ${post.eventRef?.kind === 'fact' ? 'overheard' : post.eventRef ? 'happened today' : 'posted'}`;
+  header.appendChild(nameBtn);
+  header.appendChild(meta);
+  card.appendChild(header);
+
+  const text = document.createElement('div');
+  text.className = 'cht-post-text';
+  text.textContent = post.text;
+  card.appendChild(text);
+
+  const actions = document.createElement('div');
+  actions.className = 'cht-post-actions';
+  const liked = post.likes.includes('player');
+  const likeBtn = document.createElement('button');
+  likeBtn.className = 'btn btn-secondary tiny' + (liked ? ' cht-liked' : '');
+  likeBtn.setAttribute('data-action', 'chatter.like');
+  likeBtn.setAttribute('data-row-id', post.id);
+  likeBtn.textContent = `${liked ? '♥' : '♡'} ${post.likes.length}`;
+  actions.appendChild(likeBtn);
+  card.appendChild(actions);
+
+  if (post.comments.length > 0) {
+    const list = document.createElement('div');
+    list.className = 'cht-comments';
+    for (const c of post.comments) {
+      const row = document.createElement('div');
+      row.className = 'cht-comment';
+      const who2 = document.createElement('span');
+      who2.className = 'cht-comment-author';
+      who2.textContent = chatterAuthorName(gs, c.author) + ':';
+      const body2 = document.createElement('span');
+      body2.textContent = ' ' + c.text;
+      row.appendChild(who2);
+      row.appendChild(body2);
+      list.appendChild(row);
+    }
+    card.appendChild(list);
+  }
+
+  const composeRow = document.createElement('div');
+  composeRow.className = 'cht-comment-compose';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = `cht-comment-input-${post.id}`;
+  input.className = 'cht-comment-input';
+  input.placeholder = 'Add a comment...';
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); handleAction('chatter.comment', null, { rowId: post.id, device }); }
+  });
+  const sendBtn = document.createElement('button');
+  sendBtn.className = 'btn tiny';
+  sendBtn.setAttribute('data-action', 'chatter.comment');
+  sendBtn.setAttribute('data-row-id', post.id);
+  sendBtn.textContent = 'Reply';
+  composeRow.appendChild(input);
+  composeRow.appendChild(sendBtn);
+  card.appendChild(composeRow);
+
+  return card;
+}
+
+function renderChatterFeed(body, gs, app, screen) {
+  const device = body.closest('[data-device]')?.getAttribute('data-device') || 'computer';
+  const feed = gs.world.computer.apps.social_feed;
+  body.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.className = 'wh-header';
+  header.innerHTML = '<h3>Chatter</h3>';
+  body.appendChild(header);
+
+  const composeBox = document.createElement('div');
+  composeBox.className = 'cht-compose';
+  const textarea = document.createElement('textarea');
+  textarea.id = 'cht-compose-input';
+  textarea.className = 'cht-compose-input';
+  textarea.placeholder = "What's happening?";
+  textarea.maxLength = 280;
+  const postBtn = document.createElement('button');
+  postBtn.className = 'btn tiny';
+  postBtn.setAttribute('data-action', 'chatter.post');
+  postBtn.textContent = 'Post';
+  composeBox.appendChild(textarea);
+  composeBox.appendChild(postBtn);
+  body.appendChild(composeBox);
+
+  if (feed.posts.length === 0) {
+    body.appendChild(makePanel('<p class="dim">Nothing here yet — Chatter fills up as house life happens.</p>'));
+  } else {
+    const list = document.createElement('div');
+    list.className = 'cht-feed';
+    // Newest first; ties (same day) keep insertion order stable via a
+    // stable-sort-safe index compare rather than relying on Array#sort's
+    // stability alone across engines.
+    const ordered = feed.posts.map((p, i) => ({ p, i })).sort((a, b) => (b.p.day - a.p.day) || (b.i - a.i));
+    for (const { p } of ordered) list.appendChild(renderChatterPost(gs, p, device));
+    body.appendChild(list);
+  }
+  if (typeof hydrateAvatars === 'function') hydrateAvatars(body);
+}
+
+function renderChatterProfile(body, gs, app, screen) {
+  body.innerHTML = '';
+  const params = chatterScreenParams(gs);
+  const npcId = params.npcId;
+  const who = chatterAuthorWho(gs, npcId);
+  if (!npcId || !who) {
+    body.appendChild(makePanel('<p class="dim">Nobody selected.</p>'));
+    return;
+  }
+  const name = chatterAuthorName(gs, npcId);
+  const isPlayer = npcId === 'player';
+
+  const header = document.createElement('div');
+  header.className = 'cht-profile-header';
+  header.innerHTML = avatarChipHtml(who, { className: 'cht-profile-avatar', size: 'hero', name, isPlayer, ring: isPlayer ? 'player' : 'default' });
+  const nameEl = document.createElement('h3');
+  nameEl.textContent = name;
+  header.appendChild(nameEl);
+  if (!isPlayer && who.bible?.sketch) {
+    const bio = document.createElement('p');
+    bio.className = 'dim';
+    bio.textContent = who.bible.sketch;
+    header.appendChild(bio);
+  }
+  if (!isPlayer && Array.isArray(who.bible?.interests) && who.bible.interests.length > 0) {
+    const tags = document.createElement('div');
+    tags.className = 'cht-profile-tags';
+    for (const int of who.bible.interests) {
+      const chip = document.createElement('span');
+      chip.className = 'cht-tag';
+      chip.textContent = int?.name || '';
+      tags.appendChild(chip);
+    }
+    header.appendChild(tags);
+  }
+  body.appendChild(header);
+
+  const feed = gs.world.computer.apps.social_feed;
+  const posts = feed.posts.filter((p) => p.author === npcId).sort((a, b) => b.day - a.day);
+  if (posts.length === 0) {
+    body.appendChild(makePanel(`<p class="dim">${isPlayer ? "You haven't" : `${avatarEscape(name)} hasn't`} posted anything yet.</p>`));
+  } else {
+    const list = document.createElement('div');
+    list.className = 'cht-feed';
+    const device = body.closest('[data-device]')?.getAttribute('data-device') || 'computer';
+    for (const p of posts) list.appendChild(renderChatterPost(gs, p, device));
+    body.appendChild(list);
+  }
+  if (typeof hydrateAvatars === 'function') hydrateAvatars(body);
 }
 
 // ===== /SECTION: RENDER.COMPUTER =====
