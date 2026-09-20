@@ -103,6 +103,12 @@ const ASK_REASON_PHRASES = {
   boundary_already: "you've already agreed on this",
   boundary_accept: "it's a reasonable ask, and they respect it",
   boundary_decline: "they're not ready to promise that right now",
+  // aspirations-and-creative-careers Phase 11 (D33): the $Feature leaf.
+  feature_refused: "they already said no to that one, and a no is final",
+  below_feature: "they're not comfortable with that going up where people can see it",
+  // aspirations-and-creative-careers Phase 13 (D45): $SubscriptionTalk.
+  subscription_fine: "it's your money and your business — they're genuinely fine with it",
+  subscription_boundary: "it's not something they want in the relationship, and they're asking you not to",
 };
 
 function askReasonPhrase(reason) {
@@ -221,6 +227,10 @@ function askStanceFor(decision, rel) {
   if (decision.reason === 'sleep_wake_receptive') return 'drowsy and warm';
   if (decision.reason === 'sleep_wake_hostile') return 'stern';
   if (decision.reason === 'sleep_undisturbed') return 'unaware — still asleep';
+  // aspirations-and-creative-careers Phase 13 (D45): drawing a line about
+  // a subscription is firm, not cold — it's their norm, not a verdict on
+  // the player; reaffirming one already drawn reads the same.
+  if (decision.reason === 'subscription_boundary' || (decision.reason === 'boundary_already' && !decision.accept)) return 'firm';
   if (decision.accept) {
     // Phase 9 — a gift is accepted by definition, but the stance tracks the
     // MATCH: a landed gift is warm (or measured early on), a miss is
@@ -1332,6 +1342,97 @@ const ASK_SHARE_PHOTO = {
   available: (gs) => (gs?.world?.phone?.camera?.roll?.length || 0) > 0,
 };
 
+// aspirations-and-creative-careers Phase 11 (D33) — $Feature: "can I post
+// this with you in it". Picker-first over the camera roll (only photos this
+// NPC is actually in — subjectNpcIds), the photo id riding as the
+// structured `extra` (never the flavor, D1). The TIER is the content's own
+// level (image.js stamps it at capture): a lifestyle photo is a
+// hangout-tier ask (affection − tension, the repeat ladder, seeded noise);
+// an intimate one is ASK_INTIMACY-tier — willingnessFloorReasons first
+// (every floor refuses in that leaf's own words), then the 'default'
+// willingness bar. Personality (sim.js's npcDisinhibition, the derived
+// exhibitionism read) adds a delta to either tier's score, never past a
+// floor. A refusal is final for that photo (consent_feature, granted:false).
+// On accept, postEffects writes the consent_feature fact platform.js's
+// photoSubjectsWithoutConsent reads when the photo is posted (D41).
+const ASK_FEATURE = {
+  id: 'Feature',
+  category: 'photos',
+  label: 'Post a Photo of Us',
+  help: 'pick a photo with them in it — ask before it goes up',
+  defaultFlavor: 'Can I post this one with you in it?',
+  feature: true,
+  available: (gs, npc, ctx) => {
+    // NPC records carry no id of their own — the key is found by identity,
+    // the same way ASK_PHOTO's presence check compares objects.
+    const npcId = npc && gs && gs.npcs ? Object.keys(gs.npcs).find(k => gs.npcs[k] === npc) : null;
+    if (!npcId) return false;
+    const roomId = (npc && npc.location) || (ctx && ctx.scene && ctx.scene.roomId) || null;
+    const present = !roomId || getPresentNpcIds((gs && gs.npcs) || {}, roomId).some(id => gs.npcs[id] === npc);
+    return present && featurablePhotosFor(gs, npcId).length > 0;
+  },
+  decide(gs, npc, npcId, flavor, ctx, seedCtx) {
+    if (!this.available(gs, npc, ctx)) return { accept: false, reason: 'unavailable' };
+    const photoId = seedCtx && seedCtx.featurePhotoId;
+    const photo = photoId ? (gs.world?.phone?.camera?.roll || []).find(p => p.id === photoId) : null;
+    if (!photo || !(photo.subjectNpcIds || []).includes(npcId)) return { accept: false, reason: 'unavailable' };
+    const prior = typeof featureConsentFor === 'function' ? featureConsentFor(npc, photo.id) : null;
+    if (prior && prior.granted === false) return { accept: false, reason: 'feature_refused', level: prior.level };
+    if (prior && prior.granted === true) return { accept: true, reason: 'accept', level: prior.level };
+    const level = typeof photoContentLevel === 'function' ? photoContentLevel(photo) : 'lifestyle';
+    const roomId = (npc && npc.location) || (ctx && ctx.scene && ctx.scene.roomId) || null;
+    // Floors first, for both tiers — a floor is a floor (invariant 2).
+    const floors = willingnessFloorReasons(gs, npc, 'player', { location: roomId, npcId });
+    if (floors.length > 0) return { accept: false, reason: `floor_${floors[0]}`, level };
+    const dis = typeof npcDisinhibition === 'function' ? npcDisinhibition(npc) : 0.5;
+    const delta = (dis - 0.5) * CHATTER_PLATFORM.featureDisinhibition;
+    if (level === 'intimate') {
+      const gate = resolveWillingnessGate(gs, npcId, 'player', 'default', { block: null, location: roomId, npcId });
+      if (gate.reason === 'floor') return { accept: false, reason: `floor_${(gate.reasons && gate.reasons[0]) || 'floor'}`, level };
+      const accept = gate.willingness + delta >= gate.threshold;
+      return { accept, reason: accept ? 'accept' : 'below_feature', level };
+    }
+    const rel = npc.relPlayer || {};
+    const score = (rel.affection || 0) - (rel.tension || 0) * ASK_TUNING.tensionPenaltyWeight
+      - ((seedCtx && seedCtx.ladderPenalty) || 0) + delta;
+    const rng = askSeed(gs, npcId, this.category, seedCtx.day, seedCtx.count);
+    const noise = (rng() - 0.5) * 2 * ASK_TUNING.acceptNoiseRange;
+    const accept = score + noise >= ASK_TUNING.acceptThreshold;
+    return { accept, reason: accept ? 'accept' : 'cool', level };
+  },
+  // The durable record is the consent fact (postEffects); nothing rides
+  // the DSL.
+  effects() { return []; },
+  postEffects(gs, npc, npcId, decision, data) {
+    const photoId = data && data.featurePhotoId;
+    const photo = photoId ? (gs.world?.phone?.camera?.roll || []).find(p => p.id === photoId) : null;
+    if (!photo || decision.reason === 'unavailable' || decision.reason === 'feature_refused') return;
+    if (typeof featureConsentFor === 'function' && featureConsentFor(npc, photo.id)) return;
+    const live = gs.npcs[npcId] || npc;
+    gs.npcs[npcId] = addMemoryFact(live, buildFeatureConsentFact(photo, decision.accept, decision.level, askDay(gs)));
+  },
+  leafNote(decision) {
+    if (decision.accept) {
+      return decision.level === 'intimate'
+        ? "- They agreed to let you post that private photo with them in it. Respond in character — the yes is theirs and freely given; don't waver on it, and don't describe the photo."
+        : "- They're fine with you posting that photo with them in it. Acknowledge it warmly and in character; don't describe the picture.";
+    }
+    if (decision.reason === 'feature_refused') {
+      return "- They already said no to posting that photo, and they mean it. Decline again, briefly and in character — the answer is settled.";
+    }
+    if ((decision.reason || '').startsWith('floor_')) {
+      return "- This is a hard no — they will not have that posted with them in it. Decline in character, matching your stance; do not leave room for more persuasion.";
+    }
+    return "- They'd rather that photo didn't go up with them in it. Decline in character, honestly and without cruelty; a no is a no.";
+  },
+};
+
+// The camera-roll photos an NPC is actually in — the $Feature picker's
+// source. PURE.
+function featurablePhotosFor(gs, npcId) {
+  return (gs?.world?.phone?.camera?.roll || []).filter(p => Array.isArray(p.subjectNpcIds) && p.subjectNpcIds.includes(npcId));
+}
+
 // Phase 9 — the deterministic heart of the gift leaf. Pure: a function of
 // the item's def and the NPC's bible. Sources are exactly the plan's three:
 // bible.interests (name + tags), bible.want, bible.wound. The item side is
@@ -2036,6 +2137,74 @@ const ASK_BOUNDARY = {
   },
 };
 
+// aspirations-and-creative-careers Phase 13 (D45) — $SubscriptionTalk: "I
+// pay for someone's private page — are you okay with that?" A boundary
+// topic, not infidelity: the answer is this NPC's own norm (openness and
+// disinhibition say fine; conscientiousness and an intimate relationship
+// say no; a seeded noise band), floors first. "Not okay" draws a line the
+// PLAYER is bound by — BOUNDARY_RULE_DEFS.no_private_subscriptions on
+// their npc.flags._playerBoundaries (the mirror of _boundaryRules) — which
+// flags.js's checkPlayerBoundary enforces when a crossing reaches them.
+// Nothing here touches relationships.js's infidelity deltas (verified by
+// spy in verify-acc-p13.js). Asking again once a line is drawn reaffirms
+// it; asking someone who is fine with it is a small, warm exchange.
+const ASK_SUBSCRIPTION_TALK = {
+  id: 'SubscriptionTalk',
+  category: 'boundary',
+  label: 'Talk About a Subscription',
+  template: '$SubscriptionTalk <Optional>',
+  defaultFlavor: "I pay for someone's private page on Chatter — are you okay with that?",
+  help: '<optional: whose, or why>',
+  boundaryDefId: 'no_private_subscriptions',
+  available: () => true,
+  decide(gs, npc, npcId, flavor, ctx, seedCtx) {
+    const active = (npc.flags && npc.flags._playerBoundaries) || [];
+    if (active.some(r => r.id === this.boundaryDefId)) return { accept: false, reason: 'boundary_already' };
+    const floors = willingnessFloorReasons(gs, npc, 'player', { location: npc.location, npcId });
+    if (floors.length > 0) return { accept: false, reason: `floor_${floors[0]}` };
+    const T = CHATTER_PLATFORM;
+    const t = npc.bible?.temperament || {};
+    const dis = typeof npcDisinhibition === 'function' ? npcDisinhibition(npc) : 0.5;
+    const intimate = (npc.relPlayer?.intimacyLevel || 0) >= PHASE_THRESHOLDS.intimate;
+    const score = (t.openness || 0) * T.subscriptionTalkOpenness + (dis - 0.5) * 2 * T.subscriptionTalkDisinhibition
+      - Math.max(0, t.conscientiousness || 0) * T.subscriptionTalkConscientiousness - (intimate ? T.subscriptionTalkIntimate : 0)
+      - ((seedCtx && seedCtx.ladderPenalty) || 0);
+    const rng = askSeed(gs, npcId, this.category, seedCtx.day, seedCtx.count);
+    const noise = (rng() - 0.5) * 2 * T.subscriptionTalkNoise;
+    const fine = score + noise >= 0;
+    return { accept: fine, reason: fine ? 'subscription_fine' : 'subscription_boundary', score: Math.round((score + noise) * 100) / 100 };
+  },
+  effects(gs, npc, npcId, decision, data) {
+    const name = (npc.bible && npc.bible.name) || 'them';
+    if (decision.reason === 'subscription_fine') return [`MEMORY_FACT ${npcId} The player told ${name} they pay for someone's private page on Chatter, and ${name} was fine with it.`];
+    if (decision.reason === 'subscription_boundary') return [`MEMORY_FACT ${npcId} The player told ${name} they pay for someone's private page on Chatter; ${name} asked them not to, and the player agreed to that line.`];
+    return [];
+  },
+  postEffects(gs, npc, npcId, decision, data) {
+    if (decision.reason !== 'subscription_boundary') return;
+    const day = askDay(gs);
+    npc.flags = npc.flags || {};
+    const existing = npc.flags._playerBoundaries || [];
+    if (existing.some(r => r.id === this.boundaryDefId)) return;
+    npc.flags._playerBoundaries = [...existing, { id: this.boundaryDefId, setDay: day }];
+  },
+  leafNote(decision) {
+    if (decision.reason === 'boundary_already') {
+      return "- You already asked them not to do this, and they agreed — say so plainly, in character. The line is drawn; you don't need to re-argue it.";
+    }
+    if (decision.reason === 'subscription_fine') {
+      return "- They're telling you they pay for someone's private page and asking if you're okay with it — and you genuinely are. Say so in your own voice, without making it a big thing; curiosity or a joke is fine, judgment is not.";
+    }
+    if (decision.reason === 'subscription_boundary') {
+      return "- They're telling you they pay for someone's private page and asking if you're okay with it — and you're not. Say so honestly and in character, and ask them not to; this is your own line, not a rule about them. It is not cheating and you don't treat it as cheating.";
+    }
+    if ((decision.reason || '').startsWith('floor_')) {
+      return "- This isn't a moment where you're going to have a calm conversation about it. React in character to the situation, not the question itself.";
+    }
+    return "- Answer in character.";
+  },
+};
+
 // Phase 2 builds the Request-tree menu from this. One category, one leaf in
 // Phase 1; later phases add their categories (and leaves) in the plan's
 // order: meals, hangouts, money, chores, photos, intimacy, info. The Photos
@@ -2059,7 +2228,7 @@ const ASK_CATEGORIES = [
   { id: 'chores', label: '🧹 Help Around', children: [ASK_CHORE] },
   // Phase 6 of actions-and-activities-overhaul-plan.md (D11).
   { id: 'follow', label: '🚶 Follow', children: [ASK_FOLLOW, ASK_TOUR] },
-  { id: 'photos', label: '📷 Photos', children: [ASK_PHOTO, ASK_SHARE_PHOTO] }, // Phase 8 (D11)
+  { id: 'photos', label: '📷 Photos', children: [ASK_PHOTO, ASK_SHARE_PHOTO, ASK_FEATURE] }, // Phase 8 (D11); $Feature — aspirations-and-creative-careers Phase 11 (D33)
   // actions-and-activities-overhaul-plan.md Phase 2 (D5-D7): the ladder.
   // RequestIntimacy moved here from its own 'intimacy' category — it keeps
   // its willingness gate as its whole decision; the other four are the new,
@@ -2068,7 +2237,7 @@ const ASK_CATEGORIES = [
   { id: 'affection', label: '🤗 Affection', children: [ASK_HUG, ASK_KISS_CHEEK, ASK_KISS_LIPS, ASK_CUDDLE, ASK_INTIMACY] },
   // Phase 7 of actions-and-activities-overhaul-plan.md (D12/D13).
   { id: 'apology', label: '🙏 Apologize', children: [ASK_APOLOGIZE] },
-  { id: 'boundary', label: '🛑 Ask for Space', children: [ASK_BOUNDARY] },
+  { id: 'boundary', label: '🛑 Ask for Space', children: [ASK_BOUNDARY, ASK_SUBSCRIPTION_TALK] }, // $SubscriptionTalk — aspirations-and-creative-careers Phase 13 (D45)
   { id: 'info', label: '💬 Ask About Them', children: [ASK_INFO] },
 ];
 

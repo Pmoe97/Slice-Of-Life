@@ -725,9 +725,16 @@ function resolveStandardDrive(driveId, drive, c) {
   // only decides where they do it.
   if (drive.moveToRoom && drive.moveToRoom.length) {
     const own = npc.residency?.room;
+    // Bug report (2026-09-20): a common room sealed behind bedroom_player
+    // (the ensuite upgrade) still passed this filter — nothing here checked
+    // reachability — so NPCs kept showering in a bathroom the upgrade was
+    // supposed to take away from them. npcCommonRoomAccessible reads the
+    // live adjacency graph (config.js) instead of assuming every 'common'
+    // room stays reachable forever.
     const candidates = drive.moveToRoom.map(r => r === 'bedroom' ? own : r)
       .filter(r => r && ROOMS[r] && r !== location
-        && (ROOMS[r].type !== 'bedroom' || r === own));
+        && (ROOMS[r].type !== 'bedroom' || r === own)
+        && npcCommonRoomAccessible(r));
     if (candidates.length > 0) {
       const weighted = candidates.map(roomId => {
         const occCount = getPresentNpcIds(npcs, roomId).length;

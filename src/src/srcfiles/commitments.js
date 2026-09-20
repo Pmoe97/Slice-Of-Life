@@ -259,7 +259,11 @@ function processCommitmentsForDay(gameState, day) {
 // meal (accepted an active commitment for this room). Pure read — the
 // relocation side is SIM's resolveScheduleActivity doing its job.
 function mealAttendees(gameState, roomId) {
-  const present = getPresentNpcIds(gameState.npcs, roomId);
+  // A sleeping resident (asleep on the couch, say) is physically in the room
+  // but isn't at the table (2026-09-10 audit fix, sleeping-npc-contradiction
+  // -audit.md's generalized rule: co-presence alone never decides an NPC
+  // DOES something — and eating dinner is a doing).
+  const present = getPresentNpcIds(gameState.npcs, roomId).filter(id => !npcIsAsleep(gameState.npcs[id]));
   const committedIds = new Set(
     activeMealCommitmentsInRoom(gameState, roomId).flatMap(c => c.acceptedIds || [])
   );

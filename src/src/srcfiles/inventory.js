@@ -115,7 +115,7 @@ function filterStacks(stacks, query) {
   return (stacks || []).filter(s => {
     const def = stackDef(s);
     const label = (def.id === '_unknown' ? s?.meta?.origName : def.label) || '';
-    const alias = s?.meta?.origName || '';
+    const alias = s?.meta?.origName || s?.meta?.title || '';
     return label.toLowerCase().includes(q)
       || alias.toLowerCase().includes(q)
       || (def.nouns || []).some(n => n.toLowerCase().includes(q));
@@ -427,7 +427,9 @@ function describeStack(stack, ctx = {}) {
     : (stack?.name && !stack?.defId ? stack.name
       : (plate?.label
         ? plate.label
-        : (def.id === '_unknown' ? (stack?.meta?.origName || def.label) : def.label)));
+        : (stack?.meta?.title
+          ? `${def.label}: ${stack.meta.title}`   // a titled instance (Phase 7's player_art)
+          : (def.id === '_unknown' ? (stack?.meta?.origName || def.label) : def.label))));
   const freshness = freshnessState(stack, day, containerDef);
   // Food-overhaul Phase 1 (D17/D29): the frozen/thawing states change what
   // the freshness line should say — a frozen stack isn't "aging here", and

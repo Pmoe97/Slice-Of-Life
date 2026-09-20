@@ -36,9 +36,32 @@ function pickEvidenceObject(roomObjects, rng) {
 // walked in, not who the next tick happens to move.
 function resolveRoomEntryStealth(gameState, roomId) {
   const ownerId = roomOwnerId(roomId, gameState.npcs);
+
+  // Knock-and-consent (bug report 2026-09-13): a knock's "come in!" used to
+  // mean nothing — this function unconditionally treated every entry as a
+  // boundary violation, so an invited entry and a barge-in were punished
+  // identically. resolveKnock (below) writes a ONE-SHOT grant on its
+  // 'invite' outcome; this is consumed here, by the very next call to this
+  // function regardless of which room it turns out to be — "come in right
+  // now," not a standing pass — which is why this runs before the early
+  // returns below: a detour through a public room still burns it. `invited`
+  // is deliberately a SEPARATE field from `witnessed`, not a reuse of it:
+  // `witnessed` alone drives both the grievance write below and doMove's
+  // "looks up" narration, so folding an invited entry into `witnessed` would
+  // either silently re-file the grievance or suppress the (still true)
+  // narration.
+  const invite = gameState.player.flags && gameState.player.flags._invitedInto;
+  const invited = !!(invite && invite.roomId === roomId && invite.npcId === ownerId);
+  if (invite) delete gameState.player.flags._invitedInto;
+
   if (!ownerId || ownerId === 'player') return { crossed: false };
   const owner = gameState.npcs[ownerId];
   if (!owner || owner.residency.status === 'former') return { crossed: false };
+
+  if (invited) {
+    const stillPresentAndAwake = getPresentNpcIds(gameState.npcs, roomId).includes(ownerId) && !npcIsAsleep(owner);
+    return { crossed: true, witnessed: false, invited: stillPresentAndAwake, applied: [] };
+  }
 
   const category = findBoundaryCategory(owner.bible.boundary);
   const mult = category === 'room_access' ? STEALTH_TUNING.matchedBoundaryMultiplier : 1;
@@ -47,8 +70,13 @@ function resolveRoomEntryStealth(gameState, roomId) {
   const effCtx = buildEffectContext(gameState, [], presentIds, roomObjects, gameState.player.inventory || []);
   const lines = [];
 
-  if (presentIds.includes(ownerId)) {
-    // Direct witness — owner is home right now, no roll needed.
+  if (presentIds.includes(ownerId) && !npcIsAsleep(owner)) {
+    // Direct witness — owner is home AND awake right now, no roll needed.
+    // An asleep owner falls through to the sneak branch below (2026-09-10
+    // audit fix — sleeping-npc-contradiction-audit.md item 2): co-presence
+    // alone used to count as being seen, so walking into a sleeping owner's
+    // room took the certain-witness branch instead of the much cheaper
+    // sneak-and-maybe-leave-evidence one that actually applies.
     lines.push(`WITNESS ${ownerId} player certain`);
     lines.push(`ADJUST_SUSPICION ${ownerId} boundary_violation +${(STEALTH_TUNING.witnessedSuspicionDelta * mult).toFixed(2)}`);
     lines.push(`REL_DELTA ${ownerId} tension +${STEALTH_TUNING.witnessedTensionDelta}`);
@@ -74,10 +102,10 @@ function resolveRoomEntryStealth(gameState, roomId) {
     }
   }
 
-  if (lines.length === 0) return { crossed: true, witnessed: false, applied: [] };
+  if (lines.length === 0) return { crossed: true, witnessed: false, invited: false, applied: [] };
   const effects = lines.map(l => parseEffectDSL(l)[0]).filter(Boolean);
   const result = applyEffects(effects, effCtx);
-  const witnessed = presentIds.includes(ownerId);
+  const witnessed = presentIds.includes(ownerId) && !npcIsAsleep(owner);
   // Phase 7 (D12) — a DIRECT witness is a certain transgression, worth a
   // grievance ask_apologize can later target (asks.js). The sneak-caught
   // branch above is deliberately excluded: it's evidence/suspicion, not a
@@ -90,7 +118,85 @@ function resolveRoomEntryStealth(gameState, roomId) {
       STEALTH_TUNING.witnessedGrievanceSeverity, gameState.meta.clock.day,
     );
   }
-  return { crossed: true, witnessed, result };
+  return { crossed: true, witnessed, invited: false, result };
+}
+
+// --- Knocking (bug report 2026-09-13, knock-and-consent): the deterministic
+// decision behind a knock. Same trusted-producer tier as the rest of this
+// file (file header) — writes gameState.player.flags._invitedInto directly
+// on an 'invite' outcome, the same direct-state-write precedent asks.js's
+// $AskForSpace leaf already uses for npc.flags._boundaryRules (its own
+// comment explains why: the grant can't ride the effect DSL, which only
+// carries string/boolean values, not a {roomId, npcId} pair). Called by
+// UI's doKnock, which owns the narration/LLM-voicing and time cost — this
+// function only decides.
+function resolveKnock(gameState, roomId) {
+  const ownerId = roomOwnerId(roomId, gameState.npcs);
+  if (!ownerId || ownerId === 'player') {
+    return { ok: true, outcome: 'no_answer', reason: 'floor_no_owner', ownerId: null, roomId, score: null };
+  }
+  const owner = gameState.npcs[ownerId];
+  if (!owner || owner.residency.status === 'former' || owner.location !== roomId) {
+    return { ok: true, outcome: 'no_answer', reason: 'floor_absent', ownerId, roomId, score: null };
+  }
+
+  // Shared hard floors: asleep, cold-shoulder, actively-refusing, hostile,
+  // stranger (willingness.js — the same pre-gate ASK_BOUNDARY and the
+  // affection ladder already run before scoring anything).
+  const floors = willingnessFloorReasons(gameState, owner, 'player', { location: roomId, npcId: ownerId });
+  if (floors.length > 0) {
+    return { ok: true, outcome: 'no_answer', reason: `floor_${floors[0]}`, ownerId, roomId, score: null };
+  }
+
+  // Door-specific unavailability willingnessFloorReasons doesn't cover.
+  // 'masturbating'/'masturbating in bed' is a plain npc.activity string (the
+  // masturbate DRIVE_DEF's activityOverride) — same field doKnock already
+  // switched on for sleeping/napping/showering; no NPC-vulnerable-state
+  // helper exists or is needed (AfterHours' vulnerable-state machinery is
+  // player-only).
+  const activity = (owner.activity || '').toLowerCase();
+  if (KNOCK_HARD_FLOOR_ACTIVITIES.includes(activity)) {
+    const reason = activity.startsWith('masturbat') ? 'masturbating' : activity;
+    return { ok: true, outcome: 'no_answer', reason: `floor_${reason}`, ownerId, roomId, score: null };
+  }
+
+  const day = gameState.meta.clock.day;
+  const tick = getTickIndex(gameState.meta.clock.minutes);
+  const rng = seededRng(gameState.meta.seed, `knock_${ownerId}_${day}_${tick}_${roomId}`);
+  const score = knockReceptivityScore(gameState, owner, ownerId, roomId, rng);
+
+  const K = KNOCK_TUNING;
+  const outcome = score < K.hallwayThreshold ? 'no_answer' : score < K.inviteThreshold ? 'hallway' : 'invite';
+  if (outcome === 'invite') {
+    gameState.player.flags = gameState.player.flags || {};
+    gameState.player.flags._invitedInto = { roomId, npcId: ownerId };
+  }
+  return { ok: true, outcome, reason: outcome === 'no_answer' ? 'unwilling' : outcome, ownerId, roomId, score };
+}
+
+// Mirrors boundaryReceptivityScore's shape (asks.js: trust − tension×weight +
+// mood×weight − ladderPenalty + noise) deliberately, not willingness()'s
+// intimacy terms — a knock is a social/trust question, not a consent-to-
+// intimacy one, so someone with zero desire for the player should still be
+// able to invite them in for an ordinary reason.
+function knockReceptivityScore(gameState, owner, ownerId, roomId, rng) {
+  const rel = owner.relPlayer || {};
+  const mood = typeof owner.mood === 'number' ? owner.mood : 0;
+  const K = KNOCK_TUNING;
+  const phaseIdx = Math.max(0, PHASE_ORDER.indexOf(rel.conversationPhase || 'early'));
+  const phaseTerm = PHASE_ORDER.length > 1 ? phaseIdx / (PHASE_ORDER.length - 1) : 0;
+  // Soft signal only, never a floor: no persistent "NPC mid-conversation
+  // with a third party" state exists anywhere in gameState (the thing that
+  // would know is currentSceneState, a UI-module-local variable this pure
+  // function can't see) — mere co-presence of another resident/visitor is
+  // the best available proxy for "they've got company right now."
+  const companyPenalty = getPresentNpcIds(gameState.npcs, roomId).some((id) => id !== ownerId) ? K.companyPenalty : 0;
+  const score = (rel.trust || 0)
+    - (rel.tension || 0) * K.tensionPenaltyWeight
+    + mood * K.moodWeight
+    + phaseTerm * K.phaseWeight
+    - companyPenalty;
+  return score + (rng() - 0.5) * 2 * K.acceptNoiseRange;
 }
 
 // --- Peeping (P7): observe an NPC in a private state from outside their
@@ -432,7 +538,9 @@ function resolveLaundrySnoop(gameState) {
   const desc = LAUNDRY_SNOOP_DESC[descKey].replace('{name}', owner.bible.name || 'Someone');
 
   const presentIds = getPresentNpcIds(gameState.npcs, roomId);
-  const witnessed = presentIds.includes(ownerId);
+  // A sleeping owner in the laundry room doesn't witness the search
+  // (2026-09-10 audit fix, same hole as resolveRoomEntryStealth above).
+  const witnessed = presentIds.includes(ownerId) && !npcIsAsleep(owner);
   const effCtx = buildEffectContext(gameState, [ownerId], presentIds, roomObjects, gameState.player.inventory || []);
   const lines = [`ADJUST_NEED player mood +${LAUNDRY_SNOOP_TUNING.moodGain}`];
 

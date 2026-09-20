@@ -748,6 +748,19 @@ check('dev/designer.html carries every shape the game knows',
       + ' — run `node src/src/dev/sync-designer.js`');
 check('the studio mirrors the same gate rule as the game',
       /function gatePasses/.test(designerSrc) && /minTier/.test(designerSrc) && /maxTier/.test(designerSrc));
+// Phase 17 (D55): normalizePlacement/placementFitsRoom are shared
+// byte-for-byte (dev/sync-designer.js injects the LIVE function's
+// .toString() between markers) — this is what "extract, don't duplicate"
+// cashes out to for a standalone HTML tool with no module system, and this
+// check is what makes a stale hand-edit or a forgotten sync fail loudly.
+const liveNormalize = api('normalizePlacement.toString()');
+const livePlacementFits = api('placementFitsRoom.toString()');
+check('dev/designer.html\'s normalizePlacement matches the game byte-for-byte',
+      designerSrc.includes(liveNormalize),
+      'run `node src/src/dev/sync-designer.js`');
+check('dev/designer.html\'s placementFitsRoom matches the game byte-for-byte',
+      designerSrc.includes(livePlacementFits),
+      'run `node src/src/dev/sync-designer.js`');
 
 console.log(`\n${'='.repeat(46)}\n  ${pass} passed, ${fail} failed\n${'='.repeat(46)}`);
 process.exit(fail > 0 ? 1 : 0);

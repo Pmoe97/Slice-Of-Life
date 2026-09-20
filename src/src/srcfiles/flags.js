@@ -69,7 +69,12 @@ function resolveHouseRuleViolations(gameState, event) {
     .map(rec => HOUSE_RULE_DEFS[rec.id])
     .filter(def => def && houseRuleConditionMet(def.condition, event));
   if (matched.length === 0) return [];
-  const presentIds = getPresentNpcIds(gameState.npcs, event.roomId).filter(id => id !== event.actorId);
+  // A sleeping resident doesn't witness the violation (2026-09-10 audit fix,
+  // sleeping-npc-contradiction-audit.md item 3 — the witness set used to
+  // include her regardless, so she'd react to and later gossip about
+  // something she slept through).
+  const presentIds = getPresentNpcIds(gameState.npcs, event.roomId)
+    .filter(id => id !== event.actorId && !npcIsAsleep(gameState.npcs[id]));
   if (presentIds.length === 0) return [];
   const out = [];
   for (const npcId of presentIds) {
@@ -184,5 +189,72 @@ function applyBoundaryRuleViolation(gameState, event, violation) {
 function checkBoundaryRules(gameState, event) {
   const violation = resolveBoundaryRuleViolation(gameState, event);
   return applyBoundaryRuleViolation(gameState, event, violation);
+}
+
+// --- Player-bound boundaries (aspirations-and-creative-careers Phase 13, D45) --
+// The mirror of _boundaryRules: a line an NPC drew for the PLAYER
+// (npc.flags._playerBoundaries, written by asks.js's $SubscriptionTalk),
+// matched against the player's act, applied only when THAT NPC learns of
+// the crossing — through NOTICE (the creator who knows the handle) or by
+// gossip (maybeBoundaryUponFact, wired beside maybeJealousUponFact). The
+// normal boundary-violation path: tension through REL_DELTA, a memory fact,
+// and — since someone else broke their word to them — a grievance an
+// apology can answer. Never relationships.js's infidelity deltas. Deduped
+// per subject (a subscription learned twice is one crossing).
+
+// PURE — does the player's act cross a line this NPC drew?
+function resolvePlayerBoundaryViolation(gameState, npcId, event) {
+  const npc = gameState.npcs?.[npcId];
+  const active = (npc && npc.flags && npc.flags._playerBoundaries) || [];
+  if (active.length === 0) return null;
+  const matched = active
+    .map(rec => BOUNDARY_RULE_DEFS[rec.id])
+    .find(def => def && def.playerBound && houseRuleConditionMet(def.condition, event));
+  if (!matched) return null;
+  const reacted = (npc.flags._playerBoundaryReacted || []);
+  if (event.subjectKey && reacted.includes(event.subjectKey)) return null;
+  const careWeight = ruleCareWeight(npc);
+  if (careWeight < FLAGS_TUNING.minCareToReact) return null;
+  return { npcId, rule: matched, careWeight, severity: ruleReactionSeverity(npc) };
+}
+
+// MUTATES — the reaction. Returns { applied, violation } (violation null
+// when nothing crossed).
+function applyPlayerBoundaryViolation(gameState, event, violation) {
+  if (!violation) return { applied: [], violation: null };
+  const npc = gameState.npcs[violation.npcId];
+  if (!npc) return { applied: [], violation: null };
+  const strength = violation.careWeight * FLAGS_TUNING.reactionCareWeight + violation.severity * FLAGS_TUNING.reactionSeverityWeight;
+  const magnitude = violation.rule.weight * strength;
+  const line = `REL_DELTA ${violation.npcId} tension +${(FLAGS_TUNING.playerBoundaryTensionAtFullStrength * magnitude).toFixed(3)}`;
+  const effCtx = buildEffectContext(gameState, [violation.npcId], [violation.npcId], {}, []);
+  const result = applyEffects([parseEffectDSL(line)[0]], effCtx);
+  const day = gameState.meta.clock.day;
+  const text = `The player agreed to "${violation.rule.label}" and then crossed it anyway.`;
+  let next = addMemoryFact(gameState.npcs[violation.npcId], { text, day, importance: MEMORY_IMPORTANCE.significant, category: 'social', emotionalTag: 'grievance' });
+  next = addGrievance(next, text, FLAGS_TUNING.playerBoundaryGrievanceSeverity * Math.max(0.5, strength), day);
+  if (event.subjectKey) next = { ...next, flags: { ...(next.flags || {}), _playerBoundaryReacted: [...((next.flags && next.flags._playerBoundaryReacted) || []), event.subjectKey] } };
+  gameState.npcs[violation.npcId] = next;
+  return { applied: result.applied, violation };
+}
+
+function checkPlayerBoundary(gameState, npcId, event) {
+  const violation = resolvePlayerBoundaryViolation(gameState, npcId, event);
+  return applyPlayerBoundaryViolation(gameState, event, violation);
+}
+
+// The gossip leg: a `subscription` opinion fact reaching an NPC who drew
+// the line — learning IS the crossing reaching them. Same call shape as
+// maybeJealousUponFact so the two sit side by side at the transmission
+// sites; returns the fields the caller must merge (relPlayer, flags,
+// memory) or null.
+function maybeBoundaryUponFact(gameState, receiverId, fact) {
+  if (!fact || fact.kind !== 'opinion' || !fact.subject || fact.subject.kind !== 'subscription') return null;
+  const [creatorId, tier] = String(fact.subject.ref || '').split(':');
+  if (tier !== 'private') return null;
+  const r = checkPlayerBoundary(gameState, receiverId, { act: 'subscribe_private', creatorId, subjectKey: fact.subject.key || `subscription:${fact.subject.ref}` });
+  if (!r.violation) return null;
+  const npc = gameState.npcs[receiverId];
+  return { relPlayer: npc.relPlayer, flags: npc.flags, memory: npc.memory };
 }
 // ===== /SECTION: FLAGS =====

@@ -218,6 +218,13 @@ const ICONS = {
   // Dream Engine Phase 8: Dream Diary app — a crescent moon with one small
   // star, for the app icon/tile (the key must exist or the tile renders
   // blank).
+  // aspirations-and-creative-careers Phase 14 (D47): Compass — a ring with
+  // a needle. The key must exist or the tile renders blank (the documented
+  // `upgrades` landmine above).
+  compass: () => svgWrap(`
+    <circle cx="12" cy="12" r="9"/>
+    <path d="M15.5 8.5l-2.2 5.3-5.3 2.2 2.2-5.3 5.3-2.2Z" fill="currentColor" stroke="none"/>
+  `),
   dreams: () => svgWrap(`
     <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/>
     <path d="M12 4l1.4 3.9L17.3 9.3l-3.9 1.4L12 14.6l-1.4-3.9L6.7 9.3l3.9-1.4L12 4Z"/>
@@ -248,6 +255,18 @@ const ICONS = {
   social_feed: () => svgWrap(`
     <path d="M12 20.5s-7.5-4.6-9.7-9A5 5 0 0 1 12 6.5a5 5 0 0 1 9.7 5c-2.2 4.4-9.7 9-9.7 9Z"/>
     <line x1="7" y1="3.2" x2="9" y2="3.2"/>
+  `),
+  // Patch Notes (2026-09-10): a folded-corner page (distinct from Codex's
+  // plain-rectangle notebook and Recipes' two-page book) with a small
+  // sparkle badge at the fold — "what's new," the same badge language real
+  // OS update icons use. The key must exist or the tile renders blank (the
+  // documented `upgrades` landmine above) — this app has a real one now.
+  patchnotes: () => svgWrap(`
+    <path d="M7 3h7l4 4v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/>
+    <path d="M14 3v4h4"/>
+    <line x1="9" y1="12" x2="15" y2="12"/>
+    <line x1="9" y1="15.5" x2="13" y2="15.5"/>
+    <path d="M19 3l.6 1.4L21 5l-1.4.6L19 7l-.6-1.4L17 5l1.4-.6Z" fill="currentColor" stroke="none"/>
   `),
 };
 

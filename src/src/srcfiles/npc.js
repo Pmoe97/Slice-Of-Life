@@ -897,7 +897,13 @@ function factRecency(f, nowDay) {
 
 // D10 — emotional weight is a config lookup keyed by the fact's tag. No
 // free-floating weight written by the model; unknown tags read the default.
+// Aspirations & Creative Careers Phase 3: an opinion fact (NOTICE's
+// noticeSubject) carries no tag — its weight is |valence| through
+// opinionRaiseWeight (notice.js), so a strong opinion is worth raising like
+// a grievance and a lukewarm one like a domestic detail. Guarded on the
+// function existing: notice.js loads after this file in both lists.
 function factEmotionalWeight(f) {
+  if (f && f.kind === 'opinion' && typeof opinionRaiseWeight === 'function') return opinionRaiseWeight(f);
   const tag = (f && f.emotionalTag) || '';
   return EMOTIONAL_WEIGHTS[tag] ?? EMOTIONAL_WEIGHTS.default;
 }
@@ -1039,6 +1045,15 @@ function receiveTransmittedFact(receiver, raised, opts) {
     // party when the fact reaches them through gossip. Copied verbatim —
     // never regenerated, so a told_by hop can't corrupt who did what to whom.
     ...(raised.cheating ? { cheating: raised.cheating } : {}),
+    // Aspirations & Creative Careers Phase 3 (D11): an opinion fact keeps its
+    // kind, subject ref and valence across a hop, verbatim — the receiver
+    // holds "what A thinks" at hop-attenuated confidence, and NOTICE's
+    // holdsOpinionOn / a later phase's recognition roll key on subject.key.
+    ...(raised.kind === 'opinion' ? { kind: 'opinion', subject: raised.subject, valence: raised.valence } : {}),
+    // Aspirations & Creative Careers Phase 13 (D43): an identity_link keeps
+    // its structure across a hop — the receiver now "knows" too, at
+    // hop-attenuated confidence; holdsIdentityLink reads it either way.
+    ...(raised.kind === 'identity_link' ? { kind: 'identity_link', handle: raised.handle, who: raised.who, source: raised.source } : {}),
   });
   return addMemoryFact(receiver, record);
 }
@@ -1328,7 +1343,11 @@ function advanceColdShoulderForDay(npc, day, rng) {
   if (severity >= COLD_SHOULDER.moveOutSeverity && typeof rec.day === 'number'
       && day - rec.day >= COLD_SHOULDER.moveOutEarliestDay) {
     counter += 1;
-    const roll = typeof rng === 'function' ? rng() : 0;   // no rng → never fires
+    // 2026-09-10 audit fix: this comment always said "no rng -> never fires"
+    // but defaulted to 0, and 0 < any positive chance is true — the roll
+    // always SUCCEEDED with no rng, the exact opposite of the intent. 1 can
+    // never beat a chance that lives in [0,1), so it now actually never fires.
+    const roll = typeof rng === 'function' ? rng() : 1;   // no rng → never fires
     if (roll < COLD_SHOULDER.moveOutChancePerDay) movedOut = true;
   } else {
     counter = 0;
@@ -1562,7 +1581,13 @@ function resolveSpeakerIds(dialogue, activeNpcsContext) {
   for (const d of dialogue || []) {
     const match = (activeNpcsContext || []).find(n => n.id === d.speaker
       || (typeof n.name === 'string' && n.name.toLowerCase() === String(d.speaker).toLowerCase()));
-    if (match) ids.push(match.id);
+    // Last line of defense (2026-09-10 audit fix): the AMBIENT block already
+    // tells the model a sleeper is "mention in narration only", but a model
+    // can still hallucinate dialogue for them. Refuse to attribute or
+    // promote it — npcIsAsleep reads the same `.activity` field the ambient
+    // context entry carries. sleeping-npc-contradiction-audit.md flagged
+    // this exact gap as worth closing once the ambient routing landed.
+    if (match && !npcIsAsleep(match)) ids.push(match.id);
   }
   return ids;
 }
@@ -2170,6 +2195,9 @@ async function applyProposal(proposal, context, gameState, playerAction, opts = 
             // second telling of the same betrayal does not stack).
             if (f.category === INFIDELITY.factCategory) {
               const jealous = maybeJealousUponFact(gameState, listenerCtx.id, f);
+              // aspirations-and-creative-careers Phase 13 (D45): the overheard leg
+              // of the same boundary hook; it writes the live record itself.
+              if (typeof maybeBoundaryUponFact === 'function') maybeBoundaryUponFact(gameState, listenerCtx.id, f);
               if (jealous) gameState.npcs[listenerCtx.id] = jealous;
             }
           }
@@ -2581,6 +2609,11 @@ function npcClothingForContext(npc, block, activity, currentClothing, rng) {
     if (clothing === 'nude') return 'nude';
     return npcSwimsNude(npc, rng) ? 'nude' : 'dressed';
   }
+  // Bug report (2026-09-20): the sauna drive (config.js) is new — self.sauna
+  // is a towel-only act for the PLAYER, ungated by deviancy ("a towel-only
+  // act, not a locked-room one" — defs.actions.js), so the NPC side is the
+  // same unconditional 'undressed', not a second deviancy roll like swim's.
+  if (activity === 'relaxing in the sauna') return 'undressed';
   if (clothing === 'nude') return 'dressed';
   return clothing;
 }

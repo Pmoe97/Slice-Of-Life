@@ -712,7 +712,13 @@ function mealJoinEligible(gameState, npcId, roomId) {
   if (typeof coldShoulderSuppressesOvertures === 'function' && coldShoulderSuppressesOvertures(npc)) {
     return { eligible: false, reason: 'cold_shoulder' };
   }
-  // Asleep, at work, or commuting — probed through resolveScheduleActivity
+  // LIVE state first (2026-09-10 audit fix, sleeping-npc-contradiction-audit.md
+  // item 4): npcIsAsleep reads npc.activity directly, catching off-schedule
+  // sleep (a nap, sleep_recover, a bed verb) the schedule block below can't
+  // see. Both checks stay — this answers "is she conscious right now", the
+  // block answers "will she be available later" (a remote-working npc, say).
+  if (npcIsAsleep(npc)) return { eligible: false, reason: 'asleep' };
+  // At work, or commuting — probed through resolveScheduleActivity
   // against the CURRENT clock, exactly the way respondToCommitment probes the
   // proposed slot, and refused on the same `busyBlocks` list. (`npc.activity`
   // is a display string like 'at work', not a block id, so it is the wrong

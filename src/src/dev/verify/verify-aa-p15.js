@@ -267,6 +267,10 @@ const playerPost = J(`(() => {
   const ids = __ids(g);
   for (const id of ids) __setAffinity(g, id, 'player', {}); // ensures relPlayer path is exercised, neutral axis
   g.npcs[ids[0]].relPlayer = { ...(g.npcs[ids[0]].relPlayer || {}), affection: 1, trust: 1, tension: 0 };
+  // aspirations-and-creative-careers Phase 9 (D30): posting needs a handle
+  // now — the platform is pseudonymous from the first post. Claim one the
+  // way the feed's first-open prompt does; the verbs under test are unchanged.
+  if (typeof setChatterHandle === 'function') setChatterHandle(g, 'tester');
   const before = (g.player.moodEvents || []).length;
   const r = postChatterAsPlayer(g, '  hello apartment  ', 5);
   const empty = postChatterAsPlayer(g, '   ', 5);

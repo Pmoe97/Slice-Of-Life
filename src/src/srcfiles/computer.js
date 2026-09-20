@@ -34,10 +34,14 @@ function defaultComputerState() {
     apps: {
       // Phase 2 gig board: replaces the old single-job `work` shape. `board`
       // is the currently-available gigs (regenerated on day rollover);
-      // `accepted` is the player's in-progress work; `reputation` is 0-100
-      // gating which gigs appear. `lastRefreshDay` guards idempotent
+      // `accepted` is the player's in-progress work; `reputation` is a
+      // PER-CATEGORY map of 0-100 scores (aspirations-and-creative-careers
+      // Phase 2, D14 — keys are GIG_CATEGORY_IDS; a save from when this was
+      // a single number is folded by foldGigReputation, from both the
+      // world 5->6 migration and normalizeComputerState) gating which gigs
+      // appear in each category. `lastRefreshDay` guards idempotent
       // same-day generation (same pattern as generateApplicantsForDay).
-      gigs: { board: [], accepted: [], reputation: 0, lastRefreshDay: 0 },
+      gigs: { board: [], accepted: [], reputation: defaultGigReputation(), lastRefreshDay: 0 },
       shop: { cart: [], wishlist: [] },
       // Sprite Studio (avatars-and-sprite-studio Phase 4). Navigation state
       // only — every asset lives in kv.sprites or the image LRU, never here,
@@ -213,7 +217,10 @@ function defaultComputerState() {
       // watermark rather than an equality guard. `nextPostId` is a monotonic
       // counter independent of `posts.length` so a pruned-away id is never
       // reissued to a new post.
-      social_feed: { posts: [], lastGeneratedDay: 0, nextPostId: 1 },
+      // Aspirations & Creative Careers Phase 9 (D28/D30/D58): `profile` is
+      // the player's platform record — platform.js's defaultChatterProfile;
+      // ensureChatterProfile lazily backfills it on an older save.
+      social_feed: { posts: [], lastGeneratedDay: 0, nextPostId: 1, profile: (typeof defaultChatterProfile === 'function') ? defaultChatterProfile() : null },
     },
   };
 }
@@ -278,6 +285,12 @@ function normalizeComputerState(raw) {
           if (!merged[appId]) merged[appId] = raw.apps[appId];
         }
       }
+      // The per-app shallow merge above keeps a saved scalar `reputation`
+      // as-is; the world 5->6 migration is the on-disk fix, and this is the
+      // in-memory one (D58: lazy default AND migration) for a state that
+      // never went through kv — a hand-built harness state, an import
+      // whose migration chain is still pending. Same single fold function.
+      merged.gigs = normalizeGigsAppState(merged.gigs);
       return merged;
     })(),
   };
@@ -463,12 +476,112 @@ function computeFocusMultiplier(gameState, device = 'computer') {
   return focus;
 }
 
+// --- Per-category reputation (aspirations-and-creative-careers Phase 2,
+// D14). gigs.reputation is { [GIG_CATEGORY_IDS[i]]: 0..100 }. Every rep
+// reader below goes through gigCategoryRep; every writer through
+// bumpGigCategoryRep; the scalar-era fold lives in ONE function
+// (foldGigReputation) that both the world 5->6 migration (state.js) and
+// normalizeComputerState call. ---
+
+// A fresh map: every category at 0. Built from GIG_CATEGORY_IDS so a
+// category added to the defs table is a rep key without a second edit.
+function defaultGigReputation() {
+  return Object.fromEntries(GIG_CATEGORY_IDS.map(id => [id, 0]));
+}
+
+// Fold whatever a save holds into the current map shape. A number is the
+// pre-Phase-2 scalar — it was only ever earned on `tech` gigs (every
+// template gated on tech), so it becomes the tech score with zeros
+// elsewhere. An object is backfilled with any category it is missing and
+// stripped of keys no category owns (no field without a reader). Anything
+// else is a fresh map. Pure; safe to call on an already-folded map.
+function foldGigReputation(raw) {
+  const out = defaultGigReputation();
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    out.tech = clamp(Math.round(raw), 0, GIG_REP_MAX);
+    return out;
+  }
+  if (raw && typeof raw === 'object') {
+    for (const id of GIG_CATEGORY_IDS) {
+      const v = raw[id];
+      if (typeof v === 'number' && Number.isFinite(v)) out[id] = clamp(Math.round(v), 0, GIG_REP_MAX);
+    }
+  }
+  return out;
+}
+
+// The category a gig instance's reputation moves. Read from its template
+// when the template still exists (a pre-Phase-2 accepted gig carries the
+// old cosmetic category — 'web'/'dev' — and must not fall into a rep key
+// nothing reads); an unknown category is `tech`, the only category the
+// scalar era ever paid into.
+function gigRepCategory(gig) {
+  const tplCat = GIG_TEMPLATES[gig.templateId]?.category;
+  if (tplCat && GIG_CATEGORY_BY_ID[tplCat]) return tplCat;
+  if (gig.category && GIG_CATEGORY_BY_ID[gig.category]) return gig.category;
+  return 'tech';
+}
+
+// The gigs app state as the rest of this file expects it: reputation
+// folded to the map, and every board/accepted instance's `category`
+// re-stamped from its template so an old 'web'/'dev' instance groups and
+// pays into the right category. Pure — returns a new object; the input's
+// arrays are copied, not mutated.
+function normalizeGigsAppState(gigs) {
+  const src = (gigs && typeof gigs === 'object') ? gigs : {};
+  const restamp = (list) => (Array.isArray(list) ? list : []).map(g => (
+    (g && typeof g === 'object') ? { ...g, category: gigRepCategory(g) } : g
+  ));
+  return {
+    ...src,
+    board: restamp(src.board),
+    accepted: restamp(src.accepted),
+    reputation: foldGigReputation(src.reputation),
+    lastRefreshDay: src.lastRefreshDay || 0,
+  };
+}
+
+// The display label for a category id ('tech' → 'Tech'); the id itself
+// for anything GIG_CATEGORIES doesn't own, so a log line never reads
+// "undefined reputation".
+function gigCategoryLabel(category) {
+  return (GIG_CATEGORY_BY_ID[category] && GIG_CATEGORY_BY_ID[category].label) || String(category || '');
+}
+
+// One category's current rep, 0 for a category the map lacks.
+function gigCategoryRep(gigs, category) {
+  const rep = gigs && gigs.reputation;
+  const v = rep && typeof rep === 'object' ? rep[category] : 0;
+  return (typeof v === 'number' && Number.isFinite(v)) ? v : 0;
+}
+
+// Move one category's rep by `delta`, clamped. Returns { before, after,
+// tierUp } — tierUp is { from, to, category } when the tier name changed
+// upward, else null; the callers turn it into the promotion celebration.
+function bumpGigCategoryRep(gigs, category, delta) {
+  if (!gigs.reputation || typeof gigs.reputation !== 'object') gigs.reputation = foldGigReputation(gigs.reputation);
+  const before = gigCategoryRep(gigs, category);
+  const after = clamp(before + delta, 0, GIG_REP_MAX);
+  gigs.reputation[category] = after;
+  const fromTier = gigTier(before), toTier = gigTier(after);
+  const tierUp = (GIG_REPUTATION_TIERS.indexOf(toTier) > GIG_REPUTATION_TIERS.indexOf(fromTier))
+    ? { from: fromTier.name, to: toTier.name, category }
+    : null;
+  return { before, after, tierUp };
+}
+
 // Reputation tier for a given 0-100 rep score — the lowest tier whose
-// floor the rep meets. Gates which gigs appear and how they pay.
+// floor the rep meets. Gates which gigs appear and how they pay. Takes a
+// single category's score (gigCategoryRep), never the map.
 function gigTier(rep) {
   let tier = GIG_REPUTATION_TIERS[0];
   for (const t of GIG_REPUTATION_TIERS) if (rep >= t.floor) tier = t;
   return tier;
+}
+
+// The tier's index (0..4) — what a template's declared `tier` compares to.
+function gigTierIndex(rep) {
+  return GIG_REPUTATION_TIERS.indexOf(gigTier(rep));
 }
 
 // Pay multiplier for a gig, interpolated within its tier from the tier's
@@ -491,24 +604,20 @@ function gigRepScale(gig) {
   return clamp(gig.blocks / GIG_REP_SIZE_BLOCK, GIG_REP_SIZE_MIN, GIG_REP_SIZE_MAX);
 }
 
-// Which templates a player at `rep` is eligible for (skill-gated). A
-// low-skill player still sees the entry-level gigs; a high-skill player
-// sees everything. minSkill is a hard gate — a tier that's reachable but
-// for a skill the player lacks just doesn't offer that gig.
-function eligibleGigTemplates(gameState) {
-  const rep = gameState.world.computer.apps.gigs.reputation || 0;
-  const tier = gigTier(rep);
-  const tierFloor = tier.floor;
-  return Object.values(GIG_TEMPLATES).filter(t => {
-    if (skillLevel(gameState.player, t.skill) < t.minSkill) return false;
-    // A gig's "tier" is implied by its pay band — entry gigs are Novice,
-    // top gigs are Elite. Keep the board feeling coherent by only
-    // offering gigs whose payout band sits at or below the player's rep
-    // tier, so a Novice never sees the Elite infra project. The mapping
-    // is by template index over the tiers (5 templates, 5 tiers, 1:1).
-    const templateTierIdx = Object.keys(GIG_TEMPLATES).indexOf(t.id);
-    const templateFloor = GIG_REPUTATION_TIERS[templateTierIdx]?.floor ?? 0;
-    return tierFloor >= templateFloor;
+// Which templates the player is eligible for, judged per category (D15):
+// a template is offered once its declared `tier` is at or below the tier
+// the player's rep IN THAT CATEGORY has reached, and the player meets its
+// minSkill on the category's craft skill (admin gates on nothing, D16).
+// minSkill is a hard gate — a tier that's reachable but for a skill the
+// player lacks just doesn't offer that gig. Lower-tier templates stay
+// eligible at higher tiers, so an Elite board still carries small work.
+// Pass `category` to restrict to one category's templates.
+function eligibleGigTemplates(gameState, category) {
+  const gigs = gameState.world.computer.apps.gigs;
+  return GIG_TEMPLATES_LIST.filter(t => {
+    if (category && t.category !== category) return false;
+    if (t.skill && skillLevel(gameState.player, t.skill) < t.minSkill) return false;
+    return t.tier <= gigTierIndex(gigCategoryRep(gigs, t.category));
   });
 }
 
@@ -517,6 +626,13 @@ function eligibleGigTemplates(gameState) {
 // scale with reputation; refresh is probabilistic so dry spells happen
 // (the whole point of lumpy income). A day where the board stays stale
 // is a day the player either works what they have or waits.
+//
+// Since Phase 2 of the aspirations-and-creative-careers overhaul the draw
+// is PER CATEGORY: each category the player qualifies for contributes its
+// own slice, sized by that category's rep tier (boardSize) and paid at that
+// category's pay multiplier, in GIG_CATEGORIES order. The refresh roll
+// stays a single roll for the whole board (D2 — one dry spell, not six),
+// and a fresh player still sees exactly the admin slice the old board was.
 function generateGigsForDay(gameState, day) {
   const gigs = gameState.world.computer.apps.gigs;
   // Idempotent: once generated for this day, don't regenerate on a
@@ -529,36 +645,41 @@ function generateGigsForDay(gameState, day) {
   // immediate income available.
   if (day > 1 && rng() > 0.7) { gigs.lastRefreshDay = day; return; }
 
-  const rep = gigs.reputation || 0;
-  const tier = gigTier(rep);
-  const eligible = eligibleGigTemplates(gameState);
-  if (eligible.length === 0) { gigs.lastRefreshDay = day; return; }
-
-  const size = tier.boardSize[0] + Math.floor(rng() * (tier.boardSize[1] - tier.boardSize[0] + 1));
-  const payMult = gigPayMult(rep);
   const board = [];
-  for (let i = 0; i < size; i++) {
-    const tpl = eligible[Math.floor(rng() * eligible.length)];
-    const blocks = tpl.blocksRange[0] + Math.floor(rng() * (tpl.blocksRange[1] - tpl.blocksRange[0] + 1));
-    const deadlineDays = tpl.deadlineRange[0] + Math.floor(rng() * (tpl.deadlineRange[1] - tpl.deadlineRange[0] + 1));
-    const client = tpl.clientPool[Math.floor(rng() * tpl.clientPool.length)];
-    // ~20% rush gigs: shorter deadline, ~25% premium.
-    const rush = rng() < 0.2;
-    const effBlocks = rush ? Math.max(1, Math.ceil(blocks * 0.7)) : blocks;
-    const effDeadline = rush ? Math.max(2, Math.ceil(deadlineDays * 0.6)) : deadlineDays;
-    const payout = Math.round(tpl.basePayoutPerBlock * effBlocks * payMult * (rush ? 1.25 : 1));
-    board.push({
-      gigId: `gig_${day}_${i}`,
-      templateId: tpl.id,
-      label: tpl.label,
-      client,
-      category: tpl.category,
-      blocks: effBlocks,
-      deadlineDay: day + effDeadline,
-      payout,
-      rush,
-    });
+  for (const cat of GIG_CATEGORIES) {
+    const eligible = eligibleGigTemplates(gameState, cat.id);
+    if (eligible.length === 0) continue;
+    const rep = gigCategoryRep(gigs, cat.id);
+    const tier = gigTier(rep);
+    const payMult = gigPayMult(rep);
+    const size = tier.boardSize[0] + Math.floor(rng() * (tier.boardSize[1] - tier.boardSize[0] + 1));
+    for (let i = 0; i < size; i++) {
+      const tpl = eligible[Math.floor(rng() * eligible.length)];
+      const blocks = tpl.blocksRange[0] + Math.floor(rng() * (tpl.blocksRange[1] - tpl.blocksRange[0] + 1));
+      const deadlineDays = tpl.deadlineRange[0] + Math.floor(rng() * (tpl.deadlineRange[1] - tpl.deadlineRange[0] + 1));
+      const client = tpl.clientPool[Math.floor(rng() * tpl.clientPool.length)];
+      // ~20% rush gigs: shorter deadline, ~25% premium.
+      const rush = rng() < 0.2;
+      const effBlocks = rush ? Math.max(1, Math.ceil(blocks * 0.7)) : blocks;
+      const effDeadline = rush ? Math.max(2, Math.ceil(deadlineDays * 0.6)) : deadlineDays;
+      // Phase 15 (D104): the one global pay dial — see GIG_TUNING.payScale.
+      const payout = Math.max(1, Math.round(tpl.basePayoutPerBlock * effBlocks * payMult * (rush ? 1.25 : 1) * (GIG_TUNING.payScale ?? 1)));
+      board.push({
+        gigId: `gig_${day}_${board.length}`,
+        templateId: tpl.id,
+        label: tpl.label,
+        client,
+        category: tpl.category,
+        blocks: effBlocks,
+        deadlineDay: day + effDeadline,
+        payout,
+        rush,
+      });
+    }
   }
+  // No category eligible at all (only possible if every admin template
+  // were somehow gated) leaves the board as it was, same as before.
+  if (board.length === 0) { gigs.lastRefreshDay = day; return; }
   gigs.board = board;
   gigs.lastRefreshDay = day;
 }
@@ -647,20 +768,22 @@ function deliverGig(gameState, gigId) {
     taxes.reserve = (taxes.reserve || 0) + skim;
   }
   // Reputation: on-time delivery gains (more the earlier it's delivered),
-  // late delivery loses. Scaled by gig size so big gigs matter more. A
-  // rep tier promotion is a celebration — a bigger mood hit than any single
-  // gig, and returned so the UI can announce it.
+  // late delivery loses. Scaled by gig size so big gigs matter more, and
+  // moved on THIS GIG'S CATEGORY only (D14) — a writing gig never touches
+  // tech rep. A rep tier promotion is a celebration — a bigger mood hit
+  // than any single gig, and returned (with its category) so the UI can
+  // announce it.
   const sizeFactor = gigRepScale(gig);
   const daysEarly = gig.deadlineDay - gameState.meta.clock.day;
-  const repBefore = gigs.reputation || 0;
   const repDelta = late
     ? Math.round(GIG_REP_MISS * sizeFactor)
     : Math.round(GIG_REP_DELIVERY * sizeFactor + (daysEarly >= 2 ? GIG_REP_EARLY_BONUS : 0));
-  gigs.reputation = clamp((gigs.reputation || 0) + repDelta, 0, GIG_REP_MAX);
-  const tierUp = gigTier(repBefore).name !== gigTier(gigs.reputation).name
-    ? { from: gigTier(repBefore).name, to: gigTier(gigs.reputation).name }
-    : null;
+  const category = gigRepCategory(gig);
+  const { tierUp } = bumpGigCategoryRep(gigs, category, repDelta);
   gigs.accepted = gigs.accepted.filter(g => g.gigId !== gigId);
+  // aspirations-and-creative-careers Phase 14: a lifetime delivered count —
+  // read by the independence direction's milestones (defs.works.js ASP).
+  gigs.delivered = (gigs.delivered || 0) + 1;
   // Phase 6 (D13): delivering a finished gig is a dopamine hit — a mood
   // impulse scaled by the payout (a big contract feels better than a small
   // one), capped so no single delivery out-earns a good day's living.
@@ -672,7 +795,7 @@ function deliverGig(gameState, gigId) {
   if (tierUp) {
     pushMoodImpulse(gameState.player, MOOD_PAYOUTS.repTierUp, gameState.meta.clock.day);
   }
-  return { ok: true, gig, late, payout: gig.payout, repDelta, tierUp, applied: (payoutResult && payoutResult.applied) || [] };
+  return { ok: true, gig, late, payout: gig.payout, repDelta, category, tierUp, applied: (payoutResult && payoutResult.applied) || [] };
 }
 
 // Abandon a gig — a deliberate choice that costs more reputation than a
@@ -683,9 +806,10 @@ function abandonGig(gameState, gigId) {
   if (!gig) return { ok: false, reason: 'You have no such gig.' };
   const sizeFactor = gigRepScale(gig);
   const repDelta = Math.round(GIG_REP_ABANDON * sizeFactor);
-  gigs.reputation = clamp((gigs.reputation || 0) + repDelta, 0, GIG_REP_MAX);
+  const category = gigRepCategory(gig);
+  bumpGigCategoryRep(gigs, category, repDelta);
   gigs.accepted = gigs.accepted.filter(g => g.gigId !== gigId);
-  return { ok: true, gig, repDelta };
+  return { ok: true, gig, repDelta, category };
 }
 
 // Deadline check — called from UI's processDayRollover. A gig past its
@@ -716,8 +840,9 @@ function processGigDeadlinesForDay(gameState, day) {
     }
     const sizeFactor = gigRepScale(gig);
     const repDelta = Math.round(GIG_REP_MISS * sizeFactor);
-    gigs.reputation = clamp((gigs.reputation || 0) + repDelta, 0, GIG_REP_MAX);
-    results.push({ gigId: gig.gigId, label: gig.label, missed: true, partialPay, repDelta });
+    const category = gigRepCategory(gig);
+    bumpGigCategoryRep(gigs, category, repDelta);
+    results.push({ gigId: gig.gigId, label: gig.label, missed: true, partialPay, repDelta, category });
   }
   gigs.accepted = stillAccepted;
   return results;
@@ -828,11 +953,13 @@ function placeDecorItem(gameState, { defId, roomId, pos }) {
   if (!def) return { ok: false, reason: 'That is not a buyable furniture item.' };
   if (!ROOMS[roomId]) return { ok: false, reason: 'That room does not exist.' };
   if (!DESIGN_SHAPES[def.shape]) return { ok: false, reason: `No placement shape for ${def.label}.` };
-  const p = pos || {};
-  const x = Number(p.x), y = Number(p.y), w = Number(p.w), h = Number(p.h);
-  const rot = Number(p.rot) || 0;
-  if (![x, y, w, h].every(Number.isFinite)) return { ok: false, reason: 'Give it a position first.' };
-  if (w < 2 || h < 2) return { ok: false, reason: 'It needs to be big enough to stand on.' };
+  // Phase 17 (D55): normalizePlacement is the one snap+bounds choke point
+  // the Studio's live drag and this commit path both run through — a
+  // placement outside the room's own ROOM_LAYOUT rects is refused here
+  // rather than merely floor-checked on size, which is all this did before.
+  const normalized = typeof normalizePlacement === 'function' ? normalizePlacement(pos || {}, { roomId }) : pos;
+  if (!normalized) return { ok: false, reason: "That doesn't fit in the room." };
+  const { x, y, w, h, rot } = normalized;
   const owned = (gameState.player.inventory || []).find(s => s.defId === defId);
   if (!owned || owned.qty < 1) return { ok: false, reason: `You don't own a ${def.label} to place.` };
 
@@ -860,12 +987,44 @@ function placeDecorItem(gameState, { defId, roomId, pos }) {
 function moveDecorObject(gameState, objId, pos) {
   const obj = findObjectById(gameState, objId);
   if (!obj || !obj.pos) return { ok: false, reason: 'That is not a placed item.' };
-  const p = pos || {};
-  const x = Number(p.x), y = Number(p.y), w = Number(p.w), h = Number(p.h);
-  const rot = Number(p.rot) || 0;
-  if (![x, y, w, h].every(Number.isFinite)) return { ok: false, reason: 'Invalid placement.' };
-  if (w < 2 || h < 2) return { ok: false, reason: 'It needs to be big enough to stand on.' };
-  obj.pos = { x, y, w, h, rot };
+  const roomId = obj.bucket && obj.bucket.startsWith('room_') ? obj.bucket.slice(5) : null;
+  const normalized = typeof normalizePlacement === 'function' ? normalizePlacement(pos || {}, { roomId }) : pos;
+  if (!normalized) return { ok: false, reason: "That doesn't fit in the room." };
+  obj.pos = normalized;
+  return { ok: true };
+}
+
+// --- Home: arrange base furniture (Phase 17, Handoff (c) / D110) ---
+// world.roomDecorOverrides[roomId] is the ROOM_DECOR-shaped array D53
+// defined and Phase 16 read; these three are its only writers. Presence of
+// a non-empty array is what roomDesignBase treats as "the player's own
+// arrangement" — an empty array is indistinguishable from none, so
+// resetRoomArrange deletes the key outright rather than leaving `[]`.
+function startRoomArrange(gameState, roomId) {
+  if (!ROOMS[roomId]) return { ok: false, reason: 'That room does not exist.' };
+  gameState.world.roomDecorOverrides = gameState.world.roomDecorOverrides || {};
+  const existing = gameState.world.roomDecorOverrides[roomId];
+  if (Array.isArray(existing) && existing.length > 0) return { ok: true, placements: existing, already: true };
+  const snapshot = typeof roomAutoBaseCandidates === 'function' ? roomAutoBaseCandidates(gameState, roomId) : [];
+  gameState.world.roomDecorOverrides[roomId] = snapshot;
+  return { ok: true, placements: snapshot, already: false };
+}
+
+function removeRoomArrangePlacement(gameState, roomId, index) {
+  const arr = gameState.world.roomDecorOverrides && gameState.world.roomDecorOverrides[roomId];
+  if (!Array.isArray(arr) || !arr[index]) return { ok: false, reason: 'Nothing there to remove.' };
+  arr.splice(index, 1);
+  return { ok: true };
+}
+
+// Deletes the override outright (not `[]` — see the header note above), so
+// the room falls straight back to whatever ROOM_DECOR or the auto-packer
+// would otherwise draw for it.
+function resetRoomArrange(gameState, roomId) {
+  if (!gameState.world.roomDecorOverrides || !gameState.world.roomDecorOverrides[roomId]) {
+    return { ok: false, reason: 'This room has not been arranged.' };
+  }
+  delete gameState.world.roomDecorOverrides[roomId];
   return { ok: true };
 }
 
@@ -983,7 +1142,9 @@ function attendLesson(gameState, courseId) {
   // Phase 6 (D13): lesson XP routes through the single awardSkillXp site,
   // so a level-up mid-course still fires its mood impulse; each lesson
   // attended is its own small win, and finishing the course is a bigger one.
-  awardSkillXp(gameState.player, course.skillId, course.xpPerLesson, gameState.meta.clock.day);
+  // Aspirations & Creative Careers Phase 3 (D8): a level crossed at the
+  // desk is noticeable by whoever is in the room — gameState rides along.
+  awardSkillXp(gameState.player, course.skillId, course.xpPerLesson, gameState.meta.clock.day, gameState);
   pushMoodImpulse(gameState.player, MOOD_PAYOUTS.courseLesson, gameState.meta.clock.day);
 
   const completed = enrollment.progress >= course.lessons;

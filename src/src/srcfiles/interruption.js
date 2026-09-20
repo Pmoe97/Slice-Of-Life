@@ -70,7 +70,9 @@ function getEligibleNpcs(gameState) {
     if (!npc.location) return false;
     if (npc.location === playerRoom) return false;
     const { block } = resolveScheduleActivity(npc, gameState.meta.clock);
-    if (block === 'sleep') return false;
+    // npcIsAsleep catches off-schedule sleep (2026-09-10 audit fix) the
+    // block check alone can't — a nap during a 'leisure' block, say.
+    if (block === 'sleep' || npcIsAsleep(npc)) return false;
     // D13. This used to be `block === 'work' || block === 'commute'`, which
     // was right while work always meant gone. It no longer does: a remote
     // worker is home, awake, and two rooms away, so disqualifying them on the

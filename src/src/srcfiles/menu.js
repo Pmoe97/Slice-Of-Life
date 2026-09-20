@@ -371,7 +371,11 @@ function openNewGameOptions(draft) {
   // paths verbatim ('economy.needDecayScale', ...) — those rows are the
   // exact same objects Sandbox's Economy tab renders, so they carry
   // Sandbox's field paths regardless of which screen is showing them.
-  pendingNewGameOptions = { economy: { needDecayScale: 1, needDecayDisabled: false, dispositionSkew: 0, willingnessBaseline: 0, phoneBatteryScale: 1, phoneBatteryAlwaysCharged: false } };
+  pendingNewGameOptions = { economy: { needDecayScale: 1, needDecayDisabled: false, dispositionSkew: 0, willingnessBaseline: 0, phoneBatteryScale: 1, phoneBatteryAlwaysCharged: false },
+    // aspirations-and-creative-careers Phase 14 (D47): the directions, as
+    // one toggle per direction (the generic row system); startSoloGame keeps
+    // the first ASPIRATION_TUNING.maxDirections that are on.
+    aspirations: Object.fromEntries((typeof ASPIRATION_DIRECTION_IDS !== 'undefined' ? ASPIRATION_DIRECTION_IDS : []).map(id => [id, false])) };
   sbxActiveTarget = pendingNewGameOptions;
   renderNewGameOptionsUi();
   const el = document.getElementById('newgame-options-screen');
@@ -389,7 +393,22 @@ function renderNewGameOptionsUi() {
   const panes = document.getElementById('newgame-options-panes');
   if (!panes) return;
   panes.innerHTML = '';
-  renderSandboxSections(panes, GAMEPLAY_OPTIONS_SECTIONS, '⚙️');
+  renderSandboxSections(panes, [...GAMEPLAY_OPTIONS_SECTIONS, ...aspirationOptionsSections()], '⚙️');
+}
+
+// aspirations-and-creative-careers Phase 14 (D47): the intro's one extra
+// screen-section — a toggle row per direction, built at render time from
+// ASPIRATION_DIRECTIONS (defs.works.js loads after config.js, so this
+// cannot sit in GAMEPLAY_OPTIONS_SECTIONS' literal). Only New Game shows
+// it; Sandbox authors everything else and Compass holds the choice after.
+function aspirationOptionsSections() {
+  if (typeof ASPIRATION_DIRECTIONS === 'undefined') return [];
+  const on = Object.values((pendingNewGameOptions && pendingNewGameOptions.aspirations) || {}).filter(Boolean).length;
+  return [{
+    title: 'Where are you headed?',
+    desc: `Pick up to ${ASPIRATION_TUNING.maxDirections} directions. ${COMPASS_LABEL} tracks them; nothing is locked behind them, and you can change your mind any time.${on > ASPIRATION_TUNING.maxDirections ? ` (Only the first ${ASPIRATION_TUNING.maxDirections} switched on will count.)` : ''}`,
+    rows: ASPIRATION_DIRECTION_IDS.map(id => ({ id: `asp_${id}`, kind: 'toggle', field: `aspirations.${id}`, label: ASPIRATION_DIRECTIONS[id].label, desc: ASPIRATION_DIRECTIONS[id].blurb })),
+  }];
 }
 
 function doNewGameOptionsStart() {

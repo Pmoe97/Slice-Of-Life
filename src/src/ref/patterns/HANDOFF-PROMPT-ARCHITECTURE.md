@@ -127,6 +127,16 @@ blocked:
    size," a number nobody else will go measure.
 5. **Mark the plan complete** if this was the last phase, so Step 0 next time
    correctly reports it done.
+6. **If this was the last phase, also add a Patch Notes entry** (2026-09-10) —
+   `src/src/srcfiles/defs.patchnotes.js`'s `PATCH_NOTES` array, read that
+   file's own header first. This is the ONE step that fires only on whole-plan
+   completion, not every phase — a half-finished plan has nothing to announce
+   yet. Summarize the plan's real, player-visible effect in a few `changes`
+   entries (`kind: 'added'|'changed'|'fixed'`); bump `GAME_VERSION` (config.js)
+   for the entry if it hasn't already moved since the last one. Write it for
+   the player, not the next session — no file:line citations, no D-numbers,
+   no internal function names, the same register a Steam patch-notes post
+   uses.
 
 Close with the reason, which is what makes agents actually do it:
 
@@ -224,6 +234,11 @@ You should never need to fully read the whole plan document in a session.
 3. Promote any resolved open question into Locked decisions as a new D-number.
 4. <any phase-specific obligation>
 5. If this was the last phase, mark the plan's Status header complete.
+6. If this was the last phase, also add a Patch Notes entry —
+   `src/src/srcfiles/defs.patchnotes.js`'s `PATCH_NOTES` array (read that
+   file's header first). Summarize the plan's real, player-visible effect in
+   plain language, no internal identifiers; bump `GAME_VERSION` (config.js)
+   for it if the version hasn't already moved since the last entry.
 
 Do not end a session without doing this. A half-finished phase with a precise
 Handoff note is recoverable; a half-finished phase with no note is not.

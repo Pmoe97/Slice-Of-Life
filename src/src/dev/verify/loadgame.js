@@ -27,7 +27,11 @@ const ORDER = [
   // file to only one of the two is the rumination.js scar.
   'fields.js',
   'defs.world.js', 'defs.actions.js', 'defs.computer.js',
-  'defs.menu.js', 'defs.intro.js', 'defs.design.js', 'defs.dreams.js',
+  'defs.menu.js', 'defs.intro.js', 'defs.design.js', 'defs.dreams.js', 'defs.patchnotes.js',
+  // defs.works.js (aspirations-and-creative-careers-overhaul-plan.md Phase 4,
+  // D56) sits directly after defs.patchnotes.js in index.html: WORK_KINDS /
+  // WORK_TUNING, pure data. Registered in BOTH lists in the same commit.
+  'defs.works.js',
   // defs.placement.js (npc-avatar-liveliness Phase 2, D8) sits directly after
   // defs.design.js in index.html, and here for the same reason the movement
   // family does: FP_FOOTPRINTS (moved out of render.js — which is NOT in this
@@ -59,8 +63,25 @@ const ORDER = [
   'signals.js', 'meanwhile.js', 'scene.js',
   'items.js', 'inventory.js', 'effects.js', 'cooking.js', 'taste.js', 'drives.js', 'cognition.js', 'overture.js',
   'actions.js', 'intent.js',
-  'skills.js', 'stealth.js', 'time.js', 'computer.js', 'tracker.js', 'debuglog.js', 'phone.js',
+  'skills.js', 'stealth.js', 'time.js', 'computer.js',
+  // works.js (aspirations-and-creative-careers-overhaul-plan.md Phase 4,
+  // D17–D20, D56) sits between computer.js and tracker.js in index.html —
+  // it reads skills.js/computer.js/sim.js only inside function bodies, and
+  // tracker.js's trackerCatalog calls its catalogIncomeForDay at call time.
+  // Pure logic over game state, no DOM: startWork/workBlock/releaseWork/
+  // promoteWork/decayWorks/catalogIncomeForDay are all directly testable
+  // here. Registered in BOTH lists in the same commit (invariant 8).
+  'works.js',
+  'tracker.js', 'debuglog.js', 'phone.js',
   'npc.js',
+  // notice.js (aspirations-and-creative-careers-overhaul-plan.md Phase 3,
+  // D9/D56) sits directly after npc.js in index.html. The Notice & Opinion
+  // layer: noticeSubject / opinionValence / the in-room perceiver resolution
+  // through signals.js's perceiveSignals and npc.js's addMemoryFact — pure
+  // logic over game state, no DOM at load or call time, the most directly
+  // testable kind of file. Registered in BOTH lists in the same commit
+  // (invariant 8).
+  'notice.js',
   // flags.js (actions-and-activities-overhaul-plan.md Phase 3, D15) sits
   // directly after npc.js in index.html — it calls addMemoryFact/
   // MEMORY_IMPORTANCE at runtime, plus effects.js's applyEffects/
@@ -227,6 +248,18 @@ const ORDER = [
   // directly after puzzles.js here exactly as it does in index.html — real
   // position, not a divergence.
   'chatter.js',
+  // platform.js (aspirations-and-creative-careers-overhaul-plan.md Phase 9,
+  // D56) sits directly after chatter.js in index.html: the audience side
+  // of Chatter — profile/handles/blocking/visibility/the follow decision —
+  // pure logic over game state with no DOM. Registered in BOTH lists in
+  // the same commit (invariant 8).
+  'platform.js',
+  // aspirations.js (aspirations-and-creative-careers-overhaul-plan.md Phase
+  // 14, D46–D49) sits directly after platform.js in index.html: directions,
+  // live milestones (pure predicates from defs.works.js's
+  // ASPIRATION_DIRECTIONS) and the rollover completion pass. Registered in
+  // BOTH lists in the same commit (invariant 8).
+  'aspirations.js',
   // asks.js (asks-and-attachments-plan.md) sits between render.phone.js and
   // ui.js in index.html — squarely inside the render/ui block this loader
   // otherwise stops before. It was simply never added here across that

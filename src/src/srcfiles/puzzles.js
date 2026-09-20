@@ -153,7 +153,9 @@ function generatePuzzleForDay(gameState, day) {
 function grantPuzzleCompletionReward(gameState, puzzle) {
   const usedHint = Object.keys(puzzle.revealed).length > 0;
   const mult = usedHint ? PUZZLE_TUNING.hintRewardMult : 1;
-  awardSkillXp(gameState.player, PUZZLE_TUNING.skillId, PUZZLE_TUNING.xpPerComplete * mult, gameState.meta.clock.day);
+  // Aspirations & Creative Careers Phase 3 (D8): gameState rides along so a
+  // focus level crossed over a puzzle is a Notice & Opinion subject.
+  awardSkillXp(gameState.player, PUZZLE_TUNING.skillId, PUZZLE_TUNING.xpPerComplete * mult, gameState.meta.clock.day, gameState);
   pushMoodImpulse(gameState.player, MOOD_PAYOUTS.puzzleComplete * mult, gameState.meta.clock.day);
   return { usedHint };
 }

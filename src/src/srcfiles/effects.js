@@ -307,7 +307,19 @@ function applyRelDeltaEffect(p, ctx) {
   npc.relPlayer[p.axis] = clamp((npc.relPlayer[p.axis] || 0) + Number(p.delta), -1, 1);
 }
 function applySpendMoney(p, ctx) { ctx.gameState.player.money -= Number(p.amount); }
-function applyEarnMoney(p, ctx) { ctx.gameState.player.money += Number(p.amount); }
+// aspirations-and-creative-careers Phase 15 (D50): the ONE credit verb
+// also writes the income ledger (player.incomeLog, a capped ring of
+// { day, amount, reason }) that independenceIndex reads. Every producer
+// already names its reason (gig / catalog / chatter / art_sale / kitchen /
+// rent_surplus / a loan …), so the ledger costs nothing new.
+function applyEarnMoney(p, ctx) {
+  const player = ctx.gameState.player;
+  player.money += Number(p.amount);
+  if (!Array.isArray(player.incomeLog)) player.incomeLog = [];
+  player.incomeLog.push({ day: ctx.gameState.meta?.clock?.day ?? 0, amount: Number(p.amount), reason: String(p.reason || '').split(' ')[0] || 'other' });
+  const cap = (typeof ECONOMY !== 'undefined' && ECONOMY.independence) ? ECONOMY.independence.ledgerCap : 600;
+  if (player.incomeLog.length > cap) player.incomeLog.splice(0, player.incomeLog.length - cap);
+}
 function applyNpcMove(p, ctx) { const npc = ctx.gameState.npcs[p.npcId]; if (npc) npc.location = p.roomId; }
 // Actions & Activities Overhaul Phase 8 (D16): world.thermostat is lazily
 // initialised here (same convention as ui.js's doToggleHouseRule initialising
@@ -332,7 +344,10 @@ function applyNpcActivity(p, ctx) {
   if (npc) npc.activity = p.text.slice(0, EFFECT_LIMITS.npcActivityMaxLength);
 }
 function applyAddSkillXp(p, ctx) {
-  awardSkillXp(ctx.gameState.player, p.skillId, Number(p.xp), ctx.gameState.meta.clock.day);
+  // Aspirations & Creative Careers Phase 3 (D8): gameState rides along so a
+  // level crossed here — a hobby session, a tutorial site, any ADD_SKILL_XP
+  // line — is a Notice & Opinion subject an NPC in the room can perceive.
+  awardSkillXp(ctx.gameState.player, p.skillId, Number(p.xp), ctx.gameState.meta.clock.day, ctx.gameState);
 }
 function resolveFlagBag(p, ctx) {
   return p.who === 'player' ? ctx.gameState.player : ctx.gameState.npcs[p.who];
@@ -1130,6 +1145,15 @@ const EFFECT_DEFS = {
     paramShape: ['skillId', 'xp'], llm: true, implemented: true,
     validate: (p) => firstFailure(validateSkillId(p.skillId), () => validateXp(p.xp)),
     apply: applyAddSkillXp,
+  },
+  // Aspirations & Creative Careers Phase 6 (D78): the record-player hobby
+  // appends this when the player has a released track; WORKS' playOwnTrack
+  // rolls whether it comes up and, if so, notices the room. Trusted-only —
+  // the narrator never decides what is on the stereo.
+  PLAY_OWN_TRACK: {
+    paramShape: ['roomId'], llm: false, implemented: true,
+    validate: (p) => (!!p.roomId && !!ROOMS[p.roomId]) || `Unknown room: ${p.roomId}`,
+    apply: (p, ctx) => { if (typeof playOwnTrack === 'function') playOwnTrack(ctx.gameState, p.roomId); },
   },
   ADD_FLAG: {
     paramShape: ['who', 'key', 'value'], llm: true, implemented: true,

@@ -171,9 +171,10 @@ async function doGigDeliver(gigId) {
   if (!gigId) return;
   const result = deliverGig(currentGameState, gigId);
   if (!result.ok) { addLogEntry('system', result.reason); return; }
-  addLogEntry('system', `Delivered "${result.gig.label}"${result.late ? ' (late)' : ''}. +${result.payout}. Reputation ${result.repDelta >= 0 ? '+' : ''}${result.repDelta}.`);
+  const catLabel = gigCategoryLabel(result.category);
+  addLogEntry('system', `Delivered "${result.gig.label}"${result.late ? ' (late)' : ''}. +${result.payout}. ${catLabel} reputation ${result.repDelta >= 0 ? '+' : ''}${result.repDelta}.`);
   if (result.tierUp) {
-    addLogEntry('system', `Career milestone — you're now ${result.tierUp.to}! Better gigs and higher pay await on the board.`);
+    addLogEntry('system', `Career milestone — you're now ${result.tierUp.to} in ${catLabel}! Better ${catLabel.toLowerCase()} gigs and higher pay await on the board.`);
   }
   renderComputerScreen(currentGameState);
   render(currentGameState, currentSceneState);
@@ -185,7 +186,7 @@ async function doGigDeliver(gigId) {
     id: 'gig.deliver', label: 'Deliver',
     outcomeWindow: {
       tier: 'C', trigger: 'player', dismissal: 'tap',
-      heading: result.tierUp ? `Delivered — ${result.tierUp.to}!` : 'Delivered',
+      heading: result.tierUp ? `Delivered — ${result.tierUp.to} in ${catLabel}!` : 'Delivered',
       image: { kind: 'instance', phrase: 'handing over finished work and receiving payment, satisfied' },
     },
   }, {
@@ -199,9 +200,185 @@ async function doGigAbandon(gigId) {
   if (!gigId) return;
   const result = abandonGig(currentGameState, gigId);
   if (!result.ok) { addLogEntry('system', result.reason); return; }
-  addLogEntry('system', `You abandoned "${result.gig.label}". Reputation ${result.repDelta}.`);
+  addLogEntry('system', `You abandoned "${result.gig.label}". ${gigCategoryLabel(result.category)} reputation ${result.repDelta}.`);
   renderComputerScreen(currentGameState);
   await saveAtBoundary('gig-abandon', currentGameState);
+}
+
+// --- Works (aspirations-and-creative-careers Phase 4, D18–D20) ---
+// Thin handlers over works.js, the doGigWorkBlock shape: connectivity
+// gate, the verb, a flat block of clock time, the log line, re-render,
+// save, the outcome window. `device` rides along for the phone penalty.
+
+async function doWorkBlock(workId, device, opts) {
+  if (!workId) return;
+  // A manuscript at the desk (Phase 5's write-manuscript chip) needs no
+  // connection — only the WorkHub route through the app is gated.
+  const blocked = opts && opts.offline ? null : appBlockedReason(currentGameState, 'work', device);
+  if (blocked) {
+    addLogEntry('system', `You can't work on that — ${blocked.toLowerCase()}. Pay the bill.`);
+    return;
+  }
+  showLoading();
+  try {
+    const result = workBlock(currentGameState, workId, device);
+    if (!result.ok) { addLogEntry('system', result.reason); return; }
+    pushTimeContext('working');
+    await advanceAndResolveMinutes(GIG_TUNING.workBlockMinutes);
+    popTimeContext();
+    const w = result.wip;
+    const pct = Math.round((w.done / w.blocks) * 100);
+    const label = (WORK_KINDS[w.kind] && WORK_KINDS[w.kind].label.toLowerCase()) || w.kind;
+    const line = result.finished
+      ? `"${w.title}" is finished — a ${label} at ${Math.round(result.work.quality * 100)}% quality. It's yours to release when you're ready.`
+      : `You work on "${w.title}". Progress: ${pct}% (${w.done.toFixed(2)}/${w.blocks} blocks).`;
+    addLogEntry('narration', line);
+    renderComputerScreen(currentGameState);
+    render(currentGameState, currentSceneState);
+    await saveAtBoundary('work-block', currentGameState);
+    await presentActionOutcome(currentGameState, {
+      id: 'works.block', label: 'Work',
+      outcomeWindow: {
+        tier: 'C', trigger: 'player', dismissal: 'tap',
+        heading: result.finished ? `Finished — "${w.title}"` : `${w.title} — ${pct}%`,
+        image: { kind: 'archetype', variant: 'work', phrase: 'absorbed in making something, a desk covered in the work' },
+      },
+    }, {
+      applied: [{ type: 'ADJUST_NEED', params: { who: 'player', need: 'energy', delta: -GIG_ENERGY_PER_BLOCK } }],
+      narration: line,
+      minutesSpent: GIG_TUNING.workBlockMinutes,
+    });
+  } finally {
+    hideLoading();
+  }
+}
+
+async function doWorkRelease(workId) {
+  if (!workId) return;
+  const result = releaseWork(currentGameState, workId);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  const w = result.work;
+  const label = (WORK_KINDS[w.kind] && WORK_KINDS[w.kind].label.toLowerCase()) || w.kind;
+  addLogEntry('system', `"${w.title}" is out. Your ${label} starts with a reach of ${Math.round(result.reach)} — keep promoting it, or let it find its level.`);
+  renderComputerScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('work-release', currentGameState);
+  await presentActionOutcome(currentGameState, {
+    id: 'works.release', label: 'Release',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: `Released — "${w.title}"`,
+      image: { kind: 'instance', phrase: 'putting your own work out into the world, nervous and proud' },
+    },
+  }, {
+    applied: [],
+    narration: `"${w.title}" is out. Reach ${Math.round(result.reach)}.`,
+    minutesSpent: 0,
+  });
+}
+
+// Phase 8 (D24): the home kitchen's verbs, over works.js.
+async function doListDish(recipeId) {
+  if (!recipeId) return;
+  const result = listDish(currentGameState, recipeId);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  addLogEntry('system', `${result.work.title} is on the menu — ${Math.round(result.reach)} regulars to start.`);
+  renderComputerScreen(currentGameState);
+  await saveAtBoundary('kitchen-list', currentGameState);
+}
+
+async function doFulfillOrder(orderId) {
+  if (!orderId) return;
+  const result = fulfillKitchenOrder(currentGameState, orderId);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  addLogEntry('system', `Order filled — ${result.order.dish} handed over for ${result.price}. Rated ${Math.round(result.quality * 100)}%.`);
+  renderComputerScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('kitchen-fulfil', currentGameState);
+  await presentActionOutcome(currentGameState, {
+    id: 'kitchen.fulfill', label: 'Fulfil',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: `Order filled — ${result.order.dish}`,
+      image: { kind: 'instance', phrase: 'boxing up a home-cooked meal for a delivery driver at the door' },
+    },
+  }, {
+    applied: result.applied || [],
+    narration: `${result.order.dish} handed over for ${result.price}.`,
+    minutesSpent: 0,
+  });
+}
+
+// Phase 7 (D23): sell a finished piece — one-off, through works.js's
+// sellWork (the D19 gate, EARN_MONEY, the item leaves the bag).
+async function doWorkSell(workId) {
+  if (!workId) return;
+  const result = sellWork(currentGameState, workId);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  const w = result.work;
+  addLogEntry('system', `"${w.title}" sold for ${result.price}. It's someone else's wall now.`);
+  renderComputerScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('work-sell', currentGameState);
+  await presentActionOutcome(currentGameState, {
+    id: 'works.sell', label: 'Sell',
+    outcomeWindow: {
+      tier: 'C', trigger: 'player', dismissal: 'tap',
+      heading: `Sold — "${w.title}"`,
+      image: { kind: 'instance', phrase: 'handing over a wrapped painting to a buyer, a little reluctant' },
+    },
+  }, {
+    applied: result.applied || [],
+    narration: `"${w.title}" sold for ${result.price}.`,
+    minutesSpent: 0,
+  });
+}
+
+async function doWorkPromote(workId, device) {
+  if (!workId) return;
+  const blocked = appBlockedReason(currentGameState, 'work', device);
+  if (blocked) {
+    addLogEntry('system', `You can't promote that — ${blocked.toLowerCase()}. Pay the bill.`);
+    return;
+  }
+  showLoading();
+  try {
+    const result = promoteWork(currentGameState, workId, device);
+    if (!result.ok) { addLogEntry('system', result.reason); return; }
+    pushTimeContext('working');
+    await advanceAndResolveMinutes(WORKS_TUNING.promoteBlockMinutes);
+    popTimeContext();
+    const w = result.work;
+    const line = `You spend a while promoting "${w.title}". Reach ${Math.round(w.reach - result.bump)} → ${Math.round(w.reach)}.`;
+    addLogEntry('narration', line);
+    renderComputerScreen(currentGameState);
+    render(currentGameState, currentSceneState);
+    await saveAtBoundary('work-promote', currentGameState);
+    await presentActionOutcome(currentGameState, {
+      id: 'works.promote', label: 'Promote',
+      outcomeWindow: {
+        tier: 'C', trigger: 'player', dismissal: 'tap',
+        heading: `Promoted — ${w.title}`,
+        image: { kind: 'archetype', variant: 'work', phrase: 'posting, messaging, talking up their own work online' },
+      },
+    }, {
+      applied: [{ type: 'ADJUST_NEED', params: { who: 'player', need: 'energy', delta: -GIG_ENERGY_PER_BLOCK } }],
+      narration: line,
+      minutesSpent: WORKS_TUNING.promoteBlockMinutes,
+    });
+  } finally {
+    hideLoading();
+  }
+}
+
+// aspirations-and-creative-careers Phase 2: the board's category filter
+// chips. Ephemeral render state (setGigBoardFilter, render.computer.js) —
+// nothing to save; re-render whichever surface the click came from, the
+// spriteStudioRerender shape.
+function doGigFilter(category, device) {
+  setGigBoardFilter(category);
+  if (device === 'phone' && typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  else renderComputerScreen(currentGameState);
 }
 
 async function doShopAddToCart(defId) {
@@ -399,22 +576,32 @@ let homePlacementUI = null;
 
 function ensureHomePlacementUI(gs) {
   if (!homePlacementUI) {
-    homePlacementUI = { roomId: gs.player.location, selectedId: null, draft: null, snap: true, drag: null };
+    homePlacementUI = { roomId: gs.player.location, mode: 'decor', selectedId: null, draft: null, snap: true, drag: null, undo: {} };
   }
   return homePlacementUI;
+}
+
+// Touch and mouse events keep their coordinates in different places
+// (clientX/Y directly vs. the first entry of touches/changedTouches) — every
+// gesture below reads through this so the same handler drives both a mouse
+// drag and a finger drag (Phase 17, Handoff (b); the canvas already had
+// `touch-action: none` waiting for this).
+function homePointerXY(ev) {
+  if (ev.touches && ev.touches.length) return { clientX: ev.touches[0].clientX, clientY: ev.touches[0].clientY };
+  if (ev.changedTouches && ev.changedTouches.length) return { clientX: ev.changedTouches[0].clientX, clientY: ev.changedTouches[0].clientY };
+  return { clientX: ev.clientX, clientY: ev.clientY };
 }
 
 // One SVG client-coordinate → room-units conversion, shared by every
 // gesture so move/resize/rotate agree about where the cursor is. Mirrors
 // dev/designer.html's pt().
 function homePlacementSvgPoint(svg, ev) {
+  const { clientX, clientY } = homePointerXY(ev);
   const pt = svg.createSVGPoint();
-  pt.x = ev.clientX; pt.y = ev.clientY;
+  pt.x = clientX; pt.y = clientY;
   const q = pt.matrixTransform(svg.getScreenCTM().inverse());
   return [q.x, q.y];
 }
-
-const homePlacementSnap = (v, snap) => (snap ? Math.round(v / 5) * 5 : Math.round(v));
 
 // Rebuilds only the canvas inside the current placement screen body — the
 // cheap mid-gesture redraw. The full screen rebuild is render()'s job.
@@ -424,9 +611,60 @@ function redrawHomePlacementCanvas(bodyNode, gs, hp) {
   buildHomePlacementCanvas(svg, gs, hp, hp.roomId);
 }
 
+// Phase 17: a key resolves to a live pos object differently by mode — a
+// bag-placed object's `.pos` (decor mode, key = objId), an override entry's
+// pos fields directly (base mode, key = the array index as a string), or
+// the in-progress draft. Base-mode entries ARE plain {shape,defId,x,y,w,h,
+// rot} objects (D53's own shape), so callers treat the return value as an
+// x/y/w/h/rot bag either way.
 function homePlacementTargetPos(hp, key) {
   if (key === 'draft') return hp.draft ? hp.draft.pos : null;
+  if (hp.mode === 'base') {
+    const arr = currentGameState.world?.roomDecorOverrides?.[hp.roomId];
+    const idx = Number(key);
+    return (Array.isArray(arr) && arr[idx]) || null;
+  }
   return findObjectById(currentGameState, key)?.pos || null;
+}
+
+// --- Undo/redo (Phase 17, Handoff (a)) ---
+// One stack per room+mode, holding whole-state snapshots exactly like
+// dev/designer.html's commit()/undo()/redo() — just scoped to "this room's
+// pos-carrying objects" (decor mode) or "this room's override array" (base
+// mode) instead of the dev tool's entire document. Deliberately does NOT
+// cover placeDecorItem/pickUpDecorObject (they move a stack in or out of
+// the player's inventory too — undoing a move is data an editor should
+// restore for free; undoing a purchase-shaped action is not, so those two
+// keep their existing explicit Cancel / re-place-it-yourself affordances).
+function homePlacementUndoKey(hp) { return `${hp.mode}:${hp.roomId}`; }
+function homePlacementSnapshot(hp) {
+  if (hp.mode === 'base') {
+    const arr = currentGameState.world?.roomDecorOverrides?.[hp.roomId];
+    return arr ? JSON.parse(JSON.stringify(arr)) : null;
+  }
+  const bucket = currentGameState.objects?.[`room_${hp.roomId}`] || {};
+  const out = {};
+  for (const o of Object.values(bucket)) if (o.pos) out[o.id] = { ...o.pos };
+  return out;
+}
+function homePlacementRestore(hp, snap) {
+  if (hp.mode === 'base') {
+    currentGameState.world.roomDecorOverrides = currentGameState.world.roomDecorOverrides || {};
+    if (snap) currentGameState.world.roomDecorOverrides[hp.roomId] = snap;
+    else delete currentGameState.world.roomDecorOverrides[hp.roomId];
+    return;
+  }
+  const bucket = currentGameState.objects?.[`room_${hp.roomId}`] || {};
+  for (const o of Object.values(bucket)) {
+    if (snap && Object.prototype.hasOwnProperty.call(snap, o.id)) o.pos = { ...snap[o.id] };
+  }
+}
+function homePlacementPushUndo(hp) {
+  const key = homePlacementUndoKey(hp);
+  const bucket = hp.undo[key] || (hp.undo[key] = { stack: [], redo: [] });
+  bucket.stack.push(homePlacementSnapshot(hp));
+  if (bucket.stack.length > 100) bucket.stack.shift();
+  bucket.redo = [];
 }
 
 function homePlacementStartDrag(ev, key, mode, corner) {
@@ -437,6 +675,7 @@ function homePlacementStartDrag(ev, key, mode, corner) {
   hp.selectedId = isDraft ? null : key;
   const pos = homePlacementTargetPos(hp, key);
   if (!pos) return;
+  if (!isDraft) homePlacementPushUndo(hp);
   const bodyNode = ev.target.closest('.win-body') || document.getElementById('phone-content');
   const svg = bodyNode?.querySelector('.hp-canvas');
   const [mx, my] = svg ? homePlacementSvgPoint(svg, ev) : [0, 0];
@@ -454,6 +693,11 @@ function homePlacementStartRotate(ev, key) {
   homePlacementStartDrag(ev, key, 'rot');
 }
 
+// Every frame runs the candidate through normalizePlacement (defs.design.js)
+// — snap, size floor, 15° rotation steps and, for move/size, a reject-
+// outside-the-room check — and simply skips the update on rejection, so the
+// piece stops at the wall instead of a snap-back-on-release: never a frame
+// where gameState holds an invalid placement.
 function onHomePlacementMouseMove(ev) {
   const hp = homePlacementUI;
   if (!hp || !hp.drag) return;
@@ -462,20 +706,21 @@ function onHomePlacementMouseMove(ev) {
   const [mx, my] = homePlacementSvgPoint(svg, ev);
   const pos = hp.drag.pos;
   const d = hp.drag;
-  const snap = hp.snap;
+  const raw = { x: pos.x, y: pos.y, w: pos.w, h: pos.h, rot: pos.rot || 0 };
   if (d.mode === 'move') {
-    pos.x = homePlacementSnap(mx - d.ox, snap);
-    pos.y = homePlacementSnap(my - d.oy, snap);
+    raw.x = mx - d.ox; raw.y = my - d.oy;
   } else if (d.mode === 'size') {
     const s = d.start;
-    if (d.corner.includes('e')) pos.w = Math.max(3, homePlacementSnap(mx - s.x, snap));
-    if (d.corner.includes('s')) pos.h = Math.max(3, homePlacementSnap(my - s.y, snap));
-    if (d.corner.includes('w')) { const nx = homePlacementSnap(mx, snap); pos.w = Math.max(3, s.x + s.w - nx); pos.x = nx; }
-    if (d.corner.includes('n')) { const ny = homePlacementSnap(my, snap); pos.h = Math.max(3, s.y + s.h - ny); pos.y = ny; }
+    if (d.corner.includes('e')) raw.w = mx - s.x;
+    if (d.corner.includes('s')) raw.h = my - s.y;
+    if (d.corner.includes('w')) { raw.w = s.x + s.w - mx; raw.x = mx; }
+    if (d.corner.includes('n')) { raw.h = s.y + s.h - my; raw.y = my; }
   } else if (d.mode === 'rot') {
-    const a = Math.atan2(my - (pos.y + pos.h / 2), mx - (pos.x + pos.w / 2)) * 180 / Math.PI + 90;
-    pos.rot = Math.round(a / 15) * 15;
+    raw.rot = Math.atan2(my - (pos.y + pos.h / 2), mx - (pos.x + pos.w / 2)) * 180 / Math.PI + 90;
   }
+  const roomId = d.mode === 'rot' ? null : hp.roomId;
+  const normalized = typeof normalizePlacement === 'function' ? normalizePlacement(raw, { snap: hp.snap, roomId }) : raw;
+  if (normalized) Object.assign(pos, normalized);
   redrawHomePlacementCanvas(d.bodyNode, currentGameState, hp);
 }
 
@@ -485,6 +730,17 @@ function onHomePlacementMouseUp() {
   const wasDraft = hp.drag.draft;
   const bodyNode = hp.drag.bodyNode;
   hp.drag = null;
+  if (!wasDraft) {
+    // Nothing actually moved (a click, or a drag rejected on every frame) —
+    // drop the undo entry homePlacementStartDrag pushed rather than leaving
+    // a no-op step in the stack.
+    const key = homePlacementUndoKey(hp);
+    const bucket = hp.undo[key];
+    if (bucket && bucket.stack.length
+        && JSON.stringify(bucket.stack[bucket.stack.length - 1]) === JSON.stringify(homePlacementSnapshot(hp))) {
+      bucket.stack.pop();
+    }
+  }
   redrawHomePlacementCanvas(bodyNode, currentGameState, hp);
   if (!wasDraft) {
     // The drag already wrote the final pos into gameState; this boundary
@@ -493,13 +749,46 @@ function onHomePlacementMouseUp() {
     saveAtBoundary('home-place-move', currentGameState);
   }
 }
+function onHomePlacementTouchMove(ev) {
+  if (!homePlacementUI || !homePlacementUI.drag) return;
+  ev.preventDefault();
+  onHomePlacementMouseMove(ev);
+}
+function onHomePlacementTouchEnd(ev) {
+  if (!homePlacementUI || !homePlacementUI.drag) return;
+  ev.preventDefault();
+  onHomePlacementMouseUp();
+}
+
+// Every doHomePlace*/doHomeArrange* below rebuilds both device screens —
+// the Home app runs on `devices: ['computer', 'phone']` (defs.computer.js)
+// and homePlacementUI is one shared singleton, so a phone open on the same
+// screen while the computer drives it (or vice versa) must not go stale.
+function rerenderHomePlacement() {
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+}
 
 async function doHomePlaceRoom(roomId) {
   const hp = ensureHomePlacementUI(currentGameState);
   hp.roomId = roomId;
   hp.selectedId = null;
   hp.draft = null;
-  renderComputerScreen(currentGameState);
+  rerenderHomePlacement();
+  render(currentGameState, currentSceneState);
+}
+
+// Phase 17: Decor (the bag's bought furniture) vs. Arrange (the room's own
+// base furniture, D110) are two editing targets sharing one canvas and one
+// undo/redo — switching clears the selection so a stale index from one
+// mode's array is never read as the other mode's objId, or vice versa.
+async function doHomePlaceMode(mode) {
+  const hp = ensureHomePlacementUI(currentGameState);
+  if (mode !== 'decor' && mode !== 'base') return;
+  hp.mode = mode;
+  hp.selectedId = null;
+  hp.draft = null;
+  rerenderHomePlacement();
   render(currentGameState, currentSceneState);
 }
 
@@ -509,12 +798,11 @@ async function doHomePlaceItem(defId) {
   if (!def || !DESIGN_SHAPES[def.shape]) return;
   const shape = DESIGN_SHAPES[def.shape];
   const [cx, cy] = typeof roomCentre === 'function' ? roomCentre(hp.roomId) : [50, 50];
-  hp.draft = {
-    defId,
-    pos: { x: Math.round(cx - shape.w / 2), y: Math.round(cy - shape.h / 2), w: shape.w, h: shape.h, rot: 0 },
-  };
+  const raw = { x: Math.round(cx - shape.w / 2), y: Math.round(cy - shape.h / 2), w: shape.w, h: shape.h, rot: 0 };
+  const pos = (typeof normalizePlacement === 'function' && normalizePlacement(raw, { snap: false, roomId: hp.roomId })) || raw;
+  hp.draft = { defId, pos };
   hp.selectedId = null;
-  renderComputerScreen(currentGameState);
+  rerenderHomePlacement();
   render(currentGameState, currentSceneState);
 }
 
@@ -526,7 +814,7 @@ async function doHomePlaceCommit() {
   const def = DECOR_CATALOG_DEFS[result.defId];
   hp.draft = null;
   addLogEntry('system', `${def.label} placed in ${ROOMS[hp.roomId].name}.`);
-  renderComputerScreen(currentGameState);
+  rerenderHomePlacement();
   render(currentGameState, currentSceneState);
   await saveAtBoundary('home-place', currentGameState);
 }
@@ -534,7 +822,7 @@ async function doHomePlaceCommit() {
 async function doHomePlaceCancel() {
   const hp = ensureHomePlacementUI(currentGameState);
   hp.draft = null;
-  renderComputerScreen(currentGameState);
+  rerenderHomePlacement();
   render(currentGameState, currentSceneState);
 }
 
@@ -542,7 +830,7 @@ async function doHomePlaceSelect(objId) {
   const hp = ensureHomePlacementUI(currentGameState);
   hp.selectedId = objId;
   hp.draft = null;
-  renderComputerScreen(currentGameState);
+  rerenderHomePlacement();
   render(currentGameState, currentSceneState);
 }
 
@@ -553,7 +841,7 @@ async function doHomePlacePickup(objId) {
   hp.selectedId = null;
   const def = DECOR_CATALOG_DEFS[result.defId];
   addLogEntry('system', `${def.label} picked up — back in your bag.`);
-  renderComputerScreen(currentGameState);
+  rerenderHomePlacement();
   render(currentGameState, currentSceneState);
   await saveAtBoundary('home-pickup', currentGameState);
 }
@@ -561,14 +849,141 @@ async function doHomePlacePickup(objId) {
 async function doHomePlaceToggleSnap() {
   const hp = ensureHomePlacementUI(currentGameState);
   hp.snap = !hp.snap;
-  renderComputerScreen(currentGameState);
+  rerenderHomePlacement();
   render(currentGameState, currentSceneState);
+}
+
+// --- Home → Arrange base furniture (Phase 17, Handoff (c) / D110) ---
+async function doHomeArrangeStart() {
+  const hp = ensureHomePlacementUI(currentGameState);
+  homePlacementPushUndo(hp);
+  const result = startRoomArrange(currentGameState, hp.roomId);
+  if (!result.ok) { hp.undo[homePlacementUndoKey(hp)].stack.pop(); addLogEntry('system', result.reason); return; }
+  if (!result.already) {
+    addLogEntry('system', `You start arranging ${ROOMS[hp.roomId].name}.`);
+    await saveAtBoundary('home-arrange-start', currentGameState);
+  } else {
+    hp.undo[homePlacementUndoKey(hp)].stack.pop(); // already arranged — nothing changed, no undo entry
+  }
+  rerenderHomePlacement();
+  render(currentGameState, currentSceneState);
+}
+
+async function doHomeArrangeRemove(index) {
+  const hp = ensureHomePlacementUI(currentGameState);
+  homePlacementPushUndo(hp);
+  const result = removeRoomArrangePlacement(currentGameState, hp.roomId, Number(index));
+  if (!result.ok) { hp.undo[homePlacementUndoKey(hp)].stack.pop(); addLogEntry('system', result.reason); return; }
+  hp.selectedId = null;
+  rerenderHomePlacement();
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('home-arrange-remove', currentGameState);
+}
+
+async function doHomeArrangeReset() {
+  const hp = ensureHomePlacementUI(currentGameState);
+  homePlacementPushUndo(hp);
+  const result = resetRoomArrange(currentGameState, hp.roomId);
+  if (!result.ok) { hp.undo[homePlacementUndoKey(hp)].stack.pop(); addLogEntry('system', result.reason); return; }
+  hp.selectedId = null;
+  addLogEntry('system', `${ROOMS[hp.roomId].name} is back to its original layout.`);
+  rerenderHomePlacement();
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('home-arrange-reset', currentGameState);
+}
+
+// --- Undo/redo actions (Phase 17, Handoff (a)) ---
+async function doHomePlaceUndo() {
+  const hp = ensureHomePlacementUI(currentGameState);
+  const bucket = hp.undo[homePlacementUndoKey(hp)];
+  if (!bucket || !bucket.stack.length) return;
+  const prev = bucket.stack.pop();
+  bucket.redo.push(homePlacementSnapshot(hp));
+  homePlacementRestore(hp, prev);
+  hp.selectedId = null;
+  rerenderHomePlacement();
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('home-place-undo', currentGameState);
+}
+
+async function doHomePlaceRedo() {
+  const hp = ensureHomePlacementUI(currentGameState);
+  const bucket = hp.undo[homePlacementUndoKey(hp)];
+  if (!bucket || !bucket.redo.length) return;
+  const next = bucket.redo.pop();
+  bucket.stack.push(homePlacementSnapshot(hp));
+  homePlacementRestore(hp, next);
+  hp.selectedId = null;
+  rerenderHomePlacement();
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('home-place-redo', currentGameState);
+}
+
+// --- Home → Hang (aspirations-and-creative-careers Phase 16, D54) ---
+// Transient picks for the Hang screen — which piece, which room — the same
+// split homePlacementUI has: the renderer reads it, these write it, and
+// nothing about it is state (hangWork / takeDownWork in works.js are the
+// only writes to the game). Both devices share the handlers, as with
+// doCompassToggle.
+let homeHangUI = null;
+function ensureHomeHangUI(gs) {
+  if (!homeHangUI) homeHangUI = { workId: null, roomId: gs.player.location };
+  return homeHangUI;
+}
+function rerenderHomeHang() {
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+}
+
+async function doHomeHangPick(workId) {
+  if (!currentGameState || !workId) return;
+  const ui = ensureHomeHangUI(currentGameState);
+  ui.workId = ui.workId === workId ? null : workId;
+  rerenderHomeHang();
+}
+
+async function doHomeHangRoom(roomId) {
+  if (!currentGameState || !roomId || !ROOMS[roomId]) return;
+  const ui = ensureHomeHangUI(currentGameState);
+  ui.roomId = roomId;
+  rerenderHomeHang();
+}
+
+async function doHomeHangSlot(roomId, slotId) {
+  if (!currentGameState) return;
+  const ui = ensureHomeHangUI(currentGameState);
+  if (!ui.workId) { addLogEntry('system', 'Pick a piece first.'); return; }
+  const result = hangWork(currentGameState, ui.workId, roomId || ui.roomId, slotId);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  ui.workId = null;
+  const room = ROOMS[roomId || ui.roomId];
+  addLogEntry('system', `"${result.work.title}" is up on the ${result.slot.label.toLowerCase()} of ${room ? room.name : roomId}.`);
+  rerenderHomeHang();
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('home-hang', currentGameState);
+}
+
+async function doHomeTakeDown(objId) {
+  if (!currentGameState || !objId) return;
+  const result = takeDownWork(currentGameState, objId);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  addLogEntry('system', `"${result.title || 'The piece'}" comes down — back in your bag.`);
+  rerenderHomeHang();
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('home-take-down', currentGameState);
 }
 
 (function initHomePlacementGestures() {
   if (typeof document === 'undefined') return;
   window.addEventListener('mousemove', onHomePlacementMouseMove);
   window.addEventListener('mouseup', onHomePlacementMouseUp);
+  // Phase 17, Handoff (b): the phone's Home > Place screen gets the same
+  // move/resize/rotate a mouse drag does. { passive: false } is required —
+  // without it a browser may treat touchmove as scroll-only and silently
+  // drop preventDefault, and the canvas would scroll the page mid-drag.
+  window.addEventListener('touchmove', onHomePlacementTouchMove, { passive: false });
+  window.addEventListener('touchend', onHomePlacementTouchEnd);
+  window.addEventListener('touchcancel', onHomePlacementTouchEnd);
 })();
 
 async function doBrowserVisit(siteId, device) {
@@ -1723,8 +2138,15 @@ async function doImSend(npcId, device) {
     // Clear BEFORE the render below so this same pass both drops the typing
     // dots and paints the reply — never two separate visible steps.
     IM_PENDING_REPLY.delete(npcId);
-    await advanceAndResolve(1);
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
+    // Bug report (2026-09-19): this used to be advanceAndResolve(1) = one
+    // full 30-minute tick PLUS a manual decayPlayerNeeds(tickMinutes) — the
+    // same double-charge the 2026-08-30 knock fix (above) closed, just never
+    // applied here. `structural/game-clock-time-system.md` has always
+    // documented messaging as a zero/no-cost action running under the
+    // phone's idle time-dilation scale, same as `doConvSend`'s in-person
+    // turn (also advanceAndResolve(0), no manual decay) — texting someone
+    // should never cost more real time than talking to them in person.
+    await advanceAndResolve(0);
     renderComputerScreen(currentGameState);
     render(currentGameState, currentSceneState);
     // Plan X-5 Phase 2 (D17): IM is a judged surface. A text exchange lands
@@ -2306,13 +2728,188 @@ async function doChatterPost(device) {
   const input = scope?.querySelector('#cht-compose-input');
   const text = input?.value.trim();
   if (!text) return;
-  const result = postChatterAsPlayer(currentGameState, text, currentGameState.meta.clock.day);
-  if (!result.ok) return;
+  // Phase 9 (D27): visibility and an optional poll ride the same post.
+  const visibility = scope?.querySelector('#cht-compose-visibility')?.value || 'public';
+  const pollOn = !!scope?.querySelector('#cht-compose-poll')?.checked;
+  const opts = { visibility };
+  // Phase 10 (D29): the About pick → meta.source ('work:<id>' | 'skill:<id>').
+  const about = scope?.querySelector('#cht-compose-about')?.value || '';
+  if (about.startsWith('work:')) opts.source = { kind: 'work', workId: about.slice(5) };
+  else if (about.startsWith('skill:')) opts.source = { kind: 'skill', skillId: about.slice(6) };
+  if (pollOn) opts.media = { kind: 'poll', options: [scope?.querySelector('#cht-poll-opt-1')?.value, scope?.querySelector('#cht-poll-opt-2')?.value] };
+  // Phase 11: a camera-roll photo on the post (D33's consent check lives
+  // in postChatterAsPlayer, whatever the visibility).
+  const photoId = scope?.querySelector('#cht-compose-photo')?.value || '';
+  if (photoId && !pollOn) opts.media = { kind: 'image', photoId };
+  const result = postChatterAsPlayer(currentGameState, text, currentGameState.meta.clock.day, opts);
+  if (!result.ok) { addLogEntry('system', result.reason || "Couldn't post that."); return; }
+  if (result.growth && result.growth.gained > 0) addLogEntry('system', result.growth.viral ? `Your post took off — +${Math.round(result.growth.gained)} followers.` : `+${Math.round(result.growth.gained)} followers.`);
   if (input) input.value = '';
   input?.blur();
   renderComputerScreen(currentGameState);
   if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
   await saveAtBoundary('chatter-post', currentGameState);
+}
+
+// Phase 9 (D30): claim the handle typed on first open.
+async function doChatterSetHandle(device) {
+  if (!currentGameState) return;
+  const scope = chatterScopeForDevice(device);
+  const input = scope?.querySelector('#cht-handle-input');
+  const result = setChatterHandle(currentGameState, input?.value || '');
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  addLogEntry('system', `You're @${result.handle} on Chatter now.`);
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('chatter-handle', currentGameState);
+}
+
+// Phase 9 (D27): vote on a poll — rowId is "<postId>:<optionIndex>".
+async function doChatterVote(rowId) {
+  if (!currentGameState || !rowId) return;
+  const sep = rowId.lastIndexOf(':');
+  const result = voteChatterPoll(currentGameState, rowId.slice(0, sep), Number(rowId.slice(sep + 1)));
+  if (!result.ok) return;
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('chatter-vote', currentGameState);
+}
+
+// Phase 9 (D35): block / unblock — from an NPC's page (data-npc) or the
+// player's own page (the select).
+async function doChatterBlock(npcId, device) {
+  if (!currentGameState) return;
+  const id = npcId || chatterScopeForDevice(device)?.querySelector('#cht-block-select')?.value;
+  if (!id) return;
+  const result = blockNpc(currentGameState, id);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  addLogEntry('system', `Blocked ${chatterAuthorLabel(currentGameState, id)}. They see nothing of yours now.`);
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('chatter-block', currentGameState);
+}
+
+// Phase 10 (D32): the price setter, clamped to the tier's bounds.
+async function doChatterSetPrice(tier, device) {
+  if (!currentGameState || !tier) return;
+  const scope = chatterScopeForDevice(device);
+  const input = scope?.querySelector(`#cht-price-${tier}`);
+  const result = setChatterPrice(currentGameState, tier, input?.value);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  addLogEntry('system', `${tier === 'private' ? CHATTER_LABELS.private : CHATTER_LABELS.backers} price set to ${result.price}${result.clamped ? ' (kept within bounds)' : ''}.`);
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('chatter-price', currentGameState);
+}
+
+// aspirations-and-creative-careers Phase 11 (D31): the opt-in screen — a
+// modal that says what the page is and isn't (no safety net, D35), then
+// openPrivatePage on confirm. Unreachable without the mature flag: the
+// renderer never draws the button and canOpenPrivatePage refuses anyway.
+function openChatterPrivateModal(device) {
+  if (!currentGameState) return;
+  const can = canOpenPrivatePage(currentGameState);
+  if (!can.ok) { addLogEntry('system', can.reason); return; }
+  const overlay = document.getElementById('modal-overlay');
+  const title = document.getElementById('modal-title');
+  const body = document.getElementById('modal-body');
+  const actions = document.getElementById('modal-actions');
+  if (!overlay || !title || !body || !actions) return;
+  const T = CHATTER_PLATFORM;
+  title.textContent = `Open ${CHATTER_LABELS.private}?`;
+  body.innerHTML = `<p class="dim">${CHATTER_LABELS.private} is a paid page behind your handle. Self-shots you take for it are as candid as you are when you take them — nothing more. Anyone who follows you can subscribe, and you'll only ever see their handle.</p>
+    <p class="dim tiny">Nobody is blocked for you. A housemate who follows you can pay to see it, and finding out who is behind a handle is on you. Subscribers pay ${T.privatePriceDefault} a cycle by default (${T.privatePriceBounds[0]}–${T.privatePriceBounds[1]}); Backers keep paying separately.</p>`;
+  actions.innerHTML = `<button class="btn" data-action="chatter.confirm-private">Open it</button>`
+    + `<button class="btn btn-secondary" data-action="close-modal">Not now</button>`;
+  overlay.setAttribute('data-open', '');
+}
+async function doChatterConfirmPrivate() {
+  if (!currentGameState) return;
+  closeModal();
+  const r = openPrivatePage(currentGameState, currentGameState.meta.clock.day);
+  if (!r.ok) { addLogEntry('system', r.reason); return; }
+  addLogEntry('system', `${CHATTER_LABELS.private} is open. Nothing on it yet.`);
+  switchScreen(currentGameState, 'social_feed', 'private', { npcId: 'player' }, 'computer');
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('chatter-private-open', currentGameState);
+}
+
+// Phase 11 (D31): a private self-shot — caption modal, then platform.js's
+// postPrivateSelfShot (takePhoto with the player as the subject under the
+// three-condition gate, posted private).
+function openChatterSelfShotModal(device) {
+  if (!currentGameState) return;
+  const profile = ensureChatterProfile(currentGameState);
+  if (!profile.private.open) { addLogEntry('system', `${CHATTER_LABELS.private} isn't open.`); return; }
+  const overlay = document.getElementById('modal-overlay');
+  const title = document.getElementById('modal-title');
+  const body = document.getElementById('modal-body');
+  const actions = document.getElementById('modal-actions');
+  if (!overlay || !title || !body || !actions) return;
+  const naked = NAKED_CLOTHING_STATES.includes(currentGameState.player.clothing);
+  const room = String(ROOMS[currentGameState.player.location]?.name || 'here').toLowerCase();
+  const where = /^your/.test(room) ? room : `the ${room}`;
+  title.textContent = 'Post a self-shot';
+  body.innerHTML = `<input id="cht-selfshot-caption" type="text" maxlength="280" style="width:100%" placeholder="A caption for your subscribers">
+    <p class="dim tiny" style="margin-top:8px">Taken right now, in ${avatarEscape(where)}, as you are (${naked ? 'undressed — this one is explicit' : 'dressed — a candid one'}). Only ${CHATTER_LABELS.private} subscribers see it.</p>`;
+  actions.innerHTML = `<button class="btn" data-action="chatter.post-self-shot">Shoot and post</button>`
+    + `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>`;
+  overlay.setAttribute('data-open', '');
+  setTimeout(() => document.getElementById('cht-selfshot-caption')?.focus(), 50);
+}
+async function doChatterPostSelfShot() {
+  if (!currentGameState) return;
+  const text = document.getElementById('cht-selfshot-caption')?.value || '';
+  closeModal();
+  const r = postPrivateSelfShot(currentGameState, text || 'for you', currentGameState.meta.clock.day);
+  if (!r.ok) { addLogEntry('system', r.reason || "Couldn't post that."); return; }
+  addLogEntry('system', `Posted to ${CHATTER_LABELS.private}${r.photo && r.photo.level === 'intimate' ? ' — an explicit one' : ''}.`);
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('chatter-self-shot', currentGameState);
+}
+
+// aspirations-and-creative-careers Phase 12 (D40): subscribe to an NPC
+// creator (rowId = the tier) / unsubscribe. The charge lands on the rent
+// cadence (billPlayerSubscriptions), not here.
+async function doChatterSubscribe(npcId, tier, device) {
+  if (!currentGameState || !npcId) return;
+  const r = subscribeToNpc(currentGameState, npcId, tier, currentGameState.meta.clock.day);
+  if (!r.ok) { addLogEntry('system', r.reason); return; }
+  const label = tier === 'private' ? CHATTER_LABELS.private : CHATTER_LABELS.backers;
+  addLogEntry('system', `Subscribed to @${chatterHandleFor(currentGameState, npcId)}'s ${label} — ${r.price} a cycle, billed with rent.`);
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('chatter-subscribe', currentGameState);
+}
+async function doChatterUnsubscribe(npcId, device) {
+  if (!currentGameState || !npcId) return;
+  const r = unsubscribeFromNpc(currentGameState, npcId);
+  if (!r.ok) return;
+  addLogEntry('system', `Unsubscribed from @${chatterHandleFor(currentGameState, npcId)}.`);
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('chatter-unsubscribe', currentGameState);
+}
+
+// aspirations-and-creative-careers Phase 14 (D47): a Compass chip.
+async function doCompassToggle(dirId, device) {
+  if (!currentGameState || !dirId) return;
+  const r = toggleDirection(currentGameState, dirId);
+  if (!r.ok) { addLogEntry('system', r.reason); return; }
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('compass-toggle', currentGameState);
+}
+
+async function doChatterUnblock(npcId) {
+  if (!currentGameState || !npcId) return;
+  const result = unblockNpc(currentGameState, npcId);
+  if (!result.ok) return;
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+  await saveAtBoundary('chatter-unblock', currentGameState);
 }
 
 async function doChatterLike(postId) {
@@ -2343,6 +2940,7 @@ async function doChatterComment(postId, device) {
 // switchScreen for phone vs computer — pure navigation, nothing to save.
 function doChatterOpenProfile(npcId, device) {
   if (!currentGameState || !npcId) return;
+  // Phase 9: 'player' opens the player's own page (handle, counts, blocks).
   switchScreen(currentGameState, 'social_feed', 'profile', { npcId }, device === 'phone' ? 'phone' : 'computer');
   if (device === 'phone') renderPhoneScreen(currentGameState);
   else renderComputerScreen(currentGameState);

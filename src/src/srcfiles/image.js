@@ -281,15 +281,19 @@ function buildPhotoPrompt(roomId, phase, activeNpcs, roomObjects, opts = {}) {
   // last (see the B note above — the player is the scene's subject and must
   // sit where the model pays most attention).
   const seatedTail = ', seated at the table';
+  // Phase 11 (aspirations-and-creative-careers, D31): opts.intimate opts
+  // the clauses into the intimate layer — the SAME three-condition gate
+  // (intimateAllowed + a naked state) decides what it may say. A plain
+  // camera shot never passes it, so its prompt is byte-identical to before.
   if (activeNpcs && activeNpcs.length > 0) {
     for (const npc of activeNpcs) {
-      const clause = buildVisualCharacterClause(npc, { gameState: opts.gameState });
+      const clause = buildVisualCharacterClause(npc, { gameState: opts.gameState, npcId: npc.id, intimate: !!opts.intimate });
       const tail = seated ? seatedTail : (npc.activity ? `, ${npc.activity}` : '');
       prompt += `${clause}${tail}. `;
     }
   }
   if (opts.player) {
-    const clause = buildVisualCharacterClause(opts.player, { gameState: opts.gameState, isPlayer: true });
+    const clause = buildVisualCharacterClause(opts.player, { gameState: opts.gameState, isPlayer: true, intimate: !!opts.intimate });
     prompt += `${clause}${seated ? seatedTail : ''}. `;
   }
 
@@ -1765,10 +1769,22 @@ function cleanupImageUrls(keepKeys) {
 
 // Take a photo of the room the player is currently in. Returns the new
 // record; mutates world.phone.camera.roll (caller saves).
-function takePhoto(gameState, tags) {
+// Phase 11 (aspirations-and-creative-careers, D31/D33/D41): `opts`.
+//   selfShot     — the PLAYER is the subject (arm's-length selfie framing);
+//                  nobody else is in it unless featureNpcId names them.
+//   featureNpcId — one present cast member in the frame with the player.
+//   intimate     — opt the clauses into the intimate layer; the gate
+//                  (intimateAllowed + a naked state) still decides.
+// Every record now carries `level`: 'intimate' when the mature flag is on
+// and anyone in the frame is in a naked state (the gate's two state
+// conditions), else 'lifestyle' — the $Feature ask's tier (D33).
+function takePhoto(gameState, tags, opts = {}) {
   const roomId = gameState.player.location;
   const roomObjects = gameState.objects?.[`room_${roomId}`] || {};
-  const subjectNpcIds = getPresentNpcIds(gameState.npcs, roomId);
+  const present = getPresentNpcIds(gameState.npcs, roomId);
+  const subjectNpcIds = opts.selfShot
+    ? (opts.featureNpcId && present.includes(opts.featureNpcId) ? [opts.featureNpcId] : [])
+    : present;
   const activeNpcs = subjectNpcIds.map(id => gameState.npcs[id]).filter(Boolean);
   const phase = getPhase(gameState.meta.clock.minutes);
   const day = gameState.meta.clock.day;
@@ -1778,16 +1794,25 @@ function takePhoto(gameState, tags) {
   const slot = roll.length;
   // Seeded, never Date.now() — the same (save seed, day, tick, slot) tuple
   // always names the same photo, matching genObjectId's (world.js) pattern.
-  const id = `photo_${hashStr(`${gameState.meta.seed}|camera|${day}|${tick}|${slot}`).toString(36)}`;
+  const kindKey = opts.selfShot ? 'selfshot' : 'camera';
+  const id = `photo_${hashStr(`${gameState.meta.seed}|${kindKey}|${day}|${tick}|${slot}`).toString(36)}`;
   const seed = hashStr(`${gameState.meta.seed}|photo_seed|${id}`);
 
-  const prompt = buildPhotoPrompt(roomId, phase, activeNpcs, roomObjects, { gameState })
-    + ' Candid smartphone photo, casual snapshot framing, slightly imperfect composition.';
+  const prompt = buildPhotoPrompt(roomId, phase, activeNpcs, roomObjects, { gameState, player: opts.selfShot ? gameState.player : null, intimate: !!opts.intimate })
+    + (opts.selfShot
+      ? " Candid smartphone self-shot, arm's-length selfie framing, the subject looking into the phone."
+      : ' Candid smartphone photo, casual snapshot framing, slightly imperfect composition.');
+  // The level reads the gate's other two conditions whatever opts.intimate
+  // says: a plain camera shot of a naked housemate IS intimate content for
+  // the $Feature tier even though its prompt never opted into the layer.
+  const gateOpen = typeof intimateAllowed === 'function' && intimateAllowed(gameState);
+  const naked = (who) => NAKED_CLOTHING_STATES.includes(who?.clothing);
+  const level = gateOpen && (activeNpcs.some(naked) || (opts.selfShot && naked(gameState.player))) ? 'intimate' : 'lifestyle';
 
   const photo = {
     id, day, tick, roomId, subjectNpcIds,
-    caption: `${ROOMS[roomId]?.name || roomId}, Day ${day}`,
-    prompt, seed, tags: tags || [],
+    caption: opts.selfShot ? `Self-shot, ${ROOMS[roomId]?.name || roomId}, Day ${day}` : `${ROOMS[roomId]?.name || roomId}, Day ${day}`,
+    prompt, seed, tags: tags || [], level,
   };
   roll.unshift(photo); // newest first
   if (roll.length > CAMERA.rollCap) roll.length = CAMERA.rollCap; // 8.2: oldest evicted
@@ -1822,6 +1847,9 @@ function captureActionMoment(gameState, def, actionId, actor, ctx) {
     id, day, tick, roomId, subjectNpcIds: partner ? [partner.id] : [],
     caption: def.momentCaption || `A private moment, Day ${day}`,
     prompt, seed, tags: ['moment'],
+    // Phase 11 (D33): an act's moment is intimate content by construction —
+    // when the gate is open; with it closed the prompt was clothed/neutral.
+    level: (typeof intimateAllowed === 'function' && intimateAllowed(gameState)) ? 'intimate' : 'lifestyle',
   };
   roll.unshift(photo);
   if (roll.length > CAMERA.rollCap) roll.length = CAMERA.rollCap;
@@ -1959,6 +1987,32 @@ async function generatePhoneSnoopPhotoImage(npc, gameState, explicit) {
   } catch (e) {
     return { url: null, prompt, error: e.message };
   }
+}
+
+// aspirations-and-creative-careers Phase 12 (D41) — an NPC creator's
+// private self-shot: a camera-roll-shaped record (prompt + seed, never a
+// blob) with the NPC as the only subject, in the naked state their own
+// disinhibition permits (creatorNudeDis → 'nude', else 'undressed'), the
+// clause opted into the intimate layer — the SAME three-condition gate
+// (intimateAllowed + a naked state) decides what it may say, exactly as
+// buildPhoneSnoopPhotoPrompt does with its shallow clone. Their own room,
+// soft light, selfie framing. PURE given (gs, npc, id, day).
+function buildNpcSelfShotRecord(gameState, npc, npcId, id, day) {
+  const dis = typeof npcDisinhibition === 'function' ? npcDisinhibition(npc) : 0.5;
+  const clothing = dis >= CHATTER_PLATFORM.creatorNudeDis ? 'nude' : 'undressed';
+  const subject = { ...npc, clothing };
+  const clause = buildVisualCharacterClause(subject, { npcId, gameState, intimate: true });
+  const roomId = npc?.residency?.room || 'bedroom';
+  const roomName = String(ROOMS[roomId]?.name || 'bedroom').toLowerCase();
+  const prompt = `${clause}, a private self-shot for their subscribers, in their ${roomName}, soft lamp light, `
+    + "arm's-length selfie framing, looking into the phone, "
+    + (sceneOrientation() === 'landscape' ? 'wide composition.' : 'tall vertical composition, upper-body framing.');
+  const gateOpen = typeof intimateAllowed === 'function' && intimateAllowed(gameState);
+  return {
+    id, day, roomId, subjectNpcIds: [npcId], caption: `A private one, Day ${day}`,
+    prompt, seed: hashStr(`${gameState.meta.seed}|npc_selfshot|${id}`), tags: ['chatter', 'private'],
+    level: gateOpen ? 'intimate' : 'lifestyle',
+  };
 }
 
 // Regenerate (or fetch from cache) the image for a photo record. Keyed by

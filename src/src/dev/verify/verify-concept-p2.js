@@ -248,6 +248,43 @@ check('genitals survive conceptToPartial', Array.isArray(conceptToPartial(gDraft
 check('genitals count as one authored physical prefix',
   conceptTouchedFields(gDraft).filter(a => a.startsWith('physical')).length === 1);
 
+// intimate.breasts (bug report 2026-09-13: this subtree used to be skipped
+// entirely, so it never came back from the AI flow — see concept.js's
+// conceptIntimateSkeleton/conceptNormalizePhysical for the fix). Free-text
+// fields, no type discriminator, so unlike genitals nothing gets dropped —
+// every key that's present and non-empty survives.
+const B = {
+  ...GOOD,
+  physical: {
+    ...GOOD.physical,
+    intimate: {
+      breasts: { size: 'small', shape: 'teardrop', areola: 'small and pink', nipples: 'puffy', sensitivity: 'high', bogus: 'ignore me' },
+    },
+  },
+};
+const bDraft = normalizeConceptDraft(B, 'player');
+const bB = bDraft.physical?.intimate?.breasts;
+check('breasts survive with all five real fields', !!bB &&
+  bB.size === 'small' && bB.shape === 'teardrop' && bB.areola === 'small and pink' &&
+  bB.nipples === 'puffy' && bB.sensitivity === 'high');
+check('an unknown breast key is dropped', !!bB && bB.bogus === undefined);
+check('breasts survive conceptToPartial', !!conceptToPartial(bDraft).physical?.intimate?.breasts?.size);
+check('breasts count as one authored physical prefix',
+  conceptTouchedFields(bDraft).filter(a => a.startsWith('physical')).length === 1);
+
+// Both subtrees present at once — the regression this fix could introduce:
+// conceptNormalizePhysical used to build `out.intimate` as a single
+// `{ genitals: rows }` assignment; it's additive now specifically so this
+// combination doesn't silently drop one side.
+const BG = {
+  ...GOOD,
+  physical: { ...GOOD.physical, intimate: { breasts: B.physical.intimate.breasts, genitals: G.physical.intimate.genitals } },
+};
+const bgDraft = normalizeConceptDraft(BG, 'player');
+check('breasts and genitals both survive when the model writes both',
+  bgDraft.physical?.intimate?.breasts?.size === 'small' &&
+  Array.isArray(bgDraft.physical?.intimate?.genitals) && bgDraft.physical.intimate.genitals.length === 2);
+
 console.log('\n--- 3. Every normalized path is schema-legal ---');
 
 let badPath = null;
@@ -346,7 +383,8 @@ check('the prompt names the real gender enum', npcPrompt.includes('trans_female'
 check('the prompt asks for intimate.genitals as typed rows',
   npcPrompt.includes('intimate.genitals') && npcPrompt.includes('vagina or penis'));
 check('the prompt tells the model genitals do not go in distinguishingFeatures', npcPrompt.includes('Never genitals'));
-check('the prompt does not ask for breasts (still derived/gender-based)', !npcPrompt.includes('"breasts"'));
+check('the prompt asks for breasts unconditionally (bug fix 2026-09-13)',
+  npcPrompt.includes('"breasts"') && npcPrompt.includes('is NOT optional'));
 check('the prompt carries the player\'s description', npcPrompt.includes('a shy barista'));
 const ctxPrompt = buildConceptPrompt('x', 'npcFull', { authored: { name: 'Del' }, usedNames: ['Mira', 'Wren'] });
 check('already-authored values are shown to the model', ctxPrompt.includes('name: Del'));

@@ -266,6 +266,10 @@ check('no transient def is orphaned', api(`
     for (const d of Object.values(OVERTURE_DEFS)) if (d.emitsSignal) emitted.add(d.emitsSignal.signal);
     emitted.add('footsteps');   // resolveTick, on movement
     emitted.add('cooking');     // tryEatFood's custom path
+    // aspirations-and-creative-careers Phase 3 (D10): NOTICE's noticeSubject
+    // emits it as the in-room perception gate for a player-made subject.
+    // verify-acc-p3.js proves the emitter fires and is perceived.
+    emitted.add('craft_moment');
     const transients = Object.entries(SIGNAL_DEFS).filter(([, d]) => d.decayPerTick).map(([id]) => id);
     const orphans = transients.filter(id => !emitted.has(id));
     if (orphans.length) console.log('        orphaned: ' + orphans.join(', '));

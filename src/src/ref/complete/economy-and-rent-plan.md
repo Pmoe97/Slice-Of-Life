@@ -283,3 +283,45 @@ Each step is independently shippable and useful on its own.
    system other than money.
 5. **NPC behaviour must show up on the bills.** A cost the household
    generates but only the player can see is a missed drama beat.
+
+---
+
+**Dated note (2026-09-19, aspirations-and-creative-careers-overhaul-plan.md
+Phase 15 — the economy audit; appended, the text above is unchanged):**
+
+Invariant 2 is **revised by D1** of that plan: solo living is *possible*, but
+only as a stacked late-game accomplishment — a craft skill at high level, a
+per-category gig reputation at a high tier, a works catalog kept alive by
+promotion, and a Chatter following fed daily, all at once — and never
+predictably (invariant 6 there: income stays lumpy at every tier). The
+mechanical form is `independenceIndex(gs)` (aspirations.js, D50): the last
+four weeks of INDEPENDENT income (`player.incomeLog`, written by the one
+credit verb `EARN_MONEY` — gig / catalog / chatter / art_sale / kitchen; never
+a loan, a debt collected or a rent surplus) against four weeks of SOLO cost —
+`ECONOMY.rent.total` with no roommate offsets, the even-split utilities at
+base for one resident, the personal bills, and `ECONOMY.independence.
+groceriesWeekly` (70) — ≈ $8,090 per four weeks. `player.independenceWeeks`
+counts consecutive qualifying rent-cadence weeks; the Compass milestones read
+it at 1, 4 and 8.
+
+**Measured** (verify-acc-p15.js, 52 in-game weeks, seven work clicks a day):
+
+- Before the audit, a Novice grinding admin work covered the solo cost
+  **4×** by week 4 — the gig board paid $35–220 a block AND multiplied it by
+  up to 5× at Elite reputation, counting reputation twice. Invariant 2 had
+  never held numerically.
+- After (D104: `GIG_TUNING.payScale 0.3`, the tier multiplier compressed
+  from [1…5] to [1…1.7], the tier-2–4 template rates compressed to 85–120 a
+  block): a **dabbler** (writing 3, gigs only, reputation climbing to Elite)
+  peaks at **0.93** of the solo cost and never qualifies; a **catalog-only
+  writer** (writing 10, rep 100, 15 books, two gig clicks a day) peaks at
+  **0.44**; the **full stack** qualifies — a creator (music 8, music rep 80, a
+  recording kit, tracks released, a daily craft post) first at **week 21**,
+  a stacked writer (writing 10, rep 100, books, a daily post) at **week 28**
+  — and holds through the platform's Backers on top of the catalog and gigs.
+- The gig board's share of a solo lease: Novice ≈ $10–14 a block (a 7-block
+  day ≈ 0.4 of the cost), Elite on tier-4 work ≈ $50–60 a block (≈ 2 at a
+  14-block day before burnout halves pay).
+
+Invariants 1, 3, 4 and 5 stand unchanged.
+

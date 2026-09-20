@@ -213,6 +213,15 @@ async function executeAction(actionId, gameState, actorId, opts) {
     applyPlayerOutfit(live.player, prepared.outfit);
   }
 
+  // Aspirations & Creative Careers Phase 16 (D51): a `restful` verb (self.nap,
+  // self.relax) taken in a DESIGNED room lands the room's comfort on top of
+  // the verb's own mood line — one impulse, sized by decor density, through
+  // the same write site sleep uses (WORLD's applyDesignedRoomComfort).
+  // Declarative off the def like `skill` / `meters` above; player only.
+  if (def.restful && (!actorId || actorId === 'player') && typeof applyDesignedRoomComfort === 'function') {
+    applyDesignedRoomComfort(live, ctx.roomId, live.meta?.clock?.day);
+  }
+
   // Perception plan Phase 3: the player is audible too. Same declarative
   // `emitsSignal: { signal, intensity }` field the DRIVE_DEFS entries carry,
   // so an NPC showering and the player showering produce the same sound —

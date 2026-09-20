@@ -244,11 +244,19 @@ function processPregnanciesForDay(gs, day) {
   // 3. The presence's daily cost.
   for (const p of store) {
     if (p.birthDay == null) continue;
+    // The sleep-deprived energy cost is PRESENCE-based, not parentage-based
+    // (config.js's own comment: "a sleep-deprived energy cost on the
+    // player" — one line among "presence only" effects). 2026-09-10 audit
+    // fix: this used to live inside the `pid === 'player'` branch below, so
+    // an NPC-NPC baby cost the player nothing even though a newborn in a
+    // shared apartment keeps everyone up regardless of whose it is.
+    if (gs.player) {
+      gs.player.energy = Math.max(0, (gs.player.energy ?? 0) - PREGNANCY.baby.playerEnergyCost);
+    }
     for (const pid of p.parents) {
       if (pid === 'player') {
         if (!gs.player) continue;
-        pushMoodImpulse(gs.player, PREGNANCY.baby.playerMoodBoost, day);
-        gs.player.energy = Math.max(0, (gs.player.energy ?? 0) - PREGNANCY.baby.playerEnergyCost);
+        pushMoodImpulse(gs.player, PREGNANCY.baby.playerMoodBoost, day); // new-baby joy — parent-only
       } else {
         const npc = gs.npcs[pid];
         if (!npc || !npc.flags?._baby) continue;

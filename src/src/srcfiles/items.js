@@ -96,6 +96,10 @@ function plateServingsLeft(stack) {
 function stackLabel(stack) {
   const plate = stack?.meta?.plate;
   if (plate?.label) return plate.label;
+  // Aspirations & Creative Careers Phase 7 (D23): a titled instance — the
+  // player's own painting — reads by its title, the way a plate reads by
+  // its dish. Same snapshot rule: the title is what it was when made.
+  if (stack?.meta?.title) return `${ITEM_DEFS[stack?.defId]?.label || 'Piece'}: ${stack.meta.title}`;
   return ITEM_DEFS[stack?.defId]?.label || 'Something';
 }
 
@@ -943,6 +947,10 @@ function wardrobePutCheck(obj, defId, qty) {
 // extra stat weights keyed by stat name, defaulting to the neutral table.
 // Missing slots stay unset (n/a) — an outfit never fabricates a slot.
 function composeOutfit(wantedType, itemIds, bias = {}) {
+  // A default parameter only fires on `undefined`, not `null` (2026-09-10
+  // audit fix) — an explicit null bias used to throw reading bias.stats
+  // below, breaking the documented null-safe contract.
+  bias = bias || {};
   const type = OUTFIT_TYPES[wantedType] || OUTFIT_TYPES.daily;
   const preferred = new Set(type.traits || []);
   const statWeights = { comfort: 2, attraction: 1, ...(bias.stats || {}) };

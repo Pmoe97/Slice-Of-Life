@@ -132,21 +132,38 @@ const CONCEPT_SCOPES = {
 
 // --- Prompt ---
 
-// The one intimate subtree the model is asked for. Genitals are typed rows in
-// the schema (CHARACTER_SCHEMA's `intimate.genitals`), built from itemFields
-// so this fragment cannot drift from the validator. Breasts and bodyHair stay
-// derived-from-gender / player-authored and are not offered. The prompt marks
-// the array optional: it is only filled when the description specifies it,
-// never invented on the model's own initiative.
+// The intimate subtree the model is asked for. bodyHair stays player-
+// authored and is not offered. Genitals and breasts ARE offered, but
+// differently: genitals are typed rows built from the schema's itemFields
+// (so the fragment cannot drift from the validator) and stay OPTIONAL — see
+// the prompt's own "if it doesn't, leave the array empty" instruction, since
+// a character can legitimately have no authored genitals yet. Breasts
+// (bug report 2026-09-13: previously excluded entirely, so this tab of a
+// generated character was always empty) are NOT optional the same way —
+// every character has SOME chest tissue, even "flat" — so they're asked for
+// unconditionally, like any other physical field, with the gender-neutral
+// flat/breasted split spelled out so the model doesn't default to assuming
+// breast size from gender alone (the game's own PHYS_POOL_BREAST_SIZE_MASC
+// pool exists for exactly the characters where that assumption is wrong).
 function conceptIntimateSkeleton() {
   const physical = CHARACTER_SCHEMA && CHARACTER_SCHEMA.bible && CHARACTER_SCHEMA.bible.physical;
-  const g = physical && physical.fields && physical.fields.intimate && physical.fields.intimate.fields &&
-    physical.fields.intimate.fields.genitals;
-  if (!g || !g.itemFields) return '';
-  const shape = Object.entries(g.itemFields)
-    .map(([k, spec]) => k === 'type' ? `"type": "${(spec.enum || ['penis', 'vagina']).join(' or ')}"` : `"${k}": "…"`)
-    .join(', ');
-  return `"intimate": { "genitals": [{ ${shape} }] }`;
+  const intimate = physical && physical.fields && physical.fields.intimate && physical.fields.intimate.fields;
+  if (!intimate) return '';
+  const parts = [];
+  const b = intimate.breasts && intimate.breasts.fields;
+  if (b) {
+    const hints = { size: 'flat, or a size like "full"/"modest"', shape: 'e.g. teardrop, or "broad" for a flat chest', areola: 'e.g. small and pink', nipples: 'e.g. puffy', sensitivity: 'e.g. very sensitive' };
+    const shape = Object.keys(b).map(k => `"${k}": "${hints[k] || '…'}"`).join(', ');
+    parts.push(`"breasts": { ${shape} }`);
+  }
+  const g = intimate.genitals;
+  if (g && g.itemFields) {
+    const shape = Object.entries(g.itemFields)
+      .map(([k, spec]) => k === 'type' ? `"type": "${(spec.enum || ['penis', 'vagina']).join(' or ')}"` : `"${k}": "…"`)
+      .join(', ');
+    parts.push(`"genitals": [{ ${shape} }]`);
+  }
+  return parts.length > 0 ? `"intimate": { ${parts.join(', ')} }` : '';
 }
 
 // The physical block, generated from CHARACTER_SCHEMA rather than hand-listed,
@@ -296,6 +313,7 @@ HOW TO WRITE THIS:
 - Physical fields are short phrases, not sentences — they get joined into a description, so "dyed lavender, badly grown out" works and "Her hair is dyed lavender." does not.
 - Fill in what the description leaves out, consistently. Do not leave fields blank.
 - If the description specifies genitals, put them in "physical.intimate.genitals" as one or more typed objects — "type" is "penis" or "vagina" — using only the fields that fit that type (e.g. length/girth/cut/balls for a penis, labia/colour for a vagina). If it doesn't, leave the array empty. Genitals never go in "distinguishingFeatures".
+- "physical.intimate.breasts" is NOT optional — every character has some chest tissue, even a flat chest, so fill all five fields. Do not assume breast size from gender: many women are flat-chested and many men are not, and a masculine or androgynous presentation does not by itself mean flat. Use the description and the character as a whole to decide, the same way you'd decide their build or face.
 - Adults only: every character is 18 or older.
 
 Respond with ONE JSON object and nothing else — no markdown, no commentary, no code fences.
@@ -530,13 +548,31 @@ function conceptNormalizePhysical(value, touched) {
   for (const [key, sub] of Object.entries(spec.fields)) {
     const raw = value[key];
 
-    // intimate.genitals — the one model-authored intimate subtree. Rows are
-    // typed objects (type: penis|vagina); per-row keys are filtered through
-    // GENITAL_TYPE_FIELDS and capped at the schema's maxItems. Only read when
-    // the model actually wrote it — an empty/absent array means the rolled
-    // defaults stand. Breasts/bodyHair deliberately not read (they stay
-    // derived or player-authored).
+    // intimate.genitals/breasts — the two model-authored intimate subtrees
+    // (bodyHair stays player-authored). Genitals are typed rows, filtered
+    // through GENITAL_TYPE_FIELDS and capped at the schema's maxItems, and
+    // read only when the model actually wrote a row — an absent/empty array
+    // means the rolled defaults stand. Breasts (bug report 2026-09-13: this
+    // whole subtree used to be skipped, so it never came back from the AI
+    // flow at all) are five flat free-text fields, no type discriminator, so
+    // each is just cleaned and kept if non-empty — same free-text contract
+    // every other physical field already has, not a fixed enum.
     if (key === 'intimate') {
+      const intimateOut = {};
+      const rawB = raw && raw.breasts;
+      if (rawB && typeof rawB === 'object' && !Array.isArray(rawB)) {
+        const breastFields = (sub.fields && sub.fields.breasts && sub.fields.breasts.fields) || {};
+        const bEntry = {};
+        for (const k of Object.keys(breastFields)) {
+          const s = conceptCleanString(rawB[k], 80);
+          if (s) bEntry[k] = s;
+        }
+        if (Object.keys(bEntry).length > 0) {
+          intimateOut.breasts = bEntry;
+          touched.push('physical.intimate.breasts');
+          any = true;
+        }
+      }
       const rawG = raw && raw.genitals;
       if (Array.isArray(rawG)) {
         const max = (sub.fields && sub.fields.genitals && sub.fields.genitals.maxItems) || 4;
@@ -554,11 +590,12 @@ function conceptNormalizePhysical(value, touched) {
           if (rows.length >= max) break;
         }
         if (rows.length > 0) {
-          out.intimate = { genitals: rows };
+          intimateOut.genitals = rows;
           touched.push('physical.intimate.genitals');
           any = true;
         }
       }
+      if (Object.keys(intimateOut).length > 0) out.intimate = intimateOut;
       continue;
     }
 

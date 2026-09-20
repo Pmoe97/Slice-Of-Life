@@ -54,6 +54,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "8742"],
       "port": 8742
+    },
+    {
+      "name": "slice-of-life-aa-p18",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8743"],
+      "port": 8743
     }
   ]
 }

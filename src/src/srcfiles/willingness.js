@@ -57,24 +57,40 @@ function willingnessThreshold(act) {
 // outfit tilts a consent check the same way it tilts the attraction and
 // desire reads everywhere else (one meaning per stat). Observer-neutral on
 // the outfit: it looks the same to whomever is asked. Pure.
+//
+// The axis mapping is deliberately asymmetric (2026-09-10 audit fix). A
+// positive desire axis maps linearly, 0..1 -> 0.5..1, same as before. A
+// NEGATIVE axis is a currently-expressed "I don't want them" signal, not
+// just "less enthusiastic than neutral" — it must be able to crush this
+// term toward 0 well before the axis hits its own floor of -1, so a target
+// who has told the game (via relPlayer.desire/castWeb desire) that they are
+// not into the initiator right now can't still read as ~30-50% attracted.
+// Reaches exactly 0 at axis <= -0.5. See design invariant 2 ("the
+// willingness gate is the only door to sex") — this term was the soft spot
+// that let established relationship history (phase/context/personality)
+// outvote a clearly negative current desire read.
+function desireAxisToAttraction(axis) {
+  return axis >= 0 ? (0.5 + axis * 0.5) : (0.5 * wlClamp01(1 + axis * 2));
+}
+
 function willingnessAttraction(gs, target, initiatorId, ctx) {
   const c = WILLINGNESS.attraction;
-  let axis = 0.5;    // the "want them" axis, [0,1]; 0.5 = neutral, absent data
+  let axis = 0;      // the raw desire axis, [-1,1]; 0 = neutral, absent data
   let wearer = null;
   if (initiatorId === 'player') {
     const rel = (target && target.relPlayer) || {};
-    axis = ((rel.desire || 0) + 1) / 2;
+    axis = rel.desire || 0;
     wearer = gs && gs.player;
   } else {
     const targetId = willingnessTargetId(gs, target, ctx);
     const pair = targetId && gs?.world?.castWeb ? gs.world.castWeb[[targetId, initiatorId].sort().join('|')] : null;
     const dirKey = `${targetId}→${initiatorId}`;
     const axes = (pair && pair.axes && pair.axes[dirKey]) || {};
-    axis = ((axes.desire || 0) + 1) / 2;
+    axis = axes.desire || 0;
     wearer = gs && gs.npcs ? gs.npcs[initiatorId] : null;
   }
   const outfitBias = wearer ? clothingWillingnessBias(wearer) : 0;
-  return wlClamp01(axis * c.axisWeight + outfitBias * c.clothingWeight);
+  return wlClamp01(desireAxisToAttraction(axis) * c.axisWeight + outfitBias * c.clothingWeight);
 }
 
 // The desire term — general arousal, npc.needs.desire / max. Pure.

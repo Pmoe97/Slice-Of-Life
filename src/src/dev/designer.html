@@ -36,6 +36,7 @@
   .p-plant { fill:#2f5138; stroke:var(--good); stroke-width:.7; }
   .p-glass { fill:rgba(108,199,246,.25); stroke:var(--cool); }
   .p-void { fill:#0e0c17; stroke:#4a4070; }
+  .p-art { fill:#6c5ce7; stroke:none; }
   .prop.v-empty .p-water { fill:#33322c; stroke:#5a5a7c; }
   .prop.v-empty .p-lane { stroke:none; }
   .prop { cursor:move; }
@@ -447,6 +448,49 @@ const SHAPES = {
     "h": 0.76,
     "rx": 0.06,
     "cls": "detail"
+   }
+  ]
+ },
+ "recording_kit": {
+  "label": "Recording Kit",
+  "w": 16,
+  "h": 9,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.05,
+    "cls": "frame"
+   },
+   {
+    "kind": "rect",
+    "x": 0.3,
+    "y": 0.2,
+    "w": 0.4,
+    "h": 0.6,
+    "rx": 0.08,
+    "cls": "detail"
+   },
+   {
+    "kind": "rect",
+    "x": 0.04,
+    "y": 0.15,
+    "w": 0.18,
+    "h": 0.7,
+    "rx": 0.1,
+    "cls": "soft"
+   },
+   {
+    "kind": "rect",
+    "x": 0.78,
+    "y": 0.15,
+    "w": 0.18,
+    "h": 0.7,
+    "rx": 0.1,
+    "cls": "soft"
    }
   ]
  },
@@ -1290,12 +1334,62 @@ const SHAPES = {
     "cls": "glass"
    }
   ]
+ },
+ "desktop_computer": {
+  "label": "Computer",
+  "w": 10,
+  "h": 6,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.08,
+    "cls": "frame"
+   },
+   {
+    "kind": "rect",
+    "x": 0.12,
+    "y": 0.14,
+    "w": 0.76,
+    "h": 0.6,
+    "rx": 0.04,
+    "cls": "detail"
+   }
+  ]
+ },
+ "player_art": {
+  "label": "Framed Piece",
+  "w": 12,
+  "h": 8,
+  "parts": [
+   {
+    "kind": "rect",
+    "x": 0,
+    "y": 0,
+    "w": 1,
+    "h": 1,
+    "rx": 0.04,
+    "cls": "frame"
+   },
+   {
+    "kind": "rect",
+    "x": 0.1,
+    "y": 0.14,
+    "w": 0.8,
+    "h": 0.72,
+    "cls": "art"
+   }
+  ]
  }
 };
 const SHIPPED_DECOR = {
  "pool_room": [
   {
    "shape": "pool",
+   "defId": "swimming_pool",
    "x": 372,
    "y": 352,
    "w": 96,
@@ -1308,6 +1402,7 @@ const SHIPPED_DECOR = {
   },
   {
    "shape": "pool",
+   "defId": "swimming_pool",
    "x": 372,
    "y": 352,
    "w": 96,
@@ -1361,6 +1456,39 @@ const SHIPPED_DECOR = {
   }
  ]
 };
+
+// --- normalizePlacement (defs.design.js) — DO NOT HAND-EDIT ----------------
+// Kept byte-for-byte in step with the live game function by
+// `node src/src/dev/sync-designer.js` (verify-plan.js §8 fails if they
+// drift) — Phase 17 (D55) is the reason a placement's snap/floor/rotation
+// math exists in exactly one place instead of two copies that quietly stop
+// agreeing. The dev tool never passes a roomId, so the reject-outside-the-
+// room branch never fires here — authoring a design is allowed to reach
+// past a single rect the way the pool's does.
+function normalizePlacement(pos, opts = {}) {
+  if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)
+      || !Number.isFinite(pos.w) || !Number.isFinite(pos.h)) return null;
+  const { snap = true, gridSize = 5, minSize = 2, rotStep = 15, roomId = null } = opts;
+  const G = (v) => (snap ? Math.round(v / gridSize) * gridSize : Math.round(v));
+  const out = {
+    x: G(pos.x), y: G(pos.y),
+    w: Math.max(minSize, G(pos.w)), h: Math.max(minSize, G(pos.h)),
+    rot: (Math.round((Number(pos.rot) || 0) / rotStep) * rotStep % 360 + 360) % 360,
+  };
+  if (roomId && typeof ROOM_LAYOUT !== 'undefined') {
+    const rects = ROOM_LAYOUT[roomId];
+    if (rects && rects.length > 0 && !placementFitsRoom(out, rects)) return null;
+  }
+  return out;
+}
+function placementFitsRoom(pos, rects) {
+  const corners = [
+    [pos.x, pos.y], [pos.x + pos.w, pos.y],
+    [pos.x, pos.y + pos.h], [pos.x + pos.w, pos.y + pos.h],
+  ];
+  return corners.every(([px, py]) => rects.some(([rx, ry, rw, rh]) => px >= rx && px <= rx + rw && py >= ry && py <= ry + rh));
+}
+// --- /normalizePlacement ----------------------------------------------------
 
 // --- State ------------------------------------------------------------------
 let layout, decor, room = 'pool_room', sel = null, selRect = null;
@@ -1623,17 +1751,23 @@ window.addEventListener('mousemove',(ev)=>{
   if (!drag) return;
   const [mx,my]=pt(ev);
   if (drag.kind==='move') {
-    const p=decor[room][sel]; p.x=G(mx-drag.ox); p.y=G(my-drag.oy);
+    const p=decor[room][sel];
+    const n=normalizePlacement({x:mx-drag.ox,y:my-drag.oy,w:p.w,h:p.h,rot:p.rot||0},{snap,gridSize});
+    if (n) { p.x=n.x; p.y=n.y; }
   } else if (drag.kind==='size') {
     const p=decor[room][sel], s=drag.start;
-    if (drag.corner.includes('e')) p.w=Math.max(3,G(mx-s.x));
-    if (drag.corner.includes('s')) p.h=Math.max(3,G(my-s.y));
-    if (drag.corner.includes('w')) { const nx=G(mx); p.w=Math.max(3,s.x+s.w-nx); p.x=nx; }
-    if (drag.corner.includes('n')) { const ny=G(my); p.h=Math.max(3,s.y+s.h-ny); p.y=ny; }
+    const raw={x:p.x,y:p.y,w:p.w,h:p.h,rot:p.rot||0};
+    if (drag.corner.includes('e')) raw.w=mx-s.x;
+    if (drag.corner.includes('s')) raw.h=my-s.y;
+    if (drag.corner.includes('w')) { raw.w=s.x+s.w-mx; raw.x=mx; }
+    if (drag.corner.includes('n')) { raw.h=s.y+s.h-my; raw.y=my; }
+    const n=normalizePlacement(raw,{snap,gridSize});
+    if (n) { p.x=n.x; p.y=n.y; p.w=n.w; p.h=n.h; }
   } else if (drag.kind==='rot') {
     const p=decor[room][sel];
     const a=Math.atan2(my-(p.y+p.h/2), mx-(p.x+p.w/2))*180/Math.PI+90;
-    p.rot=Math.round(a/(ev.shiftKey?1:15))*(ev.shiftKey?1:15);
+    const n=normalizePlacement({x:p.x,y:p.y,w:p.w,h:p.h,rot:a},{snap,gridSize,rotStep:ev.shiftKey?1:15});
+    if (n) p.rot=n.rot;
   } else if (drag.kind==='rect') {
     const r=layout[room][drag.i];
     if (drag.mode==='move') { r[0]=G(mx-drag.ox); r[1]=G(my-drag.oy); }

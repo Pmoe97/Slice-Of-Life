@@ -57,7 +57,11 @@ const reg = J(`({
   deepCleanMinutes: ACTION_TUNING.deepCleanMinutes,
   siteDef: SITE_DEFS.tidyhome,
   sketchSkill: ACTION_DEFS['hobby.sketchpad'].skill,
-  otherHobbiesNoSkill: ['hobby.guitar', 'hobby.bookshelf', 'hobby.record_player', 'hobby.console', 'hobby.houseplant'].map(id => !ACTION_DEFS[id].skill),
+  // Aspirations & Creative Careers Phase 1 (D6) split hobbies into mastery
+  // (XP) and bonding (none): guitar → music and bookshelf → writing joined
+  // sketchpad on the mastery side, so only the three bonding hobbies are
+  // still expected to carry no skill here.
+  otherHobbiesNoSkill: ['hobby.record_player', 'hobby.console', 'hobby.houseplant'].map(id => !ACTION_DEFS[id].skill),
   affords: {
     bookshelf: OBJECT_DEFS.bookshelf.affords,
     study_bookshelf: OBJECT_DEFS.study_bookshelf.affords,
@@ -72,7 +76,7 @@ check('self.deep_clean grants cleaning XP and costs ACTION_TUNING.deepCleanMinut
 check('ACTION_REQUIREMENT_CHECKERS.skillAtLeast is a real function (pre-existing, previously zero callers)', reg.checkerFn === true);
 check("SITE_DEFS.tidyhome is a real cleaning-research site (browser half of D25, closing cleaning's coverage gap)", !!reg.siteDef && reg.siteDef.effects.includes('ADD_SKILL_XP cleaning 6'));
 check("hobby.sketchpad grants 'art' skill XP — the previously-orphaned SKILL_IDS entry now has a real consumer", !!reg.sketchSkill && reg.sketchSkill.id === 'art' && reg.sketchSkill.xp > 0, JSON.stringify(reg.sketchSkill));
-check('every other hobby stays pure vibe — no skill XP added where none was asked for', reg.otherHobbiesNoSkill.every(Boolean), JSON.stringify(reg.otherHobbiesNoSkill));
+check('every bonding hobby (records/console/houseplant) stays pure vibe — no skill XP added where none was asked for', reg.otherHobbiesNoSkill.every(Boolean), JSON.stringify(reg.otherHobbiesNoSkill));
 check('all three bookshelf-shaped OBJECT_DEFS list all five research.* ids in affords', ['bookshelf', 'study_bookshelf', 'hobby_bookshelf'].every(k => reg.researchable.every(id => reg.affords[k].includes('research.' + id))), JSON.stringify(reg.affords));
 
 // ---------------------------------------------------------------- 1

@@ -27,8 +27,16 @@ const COMPUTER_RENDERERS = {
   streamly: renderStreamly,
   nile: renderNile,
   'home-placement': renderHomePlacement,
+  // Aspirations & Creative Careers Phase 16 (D54): hang a finished piece.
+  'home-hang': renderHomeHang,
   gigboard: renderGigBoard,
   gigaccepted: renderGigAccepted,
+  // Aspirations & Creative Careers Phase 4 (D20): the Works tab.
+  gigworks: renderGigWorks,
+  // Phase 5 (D21): the self-publishing storefront.
+  inkwell: renderInkwell,
+  // Phase 6 (D22): the player's tracks on Streamly.
+  'streamly-releases': renderStreamlyReleases,
   browser: renderBrowserHome,
   'edustream-catalog': renderEduStreamCatalog,
   'edustream-enrolled': renderEduStreamEnrolled,
@@ -65,11 +73,18 @@ const COMPUTER_RENDERERS = {
   // Dream Engine Phase 8 (D42): the dream diary — gallery + per-dream detail.
   'dreamdiary': renderDreamDiary,
   'dreamentry': renderDreamEntry,
+  // Patch Notes (2026-09-10).
+  'patchnotes-list': renderPatchNotesList,
+  'patchnotes-detail': renderPatchNotesDetail,
   // actions-and-activities-overhaul-plan.md Phase 14 (D23): DailyGrid.
   'puzzles-today': renderPuzzlesToday,
   // actions-and-activities-overhaul-plan.md Phase 15 (D24): Chatter.
   'chatter-feed': renderChatterFeed,
   'chatter-profile': renderChatterProfile,
+  // aspirations-and-creative-careers Phase 11 (D31): the Private page.
+  'chatter-private': renderChatterPrivate,
+  // aspirations-and-creative-careers Phase 14 (D47): Compass.
+  'compass-overview': renderCompassOverview,
 };
 
 // Rows whose def declares `requiresContentFlag` are hidden from any
@@ -555,6 +570,7 @@ function renderNile(body, gs, app, screen) {
 function renderHomePlacement(body, gs, app, screen) {
   const hp = (typeof homePlacementUI !== 'undefined' && homePlacementUI) || null;
   const roomId = (hp && hp.roomId) || gs.player.location;
+  const mode = (hp && hp.mode) || 'decor';
 
   // --- Room selector ---
   const roomsRow = document.createElement('div');
@@ -570,46 +586,105 @@ function renderHomePlacement(body, gs, app, screen) {
   }
   body.appendChild(roomsRow);
 
-  // --- Palette + canvas ---
+  // --- Mode tabs + undo/redo (Phase 17) ---
+  const modeRow = document.createElement('div');
+  modeRow.className = 'hp-rooms';
+  for (const [id, label] of [['decor', 'Decor'], ['base', 'Arrange']]) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    if (id === mode) chip.setAttribute('data-active', '');
+    chip.setAttribute('data-action', 'home.place-mode');
+    chip.setAttribute('data-row-id', id);
+    chip.textContent = label;
+    modeRow.appendChild(chip);
+  }
+  const undoKey = hp ? `${mode}:${roomId}` : null;
+  const undoBucket = hp && hp.undo ? hp.undo[undoKey] : null;
+  const undoBtn = document.createElement('button');
+  undoBtn.className = 'chip';
+  undoBtn.setAttribute('data-action', 'home.place-undo');
+  undoBtn.textContent = 'Undo';
+  if (!undoBucket || !undoBucket.stack.length) undoBtn.disabled = true;
+  modeRow.appendChild(undoBtn);
+  const redoBtn = document.createElement('button');
+  redoBtn.className = 'chip';
+  redoBtn.setAttribute('data-action', 'home.place-redo');
+  redoBtn.textContent = 'Redo';
+  if (!undoBucket || !undoBucket.redo.length) redoBtn.disabled = true;
+  modeRow.appendChild(redoBtn);
+  body.appendChild(modeRow);
+
+  // --- Palette (decor mode) / arrangement list (base mode) + canvas ---
   const layout = document.createElement('div');
   layout.className = 'hp-layout';
+  const overrideArr = gs.world?.roomDecorOverrides?.[roomId];
+  const arranged = Array.isArray(overrideArr) && overrideArr.length > 0;
 
-  const owned = (gs.player.inventory || []).filter(s => DECOR_CATALOG_DEFS[s.defId] && s.qty > 0);
-  const doormat = Object.values(gs.objects?.room_entry || {}).find(o => o.defId === 'doormat');
-  const onDoormat = (doormat?.contents || []).some(s => DECOR_CATALOG_DEFS[s.defId] && s.qty > 0);
+  if (mode === 'decor') {
+    const owned = (gs.player.inventory || []).filter(s => DECOR_CATALOG_DEFS[s.defId] && s.qty > 0);
+    const doormat = Object.values(gs.objects?.room_entry || {}).find(o => o.defId === 'doormat');
+    const onDoormat = (doormat?.contents || []).some(s => DECOR_CATALOG_DEFS[s.defId] && s.qty > 0);
 
-  const palette = document.createElement('div');
-  palette.className = 'hp-palette';
-  const head = document.createElement('div');
-  head.className = 'hp-palette-head';
-  head.textContent = 'Your furniture';
-  palette.appendChild(head);
-  if (owned.length === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'dim tiny hp-palette-empty';
-    empty.textContent = onDoormat
-      ? 'A delivery is waiting by the front door — pick it up first, then it will be here to place.'
-      : 'Nothing to place yet. Buy something on the Browse tab — it arrives by the door the next day.';
-    palette.appendChild(empty);
-  } else {
-    for (const s of owned) {
-      const btn = document.createElement('button');
-      btn.className = 'hp-palette-item';
-      btn.setAttribute('data-action', 'home.place-item');
-      btn.setAttribute('data-row-id', s.defId);
-      const def = DECOR_CATALOG_DEFS[s.defId];
-      const name = document.createElement('span');
-      name.className = 'hp-palette-label';
-      name.textContent = def.label;
-      const qty = document.createElement('span');
-      qty.className = 'hp-palette-qty';
-      qty.textContent = `×${s.qty}`;
-      btn.appendChild(name);
-      btn.appendChild(qty);
-      palette.appendChild(btn);
+    const palette = document.createElement('div');
+    palette.className = 'hp-palette';
+    const head = document.createElement('div');
+    head.className = 'hp-palette-head';
+    head.textContent = 'Your furniture';
+    palette.appendChild(head);
+    if (owned.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'dim tiny hp-palette-empty';
+      empty.textContent = onDoormat
+        ? 'A delivery is waiting by the front door — pick it up first, then it will be here to place.'
+        : 'Nothing to place yet. Buy something on the Browse tab — it arrives by the door the next day.';
+      palette.appendChild(empty);
+    } else {
+      for (const s of owned) {
+        const btn = document.createElement('button');
+        btn.className = 'hp-palette-item';
+        btn.setAttribute('data-action', 'home.place-item');
+        btn.setAttribute('data-row-id', s.defId);
+        const def = DECOR_CATALOG_DEFS[s.defId];
+        const name = document.createElement('span');
+        name.className = 'hp-palette-label';
+        name.textContent = def.label;
+        const qty = document.createElement('span');
+        qty.className = 'hp-palette-qty';
+        qty.textContent = `×${s.qty}`;
+        btn.appendChild(name);
+        btn.appendChild(qty);
+        palette.appendChild(btn);
+      }
     }
+    layout.appendChild(palette);
+  } else {
+    const palette = document.createElement('div');
+    palette.className = 'hp-palette';
+    const head = document.createElement('div');
+    head.className = 'hp-palette-head';
+    head.textContent = 'This room’s furniture';
+    palette.appendChild(head);
+    if (!arranged) {
+      const empty = document.createElement('p');
+      empty.className = 'dim tiny hp-palette-empty';
+      empty.textContent = 'Not arranged yet — its furniture is laid out automatically. Start arranging to move it by hand.';
+      palette.appendChild(empty);
+    } else {
+      overrideArr.forEach((place, i) => {
+        const row = document.createElement('button');
+        row.className = 'hp-palette-item';
+        row.setAttribute('data-action', 'home.place-select');
+        row.setAttribute('data-obj-id', String(i));
+        if (hp && hp.mode === 'base' && hp.selectedId === String(i)) row.setAttribute('data-active', '');
+        const name = document.createElement('span');
+        name.className = 'hp-palette-label';
+        name.textContent = DESIGN_SHAPES[place.shape]?.label || place.shape;
+        row.appendChild(name);
+        palette.appendChild(row);
+      });
+    }
+    layout.appendChild(palette);
   }
-  layout.appendChild(palette);
 
   const canvasWrap = document.createElement('div');
   canvasWrap.className = 'hp-canvas-wrap';
@@ -629,49 +704,107 @@ function renderHomePlacement(body, gs, app, screen) {
   snapBtn.textContent = `Grid snap: ${hp ? (hp.snap ? 'on' : 'off') : 'on'}`;
   bar.appendChild(snapBtn);
 
-  const bucket = gs.objects[`room_${roomId}`] || {};
-  const draftDef = hp && hp.draft ? DECOR_CATALOG_DEFS[hp.draft.defId] : null;
-  const selObj = hp && hp.selectedId ? bucket[hp.selectedId] : null;
-  const selDef = selObj ? DECOR_CATALOG_DEFS[selObj.defId] : null;
-  if (draftDef) {
+  if (mode === 'decor') {
+    const bucket = gs.objects[`room_${roomId}`] || {};
+    const draftDef = hp && hp.draft ? DECOR_CATALOG_DEFS[hp.draft.defId] : null;
+    const selObj = hp && hp.selectedId ? bucket[hp.selectedId] : null;
+    const selDef = selObj ? DECOR_CATALOG_DEFS[selObj.defId] : null;
+    if (draftDef) {
+      const lbl = document.createElement('span');
+      lbl.className = 'dim tiny';
+      lbl.textContent = `Placing ${draftDef.label} in ${ROOMS[roomId].name} — drag to move, corners resize, the dot above rotates.`;
+      bar.appendChild(lbl);
+      const place = document.createElement('button');
+      place.className = 'btn tiny';
+      place.setAttribute('data-action', 'home.place-commit');
+      place.textContent = 'Place here';
+      bar.appendChild(place);
+      const cancel = document.createElement('button');
+      cancel.className = 'btn tiny btn-secondary';
+      cancel.setAttribute('data-action', 'home.place-cancel');
+      cancel.textContent = 'Cancel';
+      bar.appendChild(cancel);
+    } else if (selObj && selDef) {
+      const lbl = document.createElement('span');
+      lbl.className = 'dim tiny';
+      lbl.textContent = `${selDef.label} — drag to move, corners resize, the dot above rotates.`;
+      bar.appendChild(lbl);
+      const pickup = document.createElement('button');
+      pickup.className = 'btn tiny btn-secondary';
+      pickup.setAttribute('data-action', 'home.place-pickup');
+      pickup.setAttribute('data-obj-id', selObj.id);
+      pickup.textContent = 'Pick up';
+      bar.appendChild(pickup);
+    } else {
+      const lbl = document.createElement('span');
+      lbl.className = 'dim tiny';
+      lbl.textContent = 'Pick an item from the palette, then drag it into place.';
+      bar.appendChild(lbl);
+    }
+  } else if (!arranged) {
     const lbl = document.createElement('span');
     lbl.className = 'dim tiny';
-    lbl.textContent = `Placing ${draftDef.label} in ${ROOMS[roomId].name} — drag to move, corners resize, the dot above rotates.`;
+    lbl.textContent = `${ROOMS[roomId].name} is laid out automatically. Arranging it by hand keeps that layout as a starting point.`;
     bar.appendChild(lbl);
-    const place = document.createElement('button');
-    place.className = 'btn tiny';
-    place.setAttribute('data-action', 'home.place-commit');
-    place.textContent = 'Place here';
-    bar.appendChild(place);
-    const cancel = document.createElement('button');
-    cancel.className = 'btn tiny btn-secondary';
-    cancel.setAttribute('data-action', 'home.place-cancel');
-    cancel.textContent = 'Cancel';
-    bar.appendChild(cancel);
-  } else if (selObj && selDef) {
-    const lbl = document.createElement('span');
-    lbl.className = 'dim tiny';
-    lbl.textContent = `${selDef.label} — drag to move, corners resize, the dot above rotates.`;
-    bar.appendChild(lbl);
-    const pickup = document.createElement('button');
-    pickup.className = 'btn tiny btn-secondary';
-    pickup.setAttribute('data-action', 'home.place-pickup');
-    pickup.setAttribute('data-obj-id', selObj.id);
-    pickup.textContent = 'Pick up';
-    bar.appendChild(pickup);
+    const start = document.createElement('button');
+    start.className = 'btn tiny';
+    start.setAttribute('data-action', 'home.arrange-start');
+    start.textContent = 'Start arranging';
+    bar.appendChild(start);
   } else {
-    const lbl = document.createElement('span');
-    lbl.className = 'dim tiny';
-    lbl.textContent = 'Pick an item from the palette, then drag it into place.';
-    bar.appendChild(lbl);
+    const idx = hp && hp.selectedId != null ? Number(hp.selectedId) : null;
+    const selPlace = idx != null ? overrideArr[idx] : null;
+    if (selPlace) {
+      const lbl = document.createElement('span');
+      lbl.className = 'dim tiny';
+      lbl.textContent = `${DESIGN_SHAPES[selPlace.shape]?.label || selPlace.shape} — drag to move, corners resize, the dot above rotates.`;
+      bar.appendChild(lbl);
+      const remove = document.createElement('button');
+      remove.className = 'btn tiny btn-secondary';
+      remove.setAttribute('data-action', 'home.arrange-remove');
+      remove.setAttribute('data-obj-id', String(idx));
+      remove.textContent = 'Remove';
+      bar.appendChild(remove);
+    } else {
+      const lbl = document.createElement('span');
+      lbl.className = 'dim tiny';
+      lbl.textContent = 'Drag a piece to rearrange it.';
+      bar.appendChild(lbl);
+    }
+    const reset = document.createElement('button');
+    reset.className = 'btn tiny btn-secondary';
+    reset.setAttribute('data-action', 'home.arrange-reset');
+    reset.textContent = 'Reset to original layout';
+    bar.appendChild(reset);
   }
   body.appendChild(bar);
 }
 
+// Phase 17: mousedown and touchstart both start a gesture — one helper so
+// every interactive canvas element (object nodes, handles, the deselect
+// rect) wires both with one call rather than two copies drifting apart.
+function bindHomePointerDown(el, handler) {
+  el.addEventListener('mousedown', handler);
+  el.addEventListener('touchstart', handler, { passive: false });
+}
+
+function appendHomePlacementBackdrop(svg, html) {
+  if (!html) return;
+  const NS = 'http://www.w3.org/2000/svg';
+  const bg = document.createElementNS(NS, 'g');
+  bg.classList.add('hp-backdrop');
+  bg.innerHTML = html;
+  svg.appendChild(bg);
+}
+
 // One room's floor plan, as an editable canvas: room fills + walls with the
-// same openings the real floor plan cuts, the room's auto-arranged base
-// furniture dimmed as a backdrop, then the player's placed decor (objects
-// with a `pos`) at their real positions and the in-progress draft on top.
+// same openings the real floor plan cuts, then either
+//   decor mode — the room's actual base (override, authored or auto-
+//     packed, dimmed) as a backdrop, the player's placed decor (objects
+//     with a `pos`) interactive at their real positions, the draft on top;
+//   base mode  — the placed decor dimmed as a backdrop instead, and the
+//     room's override entries interactive (or, before arranging, the same
+//     auto/authored base dimmed with nothing to drag yet).
 // Geometry is drawn with the SAME helpers the floor plan uses, so the
 // canvas and the map cannot disagree about where a wall or a doorway is.
 function buildHomePlacementCanvas(svg, gs, hp, roomId) {
@@ -695,7 +828,7 @@ function buildHomePlacementCanvas(svg, gs, hp, roomId) {
     r.setAttribute('class', 'fp-room');
     r.setAttribute('x', x); r.setAttribute('y', y);
     r.setAttribute('width', w); r.setAttribute('height', h);
-    r.addEventListener('mousedown', (ev) => {
+    bindHomePointerDown(r, (ev) => {
       ev.preventDefault();
       if (typeof doHomePlaceSelect === 'function') doHomePlaceSelect(null);
     });
@@ -736,43 +869,48 @@ function buildHomePlacementCanvas(svg, gs, hp, roomId) {
   label.textContent = ROOMS[roomId]?.name || roomId;
   svg.appendChild(label);
 
-  // Base furniture backdrop: the room's OTHER objects, drawn by the same
-  // auto-arranger the floor plan uses, dimmed, so the player can arrange
-  // around what is already there. Placed decor is excluded (it is drawn on
-  // top at its real position) via a read-only clone of the bucket — no
-  // mutation, just a filtered view handed to a pure function.
   const bucket = gs.objects?.[`room_${roomId}`] || {};
+  const mode = (hp && hp.mode) || 'decor';
+  // The room's own base (override wins, then authored, then the auto-
+  // packer over a placed-object-free clone) — the SAME branching
+  // renderRoomFurniture uses, so this backdrop can never show a layout the
+  // real floor plan wouldn't (Phase 17 fix: before overrides existed this
+  // always drew the auto-packer, which went stale the moment a room could
+  // be arranged).
   const baseOnly = {};
-  for (const [id, o] of Object.entries(bucket)) {
-    if (!o.pos) baseOnly[id] = o;
-  }
-  if (typeof renderAutoFurniture === 'function') {
-    const gsClone = { ...gs, objects: { ...gs.objects, [`room_${roomId}`]: baseOnly } };
-    const backdrop = renderAutoFurniture(gsClone, roomId);
-    if (backdrop) {
-      const bg = document.createElementNS(NS, 'g');
-      bg.classList.add('hp-backdrop');
-      bg.innerHTML = backdrop;
-      svg.appendChild(bg);
+  for (const [id, o] of Object.entries(bucket)) if (!o.pos) baseOnly[id] = o;
+  const gsBaseClone = { ...gs, objects: { ...gs.objects, [`room_${roomId}`]: baseOnly } };
+  const authoredHtml = typeof renderAuthoredDecor === 'function' ? renderAuthoredDecor(gs, roomId) : null;
+  const baseHtml = authoredHtml !== null ? authoredHtml
+    : (typeof renderAutoFurniture === 'function' ? renderAutoFurniture(gsBaseClone, roomId) : '');
+  const placedHtml = typeof renderPlacedDecor === 'function' ? renderPlacedDecor(gs, roomId) : '';
+
+  if (mode === 'decor') {
+    appendHomePlacementBackdrop(svg, baseHtml);
+    for (const o of Object.values(bucket)) {
+      if (!o.pos) continue;
+      svg.appendChild(buildHomePlacementObjectNode(o, gs, hp, false));
     }
-  }
-
-  // Placed decor, at their real positions.
-  for (const o of Object.values(bucket)) {
-    if (!o.pos) continue;
-    svg.appendChild(buildHomePlacementObjectNode(o, gs, hp, false));
-  }
-
-  // The in-progress draft.
-  if (hp && hp.draft) {
-    svg.appendChild(buildHomePlacementObjectNode(hp.draft, gs, hp, true));
-  }
-
-  // Selection / draft handles.
-  if (hp) {
-    const target = hp.draft ? hp.draft : (hp.selectedId ? bucket[hp.selectedId] : null);
-    if (target && target.pos) {
-      buildHomePlacementHandles(svg, target, hp.draft ? 'draft' : target.id);
+    if (hp && hp.draft) svg.appendChild(buildHomePlacementObjectNode(hp.draft, gs, hp, true));
+    if (hp) {
+      const target = hp.draft ? hp.draft : (hp.selectedId ? bucket[hp.selectedId] : null);
+      if (target && target.pos) buildHomePlacementHandles(svg, target, hp.draft ? 'draft' : target.id);
+    }
+  } else {
+    appendHomePlacementBackdrop(svg, placedHtml);
+    const overrideArr = gs.world?.roomDecorOverrides?.[roomId];
+    if (Array.isArray(overrideArr) && overrideArr.length > 0) {
+      overrideArr.forEach((place, i) => {
+        svg.appendChild(buildHomePlacementBaseNode(place, i, hp));
+      });
+      if (hp && hp.selectedId != null) {
+        const idx = Number(hp.selectedId);
+        if (overrideArr[idx]) buildHomePlacementHandles(svg, { pos: overrideArr[idx] }, String(idx));
+      }
+    } else {
+      // Nothing to drag yet — show the room's current layout dimmed, as a
+      // preview of what "Start arranging" will snapshot.
+      appendHomePlacementBackdrop(svg, baseHtml);
     }
   }
 }
@@ -801,8 +939,27 @@ function buildHomePlacementObjectNode(o, gs, hp, isDraft) {
   g.appendChild(shape);
 
   const key = isDraft ? 'draft' : o.id;
-  g.addEventListener('mousedown', (ev) => {
+  bindHomePointerDown(g, (ev) => {
     if (typeof homePlacementStartMove === 'function') homePlacementStartMove(ev, key, isDraft);
+  });
+  return g;
+}
+
+// Phase 17: the base-mode twin of buildHomePlacementObjectNode — an
+// override entry is already {shape, x, y, w, h, rot} (D53's own shape), so
+// renderDesignShape takes it directly with no DECOR_CATALOG_DEFS lookup.
+// Keyed by array index (as a string) rather than an objId.
+function buildHomePlacementBaseNode(place, index, hp) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const key = String(index);
+  const g = document.createElementNS(NS, 'g');
+  g.classList.add('hp-obj');
+  if (hp && hp.mode === 'base' && hp.selectedId === key) g.classList.add('hp-selected');
+  const shape = document.createElementNS(NS, 'g');
+  shape.innerHTML = typeof renderDesignShape === 'function' ? renderDesignShape(place) : '';
+  g.appendChild(shape);
+  bindHomePointerDown(g, (ev) => {
+    if (typeof homePlacementStartMove === 'function') homePlacementStartMove(ev, key, false);
   });
   return g;
 }
@@ -827,40 +984,184 @@ function buildHomePlacementHandles(svg, target, key) {
   ];
   for (const [corner, hx, hy] of corners) {
     const h = mk('circle', { class: 'hp-handle', cx: hx, cy: hy, r: 3.4 });
-    h.addEventListener('mousedown', (ev) => {
+    bindHomePointerDown(h, (ev) => {
       if (typeof homePlacementStartResize === 'function') homePlacementStartResize(ev, key, corner);
     });
     svg.appendChild(h);
   }
   const rh = mk('circle', { class: 'hp-handle rot', cx: p.x + p.w / 2, cy: p.y - 9, r: 3.6 });
-  rh.addEventListener('mousedown', (ev) => {
+  bindHomePointerDown(rh, (ev) => {
     if (typeof homePlacementStartRotate === 'function') homePlacementStartRotate(ev, key);
   });
   svg.appendChild(rh);
 }
 
+// --- Home → Hang (aspirations-and-creative-careers Phase 16, D54) ---
+// The minimal "pick a wall" placement for a finished piece: the pieces in
+// the bag, the rooms, the free and taken wall slots of the chosen room
+// (defs.design.js's wallSlotsFor / wallSlotOccupant), and what already
+// hangs (works.js's hungPieces). Transient picks (which piece, which room)
+// live in homeHangUI (UI.COMPUTER), read here like homePlacementUI above;
+// the state itself is only ever written by hangWork / takeDownWork. Same
+// renderer on both devices (COMPUTER_RENDERERS is shared).
+function renderHomeHang(body, gs, app, screen) {
+  body.innerHTML = '';
+  const ui = (typeof homeHangUI !== 'undefined' && homeHangUI) || {};
+  const held = (gs.player.inventory || []).filter(s => s && s.defId === 'player_art' && s.qty > 0 && s.meta && s.meta.workId);
+  const hung = typeof hungPieces === 'function' ? hungPieces(gs) : [];
+  const roomId = ui.roomId || gs.player.location;
+  const picked = ui.workId && held.find(s => s.meta.workId === ui.workId) ? ui.workId : null;
+
+  const header = document.createElement('div');
+  header.className = 'wh-header';
+  header.innerHTML = `<h3>Hang a piece</h3><div class="dim tiny">A finished piece can hang on a wall instead of selling — it stays yours, and anyone who walks in sees it. Take it down any time.</div>`;
+  body.appendChild(header);
+
+  // 1. The piece.
+  const pieces = document.createElement('div');
+  pieces.className = 'cs-panel';
+  pieces.innerHTML = '<h3>Your pieces</h3>';
+  if (held.length === 0) {
+    pieces.innerHTML += `<p class="dim tiny">Nothing in the bag. Finish a piece at the sketchpad${hung.length > 0 ? ', or take one down below' : ''}.</p>`;
+  }
+  const chips = document.createElement('div');
+  chips.className = 'hp-rooms';
+  for (const s of held) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    if (s.meta.workId === picked) chip.setAttribute('data-active', '');
+    chip.setAttribute('data-action', 'home.hang-pick');
+    chip.setAttribute('data-row-id', s.meta.workId);
+    chip.textContent = `${s.meta.title || 'Untitled'} · ${Math.round((s.meta.quality || 0) * 100)}%`;
+    chips.appendChild(chip);
+  }
+  pieces.appendChild(chips);
+  body.appendChild(pieces);
+
+  // 2. The room.
+  const rooms = document.createElement('div');
+  rooms.className = 'cs-panel';
+  rooms.innerHTML = '<h3>Which room</h3>';
+  const roomRow = document.createElement('div');
+  roomRow.className = 'hp-rooms';
+  for (const id of ALL_ROOMS) {
+    if (typeof wallSlotsFor === 'function' && wallSlotsFor(id).length === 0) continue;
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    if (id === roomId) chip.setAttribute('data-active', '');
+    chip.setAttribute('data-action', 'home.hang-room');
+    chip.setAttribute('data-room-id', id);
+    chip.textContent = ROOMS[id].name;
+    roomRow.appendChild(chip);
+  }
+  rooms.appendChild(roomRow);
+  body.appendChild(rooms);
+
+  // 3. The wall.
+  const walls = document.createElement('div');
+  walls.className = 'cs-panel';
+  walls.innerHTML = `<h3>Which wall — ${escapeHtml(ROOMS[roomId] ? ROOMS[roomId].name : roomId)}</h3>`
+    + (picked ? '' : '<p class="dim tiny">Pick a piece first.</p>');
+  const slots = typeof wallSlotsFor === 'function' ? wallSlotsFor(roomId) : [];
+  for (const slot of slots) {
+    const row = document.createElement('div');
+    row.className = 'cs-catalog-row';
+    const taken = typeof wallSlotOccupant === 'function' ? wallSlotOccupant(gs, roomId, slot.id) : null;
+    const label = document.createElement('span');
+    label.className = 'cs-catalog-title';
+    label.textContent = `${slot.label}${taken ? ` — "${taken.meta?.title || 'a piece'}"` : ' — free'}`;
+    row.appendChild(label);
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny' + (taken ? ' btn-secondary' : '');
+    if (taken) {
+      btn.setAttribute('data-action', 'home.take-down');
+      btn.setAttribute('data-obj-id', taken.id);
+      btn.textContent = 'Take down';
+    } else {
+      btn.setAttribute('data-action', 'home.hang-slot');
+      btn.setAttribute('data-room-id', roomId);
+      btn.setAttribute('data-slot', slot.id);
+      btn.textContent = 'Hang here';
+      if (!picked) btn.disabled = true;
+    }
+    row.appendChild(btn);
+    walls.appendChild(row);
+  }
+  body.appendChild(walls);
+
+  // 4. What hangs where.
+  if (hung.length > 0) {
+    const list = document.createElement('div');
+    list.className = 'cs-panel';
+    list.innerHTML = '<h3>Hanging now</h3>';
+    for (const h of hung) {
+      const row = document.createElement('div');
+      row.className = 'cs-catalog-row';
+      const slot = (typeof wallSlotsFor === 'function' ? wallSlotsFor(h.roomId) : []).find(s => s.id === h.slot);
+      row.innerHTML = `<span class="cs-catalog-title">"${escapeHtml(h.title)}"</span><span class="dim tiny">${escapeHtml(ROOMS[h.roomId] ? ROOMS[h.roomId].name : h.roomId)}${slot ? ` · ${slot.label.toLowerCase()}` : ''}</span>`;
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-secondary tiny';
+      btn.setAttribute('data-action', 'home.take-down');
+      btn.setAttribute('data-obj-id', h.objId);
+      btn.textContent = 'Take down';
+      row.appendChild(btn);
+      list.appendChild(row);
+    }
+    body.appendChild(list);
+  }
+}
+
 // --- WorkHub: task cards with progress, earnings summary, and a
 // visual reputation bar. ---
-// --- Gig board (Phase 2) ---
-// The board shows available gigs the player can accept, plus a reputation
-// header so the player can see their tier and which gigs they have access
-// to. A dry spell (no board refresh) reads as an empty board, which is
-// the intended signal.
+// --- Gig board (Phase 2; multi-category since the aspirations-and-
+// creative-careers overhaul Phase 2, D14–D16) ---
+// The board shows available gigs the player can accept, grouped by
+// category with a filter chip row, plus a per-category reputation strip
+// so the player can see each craft's tier at a glance — a Novice writer
+// with Elite tech rep sees both tiers named on one header. A dry spell
+// (no board refresh) reads as an empty board, which is the intended
+// signal.
+
+// Which category the board is filtered to ('all' or a GIG_CATEGORY_IDS
+// entry). Render-owned ephemeral UI state, the _actionNavStack precedent
+// (render.js): which chip is lit is not game data, so it lives here, not
+// in the save. Shared by the computer window and the phone — one board.
+let _gigBoardFilter = 'all';
+function setGigBoardFilter(category) {
+  _gigBoardFilter = (category && GIG_CATEGORY_BY_ID[category]) ? category : 'all';
+}
+function gigBoardFilter() { return _gigBoardFilter; }
+
+// One line per category: label, tier name, score. Reads through
+// gigCategoryRep so a map missing a key still renders 0/Novice.
+function buildGigRepStrip(gigs) {
+  const strip = document.createElement('div');
+  strip.className = 'wh-rep-strip';
+  for (const cat of GIG_CATEGORIES) {
+    const rep = Math.round(gigCategoryRep(gigs, cat.id));
+    const tier = gigTier(rep);
+    const row = document.createElement('div');
+    row.className = 'wh-rep-row' + (rep > 0 ? '' : ' is-zero');
+    row.innerHTML = `<span class="wh-rep-label">${cat.label}</span><span class="wh-rep-bar"><span class="wh-rep-fill" style="width: ${rep}%;"></span></span><span class="wh-rep-tier dim tiny">${tier.name} · ${rep}</span>`;
+    strip.appendChild(row);
+  }
+  return strip;
+}
+
 function renderGigBoard(body, gs, app, screen) {
   const gigs = gs.world.computer.apps.gigs;
-  const rep = Math.round(gigs.reputation || 0);
-  const tier = gigTier(rep);
+  const board = gigs.board || [];
 
   const header = document.createElement('div');
   header.className = 'wh-header';
   header.innerHTML = `
-    <h3>Gig Board — ${tier.name}</h3>
-    <div class="wh-rep-bar"><div class="wh-rep-fill" style="width: ${rep}%;"></div></div>
+    <h3>Gig Board</h3>
     <div class="wh-stats">
-      <span>Reputation ${rep}/100</span>
+      <span>${board.length} on the board</span>
       <span>${gigs.accepted.length}/${GIG_MAX_CONCURRENT} gigs held</span>
     </div>
   `;
+  header.appendChild(buildGigRepStrip(gigs));
   body.appendChild(header);
 
   // Link to the accepted-gigs screen
@@ -872,44 +1173,76 @@ function renderGigBoard(body, gs, app, screen) {
   acceptedLink.textContent = `My Gigs (${gigs.accepted.length})`;
   body.appendChild(acceptedLink);
 
-  const board = gigs.board || [];
   if (board.length === 0) {
     const empty = makePanel('<p class="dim">No gigs available right now. The board refreshes most days — check back tomorrow.</p>');
     body.appendChild(empty);
     return;
   }
-  const list = document.createElement('div');
-  list.className = 'cs-catalog';
-  for (const gig of board) {
-    const item = document.createElement('div');
-    item.className = 'cs-catalog-row';
-    const daysLeft = gig.deadlineDay - gs.meta.clock.day;
-    const rushTag = gig.rush ? ' <span class="dim tiny" style="color:var(--color-warning);">RUSH</span>' : '';
-    item.innerHTML = `<span class="cs-catalog-title">${gig.label}${rushTag}<br><span class="dim tiny">${gig.client} · ${gig.blocks} blocks · due day ${gig.deadlineDay} (${daysLeft}d)</span></span><span class="dim tiny">${gig.payout}</span>`;
-    const btn = document.createElement('button');
-    btn.className = 'btn tiny';
-    btn.setAttribute('data-action', 'gig.accept');
-    btn.setAttribute('data-row-id', gig.gigId);
-    btn.textContent = 'Accept';
-    if (gigs.accepted.length >= GIG_MAX_CONCURRENT) btn.disabled = true;
-    item.appendChild(btn);
-    list.appendChild(item);
+
+  // Filter chips: All + one per category that has gigs on the board today
+  // (a category the player can't yet work has nothing to filter to). A lit
+  // chip that no longer has gigs falls back to All rather than an empty
+  // list — the board turned over, not the player's choice.
+  const counts = {};
+  for (const gig of board) counts[gig.category] = (counts[gig.category] || 0) + 1;
+  const filter = counts[_gigBoardFilter] ? _gigBoardFilter : 'all';
+  const chips = document.createElement('div');
+  chips.className = 'wh-chips';
+  const chipDefs = [{ id: 'all', label: 'All', count: board.length }]
+    .concat(GIG_CATEGORIES.filter(c => counts[c.id]).map(c => ({ id: c.id, label: c.label, count: counts[c.id] })));
+  for (const c of chipDefs) {
+    const b = document.createElement('button');
+    b.className = 'wh-chip' + (filter === c.id ? ' is-on' : '');
+    b.setAttribute('data-action', 'gig.filter');
+    b.setAttribute('data-row-id', c.id);
+    b.textContent = `${c.label} ${c.count}`;
+    chips.appendChild(b);
   }
-  body.appendChild(list);
+  body.appendChild(chips);
+
+  // Grouped by category in GIG_CATEGORIES order (the order the board was
+  // drawn in), one heading per group; the filter collapses to one group.
+  for (const cat of GIG_CATEGORIES) {
+    if (filter !== 'all' && cat.id !== filter) continue;
+    const group = board.filter(g => g.category === cat.id);
+    if (group.length === 0) continue;
+    const rep = Math.round(gigCategoryRep(gigs, cat.id));
+    const heading = document.createElement('div');
+    heading.className = 'wh-group-head';
+    heading.innerHTML = `<span>${cat.label}</span><span class="dim tiny">${gigTier(rep).name}</span>`;
+    body.appendChild(heading);
+    const list = document.createElement('div');
+    list.className = 'cs-catalog';
+    for (const gig of group) {
+      const item = document.createElement('div');
+      item.className = 'cs-catalog-row';
+      const daysLeft = gig.deadlineDay - gs.meta.clock.day;
+      const rushTag = gig.rush ? ' <span class="dim tiny" style="color:var(--color-warning);">RUSH</span>' : '';
+      item.innerHTML = `<span class="cs-catalog-title">${gig.label}${rushTag}<br><span class="dim tiny">${gig.client} · ${gig.blocks} blocks · due day ${gig.deadlineDay} (${daysLeft}d)</span></span><span class="dim tiny">${gig.payout}</span>`;
+      const btn = document.createElement('button');
+      btn.className = 'btn tiny';
+      btn.setAttribute('data-action', 'gig.accept');
+      btn.setAttribute('data-row-id', gig.gigId);
+      btn.textContent = 'Accept';
+      if (gigs.accepted.length >= GIG_MAX_CONCURRENT) btn.disabled = true;
+      item.appendChild(btn);
+      list.appendChild(item);
+    }
+    body.appendChild(list);
+  }
 }
 
 // The player's accepted gigs: progress, work/deliver/abandon actions.
 function renderGigAccepted(body, gs, app, screen) {
   const gigs = gs.world.computer.apps.gigs;
-  const rep = Math.round(gigs.reputation || 0);
-  const tier = gigTier(rep);
 
   const header = document.createElement('div');
   header.className = 'wh-header';
   header.innerHTML = `
-    <h3>My Gigs — ${tier.name} (${rep}/100)</h3>
+    <h3>My Gigs</h3>
     <div class="wh-stats"><span>${gigs.accepted.length}/${GIG_MAX_CONCURRENT} held</span></div>
   `;
+  header.appendChild(buildGigRepStrip(gigs));
   body.appendChild(header);
 
   // Link back to the board
@@ -950,7 +1283,7 @@ function renderGigAccepted(body, gs, app, screen) {
     card.className = 'cs-panel';
     card.innerHTML = `
       <h3>${gig.label}${gig.rush ? ' <span class="dim tiny" style="color:var(--color-warning);">RUSH</span>' : ''}</h3>
-      <div class="dim tiny">${gig.client} · ${gig.payout} · ${gig.blocks} blocks</div>
+      <div class="dim tiny">${(GIG_CATEGORY_BY_ID[gigRepCategory(gig)] || {}).label || ''} · ${gig.client} · ${gig.payout} · ${gig.blocks} blocks</div>
       <div class="wh-rep-bar"><div class="wh-rep-fill" style="width: ${pct}%;"></div></div>
       <div class="dim tiny">Progress: ${gig.blocksDone.toFixed(2)}/${gig.blocks} (${pct}%) · ${late ? 'OVERDUE' : `due in ${daysLeft}d`}</div>
     `;
@@ -982,6 +1315,511 @@ function renderGigAccepted(body, gs, app, screen) {
     actions.appendChild(abandonBtn);
     card.appendChild(actions);
     body.appendChild(card);
+  }
+}
+
+// --- Works tab (aspirations-and-creative-careers Phase 4, D17–D20) ---
+// The player's own production and catalog, beside their gigs: what is
+// still being made (work a block, like a gig), what is finished but not
+// out (release — the D19 gate's reasons shown when it refuses), and what is
+// out (reach, what it has earned, when it was last promoted; promote).
+// Today's catalog income is derived by the same seeded call the rollover
+// credited (works.js's catalogIncomeForDay without credit) — nothing is
+// stored to show it. Kinds gain their own entry points in Phases 5–8; this
+// tab never starts a work itself.
+// Titles are player-typed free text (any string is valid) and land in
+// innerHTML here, so they go through render.js's escapeHtml — the same
+// discipline the upgrades screens use on labels.
+function renderGigWorks(body, gs, app, screen) {
+  if (typeof ensurePlayerWorks !== 'function') { body.appendChild(makePanel('<p class="dim">Works are not available.</p>')); return; }
+  const player = ensurePlayerWorks(gs.player);
+  const day = gs.meta.clock.day;
+  const wip = player.workInProgress || [];
+  const unreleased = unreleasedWorks(player);
+  const released = releasedWorks(player);
+  const income = catalogIncomeForDay(gs, day);
+
+  const header = document.createElement('div');
+  header.className = 'wh-header';
+  header.innerHTML = `
+    <h3>Works</h3>
+    <div class="wh-stats">
+      <span>${wip.length} in progress</span>
+      <span>${released.length} out</span>
+      <span>Catalog today: ${Math.round(income.total)}</span>
+    </div>
+  `;
+  body.appendChild(header);
+
+  const kindLabel = (kind) => (WORK_KINDS[kind] && WORK_KINDS[kind].label) || kind;
+  const qualityPct = (q) => `${Math.round(q * 100)}%`;
+
+  // Phase 8 (D24): the home kitchen — always rendered when the player can
+  // open one (or has), above the catalog; a dish is a work like any other.
+  renderKitchenSection(body, gs);
+
+  if (wip.length === 0 && unreleased.length === 0 && released.length === 0) {
+    body.appendChild(makePanel('<p class="dim">Nothing in the works yet. Build a craft and a reputation on the board, and the ways to go independent open up from here.</p>'));
+    return;
+  }
+
+  const group = (label, note) => {
+    const h = document.createElement('div');
+    h.className = 'wh-group-head';
+    h.innerHTML = `<span>${label}</span>${note ? `<span class="dim tiny">${note}</span>` : ''}`;
+    body.appendChild(h);
+  };
+  const actionsRow = () => {
+    const row = document.createElement('div');
+    row.style.display = 'flex';
+    row.style.gap = 'var(--space-2)';
+    row.style.marginTop = 'var(--space-2)';
+    row.style.flexWrap = 'wrap';
+    return row;
+  };
+
+  if (wip.length > 0) {
+    group('In progress', 'work a block, like a gig');
+    const focus = computeFocusMultiplier(gs);
+    const perClick = Math.round(focus * GIG_TUNING.progressPerClick * 100) / 100;
+    for (const w of wip) {
+      const pct = Math.round((w.done / w.blocks) * 100);
+      const card = document.createElement('div');
+      card.className = 'cs-panel';
+      card.innerHTML = `
+        <h3>${escapeHtml(w.title)}</h3>
+        <div class="dim tiny">${kindLabel(w.kind)} · started day ${w.startedDay} · ${w.blocks} blocks</div>
+        <div class="wh-rep-bar"><div class="wh-rep-fill" style="width: ${pct}%;"></div></div>
+        <div class="dim tiny">Progress: ${w.done.toFixed(2)}/${w.blocks} (${pct}%) · ~${perClick} blocks per click right now</div>
+      `;
+      const actions = actionsRow();
+      const btn = document.createElement('button');
+      btn.className = 'btn tiny';
+      btn.setAttribute('data-action', 'works.block');
+      btn.setAttribute('data-row-id', w.id);
+      btn.textContent = `${(WORK_KINDS[w.kind] && WORK_KINDS[w.kind].verb) || 'Work'} a Block`;
+      actions.appendChild(btn);
+      card.appendChild(actions);
+      body.appendChild(card);
+    }
+  }
+
+  if (unreleased.length > 0) {
+    group('Finished', 'not out yet');
+    for (const w of unreleased) {
+      const gate = canRelease(gs, w.kind);
+      const card = document.createElement('div');
+      card.className = 'cs-panel';
+      // Phase 7 (D23/D80): a piece has a seeded swatch (the Q5 fallback —
+      // the same hash gradient a book cover gets), and sells rather than
+      // releases: the price is the kind's salePrice at today's art rep.
+      if (w.kind === 'piece') {
+        card.classList.add('ink-card');
+        card.appendChild(bookCoverSwatch(w));
+        const info = document.createElement('div');
+        info.className = 'ink-info';
+        const held = typeof pieceItemStack === 'function' ? pieceItemStack(gs.player, w.id) : null;
+        const price = WORK_KINDS.piece.salePrice(w.quality, workCategoryRep(gs, 'piece'));
+        info.innerHTML = `<h3>${escapeHtml(w.title)}</h3>
+          <div class="dim tiny">${kindLabel(w.kind)} · quality ${qualityPct(w.quality)} · finished day ${w.createdDay}${held ? '' : ' · no longer in your bag'}</div>
+          ${gate.ok ? '' : `<div class="dim tiny" style="color:var(--color-warning);">To sell: ${gate.reasons.join(' · ')}</div>`}`;
+        const sell = document.createElement('button');
+        sell.className = 'btn tiny';
+        sell.setAttribute('data-action', 'works.sell');
+        sell.setAttribute('data-row-id', w.id);
+        sell.textContent = `Sell for ${price}`;
+        if (!gate.ok || !held) sell.disabled = true;
+        sell.style.marginTop = 'var(--space-2)';
+        info.appendChild(sell);
+        // Phase 16 (D54): or hang it — a deep link into the Home app's Hang
+        // screen (the same computer.open-screen a book uses for Inkwell),
+        // no gate: hanging is placement, not a release. A piece that
+        // already hangs says where.
+        const hungAt = typeof hungPieces === 'function' ? hungPieces(gs).find(h => h.workId === w.id) : null;
+        if (hungAt) {
+          const where = document.createElement('div');
+          where.className = 'dim tiny';
+          where.style.marginTop = 'var(--space-2)';
+          where.textContent = `Hanging in ${ROOMS[hungAt.roomId] ? ROOMS[hungAt.roomId].name : hungAt.roomId}.`;
+          info.appendChild(where);
+        } else if (held) {
+          const hang = document.createElement('button');
+          hang.className = 'btn btn-secondary tiny';
+          hang.setAttribute('data-action', 'computer.open-screen');
+          hang.setAttribute('data-app', 'home');
+          hang.setAttribute('data-screen', 'hang');
+          hang.textContent = 'Hang it at home';
+          hang.style.marginTop = 'var(--space-2)';
+          hang.style.marginLeft = 'var(--space-2)';
+          info.appendChild(hang);
+        }
+        card.appendChild(info);
+        body.appendChild(card);
+        continue;
+      }
+      card.innerHTML = `
+        <h3>${escapeHtml(w.title)}</h3>
+        <div class="dim tiny">${kindLabel(w.kind)} · quality ${qualityPct(w.quality)} · finished day ${w.createdDay}</div>
+        ${gate.ok ? '' : `<div class="dim tiny" style="color:var(--color-warning);">To release: ${gate.reasons.join(' · ')}</div>`}
+      `;
+      const actions = actionsRow();
+      const btn = document.createElement('button');
+      btn.className = 'btn tiny';
+      // Phase 5 (D21): a book goes out through the storefront screen, so
+      // its button is a deep link there rather than a second release path.
+      // Phase 6 (D22): a track likewise goes out through Streamly.
+      if (w.kind === 'book') {
+        btn.setAttribute('data-action', 'computer.open-screen');
+        btn.setAttribute('data-app', app.id);
+        btn.setAttribute('data-screen', 'inkwell');
+        btn.textContent = `Publish on ${INKWELL_LABEL}`;
+      } else if (w.kind === 'track') {
+        btn.setAttribute('data-action', 'computer.open-screen');
+        btn.setAttribute('data-app', 'stream');
+        btn.setAttribute('data-screen', 'releases');
+        btn.textContent = 'Release on Streamly';
+      } else {
+        btn.setAttribute('data-action', 'works.release');
+        btn.setAttribute('data-row-id', w.id);
+        btn.textContent = 'Release';
+        if (!gate.ok) btn.disabled = true;
+      }
+      actions.appendChild(btn);
+      card.appendChild(actions);
+      body.appendChild(card);
+    }
+  }
+
+  if (released.length > 0) {
+    group('Out', `${released.length} in the catalog`);
+    for (const w of released) {
+      const def = WORK_KINDS[w.kind] || {};
+      const row = income.byWork.find(r => r.id === w.id);
+      const sincePromo = w.lastPromotedDay != null ? day - w.lastPromotedDay : null;
+      const card = document.createElement('div');
+      card.className = 'cs-panel';
+      const sold = w.kind === 'piece' && w.meta && w.meta.soldDay != null;
+      card.innerHTML = `
+        <h3>${escapeHtml(w.title)}${row && row.spike ? ' <span class="dim tiny" style="color:var(--color-warning);">GOOD DAY</span>' : ''}</h3>
+        <div class="dim tiny">${kindLabel(w.kind)} · quality ${qualityPct(w.quality)} · ${sold ? `sold day ${w.meta.soldDay} for ${w.meta.soldFor}` : `out since day ${w.releasedDay}`}</div>
+        ${sold ? '' : `<div class="dim tiny">Reach ${Math.round(w.reach)} · earned ${Math.round(w.earned)} so far${row ? ` · ${Math.round(row.amount * 100) / 100} today` : ''}${sincePromo != null && def.ratePerReach > 0 ? ` · promoted ${sincePromo === 0 ? 'today' : `${sincePromo}d ago`}` : ''}</div>`}
+      `;
+      if (def.ratePerReach > 0) {
+        const actions = actionsRow();
+        const btn = document.createElement('button');
+        btn.className = 'btn tiny';
+        btn.setAttribute('data-action', 'works.promote');
+        btn.setAttribute('data-row-id', w.id);
+        btn.textContent = 'Promote';
+        actions.appendChild(btn);
+        card.appendChild(actions);
+      }
+      body.appendChild(card);
+    }
+  }
+}
+
+// --- The home kitchen (aspirations-and-creative-careers Phase 8, D24/D25) ---
+// One section on the Works tab: open the listing (a name, the D19 gate for
+// `menu`), list dishes (any RECIPES entry not yet listed), the day's order
+// queue (Fulfil when a serving of that dish is in the bag — cook it through
+// the kitchen like any meal), the rating, the regulars. Every line is a
+// read of player.kitchen / player.works; the cleanliness factor is
+// works.js's reader over WORLD's score, shown so a dirty kitchen explains
+// its quiet day.
+function renderKitchenSection(body, gs) {
+  if (typeof ensurePlayerKitchen !== 'function') return;
+  const player = gs.player;
+  const k = ensurePlayerKitchen(player);
+  const day = gs.meta.clock.day;
+  const gate = canRelease(gs, 'menu');
+  const isOpen = kitchenIsOpen(player);
+  if (!isOpen && !gate.ok) return;   // nothing to offer yet — the board is the bootstrap
+
+  const h = document.createElement('div');
+  h.className = 'wh-group-head';
+  h.innerHTML = `<span>Home kitchen</span><span class="dim tiny">${isOpen ? 'on DoorDrop' : 'not listed'}</span>`;
+  body.appendChild(h);
+
+  if (!isOpen) {
+    const card = makePanel(`<p class="dim">Your cooking and your food reputation are good enough to sell from home. Name the kitchen and DoorDrop lists it; orders come here, and you cook them.</p>`);
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny';
+    btn.setAttribute('data-action', 'kitchen-open-start');
+    btn.textContent = 'Open a home kitchen';
+    card.appendChild(btn);
+    body.appendChild(card);
+    return;
+  }
+
+  const dishes = listedDishes(player);
+  const open = openKitchenOrders(player, day);
+  const rating = kitchenRating(player);
+  const clean = kitchenCleanlinessFactor(gs);
+  const regulars = dishes.reduce((s, d) => s + d.reach, 0);
+  const head = makePanel(`<h3>${escapeHtml(k.name)}</h3>
+    <div class="dim tiny">${dishes.length} ${dishes.length === 1 ? 'dish' : 'dishes'} listed · ${Math.round(regulars)} regulars · rating ${rating == null ? '—' : `${Math.round(rating * 100)}%`} · kitchen cleanliness ${Math.round(clean * 100)}%${clean < 0.6 ? ' — a cleaner kitchen gets more orders' : ''}</div>`);
+  body.appendChild(head);
+
+  // The queue.
+  const q = document.createElement('div');
+  q.className = 'cs-panel';
+  q.innerHTML = `<h3>Orders today</h3>${open.length === 0 ? '<div class="dim tiny">No open orders. They arrive overnight; regulars grow when you fill them.</div>' : ''}`;
+  for (const o of open) {
+    const plate = plateForOrder(player, o, gs);
+    const who = o.customerId && gs.npcs[o.customerId] ? (gs.npcs[o.customerId].bible?.name || 'a housemate') : 'a customer';
+    const row = document.createElement('div');
+    row.className = 'cs-catalog-row';
+    row.innerHTML = `<span class="cs-catalog-title">${escapeHtml(o.dish)}<br><span class="dim tiny">${escapeHtml(who)} · ${o.price} · ordered day ${o.day}${plate ? '' : ' · cook it first'}</span></span>`;
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny';
+    btn.setAttribute('data-action', 'kitchen.fulfill');
+    btn.setAttribute('data-row-id', o.id);
+    btn.textContent = 'Fulfil';
+    if (!plate) btn.disabled = true;
+    row.appendChild(btn);
+    q.appendChild(row);
+  }
+  body.appendChild(q);
+
+  // The menu: listed dishes, and the recipes still to list.
+  const menu = document.createElement('div');
+  menu.className = 'cs-panel';
+  menu.innerHTML = '<h3>Menu</h3>';
+  for (const d of dishes) {
+    const line = document.createElement('div');
+    line.className = 'dim tiny';
+    line.textContent = `${d.title} · quality ${Math.round(d.quality * 100)}% · ${Math.round(d.reach)} regulars · earned ${Math.round(d.earned)}`;
+    menu.appendChild(line);
+  }
+  const listedIds = new Set(dishes.map(d => d.meta.recipeId));
+  const unlisted = Object.values(RECIPES || {}).filter(r => !listedIds.has(r.id));
+  if (unlisted.length > 0) {
+    const row = document.createElement('div');
+    row.style.display = 'flex'; row.style.gap = 'var(--space-1)'; row.style.flexWrap = 'wrap'; row.style.marginTop = 'var(--space-2)';
+    for (const r of unlisted) {
+      const b = document.createElement('button');
+      b.className = 'wh-chip';
+      b.setAttribute('data-action', 'kitchen.list-dish');
+      b.setAttribute('data-row-id', r.id);
+      b.textContent = `List ${r.label}`;
+      row.appendChild(b);
+    }
+    menu.appendChild(row);
+  }
+  body.appendChild(menu);
+}
+
+// --- Inkwell: the self-publishing storefront (aspirations-and-creative-
+// careers Phase 5, D21/D74) ---
+// Where a finished manuscript becomes a book on sale, and where the
+// royalties are read. Two lists: manuscripts ready to publish (the D19
+// gate's reasons shown when it refuses — publishing IS works.js's
+// releaseWork, the one release path) and the titles already out, each as
+// a card with a seeded cover swatch (a gradient from the title's hash —
+// no image call, deterministic, the Q5 fallback shape), quality, reach,
+// what it has earned and what it made today. Everything on this screen is
+// a read of player.works filtered to kind 'book'; nothing is stored here.
+function bookCoverSwatch(work) {
+  const a = hashToColor(`${work.id}:${work.title}`);
+  const b = hashToColor(`${work.title}:${work.id}:spine`);
+  const el = document.createElement('div');
+  el.className = 'ink-cover';
+  el.style.background = `linear-gradient(160deg, ${a} 0%, ${b} 100%)`;
+  const initials = String(work.title || '?').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('');
+  el.textContent = initials || '?';
+  return el;
+}
+
+function renderInkwell(body, gs, app, screen) {
+  if (typeof ensurePlayerWorks !== 'function') { body.appendChild(makePanel('<p class="dim">Not available.</p>')); return; }
+  const player = ensurePlayerWorks(gs.player);
+  const day = gs.meta.clock.day;
+  const drafts = player.workInProgress.filter(w => w.kind === 'book');
+  const ready = unreleasedWorks(player).filter(w => w.kind === 'book');
+  const out = releasedWorks(player).filter(w => w.kind === 'book');
+  const income = catalogIncomeForDay(gs, day);
+  const gate = canRelease(gs, 'book');
+  const bookIncome = income.byWork.filter(r => r.kind === 'book').reduce((s, r) => s + r.amount, 0);
+
+  const header = document.createElement('div');
+  header.className = 'wh-header';
+  header.innerHTML = `
+    <h3>${INKWELL_LABEL}</h3>
+    <div class="dim tiny">Self-publishing. You keep the rights; readers find you or they don't.</div>
+    <div class="wh-stats">
+      <span>${out.length} ${out.length === 1 ? 'title' : 'titles'} on sale</span>
+      <span>Royalties today: ${Math.round(bookIncome * 100) / 100}</span>
+      <span>${gate.ok ? 'Publishing open' : `To publish: ${gate.reasons.join(' · ')}`}</span>
+    </div>
+  `;
+  body.appendChild(header);
+
+  const group = (label, note) => {
+    const h = document.createElement('div');
+    h.className = 'wh-group-head';
+    h.innerHTML = `<span>${label}</span>${note ? `<span class="dim tiny">${note}</span>` : ''}`;
+    body.appendChild(h);
+  };
+
+  if (drafts.length === 0 && ready.length === 0 && out.length === 0) {
+    body.appendChild(makePanel(`<p class="dim">No manuscripts yet. Sit at a desk and start one — when it's finished, it can go on sale here.</p>`));
+    return;
+  }
+
+  if (drafts.length > 0) {
+    group('Drafting', 'at the desk');
+    for (const w of drafts) {
+      const pct = Math.round((w.done / w.blocks) * 100);
+      body.appendChild(makePanel(`<h3>${escapeHtml(w.title)}</h3><div class="dim tiny">${w.done.toFixed(2)}/${w.blocks} blocks (${pct}%) · started day ${w.startedDay}</div>`));
+    }
+  }
+
+  if (ready.length > 0) {
+    group('Ready to publish', gate.ok ? '' : 'not yet');
+    for (const w of ready) {
+      const card = document.createElement('div');
+      card.className = 'cs-panel ink-card';
+      card.appendChild(bookCoverSwatch(w));
+      const info = document.createElement('div');
+      info.className = 'ink-info';
+      info.innerHTML = `<h3>${escapeHtml(w.title)}</h3><div class="dim tiny">quality ${Math.round(w.quality * 100)}% · finished day ${w.createdDay}</div>${gate.ok ? '' : `<div class="dim tiny" style="color:var(--color-warning);">${gate.reasons.join(' · ')}</div>`}`;
+      const btn = document.createElement('button');
+      btn.className = 'btn tiny';
+      btn.setAttribute('data-action', 'works.release');
+      btn.setAttribute('data-row-id', w.id);
+      btn.textContent = 'Publish';
+      if (!gate.ok) btn.disabled = true;
+      btn.style.marginTop = 'var(--space-2)';
+      info.appendChild(btn);
+      card.appendChild(info);
+      body.appendChild(card);
+    }
+  }
+
+  if (out.length > 0) {
+    group('On sale', `${out.length} in your catalog`);
+    for (const w of out) {
+      const row = income.byWork.find(r => r.id === w.id);
+      const sincePromo = w.lastPromotedDay != null ? day - w.lastPromotedDay : null;
+      const card = document.createElement('div');
+      card.className = 'cs-panel ink-card';
+      card.appendChild(bookCoverSwatch(w));
+      const info = document.createElement('div');
+      info.className = 'ink-info';
+      info.innerHTML = `<h3>${escapeHtml(w.title)}${row && row.spike ? ' <span class="dim tiny" style="color:var(--color-warning);">GOOD DAY</span>' : ''}</h3>
+        <div class="dim tiny">quality ${Math.round(w.quality * 100)}% · published day ${w.releasedDay}</div>
+        <div class="dim tiny">Readers ${Math.round(w.reach)} · royalties ${Math.round(w.earned)} so far${row ? ` · ${Math.round(row.amount * 100) / 100} today` : ''}${sincePromo != null ? ` · promoted ${sincePromo === 0 ? 'today' : `${sincePromo}d ago`}` : ''}</div>`;
+      const btn = document.createElement('button');
+      btn.className = 'btn tiny';
+      btn.setAttribute('data-action', 'works.promote');
+      btn.setAttribute('data-row-id', w.id);
+      btn.textContent = 'Promote';
+      btn.style.marginTop = 'var(--space-2)';
+      info.appendChild(btn);
+      card.appendChild(info);
+      body.appendChild(card);
+    }
+  }
+}
+
+// --- Streamly: Your Releases (aspirations-and-creative-careers Phase 6,
+// D22) ---
+// The player's tracks on the existing streaming brand: sessions still
+// being recorded, finished sessions ready to release (the D19 gate, the one
+// release path — works.js's releaseWork), and released tracks with plays
+// (= reach), what they have earned and today's take, plus Promote. A
+// seeded swatch stands in for cover art exactly as Inkwell's does. All of
+// it is a read of player.works filtered to kind 'track'.
+function renderStreamlyReleases(body, gs, app, screen) {
+  if (typeof ensurePlayerWorks !== 'function') { body.appendChild(makePanel('<p class="dim">Not available.</p>')); return; }
+  const player = ensurePlayerWorks(gs.player);
+  const day = gs.meta.clock.day;
+  const sessions = player.workInProgress.filter(w => w.kind === 'track');
+  const ready = unreleasedWorks(player).filter(w => w.kind === 'track');
+  const out = releasedWorks(player).filter(w => w.kind === 'track');
+  const income = catalogIncomeForDay(gs, day);
+  const gate = canRelease(gs, 'track');
+  const trackIncome = income.byWork.filter(r => r.kind === 'track').reduce((s, r) => s + r.amount, 0);
+
+  const header = document.createElement('div');
+  header.className = 'wh-header';
+  header.innerHTML = `
+    <h3>Your Releases</h3>
+    <div class="dim tiny">Independent on Streamly. Plays pay per listen; nothing plays itself.</div>
+    <div class="wh-stats">
+      <span>${out.length} ${out.length === 1 ? 'track' : 'tracks'} out</span>
+      <span>Today: ${Math.round(trackIncome * 100) / 100}</span>
+      <span>${gate.ok ? 'Releasing open' : `To release: ${gate.reasons.join(' · ')}`}</span>
+    </div>
+  `;
+  body.appendChild(header);
+
+  const group = (label, note) => {
+    const h = document.createElement('div');
+    h.className = 'wh-group-head';
+    h.innerHTML = `<span>${label}</span>${note ? `<span class="dim tiny">${note}</span>` : ''}`;
+    body.appendChild(h);
+  };
+
+  if (sessions.length === 0 && ready.length === 0 && out.length === 0) {
+    body.appendChild(makePanel(`<p class="dim">Nothing released yet. Place a recording kit at home and record a track — finished sessions release from here.</p>`));
+    return;
+  }
+
+  if (sessions.length > 0) {
+    group('Recording', 'at the kit');
+    for (const w of sessions) {
+      const pct = Math.round((w.done / w.blocks) * 100);
+      body.appendChild(makePanel(`<h3>${escapeHtml(w.title)}</h3><div class="dim tiny">${w.done.toFixed(2)}/${w.blocks} blocks (${pct}%) · started day ${w.startedDay}</div>`));
+    }
+  }
+
+  if (ready.length > 0) {
+    group('Ready to release', gate.ok ? '' : 'not yet');
+    for (const w of ready) {
+      const card = document.createElement('div');
+      card.className = 'cs-panel ink-card';
+      card.appendChild(bookCoverSwatch(w));
+      const info = document.createElement('div');
+      info.className = 'ink-info';
+      info.innerHTML = `<h3>${escapeHtml(w.title)}</h3><div class="dim tiny">quality ${Math.round(w.quality * 100)}% · recorded day ${w.createdDay}</div>${gate.ok ? '' : `<div class="dim tiny" style="color:var(--color-warning);">${gate.reasons.join(' · ')}</div>`}`;
+      const btn = document.createElement('button');
+      btn.className = 'btn tiny';
+      btn.setAttribute('data-action', 'works.release');
+      btn.setAttribute('data-row-id', w.id);
+      btn.textContent = 'Release';
+      if (!gate.ok) btn.disabled = true;
+      btn.style.marginTop = 'var(--space-2)';
+      info.appendChild(btn);
+      card.appendChild(info);
+      body.appendChild(card);
+    }
+  }
+
+  if (out.length > 0) {
+    group('Out', `${out.length} on the platform`);
+    for (const w of out) {
+      const row = income.byWork.find(r => r.id === w.id);
+      const sincePromo = w.lastPromotedDay != null ? day - w.lastPromotedDay : null;
+      const card = document.createElement('div');
+      card.className = 'cs-panel ink-card';
+      card.appendChild(bookCoverSwatch(w));
+      const info = document.createElement('div');
+      info.className = 'ink-info';
+      info.innerHTML = `<h3>${escapeHtml(w.title)}${row && row.spike ? ' <span class="dim tiny" style="color:var(--color-warning);">TRENDING</span>' : ''}</h3>
+        <div class="dim tiny">quality ${Math.round(w.quality * 100)}% · released day ${w.releasedDay}</div>
+        <div class="dim tiny">Plays ${Math.round(w.reach)} · earned ${Math.round(w.earned)} so far${row ? ` · ${Math.round(row.amount * 100) / 100} today` : ''}${sincePromo != null ? ` · promoted ${sincePromo === 0 ? 'today' : `${sincePromo}d ago`}` : ''}</div>`;
+      const btn = document.createElement('button');
+      btn.className = 'btn tiny';
+      btn.setAttribute('data-action', 'works.promote');
+      btn.setAttribute('data-row-id', w.id);
+      btn.textContent = 'Promote';
+      btn.style.marginTop = 'var(--space-2)';
+      info.appendChild(btn);
+      card.appendChild(info);
+      body.appendChild(card);
+    }
   }
 }
 
@@ -1284,7 +2122,11 @@ function renderDoorDropBrowse(body, gs, app, screen) {
   body.appendChild(filterRow);
   // Within a filter, open places render before closed ones — a closed card
   // still shows (so the player can see the hours), just dimmed and last.
-  const list = RESTAURANT_DEFS_LIST
+  // Aspirations & Creative Careers Phase 8 (D24): the player's own kitchen
+  // rides the same list at read time (restaurantVendorsForDisplay), greyed
+  // — you cannot order from yourself.
+  const vendors = typeof restaurantVendorsForDisplay === 'function' ? restaurantVendorsForDisplay(gs) : RESTAURANT_DEFS_LIST;
+  const list = vendors
     .filter(def => foodBrowseFilterService === 'all' || def.service === foodBrowseFilterService)
     .sort((a, b) => (isRestaurantOpen(b, nowMinutes) ? 1 : 0) - (isRestaurantOpen(a, nowMinutes) ? 1 : 0));
   const grid = document.createElement('div');
@@ -1292,16 +2134,18 @@ function renderDoorDropBrowse(body, gs, app, screen) {
   for (const def of list) {
     const open = isRestaurantOpen(def, nowMinutes);
     const card = document.createElement('div');
-    card.className = `dd-card${open ? '' : ' dd-closed'}`;
+    card.className = `dd-card${open ? '' : ' dd-closed'}${def.player ? ' dd-closed' : ''}`;
     card.innerHTML = `
       <div class="dd-card-head">
-        <span class="hc-card-title">${def.label}</span>
+        <span class="hc-card-title">${escapeHtml(def.label)}</span>
         <span class="dim tiny">${def.cuisine}</span>
       </div>
       <div class="dim tiny">${def.blurb}</div>
-      <div class="dim tiny">~${def.prepMinutes} min prep — ${def.deliveryFeeBase} delivery — ${formatRestaurantHours(def)}</div>
+      <div class="dim tiny">${def.player ? 'Your listing' : `~${def.prepMinutes} min prep — ${def.deliveryFeeBase} delivery — ${formatRestaurantHours(def)}`}</div>
     `;
-    if (!open) {
+    if (def.player) {
+      card.innerHTML += '<div class="cs-status-pill">That\'s you</div>';
+    } else if (!open) {
       card.innerHTML += '<div class="cs-status-pill">Closed</div>';
     } else {
       const btn = document.createElement('button');
@@ -4164,6 +5008,26 @@ function renderBankOverview(body, gs, app, screen) {
   }
   body.appendChild(owedPanel);
 
+  // aspirations-and-creative-careers Phase 12 (D40): the player's Chatter
+  // subscriptions — charged with rent, listed here like any other standing
+  // cost. Handles only (D30).
+  const subs = (typeof playerSubscriptionLines === 'function') ? playerSubscriptionLines(gs) : [];
+  if (subs.length > 0) {
+    const subPanel = document.createElement('div');
+    subPanel.className = 'cs-panel';
+    const sh = document.createElement('div');
+    sh.className = 'tax-header';
+    sh.innerHTML = '<span class="tax-title">Subscriptions</span><span class="tax-quarter">$' + playerSubscriptionTotal(gs).toLocaleString() + ' a cycle, with rent</span>';
+    subPanel.appendChild(sh);
+    for (const s of subs) {
+      const row = document.createElement('div');
+      row.className = 'bank-owed-row';
+      row.innerHTML = '<span class="bank-owed-label">@' + avatarEscape(s.handle) + ' · ' + (s.tier === 'private' ? CHATTER_LABELS.private : CHATTER_LABELS.backers) + '</span><span class="bank-owed-value">$' + s.price + '</span>';
+      subPanel.appendChild(row);
+    }
+    body.appendChild(subPanel);
+  }
+
   const hint = document.createElement('div');
   hint.className = 'dim tiny';
   hint.textContent = 'Head to the Bills tab to pay, or Portfolia to invest.';
@@ -4990,6 +5854,114 @@ function renderDreamEntry(body, gs, app, screenDef) {
   }
 }
 
+// --- Patch Notes (2026-09-10) ---------------------------------------------
+// The one app in this game that isn't in-fiction: a real release history,
+// PATCH_NOTES (defs.patchnotes.js), newest entry first. Same list+detail
+// shape as Dream Diary exactly, minus the image panels — click handlers in
+// UI.js (patchnotes.open-entry). Rendered on both devices through the
+// shared-app path (render.phone.js's COMPUTER_RENDERERS dispatch).
+function patchNotesEmptyState(text) {
+  const div = document.createElement('div');
+  div.className = 'patchnotes-empty';
+  div.textContent = text;
+  return div;
+}
+
+function renderPatchNotesList(body, gs, app, screenDef) {
+  body.innerHTML = '';
+  const notes = Array.isArray(PATCH_NOTES) ? PATCH_NOTES : [];
+  if (notes.length === 0) {
+    body.appendChild(patchNotesEmptyState('No patch notes yet.'));
+    return;
+  }
+  const list = document.createElement('div');
+  list.className = 'patchnotes-list';
+  for (const entry of notes) {
+    if (!entry || !entry.version) continue;
+    const row = document.createElement('button');
+    row.className = 'patchnotes-row';
+    row.setAttribute('data-action', 'patchnotes.open-entry');
+    row.setAttribute('data-row-id', entry.version);
+    const main = document.createElement('div');
+    main.className = 'patchnotes-row-main';
+    const title = document.createElement('div');
+    title.className = 'patchnotes-row-title';
+    title.textContent = `v${entry.version} — ${entry.title || 'Update'}`;
+    const meta = document.createElement('div');
+    meta.className = 'patchnotes-row-meta dim tiny';
+    const count = Array.isArray(entry.changes) ? entry.changes.length : 0;
+    meta.textContent = `${entry.date || ''}${count ? ` · ${count} change${count === 1 ? '' : 's'}` : ''}`;
+    main.appendChild(title);
+    main.appendChild(meta);
+    const chevron = document.createElement('span');
+    chevron.className = 'patchnotes-row-chevron';
+    chevron.textContent = '›';
+    row.appendChild(main);
+    row.appendChild(chevron);
+    list.appendChild(row);
+  }
+  body.appendChild(list);
+}
+
+// The current screen's params for the patchnotes app on whichever device is
+// showing it (phone navStack or computer window) — the detail screen's
+// version. Mirrors codexScreenParams/dreamEntryParams exactly.
+function patchNotesScreenParams(gs) {
+  const phone = gs?.world?.phone;
+  if (phone?.openAppId === 'patchnotes' && Array.isArray(phone.navStack)) {
+    const top = phone.navStack[phone.navStack.length - 1];
+    if (top && top.appId === 'patchnotes' && top.screenId === 'detail') return top.params || {};
+  }
+  const win = gs?.world?.computer?.windows?.patchnotes;
+  if (win && win.screenId === 'detail') return win.params || {};
+  return {};
+}
+
+function renderPatchNotesDetail(body, gs, app, screenDef) {
+  body.innerHTML = '';
+  const version = patchNotesScreenParams(gs).version;
+  const notes = Array.isArray(PATCH_NOTES) ? PATCH_NOTES : [];
+  const entry = version ? notes.find(e => e && e.version === version) : null;
+  if (!entry) {
+    body.appendChild(patchNotesEmptyState('That version could not be found.'));
+    return;
+  }
+  const head = document.createElement('div');
+  head.className = 'patchnotes-entry-head';
+  const title = document.createElement('div');
+  title.className = 'patchnotes-entry-title';
+  title.textContent = `v${entry.version} — ${entry.title || 'Update'}`;
+  const meta = document.createElement('div');
+  meta.className = 'patchnotes-entry-meta dim tiny';
+  meta.textContent = entry.date || '';
+  head.appendChild(title);
+  head.appendChild(meta);
+  body.appendChild(head);
+  if (entry.summary) {
+    const summary = document.createElement('p');
+    summary.className = 'patchnotes-entry-summary';
+    summary.textContent = entry.summary;
+    body.appendChild(summary);
+  }
+  const list = document.createElement('div');
+  list.className = 'patchnotes-entry-changes';
+  for (const change of (entry.changes || [])) {
+    if (!change || !change.text) continue;
+    const row = document.createElement('div');
+    row.className = 'patchnotes-change-row';
+    const tag = document.createElement('span');
+    tag.className = `patchnotes-change-tag patchnotes-change-tag-${change.kind || 'changed'}`;
+    tag.textContent = (typeof PATCHNOTES_KIND_LABELS !== 'undefined' && PATCHNOTES_KIND_LABELS[change.kind]) || 'Changed';
+    const text = document.createElement('span');
+    text.className = 'patchnotes-change-text';
+    text.textContent = change.text;
+    row.appendChild(tag);
+    row.appendChild(text);
+    list.appendChild(row);
+  }
+  body.appendChild(list);
+}
+
 // ===== /SECTION: RENDER.COMPUTER =====
 // ===== SECTION: RENDER.COMPUTER (MOBILE) =====
 // The whole money picture at a glance. Four real numbers, all drawn
@@ -5067,6 +6039,26 @@ function renderBankOverview(body, gs, app, screen) {
     }
   }
   body.appendChild(owedPanel);
+
+  // aspirations-and-creative-careers Phase 12 (D40): the player's Chatter
+  // subscriptions — charged with rent, listed here like any other standing
+  // cost. Handles only (D30).
+  const subs = (typeof playerSubscriptionLines === 'function') ? playerSubscriptionLines(gs) : [];
+  if (subs.length > 0) {
+    const subPanel = document.createElement('div');
+    subPanel.className = 'cs-panel';
+    const sh = document.createElement('div');
+    sh.className = 'tax-header';
+    sh.innerHTML = '<span class="tax-title">Subscriptions</span><span class="tax-quarter">$' + playerSubscriptionTotal(gs).toLocaleString() + ' a cycle, with rent</span>';
+    subPanel.appendChild(sh);
+    for (const s of subs) {
+      const row = document.createElement('div');
+      row.className = 'bank-owed-row';
+      row.innerHTML = '<span class="bank-owed-label">@' + avatarEscape(s.handle) + ' · ' + (s.tier === 'private' ? CHATTER_LABELS.private : CHATTER_LABELS.backers) + '</span><span class="bank-owed-value">$' + s.price + '</span>';
+      subPanel.appendChild(row);
+    }
+    body.appendChild(subPanel);
+  }
 
   const hint = document.createElement('div');
   hint.className = 'dim tiny';
@@ -5878,6 +6870,108 @@ function renderDreamEntry(body, gs, app, screenDef) {
   }
 }
 
+// --- Patch Notes (2026-09-10) — MOBILE copy, byte-identical to the desktop
+// section above (verify-dreams-diary.js's own convention for this file:
+// duplicate renderers, one set per device section, are intentional). ---
+function patchNotesEmptyState(text) {
+  const div = document.createElement('div');
+  div.className = 'patchnotes-empty';
+  div.textContent = text;
+  return div;
+}
+
+function renderPatchNotesList(body, gs, app, screenDef) {
+  body.innerHTML = '';
+  const notes = Array.isArray(PATCH_NOTES) ? PATCH_NOTES : [];
+  if (notes.length === 0) {
+    body.appendChild(patchNotesEmptyState('No patch notes yet.'));
+    return;
+  }
+  const list = document.createElement('div');
+  list.className = 'patchnotes-list';
+  for (const entry of notes) {
+    if (!entry || !entry.version) continue;
+    const row = document.createElement('button');
+    row.className = 'patchnotes-row';
+    row.setAttribute('data-action', 'patchnotes.open-entry');
+    row.setAttribute('data-row-id', entry.version);
+    const main = document.createElement('div');
+    main.className = 'patchnotes-row-main';
+    const title = document.createElement('div');
+    title.className = 'patchnotes-row-title';
+    title.textContent = `v${entry.version} — ${entry.title || 'Update'}`;
+    const meta = document.createElement('div');
+    meta.className = 'patchnotes-row-meta dim tiny';
+    const count = Array.isArray(entry.changes) ? entry.changes.length : 0;
+    meta.textContent = `${entry.date || ''}${count ? ` · ${count} change${count === 1 ? '' : 's'}` : ''}`;
+    main.appendChild(title);
+    main.appendChild(meta);
+    const chevron = document.createElement('span');
+    chevron.className = 'patchnotes-row-chevron';
+    chevron.textContent = '›';
+    row.appendChild(main);
+    row.appendChild(chevron);
+    list.appendChild(row);
+  }
+  body.appendChild(list);
+}
+
+function patchNotesScreenParams(gs) {
+  const phone = gs?.world?.phone;
+  if (phone?.openAppId === 'patchnotes' && Array.isArray(phone.navStack)) {
+    const top = phone.navStack[phone.navStack.length - 1];
+    if (top && top.appId === 'patchnotes' && top.screenId === 'detail') return top.params || {};
+  }
+  const win = gs?.world?.computer?.windows?.patchnotes;
+  if (win && win.screenId === 'detail') return win.params || {};
+  return {};
+}
+
+function renderPatchNotesDetail(body, gs, app, screenDef) {
+  body.innerHTML = '';
+  const version = patchNotesScreenParams(gs).version;
+  const notes = Array.isArray(PATCH_NOTES) ? PATCH_NOTES : [];
+  const entry = version ? notes.find(e => e && e.version === version) : null;
+  if (!entry) {
+    body.appendChild(patchNotesEmptyState('That version could not be found.'));
+    return;
+  }
+  const head = document.createElement('div');
+  head.className = 'patchnotes-entry-head';
+  const title = document.createElement('div');
+  title.className = 'patchnotes-entry-title';
+  title.textContent = `v${entry.version} — ${entry.title || 'Update'}`;
+  const meta = document.createElement('div');
+  meta.className = 'patchnotes-entry-meta dim tiny';
+  meta.textContent = entry.date || '';
+  head.appendChild(title);
+  head.appendChild(meta);
+  body.appendChild(head);
+  if (entry.summary) {
+    const summary = document.createElement('p');
+    summary.className = 'patchnotes-entry-summary';
+    summary.textContent = entry.summary;
+    body.appendChild(summary);
+  }
+  const list = document.createElement('div');
+  list.className = 'patchnotes-entry-changes';
+  for (const change of (entry.changes || [])) {
+    if (!change || !change.text) continue;
+    const row = document.createElement('div');
+    row.className = 'patchnotes-change-row';
+    const tag = document.createElement('span');
+    tag.className = `patchnotes-change-tag patchnotes-change-tag-${change.kind || 'changed'}`;
+    tag.textContent = (typeof PATCHNOTES_KIND_LABELS !== 'undefined' && PATCHNOTES_KIND_LABELS[change.kind]) || 'Changed';
+    const text = document.createElement('span');
+    text.className = 'patchnotes-change-text';
+    text.textContent = change.text;
+    row.appendChild(tag);
+    row.appendChild(text);
+    list.appendChild(row);
+  }
+  body.appendChild(list);
+}
+
 // DailyGrid (actions-and-activities-overhaul-plan.md Phase 14, D23). Cell
 // inputs get their own direct addEventListener (AH_renderSearchBar's
 // pattern in afterhours.js), not the [data-action] delegation — a per-
@@ -6023,6 +7117,16 @@ function chatterAuthorName(gs, authorId) {
   return gs.npcs?.[authorId]?.bible?.name || 'Someone';
 }
 
+// Phase 9 (D30): the pseudonymous label — "@handle" first, the known name
+// after it for cast the player lives with or has met (housemates posting
+// about your own flat are not a mystery). The handle is what a stranger,
+// a ghost, or a later recognition roll (Phase 13) sees.
+function chatterAuthorLabel(gs, authorId) {
+  const handle = typeof chatterHandleFor === 'function' ? chatterHandleFor(gs, authorId) : '';
+  const name = chatterAuthorName(gs, authorId);
+  return handle ? `@${handle} · ${name}` : name;
+}
+
 // One post card: avatar, author name (opens their profile), day label, the
 // source badge (D24's eventRef finally gets a reader here), post text,
 // like button + count, and an inline comment list + composer. Author/text
@@ -6041,16 +7145,18 @@ function renderChatterPost(gs, post, device) {
   header.innerHTML = avatarChipHtml(who, { className: 'cht-avatar', size: 'card', name, isPlayer: post.author === 'player', ring: post.author === 'player' ? 'player' : 'default' });
   const nameBtn = document.createElement('button');
   nameBtn.className = 'cht-author-btn';
-  nameBtn.textContent = name;
+  nameBtn.textContent = chatterAuthorLabel(gs, post.author);
   if (post.author !== 'player') {
     nameBtn.setAttribute('data-action', 'chatter.open-profile');
     nameBtn.setAttribute('data-npc', post.author);
   } else {
-    nameBtn.disabled = true;
+    nameBtn.setAttribute('data-action', 'chatter.open-profile');
+    nameBtn.setAttribute('data-npc', 'player');
   }
   const meta = document.createElement('span');
   meta.className = 'cht-post-meta dim tiny';
-  meta.textContent = `${chatterDayLabel(post.day, nowDay)} · ${post.eventRef?.kind === 'fact' ? 'overheard' : post.eventRef ? 'happened today' : 'posted'}`;
+  const kindWord = post.media?.kind === 'poll' ? 'asked' : post.eventRef?.kind === 'fact' ? 'overheard' : post.eventRef ? 'happened today' : 'posted';
+  meta.textContent = `${chatterDayLabel(post.day, nowDay)} · ${kindWord}${post.visibility === 'private' ? ` · ${CHATTER_LABELS.private}` : ''}`;
   header.appendChild(nameBtn);
   header.appendChild(meta);
   card.appendChild(header);
@@ -6059,6 +7165,59 @@ function renderChatterPost(gs, post, device) {
   text.className = 'cht-post-text';
   text.textContent = post.text;
   card.appendChild(text);
+
+  // Phase 12 (D39/D41): an NPC creator's private post is DESCRIBED to a
+  // non-subscriber — the caption above, no image, and the way in — and
+  // rendered through the gate for a subscriber (the record's prompt was
+  // built under it).
+  const view = (typeof chatterPrivatePostView === 'function') ? chatterPrivatePostView(gs, post) : { rendered: true };
+  if (!view.rendered) {
+    const lock = document.createElement('div');
+    lock.className = 'cht-private-lock dim tiny';
+    lock.textContent = view.blocked ? `${CHATTER_LABELS.private} — they've blocked you.` : `${CHATTER_LABELS.private} — subscribers only${view.price != null ? ` · ${view.price} a cycle` : ''}.`;
+    card.appendChild(lock);
+    if (!view.blocked) {
+      const sub = document.createElement('button');
+      sub.className = 'btn btn-secondary tiny';
+      sub.setAttribute('data-action', 'chatter.subscribe'); sub.setAttribute('data-npc', post.author); sub.setAttribute('data-row-id', 'private');
+      sub.textContent = `Subscribe to ${CHATTER_LABELS.private}`;
+      card.appendChild(sub);
+    }
+    return card;
+  }
+
+  // Phase 9 (D27): media. An image is a frozen photo record drawn through
+  // the camera's own getPhotoImage (placeholder first, the real image when
+  // it arrives — or never, offline, which is fine); a poll is its options
+  // with the decided tally and a vote button each.
+  if (post.media && post.media.kind === 'image' && post.media.photo) {
+    const img = document.createElement('img');
+    img.className = 'cht-post-image';
+    img.alt = post.media.photo.caption || 'photo';
+    img.src = typeof getPlaceholder === 'function' ? getPlaceholder() : '';
+    card.appendChild(img);
+    if (typeof getPhotoImage === 'function') getPhotoImage(post.media.photo).then(result => { if (result && result.url) img.src = result.url; }).catch(() => {});
+  } else if (post.media && post.media.kind === 'poll') {
+    const tally = chatterPollTally(post);
+    const total = tally.reduce((s, n) => s + n, 0);
+    const mine = post.media.votes.player;
+    const poll = document.createElement('div');
+    poll.className = 'cht-poll';
+    post.media.options.forEach((opt, i) => {
+      const row = document.createElement('button');
+      row.className = 'cht-poll-option' + (mine === i ? ' is-on' : '');
+      row.setAttribute('data-action', 'chatter.vote');
+      row.setAttribute('data-row-id', `${post.id}:${i}`);
+      const pct = total > 0 ? Math.round((tally[i] / total) * 100) : 0;
+      row.innerHTML = `<span class="cht-poll-fill" style="width:${pct}%"></span><span class="cht-poll-label">${avatarEscape(opt)}</span><span class="cht-poll-pct dim tiny">${pct}% · ${tally[i]}</span>`;
+      poll.appendChild(row);
+    });
+    const foot = document.createElement('div');
+    foot.className = 'dim tiny';
+    foot.textContent = `${total} ${total === 1 ? 'vote' : 'votes'}${mine != null ? ' · you voted' : ''}`;
+    poll.appendChild(foot);
+    card.appendChild(poll);
+  }
 
   const actions = document.createElement('div');
   actions.className = 'cht-post-actions';
@@ -6079,7 +7238,9 @@ function renderChatterPost(gs, post, device) {
       row.className = 'cht-comment';
       const who2 = document.createElement('span');
       who2.className = 'cht-comment-author';
-      who2.textContent = chatterAuthorName(gs, c.author) + ':';
+      // Phase 10 (D90): a ghost comment's handle is regenerated from its
+      // seed every render — never stored (invariant 9).
+      who2.textContent = (c.ghost ? '@' + ghostHandle(c.seed, castHandles(gs)) : chatterAuthorName(gs, c.author)) + ':';
       const body2 = document.createElement('span');
       body2.textContent = ' ' + c.text;
       row.appendChild(who2);
@@ -6114,29 +7275,89 @@ function renderChatterPost(gs, post, device) {
 function renderChatterFeed(body, gs, app, screen) {
   const device = body.closest('[data-device]')?.getAttribute('data-device') || 'computer';
   const feed = gs.world.computer.apps.social_feed;
+  const profile = typeof ensureChatterProfile === 'function' ? ensureChatterProfile(gs) : null;
   body.innerHTML = '';
 
   const header = document.createElement('div');
   header.className = 'wh-header';
-  header.innerHTML = '<h3>Chatter</h3>';
+  if (profile && profile.handle) {
+    const counts = chatterAudienceCounts(gs);
+    header.innerHTML = `<h3>Chatter</h3><div class="wh-stats"><span>@${avatarEscape(profile.handle)}</span><span>${counts.followers} ${CHATTER_LABELS.followers}</span><span>${counts.friends} ${CHATTER_LABELS.friends}</span></div>`;
+    const me = document.createElement('button');
+    me.className = 'btn btn-secondary tiny';
+    me.setAttribute('data-action', 'chatter.open-profile');
+    me.setAttribute('data-npc', 'player');
+    me.textContent = 'My profile';
+    header.appendChild(me);
+  } else {
+    header.innerHTML = '<h3>Chatter</h3>';
+  }
   body.appendChild(header);
 
-  const composeBox = document.createElement('div');
-  composeBox.className = 'cht-compose';
-  const textarea = document.createElement('textarea');
-  textarea.id = 'cht-compose-input';
-  textarea.className = 'cht-compose-input';
-  textarea.placeholder = "What's happening?";
-  textarea.maxLength = 280;
-  const postBtn = document.createElement('button');
-  postBtn.className = 'btn tiny';
-  postBtn.setAttribute('data-action', 'chatter.post');
-  postBtn.textContent = 'Post';
-  composeBox.appendChild(textarea);
-  composeBox.appendChild(postBtn);
-  body.appendChild(composeBox);
+  // Phase 9 (D30): the handle prompt on first open. No handle, no
+  // composer — everything on the platform is pseudonymous from the start.
+  if (profile && !profile.handle) {
+    const claim = makePanel(`<h3>Pick a handle</h3><p class="dim tiny">Chatter runs on handles, not names. Yours is what everyone — housemates, strangers, anyone who ever finds your page — sees. You can't be someone who's already here.</p>`);
+    const row = document.createElement('div');
+    row.className = 'cht-comment-compose';
+    const input = document.createElement('input');
+    input.type = 'text'; input.id = 'cht-handle-input'; input.className = 'cht-comment-input'; input.placeholder = '@handle'; input.maxLength = 24;
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); handleAction('chatter.set-handle', null, { device }); } });
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny'; btn.setAttribute('data-action', 'chatter.set-handle'); btn.textContent = 'Claim';
+    row.appendChild(input); row.appendChild(btn);
+    claim.appendChild(row);
+    body.appendChild(claim);
+  } else {
+    const composeBox = document.createElement('div');
+    composeBox.className = 'cht-compose';
+    const textarea = document.createElement('textarea');
+    textarea.id = 'cht-compose-input';
+    textarea.className = 'cht-compose-input';
+    textarea.placeholder = "What's happening?";
+    textarea.maxLength = 280;
+    composeBox.appendChild(textarea);
+    // Phase 9 (D27/D31): visibility — Private greyed until Phase 11's page
+    // is open; a poll toggle with two option boxes.
+    const opts = document.createElement('div');
+    opts.className = 'cht-compose-opts';
+    const privOpen = !!(profile && profile.private && profile.private.open);
+    // Phase 10 (D29): what the post is about — a released work or a craft —
+    // decides its appeal; nothing named is lifestyle.
+    const works = (typeof releasedWorks === 'function') ? releasedWorks(gs.player) : [];
+    const aboutOpts = ['<option value="">Just life</option>']
+      .concat(works.map(w => `<option value="work:${avatarEscape(w.id)}">${avatarEscape(w.title)}</option>`))
+      .concat(SKILL_IDS.filter(id => skillLevel(gs.player, id) > 0).map(id => `<option value="skill:${id}">${id.charAt(0).toUpperCase() + id.slice(1)} (lv ${skillLevel(gs.player, id)})</option>`));
+    // Phase 11 (D33): a camera-roll photo on the post. A cast member in the
+    // frame needs their consent_feature fact (the $Feature ask) — the
+    // option says so, and postChatterAsPlayer refuses without it.
+    const roll = gs.world.phone?.camera?.roll || [];
+    const photoOpts = ['<option value="">No photo</option>'].concat(roll.slice(0, 12).map(p => {
+      const missing = typeof photoSubjectsWithoutConsent === 'function' ? photoSubjectsWithoutConsent(gs, p) : [];
+      const tag = missing.length > 0 ? ` (needs ${missing.map(id => gs.npcs[id]?.bible?.name || 'someone').join(', ')}'s ok)` : (p.level === 'intimate' ? ' (explicit)' : '');
+      return `<option value="${avatarEscape(p.id)}">${avatarEscape(p.caption)}${avatarEscape(tag)}</option>`;
+    }));
+    opts.innerHTML = `<label class="dim tiny">To <select id="cht-compose-visibility"><option value="public">Everyone</option><option value="private"${privOpen ? '' : ' disabled'}>${CHATTER_LABELS.private}${privOpen ? '' : ' (not open)'}</option></select></label>
+      <label class="dim tiny">About <select id="cht-compose-about">${aboutOpts.join('')}</select></label>
+      ${roll.length > 0 ? `<label class="dim tiny">Photo <select id="cht-compose-photo">${photoOpts.join('')}</select></label>` : ''}
+      <label class="dim tiny"><input type="checkbox" id="cht-compose-poll"> Make it a poll</label>
+      <span id="cht-compose-poll-opts" hidden><input type="text" id="cht-poll-opt-1" class="cht-comment-input" placeholder="Option 1" maxlength="40"> <input type="text" id="cht-poll-opt-2" class="cht-comment-input" placeholder="Option 2" maxlength="40"></span>`;
+    composeBox.appendChild(opts);
+    const pollToggle = opts.querySelector('#cht-compose-poll');
+    const pollOpts = opts.querySelector('#cht-compose-poll-opts');
+    if (pollToggle && pollOpts) pollToggle.addEventListener('change', () => { if (pollToggle.checked) pollOpts.removeAttribute('hidden'); else pollOpts.setAttribute('hidden', ''); });
+    const postBtn = document.createElement('button');
+    postBtn.className = 'btn tiny';
+    postBtn.setAttribute('data-action', 'chatter.post');
+    postBtn.textContent = 'Post';
+    composeBox.appendChild(postBtn);
+    body.appendChild(composeBox);
+  }
 
-  if (feed.posts.length === 0) {
+  // Phase 9 (D35): the player's view of the feed — a blocked author's
+  // posts are gone from it.
+  const visible = typeof visiblePostsFor === 'function' ? visiblePostsFor(gs, 'player') : feed.posts;
+  if (visible.length === 0) {
     body.appendChild(makePanel('<p class="dim">Nothing here yet — Chatter fills up as house life happens.</p>'));
   } else {
     const list = document.createElement('div');
@@ -6144,7 +7365,123 @@ function renderChatterFeed(body, gs, app, screen) {
     // Newest first; ties (same day) keep insertion order stable via a
     // stable-sort-safe index compare rather than relying on Array#sort's
     // stability alone across engines.
-    const ordered = feed.posts.map((p, i) => ({ p, i })).sort((a, b) => (b.p.day - a.p.day) || (b.i - a.i));
+    const ordered = visible.map((p, i) => ({ p, i })).sort((a, b) => (b.p.day - a.p.day) || (b.i - a.i));
+    for (const { p } of ordered) list.appendChild(renderChatterPost(gs, p, device));
+    body.appendChild(list);
+  }
+  if (typeof hydrateAvatars === 'function') hydrateAvatars(body);
+}
+
+// aspirations-and-creative-careers Phase 11 (D31/D32/D34): the player's
+// Private page. Closed (or no mature flag): a short note and the way back.
+// Open: the subscriber count and price setter (chatter.set-price with
+// rowId 'private'), the self-shot chip, and the private posts — the SAME
+// renderChatterPost cards the feed uses.
+// aspirations-and-creative-careers Phase 14 (D46–D49): Compass. The five
+// directions as chips (up to two on, `compass.toggle`), then — per chosen
+// direction — its live milestones (at most two, D49) and its progress;
+// completed milestones listed by day. Nothing here is a task list: no
+// urgency, no due day, no tracker line (D49).
+function renderCompassOverview(body, gs, app, screen) {
+  body.innerHTML = '';
+  const a = ensurePlayerAspirations(gs.player);
+  const header = document.createElement('div');
+  header.className = 'wh-header';
+  header.innerHTML = `<h3>${COMPASS_LABEL}</h3><div class="dim tiny">Where you're headed. Pick up to ${ASPIRATION_TUNING.maxDirections} — nothing is locked behind any of it, and you can change your mind any time.</div>`;
+  body.appendChild(header);
+
+  const chips = document.createElement('div');
+  chips.className = 'cs-panel compass-chips';
+  for (const id of ASPIRATION_DIRECTION_IDS) {
+    const d = ASPIRATION_DIRECTIONS[id];
+    const on = a.directions.includes(id);
+    const p = directionProgress(gs, id);
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny' + (on ? '' : ' btn-secondary');
+    btn.setAttribute('data-action', 'compass.toggle'); btn.setAttribute('data-row-id', id);
+    btn.textContent = `${d.label}${p.done > 0 ? ` · ${p.done}/${p.total}` : ''}`;
+    btn.title = d.blurb;
+    chips.appendChild(btn);
+  }
+  body.appendChild(chips);
+
+  if (a.directions.length === 0) {
+    body.appendChild(makePanel('<p class="dim">No direction chosen. That is allowed — the milestones are still there, just not watched.</p>'));
+  }
+  for (const id of a.directions) {
+    const d = ASPIRATION_DIRECTIONS[id];
+    const p = directionProgress(gs, id);
+    const panel = document.createElement('div');
+    panel.className = 'cs-panel';
+    panel.innerHTML = `<h3>${avatarEscape(d.label)}</h3><div class="dim tiny">${avatarEscape(d.blurb)} · ${p.done}/${p.total}${p.exhausted ? ' — the whole way' : ''}</div>`;
+    const live = liveMilestonesFor(gs, id);
+    if (live.length === 0 && !p.exhausted) {
+      const none = document.createElement('div'); none.className = 'dim tiny'; none.textContent = 'Nothing in reach just yet.'; panel.appendChild(none);
+    }
+    for (const m of live) {
+      const row = document.createElement('div');
+      row.className = 'cs-catalog-row';
+      row.innerHTML = `<span class="cs-catalog-title">◦ ${avatarEscape(m.label)}</span>${m.hint ? `<span class="dim tiny">${avatarEscape(m.hint)}</span>` : ''}`;
+      panel.appendChild(row);
+    }
+    const done = directionMilestones(id).filter(m => a.completed[m.id]);
+    if (done.length > 0) {
+      const list = document.createElement('div');
+      list.className = 'dim tiny';
+      list.textContent = 'Reached: ' + done.map(m => `${m.label} (day ${a.completed[m.id]})`).join(' · ');
+      panel.appendChild(list);
+    }
+    body.appendChild(panel);
+  }
+}
+
+function renderChatterPrivate(body, gs, app, screen) {
+  const device = body.closest('[data-device]')?.getAttribute('data-device') || 'computer';
+  body.innerHTML = '';
+  const profile = typeof ensureChatterProfile === 'function' ? ensureChatterProfile(gs) : null;
+  const header = document.createElement('div');
+  header.className = 'wh-header';
+  header.innerHTML = `<h3>${CHATTER_LABELS.private}</h3>`;
+  const back = document.createElement('button');
+  back.className = 'btn btn-secondary tiny'; back.setAttribute('data-action', 'chatter.open-profile'); back.setAttribute('data-npc', 'player'); back.textContent = 'My profile';
+  header.appendChild(back);
+  body.appendChild(header);
+  if (!profile || !profile.private.open || typeof intimateAllowed !== 'function' || !intimateAllowed(gs)) {
+    body.appendChild(makePanel(`<p class="dim">${CHATTER_LABELS.private} isn't open.</p>`));
+    return;
+  }
+  const counts = chatterAudienceCounts(gs);
+  const T = CHATTER_PLATFORM;
+  const money = document.createElement('div');
+  money.className = 'cs-panel';
+  const cadence = typeof privateCadenceFactor === 'function' ? privateCadenceFactor(gs) : 0;
+  money.innerHTML = `<h3>Subscribers</h3><div class="wh-stats"><span>${counts.private} ${CHATTER_LABELS.private} (${profile.private.ghosts || 0} + ${profile.private.cast.length} cast)</span><span>${counts.private * profile.privatePrice} a cycle</span></div>
+    <div class="dim tiny">Followers subscribe at ${(ghostConversion(gs, 'private') * 100).toFixed(1)}% — a page that gets posted to converts (${T.privateCadenceTarget} posts a week for the full rate; ${Math.round(cadence * 100)}% of it now), re-counted each cycle. Dearer converts fewer.</div>`;
+  const row = document.createElement('div');
+  row.className = 'cht-comment-compose';
+  const input = document.createElement('input');
+  input.type = 'number'; input.id = 'cht-price-private'; input.className = 'cht-comment-input'; input.min = T.privatePriceBounds[0]; input.max = T.privatePriceBounds[1]; input.value = profile.privatePrice;
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-secondary tiny'; btn.setAttribute('data-action', 'chatter.set-price'); btn.setAttribute('data-row-id', 'private'); btn.textContent = `Set price (${T.privatePriceBounds[0]}–${T.privatePriceBounds[1]})`;
+  row.appendChild(input); row.appendChild(btn);
+  money.appendChild(row);
+  body.appendChild(money);
+
+  const compose = document.createElement('div');
+  compose.className = 'cs-panel';
+  compose.innerHTML = `<h3>Post</h3><div class="dim tiny">A self-shot is taken where you stand, as you are — the same rules as any picture of you. Text posts go through the feed's composer with "To: ${CHATTER_LABELS.private}".</div>`;
+  const shoot = document.createElement('button');
+  shoot.className = 'btn tiny'; shoot.setAttribute('data-action', 'chatter.self-shot'); shoot.textContent = 'Take a self-shot and post it';
+  compose.appendChild(shoot);
+  body.appendChild(compose);
+
+  const posts = privatePosts(gs);
+  if (posts.length === 0) {
+    body.appendChild(makePanel('<p class="dim">Nothing on the page yet.</p>'));
+  } else {
+    const list = document.createElement('div');
+    list.className = 'cht-feed';
+    const ordered = posts.map((p, i) => ({ p, i })).sort((a, b) => (b.p.day - a.p.day) || (b.i - a.i));
     for (const { p } of ordered) list.appendChild(renderChatterPost(gs, p, device));
     body.appendChild(list);
   }
@@ -6167,8 +7504,130 @@ function renderChatterProfile(body, gs, app, screen) {
   header.className = 'cht-profile-header';
   header.innerHTML = avatarChipHtml(who, { className: 'cht-profile-avatar', size: 'hero', name, isPlayer, ring: isPlayer ? 'player' : 'default' });
   const nameEl = document.createElement('h3');
-  nameEl.textContent = name;
+  nameEl.textContent = chatterAuthorLabel(gs, npcId);
   header.appendChild(nameEl);
+  // Phase 9 (D26/D28/D35): the player's own page — counts by label and the
+  // block list, manual add/remove; an NPC's page — a Block/Unblock button.
+  if (typeof ensureChatterProfile === 'function') {
+    const profile = ensureChatterProfile(gs);
+    if (isPlayer) {
+      const counts = chatterAudienceCounts(gs);
+      const stats = document.createElement('div');
+      stats.className = 'wh-stats';
+      stats.innerHTML = `<span>${counts.friends} ${CHATTER_LABELS.friends}</span><span>${counts.followers} ${CHATTER_LABELS.followers} (${Math.round(profile.ghostFollowers)} + ${profile.castFollowers.length} cast)</span><span>${counts.backers} ${CHATTER_LABELS.backers}</span><span>${counts.private} ${CHATTER_LABELS.private}</span>`;
+      header.appendChild(stats);
+      // Phase 10 (D32/D34): the price setter and the next payout.
+      const money = document.createElement('div');
+      money.className = 'cs-panel';
+      const nb = profile.nextBillingDay != null ? `next payout day ${profile.nextBillingDay}` : 'payouts start with your first billing cycle';
+      const expected = counts.backers * profile.backersPrice + counts.private * profile.privatePrice;
+      money.innerHTML = `<h3>Support</h3><div class="dim tiny">${CHATTER_LABELS.backers} pay per cycle, on the rent cadence — ${nb}${expected > 0 ? ` · ${expected} expected` : ''}. Followers become ${CHATTER_LABELS.backers} at ${(ghostConversion(gs, 'backers') * 100).toFixed(1)}% at this price (dearer converts fewer), re-counted each cycle.</div>`;
+      const row = document.createElement('div');
+      row.className = 'cht-comment-compose';
+      const input = document.createElement('input');
+      input.type = 'number'; input.id = 'cht-price-backers'; input.className = 'cht-comment-input'; input.min = CHATTER_PLATFORM.backersPriceBounds[0]; input.max = CHATTER_PLATFORM.backersPriceBounds[1]; input.value = profile.backersPrice;
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-secondary tiny'; btn.setAttribute('data-action', 'chatter.set-price'); btn.setAttribute('data-row-id', 'backers'); btn.textContent = `Set ${CHATTER_LABELS.backers} price (${CHATTER_PLATFORM.backersPriceBounds[0]}–${CHATTER_PLATFORM.backersPriceBounds[1]})`;
+      row.appendChild(input); row.appendChild(btn);
+      money.appendChild(row);
+      header.appendChild(money);
+      // Notifications: the growth log, ghost handles regenerated per line.
+      const log = Array.isArray(profile.growthLog) ? profile.growthLog : [];
+      if (log.length > 0) {
+        const notes = document.createElement('div');
+        notes.className = 'cs-panel';
+        notes.innerHTML = '<h3>Notifications</h3>';
+        const taken = castHandles(gs);
+        for (const entry of log.slice(0, 8)) {
+          const line = document.createElement('div');
+          line.className = 'dim tiny';
+          const h = ghostHandle(hashStr(`${gs.meta.seed}|notif|${entry.postId}`), taken);
+          const n = Math.round(entry.gained);
+          line.textContent = entry.viral ? `Day ${entry.day} · your post took off — @${h} and ${Math.max(0, n - 1)} others followed you` : n > 0 ? `Day ${entry.day} · @${h}${n > 1 ? ` and ${n - 1} others` : ''} followed you` : `Day ${entry.day} · a quiet one`;
+          notes.appendChild(line);
+        }
+        header.appendChild(notes);
+      }
+      // Phase 11 (D31): the Private page — not offered at all without the
+      // mature flag; an opt-in button until opened; a link once open.
+      if (typeof intimateAllowed === 'function' && intimateAllowed(gs)) {
+        const priv = document.createElement('div');
+        priv.className = 'cs-panel';
+        if (profile.private.open) {
+          priv.innerHTML = `<h3>${CHATTER_LABELS.private}</h3><div class="dim tiny">Open since day ${profile.private.openedDay ?? '?'} · ${counts.private} subscribed at ${profile.privatePrice} a cycle · ${privatePosts(gs).length} post${privatePosts(gs).length === 1 ? '' : 's'}.</div>`;
+          const go = document.createElement('button');
+          go.className = 'btn btn-secondary tiny'; go.setAttribute('data-action', 'computer.open-screen'); go.setAttribute('data-app', 'social_feed'); go.setAttribute('data-screen', 'private'); go.textContent = 'Open your page';
+          priv.appendChild(go);
+        } else {
+          priv.innerHTML = `<h3>${CHATTER_LABELS.private}</h3><div class="dim tiny">A paid page behind your handle, for what you don't post to everyone. Off until you open it.</div>`;
+          const open = document.createElement('button');
+          open.className = 'btn btn-secondary tiny'; open.setAttribute('data-action', 'chatter.open-private'); open.textContent = `Open a ${CHATTER_LABELS.private} page`;
+          priv.appendChild(open);
+        }
+        header.appendChild(priv);
+      }
+      const blockPanel = document.createElement('div');
+      blockPanel.className = 'cs-panel';
+      blockPanel.innerHTML = `<h3>Blocked</h3><p class="dim tiny">Blocking is yours to do, by hand. Someone you block sees none of your posts and can't follow you — and nobody warns you who to block first.</p>`;
+      if (profile.blocked.length === 0) blockPanel.innerHTML += '<div class="dim tiny">Nobody blocked.</div>';
+      for (const id of profile.blocked) {
+        const row = document.createElement('div');
+        row.className = 'cs-catalog-row';
+        row.innerHTML = `<span class="cs-catalog-title">${avatarEscape(chatterAuthorLabel(gs, id))}</span>`;
+        const un = document.createElement('button');
+        un.className = 'btn btn-secondary tiny'; un.setAttribute('data-action', 'chatter.unblock'); un.setAttribute('data-npc', id); un.textContent = 'Unblock';
+        row.appendChild(un);
+        blockPanel.appendChild(row);
+      }
+      const candidates = chatterCastIds(gs).filter(id => !profile.blocked.includes(id));
+      if (candidates.length > 0) {
+        const row = document.createElement('div');
+        row.className = 'cht-comment-compose';
+        const sel = document.createElement('select');
+        sel.id = 'cht-block-select';
+        for (const id of candidates) { const o = document.createElement('option'); o.value = id; o.textContent = chatterAuthorLabel(gs, id); sel.appendChild(o); }
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-secondary tiny'; btn.setAttribute('data-action', 'chatter.block'); btn.textContent = 'Block';
+        row.appendChild(sel); row.appendChild(btn);
+        blockPanel.appendChild(row);
+      }
+      header.appendChild(blockPanel);
+    } else {
+      const blocked = profile.blocked.includes(npcId);
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-secondary tiny';
+      btn.setAttribute('data-action', blocked ? 'chatter.unblock' : 'chatter.block');
+      btn.setAttribute('data-npc', npcId);
+      btn.textContent = blocked ? 'Unblock' : 'Block';
+      header.appendChild(btn);
+      const c = ensureNpcChatter(who, gs);
+      const follows = document.createElement('div');
+      follows.className = 'dim tiny';
+      follows.textContent = blocked ? 'Blocked — sees nothing of yours.' : (c.followsPlayer ? 'Follows you.' : "Doesn't follow you yet.");
+      header.appendChild(follows);
+      // Phase 12 (D38–D40): a creator's page — their following, their
+      // tiers at their prices, and the player's own subscription to them.
+      const creator = typeof npcCreator === 'function' ? npcCreator(who) : null;
+      if (creator && creator.active) {
+        const panel = document.createElement('div');
+        panel.className = 'cs-panel';
+        const mine = playerSubscribedTo(gs, npcId);
+        const blocksMe = npcBlocksPlayer(who);
+        const kinds = (creator.kinds || []).map(k => k.startsWith('craft:') ? k.slice(6) : k).join(', ');
+        panel.innerHTML = `<h3>Creator</h3><div class="wh-stats"><span>${Math.round(c.ghostFollowers || 0)} ${CHATTER_LABELS.followers}</span><span>${kinds || 'lifestyle'}</span>${creator.privateOpen ? `<span>runs a ${CHATTER_LABELS.private} page</span>` : ''}</div>
+          <div class="dim tiny">${blocksMe ? "They've blocked you — you can't subscribe." : mine ? `You're subscribed to their ${mine === 'private' ? CHATTER_LABELS.private : CHATTER_LABELS.backers} (${mine === 'private' ? creator.privatePrice : creator.backersPrice} a cycle, billed with rent).` : `${CHATTER_LABELS.backers} ${creator.backersPrice} a cycle${creator.privateOpen ? ` · ${CHATTER_LABELS.private} ${creator.privatePrice} a cycle` : ''}, billed with rent.`}</div>`;
+        if (!blocksMe && !blocked) {
+          const row = document.createElement('div');
+          row.className = 'cht-comment-compose';
+          if (mine !== 'backers') { const b = document.createElement('button'); b.className = 'btn btn-secondary tiny'; b.setAttribute('data-action', 'chatter.subscribe'); b.setAttribute('data-npc', npcId); b.setAttribute('data-row-id', 'backers'); b.textContent = `${mine ? 'Switch to' : 'Subscribe:'} ${CHATTER_LABELS.backers}`; row.appendChild(b); }
+          if (creator.privateOpen && mine !== 'private' && typeof intimateAllowed === 'function' && intimateAllowed(gs)) { const b = document.createElement('button'); b.className = 'btn btn-secondary tiny'; b.setAttribute('data-action', 'chatter.subscribe'); b.setAttribute('data-npc', npcId); b.setAttribute('data-row-id', 'private'); b.textContent = `${mine ? 'Switch to' : 'Subscribe:'} ${CHATTER_LABELS.private}`; row.appendChild(b); }
+          if (mine) { const b = document.createElement('button'); b.className = 'btn btn-secondary tiny'; b.setAttribute('data-action', 'chatter.unsubscribe'); b.setAttribute('data-npc', npcId); b.textContent = 'Unsubscribe'; row.appendChild(b); }
+          panel.appendChild(row);
+        }
+        header.appendChild(panel);
+      }
+    }
+  }
   if (!isPlayer && who.bible?.sketch) {
     const bio = document.createElement('p');
     bio.className = 'dim';

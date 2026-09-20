@@ -26,6 +26,14 @@ const APP_DEFS = {
     screens: {
       board: { label: 'Gig Board', renderer: 'gigboard', source: 'state:apps.gigs.board' },
       accepted: { label: 'My Gigs', renderer: 'gigaccepted' },
+      // Aspirations & Creative Careers Phase 4 (D20): the player's own
+      // production and catalog (works.js) beside their accepted gigs.
+      works: { label: 'Works', renderer: 'gigworks' },
+      // Phase 5 (D21): the self-publishing storefront — where a finished
+      // manuscript becomes a book on sale and royalties are read. The label
+      // is INKWELL_LABEL (defs.works.js) at render time; this string is the
+      // fallback the sub-nav shows before that file has loaded.
+      inkwell: { label: 'Inkwell', renderer: 'inkwell' },
     },
   },
   // "Nile" — an unsubtle Amazon knockoff. Everything ships next-day
@@ -78,6 +86,11 @@ const APP_DEFS = {
       // rotate interaction as dev/designer.html's Place tab, over the
       // player's own placed decor objects instead of the dev-authored config.
       place: { label: 'Place', renderer: 'home-placement' },
+      // Aspirations & Creative Careers Phase 16 (D54): hang a finished
+      // piece — pick one from the bag, pick a room, pick a wall
+      // (defs.design.js's wallSlotsFor; works.js's hangWork / takeDownWork).
+      // The minimal placement flow; the full editor is Phase 17.
+      hang: { label: 'Hang', renderer: 'home-hang' },
     },
   },
   // "QuickCart" — an Instacart parody, and Nile's grocery-carrying twin
@@ -232,6 +245,11 @@ const APP_DEFS = {
     entryScreen: 'browse',
     screens: {
       browse: { label: 'Browse', renderer: 'streamly', source: 'STREAM_DEFS_LIST', rowAction: 'stream.watch', rowActionLabel: 'Watch Episode' },
+      // Aspirations & Creative Careers Phase 6 (D22): the player's own
+      // tracks on the platform — plays (= reach) and earnings, and the
+      // release button for a finished session (works.js's releaseWork, the
+      // one release path; D19's gate reasons shown when it refuses).
+      releases: { label: 'Your Releases', renderer: 'streamly-releases' },
     },
   },
   // Brine Bank — merge of the old Bills + Portfolia apps (BrineOS Phase 1).
@@ -330,6 +348,18 @@ const APP_DEFS = {
   // via getDreamPanelImage and reprints the register's wake line (D42). A
   // shared phone/computer app exactly like codex; the 'dreams.*' renderers
   // live in RENDER.COMPUTER, declared for both devices.
+  // aspirations-and-creative-careers Phase 14 (D47): Compass — the
+  // player's directions and live milestones, on both devices. Its label
+  // is COMPASS_LABEL (defs.works.js) — Q2 → D101 — read at runtime by the
+  // renderer; the def's own label is the same word for the tile.
+  compass: {
+    id: 'compass', label: 'Compass', category: 'personal', requires: [],
+    devices: ['computer', 'phone'],
+    entryScreen: 'overview',
+    screens: {
+      overview: { label: 'Directions', renderer: 'compass-overview' },
+    },
+  },
   dreams: {
     id: 'dreams', label: 'Dream Diary', category: 'personal', requires: [],
     devices: ['computer', 'phone'],
@@ -337,6 +367,24 @@ const APP_DEFS = {
     screens: {
       diary: { label: 'Dreams', renderer: 'dreamdiary' },
       entry: { label: 'Dream', renderer: 'dreamentry', hideFromNav: true },
+    },
+  },
+  // Patch Notes (2026-09-10 audit fix session): the one app in this game
+  // that is not in-fiction at all — a real, player-facing release history,
+  // same idea as a Steam page's update log, sitting alongside the Debug Log
+  // (F4 cheat menu) and the save-export version-mismatch warning as the
+  // third place this game already tells the player the truth about its own
+  // development. Same list+detail shape as Dream Diary/Codex exactly (a
+  // version-list gallery, a per-version detail page, `hideFromNav` on the
+  // detail so it's only ever reached by tapping a version) — content lives
+  // in `defs.patchnotes.js`'s PATCH_NOTES, keyed by GAME_VERSION (config.js).
+  patchnotes: {
+    id: 'patchnotes', label: 'Patch Notes', category: 'personal', requires: [],
+    devices: ['computer', 'phone'],
+    entryScreen: 'list',
+    screens: {
+      list: { label: 'Versions', renderer: 'patchnotes-list' },
+      detail: { label: 'Patch', renderer: 'patchnotes-detail', hideFromNav: true },
     },
   },
   // Calendar (actions-and-activities-overhaul-plan.md Phase 1, D2): "what's
@@ -406,6 +454,9 @@ const APP_DEFS = {
     screens: {
       feed: { label: 'Feed', renderer: 'chatter-feed' },
       profile: { label: 'Profile', renderer: 'chatter-profile', hideFromNav: true },
+      // aspirations-and-creative-careers Phase 11 (D31): the player's own
+      // Private page — reached from the profile, never from the nav.
+      private: { label: 'Private', renderer: 'chatter-private', hideFromNav: true },
     },
   },
 };
@@ -443,17 +494,19 @@ const DECOR_CATALOG_DEFS = {
   // --- utility / decor ---
   bookshelf: { id: 'bookshelf', label: 'Bookshelf', price: 130, buyQty: 1, shape: 'bookshelf', category: 'study' },
   shelf: { id: 'shelf', label: 'Wall Shelf', price: 60, buyQty: 1, shape: 'shelf', category: 'study' },
+  // Aspirations & Creative Careers Phase 6 (D22): the recording kit — an
+  // interface, a mic and a pair of monitors. Once PLACED it is what lets
+  // the player record a track (works.js's workRequirementMet looks for a
+  // placed object with this defId; WORK_KINDS.track.requires names it).
+  recording_kit: { id: 'recording_kit', label: 'Recording Kit', price: 180, buyQty: 1, shape: 'recording_kit', category: 'study' },
 };
 // Mirrors SHOP_CATALOG_LIST's derivation (ITEMS) — the Home app's browse
 // screen reads this list, so every priced catalog entry is buyable and no
 // parallel hand-authored list can drift from the defs.
 const DECOR_CATALOG_LIST = Object.values(DECOR_CATALOG_DEFS).filter(d => d.id !== '_unknown' && d.price != null);
 
-// --- Jobs: what WorkHub's board offers, and what working a block pays.
-// `qualitySkill` (optional) is read through SKILLS' payMultiplier curve —
-// getting better at the relevant skill raises pay on top of the base
-// rate. `requiredSkills` gates applying, not working once hired. ---
-// --- Gig board (Phase 2 — vocation rewrite) ---
+// --- Gig board (Phase 2 — vocation rewrite; multi-category since the
+// aspirations-and-creative-careers overhaul Phase 2, D14–D16) ---
 // Replaces JOB_DEFS. The player is a freelancer: accept discrete gigs,
 // work them block-by-block, deliver by a deadline. Income is lumpy by
 // design — dry spells happen. See src/src/ref/vocation-and-gigs-plan.md.
@@ -461,55 +514,221 @@ const DECOR_CATALOG_LIST = Object.values(DECOR_CATALOG_DEFS).filter(d => d.id !=
 // A template is the *shape* of an available gig; instances are generated
 // seeded on day rollover (generateGigsForDay) with payout/blocks/deadline
 // rolled within the template's ranges and scaled by reputation tier.
+//
+// The board is a real multi-category market (D14/D15): reputation is kept
+// PER category (gigs.reputation is a { [category]: 0..100 } map — see
+// COMPUTER's defaultGigReputation/foldGigReputation), every template
+// declares its category, the skill it honestly gates on, and an explicit
+// `tier` (0..4, an index into GIG_REPUTATION_TIERS) — a template is offered
+// only once that category's rep has reached its tier, so a Novice writer
+// with Elite tech rep sees Elite tech gigs and Novice writing gigs on the
+// same board. The old index-into-the-tier-table mapping (six templates,
+// five tiers, the Elite infra project resolving to floor 0) is gone.
+//
+// GIG_CATEGORIES is the one ordered list of categories: the reputation
+// map's keys, the board's grouping/filter order, and each category's
+// craft skill all read from here — never enumerated a second time.
+// `admin` is the no-skill floor (D16): a fresh player always has something
+// to take; a specialist can ignore it.
+const GIG_CATEGORIES = [
+  { id: 'admin',   label: 'Admin',   skill: null },
+  { id: 'tech',    label: 'Tech',    skill: 'tech' },
+  { id: 'writing', label: 'Writing', skill: 'writing' },
+  { id: 'music',   label: 'Music',   skill: 'music' },
+  { id: 'art',     label: 'Art',     skill: 'art' },
+  { id: 'food',    label: 'Food',    skill: 'cooking' },
+];
+const GIG_CATEGORY_IDS = GIG_CATEGORIES.map(c => c.id);
+const GIG_CATEGORY_BY_ID = Object.fromEntries(GIG_CATEGORIES.map(c => [c.id, c]));
+
 const GIG_TEMPLATES = {
+  // --- admin: no skill, minSkill 0, the floor that always exists (D16) ---
   data_entry: {
     id: 'data_entry', label: 'Data Entry Batch', category: 'admin',
-    skill: 'tech', minSkill: 0,
+    skill: null, minSkill: 0, tier: 0,
     blocksRange: [3, 8], deadlineRange: [3, 7], basePayoutPerBlock: 35,
     clientPool: ['Meridian Logistics', 'Crestline Retail', 'Harbor Data Co', 'Pinebrook Clinic'],
   },
+  transcription: {
+    id: 'transcription', label: 'Transcription Batch', category: 'admin',
+    skill: null, minSkill: 0, tier: 0,
+    blocksRange: [3, 7], deadlineRange: [2, 6], basePayoutPerBlock: 38,
+    clientPool: ['Ridgeline Legal', 'Open Mic Podcast Network', 'Pinebrook Clinic', 'Fairweather Insurance'],
+  },
+  survey_batch: {
+    id: 'survey_batch', label: 'Survey Processing', category: 'admin',
+    skill: null, minSkill: 0, tier: 1,
+    blocksRange: [4, 9], deadlineRange: [3, 7], basePayoutPerBlock: 42,
+    clientPool: ['Civic Pulse Research', 'Crestline Retail', 'Harborview Council', 'Meridian Logistics'],
+  },
+  // --- tech ---
+  support_tickets: {
+    id: 'support_tickets', label: 'Support Ticket Sweep', category: 'tech',
+    skill: 'tech', minSkill: 1, tier: 0,
+    blocksRange: [3, 7], deadlineRange: [2, 6], basePayoutPerBlock: 45,
+    clientPool: ['Northgate Bakery', 'Tidepool HR', 'Lumen Studio', 'Harbor Data Co'],
+  },
   web_tweak: {
-    id: 'web_tweak', label: 'Website Tweak', category: 'web',
-    skill: 'tech', minSkill: 2,
+    id: 'web_tweak', label: 'Website Tweak', category: 'tech',
+    skill: 'tech', minSkill: 2, tier: 1,
     blocksRange: [4, 10], deadlineRange: [3, 8], basePayoutPerBlock: 60,
     clientPool: ['Lumen Studio', 'Northgate Bakery', 'Field & Fern Co', 'Sablewood Designs'],
   },
-  copy_edit: {
-    id: 'copy_edit', label: 'Copy Edit Pass', category: 'writing',
-    skill: 'tech', minSkill: 1,
-    blocksRange: [3, 9], deadlineRange: [3, 9], basePayoutPerBlock: 50,
-    clientPool: ['Quill & Page', 'Lighthouse Press', 'Marlow Books', 'Saltmarsh Media'],
-  },
   script_automation: {
-    id: 'script_automation', label: 'Automation Script', category: 'dev',
-    skill: 'tech', minSkill: 3,
-    blocksRange: [6, 14], deadlineRange: [4, 9], basePayoutPerBlock: 90,
+    id: 'script_automation', label: 'Automation Script', category: 'tech',
+    skill: 'tech', minSkill: 3, tier: 2,
+    blocksRange: [6, 14], deadlineRange: [4, 9], basePayoutPerBlock: 85,
     clientPool: ['Vantage Analytics', 'GreenlineOps', 'Cobalt Systems', 'Tidepool HR'],
   },
   app_feature: {
-    id: 'app_feature', label: 'App Feature Build', category: 'dev',
-    skill: 'tech', minSkill: 4,
-    blocksRange: [10, 20], deadlineRange: [5, 10], basePayoutPerBlock: 150,
+    id: 'app_feature', label: 'App Feature Build', category: 'tech',
+    skill: 'tech', minSkill: 4, tier: 3,
+    blocksRange: [10, 20], deadlineRange: [5, 10], basePayoutPerBlock: 105,
     clientPool: ['Bramble Inc', 'Hollowpoint Games', 'Cedar & Co', 'Northstar Apps'],
   },
   infra_project: {
-    id: 'infra_project', label: 'Infrastructure Project', category: 'dev',
-    skill: 'tech', minSkill: 5,
-    blocksRange: [14, 30], deadlineRange: [6, 10], basePayoutPerBlock: 220,
+    id: 'infra_project', label: 'Infrastructure Project', category: 'tech',
+    skill: 'tech', minSkill: 5, tier: 4,
+    blocksRange: [14, 30], deadlineRange: [6, 10], basePayoutPerBlock: 100,
     clientPool: ['Mesa Cloud', 'Atlas Platform', 'Ironroot Labs', 'Verge Distribution'],
   },
+  // --- writing ---
+  copy_edit: {
+    id: 'copy_edit', label: 'Copy Edit Pass', category: 'writing',
+    skill: 'writing', minSkill: 1, tier: 0,
+    blocksRange: [3, 9], deadlineRange: [3, 9], basePayoutPerBlock: 50,
+    clientPool: ['Quill & Page', 'Lighthouse Press', 'Marlow Books', 'Saltmarsh Media'],
+  },
+  blog_post: {
+    id: 'blog_post', label: 'Blog Post', category: 'writing',
+    skill: 'writing', minSkill: 2, tier: 1,
+    blocksRange: [4, 8], deadlineRange: [3, 7], basePayoutPerBlock: 65,
+    clientPool: ['Field & Fern Co', 'Saltmarsh Media', 'Northgate Bakery', 'Driftwood Travel'],
+  },
+  feature_article: {
+    id: 'feature_article', label: 'Feature Article', category: 'writing',
+    skill: 'writing', minSkill: 3, tier: 2,
+    blocksRange: [8, 14], deadlineRange: [5, 10], basePayoutPerBlock: 95,
+    clientPool: ['The Daily Byte', 'Saltmarsh Media', 'Harborview Quarterly', 'Lighthouse Press'],
+  },
+  ghostwrite_chapter: {
+    id: 'ghostwrite_chapter', label: 'Ghostwrite a Chapter', category: 'writing',
+    skill: 'writing', minSkill: 5, tier: 4,
+    blocksRange: [14, 26], deadlineRange: [7, 12], basePayoutPerBlock: 98,
+    clientPool: ['Marlow Books', 'Quill & Page', 'Lighthouse Press', 'Halcyon Literary'],
+  },
+  // --- music ---
+  jingle: {
+    id: 'jingle', label: 'Ad Jingle', category: 'music',
+    skill: 'music', minSkill: 1, tier: 0,
+    blocksRange: [3, 6], deadlineRange: [3, 7], basePayoutPerBlock: 55,
+    clientPool: ['Northgate Bakery', 'Crestline Retail', 'Open Mic Podcast Network', 'Sablewood Designs'],
+  },
+  stem_mix: {
+    id: 'stem_mix', label: 'Stem Mix', category: 'music',
+    skill: 'music', minSkill: 2, tier: 1,
+    blocksRange: [5, 10], deadlineRange: [4, 8], basePayoutPerBlock: 75,
+    clientPool: ['Lowlight Records', 'Open Mic Podcast Network', 'Halfmoon Studio', 'Driftwood Travel'],
+  },
+  session_part: {
+    id: 'session_part', label: 'Session Part', category: 'music',
+    skill: 'music', minSkill: 3, tier: 2,
+    blocksRange: [6, 12], deadlineRange: [4, 9], basePayoutPerBlock: 100,
+    clientPool: ['Lowlight Records', 'Halfmoon Studio', 'Hollowpoint Games', 'Verge Distribution'],
+  },
+  score_cue: {
+    id: 'score_cue', label: 'Score Cue', category: 'music',
+    skill: 'music', minSkill: 5, tier: 4,
+    blocksRange: [12, 24], deadlineRange: [7, 12], basePayoutPerBlock: 118,
+    clientPool: ['Hollowpoint Games', 'Halfmoon Studio', 'Lowlight Records', 'Meridian Pictures'],
+  },
+  // --- art ---
+  icon_set: {
+    id: 'icon_set', label: 'Icon Set', category: 'art',
+    skill: 'art', minSkill: 1, tier: 0,
+    blocksRange: [3, 7], deadlineRange: [3, 7], basePayoutPerBlock: 50,
+    clientPool: ['Northstar Apps', 'Lumen Studio', 'Sablewood Designs', 'Tidepool HR'],
+  },
+  illustration: {
+    id: 'illustration', label: 'Spot Illustration', category: 'art',
+    skill: 'art', minSkill: 2, tier: 1,
+    blocksRange: [5, 10], deadlineRange: [4, 8], basePayoutPerBlock: 70,
+    clientPool: ['Saltmarsh Media', 'Field & Fern Co', 'Quill & Page', 'Driftwood Travel'],
+  },
+  cover_art: {
+    id: 'cover_art', label: 'Cover Art', category: 'art',
+    skill: 'art', minSkill: 3, tier: 2,
+    blocksRange: [7, 13], deadlineRange: [5, 9], basePayoutPerBlock: 98,
+    clientPool: ['Marlow Books', 'Lowlight Records', 'Lighthouse Press', 'Hollowpoint Games'],
+  },
+  mural_mockup: {
+    id: 'mural_mockup', label: 'Mural Mockup', category: 'art',
+    skill: 'art', minSkill: 5, tier: 4,
+    blocksRange: [14, 26], deadlineRange: [7, 12], basePayoutPerBlock: 116,
+    clientPool: ['Harborview Council', 'Cedar & Co', 'Sablewood Designs', 'Meridian Pictures'],
+  },
+  // --- food (the craft skill is `cooking`) ---
+  meal_prep_batch: {
+    id: 'meal_prep_batch', label: 'Meal-Prep Batch', category: 'food',
+    skill: 'cooking', minSkill: 1, tier: 0,
+    blocksRange: [3, 7], deadlineRange: [2, 5], basePayoutPerBlock: 45,
+    clientPool: ['Pinebrook Clinic', 'Tidepool HR', 'Ridgeline Legal', 'GreenlineOps'],
+  },
+  private_dinner: {
+    id: 'private_dinner', label: 'Private Dinner', category: 'food',
+    skill: 'cooking', minSkill: 2, tier: 1,
+    blocksRange: [4, 8], deadlineRange: [3, 6], basePayoutPerBlock: 80,
+    clientPool: ['The Ashworths', 'Cedar & Co', 'Halcyon Literary', 'Sablewood Designs'],
+  },
+  catering_tray: {
+    id: 'catering_tray', label: 'Catering Trays', category: 'food',
+    skill: 'cooking', minSkill: 3, tier: 2,
+    blocksRange: [6, 12], deadlineRange: [4, 8], basePayoutPerBlock: 95,
+    clientPool: ['Harborview Council', 'Bramble Inc', 'Civic Pulse Research', 'Vantage Analytics'],
+  },
+  recipe_development: {
+    id: 'recipe_development', label: 'Recipe Development', category: 'food',
+    skill: 'cooking', minSkill: 5, tier: 4,
+    blocksRange: [10, 20], deadlineRange: [6, 10], basePayoutPerBlock: 112,
+    clientPool: ['Field & Fern Co', 'Northgate Bakery', 'Saltmarsh Media', 'Brine & Barrel'],
+  },
 };
+const GIG_TEMPLATES_LIST = Object.values(GIG_TEMPLATES);
 
 // Reputation tiers gate which gigs appear and how well they pay. Rep is
-// 0-100. A gig's tier is the lowest tier whose floor the player's rep
-// meets; payout scales within the tier toward its ceiling as rep rises.
+// 0-100, PER CATEGORY. A category's tier is the lowest tier whose floor
+// that category's rep meets; a template is offered once its declared
+// `tier` index is at or below that; payout scales within the tier toward
+// its ceiling as rep rises. boardSize is per category — the board is the
+// sum over the categories the player qualifies for, so it grows with
+// each craft the player builds.
+// aspirations-and-creative-careers Phase 15 (D104): payMult compressed
+// from [1 … 5] to [1 … 1.7]. Reputation already unlocks the better-paying
+// TEMPLATES (tier 4 pays ~3× tier 0 a block); multiplying by up to 5 on
+// top counted it twice — measured, a data-entry clerk at Elite reputation
+// out-earned a solo penthouse lease three times over. Now a tier is
+// mostly what work you can get, and reputation a bump within it.
 const GIG_REPUTATION_TIERS = [
   { name: 'Novice',      floor: 0,  payMult: [1.00, 1.10], boardSize: [3, 4] },
-  { name: 'Competent',   floor: 20, payMult: [1.30, 1.55], boardSize: [4, 5] },
-  { name: 'Established', floor: 40, payMult: [1.80, 2.30], boardSize: [5, 6] },
-  { name: 'Specialist',  floor: 65, payMult: [2.80, 3.50], boardSize: [5, 7] },
-  { name: 'Elite',       floor: 85, payMult: [4.00, 5.00], boardSize: [6, 8] },
+  { name: 'Competent',   floor: 20, payMult: [1.10, 1.25], boardSize: [4, 5] },
+  { name: 'Established', floor: 40, payMult: [1.25, 1.40], boardSize: [5, 6] },
+  { name: 'Specialist',  floor: 65, payMult: [1.40, 1.55], boardSize: [5, 7] },
+  { name: 'Elite',       floor: 85, payMult: [1.55, 1.70], boardSize: [6, 8] },
 ];
+
+// Load-time shape guard, the same posture as createHobbyAction's (D6): a
+// template cannot drift in half-declared. Every template names a category
+// from GIG_CATEGORIES, gates on that category's craft skill (or none, for
+// admin — and then minSkill must be 0, D16), and carries an integer tier
+// that indexes GIG_REPUTATION_TIERS (declared just above). Throws at load
+// so a bad def is a startup error, not a gig that silently never appears.
+for (const t of GIG_TEMPLATES_LIST) {
+  const cat = GIG_CATEGORY_BY_ID[t.category];
+  if (!cat) throw new Error(`GIG_TEMPLATES.${t.id}: unknown category '${t.category}'`);
+  if ((t.skill || null) !== cat.skill) throw new Error(`GIG_TEMPLATES.${t.id}: skill '${t.skill}' does not match category '${t.category}' (${cat.skill || 'none'})`);
+  if (!t.skill && t.minSkill !== 0) throw new Error(`GIG_TEMPLATES.${t.id}: a no-skill template must have minSkill 0`);
+  if (!Number.isInteger(t.tier) || t.tier < 0 || t.tier >= GIG_REPUTATION_TIERS.length) throw new Error(`GIG_TEMPLATES.${t.id}: tier must be an integer 0..${GIG_REPUTATION_TIERS.length - 1}, got ${t.tier}`);
+}
 
 // Energy cost of gig work, per BLOCK of progress. Gigs pay lump sums on
 // delivery, so each block is progress, not a wage.
@@ -536,7 +755,16 @@ const GIG_ENERGY_PER_BLOCK = 10;
 // so a gig takes roughly half its block count of clicks at full rest.
 // Burnout counts actual blocks done, not clicks, so grind pressure survives
 // at a saner click count.
-const GIG_TUNING = { workBlockMinutes: 30, progressPerClick: 2 };
+// aspirations-and-creative-careers Phase 15 (D104 — the economy audit):
+// payScale multiplies every gig's payout. The template rates above
+// (35–220 a block before the tier multiplier) were authored against no
+// measurement; measured, a Novice grinding admin work fourteen blocks a day
+// covered a SOLO penthouse lease four times over by week 4 — the exact
+// thing D1 says only the full stack should manage, late. At 0.3 the same
+// Novice grind lands at ~0.6 of the solo cost (a shared lease with effort;
+// solo only with reputation at the top tiers plus a catalog or a
+// following). One dial, deliberately, so the call can be revisited.
+const GIG_TUNING = { workBlockMinutes: 30, progressPerClick: 2, payScale: 0.3 };
 // Max concurrent gigs — the deadline pressure does the limiting.
 const GIG_MAX_CONCURRENT = 3;
 // Reputation movement. Delivery on time gains rep roughly equal to the gig's
@@ -978,6 +1206,30 @@ const RESTAURANT_DEFS = {
   },
 };
 const RESTAURANT_DEFS_LIST = Object.values(RESTAURANT_DEFS);
+
+// Aspirations & Creative Careers Phase 8 (D24): the player's own home
+// kitchen as DoorDrop's runtime vendor — a RESTAURANT_DEFS-shaped entry
+// built from player.kitchen at READ time, never a static row. Its menu is
+// empty on purpose: the player cannot order from themselves (the browse
+// card renders greyed, "that's you"), so nothing downstream — carts,
+// foodOrders, RESTAURANT_DISH_IDS — ever sees it. Null when the kitchen is
+// not open. restaurantVendorsForDisplay is the ONE enumeration the browse
+// screen reads; countRestaurantsOpenAt (the ≥2-open invariant) keeps
+// reading the authored roster — a listing can only ever add.
+function playerKitchenDef(gameState) {
+  const k = gameState && gameState.player && gameState.player.kitchen;
+  if (!k || k.listedDay == null || !k.name) return null;
+  return {
+    id: 'player_kitchen', label: k.name, cuisine: 'Home kitchen', player: true,
+    blurb: "That's you. Orders come in through your Works tab; you cook them here.",
+    service: 'dinner', deliveryFeeBase: 0, prepMinutes: 0, hours: [0, 1410],
+    menu: [],
+  };
+}
+function restaurantVendorsForDisplay(gameState) {
+  const mine = playerKitchenDef(gameState);
+  return mine ? RESTAURANT_DEFS_LIST.concat([mine]) : RESTAURANT_DEFS_LIST;
+}
 // Every itemId any restaurant sells, derived once (food-overhaul Phase 8,
 // D21) — the recipe website's unlock-on-taste hook and RECIPE_CARDS both
 // need "is this defId a dish someone could taste and discover" without

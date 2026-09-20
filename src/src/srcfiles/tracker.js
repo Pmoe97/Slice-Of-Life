@@ -175,6 +175,57 @@ function trackerGigs(gs) {
   });
 }
 
+// The catalog's daily trickle (aspirations-and-creative-careers Phase 4,
+// D18). Date-less and informational: one line naming what the catalog
+// paid this morning and how many titles are out, derived by re-running
+// works.js's catalogIncomeForDay WITHOUT crediting — the seeded roll is
+// per (seed, day, work), so the preview is the exact number the rollover
+// landed; nothing is stored to remember it. Absent when nothing is out or
+// nothing earned.
+function trackerCatalog(gs) {
+  if (typeof catalogIncomeForDay !== 'function') return null;
+  const day = gs.meta.clock.day;
+  const income = catalogIncomeForDay(gs, day);
+  if (!income || income.byWork.length === 0) return null;
+  const out = (gs.player.works || []).filter(w => w.releasedDay != null).length;
+  const spikes = income.byWork.filter(w => w.spike).length;
+  return {
+    key: `catalog:${day}`,
+    kind: 'catalog',
+    urgency: TRACKER.catalogUrgency,
+    title: 'Catalog',
+    detail: `${Math.round(income.total)} today from ${out} ${out === 1 ? 'title' : 'titles'}${spikes ? ` · ${spikes} having a good day` : ''}`,
+    dueDay: null,
+    daysUntil: null,
+    deepLink: { appId: 'work', screenId: 'works', params: {} },
+  };
+}
+
+// The platform's next payout (aspirations-and-creative-careers Phase 10,
+// D34): informational — what the current pools would pay on the next
+// billing day (the same rent cadence). Absent until there is anyone to
+// bill. Derived every call; nothing stored.
+function trackerPlatform(gs) {
+  if (typeof ensureChatterProfile !== 'function') return null;
+  const p = ensureChatterProfile(gs);
+  const backers = (p.backers.ghosts || 0) + p.backers.cast.length;
+  const priv = (p.private.ghosts || 0) + p.private.cast.length;
+  if (backers + priv === 0 || p.nextBillingDay == null) return null;
+  const day = gs.meta.clock.day;
+  const daysUntil = p.nextBillingDay - day;
+  const amount = backers * p.backersPrice + priv * p.privatePrice;
+  return {
+    key: `platform:${p.nextBillingDay}`,
+    kind: 'platform',
+    urgency: TRACKER.catalogUrgency,
+    title: 'Chatter payout',
+    detail: `${amount} due in ${daysUntil}d — ${backers} ${CHATTER_LABELS.backers}${priv ? ` · ${priv} ${CHATTER_LABELS.private}` : ''}`,
+    dueDay: p.nextBillingDay,
+    daysUntil,
+    deepLink: { appId: 'social_feed', screenId: 'profile', params: { npcId: 'player' } },
+  };
+}
+
 // Active quests, by expiry. A quest past its expiry is a real failure
 // state (UI's processQuestsForDay marks it failed at next rollover) — the
 // tracker surfaces it as max-urgency until then.
@@ -425,7 +476,7 @@ function trackerCommitments(gs) {
 // randomness, no LLM, no persistence — same save, same entries.
 function buildTrackerEntries(gs) {
   const adapters = [
-    trackerRent, trackerBills, trackerTaxes, trackerGigs, trackerQuests,
+    trackerRent, trackerBills, trackerTaxes, trackerGigs, trackerCatalog, trackerPlatform, trackerQuests,
     trackerDeliveries, trackerRenovationJobs, trackerServices, trackerImUnread,
     trackerCourses, trackerFacilities, trackerTension, trackerCommitments,
   ];

@@ -223,7 +223,7 @@ function stepRng(plan, stepIndex, salt) {
 function resolveCookStep(step, plan, gameState) {
   const rng = stepRng(plan, step.index, step.rescueSalt);
   const player = gameState?.player;
-  const skill = typeof skillMod === 'function' ? skillMod(player, 'cooking', 'cookQuality') : 0.5;
+  const skill = typeof skillMod === 'function' ? skillMod(player, 'cooking', 'craftQuality') : 0.5;
   const skillTerm = (skill - 0.5) * COOK_TUNING.skillQualityWeight;
   if (step.type === 'prep') {
     const def = ITEM_DEFS[step.defId];

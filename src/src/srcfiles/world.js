@@ -656,4 +656,18 @@ function refreshRoomCleanliness(gameState, roomId) {
   return cleanliness;
 }
 
+// Aspirations & Creative Careers Phase 16 (D51): a designed room is a
+// little more restful. The one write site for the comfort impulse — UI's
+// doSleep and ACTIONS' `restful` verbs (self.nap / self.relax) call it with
+// the room the player rested IN, and it pushes defs.design.js's
+// designedRoomComfort (designedRoomMood × density; 0 for an auto-arranged
+// room, in which case nothing is pushed — moodEvents gains no zero entry)
+// through pushMoodImpulse like every other mood event. Returns the amount.
+function applyDesignedRoomComfort(gameState, roomId, day) {
+  if (!gameState || !gameState.player || typeof designedRoomComfort !== 'function') return 0;
+  const amount = designedRoomComfort(gameState, roomId);
+  if (amount > 0) pushMoodImpulse(gameState.player, amount, day ?? gameState.meta?.clock?.day ?? 0);
+  return amount;
+}
+
 // ===== /SECTION: WORLD =====

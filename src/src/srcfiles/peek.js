@@ -51,6 +51,27 @@ function peekWatchable(gs, roomId) {
   return roomLightVisible(gs, roomId);
 }
 
+// --- Object-anchored peek (the sauna) --------------------------------------
+// Bug report (2026-09-20): "peek through the door of the sauna". The sauna
+// is deliberately NOT its own room (D22/D58, the `sauna` OBJECT_DEFS entry)
+// — it is an object inside pool_room, so a player peeking at it is already
+// standing in the SAME room the sauna is in. That rules out the door-peek
+// shape above (peekFocusOccupant just wants "someone in the target room",
+// which here would also match someone swimming three feet away). The focus
+// has to be whoever is actually USING the object, checked by activity.
+// PURE, same shape as peekFocusOccupant/peekWatchable.
+function saunaFocusOccupant(gs) {
+  if (!gs) return null;
+  const present = getPresentNpcIds(gs.npcs || {}, 'pool_room');
+  const usingId = present.find(id => gs.npcs[id]?.activity === 'relaxing in the sauna');
+  return usingId ? { npcId: usingId, npc: gs.npcs[usingId] } : null;
+}
+
+function saunaPeekWatchable(gs) {
+  if (!saunaFocusOccupant(gs)) return false;
+  return roomLightVisible(gs, 'pool_room');
+}
+
 // The activity/clothing descriptor for text + image composition. PURE.
 function peekViewDescriptor(gs, roomId, focus) {
   const npc = focus.npc;
@@ -186,28 +207,50 @@ function peekImageBudgetSpend(gs, session) {
 
 // --- The session controller ------------------------------------------------
 // startPeekSession is called from UI's handleAction (door.keyhole /
-// door.listen). The hold itself rides the continuous clock: peek.js pushes
-// the 'peeking' context and the session loop only reads time + re-derives.
-async function startPeekSession(roomId, mode) {
+// door.listen / peek.sauna). The hold itself rides the continuous clock:
+// peek.js pushes the 'peeking' context and the session loop only reads time
+// + re-derives.
+//
+// `objId` (currently only 'sauna') switches this from a door peek — the
+// player steps up to an ADJACENT room's door, `roomId` names that room — to
+// an object peek: the sauna is deliberately not its own room (D22/D58), so
+// `roomId` is the player's OWN room (pool_room) and the "door" is the
+// object itself. Same session shape either way; only focus resolution and
+// the door identity differ, both handled inline below.
+async function startPeekSession(roomId, mode, objId) {
   if (peekSession || !currentGameState || !ROOMS[roomId]) return;
-  if (currentGameState.player.location === roomId) return;
   const gs = currentGameState;
-  const doorObj = doorObjectBetween(gs, gs.player.location, roomId);
+  const isObjPeek = objId === 'sauna';
+  if (!isObjPeek && gs.player.location === roomId) return;
+  if (isObjPeek && gs.player.location !== roomId) return;
+
+  let doorObj, doorName;
+  if (isObjPeek) {
+    doorObj = Object.values(gs.objects?.[`room_${roomId}`] || {}).find(o => o.defId === 'sauna');
+    doorName = 'the sauna door';
+  } else {
+    doorObj = doorObjectBetween(gs, gs.player.location, roomId);
+    doorName = roomPhrase(roomId) + ' door';
+  }
   if (!doorObj) return;
 
+  const watchable = isObjPeek ? saunaPeekWatchable(gs) : peekWatchable(gs, roomId);
+  const focusOf = () => isObjPeek ? saunaFocusOccupant(gs) : peekFocusOccupant(gs, roomId);
+
   // D6: empty/dark rooms are text-only — no session, no image spent.
-  if (!peekWatchable(gs, roomId)) {
-    const key = peekFocusOccupant(gs, roomId) ? 'dark' : 'empty';
-    addLogEntry('narration', pickPeekProse(gs, key, { doorName: roomPhrase(roomId) + ' door', roomId }));
+  if (!watchable) {
+    const key = focusOf() ? 'dark' : 'empty';
+    addLogEntry('narration', pickPeekProse(gs, key, { doorName, roomId }));
     return;
   }
 
-  const focus = peekFocusOccupant(gs, roomId);
+  const focus = focusOf();
   const s = {
     doorId: doorObj.id,
-    doorName: roomPhrase(roomId) + ' door',
+    doorName,
     roomId,
-    mode: mode === 'listen' ? 'listen' : 'peek',
+    objId: objId || null,
+    mode: isObjPeek ? 'peek' : (mode === 'listen' ? 'listen' : 'peek'),
     focusNpcId: focus.npcId,
     ticksElapsed: 0,
     riskAccum: 0,
@@ -253,7 +296,7 @@ async function _peekTick() {
   if (!gs) { _endPeekSession('aborted'); return; }
   if (gs.player.energy <= 0) { _endPeekSession('tired'); return; }
 
-  const focus = peekFocusOccupant(gs, s.roomId);
+  const focus = s.objId === 'sauna' ? saunaFocusOccupant(gs) : peekFocusOccupant(gs, s.roomId);
   if (!focus) { _endPeekSession('empty'); return; }
   if (!roomLightVisible(gs, s.roomId)) { _endPeekSession('dark'); return; }
   if (focus.npcId !== s.focusNpcId) s.focusNpcId = focus.npcId;
@@ -303,7 +346,16 @@ async function _refreshView(s, focus) {
   s.lastActKey = desc.actKey;
 
   if (s.mode === 'listen') {
-    const cues = deriveDoorCues(gs, findObjectById(gs, s.doorId), gs.player.location);
+    // Bug report (2026-09-20): findObjectById(gs, s.doorId) returns nothing
+    // for a virtual door (any 'door'-type threshold with no placed
+    // bedroom_door/bathroom_door object — signals.js) since it was never a
+    // real row in gameState.objects, which silently broke listening (always
+    // "listenSilent") at every one of the newly-peekable doors. Re-deriving
+    // the door fresh, the same way startPeekSession found it, returns the
+    // real object when there is one and a matching virtual descriptor
+    // otherwise — deriveDoorCues only reads .id/.bucket/.state, so either
+    // shape works.
+    const cues = deriveDoorCues(gs, doorObjectBetween(gs, gs.player.location, s.roomId), gs.player.location);
     const aud = (cues && cues.audible) || [];
     const kept = aud.slice(0, PEEK.listen.maxAudibleSignals);
     s._viewLine = kept.length > 0

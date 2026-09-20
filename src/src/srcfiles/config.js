@@ -296,6 +296,23 @@ function applyStructuralUpgrades(gameState) {
 // Populate the live tables at load, before anything reads them.
 applyStructuralUpgrades();
 
+// Bug report (2026-09-20): the ensuite upgrade seals bathroom_a off the
+// hallway and behind bedroom_player instead ("the whole household starts
+// queueing for Bathroom B" — its own comment above, in STRUCTURAL_UPGRADES).
+// But every NPC room-picker (the shower drive's moveToRoom, resolveRoomForActivity's
+// ACTIVITY_ROOM_PREFERENCES/COMMON_ROOMS candidates) only checked that the
+// room existed and wasn't someone else's bedroom — never whether it was
+// still reachable — so NPCs kept showering in bathroom_a regardless of wing
+// or upgrade. bedroom_player is never an NPC room (D16, sim.js), so a common
+// room left adjacent to nothing else is functionally private: reads the LIVE
+// ROOM_ADJACENCY (rebuilt by applyStructuralUpgrades), so it tracks any
+// future upgrade with the same "wall a common room up behind a bedroom"
+// shape, not just this one.
+function npcCommonRoomAccessible(roomId) {
+  const neighbors = ROOM_ADJACENCY[roomId] || [];
+  return neighbors.some(n => n !== 'bedroom_player');
+}
+
 // The one accessor. Owns the sorted-key convention so a caller can ask in
 // either direction and a rename can never leave half the table unreachable.
 // Rooms that are not connected at all return null, which is distinct from
@@ -514,6 +531,22 @@ const ECONOMY = {
   // than left dead.
   deliveryFee: 8,
   payPeriodDays: 7,          // rent due weekly
+  // aspirations-and-creative-careers Phase 15 (D50): the mechanical form of
+  // D1. independenceIndex (aspirations.js) compares the last windowWeeks of
+  // INDEPENDENT income (the EARN_MONEY reasons listed — gigs, the catalog,
+  // the platform, a sold piece, kitchen orders; never a loan, a debt
+  // collected, or a rent surplus) against the same weeks of SOLO cost —
+  // ECONOMY.rent.total (no roommate offsets), the even-split utilities at
+  // their base with one resident, the personal bills, and a groceries
+  // baseline (no such constant existed; this is it, with its reader).
+  // ledgerDays is how long player.incomeLog keeps an entry.
+  independence: {
+    windowWeeks: 4,
+    groceriesWeekly: 70,
+    incomeReasons: ['gig', 'gig_partial', 'catalog', 'chatter', 'art_sale', 'kitchen'],
+    ledgerDays: 42,
+    ledgerCap: 600,
+  },
   // rentLatePenaltyMood (the old per-day direct mood subtraction) was
   // absorbed by MOOD_TARGET.stress.rentPenalty in Phase 5 — a steady target
   // drag while rentOwed > 0 instead of an ever-accumulating bar push.
@@ -915,6 +948,12 @@ const MAINTENANCE = {
     // is not functional, so this one line IS the gate, and using the pool
     // for a shoot wears it out exactly as swimming does.
     'content_pool_session': ['pool_systems'],
+    // East Wing sauna (D22/D58) was player-only until this bug report
+    // (2026-09-20): "make sure NPCs CAN use the sauna". Same shape as
+    // 'swim' above — scoreDrive's generic facility gate refuses this drive
+    // whenever pool_sauna isn't functional, and using it wears the sauna
+    // out exactly as swimming wears out the pool.
+    'sauna': ['pool_sauna'],
     // NOTE: the old 'cook' drive (→ kitchen_stove) became Phase 8's 'eat'
     // drive, which deliberately does NOT map to a facility: a hungry NPC
     // raids the fridge/pantry/own bag, which needs no working stove, and
@@ -2986,7 +3025,7 @@ const COOK_TUNING = {
   // Step quality math. Pure — the seeded roll is the only non-constant term.
   stepBase: 0.55,              // a competent baseline processing step
   methodBase: 0.5,             // a competent baseline cook step
-  skillQualityWeight: 0.5,     // (cookQuality − 0.5) × this — ±0.25 at the extremes
+  skillQualityWeight: 0.5,     // (craftQuality − 0.5) × this — ±0.25 at the extremes
   freshQualityWeight: 0.12,    // (freshness factor − 1) × this — a stale batch dents every step
   rollSpread: 0.18,            // the seeded luck term, ±0.09
   heatFitBonus: 0.06,          // matching the method's burner
@@ -3240,6 +3279,10 @@ const MOOD_PAYOUTS = {
   workGigPerDollar: 0.0005, // plus scaled by payout (a big gig feels bigger)
   workGigCap: 0.12,
   repTierUp: 0.15,          // crossing a gig reputation tier (the big milestone)
+  // aspirations-and-creative-careers Phase 14 (D48): a Compass milestone,
+  // and a whole direction's pool exhausted. Mood only — nothing unlocks.
+  aspirationMilestone: 0.10,
+  aspirationDirection: 0.25,
   courseLesson: 0.02,       // per lesson attended
   courseComplete: 0.08,     // on top, when the course finishes
   payRent: 0.06,            // paying down the whole balance
@@ -3250,6 +3293,11 @@ const MOOD_PAYOUTS = {
   cleanApartmentCap: 0.08,
   puzzleComplete: 0.04,     // DailyGrid finished for the day (actions-and-activities-overhaul Phase 14, D23); halved by grantPuzzleCompletionReward when a hint was used
   chatterPost: 0.02,        // player posts to Chatter (actions-and-activities-overhaul Phase 15, D24) — modest next to puzzleComplete since posting is a trivial-effort action
+  // Aspirations & Creative Careers Phase 4 (D17/D19): finishing a work's
+  // production is a small win like a lesson; RELEASING one — going
+  // independent in a craft — is the milestone, sized like a rep tier.
+  workFinish: 0.04,         // works.js finishWorkRecord
+  workRelease: 0.10,        // works.js releaseWork
 };
 
 // --- Need consequences (P7 gameplay loops). When a need hits 0, real
@@ -3830,6 +3878,9 @@ const TRACKER = {
   facilityWarnCondition: 40,
   facilityCriticalCondition: 20,
   highTensionUrgency: 75,
+  // Aspirations & Creative Careers Phase 4: the Catalog income line
+  // (tracker.js's trackerCatalog) — informational, never a notification.
+  catalogUrgency: 10,
   // Snooze lengths offered on each notification (integer days).
   snoozeOptionsDays: [1, 3],
 };
@@ -4157,6 +4208,22 @@ const SIGNAL_DEFS = {
       strong: ['sounds through the wall, unmistakable and unselfconscious'],
     },
   },
+  // The late-night pool content-creation drive (vocation plan D17,
+  // content_pool_session) reuses moaning's own low intensity constant
+  // (SIGNALS_EMIT.moaningLow) for exactly this reason — it wants to carry
+  // the same muffled, "someone's not alone" way moaning does, just wetter.
+  // 2026-09-10 audit fix: the drive referenced this signal id without it
+  // ever being declared here, so emitTransient silently no-op'd on it and
+  // the scene's whole designed "someone might walk in on it" consequence
+  // could never fire.
+  splashing: {
+    channel: 'sound', salience: 0.6, decayPerTick: 0.15,
+    phrases: {
+      faint:  ['a faint splash from somewhere, maybe the pool'],
+      clear:  ['splashing and low laughter carrying from the pool room'],
+      strong: ['unmistakable splashing and voices, right there by the pool'],
+    },
+  },
 
   // --- Music (Intimacy & Voyeurism Phase 19) ----------------------------
   // The apartment's soundscape: a STANDING signal derived from a sound
@@ -4172,6 +4239,29 @@ const SIGNAL_DEFS = {
       faint:  ['a murmur of music somewhere, almost lost under everything'],
       clear:  ['music playing, not far off'],
       strong: ['music is playing, loud enough that you can feel the beat'],
+    },
+  },
+
+  // --- The Notice & Opinion layer's in-room gate (aspirations-and-creative-
+  // careers Phase 3, D10) ------------------------------------------------
+  // Emitted by NOTICE's noticeSubject when the player makes or crosses
+  // something in a room — a skill level, later a finished work or a designed
+  // room — so that WHO noticed is answered by the one perception query
+  // (attention, doors, sleep, the sight channel's 0.10-per-hop attenuation)
+  // rather than by a second "is anyone in the room" rule. Sight, 0.9 in the
+  // room: one open hop lands at 0.09 against noticeFloor.sight 0.08, so only
+  // a very attentive NPC in an open-plan neighbour catches it; a door kills
+  // it. Fades within a tick — it is a moment. The phrases describe the
+  // WORK, not the person, so they read from either vantage: the player's
+  // own scene line (they are the source) and an NPC's [Senses] cue, which
+  // sits beside the opinion FACT the same moment wrote to their memory.
+  // Salience is low on purpose — this never out-shouts a note or a smell.
+  craft_moment: {
+    channel: 'sight', salience: 0.2, decayPerTick: 0.9,
+    phrases: {
+      faint:  ['something coming together, over on the far side of the room'],
+      clear:  ['a piece of work that has just come together, right there'],
+      strong: ['a piece of work coming together — the kind of moment you can see happen'],
     },
   },
 };
@@ -4237,6 +4327,7 @@ const SIGNAL_ICONS = {
     cabinet_slam:    '💢',
     // Intimacy & Voyeurism Phase 11: "someone in that room is not alone".
     moaning:         '💕',
+    splashing:       '🌊',
     // Intimacy & Voyeurism Phase 19: the soundscape.
     music:           '🎶',
   },
@@ -6294,6 +6385,11 @@ const FACT_DISPLAY = {
 const EMOTIONAL_WEIGHTS = {
   grievance: 0.9, argument: 0.85, romance: 0.8, embarrassment: 0.7,
   success: 0.6, failure: 0.6, warmth: 0.5, domestic: 0.3, default: 0.3,
+  // aspirations-and-creative-careers Phase 13 (D43): "I'm pretty sure that
+  // account is you" — worth repeating like an embarrassment, and its own
+  // tag so Chatter's mood buckets never treat it as a post-worthy story
+  // (chatter.js also skips identity_link facts outright).
+  recognition: 0.7,
 };
 
 // D5/D6 — transmission tuning (knowledge-gossip-memory-plan Phase 2).
@@ -6950,6 +7046,23 @@ const CHARACTER_SCHEMA = {
         // event roll carries a comment claiming to be "weighted by stress +
         // low needs" and is in fact a flat `rng() < 0.15` — if that weighting
         // is ever built, reintroduce the field WITH its reader, per RI6.
+      }
+    },
+    // aspirations-and-creative-careers Phase 12 (D38): whether this person
+    // runs a Chatter account / Private page, derived once from temperament +
+    // occupation (sim.js's deriveCreator, seeded on genSeed) and carried on
+    // the bible like the intimate block. Runtime numbers (their following)
+    // live on npc.chatter, not here (D95). Readers: platform.js's
+    // npcCreator / creatorIds / npcCreatorTick, render.computer.js's NPC
+    // profile screen.
+    creator:       { type: 'object', required: false, default: {},
+      fields: {
+        active:       { type: 'boolean', default: false },
+        kinds:        { type: 'array',   default: [] },      // 'lifestyle' | 'craft:<skill>'
+        privateOpen:  { type: 'boolean', default: false },
+        backersPrice: { type: 'number',  default: 5 },
+        privatePrice: { type: 'number',  default: 10 },
+        blocksPlayer: { type: 'boolean', default: false },
       }
     },
     interests:     { type: 'array', required: true, default: [], maxItems: 3,
@@ -8018,8 +8131,10 @@ const CAST_CONSTRAINTS = {
 
 // --- Skills (full curves land in SKILLS, P3) — the stable id list EFFECTS
 // and ACTIONS can validate against before that phase exists, so
-// ADD_SKILL_XP has something real to check rather than a landmine. ---
-const SKILL_IDS = ['cooking', 'cleaning', 'stealth', 'tech', 'fitness', 'social', 'art', 'writing', 'focus'];
+// ADD_SKILL_XP has something real to check rather than a landmine.
+// 'music' (Aspirations & Creative Careers Phase 1, D5) is the one skill
+// that plan adds; its first award site is hobby.guitar (defs.actions.js). ---
+const SKILL_IDS = ['cooking', 'cleaning', 'stealth', 'tech', 'fitness', 'social', 'art', 'writing', 'focus', 'music'];
 
 // --- Flag key patterns. ADD_FLAG/CLEAR_FLAG validate against these rather
 // than a fixed enum, since flag keys are often parameterized (e.g.
@@ -8119,6 +8234,29 @@ const STEALTH_TUNING = {
   // belief-gated on things the NPC actually knows happened.
   witnessedGrievanceSeverity: 0.3,
   witnessedGrievanceText: 'The player walked into my room like they owned it.',
+};
+
+// Knock-and-consent (bug report 2026-09-13): tuning for stealth.js's
+// resolveKnock/knockReceptivityScore. Activities a knock can never get past
+// regardless of relationship — mirrors the OVERTURE_DND_SOURCES activity set
+// (overture.js), which is the NPC-initiated mirror of this same door; that
+// registry itself only reads PLAYER state, so it isn't callable here
+// directly, but the activity list is. 'napping'/'sleeping' are also covered
+// by willingnessFloorReasons' own 'asleep' floor — listed again here only so
+// this array is a complete, self-contained "can't answer" set for anyone
+// reading resolveKnock without also reading willingness.js.
+const KNOCK_HARD_FLOOR_ACTIVITIES = ['sleeping', 'napping', 'showering', 'masturbating', 'masturbating in bed'];
+const KNOCK_TUNING = {
+  // Formula shape and magnitude mirror ASK_TUNING.boundary/
+  // boundaryReceptivityScore (asks.js) on purpose, for consistency with the
+  // game's other "will this NPC let something happen" scores.
+  tensionPenaltyWeight: 0.8,
+  moodWeight: 0.3,
+  phaseWeight: 0.25,    // a familiar/close/intimate roommate answers more readily
+  companyPenalty: 0.2,  // someone else present makes an invite less likely (soft signal, not a floor — see knockReceptivityScore's comment)
+  acceptNoiseRange: 0.3,
+  hallwayThreshold: -0.15,  // score below this: available but unwilling -> no_answer
+  inviteThreshold: 0.35,    // score at/above this: invite. Between the two thresholds: hallway.
 };
 
 // F6 (Discord feedback, 2026-08-23/24): the player-side mirror of
@@ -8298,6 +8436,23 @@ const BOUNDARY_RULE_DEFS = {
     condition: { act: 'enter_room', roomId: 'bedroom_player' },
     weight: 0.5,
   },
+  // aspirations-and-creative-careers Phase 13 (D45): the one PLAYER-bound
+  // rule — an NPC's answer to $SubscriptionTalk when they are not okay with
+  // it. Lives as an instance on THEIR npc.flags._playerBoundaries (the
+  // mirror of _boundaryRules: a line the player agreed to, held by the
+  // person who drew it), matched against the PLAYER's act (subscribing to
+  // someone's Private page) by flags.js's checkPlayerBoundary, and — when
+  // the crossing reaches them through NOTICE or gossip — the normal
+  // boundary-violation path (tension + a grievance), never the infidelity
+  // deltas. `playerBound` marks the direction so the NPC-side matcher
+  // never picks it up.
+  no_private_subscriptions: {
+    id: 'no_private_subscriptions',
+    label: "Don't pay for other people's private pages",
+    condition: { act: 'subscribe_private' },
+    weight: 0.6,
+    playerBound: true,
+  },
 };
 
 // D15's compliance formula. npc.bible.temperament has no trait literally
@@ -8324,6 +8479,12 @@ const FLAGS_TUNING = {
   // mood/memory-fact-severity term of its own — smaller than a witness's
   // reaction above, since nobody else saw it happen.
   boundaryTensionAtFullStrength: 0.15,
+  // aspirations-and-creative-careers Phase 13 (D45) — a PLAYER-bound rule
+  // crossed by the player and learned by the NPC who drew it: larger than
+  // the self-directed one above (someone else broke their word to you) and
+  // it lands a grievance, so an apology has something to answer.
+  playerBoundaryTensionAtFullStrength: 0.3,
+  playerBoundaryGrievanceSeverity: 0.45,
 };
 
 // Clothing states visible during peeping, by NPC activity
@@ -8582,6 +8743,8 @@ const PEEK_VIEW_ACT = {
   // Nothing in the old prompt asked for water, so nothing painted any.
   showering: { safe: 'in the shower', explicit: 'in the shower',
     staging: 'under running water, wet skin and soaked hair, water droplets running down them, steam in the air, soap suds, fogged glass' },
+  'relaxing in the sauna': { safe: 'in the sauna', explicit: 'in the sauna, wrapped in a towel',
+    staging: 'seated on a cedar bench, wreathed in steam, skin flushed and damp with sweat, dim warm light' },
   changing: { safe: 'changing', explicit: 'changing' },
   // A sleeping subject is STILL. "mid-motion" is not a softening here, it is
   // a contradiction, and the base negative's "static portrait" bans exactly
@@ -8955,6 +9118,12 @@ const ACTION_TUNING = {
   relaxEnergyGain: 5,
   dishesMoodGain: 0.05,
   cleanMoodGain: 0.05,
+  // 2026-09-10 audit fix: clean.object — the per-object counterpart to
+  // self.clean's room-level sweep. A single targeted object (stove, table,
+  // shower, etc.) rather than the whole room's ambient dirt, so a smaller
+  // time cost and mood gain than self.clean's, in line with toilet.clean's.
+  cleanObjectMinutes: 8,
+  cleanObjectMoodGain: 0.04,
   // Actions & Activities Overhaul Phase 16 (D25): Deep Clean — the
   // skillAtLeast-gated verb self.clean's own header comment left as a "real
   // gap" (skillAtLeast was declared in ACTION_REQUIREMENT_CHECKERS with zero
@@ -9177,7 +9346,10 @@ const HOBBY_TUNING = {
 // shape; this is the simpler, fully Node-testable one). A single, more
 // deliberate session than any one hobby action: costs more time and energy
 // than hobby.bookshelf's leisure Read, and pays real skill XP where Read
-// pays none. xp sits at EFFECT_LIMITS.skillXpCap's own ceiling (15) — fine
+// pays only a sliver of `writing` research XP (Aspirations & Creative
+// Careers Phase 1, D6/D21 — a third of the sketchpad rate; it is still a
+// leisure verb, not a study session). xp sits at EFFECT_LIMITS.skillXpCap's
+// own ceiling (15) — fine
 // either side of it, since that cap only binds the LLM-tier producer path
 // (validateEffects); config-authored def.skill XP is the trusted-producer
 // path (ACTIONS' executeAction), same as every other skill-granting action
@@ -10205,8 +10377,56 @@ const DRIVE_DEFS = {
       // champion was being beaten to the punch by the same-term social drives;
       // the 0.02 raise restores stimulation's place in the mix (66/679 = 9.7%
       // at the Phase 5 measurement) without making the need curve redundant.
-      baseAppeal: 0.20,
-      need: { need: 'stimulation', below: 50 },
+      //
+      // 0.20 → 0.23 (2026-09-10 audit fix, by the same measurement method).
+      // The vocation plan's later idle pastimes (read_book/watch_tv/
+      // scroll_phone, below) restore this SAME need at baseAppeal 0.42 with
+      // no need gate at all, which the Phase 5 number never had to compete
+      // against — measured post-idle-pastimes, this drive's win rate had
+      // collapsed to 5/3359 eligible ticks (1.0%), an order of magnitude
+      // below every other need-gated drive's true peer group (sleep_recover
+      // 12.6%, seek_company 14.0%, chat_with_roommate 15.6%, all baseAppeal
+      // 0.20-0.25) — "never fires" in practice, not "a rare fallback" like
+      // those three.
+      //
+      // 0.23, not higher: verify-c3.js's "personality never overrides a
+      // satisfied need" invariant caps this at baseAppeal * (1 + openness*
+      // 0.35 + volatility*0.20) * blockAppeal.leisure(1.1) < actionThreshold
+      // (0.40) — i.e. baseAppeal < ~0.2346 at the most enthusiastic possible
+      // temperament. An earlier pass tried 0.32 (0.5456, over the bar) —
+      // that IS the gate-stuck-open-wearing-a-curve's-clothes defect this
+      // invariant exists to catch, not a stricter test to work around. 0.23
+      // alone only moved the win rate 0.1%->1.4% (measured) — the ceiling
+      // leaves too little room on baseAppeal by itself to matter against
+      // the idle pastimes' flat ~0.42.
+      //
+      // need.below 50 -> 60: the OTHER lever, and one the ceiling test
+      // doesn't constrain at all — it satisfies the need at val=100, where
+      // (below-100)/below is negative regardless of below's value, so this
+      // never touches the personality-ceiling invariant above. Observed
+      // stimulation range is 0..67 (comment below), so below:50 meant the
+      // need term contributed nothing until stimulation was ALREADY under
+      // 50 — most of the observed range got zero help; 60 gives the curve
+      // room to matter across nearly the whole range.
+      //
+      // Measured ceiling on this whole approach: baseAppeal 0.23 + below 60
+      // moves the win rate from 5/3359 (0.1%) to ~11-20/3000ish (0.4-0.7%)
+      // — a real, several-fold improvement, but nowhere near its true peer
+      // group's 8-16% (sleep_recover/seek_company). Pushing below further
+      // (tried 68, the observed max) barely moved it again. The actual
+      // bottleneck is structural, not a tuning knob on this drive at all:
+      // the idle pastimes below (baseAppeal 0.42, NO need gate — their own
+      // previously-measured, deliberate fix for "the empty afternoon") win
+      // almost every eligible tick regardless of how depleted stimulation
+      // is, so it rarely gets the chance to run low enough for this curve
+      // to matter. Genuine parity would mean re-tuning the idle pastimes
+      // too, which is its own already-measured, locked-in balance decision
+      // — out of scope here without reopening that hole. This lands the
+      // fix as far as it safely goes: it now actually fires, several times
+      // more often than before, without breaching verify-c3's "personality
+      // never overrides a satisfied need" invariant.
+      baseAppeal: 0.23,
+      need: { need: 'stimulation', below: 60 },
       temperamentWeights: { openness: 0.35, volatility: 0.20 },
       holdMinutes: 60, // was holdTicks 2 — 2 × 30-min ticks
       blockAppeal: { leisure: 1.1, evening: 1.05 },
@@ -10387,6 +10607,46 @@ const DRIVE_DEFS = {
     // npcDecayActions (the pool must be functional to swim, and using it
     // wears it out).
     meters: [['devices', 1.5], ['waterHeating', 1]],
+  },
+
+  // Bug report (2026-09-20): "make sure NPCs CAN use the sauna" — the East
+  // Wing sauna (D22/D58) was self.sauna, player-only, with no NPC drive at
+  // all. Wraps self.shower/self.swim's exact template: actionId gives the
+  // commitment its object anchor (ACTION_ANCHOR_OBJS' 'sauna'), moveToRoom
+  // gives it the room 'relaxing in the sauna' is absent from
+  // ACTIVITY_ROOM_PREFERENCES the same way 'showering' is (see the shower
+  // drive's comment) — without it an NPC would "use the sauna" wherever
+  // they already happened to be standing. Facility gating and decay are
+  // MAINTENANCE.npcDecayActions.sauna above, the same mechanism shower/swim
+  // use — pool_sauna must be functional or scoreDrive refuses this drive.
+  sauna: {
+    gates: [], weight: 0.12,
+    actionId: 'self.sauna',
+    timeOfDay: ['leisure', 'evening', 'wind_down'],
+    utility: {
+      // A wind-down indulgence, not a duty — same shape as swim's openness
+      // pull, plus a neuroticism pull (the anxious unwind here more than
+      // the even-keeled do).
+      baseAppeal: 0.16,
+      temperamentWeights: { openness: 0.10, neuroticism: 0.10 },
+      holdMinutes: ACTION_TUNING.saunaMinutes,
+      blockAppeal: { leisure: 1.1, evening: 1.2, wind_down: 1.3 },
+    },
+    moveToRoom: ['pool_room'],
+    // Nudity is NOT setsClothing here — design invariant 4 (see
+    // npcClothingForContext, npc.js) routes every activity-nudity decision
+    // through one gate. self.sauna is a towel-only act for the player,
+    // ungated by deviancy ("a towel-only act, not a locked-room one" —
+    // defs.actions.js), so npcClothingForContext's 'relaxing in the sauna'
+    // case mirrors that: unconditional 'undressed', same as the player's.
+    activityOverride: 'relaxing in the sauna',
+    effects: [
+      { type: 'ADJUST_NEED', params: { who: 'self', need: 'energy', delta: ACTION_TUNING.saunaEnergyGain } },
+      { type: 'ADJUST_NEED', params: { who: 'self', need: 'hygiene', delta: ACTION_TUNING.saunaHygieneGain } },
+    ],
+    eventTemplate: '{name} spent some time relaxing in the sauna.',
+    eventMood: 0.03,
+    cooldownMinutes: 600,
   },
 
   // Intimacy & Voyeurism Phase 13 (D3/D13): the solo half of "NPCs do it
@@ -11625,7 +11885,13 @@ const DRIVE_COOLDOWN_KEY = '_driveCooldowns';
 // saveIndex so the branching-tree view is a later pure-UI addition (D9).
 // The menu renders cards from kv.saveIndex (a lightweight summary list) and
 // NEVER deserializes a payload to draw a card.
-const GAME_VERSION = '0.12.0'; // bump whenever a save-affecting schema change ships
+// Bump whenever a save-affecting schema change ships, OR whenever a full
+// plan's final phase completes and gets a Patch Notes entry (2026-09-10 —
+// see HANDOFF-PROMPT-ARCHITECTURE.md's Step 3 and defs.patchnotes.js's own
+// header). The two triggers can coincide; when they don't, a plan-completion
+// bump still needs a real reason a save-version check would care about, or
+// at minimum a patch notes entry — this string IS the app's version list.
+const GAME_VERSION = '0.14.1';
 
 const SAVE_TUNING = {
   manualBaseSlots: 12,       // manual_0..manual_11; grow on demand above this

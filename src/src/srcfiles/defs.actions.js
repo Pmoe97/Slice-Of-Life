@@ -84,6 +84,28 @@ function createResearchAction(skillId, label, verbs) {
   };
 }
 
+// clean.object's target list (2026-09-10 audit fix). Every OBJECT_DEFS
+// entry that declares 'clean.object' in `affords` EXCEPT `toilet` and
+// `sink_kitchen` — both already have a fully-dedicated verb for their one
+// dirty state (toilet.clean, self.dishes) with its own proper skill/time
+// curve, so adding this generic verb on top of them would just be a second,
+// redundant chip doing the identical job. Declared here, before ACTION_DEFS,
+// because the 'clean.object' entry below reads it directly as a value at
+// object-literal-construction time (source.objDefs) — a `const` declared
+// after that point would be a temporal-dead-zone ReferenceError the moment
+// this file loads, not a runtime-only concern like the functions below.
+const CLEAN_OBJECT_TARGETS = [
+  'stove', 'fridge', 'freezer', 'trash_kitchen', 'shower', 'lockers',
+  'changing_bench', 'sink_bathroom', 'coffee_table_lr', 'kitchen_table',
+  'dining_table', 'swimming_pool', 'balcony_table',
+];
+// trash_kitchen's `fill` ladder is trash.take_out's job (physically carrying
+// the bag out) — clean.object only ever wipes/scrubs (`rotten_food` here),
+// the same way the pool's own dirtyWhen deliberately excludes `water` so no
+// generic cleaner can ever refill a derelict basin (see swimming_pool's own
+// comment, defs.world.js).
+const CLEAN_OBJECT_KEY_EXCLUDE = { trash_kitchen: ['fill'] };
+
 const ACTION_DEFS = {
   'self.eat': {
     // Inventory overhaul Phase 3: item-driven eating. The old flat
@@ -437,6 +459,10 @@ const ACTION_DEFS = {
     group: 'living_room', chipPriority: 20,
     requires: [],
     timeCost: { base: 15 },
+    // Aspirations & Creative Careers Phase 16 (D51): resting in a designed
+    // room adds its comfort (ACTIONS' executeAction → WORLD's
+    // applyDesignedRoomComfort). Declarative, like `skill` / `meters`.
+    restful: true,
     effects: [
       `ADJUST_NEED player mood +${ACTION_TUNING.relaxMoodGain}`,
       `ADJUST_NEED player energy +${ACTION_TUNING.relaxEnergyGain}`,
@@ -608,10 +634,10 @@ const ACTION_DEFS = {
   // exactly what "Clean Hallway" needs: hallway_a/hallway_b own no
   // dirtyable furniture at all, so the only thing a cleaning action there
   // CAN point at is the room-level ambient field. Every other room gets the
-  // same chip for the same reason (D17's "each room gets dirt"); the
-  // per-object clean.object affordance (stove grease, fridge rot, etc.,
-  // already declared on 13 OBJECT_DEFS entries but never wired to any
-  // action) is a separate, real, still-open gap — see the Phase 9 Handoff.
+  // same chip for the same reason (D17's "each room gets dirt"). The
+  // per-object clean.object affordance (stove grease, fridge rot, etc.) was
+  // a separate, real, still-open gap noted here until the 2026-09-10 audit
+  // fix — see clean.object below, right after self.deep_clean.
   'self.clean': {
     id: 'self.clean', label: 'Clean Up', verbs: ['clean up', 'clean the room', 'sweep up', 'tidy up'],
     source: { kind: 'room', roomIds: ALL_ROOMS },
@@ -642,6 +668,29 @@ const ACTION_DEFS = {
     buildEffects: buildDeepCleanEffects,
     narration: { mode: 'dynamic', build: deepCleanNarration },
   },
+  // 2026-09-10 audit fix: the object-level counterpart self.clean's own
+  // comment (above) flagged as a real, still-open gap. self.clean/
+  // self.deep_clean only ever touch the ambient dirt.js layer (foot
+  // traffic, dust); a SPECIFIC dirty object (stove grease, fridge rot, a
+  // cluttered table) had no player verb at all — only cleanRoomObjects
+  // (computer.js), reachable by an NPC's own clean_common drive, a maid or
+  // a paid cleaning service, never by the player. One generic action
+  // covers every target in CLEAN_OBJECT_TARGETS (declared near
+  // objectNeedsCleaning above) rather than a bespoke entry per object,
+  // mirroring cleanRoomObjects' own "reset every dirtyWhen key to
+  // states[key][0]" rule so the two paths can never disagree about what
+  // counts as clean.
+  'clean.object': {
+    id: 'clean.object', label: 'Clean', verbs: ['clean it', 'wipe it down', 'scrub it clean'],
+    source: { kind: 'object', objDefs: CLEAN_OBJECT_TARGETS },
+    group: 'clean', chipPriority: 24,
+    requires: ['objectNeedsCleaning'],
+    timeCost: { base: ACTION_TUNING.cleanObjectMinutes },
+    skill: { id: 'cleaning', xp: 3 },
+    prepare: prepareCleanObject,
+    buildEffects: buildCleanObjectEffects,
+    narration: { mode: 'dynamic', build: cleanObjectNarration },
+  },
   // --- Intimacy & Voyeurism Overhaul Phase 1 (D5): expandable submenus ---
   // A multi-verb object renders as ONE "X ▸" chip that expands a one-level
   // popover of its verbs. The parent (`door.interact`) is a grouping entry
@@ -649,11 +698,19 @@ const ACTION_DEFS = {
   // toggles the popover; `submenu` lists the verbs in declaration order.
   // Each verb is a normal ACTION_DEFS entry (own requires/effects/
   // narration) inheriting the parent's room context. Submenu verbs never
-  // surface as flat chips (resolveAvailableActions excludes them).
-  // `door.keyhole`/`door.listen` are stubs — Phase 3/10 slots real logic
-  // in; `door.open`/`door.knock` delegate to the existing move/knock
-  // handlers via `delegate` (ui.js routes them before the registered-
-  // action bridge).
+  // surface as flat chips (resolveAvailableActions excludes them) — which
+  // means the `source` on each verb below is INERT for chip visibility:
+  // submenuVerbChips (render.js) builds these rows from the `submenu` list
+  // alone and never reads a child's own `source`. Real availability lives in
+  // render.js's door-chip loop, which — since the 2026-09-20 "ANY door can be
+  // peeked through" bug report — offers this submenu at every 'door'-type
+  // threshold in the house (thresholdBetween, config.js), not only bedroom/
+  // bathroom doors off the two hallways, filtering Peek/Listen per-door on
+  // peekWatchable. The `roomIds` left on these five entries are stale
+  // relative to that and kept only because `source` is present on every
+  // other ACTION_DEFS entry; do not read them as the actual gate.
+  // `door.open`/`door.knock` delegate to the existing move/knock handlers
+  // via `delegate` (ui.js routes them before the registered-action bridge).
   'door.interact': {
     id: 'door.interact', label: 'Door',
     group: 'door', chipPriority: 45,
@@ -1291,6 +1348,21 @@ const ACTION_DEFS = {
       image: { kind: 'archetype', variant: 'sauna', clothing: 'towel', phrase: 'sitting in the sauna wrapped in a towel, steam curling around them, completely relaxed' },
     },
   },
+  // Bug report (2026-09-20): "peek through the door of the sauna". The
+  // sauna is an OBJECT, not a room (D22/D58) — self.sauna above is what you
+  // do if you want to join whoever's in there; this is what you do if you
+  // don't. Same intercepted-hold shape as door.keyhole (ui.js routes it to
+  // peek.js's startPeekSession before the registered-action bridge), but
+  // sourced off the object itself rather than a room-to-room door, and
+  // gated on someone actually being in there right now — see
+  // saunaOccupantPeepable below — the same "button only shows if
+  // applicable" rule the door family follows.
+  'peek.sauna': {
+    id: 'peek.sauna', label: 'Peek Through the Sauna Door',
+    source: { kind: 'object', objDef: 'sauna' },
+    group: 'pool_room', chipPriority: 37,
+    requires: ['saunaOccupantPeepable'],
+  },
   // "plant_balcony tend" (D22). Mirrors hobby_houseplant's tend exactly —
   // mood/energy only, no health-state write, because `health` is decorative
   // on every plant object in the game (nothing has ever set it to
@@ -1440,6 +1512,9 @@ const ACTION_DEFS = {
     group: 'chill', chipPriority: 15,
     requires: [],
     timeCost: { base: ACTION_TUNING.napMinutes },
+    // Phase 16 (D51): a nap in a designed room is a little better — see
+    // self.relax's `restful`.
+    restful: true,
     effects: [
       `ADJUST_NEED player energy +${ACTION_TUNING.napEnergyGain}`,
       `ADJUST_NEED player mood +${ACTION_TUNING.napMoodGain}`,
@@ -1551,17 +1626,27 @@ const ACTION_DEFS = {
   // One per hobby OBJECT_DEFS entry, generated by createHobbyAction (below)
   // so the six are guaranteed to share one shape. Sourced from the OBJECT,
   // which is what makes a hobby usable only in the room that contains it.
-  ...createHobbyAction('hobby_guitar', 'Play Guitar', ['play guitar', 'strum the guitar', 'practice guitar']),
-  ...createHobbyAction('hobby_bookshelf', 'Read', ['read', 'curl up with a book', 'read a book']),
-  ...createHobbyAction('hobby_record_player', 'Listen to Records', ['listen to records', 'put on a record', 'spin some vinyl']),
-  ...createHobbyAction('hobby_console', 'Play Console', ['play the console', 'play video games', 'game']),
+  // Every hobby declares its `mode` (Aspirations & Creative Careers
+  // Phase 1, D6): `mastery` hobbies are practice and award skill XP;
+  // `bonding` hobbies award none by design — their value is the
+  // shared-activity invite path that already exists (ASK_HANGOUT/
+  // ASK_INVITE), and forcing XP onto them would be busywork.
+  ...createHobbyAction('hobby_guitar', 'Play Guitar', ['play guitar', 'strum the guitar', 'practice guitar'], { mode: 'mastery', skill: 'music', xp: 6 }),
+  // Reading is research at a sliver of the sketchpad rate (D21: a third) —
+  // a leisure verb that happens to feed `writing`, not a study session
+  // (that is research.* on the same bookshelf).
+  ...createHobbyAction('hobby_bookshelf', 'Read', ['read', 'curl up with a book', 'read a book'], { mode: 'mastery', skill: 'writing', xp: 2 }),
+  ...createHobbyAction('hobby_record_player', 'Listen to Records', ['listen to records', 'put on a record', 'spin some vinyl'], { mode: 'bonding' }),
+  ...createHobbyAction('hobby_console', 'Play Console', ['play the console', 'play video games', 'game'], { mode: 'bonding' }),
   // Actions & Activities Overhaul Phase 16 (D25): the 'art' entry in
   // SKILL_IDS (config.js) had zero consumers anywhere in the codebase until
-  // now — sketching is the obvious practice verb for it (D32's "the real
+  // then — sketching is the obvious practice verb for it (D32's "the real
   // gap is XP, not architecture" pattern, same shape as Phase 1B's stealth
   // fix, applied to a second orphaned skill id).
-  ...createHobbyAction('hobby_sketchpad', 'Sketch', ['sketch', 'draw', 'doodle'], { id: 'art', xp: 6 }),
-  ...createHobbyAction('hobby_houseplant', 'Tend Plant', ['tend the plant', 'water the plant', 'care for the plant']),
+  ...createHobbyAction('hobby_sketchpad', 'Sketch', ['sketch', 'draw', 'doodle'], { mode: 'mastery', skill: 'art', xp: 6 }),
+  // No craft skill to master and nothing to perform — the plant is the
+  // no-XP side by elimination, not because anyone bonds over watering it.
+  ...createHobbyAction('hobby_houseplant', 'Tend Plant', ['tend the plant', 'water the plant', 'care for the plant'], { mode: 'bonding' }),
   // --- Self-directed research (Actions & Activities Overhaul Phase 16,
   // D25) --- One leaf per researchable skill, all sourced from any
   // bookshelf-shaped object (the seeded living-room `bookshelf`, the seeded
@@ -1569,9 +1654,11 @@ const ACTION_DEFS = {
   // studying a NAMED skill" is the chip's own label, not a runtime picker
   // (see RESEARCHABLE_SKILLS/createResearchAction below for why). Deliberately
   // excludes 'stealth' (D32 already settled stealth XP as practice-only —
-  // sneaking well is not something a book teaches) and 'social'/'writing'/
-  // 'focus' (SKILL_IDS reserves them; no natural object exists yet for
-  // either — see the Phase 16 Handoff note).
+  // sneaking well is not something a book teaches), 'social'/'focus'
+  // (SKILL_IDS reserves them; no natural object exists yet for either —
+  // see the Phase 16 Handoff note), and 'writing'/'music', whose practice
+  // verbs are the mastery hobbies above (hobby.bookshelf's leisure Read
+  // and hobby.guitar — Aspirations & Creative Careers Phase 1, D6).
   ...RESEARCHABLE_SKILLS.reduce((acc, s) => Object.assign(acc, createResearchAction(s.id, s.label, s.verbs)), {}),
   // --- BrineOS phone object actions (Phase 2) ---
   // Pickup / set-down / plug-in / unplug. These are the first-ever callers
@@ -1741,6 +1828,50 @@ function isPrivateRoom(roomId) {
   return def.type === 'bedroom' || roomId.startsWith('bathroom');
 }
 
+// Whichever CLEAN_OBJECT_TARGETS instance is actually in this room, or null.
+// At most one of these object types exists per room in the real floor plan,
+// so first-match is unambiguous — same resolution order
+// resolveAvailableActions' own source.objDefs check already uses.
+function cleanObjectTargetIn(ctx) {
+  // Prioritizes a DIRTY match over a merely-present one. Unlike every other
+  // multi-type source.objDefs action in this file (self.lock_door's two door
+  // types, self.laundry's one washer), a kitchen can hold several
+  // CLEAN_OBJECT_TARGETS types AT ONCE (stove + fridge + freezer +
+  // trash_kitchen + kitchen_table) — first-present-wins would get stuck
+  // reporting "nothing to clean" against an already-clean stove while a
+  // genuinely dirty fridge sat right next to it and never got a turn.
+  let firstPresent = null;
+  for (const defId of CLEAN_OBJECT_TARGETS) {
+    const obj = findObjectInRoom(ctx, defId);
+    if (!obj) continue;
+    if (!firstPresent) firstPresent = obj;
+    if (objectHasResettableDirt(obj)) return obj;
+  }
+  return firstPresent;
+}
+
+// The dirtyWhen keys this object can actually have cleaned by this action —
+// every declared key except this defId's exclusions above. Shared by the
+// chip's requirement check and prepare(), so the two can never disagree.
+function cleanableKeysFor(obj) {
+  const def = OBJECT_DEFS[obj.defId];
+  const excluded = new Set(CLEAN_OBJECT_KEY_EXCLUDE[obj.defId] || []);
+  return Object.keys(def?.dirtyWhen || {}).filter(k => !excluded.has(k));
+}
+
+// Mirrors cleanRoomObjects' (computer.js) own per-key dirty test exactly —
+// 'dishes' reads the real dish-unit map (dishUnitsOf), everything else
+// compares against def.states[key][0] (the clean value by construction,
+// same "no second parallel clean-value table" rule cleanRoomObjects itself
+// documents).
+function objectHasResettableDirt(obj) {
+  const def = OBJECT_DEFS[obj.defId];
+  return cleanableKeysFor(obj).some(key => {
+    if (key === 'dishes') return dishUnitsOf(obj) > 0;
+    return obj.state?.[key] !== def.states[key][0];
+  });
+}
+
 const ACTION_REQUIREMENT_CHECKERS = {
   needAbove: (ctx, need, min) => (ctx.gameState.player[need] ?? 100) >= Number(min) || `Not enough ${need}.`,
   needBelow: (ctx, need, max) => (ctx.gameState.player[need] ?? 0) <= Number(max) || `${need} is too high right now.`,
@@ -1847,11 +1978,34 @@ const ACTION_REQUIREMENT_CHECKERS = {
   },
   // Actions & Activities Overhaul Phase 9 (D17/D49): self.clean's chip only
   // lights up when the ambient dirt.js layer actually has something in it —
-  // a spotless room has nothing for a room-level sweep to do (the object-level
-  // clean.object affordance, still unwired — see the Phase 9 Handoff note —
-  // is a separate, real gap for a future session).
+  // a spotless room has nothing for a room-level sweep to do. The object-
+  // level clean.object affordance (stove grease, fridge rot, a cluttered
+  // table) was a separate, real gap noted here until the 2026-09-10 audit
+  // fix wired it — see objectNeedsCleaning below.
   roomHasDirt: (ctx) => {
     return roomDirtOf(ctx.gameState, ctx.roomId) > DIRT_TUNING.visibleFloor || 'Nothing here needs cleaning.';
+  },
+  // 2026-09-10 audit fix: the object-level counterpart to roomHasDirt above.
+  // CLEAN_OBJECT_TARGETS (below, near clean.object's def) is every object
+  // whose OBJECT_DEFS entry declares 'clean.object' in `affords` AND has no
+  // better-fitting dedicated verb already (toilet.clean, self.dishes) — a
+  // second generic chip doing the identical job to an existing bespoke one
+  // would just be redundant. cleanObjectTargetIn resolves whichever of them
+  // is actually in this room; dirty is checked per-key the same way
+  // cleanRoomObjects (computer.js) already does for the NPC/service path,
+  // so the chip and the effect can't disagree about what counts as dirty.
+  objectNeedsCleaning: (ctx) => {
+    const obj = cleanObjectTargetIn(ctx);
+    if (!obj) return 'Nothing here needs cleaning.';
+    return objectHasResettableDirt(obj) || 'Nothing here needs cleaning.';
+  },
+  // Bug report (2026-09-20): peek.sauna's own gate — reuses peek.js's
+  // saunaPeekWatchable (someone is actually using the sauna right now, AND
+  // the room reads as lit), the exact same pure check startSaunaPeekSession
+  // re-runs on click. Chip and click can never disagree about whether
+  // there's anyone to see.
+  saunaOccupantPeepable: (ctx) => {
+    return saunaPeekWatchable(ctx.gameState) || 'Nobody in the sauna right now.';
   },
   // Actions & Activities Overhaul Phase 10 (D18): reads the SAME pool
   // self.cook draws from (bag + kitchen fridge/pantry/freezer), so the Brew
@@ -2513,15 +2667,44 @@ function buildWatchTvEffects(ctx, prepared) {
 // object id suffix; sourcing from the object is what scopes the hobby to
 // the room it was placed in. The social layer rides along: a liked
 // resident watching you play makes it better.
-// `skill` (Actions & Activities Overhaul Phase 16, D25) is optional and
-// omitted for hobbies that stay pure vibe (guitar/bookshelf-read/record
-// player/console/houseplant) — only hobby_sketchpad passes one today, to
-// wire the previously-orphaned 'art' SKILL_IDS entry to a real practice
-// verb. `def.skill` is the same declarative field every other skill-
-// granting ACTION_DEFS entry uses (ACTIONS' executeAction applies it
-// unconditionally); nothing here duplicates that logic.
-function createHobbyAction(objDef, label, verbs, skill) {
+// `opts.mode` (Aspirations & Creative Careers Phase 1, D6) is REQUIRED —
+// every hobby says which side of the split it is on, and the factory
+// throws at load time rather than let a hobby drift in undeclared:
+//   'mastery' — practice. `skill` (a SKILL_IDS id) and `xp` (> 0) are
+//     required and become `def.skill`, the same declarative field every
+//     other skill-granting ACTION_DEFS entry uses (ACTIONS' executeAction
+//     applies it unconditionally); nothing here duplicates that logic.
+//   'bonding' — no XP by design; `skill`/`xp` are refused. The mode is
+//     consumed HERE (it decides whether def.skill exists) and is not
+//     stored on the def — no field without a reader (invariant 6). A later
+//     phase that needs the mode at runtime adds `def.hobbyMode` together
+//     with its reader.
+// Before Phase 1 only hobby_sketchpad passed a skill (Actions & Activities
+// Phase 16, D25, wiring the then-orphaned 'art' id); guitar → music and
+// bookshelf → writing joined it there.
+// (The mode list is a local, not a module const: ACTION_DEFS calls this
+// factory during its own evaluation, above this line — a module-level
+// const here would be in its temporal dead zone at that moment, the same
+// trap the RESEARCHABLE_SKILLS header describes.)
+function createHobbyAction(objDef, label, verbs, opts) {
   const id = `hobby.${objDef.slice('hobby_'.length)}`;
+  const modes = ['mastery', 'bonding'];
+  const mode = opts && opts.mode;
+  if (!modes.includes(mode)) {
+    throw new Error(`createHobbyAction(${objDef}): mode must be one of ${modes.join('|')}, got ${JSON.stringify(mode)}`);
+  }
+  let skill = null;
+  if (mode === 'mastery') {
+    if (!opts.skill || !SKILL_IDS.includes(opts.skill)) {
+      throw new Error(`createHobbyAction(${objDef}): a mastery hobby needs a SKILL_IDS skill, got ${JSON.stringify(opts.skill)}`);
+    }
+    if (!(Number(opts.xp) > 0)) {
+      throw new Error(`createHobbyAction(${objDef}): a mastery hobby needs xp > 0, got ${JSON.stringify(opts.xp)}`);
+    }
+    skill = { id: opts.skill, xp: Number(opts.xp) };
+  } else if (opts.skill != null || opts.xp != null) {
+    throw new Error(`createHobbyAction(${objDef}): a bonding hobby awards no XP by design (D6) — drop skill/xp or declare it mastery`);
+  }
   // The closure captures objDef so buildEffects/narration know which hobby
   // this is — executeAction only hands prepare/buildEffects the ctx and the
   // prepared result, not the def (see ACTIONS' two-step contract).
@@ -2568,6 +2751,13 @@ function buildHobbyEffects(ctx, prepared) {
     if (rec) {
       lines.push(`SET_OBJECT_STATE ${rec.id} power on`);
       if (!rec.state?.volume || rec.state.volume === '0') lines.push(`SET_OBJECT_STATE ${rec.id} volume 2`);
+    }
+    // Aspirations & Creative Careers Phase 6 (D78): with a released track
+    // of the player's own in the catalog, the stack might include it —
+    // EFFECTS' trusted-only PLAY_OWN_TRACK rolls that and notices the room.
+    const player = ctx.gameState && ctx.gameState.player;
+    if (ctx.roomId && player && Array.isArray(player.works) && player.works.some(w => w.kind === 'track' && w.releasedDay != null)) {
+      lines.push(`PLAY_OWN_TRACK ${ctx.roomId}`);
     }
   }
   return lines;
@@ -3926,6 +4116,36 @@ function cleanNarration(ctx, prepared) {
   const tool = prepared.usedCleaner ? 'scrub down' : 'sweep and tidy';
   if (prepared.step >= prepared.dirt) return `You ${tool} ${roomName} until it's spotless.`;
   return `You ${tool} ${roomName}. It's better, but there's more to do.`;
+}
+
+// clean.object's runtime logic (2026-09-10 audit fix). Unlike self.clean's
+// ambient dirt.js step, this resets the TARGETED object's own dirtyWhen
+// keys outright — a manual, single-object clean has no reason to leave a
+// partial step behind the way a whole-room sweep does. prepare() decides
+// exactly which keys are actually dirty right now (design invariant 1:
+// decide before you decorate), so buildEffects/narration never have to
+// re-derive it and can't disagree with what was actually checked.
+function prepareCleanObject(ctx) {
+  const obj = cleanObjectTargetIn(ctx);
+  if (!obj) return null;
+  const def = OBJECT_DEFS[obj.defId];
+  const dirtyKeys = cleanableKeysFor(obj).filter(key =>
+    key === 'dishes' ? dishUnitsOf(obj) > 0 : obj.state?.[key] !== def.states[key][0]);
+  return { obj, dirtyKeys };
+}
+function buildCleanObjectEffects(ctx, prepared) {
+  if (!prepared || prepared.dirtyKeys.length === 0) return [];
+  const def = OBJECT_DEFS[prepared.obj.defId];
+  const lines = prepared.dirtyKeys.map(key => key === 'dishes'
+    ? `CLEAN_DISHES ${prepared.obj.id}`
+    : `SET_OBJECT_STATE ${prepared.obj.id} ${key} ${def.states[key][0]}`);
+  lines.push(`ADJUST_NEED player mood +${ACTION_TUNING.cleanObjectMoodGain}`);
+  return lines;
+}
+function cleanObjectNarration(ctx, prepared) {
+  if (!prepared || prepared.dirtyKeys.length === 0) return "There's nothing here that needs cleaning.";
+  const label = (OBJECT_DEFS[prepared.obj.defId]?.label || 'it').toLowerCase();
+  return `You clean the ${label} until it's spotless.`;
 }
 
 // self.deep_clean's runtime logic (Actions & Activities Overhaul Phase 16,

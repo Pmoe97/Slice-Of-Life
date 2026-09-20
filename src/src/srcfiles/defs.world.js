@@ -320,7 +320,9 @@ const OBJECT_DEFS = {
     dirtyWhen: { dishes: { few: 0.4, many: 0.9 } }, cleanlinessWeight: 3,
     emits: { dishes: { few:  { signal: 'dirty_dishes', intensity: 0.3 },
                        many: { signal: 'dirty_dishes', intensity: 0.65 } } },
-    affords: ['self.dishes', 'clean.object', 'inspect.object'],
+    // 2026-09-10 audit fix: dropped clean.object — same reasoning as
+    // toilet's own note (self.dishes is the fully-dedicated verb here).
+    affords: ['self.dishes', 'inspect.object'],
     imagePhrase: 'a kitchen sink',
   },
   // Food-overhaul Phase 4 (D11): the dishwasher. Its load and cycle live on
@@ -383,7 +385,15 @@ const OBJECT_DEFS = {
     states: { dishes: ['clean', 'few', 'many'], clutter: ['tidy', 'cluttered'] },
     defaultState: { clutter: 'tidy' },
     dirtyWhen: { dishes: { few: 0.3, many: 0.6 }, clutter: { cluttered: 0.2 } }, cleanlinessWeight: 1,
-    affords: ['inspect.object'],
+    // 2026-09-10 audit fix: this was the one dishes+clutter table with no
+    // emits table at all — dining_table and the balcony bistro table (same
+    // dirtyWhen shape) both already emit exactly this on clutter; a piled
+    // kitchen table was invisible to perception (no sight/smell signal, no
+    // NPC reaction) while every sibling surface worked.
+    emits: { clutter: { cluttered: { signal: 'clutter', intensity: 0.4 } } },
+    // 2026-09-10 audit fix: dining_table and the balcony bistro table (same
+    // dishes+clutter shape) both afford clean.object; this one didn't.
+    affords: ['inspect.object', 'clean.object'],
     imagePhrase: 'a small kitchen table with mismatched chairs',
   },
   trash_kitchen: {
@@ -450,7 +460,11 @@ const OBJECT_DEFS = {
     states: { clean: ['clean', 'dirty'] }, defaultState: { clean: 'clean' },
     dirtyWhen: { clean: { dirty: 0.7 } }, cleanlinessWeight: 2,
     emits: { clean: { dirty: { signal: 'bathroom_grime', intensity: 0.7 } } },
-    affords: ['toilet.use', 'toilet.clean', 'clean.object', 'inspect.object'],
+    // 2026-09-10 audit fix: dropped clean.object — toilet.clean is the
+    // fully-dedicated verb for this object's one dirty state; the new
+    // generic clean.object action deliberately excludes toilet/sink_kitchen
+    // for exactly this reason (see CLEAN_OBJECT_TARGETS, defs.actions.js).
+    affords: ['toilet.use', 'toilet.clean', 'inspect.object'],
     imagePhrase: 'a toilet',
   },
   sink_bathroom: {
@@ -1419,6 +1433,12 @@ const ITEM_DEFS = {
   board_game: { id: 'board_game', label: 'Board Game', nouns: ['board game'], category: 'media', stackable: true, maxStack: 4, price: 20, buyQty: 1 },
   pain_reliever: { id: 'pain_reliever', label: 'Pain Reliever', nouns: ['pain reliever', 'ibuprofen', 'medicine'], category: 'medication', stackable: true, maxStack: 4, price: 5, buyQty: 1 },
   allergy_medicine: { id: 'allergy_medicine', label: 'Allergy Medicine', nouns: ['allergy medicine'], category: 'medication', stackable: true, maxStack: 4, price: 6, buyQty: 1 },
+  // Aspirations & Creative Careers Phase 7 (D23): a finished piece of the
+  // player's own art. Minted by works.js's finishWorkRecord, one stack per
+  // piece, carrying meta.workId / meta.title / meta.quality — the work
+  // record is the truth, the item is its physical half (sellable now,
+  // hangable in Phase 16, giveable like any gift). Not buyable: no price.
+  player_art: { id: 'player_art', label: 'Painting', nouns: ['painting', 'piece', 'canvas', 'artwork', 'picture'], category: 'gift', stackable: false, maxStack: 1 },
   flowers: { id: 'flowers', label: 'Flowers', nouns: ['flowers'], category: 'gift', stackable: true, maxStack: 3, price: 15, buyQty: 1 },
   chocolate_box: { id: 'chocolate_box', label: 'Box of Chocolates', nouns: ['chocolates', 'chocolate box'], category: 'gift', stackable: true, maxStack: 3, price: 10, buyQty: 1 },
 

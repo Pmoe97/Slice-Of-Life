@@ -484,12 +484,14 @@ function derivePlausibleActivity(gameState, npcId, playerRoomId) {
 // room, and the SAME perceiveSignals query every other surface reads — and
 // nothing here is stored (RI3). PURE, like everything else in this file.
 //
-// Only rooms that actually carry a door OBJECT can whisper: an archway has
-// no keyhole to light up, and the interior doorways that exist only in
-// ROOM_THRESHOLDS (game room, gym, changing room, study, balcony,
-// kitchen-laundry) are not cues. That is the honest surface — the intimate
-// rooms are the ones with doors, which is exactly where a peek system wants
-// its cues.
+// Bug report (2026-09-20): "ANY door can be peeked through" widened this —
+// every 'door'-type threshold (config.js's ROOM_THRESHOLDS) is a real door
+// for cue/peek purposes now, not only the ones with a placed bedroom_door/
+// bathroom_door object. An archway ('open'/'glass' threshold) still has no
+// keyhole to light up; the doorless-but-'door'-typed interior thresholds
+// (game room, gym, changing room, study, balcony, kitchen-laundry, and any
+// structural upgrade that retypes a threshold to 'door') get a VIRTUAL door
+// descriptor instead — see doorObjectBetween below.
 
 const DOOR_CUE_TUNING = {
   // During these clock phases a room reads as lit whenever someone is in it
@@ -525,10 +527,16 @@ function roomLightVisible(gameState, roomId) {
 }
 
 // The two rooms a door OBJECT joins, or null if its bucket room sits on no
-// door threshold (a door to nowhere). Every room that holds a door object is
-// a leaf room with exactly one door threshold in every layout, so the pair
-// is unambiguous.
+// door threshold (a door to nowhere). Every room that holds a REAL door
+// object is a leaf room with exactly one door threshold in every layout, so
+// the bucket-scan pair is unambiguous — but a room with a 'door'-type
+// threshold on more than one side (changing_room: both game_room and gym)
+// would NOT be, which is exactly the case a virtual door can hit. A virtual
+// door carries its own pair (`_virtualPair`, set by doorObjectBetween below)
+// and short-circuits the scan instead of guessing. Real objects never carry
+// that field, so this changes nothing for bedroom/bathroom doors.
 function doorPairRooms(gameState, doorObj) {
+  if (doorObj?._virtualPair) return doorObj._virtualPair;
   const ownRoom = doorObj?.bucket?.startsWith('room_') ? doorObj.bucket.slice(5) : null;
   if (!ownRoom || !ROOMS[ownRoom]) return null;
   for (const [key, type] of Object.entries(ROOM_THRESHOLDS)) {
@@ -541,7 +549,14 @@ function doorPairRooms(gameState, doorObj) {
 
 // The door object between two rooms, if one exists — the same lookup
 // edgeLockState performs, kept here because a cue needs the OBJECT, not just
-// the lock. Rooms without a door object (interior doorways) return null.
+// the lock. A real bedroom_door/bathroom_door object wins when one exists;
+// otherwise, any OTHER 'door'-type threshold (see this section's header
+// comment) gets a synthetic descriptor with nowhere to persist a lock or an
+// ajar state (getDoorState already reads 'unlocked' for anything that isn't
+// a real bedroom_door/bathroom_door, and peek.js skips the ajar effect for
+// an id that isn't a real object) — a door with no hardware, not no door.
+// Only a genuine non-door threshold (open archway, glass, no connection)
+// returns null.
 function doorObjectBetween(gameState, a, b) {
   for (const roomId of [a, b]) {
     const bucket = gameState.objects?.[`room_${roomId}`];
@@ -549,7 +564,8 @@ function doorObjectBetween(gameState, a, b) {
     const door = Object.values(bucket).find(o => o.defId === 'bedroom_door' || o.defId === 'bathroom_door');
     if (door) return door;
   }
-  return null;
+  if (thresholdBetween(a, b) !== 'door') return null;
+  return { id: `vdoor_${[a, b].sort().join('_')}`, bucket: `room_${a}`, state: {}, _virtualPair: [a, b] };
 }
 
 // The pure door-cue derivation (Phase 3, D4). Given the door object the

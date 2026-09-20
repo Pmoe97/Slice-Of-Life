@@ -80,6 +80,9 @@ const DECOR_SYMBOL_ALIASES = {
   wardrobe: 'wardrobe', desk: 'desk', desk_chair: 'armchair',
   dining_table: 'dining_table', dining_chair: 'armchair',
   bookshelf: 'bookshelf', shelf: 'bookshelf',
+  // Aspirations & Creative Careers Phase 6 (D22): the recording kit packs
+  // like the desktop computer it sits beside.
+  recording_kit: 'desktop_computer',
 };
 
 // Resolve an object defId to its {w, h} footprint, following the decor-shape
@@ -106,8 +109,15 @@ function resolveAutoPlacements(gs, roomId) {
   const rects = ROOM_LAYOUT[roomId] || [];
   if (rects.length === 0) return null;
   const bucket = gs?.objects?.[`room_${roomId}`] || {};
+  // Aspirations & Creative Careers Phase 16 (D53): an object the player
+  // PLACED (a `pos` — Home-app decor, a hung piece) is drawn where they
+  // put it (render.js's renderPlacedDecor via defs.design.js's
+  // roomPlacedDecor) and anchored there (resolveObjectStandPoint's first
+  // branch, below), so it no longer claims a wall here — the packer was
+  // drawing a placed sofa on the north wall while NPCs walked to where it
+  // actually stood, the one drawn≠walked gap in invariant 2.
   const items = Object.values(bucket)
-    .filter(o => fpFootprint(o.defId))
+    .filter(o => fpFootprint(o.defId) && !(o.pos && Number.isFinite(o.pos.x) && Number.isFinite(o.pos.y)))
     .sort((a, b) => {
       const A = fpFootprint(a.defId), B = fpFootprint(b.defId);
       return (B.w * B.h) - (A.w * A.h);   // biggest first: they claim the good walls
@@ -187,7 +197,11 @@ function resolveObjectStandPoint(gs, roomId, obj) {
       && Number.isFinite(obj.pos.w) && Number.isFinite(obj.pos.h)) {
     rect = { x: obj.pos.x, y: obj.pos.y, w: obj.pos.w, h: obj.pos.h };
   } else if (obj) {
-    const decor = (typeof ROOM_DECOR !== 'undefined' && ROOM_DECOR[roomId]) || null;
+    // Phase 16 (D53): the player's override of the room wins over the
+    // authored ROOM_DECOR entry here exactly as it does in the renderer
+    // (roomDesignBase is the one reader both branch on).
+    const base = typeof roomDesignBase === 'function' ? roomDesignBase(gs, roomId) : null;
+    const decor = base ? base.placements : ((typeof ROOM_DECOR !== 'undefined' && ROOM_DECOR[roomId]) || null);
     if (decor && decor.length > 0) {
       const place = decor.find(p => p.defId === obj.defId);
       if (place) rect = { x: place.x, y: place.y, w: place.w, h: place.h };

@@ -18,12 +18,19 @@
 // invariant 7 splits pure logic (here, Node-testable) from anything that
 // needs a live root.generateText call (ui.computer.js, live-page-only).
 //
-// Nothing here spends a new gate: NSFW/consent stays exactly what it always
-// was (CONTENT_CONFIG.mature, "no gating by design") because a post is never
-// more explicit than the templates below — a scandal event still reads as
-// "heard {text} 👀", never as an explicit description. If a future phase
-// wants explicit Chatter content it needs the same three-condition gate
-// image.js already uses, not a new one invented here.
+// Since the aspirations-and-creative-careers overhaul's Phase 9 (D27/D28),
+// Chatter is a PLATFORM, not a house-only feed: authorship is the whole
+// known cast (chatterCastIds, platform.js — residents plus every NPC whose
+// contact is known), a post carries `visibility` ('public' | 'private') and
+// optional `media` (a frozen image record or a poll), and platform.js owns
+// the audience side — handles, followers, blocking, what each viewer can
+// see. The earlier header's "residents-only" and "non-explicit by design"
+// claims were implementation-time scope guesses, not decisions; what is
+// true now: authorship is cast-wide, and NPC-authored TEXT is still never
+// more explicit than the templates below. Explicit content, when Phase 11's
+// Chatter Private exists, renders only through image.js's three-condition
+// gate (D31/D41) — this file never adds a fourth condition and never
+// bypasses the three.
 
 const CHATTER_TUNING = {
   maxBackfillDays: 5,      // how many past days generateChatterForDay will catch up in one call
@@ -75,13 +82,19 @@ function chatterEventMoodBucket(evt) {
   return 'neutral';
 }
 
-// Every resident is a Chatter "friend" by construction — no separate follow
-// graph. RoomList applicants, evicted former residents, and in-flight
+// Residents — kept as the reactor pool's floor and for the pre-Phase-9
+// callers. RoomList applicants, evicted former residents, and in-flight
 // fetch-queue stubs never post or react.
 function chatterResidentIds(gameState) {
   return Object.keys(gameState?.npcs || {})
     .filter((id) => gameState.npcs[id]?.residency?.status === 'resident')
     .sort();
+}
+
+// Phase 9 (D28): who authors and reacts — the whole known cast when
+// platform.js is loaded (residents + contactKnown), residents otherwise.
+function chatterAuthorIds(gameState) {
+  return typeof chatterCastIds === 'function' ? chatterCastIds(gameState) : chatterResidentIds(gameState);
 }
 
 // evt.template renders in THIRD person for the narration log (formatEventText,
@@ -143,6 +156,10 @@ function chatterBestCandidateForDay(gameState, npc, npcId, day) {
   for (const f of facts) {
     if (!f || f.valid === false || (f.confidence ?? 1) <= BELIEF.confidenceFloor) continue;
     if (f.day == null || f.day > day || f.day < lookbackFrom) continue;
+    // Phase 13 (D43): who is behind a handle travels by gossip, never by a
+    // public post — an NPC outing someone on the platform is not this
+    // plan's call.
+    if (f.kind === 'identity_link') continue;
     const score = chatterFactScore(f, npc, day);
     if (!best || score > best.score) best = { kind: 'fact', score, fact: f, sourceDay: f.day };
   }
@@ -184,11 +201,17 @@ function chatterAffinity(gameState, reactorId, authorId) {
 // like in. Idempotent per (post, reactor): already-liked/-commented pairs
 // are skipped, never re-rolled or duplicated.
 function applyChatterReactions(gameState, posts, day, rng) {
-  const residents = chatterResidentIds(gameState);
+  const reactors = chatterAuthorIds(gameState);
+  const blocked = (typeof ensureChatterProfile === 'function') ? ensureChatterProfile(gameState).blocked : [];
   for (const post of posts) {
     if (day - post.day > CHATTER_TUNING.reactionWindowDays) continue;
-    for (const reactorId of residents) {
+    for (const reactorId of reactors) {
       if (reactorId === post.author) continue;
+      // Phase 9 (D35): a blocked NPC cannot see the player's posts, so
+      // cannot react to them; a Private post is reactable only by its
+      // subscribers (Phase 11 fills `subscribes`).
+      if (post.author === 'player' && blocked.includes(reactorId)) continue;
+      if (post.visibility === 'private' && gameState.npcs[reactorId]?.chatter?.subscribes !== 'private') continue;
       if (post.likes.includes(reactorId)) continue;
       const affinity = chatterAffinity(gameState, reactorId, post.author);
       const likeChance = clamp01(CHATTER_TUNING.likeBaseChance + affinity * CHATTER_TUNING.likeAffinityWeight);
@@ -208,11 +231,42 @@ function pruneChatterFeed(gameState, day) {
   feed.posts = feed.posts.filter((p) => day - p.day <= CHATTER_TUNING.feedRetentionDays);
 }
 
+// Phase 9 (D27): an image-worthy source — an event with a room — gets a
+// frozen photo record the way the camera freezes one (image.js's
+// buildPhotoPrompt shape: prompt + seed, never a blob), so the same
+// getPhotoImage path draws it on both devices. Pure; seeded per post.
+function chatterImageFor(gameState, npcId, candidate, postId) {
+  if (candidate.kind !== 'event' || !candidate.evt?.roomId || !ROOMS[candidate.evt.roomId]) return null;
+  if (typeof buildPhotoPrompt !== 'function') return null;
+  const roomId = candidate.evt.roomId;
+  const npc = gameState.npcs[npcId];
+  const phase = typeof getPhase === 'function' ? getPhase(gameState.meta.clock?.minutes || 720) : 'midday';
+  const prompt = buildPhotoPrompt(roomId, phase, npc ? [npc] : [], gameState.objects?.[`room_${roomId}`] || {}, { gameState })
+    + ' Candid smartphone photo posted to a social feed, casual framing.';
+  const id = `chatter_${postId}`;
+  return { kind: 'image', photo: { id, day: candidate.sourceDay, roomId, subjectNpcIds: [npcId], caption: `${ROOMS[roomId]?.name || roomId}`, prompt, seed: hashStr(`${gameState.meta.seed}|chatter_photo|${postId}`), tags: ['chatter'] } };
+}
+
+// Phase 9 (D27): a poll — a house question with 2–4 options, tallied at
+// generation by the rest of the cast (seeded), so the count is decided
+// before anyone reads it. `votes` maps voterId → option index; the player's
+// vote lands through voteChatterPoll.
+function chatterPollFor(gameState, npcId, rng) {
+  if (typeof CHATTER_POLL_TEMPLATES === 'undefined') return null;
+  const tpl = CHATTER_POLL_TEMPLATES[Math.floor(rng() * CHATTER_POLL_TEMPLATES.length)];
+  const votes = {};
+  for (const voterId of chatterAuthorIds(gameState)) {
+    if (voterId === npcId) continue;
+    if (rng() < CHATTER_PLATFORM.pollVoteChance) votes[voterId] = Math.floor(rng() * tpl.options.length);
+  }
+  return { kind: 'poll', options: [...tpl.options], votes, text: tpl.text };
+}
+
 function generateChatterForSingleDay(gameState, day) {
   const feed = gameState.world.computer.apps.social_feed;
   const rng = seededRng(gameState.meta.seed, `chatter_post_${day}`);
   const drafts = [];
-  for (const npcId of chatterResidentIds(gameState)) {
+  for (const npcId of chatterAuthorIds(gameState)) {
     const npc = gameState.npcs[npcId];
     const candidate = chatterBestCandidateForDay(gameState, npc, npcId, day);
     if (!candidate) continue;
@@ -224,12 +278,24 @@ function generateChatterForSingleDay(gameState, day) {
   // never iteration order (which would silently favor low-id npcs).
   drafts.sort((a, b) => b.candidate.score - a.candidate.score);
   for (const { npcId, candidate } of drafts.slice(0, CHATTER_TUNING.maxPostsPerDay)) {
+    const id = 'post_' + (feed.nextPostId++);
+    // Phase 9 (D27): kind by a seeded roll — a poll instead of the
+    // candidate's text this often; else the text, with an image when the
+    // source has a room this often. The DECISION (which kind, which
+    // photo, who voted) is made here; templates only phrase it.
+    const asPoll = typeof CHATTER_PLATFORM !== 'undefined' && rng() < CHATTER_PLATFORM.pollPostChance;
+    const poll = asPoll ? chatterPollFor(gameState, npcId, rng) : null;
+    // Phase 12 (D39): a creator's ordinary posts carry a photo more often.
+    const creator = typeof npcCreator === 'function' ? npcCreator(gameState.npcs[npcId]) : null;
+    const imgChance = typeof CHATTER_PLATFORM !== 'undefined' ? CHATTER_PLATFORM.imagePostChance * (creator && creator.active ? CHATTER_PLATFORM.creatorImageMult : 1) : 0;
+    const media = poll || ((rng() < imgChance) ? chatterImageFor(gameState, npcId, candidate, id) : null);
     feed.posts.push({
-      id: 'post_' + (feed.nextPostId++),
-      author: npcId,
-      text: chatterRenderText(gameState, candidate, rng),
+      id, author: npcId,
+      text: poll ? poll.text : chatterRenderText(gameState, candidate, rng),
       likes: [], comments: [], day,
-      eventRef: { kind: candidate.kind, day: candidate.sourceDay },
+      eventRef: poll ? null : { kind: candidate.kind, day: candidate.sourceDay },
+      visibility: 'public',
+      media,
     });
   }
 }
@@ -258,15 +324,94 @@ function generateChatterForDay(gameState, day) {
 // All three are out-of-band (can fire any time, not just at day generation),
 // so each mints its own subseed rather than reusing the day's generation rng.
 
-function postChatterAsPlayer(gameState, text, day) {
+// Phase 9 (D27/D30): a player post carries `visibility` ('public' by
+// default; 'private' only once Phase 11's page is open — refused until
+// then) and optional `media` (a frozen photo record from the camera roll
+// by id, or a poll the player wrote). Posting needs a handle (D30). The
+// profile's lastPostDay feeds Phase 10's cadence bonus.
+function postChatterAsPlayer(gameState, text, day, opts = {}) {
   const clean = String(text || '').trim().slice(0, 280);
-  if (!clean) return { ok: false };
+  if (!clean) return { ok: false, reason: 'Write something first.' };
   const feed = gameState.world.computer.apps.social_feed;
-  const post = { id: 'post_' + (feed.nextPostId++), author: 'player', text: clean, likes: [], comments: [], day, eventRef: null };
+  const profile = typeof ensureChatterProfile === 'function' ? ensureChatterProfile(gameState) : null;
+  if (profile && !profile.handle) return { ok: false, reason: 'Pick a handle first.' };
+  const visibility = opts.visibility === 'private' ? 'private' : 'public';
+  if (visibility === 'private' && !(profile && profile.private && profile.private.open)) return { ok: false, reason: `${CHATTER_LABELS.private} isn't open.` };
+  let media = null;
+  if (opts.media && opts.media.kind === 'image' && opts.media.photoId) {
+    const photo = (gameState.world.phone?.camera?.roll || []).find(p => p.id === opts.media.photoId);
+    if (!photo) return { ok: false, reason: 'That photo is no longer in your camera roll.' };
+    // Phase 11 (D33/D41): featuring another person is an Ask — a cast
+    // member in the frame must hold a consent_feature fact for THIS photo
+    // (the $Feature leaf writes it), whatever the visibility.
+    if (typeof photoSubjectsWithoutConsent === 'function') {
+      const missing = photoSubjectsWithoutConsent(gameState, photo);
+      if (missing.length > 0) {
+        const names = missing.map(id => gameState.npcs[id]?.bible?.name || 'someone').join(' and ');
+        return { ok: false, reason: `${names} hasn't agreed to be posted — ask first ($Feature).` };
+      }
+    }
+    media = { kind: 'image', photo: { ...photo } };
+  } else if (opts.media && opts.media.kind === 'poll') {
+    const options = (opts.media.options || []).map(o => String(o || '').trim().slice(0, 40)).filter(Boolean).slice(0, 4);
+    if (options.length < 2) return { ok: false, reason: 'A poll needs at least two options.' };
+    media = { kind: 'poll', options, votes: {}, text: clean };
+  }
+  // Phase 10 (D29): what the post is ABOUT decides its appeal — a released
+  // work of the player's, a craft skill, or nothing (lifestyle).
+  const source = opts.source && opts.source.kind === 'work' && (gameState.player.works || []).some(w => w.id === opts.source.workId && w.releasedDay != null) ? { kind: 'work', workId: opts.source.workId }
+    : opts.source && opts.source.kind === 'skill' && SKILL_IDS.includes(opts.source.skillId) ? { kind: 'skill', skillId: opts.source.skillId }
+    : null;
+  const post = { id: 'post_' + (feed.nextPostId++), author: 'player', text: clean, likes: [], comments: [], day, eventRef: null, visibility, media, meta: { source } };
+  // Appeal is decided at post time and stamped (before lastPostDay moves,
+  // so the cadence bonus reads the PREVIOUS post's day); growth follows.
+  let growth = null;
+  if (typeof postAppeal === 'function') {
+    post.appeal = postAppeal(gameState, post);
+    if (visibility === 'public') growth = applyGrowth(gameState, post);
+  }
   feed.posts.push(post);
+  if (profile) profile.lastPostDay = day;
   pushMoodImpulse(gameState.player, MOOD_PAYOUTS.chatterPost, day);
+  // Q3 → D90: a ghost comment on a post that did well. No name is stored —
+  // the handle is ghostHandle(seed) at render, from the comment's seed.
+  if (typeof CHATTER_GHOST_COMMENTS !== 'undefined' && typeof post.appeal === 'number' && post.appeal >= CHATTER_PLATFORM.ghostCommentMinAppeal && visibility === 'public') {
+    const grng = seededRng(gameState.meta.seed, `ghost_comment_${post.id}`);
+    if (grng() < CHATTER_PLATFORM.ghostCommentChance) {
+      post.comments.push({ author: null, ghost: true, seed: hashStr(`${gameState.meta.seed}|ghost|${post.id}`), text: CHATTER_GHOST_COMMENTS[Math.floor(grng() * CHATTER_GHOST_COMMENTS.length)] });
+    }
+  }
   applyChatterReactions(gameState, [post], day, seededRng(gameState.meta.seed, `chatter_react_player_${post.id}`));
-  return { ok: true, post };
+  // Phase 9: a player poll gets its cast tally the same way an NPC's does —
+  // decided now, seeded on the post.
+  if (media && media.kind === 'poll') {
+    const rng = seededRng(gameState.meta.seed, `chatter_poll_${post.id}`);
+    const blocked = profile ? profile.blocked : [];
+    for (const voterId of chatterAuthorIds(gameState)) {
+      if (blocked.includes(voterId)) continue;
+      if (rng() < CHATTER_PLATFORM.pollVoteChance) media.votes[voterId] = Math.floor(rng() * media.options.length);
+    }
+  }
+  return { ok: true, post, growth };
+}
+
+// Phase 9 (D27): the player votes on a poll — one vote, changeable. NPC
+// votes were decided at generation and never move.
+function voteChatterPoll(gameState, postId, optionIndex) {
+  const feed = gameState.world.computer.apps.social_feed;
+  const post = feed.posts.find((p) => p.id === postId);
+  if (!post || !post.media || post.media.kind !== 'poll') return { ok: false, reason: 'Not a poll.' };
+  const idx = Number(optionIndex);
+  if (!Number.isInteger(idx) || idx < 0 || idx >= post.media.options.length) return { ok: false, reason: 'No such option.' };
+  post.media.votes.player = idx;
+  return { ok: true, tally: chatterPollTally(post) };
+}
+
+// The decided tally: option index → count, in option order.
+function chatterPollTally(post) {
+  const counts = post.media.options.map(() => 0);
+  for (const v of Object.values(post.media.votes || {})) if (Number.isInteger(v) && counts[v] !== undefined) counts[v]++;
+  return counts;
 }
 
 function toggleChatterLike(gameState, postId) {

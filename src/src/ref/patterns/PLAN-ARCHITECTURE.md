@@ -42,6 +42,10 @@ The status line is the **first thing a resuming session reads** and the only
 thing it needs in order to decide whether to keep going. Keep it one glance
 long. `planned — not started` / `in progress — Phase N` / `complete`.
 
+The moment this line changes to `complete` (2026-09-10), the session doing it
+owes the game a Patch Notes entry — `HANDOFF-PROMPT-ARCHITECTURE.md`'s Step 3
+covers the obligation, `src/src/srcfiles/defs.patchnotes.js` is where it lands.
+
 ### 2. Companions
 
 Cross-links to related plans, each annotated with *what the relationship is* —

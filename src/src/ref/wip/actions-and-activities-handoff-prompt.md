@@ -216,6 +216,16 @@ it's over a thousand lines.
      as a new D-number before implementing the cook-off event type.
 5. If this was Phase 19 (or whichever phase turns out to be last), mark
    the plan's Status header **complete**.
+6. If this was the last phase, also add a Patch Notes entry (2026-09-10
+   addition, post-dating most of this plan's own implementation history —
+   see `HANDOFF-PROMPT-ARCHITECTURE.md`'s Step 3 for the full instruction) —
+   `src/src/srcfiles/defs.patchnotes.js`'s `PATCH_NOTES` array. This whole
+   19-phase overhaul is one release to the player: summarize the real,
+   player-visible shape of it (the invitation spine, stealth/covert acts,
+   the East Wing hotspot, house parties, whatever else actually shipped) in
+   plain language — not a phase-by-phase recap, not D-numbers or file names.
+   Bump `GAME_VERSION` (config.js) for the entry if it hasn't already moved
+   since the last one.
 
 Do not end a session without doing this. A half-finished phase with a
 precise Handoff note is recoverable; a half-finished phase with no note is

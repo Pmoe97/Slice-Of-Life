@@ -1644,6 +1644,12 @@ function resolveRoomForActivity(block, npcId, npcs, rng, clock, gameState) {
         const npc = npcs[npcId];
         if (npc?.residency?.room !== r) return false;
       }
+      // Bug report (2026-09-20): 'skincare routine' (and anything else
+      // listing both bathrooms) kept routing NPCs into bathroom_a after the
+      // ensuite upgrade sealed it behind bedroom_player — see
+      // npcCommonRoomAccessible's comment (config.js) for why a 'common'
+      // room can stop being one.
+      if (!npcCommonRoomAccessible(r)) return false;
       return true;
     });
     if (valid.length > 0) {
@@ -1659,7 +1665,7 @@ function resolveRoomForActivity(block, npcId, npcs, rng, clock, gameState) {
 
   // Fallback: crowd-avoidance random pick among all common rooms
   if (!targetRoom) {
-    const candidates = COMMON_ROOMS.map(roomId => {
+    const candidates = COMMON_ROOMS.filter(npcCommonRoomAccessible).map(roomId => {
       const occCount = getPresentNpcIds(npcs, roomId).length;
       const capacity = ROOMS[roomId].capacity;
       const weight = occCount >= capacity ? 1 / SCENE.crowdAvoidanceWeight : 1;
@@ -2834,6 +2840,10 @@ function resolveTick(gameState, minutesThisTick = CLOCK.tickMinutes) {
       // is merged into npcUpdates below the same way the fact itself is, or
       // resolveBatch's rebuild would clobber it.
       const jealous = maybeJealousUponFact(gameState, ft.receiverId, ft.fact);
+      // aspirations-and-creative-careers Phase 13 (D45): a subscription the
+      // receiver drew a line against, learned by gossip — the crossing
+      // reaches them here. Same merge discipline as the jealousy write.
+      const crossed = (typeof maybeBoundaryUponFact === 'function') ? maybeBoundaryUponFact(gameState, ft.receiverId, ft.fact) : null;
       const mem = gameState.npcs[ft.receiverId].memory;
       const extra = {};
       if (jealous) {
@@ -2841,6 +2851,7 @@ function resolveTick(gameState, minutesThisTick = CLOCK.tickMinutes) {
         extra.flags = jealous.flags;
         if (jealous.relPlayer) extra.relPlayer = jealous.relPlayer;
       }
+      if (crossed) { extra.flags = crossed.flags; extra.relPlayer = crossed.relPlayer; }
       npcUpdates[ft.receiverId] = npcUpdates[ft.receiverId]
         ? { ...npcUpdates[ft.receiverId], memory: mem, ...extra }
         : { memory: mem, ...extra };
@@ -2974,6 +2985,11 @@ function resolveBatch(gameState, ticks, opts = {}) {
       newNpcs[id] = merged;
       if (update.location && update.location !== prevLocation) {
         boundaryChecks.push({ id, roomId: update.location });
+        // aspirations-and-creative-careers Phase 13 (D43): the rooms this
+        // person has actually stood in — the "room they've been in" tell a
+        // recognition roll reads. A capped id list on flags, written on
+        // the same change-of-room test the boundary check uses.
+        noteRoomSeen(merged, update.location);
       }
     }
     state = { ...state, npcs: newNpcs };
@@ -4146,18 +4162,39 @@ function changeResidencyStatus(npc, status, opts) {
 // start without first clicking an explicit "Talk to" chip. Whoever the
 // player has the best relationship with (least tense, most affection)
 // engages first, a reasonable default for who'd naturally speak up.
+// The one canonical "is this NPC unconscious right now" predicate (2026-09-10
+// audit fix — sleeping-npc-contradiction-audit.md). Before this, "asleep"
+// was hand-rolled in 15+ places across 8 files and a second, unrelated
+// notion — resolveScheduleActivity(...).block === 'sleep' — disagreed with
+// it whenever someone slept off-schedule (a nap, sleep_recover, a bed verb).
+// This reads the LIVE state (npc.activity), which is the only thing that
+// answers "is she conscious right now" — the schedule block still answers
+// "will she be available later" and is deliberately NOT folded in here; a
+// caller that means "not busy sleeping AND not busy at work" checks both.
+function npcIsAsleep(npc) {
+  const activity = ((npc && npc.activity) || '').toLowerCase();
+  return activity === 'sleeping' || activity === 'napping';
+}
+
 function getSceneParticipants(player, npcs, world) {
   const roomId = player.location;
   const presentNpcIds = getPresentNpcIds(npcs, roomId);
-  const sorted = [...presentNpcIds].sort((a, b) => {
+  const awakeIds = presentNpcIds.filter(id => !npcIsAsleep(npcs[id]));
+  const sleepingIds = presentNpcIds.filter(id => npcIsAsleep(npcs[id]));
+  const sorted = [...awakeIds].sort((a, b) => {
     const scoreA = (npcs[a].relPlayer.affection || 0) - (npcs[a].relPlayer.tension || 0);
     const scoreB = (npcs[b].relPlayer.affection || 0) - (npcs[b].relPlayer.tension || 0);
     return scoreB - scoreA;
   });
   return {
     present: presentNpcIds,
+    // Sleepers are never speakers (design invariant: an unconscious NPC
+    // cannot be offered to the model as one of the "ONLY people who can
+    // speak") but still occupy the room, so they fall through to ambient —
+    // the prompt's AMBIENT block already knows how to mention a sleeper in
+    // narration only, no prompt change needed.
     active: sorted.slice(0, SCENE.maxActiveNpcs),
-    ambient: sorted.slice(SCENE.maxActiveNpcs),
+    ambient: [...sorted.slice(SCENE.maxActiveNpcs), ...sleepingIds],
     engagement: {},
   };
 }
@@ -5393,6 +5430,20 @@ function buildGameState(seed, cast, clock, droppedConstraints, economyCfg) {
     // the field and read as DESIRE.player.start there, so no migration.
     desire: DESIRE.player.start,
     skills: {},
+    // Aspirations & Creative Careers Phase 4 (D17/D20): the player's own
+    // catalog and what is still being made (works.js). Explicit here for a
+    // fresh game; works.js's ensurePlayerWorks lazily defaults them on a
+    // save from before this existed (D58's additive-default precedent —
+    // no migration). catalogCarry holds the fractional dollar the daily
+    // trickle has not yet paid out; nextWorkSeq mints work ids.
+    works: [],
+    workInProgress: [],
+    catalogCarry: 0,
+    catalogPaidDay: 0,
+    nextWorkSeq: 0,
+    // Phase 8 (D24/D81): the home-kitchen listing (works.js's
+    // ensurePlayerKitchen lazily defaults it on an older save).
+    kitchen: { name: '', listedDay: null, orders: [], lastOrdersDay: 0, ratingSum: 0, ratingCount: 0 },
     // Inventory overhaul Phase 1: the player starts with their personal
     // effects — keys, wallet, ID — as `keyItem` stacks that the inventory
     // panel protects from drop/trash/give. acquiredDay is 1 (the game
@@ -5981,9 +6032,60 @@ function ensureIntimate(bible) {
   return { ...bible, physical: { ...physical, intimate: generateIntimate(rng, bible.gender) } };
 }
 
+// aspirations-and-creative-careers Phase 12 (D38/D40) — PURE: does this
+// person run a Chatter account, and a Private page, and do they block the
+// player from it? Seeded on the bible's OWN genSeed, so the same character
+// always answers the same way; the leans are the plan's (exhibitionist →
+// disinhibition, broke → a low incomeBand, self-employed → workMode,
+// ambitious → assertiveness). The block decision (D40) is a personality
+// call made at page creation: a private person (low disinhibition) blocks
+// housemates outright, an exhibitionist never, in between a seeded coin.
+// Prices are seeded inside the same bounds the player's are. `kinds`
+// names the craft their occupation's gig category maps to, if any.
+function deriveCreator(bible) {
+  const T = (typeof CHATTER_PLATFORM !== 'undefined') ? CHATTER_PLATFORM : null;
+  if (!T || !bible) return { active: false, kinds: [], privateOpen: false, backersPrice: 5, privatePrice: 10, blocksPlayer: false };
+  const rng = seededRng(bible.genSeed || 0, 'creator_derive');
+  const dis = typeof bible.deviantLevel === 'number' ? Math.max(0, Math.min(1, bible.deviantLevel)) : disinhibitionFromTemperament(bible.temperament);
+  const occ = bible.occupation || {};
+  const t = bible.temperament || {};
+  const pActive = T.creatorBase + T.creatorDisinhibition * dis
+    + (occ.incomeBand === 'low' ? T.creatorLowIncome : 0)
+    + (occ.workMode === 'self_employed' ? T.creatorSelfEmployed : 0)
+    + T.creatorAssertive * Math.max(0, t.assertiveness || 0);
+  const active = rng() < pActive;
+  const pPrivate = T.creatorPrivateBase + T.creatorPrivateDisinhibition * dis;
+  const privateOpen = active && rng() < pPrivate;
+  const cat = (typeof GIG_CATEGORY_BY_ID !== 'undefined') ? GIG_CATEGORY_BY_ID[occ.category] : null;
+  const kinds = active ? ['lifestyle'].concat(cat && cat.skill ? [`craft:${cat.skill}`] : []) : [];
+  const blocksPlayer = privateOpen && (dis < T.creatorBlockBelowDis ? true : dis >= T.creatorBlockAboveDis ? false : rng() < T.creatorBlockChance);
+  const bp = T.backersPriceBounds, pp = T.privatePriceBounds;
+  const backersPrice = active ? bp[0] + Math.floor(rng() * (bp[1] - bp[0] + 1)) : T.backersPriceDefault;
+  const privatePrice = privateOpen ? pp[0] + Math.floor(rng() * (pp[1] - pp[0] + 1)) : T.privatePriceDefault;
+  return { active, kinds, privateOpen, backersPrice, privatePrice, blocksPlayer };
+}
+
+// Idempotent, like ensureIntimate: a bible that already carries a creator
+// block passes through untouched; one without gets its derivation.
+function ensureCreator(bible) {
+  if (!bible || typeof bible !== 'object') return bible;
+  if (bible.creator && typeof bible.creator === 'object' && typeof bible.creator.active === 'boolean') return bible;
+  return { ...bible, creator: deriveCreator(bible) };
+}
+
+// Phase 13 (D43): record a room on npc.flags._roomsSeen (a de-duplicated id
+// list, capped at the room count — ROOMS is small). Mutates the record it
+// is handed (the fresh merged object in resolveBatch, or a live npc).
+function noteRoomSeen(npc, roomId) {
+  if (!npc || !roomId || typeof ROOMS === 'undefined' || !ROOMS[roomId]) return;
+  const prev = (npc.flags && Array.isArray(npc.flags._roomsSeen)) ? npc.flags._roomsSeen : [];
+  if (prev.includes(roomId)) return;
+  npc.flags = { ...(npc.flags || {}), _roomsSeen: [...prev, roomId].slice(-32) };
+}
+
 function createNpcFromBible(bible, residencyStatus) {
   const npc = {
-    bible: ensureIntimate(bible),
+    bible: ensureCreator(ensureIntimate(bible)),
     bibleRevision: 0,
     bibleChanges: [],
     residency: {

@@ -160,8 +160,12 @@ async function doPhoneCameraShare(photoId, npcId) {
     renderPhoneScreen(currentGameState);
     const result = await resolveImReply(currentGameState, npcId, shared.text);
     if (!result.ok) addLogEntry('system', result.reason);
-    await advanceAndResolve(1);
-    currentGameState.player = decayPlayerNeeds(currentGameState.player, CLOCK.tickMinutes, currentGameState);
+    // Bug report (2026-09-19): mirrors the doImSend fix (ui.computer.js) —
+    // was advanceAndResolve(1) + a manual decayPlayerNeeds(tickMinutes),
+    // charging a full 30-minute tick per photo shared. Messaging is
+    // documented as zero/no-cost (structural/game-clock-time-system.md),
+    // same as doConvSend's in-person turn.
+    await advanceAndResolve(0);
     addLogEntry('system', `Photo sent to ${currentGameState.npcs[npcId]?.bible?.name || 'them'}.`);
     renderPhoneScreen(currentGameState);
     render(currentGameState, currentSceneState);

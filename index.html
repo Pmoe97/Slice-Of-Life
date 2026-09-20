@@ -794,6 +794,10 @@ body {
 .fp-p-plant { fill: #2f5138; stroke: var(--color-positive); stroke-width: 0.7; }
 .fp-p-glass { fill: rgba(108,199,246,0.25); stroke: var(--color-cool); }
 .fp-p-void { fill: var(--color-bg); stroke: var(--color-border-strong); }
+/* Aspirations & Creative Careers Phase 16 (D54): a hung piece's canvas — the
+   default when no swatch rides the placement; renderDesignShape overrides the
+   fill inline with the piece's seeded colour. */
+.fp-p-art { fill: var(--color-accent, #6c5ce7); stroke: none; }
 /* An unfinished facility's placement — the dry basin before the pool works. */
 .fp-prop.v-empty .fp-p-water { fill: #33322c; stroke: var(--color-text-faint); }
 .fp-prop.v-empty .fp-p-lane { stroke: none; }
@@ -1487,9 +1491,10 @@ body {
 .sps-notice { font-size: var(--fs-xs); padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); background: var(--color-surface-alt); }
 .sps-notice[data-tone="ok"] { color: var(--color-positive); }
 .sps-notice[data-tone="bad"] { color: var(--color-negative); }
-.sps-chips { display: flex; gap: var(--space-1); flex-wrap: wrap; }
-.sps-chip { background: var(--color-surface-alt); border: 1px solid var(--color-border); color: var(--color-text-dim); border-radius: 999px; padding: var(--space-1) var(--space-3); font-size: var(--fs-xs); font-weight: 600; font-family: inherit; cursor: pointer; }
-.sps-chip.is-on { background: var(--color-accent); border-color: var(--color-accent); color: #fff; }
+/* .wh-chips/.wh-chip: the gig board's category filter shares the studio's pill chips (aspirations-and-creative-careers Phase 2). */
+.sps-chips, .wh-chips { display: flex; gap: var(--space-1); flex-wrap: wrap; }
+.sps-chip, .wh-chip { background: var(--color-surface-alt); border: 1px solid var(--color-border); color: var(--color-text-dim); border-radius: 999px; padding: var(--space-1) var(--space-3); font-size: var(--fs-xs); font-weight: 600; font-family: inherit; cursor: pointer; }
+.sps-chip.is-on, .wh-chip.is-on { background: var(--color-accent); border-color: var(--color-accent); color: #fff; }
 .sps-roster { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: var(--space-3); }
 .sps-card { background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3) var(--space-2); display: flex; flex-direction: column; align-items: center; gap: var(--space-1); text-align: center; cursor: pointer; }
 .sps-card:hover { border-color: var(--color-border-strong); }
@@ -5955,6 +5960,49 @@ body {
   font-style: italic;
 }
 
+/* --- Patch Notes (2026-09-10) — same shape as Dream Diary's row/entry
+   rules just above, minus the thumbnail. --- */
+.patchnotes-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.patchnotes-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+.patchnotes-row:hover { border-color: var(--color-accent-dim); }
+.patchnotes-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.patchnotes-row-title { font-size: var(--fs-sm); font-weight: 600; color: var(--color-text); }
+.patchnotes-row-meta { font-size: var(--fs-xs); color: var(--color-text-dim); line-height: var(--lh-tight); }
+.patchnotes-row-chevron { color: var(--color-text-faint); }
+.patchnotes-empty { padding: var(--space-4); text-align: center; font-size: var(--fs-sm); color: var(--color-text-dim); }
+.patchnotes-entry-head { padding: var(--space-2) 0 var(--space-2); border-bottom: 1px solid var(--color-border); margin-bottom: var(--space-3); }
+.patchnotes-entry-title { font-size: var(--fs-lg); font-weight: 700; }
+.patchnotes-entry-meta { margin-top: 2px; }
+.patchnotes-entry-summary { font-size: var(--fs-sm); line-height: var(--lh-relaxed); color: var(--color-text-dim); margin: var(--space-3) 0; }
+.patchnotes-entry-changes { display: flex; flex-direction: column; gap: var(--space-3); }
+.patchnotes-change-row { display: flex; align-items: flex-start; gap: var(--space-2); }
+.patchnotes-change-text { font-size: var(--fs-sm); line-height: var(--lh-relaxed); color: var(--color-text); }
+.patchnotes-change-tag {
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  margin-top: 1px;
+}
+.patchnotes-change-tag-added { color: var(--color-positive); background: color-mix(in srgb, var(--color-positive) 16%, transparent); }
+.patchnotes-change-tag-fixed { color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 16%, transparent); }
+.patchnotes-change-tag-changed { color: var(--color-warning); background: color-mix(in srgb, var(--color-warning) 16%, transparent); }
+
 /* --- BrineOS Phase 6: Clock app --- */
 .phone-clock-face {
   font-size: var(--fs-xl);
@@ -6523,6 +6571,34 @@ body {
 .wh-rep-bar { height: 6px; background: var(--color-border); border-radius: 3px; overflow: hidden; margin: 8px 0; }
 .wh-rep-fill { height: 100%; background: var(--color-accent); transition: width 0.3s; }
 .wh-stats { display: flex; gap: 12px; font-size: var(--fs-xs); color: var(--color-text-dim); }
+/* Per-category reputation strip, filter chip row spacing and group headings (aspirations-and-creative-careers Phase 2, D14/D15). */
+.wh-rep-strip { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: center; margin-top: 8px; }
+.wh-rep-row { display: contents; }
+.wh-rep-label { font-size: var(--fs-xs); font-weight: 600; }
+.wh-rep-row.is-zero .wh-rep-label { color: var(--color-text-dim); font-weight: 500; }
+.wh-rep-strip .wh-rep-bar { display: block; margin: 0; min-width: 60px; }
+.wh-rep-strip .wh-rep-fill { display: block; }
+.wh-rep-tier { white-space: nowrap; }
+.wh-chips { margin: 8px 0; }
+.wh-group-head { display: flex; justify-content: space-between; align-items: baseline; font-size: var(--fs-sm); font-weight: 600; margin: 10px 0 4px; }
+/* Inkwell storefront cards: a seeded cover swatch beside the title (aspirations-and-creative-careers Phase 5, D21). */
+.ink-card { display: flex; gap: 12px; align-items: flex-start; }
+.ink-cover { flex: 0 0 48px; width: 48px; height: 64px; border-radius: 3px; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.85); font-weight: 700; font-size: var(--fs-sm); letter-spacing: 0.04em; box-shadow: inset 4px 0 0 rgba(0,0,0,0.25); }
+.ink-info { flex: 1; min-width: 0; }
+.ink-info h3 { margin-top: 0; }
+/* Chatter as a platform (aspirations-and-creative-careers Phase 9): media, polls, the composer's options. */
+.cht-post-image { display: block; width: 100%; max-height: 240px; object-fit: cover; border-radius: 6px; margin: 6px 0; background: var(--color-surface-alt); }
+.cht-private-lock { padding: 10px; margin: 6px 0; border: 1px dashed var(--color-border); border-radius: 6px; text-align: center; }
+.compass-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.cht-poll { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.cht-poll-option { position: relative; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface-alt); color: inherit; font-family: inherit; font-size: var(--fs-sm); cursor: pointer; overflow: hidden; text-align: left; }
+.cht-poll-option.is-on { border-color: var(--color-accent); }
+.cht-poll-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--color-accent); opacity: 0.18; pointer-events: none; }
+.cht-poll-label, .cht-poll-pct { position: relative; }
+.cht-compose-opts { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 6px 0; flex-basis: 100%; order: 2; }
+.cht-compose .cht-compose-input { flex: 1 1 200px; }
+.cht-compose > .btn { order: 3; }
+.cht-compose-opts select, .cht-compose-opts input[type=text] { font-family: inherit; font-size: var(--fs-xs); }
 .wh-earnings { background: var(--color-card); border: 1px solid var(--color-border); border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; }
 .wh-earnings-row { display: flex; justify-content: space-between; font-size: var(--fs-sm); }
 .wh-task-header { font-size: var(--fs-sm); font-weight: 600; margin: 8px 0 4px; }
@@ -7129,7 +7205,7 @@ body {
 .pz-clue-row.pz-clue-solved { opacity: 0.55; text-decoration: line-through; }
 
 /* Chatter (actions-and-activities-overhaul-plan.md Phase 15, D24) */
-.cht-compose { display: flex; gap: var(--space-2); align-items: flex-start; margin-bottom: var(--space-3); }
+.cht-compose { display: flex; gap: var(--space-2); align-items: flex-start; margin-bottom: var(--space-3); flex-wrap: wrap; }
 .cht-compose-input { flex: 1; min-height: 44px; resize: vertical; padding: var(--space-2); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg); color: var(--color-text); font: inherit; }
 .cht-feed { display: flex; flex-direction: column; gap: var(--space-3); }
 .cht-post { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); background: var(--color-surface-hover); }
@@ -8310,7 +8386,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=172"></script>
+<script src="src/src/srcfiles/config.js?v=182"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -8318,15 +8394,15 @@ body {
      order. -->
 <script src="src/src/srcfiles/defs.settings.js?v=10"></script>
 <script src="src/src/srcfiles/settings.js?v=8"></script>
-<script src="src/src/srcfiles/icons.js?v=34"></script>
+<script src="src/src/srcfiles/icons.js?v=36"></script>
 <!-- FIELDS — shared form-control builders (comboControl / customChipInput).
      AI-Assisted Character Generation Phase 1: must load before menu.js,
      render.computer.js and studio.js, all of which build controls with it.
      Registered in dev/verify/loadgame.js's ORDER in the same commit. -->
 <script src="src/src/srcfiles/fields.js?v=1"></script>
-<script src="src/src/srcfiles/defs.world.js?v=50"></script>
-<script src="src/src/srcfiles/defs.actions.js?v=52"></script>
-<script src="src/src/srcfiles/defs.computer.js?v=36"></script>
+<script src="src/src/srcfiles/defs.world.js?v=52"></script>
+<script src="src/src/srcfiles/defs.actions.js?v=56"></script>
+<script src="src/src/srcfiles/defs.computer.js?v=46"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
      at runtime; IMAGE's titleGallery consumes genTitlePrompt. -->
@@ -8337,14 +8413,14 @@ body {
 <script src="src/src/srcfiles/defs.intro.js?v=13"></script>
 <!-- The interior: the composite-shape library and the authored room designs
      (Home Design Studio). Pure data; authored in dev/designer.html. -->
-<script src="src/src/srcfiles/defs.design.js?v=3"></script>
+<script src="src/src/srcfiles/defs.design.js?v=5"></script>
   <!-- defs.placement.js (npc-avatar-liveliness Phase 2, D8): the shared
        furniture placement module. FP_FOOTPRINTS (moved out of render.js) +
        the pure resolveAutoPlacements packer + resolveObjectStandPoint (D9/D10)
        anchor resolution. Lives here — after defs.design.js (ROOM_DECOR) and
        before render.js (which merges FP_FOOTPRINTS at load) — and is
        registered in loadgame.js's ORDER in the same commit (invariant 6). -->
-  <script src="src/src/srcfiles/defs.placement.js?v=2"></script>
+  <script src="src/src/srcfiles/defs.placement.js?v=4"></script>
 <!-- Dream Engine Phase 1: the dream component tables (defs.dreams.js) — the
      forms, perspectives, tempos, registers, lenses, distortions, motifs and
      every tuning number a dream is assembled from. Pure data with no
@@ -8353,16 +8429,25 @@ body {
      selection is a seeded roll made before any model call, because the LLM
      never decides a dream's structure (D1). -->
 <script src="src/src/srcfiles/defs.dreams.js?v=7"></script>
+<!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
+     player-facing release history. Pure data, no dependencies, grouped with
+     the other defs.* files for the same reason defs.dreams.js is. -->
+<script src="src/src/srcfiles/defs.patchnotes.js?v=2"></script>
+<!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
+     WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
+     ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
+     other defs.* files. Registered in BOTH lists in the same commit. -->
+<script src="src/src/srcfiles/defs.works.js?v=13"></script>
 <!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/src/srcfiles/orbital.js?v=12"></script>
-<script src="src/src/srcfiles/state.js?v=65"></script>
-<script src="src/src/srcfiles/sim.js?v=98"></script>
+<script src="src/src/srcfiles/state.js?v=72"></script>
+<script src="src/src/srcfiles/sim.js?v=104"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
-<script src="src/src/srcfiles/commitments.js?v=15"></script>
-<script src="src/src/srcfiles/world.js?v=31"></script>
+<script src="src/src/srcfiles/commitments.js?v=16"></script>
+<script src="src/src/srcfiles/world.js?v=32"></script>
 <script src="src/src/srcfiles/movement.js?v=4"></script>
 <!-- NPC avatar liveliness Phase 1 (movement.present.js): the presentation
      layer — per-avatar TRACK-vs-CATCH-UP animation on REAL time, its own rAF
@@ -8372,7 +8457,7 @@ body {
      whose renderFloorPlanLive delegates to presentFrame. Registered in
      dev/verify/loadgame.js's ORDER in the same commit (invariant 6). -->
 <script src="src/src/srcfiles/movement.present.js?v=5"></script>
-<script src="src/src/srcfiles/signals.js?v=20"></script>
+<script src="src/src/srcfiles/signals.js?v=21"></script>
 <!-- continuous-cadence-closure Phase 8 (D9): the ambient "meanwhile" ticker
      (meanwhile.js) — sits directly after signals.js (calls its
      reachMultipliers at runtime) and before scene.js, whose composeScene
@@ -8380,40 +8465,56 @@ body {
      ORDER in the same commit (invariant 6). -->
 <script src="src/src/srcfiles/meanwhile.js?v=1"></script>
 <script src="src/src/srcfiles/scene.js?v=18"></script>
-<script src="src/src/srcfiles/items.js?v=30"></script>
+<script src="src/src/srcfiles/items.js?v=32"></script>
 <!-- Inventory overhaul Phase 1: pure inventory query/sort/describe helpers
      (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
      time) and before render.js/ui.js, which call it at runtime. -->
-<script src="src/src/srcfiles/inventory.js?v=23"></script>
-<script src="src/src/srcfiles/effects.js?v=41"></script>
+<script src="src/src/srcfiles/inventory.js?v=24"></script>
+<script src="src/src/srcfiles/effects.js?v=44"></script>
 <!-- Food-overhaul Phase 5: the pure cooking engine (cooking.js) — after
      effects.js (uses clamp) and items.js (makePlate/freshnessOf); its
      functions are called at runtime by defs.actions.js and render.js. -->
 <script src="src/src/srcfiles/cooking.js?v=4"></script>
 <script src="src/src/srcfiles/taste.js?v=1"></script>
-<script src="src/src/srcfiles/drives.js?v=45"></script>
+<script src="src/src/srcfiles/drives.js?v=46"></script>
 <!-- NPC utility scoring (npc-cognition-plan.md). Loads after drives.js: it
      reuses driveGateValue / isOnCooldown / DRIVE_COOLDOWN_KEY from it. -->
-<script src="src/src/srcfiles/cognition.js?v=30"></script>
+<script src="src/src/srcfiles/cognition.js?v=31"></script>
 <!-- NPC initiative (npc-initiative-plan.md Phase 3). Loads after cognition.js:
      scoreCandidates calls scoreOvertures, and evaluateDrives calls the writers
      here for the tick it wins. -->
-<script src="src/src/srcfiles/overture.js?v=16"></script>
-<script src="src/src/srcfiles/actions.js?v=36"></script>
+<script src="src/src/srcfiles/overture.js?v=17"></script>
+<script src="src/src/srcfiles/actions.js?v=37"></script>
 <script src="src/src/srcfiles/intent.js?v=18"></script>
-<script src="src/src/srcfiles/skills.js?v=19"></script>
-<script src="src/src/srcfiles/stealth.js?v=23"></script>
+<script src="src/src/srcfiles/skills.js?v=20"></script>
+<script src="src/src/srcfiles/stealth.js?v=24"></script>
 <script src="src/src/srcfiles/time.js?v=30"></script>
-<script src="src/src/srcfiles/computer.js?v=71"></script>
+<script src="src/src/srcfiles/computer.js?v=76"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
-<script src="src/src/srcfiles/tracker.js?v=18"></script>
+<!-- Aspirations & Creative Careers Phase 4 (D17–D20, D56): the works
+     engine (works.js) — after skills.js (skillMod/skillLevel) and
+     computer.js (computeFocusMultiplier, gigCategoryRep, recordUtilityUsage,
+     GIG_* constants' readers) and sim.js (needDecayScaleFor,
+     getBurnoutWorkPayMult, notePlayerActivity, pushMoodImpulse), before
+     tracker.js (trackerCatalog calls catalogIncomeForDay at call time).
+     Registered in BOTH this list and loadgame.js's ORDER, same commit. -->
+<script src="src/src/srcfiles/works.js?v=6"></script>
+<script src="src/src/srcfiles/tracker.js?v=20"></script>
 <script src="src/src/srcfiles/debuglog.js?v=2"></script>
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
 <script src="src/src/srcfiles/phone.js?v=22"></script>
-<script src="src/src/srcfiles/npc.js?v=58"></script>
+<script src="src/src/srcfiles/npc.js?v=62"></script>
+<!-- Aspirations & Creative Careers Phase 3 (D9/D56): the Notice & Opinion
+     layer (notice.js) — after npc.js (addMemoryFact, MEMORY_IMPORTANCE,
+     EMOTIONAL_WEIGHTS' reader) and signals.js (emitTransient,
+     perceiveSignals) and sim.js (seededRng, npcIsAsleep); before nothing
+     that needs it at load — skills.js's awardSkillXp and npc.js's
+     factEmotionalWeight reach it by name inside function bodies, guarded.
+     Registered in BOTH this list and loadgame.js's ORDER, same commit. -->
+<script src="src/src/srcfiles/notice.js?v=8"></script>
 <!-- Actions & Activities Overhaul Phase 3 (D15): the flags & conditions
      engine (flags.js) — after npc.js (addMemoryFact/MEMORY_IMPORTANCE) and
      effects.js/sim.js above it (applyEffects/buildEffectContext/
@@ -8421,7 +8522,7 @@ body {
      checkHouseRules at runtime (effects.js's applyEatItem calls it, but only
      inside a function body — load order doesn't gate that, this is for
      documentation-convention consistency with the rest of this file). -->
-<script src="src/src/srcfiles/flags.js?v=2"></script>
+<script src="src/src/srcfiles/flags.js?v=4"></script>
 <!-- Actions & Activities Overhaul Phase 8 (D16): the thermostat's pure math
      (temperature.js) — after sim.js (getSeasonIndex) and before anything
      that calls ambientTempC/npcComfortBandC/temperatureClothingBiasWeight
@@ -8440,7 +8541,7 @@ body {
      into any intimacy act. Pure function + tuning (willingness.js); reads
      npc.js's shared clothing reads at call time, consumed by cognition.js's
      scoring and defs.actions.js's requirement checker at runtime only. -->
-<script src="src/src/srcfiles/willingness.js?v=2"></script>
+<script src="src/src/srcfiles/willingness.js?v=3"></script>
 <!-- Intimacy & Voyeurism Phase 12 (D12): the relationship store + formation
      pass (relationships.js). After npc.js (reuses clamp01/clampAxis at
      runtime) and after willingness.js for file grouping; reads sim.js's
@@ -8473,8 +8574,8 @@ body {
      After llm.js because the two passes' calls live there and are fired from
      ui.js; x5.js itself is pure and calls no model. -->
 <script src="src/src/srcfiles/x5.js?v=17"></script>
-<script src="src/src/srcfiles/interruption.js?v=23"></script>
-<script src="src/src/srcfiles/image.js?v=38"></script>
+<script src="src/src/srcfiles/interruption.js?v=24"></script>
+<script src="src/src/srcfiles/image.js?v=40"></script>
 <!-- Avatars & Sprite Studio Phase 1: the permanent override store (kv.sprites)
      and resolveSprite, the ONE function allowed to read a sprite blob. After
      image.js because the resolver falls through to cutoutKey / getCachedImage
@@ -8494,7 +8595,7 @@ body {
      (calls composePeekKey/getPeekImage at runtime) and before render.js/ui.js,
      which call renderPeekOverlay/startPeekSession at runtime only. Phase 15
      writes the 'witnessed' ledger entries via codex.js at session end. -->
-<script src="src/src/srcfiles/peek.js?v=7"></script>
+<script src="src/src/srcfiles/peek.js?v=8"></script>
 <!-- Dream Engine Phase 1 (dreams.js): the dream compiler, writer, renderer
      and viewer. After image.js because every panel goes through a cached
      getter there (getDreamPanelImage) — root.generateImage is never called
@@ -8539,8 +8640,8 @@ body {
      dev/verify/loadgame.js's ORDER in the same commit, because shipping a
      file to only one of the two lists is the rumination.js scar. -->
 <script src="src/src/srcfiles/nightscene.js?v=1"></script>
-<script src="src/src/srcfiles/pregnancy.js?v=1"></script>
-<script src="src/src/srcfiles/render.js?v=89"></script>
+<script src="src/src/srcfiles/pregnancy.js?v=2"></script>
+<script src="src/src/srcfiles/render.js?v=94"></script>
 <!-- Night Scene Phase 3b: the Living Tableau's PAINTER. After render.js
      (shares its rules: idempotent, no state mutation, no rolls) and after
      actionwindow.js, whose awShow/awHide it calls to claim the overlay. NOT
@@ -8548,7 +8649,7 @@ body {
      loader deliberately stops before the render layer, exactly as
      render.spritestudio.js does. -->
 <script src="src/src/srcfiles/render.nightscene.js?v=1"></script>
-<script src="src/src/srcfiles/render.computer.js?v=59"></script>
+<script src="src/src/srcfiles/render.computer.js?v=73"></script>
 <!-- Avatars & Sprite Studio Phase 4: the studio's verbs and its screens.
      render.spritestudio.js extends COMPUTER_RENDERERS, so it must load AFTER
      render.computer.js declares it; spritestudio.js holds the actions and is
@@ -8611,7 +8712,7 @@ body {
      computer.js (openApp), phone.js (phoneOpenApp), render.computer.js
      (renderPuzzlesToday) and ui.computer.js (its do* handlers), none of
      which need it to exist yet at THEIR load time. -->
-<script src="src/src/srcfiles/puzzles.js?v=1"></script>
+<script src="src/src/srcfiles/puzzles.js?v=2"></script>
 <!-- actions-and-activities-overhaul-plan.md Phase 15 (D24): Chatter, the
      in-house social feed (chatter.js) — pure reads plus mutating
      generateChatterForDay/postChatterAsPlayer/toggleChatterLike/
@@ -8625,10 +8726,19 @@ body {
      phone.js (phoneOpenApp), render.computer.js (renderChatterFeed/
      renderChatterProfile) and ui.computer.js (its do* handlers), none of
      which need it to exist yet at THEIR load time. -->
-<script src="src/src/srcfiles/chatter.js?v=1"></script>
-<script src="src/src/srcfiles/asks.js?v=18"></script>
-<script src="src/src/srcfiles/ui.js?v=159"></script>
-<script src="src/src/srcfiles/ui.computer.js?v=55"></script>
+<script src="src/src/srcfiles/chatter.js?v=6"></script>
+<!-- Aspirations & Creative Careers Phase 9 (D26–D30, D35–D37, D56): the
+     platform layer (platform.js) — the audience side of Chatter: the
+     player's profile and handle, cast handles, the three audience layers,
+     manual blocking, visibility per viewer, the follow decision. After
+     chatter.js (chatterAffinity) and notice.js; reads defs.works.js's
+     CHATTER_LABELS / CHATTER_PLATFORM / CHATTER_HANDLE_POOLS at call time.
+     Registered in BOTH this list and loadgame.js's ORDER, same commit. -->
+<script src="src/src/srcfiles/platform.js?v=6"></script>
+<script src="src/src/srcfiles/aspirations.js?v=2"></script>
+<script src="src/src/srcfiles/asks.js?v=20"></script>
+<script src="src/src/srcfiles/ui.js?v=175"></script>
+<script src="src/src/srcfiles/ui.computer.js?v=66"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
      site header with fake address bar + internal back/forward, footer, 404,
@@ -8651,5 +8761,5 @@ body {
      at runtime). Loads LAST: the bottom of menu.js invokes boot(), which
      ui.js can no longer call itself because boot() reaches into MENU/IMAGE
      functions defined after UI. -->
-<script src="src/src/srcfiles/menu.js?v=38"></script>
+<script src="src/src/srcfiles/menu.js?v=39"></script>
 <!-- ===== /SECTION: SCRIPTS ===== -->

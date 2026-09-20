@@ -22,30 +22,56 @@ function skillLevel(player, skillId) {
 // level-up dopamine rule lives in one place: crossing a level boundary
 // pushes a mood impulse (MOOD_PAYOUTS.skillLevelUp × levels crossed). All
 // other readers (skillMod etc.) keep reading player.skills directly.
-function awardSkillXp(player, skillId, xp, day) {
+//
+// Aspirations & Creative Careers Phase 3 (D8): a level crossed is the first
+// Notice & Opinion subject. When the caller passes `gameState` (optional —
+// existing callers are unchanged), the crossing goes through NOTICE's
+// noticeSubject as a `skill_levelup` in the player's current room, and any
+// NPC who actually perceives it (SIGNALS' one query — attention, doors,
+// sleep) forms an opinion fact. Callers that pass nothing — the stealth
+// award sites, whose whole premise is that nobody saw — stay unnoticed.
+function awardSkillXp(player, skillId, xp, day, gameState) {
   player.skills = player.skills || {};
   const before = skillLevel(player, skillId);
   player.skills[skillId] = (player.skills[skillId] || 0) + Number(xp);
   const after = skillLevel(player, skillId);
   if (after > before && player !== undefined) {
     pushMoodImpulse(player, MOOD_PAYOUTS.skillLevelUp * (after - before), day);
+    if (gameState && typeof noticeSubject === 'function') {
+      noticeSubject(gameState, {
+        kind: 'skill_levelup', ref: skillId,
+        roomId: gameState.player?.location, day: day ?? gameState.meta?.clock?.day,
+        meta: { from: before, to: after },
+      });
+    }
   }
   return player.skills[skillId];
 }
 
-// 11 entries each, indexed 0..SKILLS.maxLevel. Only `timeReduction` is
-// consumed by anything yet (ACTIONS' resolveTimeCost, wired to
-// self.cook's `cooking` skill) — the rest (cookQuality, stealthSuccess,
-// cleanEfficiency, payMultiplier, socialEdge) are declared now so P4
-// (jobs), P6 (stealth), and P7 (autonomy chores) have a stable curve to
-// read the moment their systems exist, rather than needing a second pass
-// through this file later.
+// 11 entries each, indexed 0..SKILLS.maxLevel. Every curve here has a
+// real reader (Aspirations & Creative Careers Phase 1, D7 — no field
+// without a reader):
+//   timeReduction   — ACTIONS' resolveTimeCost (self.cook's `cooking`).
+//   craftQuality    — cooking.js's resolveCookStep (`cooking`), and the
+//                     quality of every made work from Phase 4 on (a book's
+//                     `writing`, a track's `music`, a piece's `art`, D17).
+//                     Phase 1 generalised it from its old cooking-specific
+//                     name; the values are byte-identical.
+//   cleanEfficiency — self.dishes' timeCost curve (`cleaning`).
+//   stealthSuccess  — stealth.js / boundary.js / peek.js (`stealth`).
+//   socialEdge      — on-camera presence: the appeal multiplier for
+//                     skill-agnostic lifestyle Chatter content (D7/D29).
+//                     Its reader lands with the platform in Phase 10; it
+//                     stays declared so that phase adds a reader, not a
+//                     second formula.
+// The skill-scaled pay curve was retired in the same phase: gig pay is
+// owned by reputation tiers (computer.js's gigPayMult), so it had no
+// honest consumer and sat unread for two months.
 const SKILL_CURVES = {
   timeReduction:   [1.00, 0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65, 0.60, 0.55, 0.50],
-  cookQuality:     [0.30, 0.40, 0.50, 0.60, 0.68, 0.76, 0.82, 0.88, 0.92, 0.96, 1.00],
+  craftQuality:    [0.30, 0.40, 0.50, 0.60, 0.68, 0.76, 0.82, 0.88, 0.92, 0.96, 1.00],
   cleanEfficiency: [1.00, 0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65, 0.60, 0.55, 0.50],
   stealthSuccess:  [0.25, 0.34, 0.42, 0.50, 0.57, 0.64, 0.70, 0.76, 0.82, 0.88, 0.94],
-  payMultiplier:   [1.00, 1.06, 1.12, 1.20, 1.28, 1.36, 1.44, 1.52, 1.60, 1.70, 1.80],
   socialEdge:      [0.00, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50],
 };
 

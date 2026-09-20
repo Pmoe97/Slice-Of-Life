@@ -29,7 +29,7 @@ function assert(cond, msg, context) {
 const FOLDER_VERSIONS = {
   meta: 2,
   player: 8,
-  world: 5,
+  world: 6,
   npcs: 8,
   images: 1,
   snapshots: 1,
@@ -52,6 +52,20 @@ const FOLDER_VERSIONS = {
 // every key, by construction.
 const SAVE_KEYS = [
   { folder: 'meta', keys: ['meta'] },
+  // The player is ONE key; sub-fields ride it. Fields added since the
+  // record was designed carry a lazy default at their reader rather than a
+  // migration (the additive-default precedent): player.works /
+  // player.workInProgress / player.catalogCarry / player.catalogPaidDay /
+  // player.nextWorkSeq (aspirations-and-creative-careers Phase 4, D58 —
+  // works.js's ensurePlayerWorks); player.kitchen (Phase 8, D81 —
+  // ensurePlayerKitchen); player.aspirations (Phase 14, D47 —
+  // aspirations.js's ensurePlayerAspirations); player.incomeLog /
+  // independenceWeeks / independenceNextDay (Phase 15, D50 — effects.js's
+  // applyEarnMoney and aspirations.js's processIndependenceForDay).
+  // world.computer.apps.social_feed.profile (Phase 9,
+  // D58 — platform.js's ensureChatterProfile, also in defaultComputerState)
+  // rides the `computer` world key below; npc.chatter (Phase 9 —
+  // ensureNpcChatter) rides each npcs-folder record.
   { folder: 'player', keys: ['player'] },
   { folder: 'world', keys: [
     'rooms', 'castWeb', 'relationships', 'events', 'deliveries', 'renovationJobs',
@@ -84,6 +98,13 @@ const SAVE_KEYS = [
     // (mail.js's queueDeliveryDoorEvent/sweepDoorEvent). Additive-default
     // precedent — see WORLD_KEY_FALLBACKS below.
     'mailbox', 'doorEvent',
+    // Aspirations & Creative Careers Phase 16 (D53/D58): the player's
+    // per-room arrangement overrides (roomId → a ROOM_DECOR-shaped array).
+    // Read by defs.design.js's roomDesignBase (render, anchors, comfort,
+    // opinions); written by Phase 17's designer. Additive-default
+    // precedent — see WORLD_KEY_FALLBACKS below. Hung pieces and placed
+    // decor are NOT here: they are room objects (the `objects` folder).
+    'roomDecorOverrides',
   ] },
   { folder: 'npcs', all: true },
   { folder: 'objects', all: true },
@@ -206,6 +227,10 @@ const WORLD_KEY_FALLBACKS = {
   // signals above.
   mailbox: () => [],
   doorEvent: () => null,
+  // Aspirations & Creative Careers Phase 16 (D53): no room overridden is
+  // exactly what a save from before this existed should read as — no
+  // migration, the same additive-default precedent.
+  roomDecorOverrides: () => ({}),
 };
 
 // World keys whose on-disk value needs more than a bare "absent → default"
@@ -463,6 +488,25 @@ const MIGRATIONS = {
           condition: MAINTENANCE.startingCondition,
         },
       };
+    } },
+    // world 5->6 (aspirations-and-creative-careers Phase 2, D14/D58): gig
+    // reputation goes from one number to a per-category map. The scalar
+    // was only ever earned on `tech` gigs (every template gated on tech),
+    // so it folds into `tech` with zeros elsewhere — a 37 becomes
+    // { admin: 0, tech: 37, writing: 0, music: 0, art: 0, food: 0 }. In
+    // the same pass every board/accepted gig instance gets its `category`
+    // re-stamped from its template, so an in-flight 'web'/'dev' gig pays
+    // into the right key. The fold itself is COMPUTER's normalizeGigsAppState
+    // (one function, also run by normalizeComputerState for in-memory
+    // states, D58's "lazy default AND migration") — this entry only
+    // decides which key it has been handed. Same per-key guard as the
+    // migrations above: the world folder holds many differently-shaped
+    // keys under one pass; only the computer state has apps.gigs.
+    { from: 5, to: 6, fn: (data) => {
+      if (!data || typeof data !== 'object') return data;
+      const gigs = data.apps && data.apps.gigs;
+      if (!gigs || typeof gigs !== 'object') return data;
+      return { ...data, apps: { ...data.apps, gigs: normalizeGigsAppState(gigs) } };
     } },
   ],
   npcs: [

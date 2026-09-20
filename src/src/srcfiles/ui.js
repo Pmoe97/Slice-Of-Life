@@ -376,6 +376,21 @@ async function processDayRollover(day) {
   maybeFireContractorQualityMilestone();
   processQuestsForDay(day);
   processGigsForDay(day);
+  // Aspirations & Creative Careers Phase 4 (D18): the catalog fades and
+  // pays overnight — works.js's one rollover call, beside the gig board's.
+  // Before the burnout update below so a promotion counted yesterday
+  // still lands in workBlocksToday.
+  processWorksForDayUi(day);
+  // Aspirations & Creative Careers Phase 10 (D29/D34/D37): the platform's
+  // day — a quiet day's decay, cast follows, opinions from scrolling, and
+  // billing on the rent cadence.
+  processPlatformForDayUi(day);
+  // aspirations-and-creative-careers Phase 15 (D50): the independence
+  // count moves on the rent cadence, before the milestones read it.
+  processIndependenceForDayUi(day);
+  // aspirations-and-creative-careers Phase 14 (D48): after everything else
+  // has moved, the milestones that became true today complete.
+  processAspirationsForDayUi(day);
   // Phase 8: burnout updates at day rollover based on yesterday's work
   // load. workBlocksToday is incremented by workGigBlock and reset here.
   const gigs = currentGameState.world.computer?.apps?.gigs;
@@ -1392,6 +1407,16 @@ function doDreamOpenEntry(dreamId, device) {
   else renderComputerScreen(currentGameState);
 }
 
+// --- Patch Notes (2026-09-10) ----------------------------------------------
+// Open one version's detail page from the list. Pure navigation, mirrors
+// doDreamOpenEntry exactly — nothing here reads or writes any game system.
+function doPatchNotesOpenEntry(version, device) {
+  if (!currentGameState || !version) return;
+  switchScreen(currentGameState, 'patchnotes', 'detail', { version }, device === 'phone' ? 'phone' : 'computer');
+  if (device === 'phone') renderPhoneScreen(currentGameState);
+  else renderComputerScreen(currentGameState);
+}
+
 async function doConfrontNpc(npcId, index) {
   if (!currentGameState || !npcId || typeof index !== 'number') return;
   const npc = currentGameState.npcs[npcId];
@@ -1614,12 +1639,65 @@ function processGigsForDay(day) {
   if (!currentGameState.world.computer) return;
   generateGigsForDay(currentGameState, day);
   for (const r of processGigDeadlinesForDay(currentGameState, day)) {
+    const catLabel = gigCategoryLabel(r.category);
     if (r.missed) {
-      addLogEntry('system', `Missed deadline on "${r.label}" — ${r.partialPay > 0 ? `partial pay ${r.partialPay}, ` : ''}reputation ${r.repDelta}.`);
+      addLogEntry('system', `Missed deadline on "${r.label}" — ${r.partialPay > 0 ? `partial pay ${r.partialPay}, ` : ''}${catLabel} reputation ${r.repDelta}.`);
     } else if (r.autoDelivered) {
-      addLogEntry('system', `"${r.label}" was delivered late (auto) — paid ${r.payout}, reputation ${r.repDelta}.`);
+      addLogEntry('system', `"${r.label}" was delivered late (auto) — paid ${r.payout}, ${catLabel} reputation ${r.repDelta}.`);
     }
   }
+}
+
+// WORKS' catalog: reach fades, then the day's trickle credits through
+// EARN_MONEY (aspirations-and-creative-careers Phase 4, D18). One log line
+// when money actually landed; a spike is worth naming — it is the lumpy
+// part of the design, not noise.
+function processWorksForDayUi(day) {
+  if (typeof processWorksForDay !== 'function') return;
+  const r = processWorksForDay(currentGameState, day);
+  if (!r || !r.income || r.income.credited <= 0) return;
+  const spikes = r.income.byWork.filter(w => w.spike).map(w => `"${w.title}"`);
+  addLogEntry('system', `Overnight, your catalog earned ${r.income.credited}${spikes.length ? ` — ${spikes.join(', ')} had a good day` : ''}.`);
+}
+
+// INDEPENDENCE's week (aspirations-and-creative-careers Phase 15, D50): a
+// quiet line when a week qualifies, one when a streak breaks. Never a
+// nag (D49) — nothing on a week that simply didn't.
+function processIndependenceForDayUi(day) {
+  if (typeof processIndependenceForDay !== 'function') return;
+  const r = processIndependenceForDay(currentGameState, day);
+  if (!r) return;
+  if (r.index.qualifies) addLogEntry('system', `This past month you covered a solo lease on your own income — ${r.weeks} week${r.weeks === 1 ? '' : 's'} running.`);
+  else if (r.reset) addLogEntry('system', `Your own income slipped under a solo lease this month — the streak resets.`);
+}
+
+// ASPIRATIONS' day (aspirations-and-creative-careers Phase 14, D48): a
+// line per milestone reached, one more when a direction is done.
+function processAspirationsForDayUi(day) {
+  if (typeof checkAspirations !== 'function') return;
+  const r = checkAspirations(currentGameState, day);
+  for (const m of r.completed) addLogEntry('system', `${COMPASS_LABEL}: ${m.label} — reached.`);
+  for (const d of r.directionsDone) addLogEntry('system', `${COMPASS_LABEL}: you've gone the whole way on ${ASPIRATION_DIRECTIONS[d]?.label || d}.`);
+}
+
+// PLATFORM's day (aspirations-and-creative-careers Phase 10). One log line
+// when a billing cycle credited money; new cast followers are named.
+function processPlatformForDayUi(day) {
+  if (typeof processPlatformForDay !== 'function') return;
+  const r = processPlatformForDay(currentGameState, day);
+  if (!r) return;
+  for (const id of r.followed || []) {
+    const name = currentGameState.npcs[id]?.bible?.name || 'Someone';
+    addLogEntry('system', `${name} started following you on Chatter.`);
+  }
+  if (r.billing && r.billing.credited > 0) {
+    const b = r.billing.breakdown;
+    addLogEntry('system', `Chatter paid out ${r.billing.credited} — ${b.backers} ${CHATTER_LABELS.backers} at ${b.backersPrice}${b.private > 0 ? `, ${b.private} ${CHATTER_LABELS.private} at ${b.privatePrice}` : ''}.`);
+  }
+  // Phase 12 (D40): the player's own subscriptions, charged or lapsed.
+  const ch = r.billing && r.billing.charges;
+  if (ch && ch.charged > 0) addLogEntry('system', `Chatter charged you ${ch.charged} for ${ch.paid.length} subscription${ch.paid.length === 1 ? '' : 's'}.`);
+  if (ch && ch.lapsed.length > 0) addLogEntry('system', `Your subscription to ${ch.lapsed.map(l => '@' + l.handle).join(', ')} lapsed — unpaid.`);
 }
 
 // COMPUTER's services app: a hired housekeeper visits on its own cadence,
@@ -3517,32 +3595,33 @@ async function doPeep(roomId) {
 // the roomId of the bedroom being knocked on (set by renderActionChips as
 // data-npc on knock chips for consistency with peep). If the owner is home
 // and awake, they respond; if asleep or away, a different message.
+// Knock-and-consent (bug report 2026-09-13): the narration/voicing shell
+// around stealth.js's resolveKnock, which owns the actual decision (and, on
+// an 'invite' outcome, writes the one-shot player.flags._invitedInto grant
+// resolveRoomEntryStealth checks on the player's next move). 'no_answer' is
+// template-only — there's nothing to voice when nobody's answering.
+// 'hallway'/'invite' are LLM-voiced via buildKnockPrompt, matching the
+// game's established decide-first-then-voice pattern (asks.js), degrading
+// to buildKnockFallback on failure the same way runAskPhotoFlow/
+// buildInterruptionFallback already do elsewhere.
 async function doKnock(roomId) {
   if (!currentGameState) return;
-  const ownerId = roomOwnerId(roomId, currentGameState.npcs);
-  const owner = ownerId ? currentGameState.npcs[ownerId] : null;
   const roomName = ROOMS[roomId]?.name || 'room';
+  const decision = resolveKnock(currentGameState, roomId);
+  const owner = decision.ownerId ? currentGameState.npcs[decision.ownerId] : null;
+
   let narration;
-  if (!owner) {
-    narration = `You knock on the ${roomName} door. No answer — nobody's home.`;
-  } else if (owner.location !== roomId) {
-    narration = `You knock on the ${roomName} door. No answer — it's empty.`;
+  if (decision.outcome === 'no_answer') {
+    narration = buildKnockNoAnswerNarration(decision.reason, owner, roomName);
   } else {
-    const activity = owner.activity || '';
-    const name = owner.bible.name || 'Someone';
-    if (activity === 'sleeping' || activity === 'napping') {
-      narration = `You knock on the ${roomName} door. After a moment you hear groaning — ${name} is asleep. No response.`;
-    } else if (activity === 'showering') {
-      narration = `You knock on the ${roomName} door. The shower keeps running inside.`;
-    } else {
-      const responses = [
-        `${name}'s voice: "Yeah? What's up?"`,
-        `${name} opens the door a crack. "Hey, what is it?"`,
-        `${name} calls out, "Come in!"`,
-        `A pause, then footsteps. ${name} opens the door. "Oh, hey."`,
-      ];
-      narration = `You knock on the ${roomName} door. ${responses[Math.floor(orbitalRandom() * responses.length)]}`;
+    let line;
+    try {
+      const prompt = buildKnockPrompt(currentGameState, decision.ownerId, decision.outcome, roomName);
+      line = (await root.generateText(prompt)).trim();
+    } catch (e) {
+      line = buildKnockFallback(owner, decision.outcome);
     }
+    narration = `You knock on the ${roomName} door. ${line}`;
   }
   addLogEntry('narration', narration);
   // 2026-08-30: a knock used to be advanceAndResolve(1) = one full tick
@@ -3556,15 +3635,59 @@ async function doKnock(roomId) {
   // action-outcome-window-plan Phase 6 (D3): knock is a real, time-costing
   // social overture, so it earns a window. A knock changes nothing numeric —
   // it's a doorway, not a deed — so the strip shows only the time; the frame
-  // is a reused "knocking" archetype (repetitive-motion verb, D5).
+  // is a reused "knocking" archetype (repetitive-motion verb, D5). Heading
+  // now reflects the real three-way outcome instead of just presence.
   await presentActionOutcome(currentGameState, {
     id: 'knock', label: 'Knock',
     outcomeWindow: {
       tier: 'C', trigger: 'player', dismissal: 'tap',
-      heading: owner && owner.location === roomId ? 'Knock' : 'No answer',
+      heading: decision.outcome === 'invite' ? 'Invited in' : decision.outcome === 'hallway' ? 'Knock' : 'No answer',
       image: { kind: 'archetype', variant: 'knock', phrase: 'standing at a closed door with a hand raised to knock, waiting for an answer' },
     },
   }, { applied: [], narration, minutesSpent: BOUNDARY.durationMinutes.knock });
+}
+
+// Template-only — a 'no_answer' outcome has no line to voice, whether the
+// reason is a hard floor (asleep/showering/masturbating/absent/hostile/
+// stranger) or an available-but-unwilling score. Distinct register for the
+// deliberate-blank case ('unwilling') vs. the unaware ones (asleep, etc).
+function buildKnockNoAnswerNarration(reason, owner, roomName) {
+  const name = owner?.bible?.name || 'they';
+  switch (reason) {
+    case 'floor_asleep': case 'floor_sleeping': case 'floor_napping':
+      return `You knock on the ${roomName} door. After a moment you hear groaning — ${name} is asleep. No response.`;
+    case 'floor_showering':
+      return `You knock on the ${roomName} door. The shower keeps running inside.`;
+    case 'floor_masturbating':
+      return `You knock on the ${roomName} door. No answer. Whatever ${name}'s doing in there, it's not stopping for you.`;
+    case 'floor_absent': case 'floor_no_owner':
+      return `You knock on the ${roomName} door. No answer — it's empty.`;
+    case 'floor_cold_shoulder': case 'floor_actively_refusing': case 'floor_hostile':
+      return `You knock on the ${roomName} door. Dead silence. ${name} isn't answering — not for you, not right now.`;
+    case 'floor_stranger':
+      return `You knock on the ${roomName} door. No answer. You barely know ${name} well enough for them to just let you in.`;
+    case 'unwilling':
+      return `You knock on the ${roomName} door. Silence. You know ${name}'s in there — they're just not answering.`;
+    default:
+      return `You knock on the ${roomName} door. No answer.`;
+  }
+}
+
+// Fallback if the LLM call fails — personality-branching template, mirroring
+// buildInterruptionFallback's shape (ui.computer.js), NOT convAddBeat (that
+// requires an open conversation overlay's #conv-log DOM node, which doesn't
+// exist at a knock — this happens from the hallway with no overlay open).
+function buildKnockFallback(npc, outcome) {
+  const name = npc?.bible?.name || 'They';
+  const t = npc?.bible?.temperament || {};
+  if (outcome === 'invite') {
+    if (t.warmth > 0.3) return `${name} calls out, "Come in!"`;
+    if (t.assertiveness > 0.3) return `${name} opens the door. "Yeah, come on."`;
+    return `A pause, then footsteps. ${name} opens the door. "...Okay, come in."`;
+  }
+  if (t.volatility > 0.3) return `${name}'s voice: "What? I'm busy — say it from there."`;
+  if (t.warmth > 0.3) return `${name} opens the door a crack. "Hey, what's up?"`;
+  return `${name}'s voice: "Yeah? What is it?"`;
 }
 
 // Unlock a locked door from the OUTSIDE. The only locks in the game are the
@@ -3647,6 +3770,96 @@ async function doWriteNote() {
   await saveAtBoundary('write-note', currentGameState);
 }
 
+// --- Manuscripts (aspirations-and-creative-careers Phase 5, D21) ---
+// The one writing verb that needs free text — the title — so, like the
+// note above, it is a modal over the shared overlay rather than an
+// ACTION_DEFS entry. Free text is always valid (the AI-character-generation
+// rule applies to every free-text field): the only refusal is an empty
+// title. The modal shows the quality the draft will finish at (works.js
+// fixes it at finish from the writing skill), so a beginner knows what
+// they are committing thirty-odd blocks to. Confirm starts the draft and
+// writes its first block.
+// One modal per kind, from this table: what the box is called, where the
+// work happens, the confirm action, the opening line. Phase 6 (D22) added
+// 'track' beside 'book'; a later kind adds a row, not a modal.
+const WORK_START_COPY = {
+  book: { heading: 'Start a manuscript', placeholder: 'Working title…', where: 'drafting at the desk', confirm: 'confirm-write-manuscript', button: 'Start Writing', outlet: () => INKWELL_LABEL, outletVerb: 'publishing on', noun: 'manuscript', save: 'manuscript-start',
+    opening: (wip) => `You open a blank page and give it a name: "${wip.title}". ${wip.blocks} blocks of work ahead.` },
+  track: { heading: 'Record a track', placeholder: 'Track title…', where: 'recording at the kit', confirm: 'confirm-record-track', button: 'Start Recording', outlet: () => 'Streamly', outletVerb: 'releasing on', noun: 'track', save: 'recording-start',
+    opening: (wip) => `You set the levels, name the session "${wip.title}", and hit record. ${wip.blocks} blocks of work ahead.` },
+  piece: { heading: 'Paint a piece', placeholder: 'Title…', where: 'work at the sketchpad', confirm: 'confirm-paint-piece', button: 'Start Painting', outlet: () => 'a buyer', outletVerb: 'selling to', noun: 'piece', save: 'painting-start',
+    opening: (wip) => `You block out the first shapes of "${wip.title}". ${wip.blocks} blocks of work ahead.` },
+};
+
+function openWorkStartModal(kind) {
+  if (!currentGameState) return;
+  const copy = WORK_START_COPY[kind];
+  const def = WORK_KINDS[kind];
+  if (!copy || !def) return;
+  const overlay = document.getElementById('modal-overlay');
+  const title = document.getElementById('modal-title');
+  const body = document.getElementById('modal-body');
+  const actions = document.getElementById('modal-actions');
+  if (!overlay || !title || !body || !actions) return;
+  const quality = Math.round(skillMod(currentGameState.player, def.skill, 'craftQuality') * 100);
+  const level = skillLevel(currentGameState.player, def.skill);
+  const gate = canRelease(currentGameState, kind);
+  title.textContent = copy.heading;
+  body.innerHTML = `<input id="work-start-title" type="text" maxlength="80" style="width:100%" placeholder="${copy.placeholder}">
+    <p class="dim tiny" style="margin-top:8px">${def.blocksRange[0]}–${def.blocksRange[1]} blocks of ${copy.where}. At ${def.skill} ${level} it will finish at ${quality}% quality — the skill you have when you finish is the ${def.label.toLowerCase()}'s forever.</p>
+    ${gate.ok ? '' : `<p class="dim tiny">You can ${kind === 'book' ? 'draft' : kind === 'piece' ? 'paint' : 'record'} now; ${copy.outletVerb} ${copy.outlet()} needs ${gate.reasons.join(' and ')}.</p>`}`;
+  actions.innerHTML = `<button class="btn" data-action="${copy.confirm}">${copy.button}</button>`
+    + `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>`;
+  overlay.setAttribute('data-open', '');
+  setTimeout(() => document.getElementById('work-start-title')?.focus(), 50);
+}
+
+async function doStartWorkFromModal(kind) {
+  const copy = WORK_START_COPY[kind];
+  if (!copy) return;
+  const text = document.getElementById('work-start-title')?.value || '';
+  closeModal();
+  if (!text.trim()) { addLogEntry('system', `A ${copy.noun} needs a title.`); return; }
+  const result = startWork(currentGameState, { kind, title: text });
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  addLogEntry('narration', copy.opening(result.wip));
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary(copy.save, currentGameState);
+  await doWorkBlock(result.wip.id, 'computer', { offline: true });
+}
+
+// Phase 5's names, kept: the manuscript chips dispatch here.
+function openManuscriptModal() { openWorkStartModal('book'); }
+async function doStartManuscript() { await doStartWorkFromModal('book'); }
+
+// Phase 8 (D24): the home kitchen's name — free text, the same modal shape.
+function openKitchenModal() {
+  if (!currentGameState) return;
+  const overlay = document.getElementById('modal-overlay');
+  const title = document.getElementById('modal-title');
+  const body = document.getElementById('modal-body');
+  const actions = document.getElementById('modal-actions');
+  if (!overlay || !title || !body || !actions) return;
+  title.textContent = 'Open a home kitchen';
+  body.innerHTML = `<input id="kitchen-name" type="text" maxlength="60" style="width:100%" placeholder="Kitchen name…">
+    <p class="dim tiny" style="margin-top:8px">It goes on DoorDrop under this name. Orders arrive overnight from your regulars; you cook each one here and hand it over from the Works tab. A dirty kitchen gets fewer orders.</p>`;
+  actions.innerHTML = `<button class="btn" data-action="confirm-kitchen-open">List It</button>`
+    + `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>`;
+  overlay.setAttribute('data-open', '');
+  setTimeout(() => document.getElementById('kitchen-name')?.focus(), 50);
+}
+
+async function doOpenKitchen() {
+  const text = document.getElementById('kitchen-name')?.value || '';
+  closeModal();
+  const result = openKitchen(currentGameState, text);
+  if (!result.ok) { addLogEntry('system', result.reason); return; }
+  addLogEntry('system', `${result.kitchen.name} is on DoorDrop. List a dish or two and see who bites.`);
+  renderComputerScreen(currentGameState);
+  render(currentGameState, currentSceneState);
+  await saveAtBoundary('kitchen-open', currentGameState);
+}
+
 async function doSearchRoom(ownerId) {
   if (!currentGameState) return;
   const npc = currentGameState.npcs[ownerId];
@@ -3674,7 +3887,10 @@ async function doTakeFromRoom(ownerId, defId, qty) {
   const name = npc.bible.name || 'They';
   const roomId = currentGameState.player.location;
   const presentIds = getPresentNpcIds(currentGameState.npcs, roomId);
-  const ownerPresent = presentIds.includes(ownerId);
+  // A sleeping owner can't catch you taking something (2026-09-10 audit fix,
+  // sleeping-npc-contradiction-audit.md's generalized rule: co-presence
+  // alone never decides an NPC ACTS).
+  const ownerPresent = presentIds.includes(ownerId) && !npcIsAsleep(npc);
   const delta = ownerPresent
     ? STEALTH_TUNING.witnessedSuspicionDelta
     : STEALTH_TUNING.possessionTakeSuspicionDelta;
@@ -3734,7 +3950,9 @@ async function doSearchPhone(ownerId) {
 
   const roomId = currentGameState.player.location;
   const presentIds = getPresentNpcIds(currentGameState.npcs, roomId);
-  const ownerPresent = presentIds.includes(ownerId);
+  // A sleeping owner can't catch you going through their phone (same fix as
+  // doTakeFromRoom above).
+  const ownerPresent = presentIds.includes(ownerId) && !npcIsAsleep(npc);
   const day = currentGameState.meta.clock.day;
 
   npc.flags = npc.flags || {};
@@ -4811,6 +5029,21 @@ const ENERGY_GATE_EXEMPT = new Set([
   'browser.visit',
   'computer.window-close', 'computer.window-minimize', 'computer.window-maximize',
   'computer.taskbar-click', 'computer.toggle-start',
+  // aspirations-and-creative-careers Phase 2: filtering the gig board is
+  // reading a screen, same category as browser.visit — the chips must stay
+  // clickable at 0 energy (gig.deliver below is exempt for the same shape
+  // of reason).
+  'gig.filter',
+  // aspirations-and-creative-careers Phase 4: releasing a finished work is
+  // a zero-cost click at the desk (works.js's releaseWork spends nothing),
+  // the same shape as gig.deliver above. works.block / works.promote are
+  // real work and stay gated.
+  'works.release',
+  // Phase 7: selling a finished piece is likewise a zero-cost click.
+  'works.sell',
+  // Phase 8: listing a dish / handing an order over are clicks at the
+  // desk too; the cooking itself is the gated work.
+  'kitchen.list-dish', 'kitchen.fulfill',
   // Door handling is a one-minute mechanical act, not exertion — and the
   // unlock from outside must always be reachable, or an exhausted player
   // who locked their own door at 0 energy could never get back in to sleep.
@@ -4968,6 +5201,15 @@ async function handleAction(action, npcId, extra) {
       return;
     }
     await startPeekSession(roomId, action === 'door.listen' ? 'listen' : 'peek');
+    return;
+  }
+  // Bug report (2026-09-20): peek.sauna is the sauna's own version of
+  // door.keyhole — same intercepted-hold pattern, but object-sourced rather
+  // than room-sourced (D22/D58: the sauna isn't a room), so there is no
+  // adjacent room to read off the chip. `currentGameState.player.location`
+  // IS the room to peek in — the sauna sits right there.
+  if (action === 'peek.sauna') {
+    await startPeekSession(currentGameState.player.location, 'peek', 'sauna');
     return;
   }
   // door.unlock — the one door verb that works from the OUTSIDE. The door
@@ -5154,6 +5396,11 @@ async function handleAction(action, npcId, extra) {
     case 'dreams.open-entry':
       doDreamOpenEntry(extra?.rowId, extra?.device);
       break;
+    // Patch Notes (2026-09-10): open one version's detail page from the
+    // list — same rowId/device shape as dreams.open-entry above.
+    case 'patchnotes.open-entry':
+      doPatchNotesOpenEntry(extra?.rowId, extra?.device);
+      break;
     // actions-and-activities-overhaul-plan.md Phase 14 (D23): DailyGrid.
     // Cell typing bypasses this delegation entirely (its own listener,
     // render.computer.js) — only the deliberate Hint/Check buttons route
@@ -5180,6 +5427,46 @@ async function handleAction(action, npcId, extra) {
     case 'chatter.open-profile':
       doChatterOpenProfile(npcId, extra?.device);
       break;
+    // aspirations-and-creative-careers Phase 9: the platform's verbs.
+    case 'chatter.set-handle':
+      await doChatterSetHandle(extra?.device);
+      break;
+    case 'chatter.vote':
+      await doChatterVote(extra?.rowId);
+      break;
+    case 'chatter.block':
+      await doChatterBlock(npcId, extra?.device);
+      break;
+    case 'chatter.unblock':
+      await doChatterUnblock(npcId);
+      break;
+    case 'chatter.set-price':
+      await doChatterSetPrice(extra?.rowId, extra?.device);
+      break;
+    // aspirations-and-creative-careers Phase 11: Chatter Private.
+    case 'chatter.open-private':
+      openChatterPrivateModal(extra?.device);
+      break;
+    case 'chatter.confirm-private':
+      await doChatterConfirmPrivate();
+      break;
+    case 'chatter.self-shot':
+      openChatterSelfShotModal(extra?.device);
+      break;
+    case 'chatter.post-self-shot':
+      await doChatterPostSelfShot();
+      break;
+    // aspirations-and-creative-careers Phase 12 (D40): the player subscribes.
+    case 'chatter.subscribe':
+      await doChatterSubscribe(npcId, extra?.rowId, extra?.device);
+      break;
+    case 'chatter.unsubscribe':
+      await doChatterUnsubscribe(npcId, extra?.device);
+      break;
+    // aspirations-and-creative-careers Phase 14 (D47): Compass.
+    case 'compass.toggle':
+      await doCompassToggle(extra?.rowId, extra?.device);
+      break;
     case 'gig.accept':
       await doGigAccept(extra?.rowId);
       break;
@@ -5188,6 +5475,19 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'gig.abandon':
       await doGigAbandon(extra?.rowId);
+      break;
+    case 'gig.filter':
+      doGigFilter(extra?.rowId, extra?.device);
+      break;
+    // aspirations-and-creative-careers Phase 4: the Works tab's verbs.
+    case 'works.block':
+      await doWorkBlock(extra?.rowId, extra?.device);
+      break;
+    case 'works.release':
+      await doWorkRelease(extra?.rowId);
+      break;
+    case 'works.promote':
+      await doWorkPromote(extra?.rowId, extra?.device);
       break;
     case 'shop.add-to-cart':
       await doShopAddToCart(extra?.rowId);
@@ -5227,6 +5527,39 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'home.place-snap':
       await doHomePlaceToggleSnap();
+      break;
+    // Phase 17 (D55/D110): Decor/Arrange mode tabs, undo/redo, and the
+    // base-furniture arranger.
+    case 'home.place-mode':
+      await doHomePlaceMode(extra?.rowId);
+      break;
+    case 'home.place-undo':
+      await doHomePlaceUndo();
+      break;
+    case 'home.place-redo':
+      await doHomePlaceRedo();
+      break;
+    case 'home.arrange-start':
+      await doHomeArrangeStart();
+      break;
+    case 'home.arrange-remove':
+      await doHomeArrangeRemove(extra?.objId);
+      break;
+    case 'home.arrange-reset':
+      await doHomeArrangeReset();
+      break;
+    // aspirations-and-creative-careers Phase 16 (D54): the Hang screen.
+    case 'home.hang-pick':
+      await doHomeHangPick(extra?.rowId);
+      break;
+    case 'home.hang-room':
+      await doHomeHangRoom(extra?.roomId);
+      break;
+    case 'home.hang-slot':
+      await doHomeHangSlot(extra?.roomId, extra?.slotId);
+      break;
+    case 'home.take-down':
+      await doHomeTakeDown(extra?.objId);
       break;
     case 'grocery.add-to-cart':
       await doGroceryAddToCart(extra?.rowId);
@@ -5695,6 +6028,52 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'confirm-write-note':
       await doWriteNote();
+      break;
+    // aspirations-and-creative-careers Phase 5 (D21): the manuscript chips.
+    case 'write-manuscript-start':
+      openManuscriptModal();
+      break;
+    case 'confirm-write-manuscript':
+      await doStartManuscript();
+      break;
+    case 'write-manuscript':
+      await doWorkBlock(extra?.rowId, 'computer', { offline: true });
+      break;
+    // Phase 6 (D22): the recording chips — the same shape over kind 'track'.
+    case 'record-track-start':
+      openWorkStartModal('track');
+      break;
+    case 'confirm-record-track':
+      await doStartWorkFromModal('track');
+      break;
+    case 'record-track':
+      await doWorkBlock(extra?.rowId, 'computer', { offline: true });
+      break;
+    // Phase 7 (D23): the painting chips — kind 'piece' over the same modal.
+    case 'paint-piece-start':
+      openWorkStartModal('piece');
+      break;
+    case 'confirm-paint-piece':
+      await doStartWorkFromModal('piece');
+      break;
+    case 'paint-piece':
+      await doWorkBlock(extra?.rowId, 'computer', { offline: true });
+      break;
+    case 'works.sell':
+      await doWorkSell(extra?.rowId);
+      break;
+    // Phase 8 (D24): the home kitchen.
+    case 'kitchen-open-start':
+      openKitchenModal();
+      break;
+    case 'confirm-kitchen-open':
+      await doOpenKitchen();
+      break;
+    case 'kitchen.list-dish':
+      await doListDish(extra?.rowId);
+      break;
+    case 'kitchen.fulfill':
+      await doFulfillOrder(extra?.rowId);
       break;
     case 'give-item':
       if (npcId) await doGiveItem(npcId);
@@ -6458,6 +6837,15 @@ async function doSleep() {
       // the same "good sleep" condition that grows the energy ceiling.
       pushMoodImpulse(currentGameState.player, MOOD_PAYOUTS.goodSleep, currentGameState.meta.clock.day);
     }
+    // Aspirations & Creative Careers Phase 16 (D51): a night in a designed
+    // room — one small impulse, sized by how furnished it is, through the
+    // same write site the restful verbs use. Nothing for an auto-arranged
+    // room. The room is where the player fell asleep, read now rather than
+    // before the batch so a night that ended elsewhere (it never does — the
+    // player does not move while asleep) would still be judged honestly.
+    if (typeof applyDesignedRoomComfort === 'function') {
+      applyDesignedRoomComfort(currentGameState, currentGameState.player.location, currentGameState.meta.clock.day);
+    }
     let sleepMsg = describeSleep(sleepHours, currentGameState.player.energy);
     if (alarmFired) sleepMsg += ' The alarm dragged you out of bed.';
     else if (phoneDead && currentGameState.player.alarm != null) sleepMsg += ' Your phone died overnight — the alarm never went off.';
@@ -6662,6 +7050,14 @@ async function maybeShowConversationScene(npc) {
     };
     convPushImage(record);
     convAddImageBubble('npc', result.url, '', '🎨 Scene', record);
+  } else {
+    // Bug report (2026-09-13): a failed generation left this function
+    // silent — convShowGeneratingImage's bubble is correctly removed above
+    // either way, but nothing ever told the player it failed, so a due
+    // panel just looked like it was about to render and then vanished with
+    // no feedback at all. Same degrade-gracefully pattern runAskPhotoFlow
+    // already uses for its own failed generation.
+    convAddBeat("The scene didn't render this time.");
   }
 }
 
@@ -7139,6 +7535,14 @@ function askMenuInsertLeaf(askId) {
     openConvReturnPicker().then(pick => { if (pick) doConvReturnItem(pick.defId); });
     return;
   }
+  // aspirations-and-creative-careers Phase 11 (D33) — $Feature is picker-
+  // first over the camera roll (photos this NPC is in); the pick rides as
+  // the structured payload, never as flavor.
+  if (leaf.feature) {
+    closeAskMenu();
+    openConvFeaturePicker(convState.npcId).then(pick => { if (pick) doConvFeaturePhoto(pick.id); });
+    return;
+  }
   const input = document.getElementById('conv-input');
   if (!input) return;
   input.value = leaf.template;
@@ -7480,7 +7884,7 @@ function convRenderJoinButton(dep) {
 // into one structured-pick parameter: three short, independent branches read
 // more plainly here than a shared shape built for a third caller that may
 // never need a fourth.
-async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId) {
+async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featurePhotoId) {
   if (!convState || convState.sending) return;
   // Bug report (2026-08-27): the LLM call below takes up to a minute, and a
   // player who closes the overlay (or moves rooms) mid-flight runs
@@ -7513,6 +7917,14 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId) {
     const name = currentGameState?.npcs?.[convState?.npcId]?.bible?.name || 'them';
     text = `You give back ${name}'s ${def.label || 'thing'}.`;
     if (input) input.value = '';
+  } else if (featurePhotoId) {
+    // aspirations-and-creative-careers Phase 11 (D33): the $Feature turn —
+    // a structured photo pick, no $-text.
+    const photo = (currentGameState?.world?.phone?.camera?.roll || []).find(p => p.id === featurePhotoId);
+    if (!photo) return; // photo evicted between the picker and the send
+    const name = currentGameState?.npcs?.[convState?.npcId]?.bible?.name || 'them';
+    text = `You show ${name} the photo "${photo.caption}" and ask if you can post it with them in it.`;
+    if (input) input.value = '';
   } else {
     text = forcedText || input?.value.trim();
     if (!text) return;
@@ -7526,11 +7938,12 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId) {
   // $Tag falls through to the plain free-text path — it gets no chip and no
   // decision, just a normal turn. A gift/borrow/return turn carries no
   // $-text at all.
-  const structuredDefId = giftDefId || borrowDefId || returnDefId;
+  const structuredDefId = giftDefId || borrowDefId || returnDefId || featurePhotoId;
   const parsedAsk = (forcedText || structuredDefId) ? null : parseAskInput(text);
   const askLeaf = giftDefId ? ASK_TYPES.RequestGift
     : borrowDefId ? ASK_TYPES.BorrowItem
     : returnDefId ? ASK_TYPES.ReturnItem
+    : featurePhotoId ? ASK_TYPES.Feature
     : (parsedAsk ? ASK_TYPES[parsedAsk.askId] || null : null);
 
   // Player's message appears instantly in the conversation log. Forced
@@ -7631,7 +8044,7 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId) {
     const askTurn = askLeaf
       ? resolveAsk(currentGameState, myNpcId, askLeaf.id,
           structuredDefId ? text : parsedAsk.flavor, context,
-          giftDefId ? { giftDefId } : borrowDefId ? { borrowDefId } : returnDefId ? { returnDefId } : undefined)
+          giftDefId ? { giftDefId } : borrowDefId ? { borrowDefId } : returnDefId ? { returnDefId } : featurePhotoId ? { featurePhotoId } : undefined)
       : null;
 
     const result = await callLLM(
@@ -8070,6 +8483,63 @@ function doConvGiveGift(defId) {
   return doConvSend(null, defId);
 }
 
+// aspirations-and-creative-careers Phase 11 (D33) — the $Feature picker:
+// the camera-roll grid (openConvPhotoPicker's shape) filtered to photos the
+// NPC is actually in (asks.js featurablePhotosFor). Resolves the photo
+// record or null on cancel; doConvFeaturePhoto runs the turn as an ask.
+function openConvFeaturePicker(npcId) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const titleEl = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !titleEl || !body || !actions) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (photo) => { overlay.removeAttribute('data-open'); resolve(photo); };
+    const photos = featurablePhotosFor(currentGameState, npcId);
+    if (photos.length === 0) { resolve(null); return; }
+    const npc = currentGameState?.npcs?.[npcId];
+    titleEl.textContent = `Post a photo with ${npc?.bible?.name || 'them'}?`;
+    body.textContent = '';
+    const note = document.createElement('p');
+    note.className = 'dim tiny';
+    note.textContent = 'Pick the photo. They decide — a private one is a bigger ask than a living-room snap, and a no is final for that photo.';
+    body.appendChild(note);
+    const grid = document.createElement('div');
+    grid.className = 'conv-photo-picker';
+    for (const photo of photos) {
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'conv-photo-pick';
+      tile.setAttribute('aria-label', `Ask about ${photo.caption}`);
+      const img = document.createElement('img');
+      img.src = getPlaceholder();
+      img.alt = photo.caption;
+      tile.appendChild(img);
+      const cap = document.createElement('span');
+      cap.className = 'conv-photo-pick-cap';
+      const consent = npc && typeof featureConsentFor === 'function' ? featureConsentFor(npc, photo.id) : null;
+      cap.textContent = `${photo.caption}${photoContentLevel(photo) === 'intimate' ? ' · private' : ''}${consent ? (consent.granted ? ' · agreed' : ' · refused') : ''}`;
+      tile.appendChild(cap);
+      tile.addEventListener('click', () => finish(photo));
+      grid.appendChild(tile);
+      getPhotoImage(photo).then(result => { if (result.url) img.src = result.url; });
+    }
+    body.appendChild(grid);
+    actions.textContent = '';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    actions.appendChild(cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+function doConvFeaturePhoto(photoId) {
+  return doConvSend(null, null, null, null, photoId);
+}
+
 // actions-and-activities-overhaul-plan.md Phase 4 (D8) — the borrow/return
 // pickers. Same shared-modal + grid shape as openConvGiftPicker above, just
 // sourced from the other side's belongings (borrowableStacks reads the NPC
@@ -8401,6 +8871,15 @@ async function doMove(targetRoomId) {
     // no LLM — safe to run unconditionally on every move.
     const stealthResult = resolveRoomEntryStealth(currentGameState, roomId);
     emitPlayerFootsteps(currentGameState, roomId, false);
+    // Aspirations & Creative Careers Phase 16 (D52): walking into a room the
+    // player has designed makes the design a Notice subject for whoever is
+    // there to see it — the one perception path (NOTICE's noticeRoomDesign
+    // → craft_moment → perceiveSignals), an opinion fact per NPC who
+    // noticed, once per design. Before the arrival LLM call below, so the
+    // opinion is already in the persona prompt when they open their mouth.
+    // Trusted producer, no model; a no-op for rooms the player hasn't
+    // touched, so it is safe to run on every move.
+    if (typeof noticeRoomDesign === 'function') noticeRoomDesign(currentGameState, roomId);
     // Recompute scene participants for the new room — active starts
     // populated (see getSceneParticipants) rather than empty.
     currentSceneState = getSceneParticipants(currentGameState.player, currentGameState.npcs, currentGameState.world);
@@ -8446,12 +8925,16 @@ async function doMove(targetRoomId) {
       const line = templates[Math.min(stage.index, templates.length - 1)];
       if (line) addLogEntry('narration', line);
     }
-    if (stealthResult.witnessed) {
+    if (stealthResult.witnessed || stealthResult.invited) {
       const ownerId = roomOwnerId(roomId, currentGameState.npcs);
       const ownerName = currentGameState.npcs[ownerId]?.bible?.name;
       // Two full alternatives, not a {name}/'They' template — "They looks
       // up" is wrong subject-verb agreement, and singular-they's correct
       // "They look up" reads wrong once a real name replaces it.
+      // Knock-and-consent: `invited` (stealth.js's resolveRoomEntryStealth)
+      // means this same line fires for a consented entry too — the owner
+      // genuinely does look up either way; only the WITNESS/suspicion/
+      // tension/grievance branch (gated on `witnessed` alone) is skipped.
       addLogEntry('narration', ownerName ? `${ownerName} looks up as you come in.` : 'Someone looks up as you come in.');
     }
     surfaceRoomEvidence(roomId);
@@ -8825,8 +9308,12 @@ async function startSoloGame(draft) {
     // "Back to menu" path skipping the options screen entirely) never
     // reuses a stale options object.
     const gameplayOptions = pendingNewGameOptions?.economy;
+    // aspirations-and-creative-careers Phase 14 (D47): the intro's
+    // directions — up to two toggles on the same options screen.
+    const aspirationPicks = Object.entries(pendingNewGameOptions?.aspirations || {}).filter(([, on]) => on).map(([id]) => id).slice(0, ASPIRATION_TUNING.maxDirections);
     pendingNewGameOptions = null;
     pendingCast = SIM_generateHouse(seed, 0, [], draft, gameplayOptions);
+    if (typeof chooseDirections === 'function' && aspirationPicks.length > 0) chooseDirections(pendingCast, aspirationPicks);
     // Settings & Pause Overhaul Phase 4 (D5): the solo path bypasses the
     // cast-approval step where pendingCast.contentConfig is normally built
     // (handleGenerateCast), so seed it from defaults and apply the SFW

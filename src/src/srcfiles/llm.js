@@ -1924,6 +1924,59 @@ async function compactMemory(npc) {
   }
 }
 
+// --- Knock prompt (knock-and-consent, bug report 2026-09-13): generates an
+// NPC's spoken response to a knock on their door. Same shape as
+// buildInterruptionPrompt below (self-contained plain-text generation, not
+// appended to a scene prompt — no conversation overlay is open when
+// knocking from the hallway) — and the same "decide first, voice second"
+// contract asks.js's buildAskDirective uses for conversational asks,
+// adapted here since a knock has no open turn to attach a directive
+// fragment to. `outcome` ('hallway' | 'invite') is stealth.js's
+// resolveKnock's decision, already final — the prompt frames it as
+// something the NPC has already decided, not something being negotiated,
+// and the 'hallway' branch is explicitly told not to say anything that
+// reads as an invitation (the model's WORDS are the only signal a knock
+// exchange has; there's no separate accept/decline field like an ask has).
+function buildKnockPrompt(gameState, npcId, outcome, roomName) {
+  const npc = gameState.npcs[npcId];
+  if (!npc) return { instruction: 'Error: NPC not found.' };
+  const b = npc.bible;
+  const rel = npc.relPlayer || {};
+  const t = b.temperament;
+
+  const situationLine = outcome === 'invite'
+    ? `Your roommate just knocked on your ${roomName} door. You've decided to invite them in — you want them here right now.`
+    : `Your roommate just knocked on your ${roomName} door. You've decided to answer and talk through the doorway, but you do NOT want them to come in right now.`;
+
+  const instruction = `You are ${b.name}, a roommate in a shared apartment. ${situationLine}
+
+Your personality:
+- Warmth: ${t.warmth} (warm if positive, cold if negative)
+- Volatility: ${t.volatility} (volatile if positive, steady if negative)
+- Openness: ${t.openness} (open if positive, guarded if negative)
+- Assertiveness: ${t.assertiveness} (bold if positive, passive if negative)
+- Conscientiousness: ${t.conscientiousness} (careful if positive, careless if negative)
+
+Your relationship with your roommate:
+- Trust: ${rel.trust}
+- Affection: ${rel.affection}
+- Tension: ${rel.tension}
+
+${outcome === 'invite'
+    ? 'Write 1-2 sentences inviting them in. Stay completely in character — warm, curious, playful, whatever this personality would actually do. Do NOT describe opening the door or them walking in; the game handles that. Just say what you say.'
+    : "Write 1-2 sentences responding through the closed (or cracked-open) door, WITHOUT inviting them in. You can be friendly, brusque, tired, mid-something — whatever this personality and relationship would produce — but the words themselves must not invite entry, agree to let them in, or say anything like \"come in\"/\"door's open.\" You are choosing to keep this a hallway conversation."}
+
+Speech style: ${b.speech?.textingStyle || 'casual'}, humor ${b.speech?.humorStyle || 'dry'}, verbosity ${b.speech?.verbosity || 0.5}, profanity level ${b.speech?.profanityLevel || 0.3}.
+
+Write ONLY what you say — no narration, no stage directions, no description of the door or your movements. Just your words.`;
+
+  return {
+    instruction,
+    startWith: b.name + ': ',
+    stopSequences: ['\n\n', '\n\n—', '\n\n— '],
+  };
+}
+
 // --- Interruption prompt (Phase 5): generates an NPC's line when they
 // walk in on the player masturbating. Unlike callLLM's JSON contract,
 // this is a plain-text generation — the output is 1-3 sentences of

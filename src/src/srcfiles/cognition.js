@@ -791,6 +791,14 @@ function ageCommitment(gameState, npcId, resolved) {
     }
     return npc.commitment;
   }
+  // 2026-09-10 audit fix, reverted: adding npcIsAsleep(npc) here looked
+  // like the same off-schedule-sleep gap the other fixes closed, but this
+  // function runs every npc-tick against the ACTIVE commitment itself —
+  // sleep_recover's own commitment sets activityOverride: 'napping' for its
+  // hold duration (config.js), so the check self-cancelled the very nap
+  // that caused it, re-resolving a mid-hold commitment on every tick
+  // (measured: verify-c2/c5's D3/D6 event-driven-scheduling invariants).
+  // Left as resolved.block === 'sleep' only, unchanged from before.
   if (!resolved || resolved.block === 'sleep' || !resolved.location) {
     // Phase 6 (fluid work boundary): the missing-location release fires the
     // moment the schedule block goes off-map (commute/work/commute_home) and

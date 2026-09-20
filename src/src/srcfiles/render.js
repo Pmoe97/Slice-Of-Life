@@ -689,9 +689,14 @@ function renderDesignShape(place) {
     : `<g class="fp-prop${variant}">`;
   for (const p of def.parts) {
     const cls = `fp-p fp-p-${p.cls}`;
+    // Aspirations & Creative Careers Phase 16 (D54): the `art` part is the
+    // one whose fill comes from the PLACEMENT — a hung piece's seeded
+    // swatch (place.fill) — so two pieces are two pictures. Every other
+    // part keeps the palette.
+    const fill = p.cls === 'art' && place.fill ? ` style="fill:${place.fill}"` : '';
     if (p.kind === 'rect') {
       const rx = p.rx ? (p.rx * Math.min(w, h)).toFixed(2) : 0;
-      out += `<rect class="${cls}" x="${(x + p.x * w).toFixed(2)}" y="${(y + p.y * h).toFixed(2)}"`
+      out += `<rect class="${cls}"${fill} x="${(x + p.x * w).toFixed(2)}" y="${(y + p.y * h).toFixed(2)}"`
            + ` width="${(p.w * w).toFixed(2)}" height="${(p.h * h).toFixed(2)}" rx="${rx}"/>`;
     } else if (p.kind === 'ellipse') {
       out += `<ellipse class="${cls}" cx="${(x + p.cx * w).toFixed(2)}" cy="${(y + p.cy * h).toFixed(2)}"`
@@ -704,11 +709,16 @@ function renderDesignShape(place) {
   return out + '</g>';
 }
 
-// A designed room's contents. Returns null when the room has no authored
-// design, which is the signal to fall back to the automatic layout — a room
-// is either designed or auto-arranged, never a confusing half of each.
+// A designed room's contents. Returns null when the room has no design,
+// which is the signal to fall back to the automatic layout — a room is
+// either designed or auto-arranged, never a confusing half of each.
+// Aspirations & Creative Careers Phase 16 (D53): "designed" now means the
+// player's override OR the authored ROOM_DECOR entry — defs.design.js's
+// roomDesignBase is the one reader, the same one the anchor resolver
+// branches on, so what is drawn and what is walked to still agree.
 function renderAuthoredDecor(gs, roomId) {
-  const decor = (typeof ROOM_DECOR !== 'undefined' && ROOM_DECOR[roomId]) || null;
+  const base = typeof roomDesignBase === 'function' ? roomDesignBase(gs, roomId) : null;
+  const decor = base ? base.placements : ((typeof ROOM_DECOR !== 'undefined' && ROOM_DECOR[roomId]) || null);
   if (!decor || decor.length === 0) return null;
   let out = '<g class="fp-furniture">';
   for (const place of decor) {
@@ -718,15 +728,37 @@ function renderAuthoredDecor(gs, roomId) {
   return out + '</g>';
 }
 
+// Phase 16 (D53/D54): the objects the player PLACED — Home-app decor and
+// hung pieces, the room-bucket objects carrying a `pos` — drawn at that
+// pos through the composite-shape renderer, on top of whichever base
+// layout the room has. Until this phase the packer drew them on a wall
+// of its choosing while NPCs walked to where they really were; the packer
+// now skips them (defs.placement.js) and this draws them. A hung piece's
+// canvas takes the same seeded swatch its catalog card shows (D80).
+// '' when nothing is placed.
+function renderPlacedDecor(gs, roomId) {
+  const placed = typeof roomPlacedDecor === 'function' ? roomPlacedDecor(gs, roomId) : [];
+  if (placed.length === 0) return '';
+  let out = '<g class="fp-furniture fp-placed">';
+  for (const place of placed) {
+    const fill = place.shape === 'player_art' && typeof hashToColor === 'function'
+      ? hashToColor(`${place.meta.workId}:${place.meta.title}`) : null;
+    out += renderDesignShape(fill ? { ...place, fill } : place);
+  }
+  return out + '</g>';
+}
+
 // Lay a room's furniture around the inside of its largest rectangle, walking
 // the perimeter. The FALLBACK for rooms nobody has designed yet: 19 rooms
 // times a dozen objects is 200-odd coordinates, and auto-placement means an
 // undesigned room still reads as furnished rather than as an empty box.
-// A room with a ROOM_DECOR entry uses that instead — see renderAuthoredDecor.
+// A room with a design uses that instead — see renderAuthoredDecor. The
+// player's placed objects draw on top in either regime (renderPlacedDecor).
 function renderRoomFurniture(gs, roomId) {
+  const placed = renderPlacedDecor(gs, roomId);
   const authored = renderAuthoredDecor(gs, roomId);
-  if (authored !== null) return authored;
-  return renderAutoFurniture(gs, roomId);
+  if (authored !== null) return authored + placed;
+  return renderAutoFurniture(gs, roomId) + placed;
 }
 
 function renderAutoFurniture(gs, roomId) {
@@ -3772,6 +3804,39 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
     if (phase === 'night' || phase === 'early_morning') hereChips.push({ label: 'Sleep', action: 'sleep', bucket: 'bed' });
     hereChips.push({ label: 'Use Computer', action: 'computer.use', bucket: 'devices' });
   }
+  // Writing (aspirations-and-creative-careers Phase 5, D21): a desk or a
+  // computer in the room is where a manuscript gets written. Like the note
+  // chip below, starting one needs a text box (the title), so it is a
+  // bespoke chip rather than an ACTION_DEFS entry; continuing one is a
+  // work block on the draft (works.js's workBlock through the same handler
+  // the Works tab uses). One draft at a time — the chip names it.
+  if (typeof ensurePlayerWorks === 'function') {
+    const hereObjs = gs.objects?.[`room_${player.location}`] || {};
+    const writingSpot = Object.values(hereObjs).some(o => o && (o.defId === 'desk' || o.defId === 'desktop_computer'));
+    if (writingSpot) {
+      const draft = ensurePlayerWorks(player).workInProgress.find(w => w.kind === 'book');
+      if (draft) hereChips.push({ label: `Write — "${draft.title}"`, action: 'write-manuscript', bucket: 'devices', extra: { rowId: draft.id } });
+      else hereChips.push({ label: 'Start a Manuscript', action: 'write-manuscript-start', bucket: 'devices' });
+    }
+    // Recording (Phase 6, D22/D77): a placed recording kit in the room,
+    // and the music skill the track kind asks for to START (the plan's
+    // Phase 6 gate; release gates separately, D19). Same two-chip shape.
+    const kitHere = Object.values(hereObjs).some(o => o && o.defId === 'recording_kit');
+    if (kitHere && typeof WORK_KINDS !== 'undefined' && skillLevel(player, WORK_KINDS.track.skill) >= WORK_KINDS.track.minSkill) {
+      const session = ensurePlayerWorks(player).workInProgress.find(w => w.kind === 'track');
+      if (session) hereChips.push({ label: `Record — "${session.title}"`, action: 'record-track', bucket: 'devices', extra: { rowId: session.id } });
+      else hereChips.push({ label: 'Record a Track', action: 'record-track-start', bucket: 'devices' });
+    }
+    // Painting (Phase 7, D23/D79): the sketchpad in the room and the art
+    // skill the piece kind asks for to start ("at the gate"). A finished
+    // piece is an item in the bag; Sell lives on the Works tab.
+    const padHere = Object.values(hereObjs).some(o => o && o.defId === 'hobby_sketchpad');
+    if (padHere && typeof WORK_KINDS !== 'undefined' && skillLevel(player, WORK_KINDS.piece.skill) >= WORK_KINDS.piece.minSkill) {
+      const piece = ensurePlayerWorks(player).workInProgress.find(w => w.kind === 'piece');
+      if (piece) hereChips.push({ label: `Paint — "${piece.title}"`, action: 'paint-piece', extra: { rowId: piece.id } });
+      else hereChips.push({ label: 'Paint a Piece', action: 'paint-piece-start' });
+    }
+  }
   for (const avail of resolveAvailableActions(gs)) {
     if (!avail.ok) continue;
     hereChips.push({ label: avail.label, action: avail.actionId });
@@ -3873,38 +3938,32 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
   }
   if ((player.rentOwed || 0) > 0) hereChips.push({ label: `Pay Rent (${player.rentOwed})`, action: 'pay-rent' });
   if (Object.values(gs.world.bills || {}).some(b => b && b.cutoffActive)) hereChips.push({ label: 'Pay Bills (service cut off)', action: 'pay-bills' });
-  // Door chips. In the hallways every reachable bedroom/bathroom door is
-  // one you can do something at (peek/listen/unlock/knock/open), so those
-  // get the full "X Door ▸" submenu. The player's OWN door is normally
-  // ceremony-free — you just walk in — but a LOCKED one is the one way your
-  // own lock locks YOU out (lock from inside, walk out, now it's sealed),
-  // so it appears only then. And anywhere at all, a locked ADJACENT door —
-  // the ensuite case: you can lock bathroom_a from inside it and leave —
-  // needs an Unlock affordance. Only the player ever locks doors, so a
-  // locked door you're standing next to is always your own lock to undo.
+  // Door chips. Bug report (2026-09-20): "ANY door can be peeked through" —
+  // every real door in the house (any 'door'-type threshold, live-read off
+  // thresholdBetween so a structural upgrade's new door counts too) gets
+  // the full "X Door ▸" submenu now, not only bedroom/bathroom doors off the
+  // two hallways. Peek/Listen are dropped per-door when nobody's actually
+  // on the other side to watch (peekWatchable — occupied and lit), so "the
+  // button only shows if applicable"; startPeekSession re-runs the exact
+  // same check on click, so chip and click can never disagree. The player's
+  // OWN door is still the one exception: normally ceremony-free (you just
+  // walk in), a LOCKED one is the one way your own lock locks YOU out (lock
+  // from inside, walk out, now it's sealed) — the ensuite case, since only
+  // the player ever locks a door — so it appears only then, and only as a
+  // flat Unlock (peeking into your own room makes no sense).
   for (const adjId of adjacentRooms) {
-    const roomType = ROOMS[adjId]?.type;
-    const isBedroom = roomType === 'bedroom';
-    const isBathroom = adjId === 'bathroom_a' || adjId === 'bathroom_b';
-    if (!isBedroom && !isBathroom) continue;
-    const locked = getDoorState(gs, adjId) === 'locked';
-    const inHallway = roomId === 'hallway_a' || roomId === 'hallway_b';
     if (adjId === 'bedroom_player') {
-      if (!locked) continue;
-    } else if (!inHallway && !locked) {
-      continue;
-    }
-    const roomName = ROOMS[adjId]?.name || 'Room';
-    // Outside the hallways the voyeurism verbs make no sense — the chip is
-    // a flat Unlock, and nothing else.
-    if (!inHallway) {
+      if (getDoorState(gs, adjId) !== 'locked') continue;
       hereChips.push({
-        label: adjId === 'bedroom_player' ? `Unlock ${roomName} Door` : `Unlock the ${roomName} Door`,
+        label: `Unlock ${ROOMS[adjId]?.name || 'Room'} Door`,
         action: 'door.unlock',
         extra: { roomId: adjId },
       });
       continue;
     }
+    if (thresholdBetween(roomId, adjId) !== 'door') continue;
+    const locked = getDoorState(gs, adjId) === 'locked';
+    const roomName = ROOMS[adjId]?.name || 'Room';
     // Intimacy & Voyeurism Phase 1 (D5): a multi-verb door renders as one
     // "X Door ▸" chip drilling into its verbs. The verbs live in
     // ACTION_DEFS' 'door.interact' submenu; the flat Open/Knock/Peek
@@ -3916,9 +3975,14 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
       groupKey: `door-${adjId}`,
       extra: { roomId: adjId },
     };
-    // Unlock is only real against a locked door — drop it otherwise.
-    const verbs = submenuVerbChips(doorChip);
-    doorChip.children = locked ? verbs : verbs.filter(v => v.action !== 'door.unlock');
+    const watchable = peekWatchable(gs, adjId);
+    const verbs = submenuVerbChips(doorChip).filter(v => {
+      if (v.action === 'door.unlock') return locked;
+      if (v.action === 'door.keyhole' || v.action === 'door.listen') return watchable;
+      return true;
+    });
+    if (verbs.length === 0) continue;
+    doorChip.children = verbs;
     hereChips.push(doorChip);
   }
   // Phase 8 (D8): searching a roommate's room surfaces their possessions

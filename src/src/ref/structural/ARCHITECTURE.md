@@ -69,6 +69,7 @@ between folders together.
 | `src/src/ref/complete/plan-x5-conversation-consequences.md` | **Not one of the roadmap's six** — inserted ahead of Plan 5, which measured four of its five motivation sources reading zero. Splits the model that *writes* dialogue from the models that *judge* it: the **Assessor** scores a relationship over a scene, the **Chronicler** extracts knowledge over a day, and the writing prompt scores nothing (its `relationshipDeltas` and `memoryAdditions` are stripped on ingestion, not merely unasked for). Created `src/src/srcfiles/x5.js` — pure, no `async`, the parsing/clamping/windowing/ingestion half. **Built** — all 4 phases, D1–D28 locked, 295 assertions across `verify-x1..x4`. Phase 4 retuned `X5.deltaDivisor` 100 → 50 by measurement (`dev/verify/measure-x5.js`). |
 | `src/src/ref/complete/npc-initiative-plan.md` | Roadmap Plan 5 — NPCs open. **Built** — all 6 phases, D1–D36 locked, 372 assertions across `verify-i1..i6`. `expresses` leaks mood into the signal layer (Phase 1); ambient episodes carry `participants`/`emotionalTag` so the knowledge sources stop reading zero (Phase 2); `npc.overture` is a committed social act scored by Plan 3's one scorer and committed by four named writers in `src/src/srcfiles/overture.js` (Phase 3); text, propose and knock ship as `OVERTURE_DEFS` rows rather than code paths, deleting `DRIVE_DEFS.text_player` and giving `commitments.js` a second kind (`hangout`) booked by an NPC (Phase 4); ten `shared` fields on the existing `self.*` entries make activities two-person (Phase 5). Phase 6 tuned the rate to **0.099 overtures/NPC/day untouched and 1.742 at the affection ceiling** (`dev/verify/measure-initiative.js`) and found **D34**: a `cooldownTicks` is a wrapped daily window, not an elapsed duration, so three entries at or above `CLOCK.ticksPerDay` had been firing **once per NPC per game**. |
 | `src/src/ref/complete/prompt-generator-v2.md` | Decision-vector prompt architecture for the menu slideshow (**COMPLETE — engine + all 4 passes shipped**; moved from `wip/` 2026-08-18. Further kink/pool expansion is a standing, open-ended content lever, not an unfinished pass) |
+| `src/src/ref/complete/aspirations-and-creative-careers-overhaul-plan.md` | `aspirations-and-creative-careers-handoff-prompt.md` (**The player's throughline — designed 2026-09-18, D1–D112 locked, 18 phases. COMPLETE — all 18 phases built and verified, close-out audit 2026-09-19; moved from `wip/`.** NPCs have cognition, initiative, memory and gossip; the player now has one too. Six pillars: `music` skill + a mastery/bonding hobby split (P1); the gig board goes multi-category with per-craft reputation and explicit template tiers — before P2 all six templates gated on `tech` and `eligibleGigTemplates`'s tier-by-index mapping was off by one (P2: `GIG_CATEGORIES`, 24 templates, world 5→6 migration); a shared **Notice & Opinion** layer (`notice.js`, P3) where anything the player makes → `perceiveSignals` → an `opinion` fact via `addMemoryFact` → gossip, the LLM phrasing never deciding; a **works engine** (`works.js`, P4–8) for going independent — books, tracks on Streamly, art, a home kitchen as DoorDrop's 13th runtime vendor — royalties as a fading trickle that promotion sustains and a catalog sums; **Chatter as a platform** (`platform.js`, P9–13) — cast / numbers-only ghosts / Backers + an opt-in Chatter Private tier behind `CONTENT_CONFIG.mature` and `image.js`'s existing three-condition gate, pseudonymous handles, manual blocking, NPC creators with derived subscription *slots* (NPCs have no wallet), the player subscribing at real cost, recognition-as-a-roll writing transmissible `identity_link` facts, `$Feature` under the willingness gate, `$SubscriptionTalk` as a boundary leaf rather than infidelity; **aspirations** (`aspirations.js`, P14–15) — directions chosen, milestones as pure predicates, Compass app, `independenceIndex`; and home (P16–17) — a designed-room comfort effect, rooms as opinion subjects, `roomDecorOverrides`, hanging art, the dev designer ported into the Home app, with per-room Arrange mode + undo/redo. **Revises the "solo living must never work" invariant (D1)** to "possible as a stacked late-game accomplishment," measured (P15): gigs alone peak at 0.93× the solo cost and never qualify, a catalog alone is worse (0.44×), the full stack qualifies in months. Phase 18's close-out audit (`verify-acc-p18.js`, 82/82) grep-checked every D-number against the shipped source and proved the D14 save migration live via a direct `restoreSave()` call on a hand-edited pre-plan record. `GAME_VERSION` 0.13.0→0.14.0.) |
 | `src/src/ref/wip/home-design-studio-plan.md` | The interior. Furniture stops being hand-written absolute-coordinate SVG (a bed that could be drawn but never moved, because its pillow had no relationship to its frame) and becomes COMPOSITE OBJECTS: a shape is parts normalized to a 0..1 box, a placement is `{shape,x,y,w,h,rot}`, and move/resize/rotate is one affine map on the group. Created `src/src/srcfiles/defs.design.js` (40 shapes + `ROOM_DECOR` + `decorVisible`) and `dev/designer.html` — room reshaping with a live tiling check, drag/resize/rotate handles, grid snap, undo, autosave, named slots, import/export, and per-placement UPGRADE GATING with a tier preview. D5 is the idea worth stealing: a gated placement describes the finished room, so the pool ships as a dry basin and a filled one on the identical footprint and renovation fills the hole rather than conjuring it. **Foundation built**; one room authored, eighteen still auto-arrange. |
 | `src/src/ref/complete/npc-avatar-liveliness-and-movement-plan.md` | **The floor-plan avatar liveliness + movement-presentation overhaul.** Investigation complete 2026-08-28, design session complete 2026-08-28 (Q1–Q5 + follow-ups → D15–D21; two flagged interpretations: player-speed multiplier, reverse-overture auto-talk). Root causes confirmed: (A) every player action → `settleWalks` (sim.js:1704) snaps in-flight walks and `reconcileNpcPos` (sim.js:2588) teleports non-walk movers to room centroids, then `renderFloorPlanStatic` rebuilds the whole SVG `innerHTML` and `.fp-avatar` has no transition — hard snaps on every action; (B) at idle 20× one rAF is 20 game-sec, so `advanceFrameWalks`' per-frame interpolation completes a neighbour walk inside a single frame — the walk integrator runs but is invisible; (C) the renderer's `renderAutoFurniture` perimeter packer and `resolveActionAnchor`'s centroid fallback disagree, so NPCs "using the pool" stand at the empty room centre (only player-placed decor has `obj.pos`); (D) `currentSceneState` is never reconciled during a live conversation and `doConvSend` never re-checks co-location, so `CHARACTERS PRESENT` keeps a departed NPC as a speaker and the model replies for a person who isn't there. D1–D21 locked: presentation decoupled from sim time and never writing sim state (D1/D3/D4 — render-layer state keyed by avatar id survives static rebuilds), floor/cap presentation durations that apply to CATCH-UP only while live walks play at mechanical speed (D5/D6), per-room per-tier walk time (NPC 10s/hop, player ~3s/hop — D15/D19, user-driven slowdown, new Phase 0 first to build), one shared `resolveAutoPlacements` consumed by renderer AND anchor (D8), stand-point priority + curated `standInset`/`anchorMode` table (D9/D10/D17), per-turn presence recheck + destination-typed DEPARTURE AWARENESS + handoff-not-cutoff session end + in-chat [Join] button (D11–D14, D21), dotted path illustration for NPCs only (D18, Phase 1b), reverse overture — click an NPC's avatar to travel to them with off-map fallback (D20, Phase 2b). Phases 0/1 first, then 2/2b/3 independent (shared placement + anchors / reverse overture / conversation departure awareness), Phase 4 polish+verification. Paired with `npc-avatar-liveliness-and-movement-handoff-prompt.md` (whose Step 0 is the design gate). |
 | `src/src/ref/complete/npc-avatar-liveliness-and-movement-handoff-prompt.md` | The session prompt for the row above. Step 0 is a hard **design gate**: nothing is built until the open-questions section (presentation budget, player-marker presentation, conversation-end semantics, anchor modes, floor-plan departure cue) is resolved with the user and locked as D-numbers — the gate precedes the usual first-phase rule. Phases 1/2/3 independent, Phase 4 needs all three. Carries the invariants: presentation never writes `npc.pos`/`location`/`walk`/`commitment.arrived`, drawn furniture ≡ walked-to furniture, a conversation never replies for a person who isn't there, the D12 static/live split survives, two-place registration + `?v=` bump for new source files, pure-logic-vs-live-page verification split (`dev/verify` Node harnesses named `verify-present-pN.js` for pure logic; `browser_eval`/`vision` for anything visual). |
@@ -157,18 +158,129 @@ partial bump is how you get a client running half-old code):
 
 ```
 config.js → icons.js → defs.world.js → defs.actions.js → defs.computer.js
-→ defs.menu.js → defs.intro.js → defs.design.js → defs.dreams.js → orbital.js → state.js → sim.js
+→ defs.menu.js → defs.intro.js → defs.design.js → defs.dreams.js → defs.patchnotes.js → defs.works.js → orbital.js → state.js → sim.js
 → commitments.js → world.js
 → signals.js → meanwhile.js → scene.js → items.js → inventory.js → effects.js → cooking.js
 → taste.js → drives.js
 → cognition.js → actions.js → intent.js → skills.js → stealth.js → time.js
-→ computer.js → tracker.js → phone.js → npc.js → willingness.js → rumination.js → prompt.js
+→ computer.js → works.js → tracker.js → phone.js → npc.js → notice.js → willingness.js → rumination.js → prompt.js
 → llm.js → x5.js → interruption.js
 → image.js → sprites.js → avatar.js → peek.js → dreams.js → actionwindow.js
 → render.js → render.computer.js → spritestudio.js → render.spritestudio.js → render.desktop.js
-→ render.phone.js → asks.js → ui.js → ui.computer.js → afterhours.js
+→ render.phone.js → chatter.js → platform.js → aspirations.js → asks.js → ui.js → ui.computer.js → afterhours.js
 → ui.windowmanager.js → ui.phone.js → studio.js → menu.js
 ```
+
+`defs.works.js` / `works.js` (Aspirations & Creative Careers Phase 4,
+2026-09-18, D17–D20/D56): the works engine — the player's own catalog.
+`defs.works.js` (`WORK_KINDS`, `WORKS_TUNING` — plural, because config.js
+already owns `WORK_TUNING` for the focus floors) sits with the other defs;
+`works.js` sits between `computer.js` and `tracker.js`: it reads
+`skills.js` (`skillMod` craftQuality, `skillLevel`), `computer.js`
+(`computeFocusMultiplier`, `gigCategoryRep`, `recordUtilityUsage`, the
+`GIG_*` constants) and `sim.js` (`needDecayScaleFor`,
+`getBurnoutWorkPayMult`, `notePlayerActivity`, `pushMoodImpulse`) inside
+function bodies only, and `tracker.js`'s `trackerCatalog` calls its
+`catalogIncomeForDay` at call time. `startWork` / `workBlock`
+(`workGigBlock`'s shape) / `releaseWork` (the D19 skill-AND-reputation
+gate) / `promoteWork` / `decayWorks` / `catalogIncomeForDay` (whole-dollar
+`EARN_MONEY` credit, fractional carry, once per day) /
+`processWorksForDay` (called from `ui.js`'s `processDayRollover` beside
+`processGigsForDay`). WorkHub gained a Works tab (`renderGigWorks`,
+`works.block/release/promote`). `verify-acc-p4.js` covers it.
+
+`notice.js` (Aspirations & Creative Careers Phase 3, 2026-09-18, D9/D56)
+sits directly after `npc.js`: the Notice & Opinion layer — `noticeSubject`
+turns a player-made thing (first subject: a skill level crossed, emitted
+from `skills.js`'s `awardSkillXp` when a caller passes `gameState`) into a
+transient `craft_moment` signal, asks `signals.js`'s `perceiveSignals` who
+actually noticed, and writes each perceiver an `{ kind: 'opinion', subject,
+valence, text }` fact through `npc.js`'s `addMemoryFact` — the valence a
+pure seeded function over `OPINION_PERSONALITY` (the one sensitivity table),
+the text a claim-style line from `OPINION_LINES`. It reaches `npc.js`
+(`addMemoryFact`, `EMOTIONAL_WEIGHTS`' reader), `signals.js` and `sim.js`
+(`seededRng`, `npcIsAsleep`) only at call time; `npc.js`'s
+`factEmotionalWeight` and `skills.js` reach back into it by name inside
+function bodies, guarded. `verify-acc-p3.js` covers it.
+
+`platform.js` (Aspirations & Creative Careers Phases 9–10, 2026-09-18/19,
+D26–D37/D42, D85–D91) sits directly after `chatter.js`: Chatter as a
+platform. Phase 9 — the player's profile (`ensureChatterProfile`, lazy on
+`world.computer.apps.social_feed.profile`), `npc.chatter` (lazy, the
+handle minted from the bible), `ghostHandle(seed)` (regenerated, never
+stored), `chatterCastIds` (residents ∪ `contactKnown`), mutual blocking,
+`visiblePostsFor`, the seeded `castFollowDecision` + its idempotent daily
+pass. Phase 10 — `postAppeal` (pure, seeded on the post id; `meta.source`
+names the craft), `applyGrowth`/`ghostDecay` (`growthK 0.5`, measured),
+`npcSlots` (D42's derived subscription slots — NPCs have no wallet),
+`castSubscribeDecision`, `ghostConversion` (price-elastic, D91),
+`deriveSubscribers`/`billSubscriptions` (`EARN_MONEY <n> chatter` through
+`applyEffects`, `taxes.quarterGross`, on the rent cadence via
+`profile.nextBillingDay`), `platformPerceiversFor` (the body of
+`notice.js`'s `platformPerceivers` hook: following, unblocked NPCs with a
+`scroll_phone` event yesterday), and `processPlatformForDay` (called from
+`ui.js`'s `processDayRollover` after `processWorksForDay`). It reaches
+`chatter.js` (`chatterAffinity`), `notice.js` (`noticeSubject`),
+`effects.js`, `skills.js`, `works.js` and `sim.js` inside function bodies
+only; `chatter.js`'s `postChatterAsPlayer` and `tracker.js`'s
+`trackerPlatform` reach back by name, guarded. Phase 11 (Chatter Private,
+D31–D33, D92–D94) — `canOpenPrivatePage`/`openPrivatePage` (the mature
+flag through `intimateAllowed`, no new gate), `castPrivateDecision` /
+`derivePrivateSubscribers` (one slot, one tier), `ghostConversion(gs,
+'private')` (cadence-earned), `takePrivateSelfShot`/`postPrivateSelfShot`
+(image.js's `takePhoto(gs, tags, { selfShot, intimate })` — the player as
+the subject, `level` stamped on every record), and the consent readers
+(`featureConsentFor`/`photoSubjectsWithoutConsent`) that `chatter.js`'s
+`postChatterAsPlayer` checks before any photo with a cast member in it
+goes up; the writer is `asks.js`'s `$Feature` leaf (picker-first, tiered by
+the photo's level over the willingness floors). Phase 12 (NPC creators,
+D38–D41, D95–D97) — `sim.js`'s `deriveCreator`/`ensureCreator` stamp
+`bible.creator` at `createNpcFromBible` (a `CHARACTER_SCHEMA` entry);
+platform.js reads it (`npcCreator`, lazy backfill), grows creators offscreen
+per cycle (`npcCreatorTick`, a described-not-rendered private post whose
+record `image.js`'s `buildNpcSelfShotRecord` builds under the gate), and
+runs the player's own subscriptions (`subscribeToNpc`,
+`billPlayerSubscriptions` — a plain `player.money` debit on the rent
+cadence, lapsing unpaid; `renderBankOverview` lists them). Phase 13
+(recognition, D43–D45, D98–D100) — `recognitionRoll` (seeded, over tells
+the post carries for THAT perceiver: `npc.flags._roomsSeen`, which
+`sim.js`'s `resolveBatch` writes on every change of room; a selfie; an
+intimate selfie at the intimate phase; being in the photo) writes a
+transmissible `identity_link` fact from `applyPlatformPerceptionForDay`;
+`subscribeToNpc` emits a `subscription` NOTICE subject the creator perceives
+only once they hold the link; `flags.js`'s player-bound mirror
+(`_playerBoundaries`, `checkPlayerBoundary`, `maybeBoundaryUponFact` beside
+`maybeJealousUponFact` at both transmission sites) is what `asks.js`'s
+`$SubscriptionTalk` draws and the crossing trips — never relationships.js.
+All tier names live in `defs.works.js`'s `CHATTER_LABELS` (invariant 11).
+`verify-acc-p9.js` through `verify-acc-p13.js` cover it.
+
+`aspirations.js` (Aspirations & Creative Careers Phase 14, 2026-09-19,
+D46–D49, D101–D103) sits directly after `platform.js`: the player's
+directions and milestones. `defs.works.js` owns the data —
+`ASPIRATION_DIRECTIONS` (five directions, each a pool of `{ id, label,
+hint, pre, done }` templates whose predicates read only through the
+read-only `ASP` helpers: skills.js's `skillLevel`, `player.works`, the raw
+Chatter profile, placed catalog decor, `getApartmentQuality`, `gigs.
+delivered` — never an ensure* backfill, so they can run against any save
+without writing), `ASPIRATION_TUNING` and `COMPASS_LABEL`. aspirations.js
+holds the state (`player.aspirations`, lazy), `chooseDirections` /
+`toggleDirection`, `liveMilestones` (the next two whose `pre` holds) and
+`checkAspirations` — the rollover pass (`ui.js`'s `processDayRollover`,
+after the platform's) that completes what has become true, pushes
+`MOOD_PAYOUTS.aspirationMilestone` / `aspirationDirection` and raises an
+`aspiration` Notice subject in the player's room. The Compass app
+(`defs.computer.js`, `render.computer.js`'s `renderCompassOverview`, both
+devices) and the New Game options screen's directions section (`menu.js`)
+are its surfaces; the tracker never lists it (D49). Phase 15 (D50,
+D104–D105) added the independence half: `independenceCost` / `independence
+Income` / `independenceIndex` over `player.incomeLog` — the ledger
+`effects.js`'s `applyEarnMoney` (the one credit verb) now keeps — and
+`processIndependenceForDay`, the rent-cadence pass (`ui.js`, before the
+aspirations pass) that counts `player.independenceWeeks`. The same phase's
+audit rescaled gig pay through `GIG_TUNING.payScale` (defs.computer.js) and
+compressed `GIG_REPUTATION_TIERS.payMult`; the economy plan carries the
+dated note. `verify-acc-p14.js` and `verify-acc-p15.js` cover it.
 
 `sprites.js`/`avatar.js` (avatars-and-sprite-studio-plan Phases 1-2) sit directly
 after `image.js`, because `resolveSprite` falls through to that file's
@@ -612,6 +724,19 @@ variance for `cookQuality`). This mirrors EFFECTS' P0 pattern of declaring
 a full vocabulary before every consumer exists — better than leaving a gap
 to retrofit later.
 
+**As of 2026-09-18 (Aspirations & Creative Careers Phase 1, D5–D7):**
+`SKILL_IDS` gained `music`; `cookQuality` was renamed `craftQuality`
+(values unchanged — it is now the quality curve for every made thing, a
+meal today and books/tracks/pieces from that plan's Phase 4 on);
+`payMultiplier` was deleted outright, never having gained a reader (gig
+pay is owned by reputation tiers, `computer.js`'s `gigPayMult`); and
+`socialEdge` is explicitly reserved for the Chatter platform's lifestyle
+appeal (that plan's Phase 10). `createHobbyAction` (`defs.actions.js`) now
+requires `mode: 'mastery' | 'bonding'` — mastery hobbies (guitar → `music`,
+sketchpad → `art`, bookshelf Read → `writing` at a third rate) carry
+`def.skill`; bonding hobbies (records, console, houseplant) award none by
+design. `verify-acc-p1.js` covers it.
+
 **`actions.js` gained two small, generic hooks** rather than one-off
 cooking-specific code:
 - `resolveTimeCost(def, gameState)` — an `ACTION_DEFS` entry's base
@@ -715,6 +840,23 @@ hook in UI's `processDayRollover`, and enough strikes ends the job. The
 `sleep`/`move`) rather than an `ACTION_DEFS` entry, since opening the
 computer is a viewpoint change with no time cost or narration, not a
 world-effecting action.
+
+**As of 2026-09-18 (Aspirations & Creative Careers Phase 2, D14–D16,
+D61–D64):** the gig board (which the vocation rewrite had already put in
+place of the job board above) is a six-category market. `defs.computer.js`
+`GIG_CATEGORIES` (`admin`/`tech`/`writing`/`music`/`art`/`food`, each
+naming its craft skill — food's is `cooking`) is the one category table;
+`GIG_TEMPLATES` is 24 templates each declaring `category`, an honest
+`skill`/`minSkill`, and an explicit `tier: 0..4`, checked by a load-time
+guard. `world.computer.apps.gigs.reputation` is a per-category map
+(`MIGRATIONS.world` 5→6 folds the old scalar into `tech`, via
+`computer.js`'s single `normalizeGigsAppState`, which
+`normalizeComputerState` also runs); `eligibleGigTemplates` compares
+`t.tier` to `gigTierIndex(gigCategoryRep(gigs, t.category))` — the
+tier-by-template-index mapping is gone — and `generateGigsForDay` draws
+per category under one refresh roll. `renderGigBoard` groups by category
+with a filter chip row (`gig.filter`, render-owned state) and a
+per-category reputation strip; `verify-acc-p2.js` covers the logic.
 
 **Click delegation extended**: `attachEventHandlers`'s generic handler
 (`ui.js`) now also reads `data-app`/`data-screen`/`data-row-id` off a
