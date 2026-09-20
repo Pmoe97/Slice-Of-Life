@@ -8,3 +8,7 @@ node_modules/
 __pycache__/
 pycache__/
 *.pyc
+
+# Local AI shim: per-session vast.ai endpoints (and any tokens), never shared
+local-ai.config.js
+.vast-ai-last-connection.json

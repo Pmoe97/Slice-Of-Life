@@ -26,40 +26,94 @@
 <title>dev harness</title>
 </head>
 <body>
+<!-- Local AI shim (src/src/dev/LOCAL-AI-SETUP.md): optional, off by default.
+     local-ai.config.js doesn't exist until you copy it from the .example
+     file, so this 404s silently on a fresh checkout and generateText/
+     generateImage below fall through to their original stub-and-throw. -->
+<script src="local-ai.config.js" onerror="console.warn('local-ai.config.js not found (copy local-ai.config.example.js to create it) — AI calls stay stubbed out.')"></script>
+<script src="local-ai-shim.js"></script>
 <script>
-  function makeFolder() {
-    const store = new Map();
+  // Bug report (2026-09-13): the original in-memory Map-backed kv wiped
+  // every save on a page reload (any reload — a deliberate one to pick up
+  // an edit, or an accidental F5), which real Perchance kv storage never
+  // does. IndexedDB gives the exact same async get/set/update/delete/keys
+  // surface but actually persists across reloads (and browser restarts),
+  // scoped to this origin (http://localhost:PORT) — so each launch.json
+  // port (8734/8735/8736/...) already gets its own separate, isolated save
+  // data for free, matching how those configs were meant to be independent
+  // test environments. Also stores Blobs natively (the images folder needs
+  // this) via the structured clone algorithm, unlike localStorage.
+  const KV_FOLDERS = [
+    'meta', 'player', 'world', 'npcs', 'objects', 'images', 'snapshots',
+    // Folders added to the game after this harness was first written.
+    // Missing ones fail as `Cannot read properties of undefined (reading
+    // 'get')` during boot, which reads like a game bug and isn't one —
+    // keep this list in step with KVFolders in state.js.
+    'menu', 'saves', 'saveIndex',
+    // avatars-and-sprite-studio Phase 1: the permanent override store.
+    'sprites',
+  ];
+  function openKvDb() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open('slice-of-life-dev-harness', 1);
+      req.onupgradeneeded = () => {
+        for (const name of KV_FOLDERS) {
+          if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  // Runs one request against `storeName` and resolves with ITS result
+  // (not the transaction's) — request.onsuccess fires before tx.oncomplete
+  // and already carries the value, so that's the one signal actually needed.
+  async function runRequest(dbPromise, storeName, mode, fn) {
+    const db = await dbPromise;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, mode);
+      const req = fn(tx.objectStore(storeName));
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  function makeFolder(dbPromise, storeName) {
     return {
-      async get(key) { return store.has(key) ? structuredClone(store.get(key)) : undefined; },
-      async set(key, val) { store.set(key, structuredClone(val)); return val; },
+      async get(key) { return runRequest(dbPromise, storeName, 'readonly', (store) => store.get(key)); },
+      async set(key, val) {
+        await runRequest(dbPromise, storeName, 'readwrite', (store) => store.put(val, key));
+        return val;
+      },
       async update(key, fn) {
-        const cur = store.has(key) ? structuredClone(store.get(key)) : undefined;
+        const cur = await this.get(key);
         const next = await fn(cur);
-        store.set(key, structuredClone(next));
+        await this.set(key, next);
         return next;
       },
-      async delete(key) { store.delete(key); },
-      async keys() { return [...store.keys()]; },
+      async delete(key) { await runRequest(dbPromise, storeName, 'readwrite', (store) => store.delete(key)); },
+      async keys() { return runRequest(dbPromise, storeName, 'readonly', (store) => store.getAllKeys()); },
     };
   }
+  const kvDbPromise = openKvDb();
   var root = {
-    kv: {
-      meta: makeFolder(), player: makeFolder(), world: makeFolder(),
-      npcs: makeFolder(), objects: makeFolder(), images: makeFolder(),
-      snapshots: makeFolder(),
-      // Folders added to the game after this harness was first written.
-      // Missing ones fail as `Cannot read properties of undefined (reading
-      // 'get')` during boot, which reads like a game bug and isn't one —
-      // keep this list in step with KVFolders in state.js.
-      menu: makeFolder(), saves: makeFolder(), saveIndex: makeFolder(),
-      // avatars-and-sprite-studio Phase 1: the permanent override store.
-      sprites: makeFolder(),
-    },
-    // Deliberately reject — exercises the game's own existing fallback
+    kv: Object.fromEntries(KV_FOLDERS.map((name) => [name, makeFolder(kvDbPromise, name)])),
+    // Stubbed out by default — exercises the game's own existing fallback
     // paths (image.js's gradient placeholder, IM's broken-response
     // handling) rather than needing a hand-rolled fake LLM schema here.
-    async generateText() { throw new Error('dev-harness: generateText stubbed out'); },
-    async generateImage() { throw new Error('dev-harness: generateImage stubbed out'); },
+    // Set LOCAL_AI_CONFIG.enabled = true (local-ai.config.js) to route
+    // these at a real llama.cpp/ComfyUI box instead — see local-ai-shim.js.
+    async generateText(arg) {
+      if (window.LocalAI && window.LOCAL_AI_CONFIG && window.LOCAL_AI_CONFIG.enabled) {
+        return window.LocalAI.generateText(arg);
+      }
+      throw new Error('dev-harness: generateText stubbed out');
+    },
+    async generateImage(prompt, opts) {
+      if (window.LocalAI && window.LOCAL_AI_CONFIG && window.LOCAL_AI_CONFIG.enabled) {
+        return window.LocalAI.generateImage(prompt, opts);
+      }
+      throw new Error('dev-harness: generateImage stubbed out');
+    },
     // AfterHours' clip fetch. Real superFetch proxies a cross-origin GET;
     // locally that would just be a CORS failure, which only ever exercises
     // the error branch. Canned payload instead, shaped like the Pornhub
