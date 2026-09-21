@@ -100,7 +100,10 @@ const reg = J(`({
   platformHook: typeof platformPerceivers === 'function' ? platformPerceivers(__mk(1), { kind: 'chatter_post', ref: 'x' }) : 'missing',
   fnTypes: [typeof noticeSubject, typeof opinionValence, typeof opinionRaiseWeight, typeof noticeSubjectKey],
 })`);
-check('NOTICE_KINDS is the seven D9 subject kinds', JSON.stringify(reg.kinds) === JSON.stringify(['skill_levelup', 'work', 'room_design', 'chatter_post', 'chatter_private', 'subscription', 'aspiration']), JSON.stringify(reg.kinds));
+// 2026-09-21: 'hobby_skill' joined the original seven D9 kinds (interests[].skill
+// wiring, decision C) — the one kind whose subject is a resident, not the
+// player. See notice.js's NOTICE_KINDS comment and verify-i5.js for its own coverage.
+check('NOTICE_KINDS is the seven D9 subject kinds plus hobby_skill', JSON.stringify(reg.kinds) === JSON.stringify(['skill_levelup', 'work', 'room_design', 'chatter_post', 'chatter_private', 'subscription', 'aspiration', 'hobby_skill']), JSON.stringify(reg.kinds));
 check('OPINION_PERSONALITY reads temperament axes warmth/openness (bias) and conscientiousness/volatility (sensitivity), plus hard/soft/craft trait tags — the one table later phases share', JSON.stringify(reg.biasKeys) === JSON.stringify(['warmth', 'openness']) && JSON.stringify(reg.sensKeys) === JSON.stringify(['conscientiousness', 'volatility']) && JSON.stringify(reg.traitKeys) === JSON.stringify(['hard', 'soft', 'craft']), JSON.stringify([reg.biasKeys, reg.sensKeys, reg.traitKeys]));
 check('SKILL_CRAFT_NOUNS has a noun + category for every SKILL_IDS entry (a level-up in any skill phrases)', reg.nounsCoverSkills === true);
 check('five valence bands, and OPINION_LINES.skill_levelup has a non-empty {craft}-bearing pool for each', JSON.stringify(reg.bands) === JSON.stringify(['strong_pos', 'pos', 'neutral', 'neg', 'strong_neg']) && JSON.stringify(reg.linesBands) === JSON.stringify(reg.bands) && reg.linesNonEmpty === true, JSON.stringify([reg.bands, reg.linesBands, reg.linesNonEmpty]));

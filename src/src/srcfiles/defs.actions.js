@@ -232,6 +232,7 @@ const ACTION_DEFS = {
     emitsSignal: { signal: 'cooking', intensity: SIGNALS_EMIT.cookingAction },
     shared: {
       rate: 'companionable',
+      interestTag: 'cooking',   // SHARED_ACTIVITY.skillMultiplierDivisor reader (interests[].skill wiring)
       fact: 'You and {name} cooked together.',
       templates: [
         'You cook with {name} — one of you chopping, one of you stirring, both of you in the way.',
@@ -1121,6 +1122,7 @@ const ACTION_DEFS = {
     meters: [['devices', 0.5]],
     shared: {
       rate: 'parallel',
+      interestTag: 'fitness',   // SHARED_ACTIVITY.skillMultiplierDivisor reader (interests[].skill wiring)
       fact: 'You and {name} worked out together.',
       templates: [
         'You work out with {name} — mostly in silence, mostly counting, occasionally spotting.',
@@ -1163,6 +1165,7 @@ const ACTION_DEFS = {
     meters: [['devices', 1.5], ['waterHeating', 1]],
     shared: {
       rate: 'parallel',
+      interestTag: 'fitness',   // SHARED_ACTIVITY.skillMultiplierDivisor reader (interests[].skill wiring)
       fact: 'You and {name} swam together.',
       templates: [
         'You swim laps alongside {name}. Neither of you talks; the water does not really allow it.',
@@ -1188,6 +1191,7 @@ const ACTION_DEFS = {
     meters: [['devices', 1]],
     shared: {
       rate: 'companionable',
+      interestTag: 'gaming',   // SHARED_ACTIVITY.skillMultiplierDivisor reader (interests[].skill wiring)
       fact: 'You and {name} played against each other.',
       templates: [
         'You play against {name} until one of you is properly, unreasonably invested in winning.',
@@ -1277,6 +1281,7 @@ const ACTION_DEFS = {
     ],
     shared: {
       rate: 'parallel',
+      interestTag: 'yoga',   // SHARED_ACTIVITY.skillMultiplierDivisor reader (interests[].skill wiring)
       fact: 'You and {name} did yoga together.',
       templates: [
         'You and {name} work through a slow flow side by side, breathing more or less in time.',
@@ -1303,6 +1308,7 @@ const ACTION_DEFS = {
     ],
     shared: {
       rate: 'parallel',
+      interestTag: 'fitness',   // SHARED_ACTIVITY.skillMultiplierDivisor reader (interests[].skill wiring)
       fact: 'You and {name} lifted weights together.',
       templates: [
         'You and {name} trade off sets on the bench, mostly counting reps out loud for each other.',
@@ -1591,6 +1597,7 @@ const ACTION_DEFS = {
     ],
     shared: {
       rate: 'parallel',
+      interestTag: 'music',   // SHARED_ACTIVITY.skillMultiplierDivisor reader (interests[].skill wiring)
       fact: 'You and {name} listened to music together.',
       templates: [
         'You put music on and {name} lets it play. Two people in a room agreeing about a sound.',

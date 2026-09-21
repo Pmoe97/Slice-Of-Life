@@ -38,7 +38,16 @@
 // The subject kinds the layer knows (D9). A kind not in this list is a
 // producer bug: noticeSubject warns and does nothing rather than writing
 // a fact no later phase's readers understand.
-const NOTICE_KINDS = ['skill_levelup', 'work', 'room_design', 'chatter_post', 'chatter_private', 'subscription', 'aspiration'];
+// 'hobby_skill' (2026-09-21, character-creation field-impact session, locked
+// decision C): the ONLY subject kind this layer forms about someone OTHER
+// than the player — a resident's interests[].skill, dead since it was rolled
+// (credited to the npc-initiative plan's "shared activities", which shipped
+// without ever consulting it; see npc-correctness-fixes-plan.md's Phase 5
+// correction). Producer is actions.js's resolveSharedActivity: when the
+// player does a shared hobby with a skilled roommate, whoever ELSE is in the
+// room can notice, via the explicit-perceiverIds path (D83) rather than a
+// signal — being there for it IS the perception.
+const NOTICE_KINDS = ['skill_levelup', 'work', 'room_design', 'chatter_post', 'chatter_private', 'subscription', 'aspiration', 'hobby_skill'];
 
 // Personality sensitivity — the ONE table that decides how a temperament
 // and its trait tags move an opinion's valence (D12). Phases 10 (platform
@@ -79,7 +88,7 @@ const OPINION_PERSONALITY = {
 };
 
 // Which subject kinds are about a craft (the traits.craft bonus applies).
-const NOTICE_CRAFT_KINDS = ['skill_levelup', 'work'];
+const NOTICE_CRAFT_KINDS = ['skill_levelup', 'work', 'hobby_skill'];
 
 // How a skill reads as a craft in prose, and which fact `category` its
 // opinions carry (NPC's factInterestRelevance matches category against a
@@ -293,6 +302,33 @@ const OPINION_LINES = {
       "the player's {what} should have stayed in the drawer",
     ],
   },
+  // 2026-09-21 (interests[].skill wiring): the one table here that is NOT
+  // about the player. `{name}` is the skilled resident's own bible.name
+  // (subject.meta.name); `{craft}` is their interest's name, passed as
+  // meta.label since SKILL_CRAFT_NOUNS is keyed by SKILL_IDS and several
+  // matched interestTags (gaming, yoga) aren't skills at all.
+  hobby_skill: {
+    strong_pos: [
+      "{name} is genuinely good at {craft}",
+      "{name}'s {craft} is honestly impressive",
+    ],
+    pos: [
+      "{name} is pretty good at {craft}",
+      "{name} clearly knows what they're doing with {craft}",
+    ],
+    neutral: [
+      "{name} is into {craft}",
+      "{name} spends a fair amount of time on {craft}",
+    ],
+    neg: [
+      "{name}'s {craft} still needs some work",
+      "{name} is still finding their footing with {craft}",
+    ],
+    strong_neg: [
+      "{name}'s {craft} is rough, honestly",
+      "{name} really isn't very good at {craft}",
+    ],
+  },
 };
 
 // The in-room signal each kind emits (SIGNAL_DEFS id + intensity). Sight,
@@ -376,11 +412,26 @@ function npcTraitTags(npc) {
 // personality decides the sensitivity and sign bias; the relationship adds
 // a bias; a seeded jitter keeps identical temperaments from agreeing to the
 // decimal. Same seed + same state → same number, every time.
-function opinionValence(npc, subject, gameState) {
+//
+// `perceiverId` (2026-09-21, interests[].skill wiring): every subject before
+// 'hobby_skill' was about the player, so the relationship bias always read
+// `npc.relPlayer` — the perceiver's OWN fondness for the player they're
+// judging. A `subject.aboutNpcId` (someone other than the player) needs the
+// perceiver's relationship with THAT resident instead, which lives in
+// castWeb, not relPlayer, and castWeb is keyed by a pair of ids — hence the
+// new, optional parameter. Every existing call site omits both
+// `aboutNpcId` and `perceiverId`, so this branch is dead for them and
+// behavior is unchanged (verified in verify-acc-p3/p5, unmodified).
+function opinionValence(npc, subject, gameState, perceiverId) {
   const P = OPINION_PERSONALITY;
   const t = npc?.bible?.temperament || {};
   const traits = npcTraitTags(npc);
-  const rel = npc?.relPlayer || {};
+  let rel = npc?.relPlayer || {};
+  if (subject?.aboutNpcId && perceiverId) {
+    const pairKey = [perceiverId, subject.aboutNpcId].sort().join('|');
+    const dir = gameState?.world?.castWeb?.[pairKey]?.axes?.[`${perceiverId}→${subject.aboutNpcId}`];
+    rel = dir || {};
+  }
   const axis = (k) => (typeof t[k] === 'number' && Number.isFinite(t[k]) ? clamp(t[k], -1, 1) : 0);
 
   let core = (subjectQuality(subject, npc, gameState) - 0.5) * 2;
@@ -422,9 +473,16 @@ function opinionLine(subject, valence, gameState) {
   const meta = subject?.meta || {};
   const snippet = meta.text ? `"${String(meta.text).split(/\s+/).slice(0, 6).join(' ')}${String(meta.text).split(/\s+/).length > 6 ? '…' : ''}"` : '';
   const what = meta.title ? `${meta.label || 'work'} "${meta.title}"` : (snippet ? `${meta.label || 'post'} ${snippet}` : (meta.label || craft));
-  if (!pool || pool.length === 0) return `the player's ${what}: ${band.replace('_', ' ')}`;
+  // hobby_skill (2026-09-21): the one kind whose subject is a resident, not
+  // the player — `{name}` from meta.name, same optional-placeholder shape
+  // `{craft}`/`{what}` already use (a template with no `{name}` is unchanged).
+  const name = meta.name || 'they';
+  if (!pool || pool.length === 0) {
+    const owner = subject?.aboutNpcId ? `${name}'s` : "the player's";
+    return `${owner} ${what}: ${band.replace('_', ' ')}`;
+  }
   const rng = seededRng(gameState?.meta?.seed ?? 0, `opinion_line_${noticeSubjectKey(subject)}`);
-  return pool[Math.floor(rng() * pool.length)].replace(/\{craft\}/g, craft).replace(/\{what\}/g, what);
+  return pool[Math.floor(rng() * pool.length)].replace(/\{craft\}/g, craft).replace(/\{what\}/g, what).replace(/\{name\}/g, name);
 }
 
 // The raise weight of an opinion fact for NPC's factRaiseScore — "a weight
@@ -538,7 +596,7 @@ function noticeSubject(gameState, subject) {
     seen.add(p.npcId);
     const npc = gameState.npcs[p.npcId];
     if (!npc || holdsOpinionOn(npc, key)) continue;
-    const valence = opinionValence(npc, { ...subject, day }, gameState);
+    const valence = opinionValence(npc, { ...subject, day }, gameState, p.npcId);
     const fact = buildOpinionFact(npc, { ...subject, day }, valence, gameState);
     gameState.npcs[p.npcId] = addMemoryFact(npc, fact);
     perceivers.push({ npcId: p.npcId, valence: fact.valence, band: opinionBand(valence), text: fact.text, via: p.via });

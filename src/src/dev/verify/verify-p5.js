@@ -102,14 +102,59 @@ check("Del's vocabularyLevel reaches the prompt", /vocabulary 0\.6/.test(delBloc
 check('a generated NPC with no catchphrases emits no empty line',
       !block.includes('Things they say:'));
 
+console.log('\nWIRED — 2026-09-21 re-audit: two Reserved claims were stale');
+// sampleLines/history were credited to Plan 4 ("few-shot voice examples" /
+// "compressed into the prompt"); Plan 4 shipped without ever touching either.
+// firstMetDay was credited to Plan 4's "daysKnown in the player model", which
+// never got built either. All three are now wired directly, not by the plans
+// that were supposed to deliver them — see npc-correctness-fixes-plan.md's
+// Phase 5 correction.
+api(`
+  __npc3 = JSON.parse(JSON.stringify(__npc));
+  __npc3.bible.history = 'Grew up three towns over and came here for the job.';
+  __npc3.bible.sampleLines = ["Honestly? I'd rather just deal with it now."];
+  __npc3.relPlayer.firstMetDay = 1;
+  __histBlock = buildNpcBlockV2(__npc3, 'hello', 'scene');
+  __daysBlock = buildNpcBlockV2(__npc3, 'hello', 'scene', 10);
+  __day1Block = buildNpcBlockV2(__npc3, 'hello', 'scene', 1);
+`);
+check("bible.history reaches the prompt as [History]",
+      api('__histBlock').includes('[History]: Grew up three towns over'));
+check("bible.sampleLines reaches the prompt as voice examples",
+      api('__histBlock').includes("Honestly? I'd rather just deal with it now."));
+check("firstMetDay-derived daysKnown appears once real time has passed",
+      /known them for 9 days/.test(api('__daysBlock')));
+check("daysKnown line is omitted on the day they met (no false 'known for 0 days')",
+      !api('__day1Block').includes('known them for'));
+
+// typicalAttire was credited to Plan 2 ("what are they wearing right now");
+// that plan shipped without ever consulting it either. Proves the wiring
+// actually MOVES a real outfit pick, not just adds an inert bias term: blouse
+// beats dress_shirt on raw trait+stat score alone (6.6 vs 6.55), so the flip
+// below only happens if the extracted style words genuinely reach
+// composeOutfit's scorer.
+api(`
+  __attireNpc = { bible: { occupation: {}, physical: { typicalAttire: {} } }, residency: {}, inventory: [] };
+  __attireIds = ['blouse', 'dress_shirt'];
+  __noAttireLean = composeOutfit('work', __attireIds, {});
+  __attireNpc.bible.physical.typicalAttire.work = 'always sharp and crisp';
+  __attireLean = typicalAttireStyleLean(__attireNpc, 'work');
+  __withAttireLean = composeOutfit('work', __attireIds, { styleLean: __attireLean });
+  __delAttireLean = typicalAttireStyleLean({ bible: CONTRACTOR_BIBLE }, 'work');
+`);
+check('typicalAttire text extracts its known style words',
+      JSON.stringify(api('__attireLean')) === JSON.stringify(['sharp', 'crisp']));
+check('without the lean, raw trait+stat score picks blouse',
+      api('__noAttireLean.top') === 'blouse');
+check('with typicalAttire.work "sharp and crisp", the pick flips to dress_shirt',
+      api('__withAttireLean.top') === 'dress_shirt');
+check("Del's typicalAttire ('coveralls') legitimately extracts nothing — an honest no-op, not a bug",
+      Array.isArray(api('__delAttireLean')) && api('__delAttireLean').length === 0);
+
 console.log('\nRESERVED — kept deliberately, with the plan that claims them');
 const RESERVED = {
-  'typicalAttire':  S.bible.physical.fields.typicalAttire,
-  'sampleLines':    S.bible.sampleLines,
-  'history':        S.bible.history,
   'emotionalTag':   S.mutable.memory.fields.episodes.itemFields.emotionalTag,
   'participants':   S.mutable.memory.fields.episodes.itemFields.participants,
-  'firstMetDay':    S.mutable.relPlayer.fields.firstMetDay,
   'lastInteractionDay': S.mutable.relPlayer.fields.lastInteractionDay,
   'bibleRevision':  S.mutable.bibleRevision,
   'bibleChanges':   S.mutable.bibleChanges,

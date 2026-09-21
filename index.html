@@ -8386,7 +8386,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=183"></script>
+<script src="src/src/srcfiles/config.js?v=184"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -8401,7 +8401,7 @@ body {
      Registered in dev/verify/loadgame.js's ORDER in the same commit. -->
 <script src="src/src/srcfiles/fields.js?v=1"></script>
 <script src="src/src/srcfiles/defs.world.js?v=52"></script>
-<script src="src/src/srcfiles/defs.actions.js?v=56"></script>
+<script src="src/src/srcfiles/defs.actions.js?v=57"></script>
 <script src="src/src/srcfiles/defs.computer.js?v=46"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
@@ -8432,7 +8432,7 @@ body {
 <!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
      player-facing release history. Pure data, no dependencies, grouped with
      the other defs.* files for the same reason defs.dreams.js is. -->
-<script src="src/src/srcfiles/defs.patchnotes.js?v=3"></script>
+<script src="src/src/srcfiles/defs.patchnotes.js?v=4"></script>
 <!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
      WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
      ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
@@ -8442,7 +8442,7 @@ body {
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/src/srcfiles/orbital.js?v=12"></script>
 <script src="src/src/srcfiles/state.js?v=72"></script>
-<script src="src/src/srcfiles/sim.js?v=104"></script>
+<script src="src/src/srcfiles/sim.js?v=105"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
@@ -8484,7 +8484,7 @@ body {
      scoreCandidates calls scoreOvertures, and evaluateDrives calls the writers
      here for the tick it wins. -->
 <script src="src/src/srcfiles/overture.js?v=17"></script>
-<script src="src/src/srcfiles/actions.js?v=37"></script>
+<script src="src/src/srcfiles/actions.js?v=38"></script>
 <script src="src/src/srcfiles/intent.js?v=18"></script>
 <script src="src/src/srcfiles/skills.js?v=20"></script>
 <script src="src/src/srcfiles/stealth.js?v=24"></script>
@@ -8506,7 +8506,7 @@ body {
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
 <script src="src/src/srcfiles/phone.js?v=22"></script>
-<script src="src/src/srcfiles/npc.js?v=62"></script>
+<script src="src/src/srcfiles/npc.js?v=63"></script>
 <!-- Aspirations & Creative Careers Phase 3 (D9/D56): the Notice & Opinion
      layer (notice.js) — after npc.js (addMemoryFact, MEMORY_IMPORTANCE,
      EMOTIONAL_WEIGHTS' reader) and signals.js (emitTransient,
@@ -8514,7 +8514,7 @@ body {
      that needs it at load — skills.js's awardSkillXp and npc.js's
      factEmotionalWeight reach it by name inside function bodies, guarded.
      Registered in BOTH this list and loadgame.js's ORDER, same commit. -->
-<script src="src/src/srcfiles/notice.js?v=8"></script>
+<script src="src/src/srcfiles/notice.js?v=9"></script>
 <!-- Actions & Activities Overhaul Phase 3 (D15): the flags & conditions
      engine (flags.js) — after npc.js (addMemoryFact/MEMORY_IMPORTANCE) and
      effects.js/sim.js above it (applyEffects/buildEffectContext/
@@ -8562,7 +8562,7 @@ body {
      and called by sim.js at runtime only. -->
 <script src="src/src/srcfiles/rumination.js?v=15"></script>
 <script src="src/src/srcfiles/prompt.js?v=20"></script>
-<script src="src/src/srcfiles/llm.js?v=47"></script>
+<script src="src/src/srcfiles/llm.js?v=49"></script>
 <!-- CONCEPT — the character-concept engine (description -> validated draft).
      AI-Assisted Character Generation Phase 2. Sits after llm.js (whose prompt
      conventions it follows) and before the UI layer that calls it. Reads
@@ -8761,5 +8761,5 @@ body {
      at runtime). Loads LAST: the bottom of menu.js invokes boot(), which
      ui.js can no longer call itself because boot() reaches into MENU/IMAGE
      functions defined after UI. -->
-<script src="src/src/srcfiles/menu.js?v=39"></script>
+<script src="src/src/srcfiles/menu.js?v=40"></script>
 <!-- ===== /SECTION: SCRIPTS ===== -->

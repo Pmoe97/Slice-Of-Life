@@ -809,6 +809,25 @@ different roommates' sub-tabs.
 | 5 | Done | Roommates — the rail + per-instance five-sub-tab editor |
 | 6 | Done | Persistent summary strip, scroll preservation, `.sbx-badge` resolution |
 
+**Post-completion addendum (2026-09-21, character-creation field-impact
+session, not a numbered phase of this plan).** A new field on the Identity
+sub-tab, "Relationship with you" — a closed pool (`PRIOR_RELATIONSHIP_KINDS`,
+config.js) covering both non-family relationships (acquaintance through
+ex-partner) and family (sibling, primary/secondary relative, step-family).
+Motivated by a real gap this plan never touched: every Sandbox roommate
+started `relPlayer` flat at 0 and `firstMetDay` at day 1 regardless of what
+the player intended them to be, so a deliberately-authored sibling or old
+friend read to `npcIsStrangerTo` (willingness.js) as a total stranger.
+Picking one now warms real `relPlayer` axes and backdates `firstMetDay`
+through `SIM`'s new `applyPriorRelationship`, and is stated plainly in the
+persona prompt (`buildNpcBlockV2`, llm.js: "They are your sibling," "You've
+known them for N days"). Family is deliberately "fully emergent, no special
+rule" — no entry sets `desire`, and no code branches on family status; the
+willingness system treats a family pick exactly like a same-warmth friend
+pick, per the locked design decision this addendum's own session recorded.
+Leaving the field unset is byte-identical to every roommate this plan ever
+shipped. `verify-prior-relationship.js`, 26 assertions.
+
 ## Dependency order
 
 ```
