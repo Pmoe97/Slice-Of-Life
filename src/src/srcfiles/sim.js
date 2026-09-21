@@ -5040,6 +5040,10 @@ function generateCast(seed, count, attempt, partials, dispositionSkew = 0) {
 
     usedOccupationCats.add(rolled.occCategory);
     npcs[npcId] = createNpcFromBible(rolled.normalized.bible, 'resident');
+    // Sandbox prior-relationship feature (2026-09-21): day is hardcoded to 1
+    // because this whole function only ever runs at initial cast generation
+    // — new-game or Sandbox start, always day 1 (D19).
+    if (partial.priorRelationship) npcs[npcId] = applyPriorRelationship(npcs[npcId], partial.priorRelationship, 1);
     npcIds.push(npcId);
   }
 
@@ -6147,6 +6151,33 @@ function createNpcFromBible(bible, residencyStatus) {
   // the bible (seedNpcInventory, NPC.js); deterministic per genSeed, so a
   // reload or a migration of the same NPC produces the same inventory.
   return seedNpcInventory(npc, 1);
+}
+
+// Sandbox prior-relationship feature (2026-09-21, character-creation
+// field-impact session). Applies a PRIOR_RELATIONSHIP_KINDS pick to a
+// freshly-created resident's relPlayer: warms real axes (never `desire` —
+// see the table's own comment on the locked "fully emergent" decision for
+// family) and backdates firstMetDay by `monthsKnown`. npcIsStrangerTo
+// (willingness.js) needs no special case for this — it already reads
+// "every axis still at its exact flat starting value" as the definition of
+// stranger, so real non-zero axes clear that gate on their own; what this
+// function ALSO does is re-derive conversationPhase/intimacyLevel through
+// the same deriveConversationPhase (npc.js) a real relationship delta uses,
+// so a warmed-up sibling doesn't sit at a stale 'early' phase telling the
+// model "you barely know them" one line below "they are your sibling."
+// Unknown kindId (a stale save, a bad partial) is a no-op — the npc it was
+// handed comes back untouched, still today's correct default.
+function applyPriorRelationship(npc, kindId, day) {
+  const kind = PRIOR_RELATIONSHIP_KINDS.find(k => k.id === kindId);
+  if (!kind || !npc) return npc;
+  const rel = {
+    ...npc.relPlayer,
+    ...kind.axes,
+    priorRelationshipKind: kind.id,
+    firstMetDay: day - Math.round(kind.monthsKnown * 30),
+  };
+  Object.assign(rel, deriveConversationPhase(rel));
+  return { ...npc, relPlayer: rel };
 }
 
 // ===== /SECTION: SIM =====

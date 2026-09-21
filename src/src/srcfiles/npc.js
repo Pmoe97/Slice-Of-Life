@@ -2532,6 +2532,47 @@ function npcWardrobeItems(gameState, npc) {
   return (npc?.inventory || []).map(s => s.defId).filter(id => CLOTHING_DEFS[id]);
 }
 
+// physical.typicalAttire's four slots -> the OUTFIT_TYPES key each describes.
+// composeOutfit has six real types; loungewear/workout/swim/sexy have no
+// authored slot to draw from and silently contribute nothing, same as an
+// occupation with no styleLean.
+const ATTIRE_SLOT_FOR_OUTFIT_TYPE = { daily: 'casual', work: 'work', sleepwear: 'sleep', formal: 'formal' };
+
+// Every trait/styleTag CLOTHING_DEFS actually declares — the vocabulary a
+// typicalAttire slot's free text can move. Computed once; CLOTHING_DEFS
+// doesn't change at runtime.
+let _attireStyleVocab = null;
+function attireStyleVocab() {
+  if (_attireStyleVocab) return _attireStyleVocab;
+  const words = new Set();
+  for (const def of Object.values(CLOTHING_DEFS)) {
+    (def.traits || []).forEach(t => words.add(t));
+    (def.styleTags || []).forEach(t => words.add(t));
+  }
+  _attireStyleVocab = words;
+  return words;
+}
+
+// Correctness plan Phase 5 reserved typicalAttire for "what are they wearing
+// right now" (a future sensory-layer question); that plan shipped without
+// ever consulting it (2026-09-21 re-audit — see npc-correctness-fixes-plan.md's
+// Phase 5 correction). Real wiring, not text-only: whichever known style
+// word(s) the relevant slot's authored text contains feed through
+// composeOutfit's existing styleLean bias below — the same mechanism
+// occupation.styleLean already uses to nudge a within-type pick, never to
+// change the type itself. Free text written before this vocabulary existed
+// (Del's `work: 'coveralls'`) legitimately contributes nothing — the same
+// honest no-op as an occupation with no lean, not a bug: a soft nudge can't
+// act on a word it was never given.
+function typicalAttireStyleLean(npc, outfitType) {
+  const slot = ATTIRE_SLOT_FOR_OUTFIT_TYPE[outfitType];
+  const text = slot && npc?.bible?.physical?.typicalAttire?.[slot];
+  if (!text) return [];
+  const vocab = attireStyleVocab();
+  const words = String(text).toLowerCase().match(/[a-z]+/g) || [];
+  return words.filter(w => vocab.has(w));
+}
+
 // The outfit an NPC is wearing this tick: type from context, items composed
 // from their wardrobe. Deterministic, idempotent — resolveTick derives it
 // every tick, so it self-heals and can never contradict the block/activity.
@@ -2551,10 +2592,12 @@ function npcOutfitForContext(npc, gameState, block, activity, npcId) {
   // uncomfortable. Never changes the TYPE, same non-thrashing guarantee the
   // styleLean comment above already relies on.
   const thermalBias = temperatureClothingBiasWeight(gameState, npc, npcId);
+  const outfitType = outfitTypeForContext(npc, block, activity, gameState?.meta?.clock, npcId);
+  const combinedLean = [...(Array.isArray(lean) ? lean : []), ...typicalAttireStyleLean(npc, outfitType)];
   return composeOutfit(
-    outfitTypeForContext(npc, block, activity, gameState?.meta?.clock, npcId),
+    outfitType,
     npcWardrobeItems(gameState, npc),
-    { styleLean: Array.isArray(lean) ? lean : [], stats: thermalBias ? { thermal: thermalBias } : {} }
+    { styleLean: combinedLean, stats: thermalBias ? { thermal: thermalBias } : {} }
   );
 }
 

@@ -7148,6 +7148,18 @@ const CHARACTER_SCHEMA = {
         grievances: { type: 'array', default: [] },                           // NPC Overhaul
         firstMetDay: { type: 'number', default: 1 },                         // NPC Overhaul
         lastInteractionDay: { type: 'number', default: 1 },                 // NPC Overhaul
+        // Sandbox prior-relationship feature (2026-09-21, character-creation
+        // field-impact session): a player-authored pick from
+        // PRIOR_RELATIONSHIP_KINDS, applied at cast generation by SIM's
+        // applyPriorRelationship. null (the default) is every roommate today
+        // — met on day 1, flat axes. The enum MUST stay in sync with
+        // PRIOR_RELATIONSHIP_KINDS' ids (the same standing-content-lever
+        // discipline `species`/RACES already documents above) and
+        // deliberately excludes 'stranger' — that's the absence of a pick,
+        // not a value ever stored. Read by buildNpcBlockV2 (llm.js) to tell
+        // the model who this person actually is to the player.
+        priorRelationshipKind: { type: 'string', required: false, default: null, nullable: true,
+          enum: ['acquaintance', 'friend', 'close_friend', 'ex_partner', 'sibling', 'primary_relative', 'secondary_relative', 'step_family'] },
       }
     },
     memory: { type: 'object', required: true, default: {},
@@ -8092,6 +8104,44 @@ const HOW_THEY_MET_POOL = [
   'were the previous tenant\'s ex who stayed',
   'knew each other from the gym',
   'were friends of friends who hit it off',
+];
+
+// Sandbox prior-relationship feature (2026-09-21, character-creation
+// field-impact session, locked design decisions): a player-authored answer
+// to "how long have you known them, and what are they to you" for a
+// Sandbox roommate — so a deliberately-authored old friend or sibling does
+// not start the game read as a total stranger the way every roommate does
+// today (SIM's createNpcFromBible always starts relPlayer flat at 0,
+// firstMetDay at day 1). Applied by SIM's applyPriorRelationship, which
+// warms real relPlayer axes (the same "warm the axes directly" pattern
+// ensureOutsidePartners already uses for outside partners) and backdates
+// firstMetDay by `monthsKnown` — never `desire`, on any entry, family
+// included: the locked decision on family was "fully emergent, no special
+// rule," so nothing here may make family read as more or less available
+// for intimacy than a same-warmth non-family friend would. The willingness
+// system reads these same generic axes either way; no code anywhere
+// branches on `category` or on `id` to treat family differently.
+// `monthsKnown` is the same unit generateCastWeb's NPC-NPC `priorRel.known`
+// already uses. First-pass axis values, not measured — a reasonable person's
+// idea of what these relationships feel like on day one, not a tuned
+// balance number; retune freely.
+const PRIOR_RELATIONSHIP_KINDS = [
+  { id: 'acquaintance',      label: 'Acquaintance',       category: 'other',  monthsKnown: 3,
+    axes: { trust: 0.15, affection: 0.10, tension: 0,    respect: 0.10, comfort: 0.10 } },
+  { id: 'friend',            label: 'Friend',             category: 'other',  monthsKnown: 18,
+    axes: { trust: 0.40, affection: 0.45, tension: 0.05, respect: 0.35, comfort: 0.35 } },
+  { id: 'close_friend',      label: 'Close friend',       category: 'other',  monthsKnown: 60,
+    axes: { trust: 0.65, affection: 0.60, tension: 0.05, respect: 0.55, comfort: 0.55 } },
+  { id: 'ex_partner',        label: 'Ex-partner',         category: 'other',  monthsKnown: 24,
+    axes: { trust: 0.20, affection: 0.15, tension: 0.35, respect: 0.20, comfort: 0.30 } },
+  { id: 'sibling',           label: 'Sibling',            category: 'family', monthsKnown: 300,
+    axes: { trust: 0.55, affection: 0.60, tension: 0.25, respect: 0.40, comfort: 0.60 } },
+  { id: 'primary_relative',  label: 'Primary relative',   category: 'family', monthsKnown: 300,
+    axes: { trust: 0.50, affection: 0.55, tension: 0.20, respect: 0.45, comfort: 0.55 } },
+  { id: 'secondary_relative', label: 'Secondary relative', category: 'family', monthsKnown: 200,
+    axes: { trust: 0.35, affection: 0.35, tension: 0.10, respect: 0.30, comfort: 0.30 } },
+  { id: 'step_family',       label: 'Step-family',        category: 'family', monthsKnown: 120,
+    axes: { trust: 0.25, affection: 0.25, tension: 0.30, respect: 0.20, comfort: 0.20 } },
 ];
 
 const SHARED_BEAT_POSITIVE = [
@@ -9325,6 +9375,31 @@ const SHARED_ACTIVITY = {
   factConfidence: 0.9,           // first-hand: they were in the room (OVERTURE.refusalFactConfidence's reasoning)
   factCategory: 'relationship',
   factEmotionalTag: 'warmth',
+
+  // interests[].skill wiring (2026-09-21, character-creation field-impact
+  // session, locked decision A). That field was rolled by every generated
+  // NPC (rollCastSlot) and read by nothing at all — credited to the
+  // npc-initiative plan's "shared activities" feature, which shipped without
+  // ever consulting it (see npc-correctness-fixes-plan.md's Phase 5
+  // correction). A handful of `shared` entries now name the INTEREST_POOL
+  // interest they match (`interestTag`, defs.actions.js) — cooking, fitness,
+  // gaming, yoga, music. When a participant's own interests carry that name,
+  // the CREDIT this activity pays scales continuously with their skill at
+  // it, never the minutes cap above: skill 0 leaves the base rate untouched
+  // (an interest match with no practice behind it isn't worth more), the
+  // generation ceiling (39, rollCastSlot's Math.floor(rng()*40)) is worth
+  // ~1.49x, and a hand-authored 100 caps at 2.25x. First-pass tuning, not
+  // measured — re-tune this divisor if shared activities turn out to over-
+  // or under-reward a skilled hobbyist once there's real play to look at.
+  skillMultiplierDivisor: 80,
+
+  // Decision C's other half: below this skill, a shared hobby forms no
+  // hobby_skill opinion in any bystander at all — this is about a genuinely
+  // skilled hobbyist being noticed, not mediocrity becoming gossip. At or
+  // above it, notice.js's quality curve rises from neutral (0.5) toward 1.0
+  // and never dips below neutral, so clearing the floor never reads as an
+  // insult. First-pass tuning alongside skillMultiplierDivisor above.
+  hobbySkillNoticeFloor: 20,
 };
 
 // --- Hobby objects (inventory overhaul Phase 6, D13) ---
