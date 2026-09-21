@@ -8386,7 +8386,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=182"></script>
+<script src="src/src/srcfiles/config.js?v=183"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -8432,7 +8432,7 @@ body {
 <!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
      player-facing release history. Pure data, no dependencies, grouped with
      the other defs.* files for the same reason defs.dreams.js is. -->
-<script src="src/src/srcfiles/defs.patchnotes.js?v=2"></script>
+<script src="src/src/srcfiles/defs.patchnotes.js?v=3"></script>
 <!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
      WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
      ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
@@ -8626,7 +8626,7 @@ body {
      writers) and codex.js (ledger), so it loads after all of them and after
      peek.js (reuses its willingness/prose/undressed patterns), but before
      render.js/ui.js which call its resolvers/applys at runtime only. -->
-<script src="src/src/srcfiles/boundary.js?v=3"></script>
+<script src="src/src/srcfiles/boundary.js?v=4"></script>
 <!-- Night Scene Phase 3b (night-scene-sleeping-npc-plan.md): the Living
      Tableau's DECIDER half — the session cursor, the selection repair that
      keeps D31 true across a state change, the pure view model, and the one
@@ -8640,7 +8640,7 @@ body {
      dev/verify/loadgame.js's ORDER in the same commit, because shipping a
      file to only one of the two lists is the rumination.js scar. -->
 <script src="src/src/srcfiles/nightscene.js?v=1"></script>
-<script src="src/src/srcfiles/pregnancy.js?v=2"></script>
+<script src="src/src/srcfiles/pregnancy.js?v=3"></script>
 <script src="src/src/srcfiles/render.js?v=94"></script>
 <!-- Night Scene Phase 3b: the Living Tableau's PAINTER. After render.js
      (shares its rules: idempotent, no state mutation, no rolls) and after

@@ -37,7 +37,7 @@ const PATCHNOTES_KIND_LABELS = {
 const PATCH_NOTES = [
   {
     version: '0.14.1',
-    date: '2026-09-20',
+    date: '2026-09-21',
     title: 'Hotfix: Bathroom Routing & Any-Door Peeking',
     summary: "A small hotfix: one household bug, one long-requested expansion "
       + "to the peeking system, and the sauna finally gets used by more than "
@@ -47,6 +47,8 @@ const PATCH_NOTES = [
       { kind: 'added', text: "Peeking and listening at a door is no longer limited to bedroom and bathroom doors off the two hallways — any real door in the apartment (the gym, the game room, the study, the balcony, and more) can now be peeked or listened through. The option only shows up when there's actually someone on the other side to catch." },
       { kind: 'added', text: "Roommates can now use the sauna themselves instead of leaving it to you. If someone's in there when you're not, you can peek in through the sauna door and see for yourself." },
       { kind: 'fixed', text: "A more anxious, easily-rattled roommate was supposed to reach for the sauna to unwind more than an even-keeled one would. A typo in that behavior meant everyone was equally likely to use it regardless of temperament — now the anxious ones actually do head there more." },
+      { kind: 'fixed', text: "Getting caught sneaking into your bed at night, or a household welcoming a new baby, were both supposed to stick in a roommate's memory as their own kind of moment — one awkward, one warm — the way they mentally group and revisit things over time. A wiring gap meant neither ever got filed that way, so they were quietly invisible to that process. Fixed." },
+      { kind: 'fixed', text: "Roommates using the pool or sauna on their own was rarer than intended — even a roommate who'd genuinely enjoy it almost never found the idea appealing enough in the moment to act on, so both sat unused regardless of who lived there. They're now realistically likely to head there on their own, especially the more easygoing, laid-back ones." },
     ],
   },
   {

@@ -1,21 +1,28 @@
 # Verify-suite regression triage — 2026-09-20
 
-**Status: IN PROGRESS (18 of the original 84 failures remain, after seven
-self-guided sessions — five on 2026-09-20, two on 2026-09-21). Two real
+**Status: IN PROGRESS (12 of the original 84 failures remain, after nine
+self-guided sessions — five on 2026-09-20, four on 2026-09-21). Four real
 gameplay bugs found and FIXED (session 3's sauna temperament typo; session
-5's shower/disrepair test was chasing a superseded design, no code bug);
-one real gameplay bug found and DELIBERATELY LEFT UNFIXED, flagged HIGH
-PRIORITY for a design decision (session 4's cluster 7 — scheduled meals/
-hangouts losing to an unrelated NPC drive on their first tick); and a
-systemic drive-scoring-competition pattern (idle-pastime drives from the
-Vocation & Lifestyle Expansion dominating the appeal budget) confirmed
-across FOUR independent measurements across sessions 5, 6, and 7
-(`seek_stimulation`, `gift_to_player`, cluster 1's `swim`/`sauna`, and
-session 7's `verify-w6.js` swim-never-fires finding) —
-DELIBERATELY LEFT UNFIXED pending a tuning decision, not a quick fix.
-Session 7 also closed out `dev-verify-harness-gotchas.md` shape #7 (a
-seed-classification loop reusing its own mutated state for the real
-assertion) on its first confirmed live occurrence in this triage.**
+5's shower/disrepair test was chasing a superseded design, no code bug;
+session 8's boundary/birth memory-tag wiring gap; session 9's swim/sauna
+appeal tuning, below); one real gameplay bug found and DELIBERATELY LEFT
+UNFIXED, flagged HIGH PRIORITY for a design decision (session 4's cluster 7
+— scheduled meals/hangouts losing to an unrelated NPC drive on their first
+tick); and a systemic drive-scoring-competition pattern (idle-pastime
+drives from the Vocation & Lifestyle Expansion dominating the appeal
+budget) confirmed across FOUR independent measurements across sessions 5,
+6, and 7 (`seek_stimulation`, `gift_to_player`, cluster 1's `swim`/`sauna`,
+and session 7's `verify-w6.js` swim-never-fires finding). **Session 9
+closed the `swim`/`sauna` two-thirds of that finding with a real tuning
+pass** (`verify-c1.js`, `verify-c2.js`, `verify-w6.js` all clean on those
+two drives now) — `seek_stimulation` and `gift_to_player` remain
+DELIBERATELY UNFIXED, because closing them means touching the idle-pastime
+table itself (the harder, riskier two-thirds of the same finding — see
+session 9's write-up for why that's a materially different, larger change
+than swim/sauna's own facility-gated fix). Session 7 also closed out
+`dev-verify-harness-gotchas.md` shape #7 (a seed-classification loop
+reusing its own mutated state for the real assertion) on its first
+confirmed live occurrence in this triage.**
 A self-guided "find and improve" session picked the
 regression suite itself as its area, because `node src/src/dev/verify/run-all.js`
 came back red in a way its own README says should never happen quietly: **9
@@ -324,39 +331,37 @@ Three more one-off fixes, each a genuine test-only drift:
   alongside. Repointed to `24`, matching both the live config value and the
   check's own stated name.
 
-**Left as a documented, uninvestigated-no-longer, genuinely-real finding —
+**FIXED 2026-09-21** (session 8 — a later find-and-improve session,
+appended here rather than as its own section because it closes the exact
+cluster session 3 opened above) —
 `verify-i2.js`'s "every EVENT_EMOTION key is an event type something can
-actually emit" (orphans: `boundary`, `birth`).** Traced both fully:
-- `birth`'s emotional tag is set DIRECTLY on its fact record
-  (`pregnancy.js`'s `birthFactRecord`, `emotionalTag: PREGNANCY
-  .factEmotionalTag`) — it never goes through the `evt.type` →
-  `eventEmotionalTag()` → `EVENT_EMOTION` pipeline this check derives
-  reachability from at all. `EVENT_EMOTION.birth` is genuinely dead —
-  authored, harmless, unreachable config.
-- `boundary`'s only live write site (`boundary.js:813`'s
-  `` `MEMORY_EPISODE ${npcId} Got caught sneaking into the player's bed...` ``
-  DSL line, run through `effects.js`'s `applyMemoryEpisodeEffect`) calls
-  `addMemoryEpisode(npc, day, text, MEMORY_IMPORTANCE.conversational)` with
-  **no emotional-tag argument at all** — the `MEMORY_EPISODE` DSL has no
-  slot for one. So `EVENT_EMOTION.boundary`'s comment ("a boundary act
-  surfaces as a secretive beat — embarrassment groups repeated sneaking
-  into themes the same way caught masturbation does") describes intent
-  that was **never wired up**: a caught boundary violation currently gets
-  no emotional tag and so cannot group into a rumination theme the way the
-  comment claims, unlike caught masturbation (which does reach
-  `EVENT_EMOTION` through a real `evt.type`).
-  
-  This is real, but the correct fix (adding an emotional-tag parameter to
-  the `MEMORY_EPISODE` DSL grammar, threading it through
-  `applyMemoryEpisodeEffect`, and wiring `boundary.js`'s call site to pass
-  `'boundary'`) is a small feature change, not a one-line data fix like the
-  sauna bug — left uninvestigated further and NOT fixed this session to
-  keep blast radius small. A future session should either do that wiring,
-  or — if the grouping behavior turns out not to matter in practice —
-  delete both dead `EVENT_EMOTION` entries and adjust the check's own
-  comment accordingly. Either is a legitimate resolution; guessing which
-  without doing the work would be exactly the mistake this triage's own
-  rule 3 warns against.
+actually emit" (orphans: `boundary`, `birth`). Both traced fully here, and
+both are now wired up rather than deleted — the grouping behavior does
+matter (it feeds rumination's theme grouping, D15), so this resolved as
+"do the wiring," not "delete the dead config."
+- `birth`'s emotional tag was set DIRECTLY on its fact record
+  (`pregnancy.js`'s `birthFactRecord`), reusing `PREGNANCY.factEmotionalTag`
+  ('romance') — the SAME tag the pregnancy-*announcement* fact uses, never
+  consulting `EVENT_EMOTION.birth` ('warmth') at all. Fixed by changing that
+  one field to `eventEmotionalTag({ type: 'birth' })`, so a birth now reads
+  as its own warmth/family beat instead of quietly inheriting the
+  announcement fact's romance tag.
+- `boundary`'s three live write sites (`boundary.js`'s silent-success,
+  decline, and caught/angry branches of `trySneakIntoBed`/
+  `resolveSleepAdvanceChoice`) all built `MEMORY_EPISODE` DSL lines with no
+  tag slot. Rather than extending the `MEMORY_EPISODE` DSL grammar itself
+  (touching LLM-reachable action grammar the model can also emit, for a
+  fix that only three trusted-producer call sites needed) — the original
+  plan sketched here — each site now calls `addMemoryEpisode(...)` directly
+  with `eventEmotionalTag({ type: 'boundary' })`, the exact pattern
+  `sim.js`'s own comment on `eventEmotionalTag` already prescribes ("a
+  phase that needs one adds it with its reader") and the same one the
+  ambient event pipeline (`ui.js`'s ambient-episode loop) already uses.
+  Zero DSL/grammar changes, zero risk to what the model can say.
+  Verified: `verify-i2.js` 56→57 passed (0 failed), full suite 18→17
+  failed with an exact +1/-1 delta and no other harness affected. Patch-
+  noted under 0.14.1 (`defs.patchnotes.js`) since it changes real NPC
+  memory/rumination content, however subtly.
 
 **Files touched:** `config.js` (game data, NOT a verify file — the sauna
 fix), `verify-c3.js`, `verify-i3.js`, `verify-intro.js`, `verify-p1.js`.
@@ -947,6 +952,109 @@ passed, 53→**18** failed, 0 errored — confirmed with a full `run-all.js`
 sweep after each file and again at the end. No regressions in any
 previously-fixed cluster.
 
+## Session 9 (2026-09-21, new session, continuing from session 8) — `swim`/`sauna` tuning (two-thirds of the idle-pastime-dominance finding)
+
+Picked up the systemic drive-scoring-competition finding sessions 5/6/7 kept
+flagging (`[[idle-pastime-drives-dominate-appeal-budget]]`, this triage's own
+single highest-priority open item) and scoped it down to the two-thirds of it
+that is actually safe to fix without redesigning the idle-pastime table:
+`swim` and `sauna`. Both are **facility- and room-gated** — they can never
+become the universal always-available fallback the idle pastimes exist to
+be — which is what makes raising their `baseAppeal` a contained, low-risk
+change, unlike `seek_stimulation`/`gift_to_player` (both of which compete
+head-to-head against the idle pastimes in the exact same always-available
+time windows, and whose real fix is the idle-pastime table itself — left
+untouched, see below).
+
+**Root cause, confirmed by direct measurement (`scoreCandidates`):** both
+drives' `baseAppeal` was authored low enough that even the best
+temperament/block combination `verify-c1.js`'s sweep can construct never
+cleared `COGNITION.actionThreshold` (0.40) — `swim` topped out at 0.336,
+`sauna` at 0.250. This was true EVEN AFTER session 3's fix to `sauna`'s
+`temperamentWeights` typo (`neuroticism`→`volatility`) — that fix made
+anxious NPCs *want* the sauna more than even-keeled ones, but neither could
+ever clear the bar to act on it, so "roommates can now use the sauna" (the
+0.14.1 patch note) was true in name only. Confirmed live: a 3-day, 3-NPC
+run at maximal deviancy (`verify-w6.js`'s own fixture) produced zero swim
+sessions at all — not just zero *nude* ones.
+
+**Fix: `config.js`, `DRIVE_DEFS.swim.utility.baseAppeal` 0.24→0.37,
+`DRIVE_DEFS.sauna.utility.baseAppeal` 0.16→0.30.** Both comments in
+`config.js` carry the full arithmetic. `temperamentWeights` on both were
+left untouched — the design intent behind them (openness pulls both up,
+conscientiousness pulls swim down, volatility pulls sauna up) was sound;
+only the flat floor that made them unreachable regardless of personality
+needed raising.
+
+**The exact numbers were NOT the first guess (0.34/0.30) — a real cross-
+check caught a collateral-damage failure mode worth remembering.** The
+first candidate value for `swim` (0.34) cleared `verify-c1.js`'s ceiling
+check cleanly, but left `verify-w6.js`'s "a fully deviant cast DOES produce
+nude ticks" still red: swim now *fired* (unlike before) but only once in
+the fixed-seed 3-day run, and the nudity roll (`NUDITY_TUNING.nudeSwimChance`,
+40% per session) happened not to land on that one session. Raising to 0.38
+gave enough sessions for the roll to land — but introduced a NEW failure in
+`verify-c3.js`, a file this session hadn't even touched:
+"...while conscientiousness moves the same drives by only 19%" (a
+personality-vs-chaos control check on an unrelated axis pairing,
+`gift_to_player`/`seek_company`'s warmth-vs-conscientiousness invariant).
+**Mechanism:** `scoreCandidates` picks exactly one winner per NPC-tick, so
+making `swim` a real, frequent contender doesn't just add swim events — it
+changes which OTHER drives win the ticks swim would otherwise have lost.
+Since `swim`'s own `temperamentWeights.conscientiousness` (-0.10) makes its
+win-rate vary between the test's conscientiousness+/- arms, that variation
+leaked into `gift_to_player`'s tally as an apparent (spurious)
+conscientiousness sensitivity — exactly the "chaos, not personality" `verify-c3.js`'s
+own comment says this control exists to catch. Confirmed by testing a build
+with `swim`'s conscientiousness weight removed entirely (control margin
+dropped 19%→12%, still failing) — the leak was mostly about *how often* swim
+wins ticks at all, not specifically its conscientiousness term. Binary-
+searched `baseAppeal` between the two known-good bounds (0.34 clean control,
+0.38 not) against BOTH `verify-w6.js` and `verify-c3.js` together: **0.37 is
+the highest value that measures clean on both** (nude ticks fire; `verify-c3.js`'s
+control margin lands around 4%, well inside its `< margin/2` bar).
+**Lesson for the next tuning pass on this cluster:** raising a previously-
+unreachable drive's appeal doesn't just risk under- or over-shooting its OWN
+reachability bar — it can leak into completely unrelated drives' population
+statistics purely through the one-winner-per-tick competition, even along
+an axis the raised drive barely uses. Any future `seek_stimulation`/
+`gift_to_player`/idle-pastime rebalance should re-run `verify-c3.js` (not
+just the drive's own reachability checks) after every candidate value, the
+same way this session did.
+
+**Verified:** `verify-c1.js` (74/74), `verify-w6.js` (39/39), `verify-c3.js`
+(53/53) all fully green; `verify-c2.js`'s population sweep gained `swim` and
+`sauna` firing naturally (no forced temperament) over 6 households × 7 days
+as a byproduct — neither was specifically targeted, both just started
+clearing threshold often enough in the real, unforced population. Full
+suite: 17→**12** failed (5827→**5832** passed), 0 errored, confirmed with a
+full `run-all.js` sweep before and after. The remaining 9 `verify-c2.js`
+failures (`change_clothes`, `masturbate`, the three `content_*` drives,
+`intimate`, `sext_partner`, `sneak_into_bed`, `gift_to_player`) are
+untouched — all were already re-categorized into Findings A/B/C in session
+6's write-up above, none of which this session's fix addresses.
+
+**`seek_stimulation` and `gift_to_player` remain deliberately unfixed.**
+Both compete directly against the idle pastimes in the SAME always-available
+time windows (leisure/evening/wind_down), which is structurally different
+from `swim`/`sauna`'s facility gate — there is no floor low enough to be
+safe and high enough to matter without either (a) touching the idle-pastime
+table's own `baseAppeal`/lack of `temperamentWeights`, which the table's own
+comment explains was a deliberate choice to guarantee every NPC always has
+*some* idle fallback (raising the bar for idle pastimes risks recreating the
+exact "empty afternoon" hole they were built to close), or (b) buffing these
+two drives enough to routinely beat 0.42-0.53-scoring idle pastimes
+outright, which is a much larger swing than swim/sauna's own fix and needs
+the same kind of `verify-c3.js`-aware measurement this session did, across a
+wider blast radius. This is real, scoped follow-up work, not a "some day"
+— see `[[idle-pastime-drives-dominate-appeal-budget]]` for the numbers.
+
+**Files touched:** `src/src/srcfiles/config.js` (game data:
+`DRIVE_DEFS.swim.utility.baseAppeal`, `DRIVE_DEFS.sauna.utility.baseAppeal`),
+`index.html` (config.js cache-bust `?v=182`→`?v=183`),
+`src/src/srcfiles/defs.patchnotes.js` (0.14.1 changelog entry — player-
+facing, NPCs now actually use the pool/sauna on their own).
+
 ## Not fixed — catalogued for a future session
 
 Triaged by cluster, with a confidence-graded hypothesis for each. None of
@@ -956,7 +1064,7 @@ digging per cluster, and eight fixes with full verification was already a
 full session. Re-run `node src/src/dev/verify/run-all.js <substring>` to
 pull up any cluster's live detail before starting.
 
-### 1. `verify-c1.js` — 8 of 10 RESOLVED in session 6 (precondition gaps in the test, not code bugs); `verify-c2.js` — 1 of 12 RESOLVED (an off-by-one-tick test bug); the rest re-categorized into three real, distinct findings — see session 6's write-up below.
+### 1. `verify-c1.js` — 8 of 10 RESOLVED in session 6 (precondition gaps in the test, not code bugs), the remaining 2 (`swim`/`sauna` ceiling) RESOLVED in session 9 (a real tuning pass, see below); `verify-c2.js` — 1 of 12 RESOLVED in session 6 (an off-by-one-tick test bug), `swim`/`sauna` RESOLVED in session 9 as a byproduct of the same fix, the remaining 9 re-categorized into three real, distinct findings (Findings A/B/C, session 6's write-up below) that session 9 did NOT touch.
 
 ### 2. `verify-c4.js` — RESOLVED in session 7 (all 9 test-only; see write-up below).
 
@@ -974,7 +1082,7 @@ pull up any cluster's live detail before starting.
 
 ### 9. `verify-voc-p8.js` — RESOLVED in session 2, see above.
 
-### 10. `verify-w1.js`, `verify-w9.js`, `verify-w10.js`, `verify-w12.js`, `verify-w13.js`, `verify-w15.js`, `verify-w16.js`, `verify-w17.js`, `verify-w18.js`, `verify-w6.js` — RESOLVED in session 7 (20 of 21 test-only fixes; `verify-w6.js`'s swim-never-fires finding left red on purpose — systemic tuning issue, same family as clusters 1/4; see write-up below).
+### 10. `verify-w1.js`, `verify-w9.js`, `verify-w10.js`, `verify-w12.js`, `verify-w13.js`, `verify-w15.js`, `verify-w16.js`, `verify-w17.js`, `verify-w18.js`, `verify-w6.js` — RESOLVED in session 7 (20 of 21 test-only fixes; `verify-w6.js`'s swim-never-fires finding left red on purpose — systemic tuning issue, same family as clusters 1/4); the 21st (`verify-w6.js`'s swim-never-fires) RESOLVED in session 9 — see below.
 
 ## Files touched this session
 

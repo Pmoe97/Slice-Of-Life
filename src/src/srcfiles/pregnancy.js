@@ -110,7 +110,11 @@ function birthFactRecord(gs, parents, day) {
     provenance: 'witnessed',
     confidence: 1.0,
     salience: 1.0,
-    emotionalTag: PREGNANCY.factEmotionalTag,
+    // A birth reads as its own warmth/family beat (EVENT_EMOTION.birth), not
+    // a reuse of the pregnancy-announcement fact's 'romance' tag — the two
+    // used to share PREGNANCY.factEmotionalTag, which left EVENT_EMOTION's
+    // own birth entry dead config no episode ever consulted (verify-i2.js).
+    emotionalTag: eventEmotionalTag({ type: 'birth' }),
   };
 }
 

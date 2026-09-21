@@ -10601,7 +10601,28 @@ const DRIVE_DEFS = {
     utility: {
       // Swimming is fun, not duty: openness pulls it up, conscientiousness
       // down (the pool is a luxury, not a chore).
-      baseAppeal: 0.24,
+      //
+      // 0.24 -> 0.37 (2026-09-21 tuning pass, verify-suite-regression-triage
+      // cluster 1/10): at 0.24 this could never clear actionThreshold (0.40)
+      // even at the best temperament/block combination a sweep can construct
+      // (measured ceiling 0.336, verify-c1.js) — the pool went structurally
+      // unused regardless of who lived there, and the deviant-nudity beat
+      // (verify-w6.js) never had a swim session to roll nude on at all. 0.37
+      // clears the ceiling with a real margin (~0.50 at max-favorable
+      // temperament) and produces enough real swim sessions for the nudity
+      // roll to actually fire, while a neutral or conscientiousness-leaning
+      // NPC still sits at/under the bar most of the time. Not 0.38 or higher:
+      // measured directly against verify-c3.js's cross-control (D7's "an
+      // axis this drive does NOT declare must barely move an unrelated
+      // drive's tally"), 0.38 let swim win enough ticks that competing for
+      // them measurably leaked into gift_to_player/seek_company's own
+      // conscientiousness-vs-warmth invariant (19% control margin against a
+      // 19% real signal — chaos, not personality, by the check's own
+      // standard); 0.37 is the highest value this measured clean (4-ish%
+      // control). Reachable, not a guaranteed win over the idle pastimes it
+      // already loses most head-to-head contests against, and not loud
+      // enough to distort an unrelated drive's population statistics.
+      baseAppeal: 0.37,
       temperamentWeights: { openness: 0.15, conscientiousness: -0.10 },
       holdMinutes: 60, // was holdTicks 2 — 2 × 30-min ticks
       blockAppeal: { leisure: 1.2, midday: 1.1, evening: 1.0 },
@@ -10635,7 +10656,16 @@ const DRIVE_DEFS = {
       // A wind-down indulgence, not a duty — same shape as swim's openness
       // pull, plus a volatility pull (the anxious unwind here more than
       // the even-keeled do).
-      baseAppeal: 0.16,
+      //
+      // 0.16 -> 0.30 (2026-09-21 tuning pass, same measurement as swim
+      // above). Even after the same-day fix to the temperamentWeights typo
+      // (neuroticism -> volatility) let anxious NPCs actually get their
+      // pull toward the sauna, 0.16 still could not clear actionThreshold
+      // at the best combination a sweep can construct (measured ceiling
+      // 0.250, verify-c1.js) — "roommates can now use the sauna" was true in
+      // name only. 0.30 clears it with margin (~0.47 at max-favorable
+      // temperament).
+      baseAppeal: 0.30,
       temperamentWeights: { openness: 0.10, volatility: 0.10 },
       holdMinutes: ACTION_TUNING.saunaMinutes,
       blockAppeal: { leisure: 1.1, evening: 1.2, wind_down: 1.3 },

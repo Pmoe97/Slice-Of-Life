@@ -731,9 +731,17 @@ function trySneakIntoBed(npc, npcId, resolved, gameState) {
   const lines = [
     `ADJUST_NEED ${npcId} desire ${cfg.desireRelease}`,
     `MOOD_DELTA ${npcId} +${cfg.moodGain}`,
-    `MEMORY_EPISODE ${npcId} Slipped into the player's bed while they slept. Nobody saw.`,
   ];
   applyEffects(lines.map(l => parseEffectDSL(l)[0]).filter(Boolean), effCtx);
+  // Written directly rather than through a MEMORY_EPISODE DSL line so the
+  // episode carries a real emotionalTag (EVENT_EMOTION.boundary via the
+  // same eventEmotionalTag() reader the ambient pipeline uses) — the DSL
+  // path has no tag parameter at all, which left this whole beat invisible
+  // to rumination's theme grouping (see verify-i2.js).
+  gameState.npcs[npcId] = addMemoryEpisode(
+    gameState.npcs[npcId], day, "Slipped into the player's bed while they slept. Nobody saw.",
+    MEMORY_IMPORTANCE.conversational, eventEmotionalTag({ type: 'boundary' }),
+  );
   unmakeBed(gameState, pRoom);
   return {
     npc, npcOut: gameState.npcs[npcId],
@@ -795,11 +803,12 @@ function resolveSleepAdvanceChoice(gameState, npcId, choice) {
     // less than being caught out (below): declining a wanted advance is not
     // the same event as being caught doing something wrong.
     gameState.npcs[npcId] = applyRelDelta(gameState.npcs[npcId], cfg.declineRelDeltas, day);
-    const effCtx = buildEffectContext(gameState, [npcId], [npcId], {}, []);
-    applyEffects(
-      [`MEMORY_EPISODE ${npcId} Woke the player trying to get into bed with them. They said no, gently — no hard feelings.`]
-        .map(l => parseEffectDSL(l)[0]).filter(Boolean),
-      effCtx,
+    // See the silent-success branch above for why this bypasses the
+    // MEMORY_EPISODE DSL — it needs a real emotionalTag (EVENT_EMOTION.boundary).
+    gameState.npcs[npcId] = addMemoryEpisode(
+      gameState.npcs[npcId], day,
+      "Woke the player trying to get into bed with them. They said no, gently — no hard feelings.",
+      MEMORY_IMPORTANCE.conversational, eventEmotionalTag({ type: 'boundary' }),
     );
     return { outcome: 'decline' };
   }
@@ -809,11 +818,16 @@ function resolveSleepAdvanceChoice(gameState, npcId, choice) {
   gameState.npcs[npcId] = applyRelDelta(gameState.npcs[npcId], cfg.caughtRelDeltas, day);
   const effCtx = buildEffectContext(gameState, [npcId], [npcId], {}, []);
   applyEffects(
-    [
-      `MEMORY_EPISODE ${npcId} Got caught sneaking into the player's bed, and they were furious about it.`,
-      `ADJUST_SUSPICION ${npcId} boundary_violation +${cfg.caughtSuspicion}`,
-    ].map(l => parseEffectDSL(l)[0]).filter(Boolean),
+    [`ADJUST_SUSPICION ${npcId} boundary_violation +${cfg.caughtSuspicion}`]
+      .map(l => parseEffectDSL(l)[0]).filter(Boolean),
     effCtx,
+  );
+  // See the silent-success branch above for why this bypasses the
+  // MEMORY_EPISODE DSL — it needs a real emotionalTag (EVENT_EMOTION.boundary).
+  gameState.npcs[npcId] = addMemoryEpisode(
+    gameState.npcs[npcId], day,
+    "Got caught sneaking into the player's bed, and they were furious about it.",
+    MEMORY_IMPORTANCE.conversational, eventEmotionalTag({ type: 'boundary' }),
   );
   return { outcome: 'angry' };
 }
