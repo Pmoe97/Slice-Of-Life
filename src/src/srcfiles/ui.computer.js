@@ -1528,6 +1528,13 @@ async function doClassifiedsInterview(npcId) {
       image: { kind: 'instance', phrase: 'interviewing an applicant over chat, reading their profile on screen' },
     },
   }, { applied: [], narration: `You get to know ${npc.bible?.name || 'the applicant'}. ${npc.bible?.age ? `They're ${npc.bible.age}. ` : ''}A note in their file: ${(npc.personality && npc.personality[0]) || 'quiet, steady'}.`, minutesSpent: 0 });
+  // Player-reported bug (Discord, 2026-08-22/09-11): inviting an applicant
+  // over, or texting them, failed with "you don't have their number" even
+  // right after interviewing them. doInviteOver (ui.js) gates on
+  // npc.contactKnown, which nothing on this path ever set — an applicant's
+  // number is exchanged the moment you start texting them, so this is the
+  // right place to set it, not a separate "ask for their number" step.
+  npc.contactKnown = true;
   // Create a thread so the applicant shows up in the IM contact list
   ensureImThread(currentGameState, npcId);
   // Set the IM app to view this thread

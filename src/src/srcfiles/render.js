@@ -2743,6 +2743,14 @@ function openCookScreen(recipe, gs, ctx) {
     }
 
     renderPlan();
+    // Player-reported bug (Discord, 2026-09-11): clicking Cook and picking a
+    // recipe did nothing — the character never actually cooked. Every other
+    // picker sharing #modal-overlay (openRecipePicker just above included)
+    // opens with `overlay.setAttribute('data-open', '')` right after its
+    // first render; this one built the whole interactive screen (renderPlan)
+    // but never actually opened the overlay, so it sat fully populated and
+    // fully functional behind `display:none` — invisible, not broken.
+    overlay.setAttribute('data-open', '');
   });
 }
 

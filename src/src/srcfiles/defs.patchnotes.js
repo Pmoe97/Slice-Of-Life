@@ -43,6 +43,8 @@ const PATCH_NOTES = [
       + "to the peeking system, and the sauna finally gets used by more than "
       + "just you.",
     changes: [
+      { kind: 'fixed', text: "Cooking was broken: picking a recipe closed the menu and did nothing else, every time, no matter what you tried. The interactive cooking screen was actually building itself correctly behind the scenes — it just never actually opened. Fixed." },
+      { kind: 'fixed', text: "Inviting an applicant over, or texting them, could fail with \"you don't have their number\" even right after interviewing them — interviewing opens a text thread with them, but never actually exchanged contact info on the game's own books. Fixed; that now happens the moment you start texting." },
       { kind: 'fixed', text: "Building the Private Ensuite was supposed to seal Bathroom A off from everyone but you, forcing the rest of the household to queue for Bathroom B. Instead, roommates kept showing up in Bathroom A to shower and groom regardless of the upgrade or which hallway their own room was on. They now respect the lock." },
       { kind: 'added', text: "Peeking and listening at a door is no longer limited to bedroom and bathroom doors off the two hallways — any real door in the apartment (the gym, the game room, the study, the balcony, and more) can now be peeked or listened through. The option only shows up when there's actually someone on the other side to catch." },
       { kind: 'added', text: "Roommates can now use the sauna themselves instead of leaving it to you. If someone's in there when you're not, you can peek in through the sauna door and see for yourself." },
