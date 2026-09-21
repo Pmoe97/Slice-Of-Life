@@ -108,7 +108,7 @@ plan in the roadmap is now complete.**
 | `afterhours-redesign-plan.md` | `afterhours-redesign-handoff-prompt.md` |
 | `inventory-needs-menu-saves-plan.md` | `inventory-needs-menu-saves-handoff-prompt.md` |
 | `restaurant-network-expansion-plan.md` | `restaurant-expansion-handoff-prompt.md` |
-| `npc-correctness-fixes-plan.md` | — (roadmap Plan 0; carries the dead-field disposition table) |
+| `npc-correctness-fixes-plan.md` | — (roadmap Plan 0; carries the dead-field disposition table. **2026-09-21 correction added to its Reserved table**: two of its twelve "reserved for a future plan" claims (`sampleLines`, `history`) turned out to have rotted — the claimed plan shipped without ever consuming them — and are now wired into `buildNpcBlockV2`; three more (`typicalAttire`, `interests[].skill`, `firstMetDay`) are confirmed still-dead by the same re-check but left unfixed, needing a real design decision rather than a text addition. Read the doc's Phase 5 section before trusting any "claimed by Plan N" line in it.) |
 | `perception-and-signals-plan.md` | — (roadmap Plan 1; the signal substrate Plans 2–5 consume) |
 | `scene-reader-ui-plan.md` | `scene-reader-ui-handoff-prompt.md` (roadmap Plan 2; the main UI stopped being a log and became a scene) |
 | `npc-cognition-plan.md` | `npc-cognition-handoff-prompt.md` (roadmap Plan 3; utility scoring + committed `pursuit`s replace the twelve independent drive coin flips) |

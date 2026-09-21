@@ -37,7 +37,7 @@ const PATCHNOTES_KIND_LABELS = {
 const PATCH_NOTES = [
   {
     version: '0.14.1',
-    date: '2026-09-20',
+    date: '2026-09-21',
     title: 'Hotfix: Bathroom Routing & Any-Door Peeking',
     summary: "A small hotfix: one household bug, one long-requested expansion "
       + "to the peeking system, and the sauna finally gets used by more than "
@@ -47,6 +47,7 @@ const PATCH_NOTES = [
       { kind: 'added', text: "Peeking and listening at a door is no longer limited to bedroom and bathroom doors off the two hallways — any real door in the apartment (the gym, the game room, the study, the balcony, and more) can now be peeked or listened through. The option only shows up when there's actually someone on the other side to catch." },
       { kind: 'added', text: "Roommates can now use the sauna themselves instead of leaving it to you. If someone's in there when you're not, you can peek in through the sauna door and see for yourself." },
       { kind: 'fixed', text: "A more anxious, easily-rattled roommate was supposed to reach for the sauna to unwind more than an even-keeled one would. A typo in that behavior meant everyone was equally likely to use it regardless of temperament — now the anxious ones actually do head there more." },
+      { kind: 'fixed', text: "A character's written backstory, and the sample lines of dialogue you or the AI gave them while creating them, never actually reached a conversation — they only ever showed up on their profile page. Conversations now draw on both, so a roommate's history and the way they were written to sound actually come through in how they talk to you." },
     ],
   },
   {
