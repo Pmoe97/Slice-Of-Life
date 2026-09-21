@@ -176,9 +176,9 @@ check(`every pool entry names 1-2 real idle pastimes (${api('OCCUPATION_POOL.len
   poolBad.length === 0, poolBad.join(', '));
 
 check('the schema declares idlePastimes with an empty default (legacy = no lean)',
-  api(`!!OCCUPATION_SCHEMA.occupation.fields.idlePastimes
-      && OCCUPATION_SCHEMA.occupation.fields.idlePastimes.default !== undefined
-      && OCCUPATION_SCHEMA.occupation.fields.idlePastimes.default.length === 0`));
+  api(`!!CHARACTER_SCHEMA.bible.occupation.fields.idlePastimes
+      && CHARACTER_SCHEMA.bible.occupation.fields.idlePastimes.default !== undefined
+      && CHARACTER_SCHEMA.bible.occupation.fields.idlePastimes.default.length === 0`));
 
 check('rollCastSlot carries the field onto the bible',
   api(`(() => {
@@ -406,8 +406,18 @@ check('the field has a reader in cognition.js (the same phase — RI6)',
   cognitionSrc.includes('function idlePastimePreferred') && cognitionSrc.includes('pastimeWeight'));
 check('the reader is actually wired into the scorer',
   cognitionSrc.includes('appeal = base + need + signal + motive + desireBias + willingnessBias + pastime'));
-check('rollCastSlot carries the field in sim.js',
-  simSrc.includes('occ.idlePastimes'));
+// sim.js used to carry the occupation entry onto the bible through a
+// hand-maintained ALLOWLIST (a literal `idlePastimes: occ.idlePastimes,`
+// line) — the "code-review fix" comment beside `occupation: (() => {...})()`
+// replaced that with a DENYLIST spread (`...runtime`, excluding only the two
+// roll-time-only keys) so a new pool field reaches the bible with no new
+// line here at all. Grepping for the old allowlist line is exactly the stale
+// assertion rule 2 in the README warns about; check 6 above already proves
+// the real invariant (idlePastimes genuinely lands on a generated NPC) — this
+// one instead confirms the MECHANISM that makes future fields safe by
+// construction stayed a denylist and didn't regress back to an allowlist.
+check('rollCastSlot copies the occupation entry by denylist, not a hand-maintained allowlist (D23)',
+  /\.\.\.runtime\b/.test(simSrc) && simSrc.includes('traitAffinity, ...runtime'));
 check('verify-voc-p2\'s pool-key allowlist admits the field (no silent drift in the D23 pin)',
   p2Src.includes("'idlePastimes'"));
 // A field read by nothing is the stressProfile scar. Grep for the reader's

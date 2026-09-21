@@ -228,7 +228,16 @@ check('history moves the number: a recent refusal chills, and old intimacy recen
       api(`(() => {
         const h = house(20260901, 1);
         const npc = Object.values(h.npcs)[0];
-        warmNpc(npc, {});
+        // warmNpc's DEFAULT opts (used everywhere else in this file) now
+        // pre-clamp above 1 — willingness() clamps to [-1,1], so at the
+        // default settings the refusal penalty alone is too small to move
+        // the visible (post-clamp) number off the ceiling, even though it
+        // genuinely subtracts from the raw score (confirmed: only the
+        // COMBINED refusal+recency penalty in justSated was big enough to
+        // escape the ceiling). Toned down here, locally, so the history
+        // term's effect is visible without touching warmNpc's shared
+        // defaults or the willingness formula itself.
+        warmNpc(npc, { comfort: 0.5, relDesire: 0.4, desire: 40, mood: 0, affection: 0.4, trust: 0.3, respect: 0.2 });
         const base = willingness(h, npc, 'player', 'default', {});
         noteIntimacyRefusal(npc, h.meta.clock.day, { lockoutDays: 0 });
         const afterRefusal = willingness(h, npc, 'player', 'default', {});
@@ -324,6 +333,14 @@ check('a floored (hostile) NPC\'s desire-motive approach overture is dropped fro
         const npc = h.npcs[id];
         // Hostile but WANTING: initiative gate passes (desire/comfort/affection high),
         // so the desire motive is live — and the willingness floor must kill the candidate.
+        // The player's freshly-rolled default outfit contributes a real
+        // attraction term to the COMPETING affection motive (clothingResponseToWearer)
+        // — large enough, on some seeds, to tie or beat desire's own strength
+        // and let affection win bestMotive's array-order tiebreak instead,
+        // which tests nothing about the willingness floor this check exists
+        // for. Neutralized so desire is deterministically the strongest live
+        // motive, exactly as the comment above already assumes.
+        h.player.outfit = {};
         npc.relPlayer.desire = 0.9; npc.relPlayer.comfort = 0.8; npc.relPlayer.affection = 0.6;
         npc.relPlayer.tension = REL_CONSEQUENCES.tensionHigh;
         npc.relPlayer.grievances = [];
@@ -341,6 +358,11 @@ check('the same NPC once NOT hostile keeps the desire-motive overture, with a po
         const h = house(20260901, 1);
         const id = Object.keys(h.npcs)[0];
         const npc = h.npcs[id];
+        // Same reason as the floored check above: neutralize the player's
+        // outfit so desire — not affection — is deterministically the
+        // strongest live motive, regardless of what this seed's default
+        // player outfit happens to score on attraction.
+        h.player.outfit = {};
         npc.relPlayer.desire = 0.9; npc.relPlayer.comfort = 0.8; npc.relPlayer.affection = 0.6;
         npc.relPlayer.tension = 0.1; npc.relPlayer.trust = 0.3; npc.relPlayer.respect = 0.3;
         npc.relPlayer.grievances = [];

@@ -30,13 +30,22 @@ api(`
   __set = (g, room, defId, k, v) => {
     for (const o of Object.values(g.objects['room_' + room] || {})) if (o.defId === defId) o.state = { ...o.state, [k]: v };
   };
+  // Food-overhaul Phase 4 (D9) rerouted the 'dishes' emit to the DERIVED
+  // dishLevelOf(obj.dishes map) — __set(..., 'dishes', level) via the
+  // vestigial state field has done nothing since (session 3's cluster-6
+  // finding, same fix applied here).
+  __setDishes = (g, room, defId, level) => {
+    for (const o of Object.values(g.objects['room_' + room] || {})) {
+      if (o.defId === defId) addDishUnits(o, { plate: level === 'many' ? DISH_TUNING.sinkDirtyAtMany : DISH_TUNING.sinkDirtyAtFew });
+    }
+  };
 `);
 
 console.log('\nsignalsByRoom — signals at their SOURCE (D9)');
 api(`
   __g = __mk();
   __set(__g, 'kitchen', 'fridge', 'rotten_food', 'rotten');
-  __set(__g, 'kitchen', 'sink_kitchen', 'dishes', 'many');
+  __setDishes(__g, 'kitchen', 'sink_kitchen', 'many');
   __g.player.location = 'dining';
   __map = signalsByRoom(__g);
 `);

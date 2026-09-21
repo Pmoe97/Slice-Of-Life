@@ -205,12 +205,22 @@ check('the recalled renderer marks every node it appends as past',
 check('it is a projection — no filtering or timestamp logic of its own',
       !/channel/.test(recallFn) && !/formatTime|formatDate/.test(recallFn),
       'all of that belongs to recallSceneExchanges, where it is testable');
+// D13 + 2026-08-31 moved the separator OUT of convRenderRecalled entirely:
+// recalled text rows and persisted chat images (convRenderImages) now share
+// the top half, so the 'Now' separator is drawn by the CALLER
+// (openConversationOverlay) once, gated on either one having drawn
+// anything — 'rows.length === 0' inside convRenderRecalled no longer has
+// any relationship to where 'conv-separator' gets created at all.
 check('the separator is drawn only when there is something above it',
-      recallFn.indexOf('rows.length === 0') < recallFn.indexOf('conv-separator'));
-// Bound this at the Phase 5 comment block, not at `function convRenderRecalled`
-// — the comment itself names [data-past], which is what the marker is for.
+      openFn.indexOf('rows > 0 || imgs > 0') < openFn.indexOf('conv-separator')
+      && openFn.indexOf('rows > 0 || imgs > 0') >= 0);
+// Bound tightly to convAddBeat/convAddBubble themselves, not out to the
+// Phase 5 comment block — 2026-08-31's convRenderImages (a DIFFERENT,
+// legitimate past-content renderer for persisted chat images) now sits in
+// that gap and genuinely does set data-past, which made the old wide slice
+// fail for a reason that has nothing to do with the live-half writers.
 check('convAddBubble/convAddBeat still write the live half untouched',
-      !/data-past/.test(UI.slice(UI.indexOf('function convAddBeat'), UI.indexOf('// Scene reader plan Phase 5'))),
+      !/data-past/.test(UI.slice(UI.indexOf('function convAddBeat'), UI.indexOf('// Asks plan Phase 8 — an image bubble'))),
       'Phase 5 adds a recalled half above a separator; it does not change how the live half is written');
 check('[data-past] has a stylesheet rule — a marker nobody styles is R8 again',
       /\.conv-bubble\[data-past\]/.test(HTML) && /\.conv-beat\[data-past\]/.test(HTML));

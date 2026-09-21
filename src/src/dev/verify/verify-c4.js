@@ -42,6 +42,21 @@ api(`
   __ids = (g) => Object.keys(g.npcs).filter(id => g.npcs[id].residency.status === 'resident');
   __res = (block, location) => ({ block, location, activity: '', transit: null });
   __find = (g, room, defId) => Object.values(g.objects['room_' + room] || {}).find(o => o.defId === defId);
+  // Isolates one drive from the appeal contest, the same way verify-c2.js's
+  // react_to_player/gift_to_player checks do: stamp every OTHER drive on
+  // cooldown so it cannot be chosen. D21's own checks care about the walk-leg
+  // COOLDOWN mechanism specifically, not whether investigate_smell happens to
+  // outscore whatever else the roster offers that tick — confirmed via
+  // verify-suite-regression-triage-2026-09-20.md's session-5/6 finding that
+  // the idle-pastime drives (read_book/watch_tv/scroll_phone) structurally
+  // win most appeal contests regardless of what they are up against.
+  __isolate = (g, npc, exceptId) => {
+    let n = npc;
+    for (const driveId of Object.keys(DRIVE_DEFS)) {
+      if (driveId !== exceptId) n = setCooldown(n, driveId, clockToAbsolute(g.meta.clock));
+    }
+    return n;
+  };
 
   // "Dirty" is DERIVED, never a literal list of state values: an object whose
   // CURRENT state value appears in its own def's emits table is one the world
@@ -64,6 +79,37 @@ api(`
     let n = 0;
     for (const objs of Object.values(g.objects)) for (const o of Object.values(objs))
       if (OBJECT_DEFS[o.defId] && OBJECT_DEFS[o.defId].emits) n++;
+    return n;
+  };
+  // Every {defId, stateKey} any DRIVE_DEFS entry's own leaves table can ever
+  // touch — computed once, from the real (not leaves-stripped) DRIVE_DEFS,
+  // before the with/without-leaves counterfactual below temporarily deletes
+  // them. Some facilities (the neglected pool) start permanently dirty from
+  // day one for reasons that have nothing to do with drive.leaves — counting
+  // them in the with/without comparison dilutes the exact signal that
+  // comparison exists to isolate (measured: the pool alone contributes a
+  // CONSTANT 56 of the 'without leaves' baseline's 68 dirty-house-days over
+  // 8 houses x 7 days, compressing what is really an ~3.8x leaves-vs-no-leaves
+  // ratio down to an apparent, borderline 1.5x). __dirtyCount itself stays
+  // unscoped — the "is the house ever dirty at all" and "no spiral" checks
+  // below genuinely want the whole house, pool included.
+  __leavesTargets = new Set(Object.values(DRIVE_DEFS).filter(d => d.leaves)
+    .flatMap(d => Object.entries(d.leaves).flatMap(([defId, byState]) =>
+      Object.keys(byState).map(k => defId + '.' + k))));
+  __leavesDirtyCount = (g) => {
+    let n = 0;
+    for (const objs of Object.values(g.objects)) for (const o of Object.values(objs)) {
+      const emits = OBJECT_DEFS[o.defId] && OBJECT_DEFS[o.defId].emits;
+      if (!emits) continue;
+      for (const [k, byValue] of Object.entries(emits)) {
+        if (!__leavesTargets.has(o.defId + '.' + k)) continue;
+        // 'dishes' is the food-overhaul Phase 4 map special case (session 3):
+        // dirtiness reads from the real obj.dishes unit map, never the
+        // vestigial ladder state, once the object carries one at all.
+        const cur = k === 'dishes' && o.dishes ? dishLevelOf(o) : (o.state && o.state[k]);
+        if (cur !== undefined && byValue[cur]) { n++; break; }
+      }
+    }
     return n;
   };
   __setTemper = (g, axis, v) => {
@@ -89,7 +135,7 @@ api(`
       rows.push({ npcId, fired: Object.keys(after).filter(d => after[d] === nowAbs && before[d] !== nowAbs) });
       return res;
     };
-    let messHouseDays = 0, maxAtOnce = 0, capable = 0;
+    let messHouseDays = 0, leavesMessHouseDays = 0, maxAtOnce = 0, capable = 0;
     try {
       for (let i = 0; i < houses; i++) {
         let g = __mk(20260811 + i * 7919);
@@ -99,6 +145,7 @@ api(`
           g = resolveBatch(g, ${DAY}).state;
           const n = __dirtyCount(g);
           messHouseDays += n;
+          leavesMessHouseDays += __leavesDirtyCount(g);
           if (n > maxAtOnce) maxAtOnce = n;
         }
       }
@@ -108,7 +155,7 @@ api(`
       byDrive[d] = (byDrive[d] || 0) + 1;
       if (d === 'investigate_smell') who[r.npcId] = 1;
     }
-    return { messHouseDays, maxAtOnce, capable, byDrive,
+    return { messHouseDays, leavesMessHouseDays, maxAtOnce, capable, byDrive,
              investigators: Object.keys(who).length, samples: rows.length };
   };
 `);
@@ -135,8 +182,15 @@ check('every trace names a real state LADDER on that def (array, 2+ rungs)', api
 `), 'applyDriveLeaves walks a ladder by index — a non-ladder state is a silent no-op');
 check('every step is a positive integer', api(`
   Object.values(DRIVE_DEFS).filter(d => d.leaves).every(d =>
-    Object.values(d.leaves).every(byState =>
-      Object.values(byState).every(s => Number.isInteger(s) && s >= 1)))
+    Object.entries(d.leaves).every(([, byState]) =>
+      Object.entries(byState).every(([stateKey, s]) =>
+        // Food-overhaul Phase 4 (D9): a 'dishes' entry is a { dishType:
+        // count } MAP applied via addDishUnits, not a ladder-step integer —
+        // applyDriveLeaves (drives.js) special-cases it explicitly, the
+        // same real-dish-map shape session 3's cluster-6 fix already
+        // established elsewhere in this suite.
+        (stateKey === 'dishes' && s && typeof s === 'object' && !Array.isArray(s))
+        || (Number.isInteger(s) && s >= 1))))
 `));
 // D19's own lesson, made permanent. `sleep_recover` was authored a bed-unmade
 // trace and measured 0 of 26 naps in a bedroom, so it was REMOVED rather than
@@ -215,13 +269,24 @@ check('a trace applied to a room the object is not in changes nothing', api(`
     return JSON.stringify(g.objects) === before;
   })()
 `));
+// sink_kitchen/dishes is NOT used for these two: food-overhaul Phase 4 (D9)
+// made 'dishes' a special case of BOTH computeObjectGriminess (world.js) and
+// deriveStandingSignals (signals.js) — once an object carries a real
+// obj.dishes MAP (every sink does, even an empty {}, which is truthy), its
+// dirtiness is read exclusively from dishLevelOf(obj.dishes), never from
+// obj.state.dishes again. applyDriveLeaves's raw-integer ladder branch (used
+// above) still happily writes obj.state.dishes, but nothing downstream reads
+// it any more, so cleanliness/signal derivation would silently see no
+// change — testing the mechanism through the one object it can no longer
+// prove anything about. stove/burner is a plain, unshadowed ladder (no
+// dish-map special case anywhere) that exercises the exact same generic path.
 check('the room\'s derived cleanliness is refreshed when a trace lands', api(`
   (() => {
     const g = __mk();
-    const ladder = OBJECT_DEFS.sink_kitchen.states.dishes;
-    __find(g, 'kitchen', 'sink_kitchen').state = { dishes: ladder[0] };
+    const ladder = OBJECT_DEFS.stove.states.burner;
+    __find(g, 'kitchen', 'stove').state = { ...__find(g, 'kitchen', 'stove').state, burner: ladder[0] };
     const before = g.world.rooms.kitchen && g.world.rooms.kitchen.cleanliness;
-    applyDriveLeaves(g, { sink_kitchen: { dishes: ladder.length - 1 === 1 ? 1 : 2 } }, 'kitchen');
+    applyDriveLeaves(g, { stove: { burner: ladder.length - 1 === 1 ? 1 : 2 } }, 'kitchen');
     const after = g.world.rooms.kitchen && g.world.rooms.kitchen.cleanliness;
     return typeof after === 'number' && after !== before;
   })()
@@ -229,11 +294,11 @@ check('the room\'s derived cleanliness is refreshed when a trace lands', api(`
 check('the standing signal is DERIVED from the state — nothing is stored', api(`
   (() => {
     const g = __mk();
-    const ladder = OBJECT_DEFS.sink_kitchen.states.dishes;
-    __find(g, 'kitchen', 'sink_kitchen').state = { dishes: ladder[0] };
-    const clean = deriveStandingSignals(g, 'kitchen').some(s => s.signalId === 'dirty_dishes');
-    applyDriveLeaves(g, { sink_kitchen: { dishes: 1 } }, 'kitchen');
-    const dirty = deriveStandingSignals(g, 'kitchen').some(s => s.signalId === 'dirty_dishes');
+    const ladder = OBJECT_DEFS.stove.states.burner;
+    __find(g, 'kitchen', 'stove').state = { ...__find(g, 'kitchen', 'stove').state, burner: ladder[0] };
+    const clean = deriveStandingSignals(g, 'kitchen').some(s => s.signalId === 'grease');
+    applyDriveLeaves(g, { stove: { burner: 1 } }, 'kitchen');
+    const dirty = deriveStandingSignals(g, 'kitchen').some(s => s.signalId === 'grease');
     return !clean && dirty;
   })()
 `), 'so a trace needs no cleanup path — clear the mess and the signal stops being derivable');
@@ -257,7 +322,13 @@ const LEAVES_CALLS = (() => {
   const at = [];
   for (let i = src.indexOf('applyDriveLeaves('); i !== -1; i = src.indexOf('applyDriveLeaves(', i + 1)) {
     if (/function\s+$/.test(src.slice(Math.max(0, i - 12), i))) continue;   // the definition, not a call
-    at.push(/emitTransient\(/.test(src.slice(Math.max(0, i - 1500), i)));
+    // "Beside" means proximity, not a fixed before/after order: the standard
+    // resolver and tryEatFood both emit THEN leave a trace, but Phase 13's
+    // pair-act resolver (resolvePairedAct) leaves the bed trace THEN emits
+    // the moan — a third call site with the opposite, equally legitimate
+    // order the original backward-only look never accounted for.
+    at.push(/emitTransient\(/.test(src.slice(Math.max(0, i - 1500), i))
+      || /emitTransient\(/.test(src.slice(i, i + 1500)));
   }
   return at;
 })();
@@ -402,8 +473,9 @@ check('evaluateDrives sets NO cooldown on a walk leg', api(`
     const from = __smellFrom(g);
     if (!from) return false;
     const id = __ids(g)[0];
-    const npc = { ...g.npcs[id], flags: {},
+    let npc = { ...g.npcs[id], flags: {},
                   needs: { hunger: 90, hygiene: 90, energy: 90, social: 90, comfort: 90, stimulation: 90 } };
+    npc = __isolate(g, npc, 'investigate_smell');
     const r = evaluateDrives(npc, id, g.npcs, __res('leisure', from.room), g, () => 0.5, 0);
     const stamps = (r.updatedNpc.flags || {})[DRIVE_COOLDOWN_KEY] || {};
     // The walk must actually have HAPPENED, or "no cooldown was set" is just
@@ -418,8 +490,9 @@ check('...but a real clearing does set it', api(`
     const ladder = OBJECT_DEFS.trash_kitchen.states.fill;
     __find(g, 'kitchen', 'trash_kitchen').state = { fill: ladder[ladder.length - 1] };
     refreshRoomCleanliness(g, 'kitchen');
-    const npc = { ...g.npcs[id], flags: {},
+    let npc = { ...g.npcs[id], flags: {},
                   needs: { hunger: 90, hygiene: 90, energy: 90, social: 90, comfort: 90, stimulation: 90 } };
+    npc = __isolate(g, npc, 'investigate_smell');
     const r = evaluateDrives(npc, id, g.npcs, __res('leisure', 'kitchen'), g, () => 0.5, 0);
     const stamps = (r.updatedNpc.flags || {})[DRIVE_COOLDOWN_KEY] || {};
     return stamps.investigate_smell === clockToAbsolute(g.meta.clock);
@@ -435,8 +508,9 @@ check('the two-step walk COMPLETES: walk one tick, clear the next', api(`
     let npc = { ...g.npcs[id], flags: {},
                 needs: { hunger: 90, hygiene: 90, energy: 90, social: 90, comfort: 90, stimulation: 90 } };
     // Leg 1, from a room that can smell it: walks, and sets no cooldown.
+    npc = __isolate(g, npc, 'investigate_smell');
     const r1 = evaluateDrives(npc, id, g.npcs, __res('leisure', from.room), g, () => 0.5, 0);
-    npc = r1.updatedNpc;
+    npc = __isolate(g, r1.updatedNpc, 'investigate_smell');
     const walked = r1.locationOverride;
     // Leg 2, now standing in the source room on the next tick. Without D21 this
     // tick is a no-op forever: the cooldown from leg 1 excluded the drive.
@@ -470,14 +544,33 @@ console.log(`  without     : ${noLeaves.messHouseDays} mess-house-days, max ${no
 check('an untouched house ends up with a NON-ZERO amount of mess',
       withLeaves.messHouseDays > 0,
       'the Evidence baseline was 0 dirty objects and 0 rot after seven untouched days');
+// Scoped to leavesMessHouseDays, not the raw messHouseDays printed above:
+// the whole-house count includes facilities that start permanently dirty
+// for reasons that have nothing to do with drive.leaves (the neglected pool
+// — see __leavesTargets' own comment) — a constant present in BOTH runs
+// that dilutes the real signal from ~3.8x down to a borderline, sometimes-
+// failing 1.5x. Scoping to exactly what leaves can touch is what "isolates
+// Phase 4's contribution from everything else in the tick" (this section's
+// own header) actually requires.
 check('and it is the traces that put it there, not something else in the tick',
-      withLeaves.messHouseDays > noLeaves.messHouseDays * 1.5,
-      `${withLeaves.messHouseDays} with vs ${noLeaves.messHouseDays} without, same seeds`);
+      withLeaves.leavesMessHouseDays > noLeaves.leavesMessHouseDays * 1.5,
+      `${withLeaves.leavesMessHouseDays} with vs ${noLeaves.leavesMessHouseDays} without (leaves-scoped); ` +
+      `${withLeaves.messHouseDays} vs ${noLeaves.messHouseDays} whole-house, same seeds`);
 check('investigate_smell goes from never firing on an untouched house to firing sometimes',
       (nl.investigate_smell || 0) === 0 && (wl.investigate_smell || 0) > 0,
       `${nl.investigate_smell || 0} without leaves, ${wl.investigate_smell || 0} with`);
+// Not a 0-vs->0 binary any more, unlike investigate_smell above: food-
+// overhaul Phase 4 (D9) moved dish-dirtying off SET_OBJECT_STATE/leaves and
+// onto buildCookEffects' own ADD_DISHES lines (defs.actions.js, and the NPC
+// eat resolver's mirror, drives.js) — real cooking dirties dishes (one of
+// clean_common's three gate signals) whether or not any drive.leaves entry
+// exists at all, so clean_common legitimately fires sometimes even with
+// leaves fully stripped (measured: 32 times). What leaves still owns here is
+// the REST of clean_common's gate (clutter, unmade_bed) plus the grease
+// leaves keeps as "the rest of the footprint" (defs.world.js's own comment).
+// Same ratio shape as "and it is the traces..." above, for the same reason.
 check('clean_common likewise',
-      (nl.clean_common || 0) === 0 && (wl.clean_common || 0) > 0,
+      (wl.clean_common || 0) > (nl.clean_common || 0) * 1.5,
       `${nl.clean_common || 0} without leaves, ${wl.clean_common || 0} with`);
 check(`the work is spread across the cast (${withLeaves.investigators} distinct NPCs investigated)`,
       withLeaves.investigators >= 3,

@@ -183,9 +183,36 @@ console.log('\nEvery ACTION_DEFS entry declares a timeCost');
 // resolveTimeCost reads timeCost.base unconditionally, so an entry without one
 // THROWS out of executeAction — self.workout, self.play_games and self.study
 // all did, and all three are activities D17 makes shareable.
-check('no entry is missing timeCost', api(`
+//
+// Scoped to entries that can actually REACH executeAction/resolveTimeCost —
+// not every ACTION_DEFS row does, and the ones that don't legitimately need
+// no timeCost. Named explicitly (not inferred) so a genuinely missing
+// timeCost on an executable entry still fails loudly:
+//   - grouping-only submenu parents (`actionSourceMatches` rejects any def
+//     with no `source` outright, per actions.js): door.interact,
+//     wardrobe.interact, bed.interact, lockers.interact, sound.interact
+//   - `delegate` entries — ui.js's handleAction reroutes these to a
+//     DIFFERENT def's own registered action before ever reaching
+//     executeAction: door.open (-> move), door.knock (-> knock),
+//     wardrobe.open / lockers.open (-> container.open)
+//   - verbs handleAction intercepts explicitly, before the registered-action
+//     bridge, resolving through their own hand-written flow with no
+//     executeAction/resolveTimeCost call at all (see actions.js's own
+//     boundary.throuple comment for why): door.unlock, door.keyhole,
+//     door.listen, peek.sauna, boundary.night_scene, boundary.sleep_with,
+//     boundary.sleep_watch, boundary.throuple
+const NEVER_REACHES_TIMECOST = new Set([
+  'door.interact', 'wardrobe.interact', 'bed.interact', 'lockers.interact', 'sound.interact',
+  'door.open', 'door.knock', 'wardrobe.open', 'lockers.open',
+  'door.unlock', 'door.keyhole', 'door.listen', 'peek.sauna',
+  'boundary.night_scene', 'boundary.sleep_with', 'boundary.sleep_watch', 'boundary.throuple',
+]);
+api(`__NEVER_REACHES_TIMECOST = new Set(${JSON.stringify([...NEVER_REACHES_TIMECOST])});`);
+check('no executable entry is missing timeCost', api(`
   (() => {
-    const bad = Object.entries(ACTION_DEFS).filter(([, d]) => d.timeCost === undefined).map(([k]) => k);
+    const bad = Object.entries(ACTION_DEFS)
+      .filter(([id, d]) => d.timeCost === undefined && !__NEVER_REACHES_TIMECOST.has(id))
+      .map(([k]) => k);
     if (bad.length) console.log('        ' + bad.join(', '));
     return bad.length === 0;
   })()
@@ -195,6 +222,7 @@ check('and resolveTimeCost returns a positive integer for every one of them', ap
     const g = __mk();
     const bad = [];
     for (const id of Object.keys(ACTION_DEFS)) {
+      if (__NEVER_REACHES_TIMECOST.has(id)) continue;
       let m;
       try { m = resolveTimeCost(ACTION_DEFS[id], g, null); }
       catch (e) { bad.push(id + ' THREW ' + e.message); continue; }
@@ -533,7 +561,13 @@ check('executeAction hands the resolution to narrateAction', (() => {
 })());
 check('and resolves it BEFORE the clock advances', (() => {
   const src = codeOf('actions.js');
-  return src.indexOf('resolveSharedActivity(gameState') < src.indexOf('advanceAndResolveMinutes(minutes)');
+  // The real call site passes `live` (executeAction's "write to the live
+  // global, not the detached snapshot" rebind), not `gameState` — matching
+  // the literal string 'resolveSharedActivity(gameState' skips right past it
+  // and instead matches resolveSharedActivity's OWN function signature
+  // (`function resolveSharedActivity(gameState, ...)`) further down the
+  // file, which is unrelated to call order.
+  return src.indexOf('resolveSharedActivity(live') < src.indexOf('advanceAndResolveMinutes(minutes)');
 })(), 'the participants are who was here when it started, not who wandered in');
 check('watchTvNarration is gone, and nothing still calls it', (() => {
   let n = 0;

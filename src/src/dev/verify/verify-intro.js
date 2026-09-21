@@ -268,11 +268,16 @@ check('the portrait record carries through untouched',
       api(`__authored.portrait.prompt === 'my own words' && __authored.portrait.promptDirty === true`));
 check('a hand-edited prompt is what buildPlayerDraftForNewGame keeps', api(`
   (() => {
-    playerStudioDraft = blankPlayerDraft();
-    playerStudioDraft.portrait = { prompt: 'mine', seed: 1, promptDirty: true };
-    playerStudioDraft.physical = { intimate: { genitals: [{ type: 'penis', bogus: 1 }] } };
+    // buildPlayerDraftForNewGame reads studioSubject.draft now, not a bare
+    // playerStudioDraft global — that variable was folded into the unified
+    // player/NPC studio subject wrapper (studio.js's studioSubject, shaped
+    // { draft, kind, title, ... }) and no longer exists anywhere.
+    const draft = blankPlayerDraft();
+    draft.portrait = { prompt: 'mine', seed: 1, promptDirty: true };
+    draft.physical = { intimate: { genitals: [{ type: 'penis', bogus: 1 }] } };
+    studioSubject = { kind: 'player', draft };
     const d = buildPlayerDraftForNewGame();
-    playerStudioDraft = null;
+    studioSubject = null;
     return d.portrait.prompt === 'mine' && d.portrait.promptDirty === true
         && !('bogus' in d.physical.intimate.genitals[0]);
   })()

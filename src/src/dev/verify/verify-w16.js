@@ -293,7 +293,14 @@ await check('the confront effect lines format signed deltas without a stray "+" 
     }
     return lines.every(l => {
       const parsed = parseEffectDSL(l)[0];
-      return parsed && typeof parsed.delta === 'number' && !Number.isNaN(parsed.delta);
+      // parseEffectDSL keeps every param as the raw matched STRING (delta
+      // included) under .params, not a top-level .delta — that field never
+      // existed, so this always read undefined regardless of the "+-"
+      // question it was written to catch. The real bug this guards against
+      // (a naive '+' + v that mangles a negative v into a double sign,
+      // "+-0.2") shows up as validateMagnitude's isFiniteNumber/Number()
+      // call failing on the parsed string, so check that instead.
+      return parsed && typeof parsed.params.delta === 'string' && !Number.isNaN(Number(parsed.params.delta));
     }) && lines.some(l => l.includes('-0.')) && lines.some(l => l.includes('+0.'));
   })()`));
 
@@ -380,8 +387,14 @@ await check('the day pass is a verdict, not the move-out itself (returns {movedO
     noteColdShoulder(h.npcs[r1], 3, day, 'caught_peep');
     const first = advanceColdShoulderForDay(h.npcs[r1], day + 3, () => 0.0);
     const second = advanceColdShoulderForDay(h.npcs[r1], day + 4, () => 0.99);
+    // The check's own name says it: "resets the counter when below bar."
+    // By day+4, timeRecoveryDays (4) has elapsed since healDay, so time-heal
+    // fires FIRST and drops severity 3→2 — below moveOutSeverity (3) — and
+    // advanceColdShoulderForDay's own else-branch resets counter to 0 in
+    // that exact case (npc.js's own comment: "counter = 0"). >= 1 asserted
+    // the opposite of the invariant this check is named for.
     return first.movedOut === true && typeof first.counter === 'number'
-      && second.movedOut === false && h.npcs[r1].flags._coldShoulderDays >= 1;
+      && second.movedOut === false && h.npcs[r1].flags._coldShoulderDays === 0;
   })()`));
 
 console.log('\n8. Save/load round-trip through the REAL writeGeneratedGameState/loadGameState (in-memory kv, meta pre-seeded)');

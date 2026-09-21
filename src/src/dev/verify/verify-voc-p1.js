@@ -126,28 +126,40 @@ const OFFSITE_PATTERN = /block\s*===\s*'(work|commute|commute_home)'/;
 const FILES = ['sim.js', 'cognition.js', 'interruption.js', 'movement.js', 'npc.js'];
 
 // The survivors are all legitimate, and each is pinned so that a NEW one
-// shows up as a diff rather than as silence:
-//  - sim.js x3, cognition.js x1 (deriveHeldRecord), interruption.js x1: the
+// shows up as a diff rather than as silence. Re-audited 2026-09-20 (the
+// verify-suite regression sweep) against the code as it stands today — see
+// that audit doc for the line-by-line check; sim.js and cognition.js had
+// each grown two sites past what was pinned when this comment was first
+// written, all legitimate, none a re-derivation that skips the predicate:
+//  - sim.js x4, cognition.js x1 (deriveHeldRecord), interruption.js x1: the
 //    cheap block-name TRIGGER before asking the predicate. A non-work block
 //    is never offsite, so testing it first is correct and the predicate
-//    re-checks it anyway.
+//    re-checks it anyway (resolveRoomForActivity, the follow-release check,
+//    the D15 work-commitment gate above openWorkCommitment, and — added
+//    later, same shape — cognition.js's departure-signal Signal 2).
 //  - sim.js x1 more (Phase 3): the at-home shift's opener triggers on the
 //    work block alone, because openHomeWorkCommitment asks the predicate
 //    itself and returns null for anyone who is actually out.
+//  - sim.js x1 more: a troubleshooting-log branch TAG (resolveTick's
+//    logDebugEvent call) that reuses the block-name comparison to label a
+//    log entry 'work' vs 'wander' — it decides nothing, so the predicate has
+//    nothing to confirm; it just needs to keep matching the label a reader
+//    would expect on that log line.
 //  - cognition.js x1: resolved.block === 'commute' in the finishing-soon
 //    check, which is a genuine question about the block name and not about
 //    whether the NPC is out of the flat.
 //
-// Code-review fix (deriveHeldRecord): the SECOND cognition.js hit — the
-// `if (sched.block === 'work' || sched.block === 'commute' || ...)` branch
-// that used to re-derive a fresh home-work placement for ANY held commitment
-// during a work block — is gone. It was wrong the moment content_session/
-// content_collab could hold a commitment during that block: their real
-// anchor/activity got discarded every non-decision tick in favour of a
-// randomly re-rolled one. The generic fallback a few lines below (which
-// reads the commitment's own anchor/activity) already handled this
-// correctly and now simply isn't intercepted before it's reached.
-const EXPECTED_INLINE = { 'sim.js': 4, 'cognition.js': 1, 'interruption.js': 1, 'movement.js': 0, 'npc.js': 0 };
+// Code-review fix (deriveHeldRecord): the SECOND cognition.js hit that
+// EXISTED AT THE TIME — the `if (sched.block === 'work' || sched.block ===
+// 'commute' || ...)` branch that used to re-derive a fresh home-work
+// placement for ANY held commitment during a work block — is gone. It was
+// wrong the moment content_session/content_collab could hold a commitment
+// during that block: their real anchor/activity got discarded every
+// non-decision tick in favour of a randomly re-rolled one. The generic
+// fallback a few lines below (which reads the commitment's own anchor/
+// activity) already handled this correctly and now simply isn't intercepted
+// before it's reached.
+const EXPECTED_INLINE = { 'sim.js': 6, 'cognition.js': 2, 'interruption.js': 1, 'movement.js': 0, 'npc.js': 0 };
 
 // The `\r` strip is load-bearing on this repo: the files are CRLF, and JS's
 // `.` does not match `\r`, so `^\s*\/\/.*$` silently fails to match a

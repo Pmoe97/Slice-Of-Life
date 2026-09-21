@@ -213,7 +213,7 @@ check('applyFacilityCompletionStates is gone from ui.js',
       !/function applyFacilityCompletionStates/.test(srcOf('ui.js')));
 check('applySandboxPreset calls applyStructuralUpgrades (step 2, D18)', /applyStructuralUpgrades\(gameState\);/.test(simSrc));
 check('applySandboxPreset routes residency through moveToRoom (D16)', /moveToRoom\(npcId, npc, r\.residency\.room, gameState\.npcs/.test(simSrc));
-check('there is NO step 8 — the "no rebase" marker is present (D19)', /There is no step 8 \(D19\)/.test(simSrc));
+check('there is NO step 8 — the "no rebase" marker is present (D19)', /There is NO step 8\./.test(simSrc));
 
 const cfgSrc = srcOf('config.js');
 check('SANDBOX_HOUSE_PRESETS has the three presets as data (D17)',

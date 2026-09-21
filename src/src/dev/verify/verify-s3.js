@@ -270,6 +270,10 @@ check('no transient def is orphaned', api(`
     // emits it as the in-room perception gate for a player-made subject.
     // verify-acc-p3.js proves the emitter fires and is perceived.
     emitted.add('craft_moment');
+    // Actions & Activities Overhaul Phase 17 (D26): resolveTick's live-party
+    // branch calls emitTransient(...) directly for whoever is physically
+    // attending, same custom-path shape as footsteps/cooking above.
+    emitted.add('party_noise');
     const transients = Object.entries(SIGNAL_DEFS).filter(([, d]) => d.decayPerTick).map(([id]) => id);
     const orphans = transients.filter(id => !emitted.has(id));
     if (orphans.length) console.log('        orphaned: ' + orphans.join(', '));
@@ -282,6 +286,10 @@ check('standing and transient defs are cleanly distinguishable', api(`
     for (const d of Object.values(OBJECT_DEFS))
       for (const bv of Object.values(d.emits || {}))
         for (const p of Object.values(bv)) standing.add(p.signal);
+    // 'dust' is standing (no decayPerTick) but derived straight from
+    // world.rooms[roomId].dirt in deriveStandingSignals, not from any
+    // OBJECT_DEFS.emits entry — the object-emits walk above can't see it.
+    standing.add('dust');
     // A def must be one or the other: decayPerTick marks transient, an object
     // emitter marks standing. Both, or neither, means the model is confused.
     const bad = Object.entries(SIGNAL_DEFS).filter(([id, d]) =>

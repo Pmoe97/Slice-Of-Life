@@ -106,7 +106,10 @@ api(script).then(recent => {
   check('buffer caps at MEMORY_BUDGET.maxRecent (40)', deepLen === 40, `got ${deepLen}`);
   check('cap keeps the NEWEST, drops the oldest', api(`__t.deep.memory.recent[39].text`) === 'line 59');
   const sliceLen = api(`getRecentExchanges(__t.deep, undefined, 'scene').split(' | ').length`);
-  check('prompt slice returns 24 entries by default', sliceLen === 16, `got ${sliceLen}`);
+  // MEMORY_BUDGET.promptRecentCount is 24 (npc.js) — the check's own name
+  // already said so; the literal compared against it had drifted to a
+  // stale 16 from before promptRecentCount was bumped.
+  check('prompt slice returns 24 entries by default', sliceLen === 24, `got ${sliceLen}`);
 
   // -------------------------------------------------------------
   console.log('\nD6 — scene and IM transcripts do not interleave');

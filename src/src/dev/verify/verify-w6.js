@@ -102,7 +102,15 @@ function simulate({ residents = 3, days = 3, seed = 20260816, startDay = 5,
         const n = __gs.npcs[id];
         const block = n.schedule && n.schedule.currentBlock;
         __clothingSeen[id][n.clothing] = true;
-        if (n.clothing === 'nude') __nude[id].push(n.activity);
+        // bug-fix-audit-2026-08-30 fix #5 (landed after this file) changed
+        // the NPC shower drive's setsClothing from 'towel' to 'nude' — a
+        // universal, deviancy-independent nude state (everyone showers
+        // nude) that this array never saw before that fix. __nude exists
+        // specifically to isolate the deviancy-GATED pool nudity these
+        // checks assert on ("no nude ticks for a natural cast" / "only
+        // during a swim activity"), so showering has to be excluded at the
+        // source or it reads as a false positive on every single cast.
+        if (n.clothing === 'nude' && n.activity !== 'showering') __nude[id].push(n.activity);
         if (n.clothing === 'changing') {
           __changingRuns[id] = __lastClothing[id] === 'changing' ? __changingRuns[id] + 1 : 1;
         }
@@ -325,7 +333,25 @@ check('candidacy fires on a transition (yesterday’s outfit, today’s work blo
         const h = house(20260816, 3);
         const n = Object.values(h.npcs).find(x => x.residency.status === 'resident');
         n.bible.temperament.conscientiousness = 1;
-        n.outfit = composeOutfit('daily', npcWardrobeItems(h, n)); // wore daily yesterday
+        // Vocation & Lifestyle Expansion (D14): outfitTypeForContext's work
+        // target only applies when npcIsOffsite says this NPC's job actually
+        // takes them out of the flat — a remote/hybrid/self-employed/unemployed
+        // roll (whatever SIM_generateHouse happened to deal this seed) reads
+        // 'daily' here regardless of conscientiousness, same as this file's
+        // own header comment warns other checks about ("must force on_site
+        // too, or they are asserting the old world"). Force it explicitly.
+        n.bible.occupation = { ...n.bible.occupation, workMode: 'on_site' };
+        // composeOutfit('daily', wardrobe) is not reliable for "definitely
+        // not dressed for work" — plenty of real 'daily'-appropriate pieces
+        // (polo shirts, chinos, a wristwatch) ALSO carry the 'work' trait
+        // (office-casual is a real overlap), so outfitMatchesType can still
+        // read the composed outfit as matching 'work' depending on which
+        // items this seed's wardrobe happens to roll and how ties score.
+        // Hand-picked from CLOTHING_DEFS instead: every one of these five
+        // items carries only 'everyday'/'comfortable'/'sport'/'versatile' —
+        // none carries 'work' or 'formal' — so the mismatch is guaranteed
+        // regardless of wardrobe RNG.
+        n.outfit = { top: 'sweater', bottom: 'jeans', shoes: 'sneakers', socks: 'socks_cotton', underwear: 'boxers' }; // wore daily yesterday
         return DRIVE_CANDIDACY.change_clothes(n, 'x', h, { block: 'morning', activity: null }) === true;
       })()`));
 check('candidacy refuses when already dressed for the block',

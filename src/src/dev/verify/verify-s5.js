@@ -24,6 +24,14 @@ api(`
       if (o.defId === defId) o.state = { ...o.state, [key]: val };
     }
   };
+  // Food-overhaul Phase 4 (D9) rerouted the 'dishes' emit to the DERIVED
+  // dishLevelOf(obj.dishes map) — __set(..., 'dishes', level) via the
+  // vestigial state field has done nothing since. Use the real writer.
+  __setDishes = (g, room, defId, level) => {
+    for (const o of Object.values(g.objects['room_' + room] || {})) {
+      if (o.defId === defId) addDishUnits(o, { plate: level === 'many' ? DISH_TUNING.sinkDirtyAtMany : DISH_TUNING.sinkDirtyAtFew });
+    }
+  };
   __residents = (g) => Object.entries(g.npcs).filter(([, n]) => n.residency.status === 'resident').map(([id]) => id);
 `);
 
@@ -117,13 +125,13 @@ check('it targets the offending container only, not a deep clean', api(`
   (() => {
     const g = __mk();
     __set(g, 'kitchen', 'fridge', 'rotten_food', 'rotten');
-    __set(g, 'kitchen', 'sink_kitchen', 'dishes', 'many');
+    __setDishes(g, 'kitchen', 'sink_kitchen', 'many');
     const npc = __residents(g)[0];
     g.npcs[npc].location = 'kitchen';
     tryInvestigateSmell(g.npcs[npc], npc, { location: 'kitchen', block: 'leisure' }, g,
       mergePerceived(perceiveSignals(g, npc, 'kitchen')));
     const sink = Object.values(g.objects['room_kitchen']).find(o => o.defId === 'sink_kitchen');
-    return sink.state.dishes === 'many';   // untouched
+    return dishLevelOf(sink) === 'many';   // untouched
   })()
 `), 'following your nose to a bad smell is not a deep clean');
 
@@ -171,7 +179,7 @@ check('it does not fire in a spotless room', api(`
 check('it does fire where there is something to clean', api(`
   (() => {
     const g = __mk();
-    __set(g, 'kitchen', 'sink_kitchen', 'dishes', 'many');
+    __setDishes(g, 'kitchen', 'sink_kitchen', 'many');
     const npc = __residents(g)[0];
     return checkDriveGates(DRIVE_DEFS.clean_common, g.npcs[npc], mergePerceived(perceiveSignals(g, npc, 'kitchen')));
   })()
@@ -179,7 +187,7 @@ check('it does fire where there is something to clean', api(`
 check('sight does not propagate, so it cannot fire from next door', api(`
   (() => {
     const g = __mk();
-    __set(g, 'kitchen', 'sink_kitchen', 'dishes', 'many');
+    __setDishes(g, 'kitchen', 'sink_kitchen', 'many');
     const npc = __residents(g)[0];
     return !checkDriveGates(DRIVE_DEFS.clean_common, g.npcs[npc], mergePerceived(perceiveSignals(g, npc, 'dining')));
   })()

@@ -38,12 +38,15 @@ api(`
 
 // ---------------------------------------------------------------- 1
 console.log('\n1. The four submenu parents (defs.actions.js)');
-check('exactly the four D5 submenu parents exist, each a flat non-empty string array, verbs resolve, and nothing nests',
+check('exactly the five D5 submenu parents exist, each a flat non-empty string array, verbs resolve, and nothing nests',
       api(`(() => {
         const parents = Object.entries(ACTION_DEFS)
           .filter(([, d]) => Array.isArray(d.submenu) && d.submenu.length > 0)
           .map(([k]) => k).sort();
-        const expect = ['bed.interact', 'door.interact', 'sound.interact', 'wardrobe.interact'].sort();
+        // lockers.interact (the sauna/locker-room changing facility) joined
+        // the other four submenu parents later — same grouping-only shape
+        // (change_outfit + open as its verbs, no source of its own).
+        const expect = ['bed.interact', 'door.interact', 'lockers.interact', 'sound.interact', 'wardrobe.interact'].sort();
         if (JSON.stringify(parents) !== JSON.stringify(expect)) return false;
         for (const [k, d] of Object.entries(ACTION_DEFS)) {
           if (!d.submenu) continue;
@@ -58,7 +61,7 @@ check('exactly the four D5 submenu parents exist, each a flat non-empty string a
         return true;
       })()`));
 check('submenu parents are grouping-only: no source, so they never resolve as executable actions',
-      api(`(() => ['door.interact', 'wardrobe.interact', 'bed.interact', 'sound.interact']
+      api(`(() => ['door.interact', 'wardrobe.interact', 'bed.interact', 'sound.interact', 'lockers.interact']
             .every(id => !ACTION_DEFS[id].source))()`));
 
 // ---------------------------------------------------------------- 2

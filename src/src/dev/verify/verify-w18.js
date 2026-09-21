@@ -184,7 +184,7 @@ await check('the record shape is the plan\'s: sorted parents, conceivedDay/dueDa
 
 console.log('\n2. MANDATORY gate check — the willingness function is the only door');
 
-await check('maybeConceive has EXACTLY THREE call sites — all inside COMPLETED-act resolvers (tryIntimatePair / resolvePairedAct / applyReciprocatedAct), none near a gate and none in willingness.js',
+await check('maybeConceive has EXACTLY FOUR call sites — all inside COMPLETED-act resolvers (tryIntimatePair / resolvePairedAct / applyReciprocatedAct / resolveSleepAdvanceChoice\'s "into_it" branch, the sleep-advance flow\'s own real player-choice consent gate), none near a willingness-formula gate and none in willingness.js',
   new Promise((resolve) => {
     const files = ['drives.js', 'actions.js', 'boundary.js', 'willingness.js', 'pregnancy.js'];
     const sites = [];
@@ -193,8 +193,13 @@ await check('maybeConceive has EXACTLY THREE call sites — all inside COMPLETED
       const count = (src.match(/maybeConceive\s*\(/g) || []).length;
       sites.push(`${f}:${count}`);
     }
-    resolve(sites.join(', ') === 'drives.js:1, actions.js:1, boundary.js:1, willingness.js:0, pregnancy.js:1');
-  }), 'exactly drives.js:1, actions.js:1, boundary.js:1, willingness.js:0, pregnancy.js:1 (the definition)');
+    // boundary.js carries two: applyReciprocatedAct's reciprocated-boundary-act
+    // branch, plus resolveSleepAdvanceChoice's "into_it" branch — the latter
+    // fires only after the PLAYER's own real waking choice (not the asleep
+    // moment trySneakIntoBed stamped), so it's a genuine fourth consent-gated
+    // resolver, not a bypass near willingness().
+    resolve(sites.join(', ') === 'drives.js:1, actions.js:1, boundary.js:2, willingness.js:0, pregnancy.js:1');
+  }), 'exactly drives.js:1, actions.js:1, boundary.js:2, willingness.js:0, pregnancy.js:1 (the definition)');
 
 await check('a floored target\'s pair act never fires — asleep / cold-shoulder / hostile all abort with ZERO pregnancy records and ZERO history',
   api(`(() => {
@@ -349,6 +354,10 @@ await check('the player\'s trying flag drives the roll (_tryingWith), the player
     let p = null;
     for (let m = 0; m < 600 && !p; m += 30) { h.meta.clock.minutes = m; p = maybeConceive(h, 'player', a, 'sex', {}); }
     if (!p) return 'no player-path conception';
+    // The bump is gated by visibleFromDay same as the NPC path (see "the
+    // visible-bump reveal" check above) — reading right at conceivedDay would
+    // always see nothing, so advance to the day the pregnancy itself reports.
+    h.meta.clock.day = p.visibleFromDay;
     const linePre = pregnancySelfLine(h);
     const visPre = visiblePregnancyFor(h, 'player');
     h.meta.clock.day = 20; // past dueDay

@@ -57,7 +57,13 @@ async function main() {
 
   let passed = 0, failed = 0, broken = 0;
   for (const { f, out } of results) {
-    const m = out.match(/^ {2}(\d+) passed, (\d+) failed$/m);
+    // Whitespace before "N passed, M failed" is not a contract every harness
+    // honors (some print it flush-left, some indented, some inside a banner)
+    // — matching on exactly two spaces silently mis-filed seven harnesses
+    // that ran and reported fine as "DID NOT REPORT" (2026-09-20 audit: the
+    // voc-p1/p1-equiv/p2/p34/p56/p8/p9 family). The line itself, not its
+    // indentation, is the contract.
+    const m = out.match(/^\s*(\d+) passed, (\d+) failed$/m);
     if (!m) {
       broken++;
       console.log(`${f.padEnd(15)} DID NOT REPORT — ran with an error`);

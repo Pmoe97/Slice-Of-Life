@@ -143,7 +143,12 @@ api(`
         now.add(id);
         if (n.overture.channel === 'text') textHeld++;
         if (n.overture.channel === 'knock' && n.location === g.player.location) knockerPulledIn++;
-        if (n.overture.channel === 'propose' && !n.overture.proposal) proposalsNoTerms++;
+        // request_money_player/request_borrow_player also sit on the
+        // 'propose' channel (same geometry class) but carry a request field
+        // instead of a proposal one — the record-shape check above already
+        // treats both as valid terms (def.proposes gives proposal, def.requests
+        // gives request); this population sweep needs the same either/or.
+        if (n.overture.channel === 'propose' && !n.overture.proposal && !n.overture.request) proposalsNoTerms++;
         if (!prev.has(id)) {
           byChannel[n.overture.channel] = (byChannel[n.overture.channel] || 0) + 1;
           byMotive[n.overture.motive] = (byMotive[n.overture.motive] || 0) + 1;
@@ -344,7 +349,13 @@ check('the four channels sort themselves by geometry, with no code branching on 
         g2.player.location = 'bedroom_player'; __lock(g2, 'locked');
         const hall = ROOM_ADJACENCY['bedroom_player'][0];
         const shut = __open(g2, id, hall).sort().join(',');
-        return openDoor === 'approach_player,propose_player,text_player'
+        // request_money_player shares approach/propose's 'adjacent' proximity
+        // and, unlike request_borrow_player, always has "a real thing to
+        // name" (money, unconditionally) — so it legitimately opens here too.
+        // request_borrow_player does NOT, because this fixture seeds no
+        // borrowable item; requestTerms() fails closed with nothing to name
+        // (D29's rule — see verify-i4's own record-shape section above).
+        return openDoor === 'approach_player,propose_player,request_money_player,text_player'
           && away === 'text_player'
           && shut === 'knock_player,text_player'
           ? true : JSON.stringify({ openDoor, away, shut });
@@ -472,21 +483,39 @@ check('openOverture REFUSES a propose choice with no terms rather than opening a
 check('the record carries the terms, and every OTHER channel\'s record is the Phase 3 shape exactly',
       api(`(() => {
         const g = __mk(); const id = __ids(g)[0];
+        // request_borrow_player's requestTerms reads borrowableStacks(g, g.player)
+        // and returns null with nothing to lend — same shape as verify-aa-p5's
+        // fixture, a plain non-keyItem stack.
+        g.player.inventory = [{ defId: 'hobby_sketchpad', qty: 1, ownerId: 'player', meta: {} }];
         const base = 'channel,motive,motiveRef,openedDay,overtureId,status,targetId,ticksLeft,tone';
         const terms = proposeTerms(g.npcs[id], OVERTURE_DEFS.propose_player, g);
         const shapes = {};
         for (const ovId of Object.keys(OVERTURE_DEFS)) {
-          if (!OVERTURE_DEFS[ovId].awaitsAnswer) continue;
+          const def = OVERTURE_DEFS[ovId];
+          if (!def.awaitsAnswer) continue;
+          // D10's two request channels (request_money_player/request_borrow_player)
+          // need choice.request just as much as a propose channel needs
+          // choice.proposal — openOverture (overture.js:541) refuses either kind
+          // with no terms, which is the SAME "no candidacy without a real thing to
+          // name" rule proposeTerms documents. Missing this crashed the loop
+          // outright (Object.keys(null)) rather than reporting a real shape
+          // mismatch — no request channel's record shape was ever checked here.
           const rec = openOverture(g, id, { overtureId: ovId, motive: 'affection', motiveRef: {}, tone: 'warm',
-                                            ...(OVERTURE_DEFS[ovId].proposes ? { proposal: terms } : {}) });
+                                            ...(def.proposes ? { proposal: terms } : {}),
+                                            ...(def.requests ? { request: requestTerms(g.npcs[id], def, g) } : {}) });
           shapes[ovId] = Object.keys(rec).sort().join(',');
           delete g.npcs[id].overture;
         }
-        const withTerms = base.split(',').concat('proposal').sort().join(',');
-        return Object.entries(shapes).every(([ovId, keys]) =>
-          keys === (OVERTURE_DEFS[ovId].proposes ? withTerms : base))
+        const expected = (ovId) => {
+          const def = OVERTURE_DEFS[ovId];
+          let keys = base.split(',');
+          if (def.proposes) keys = keys.concat('proposal');
+          if (def.requests) keys = keys.concat('request');
+          return keys.sort().join(',');
+        };
+        return Object.entries(shapes).every(([ovId, keys]) => keys === expected(ovId))
           ? true : JSON.stringify(shapes);
-      })() === true`), 'an optional field beats a null on three records — absent already means none everywhere else here');
+      })() === true`), 'an optional field beats a null on every other record — absent already means none everywhere else here');
 
 // ---------------------------------------------------------------------------
 console.log('\n...and the commitment it books binds exactly as a meal does');

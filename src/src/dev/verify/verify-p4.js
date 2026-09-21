@@ -22,7 +22,20 @@ function simulate({ residents = 3, days = 5, seed = 20260810, repair = false }) 
     __h = SIM_generateHouse(${seed}, ${residents});
     __gs = { meta: { seed: __h.seed, clock: __h.clock, contentConfig: null, sessionLog: [] },
              player: __h.player, npcs: __h.npcs, world: __h.world, objects: __h.objects };
-    ${repair ? `for (const k of Object.keys(__gs.world.upgrades)) __gs.world.upgrades[k] = { tier: 'functional', condition: 100 };` : ''}
+    ${repair ? `for (const k of Object.keys(__gs.world.upgrades)) __gs.world.upgrades[k] = { tier: 'functional', condition: 100 };`
+      // bug-fix-audit-2026-08-17.md finding B4 (user-directed): both bathrooms'
+      // plumbing now starts 'functional' by design — "showers must be
+      // FUNCTIONAL (working, unremarkable) at game start, not
+      // upgraded/luxurious." SIM_generateHouse's own opening state is no
+      // longer disrepair for plumbing specifically (most other facilities
+      // still start broken). Force it broken here so this scenario keeps
+      // testing what it always meant to: does the shower drive still
+      // correctly respect broken plumbing on a legacy save that predates
+      // this fix (decayFacilityCondition's own "Locked decision #5" means
+      // 'functional' never decays back to 'broken' in a fresh game, so this
+      // is no longer reachable any other way).
+      : `__gs.world.upgrades.bathroom_a_plumbing = { tier: 'broken', condition: 0 };
+    __gs.world.upgrades.bathroom_b_plumbing = { tier: 'broken', condition: 0 };`}
     __restock = () => {
       for (const o of Object.values(__gs.objects['room_kitchen'] || {})) {
         if (o.defId === 'fridge' || o.defId === 'pantry') {
@@ -111,8 +124,18 @@ check('the shower drive actually fires in a repaired apartment',
       (repaired.fired.shower || 0) > 0, `shower events: ${repaired.fired.shower || 0}`);
 check('hygiene recovers rather than sliding one-way to zero',
       repaired.agg('hygiene', 'max') > 50, `peak ${Math.round(repaired.agg('hygiene', 'max'))}`);
-check('the towel clothing state is reachable again',
-      repaired.res.some(id => repaired.clothing[id].towel),
+// Bug-fix audit 2026-08-30 (sleeping-npc-contradiction-audit.md's sibling,
+// bug-fix-audit-2026-08-30.md #5): DRIVE_DEFS.shower.setsClothing was
+// 'towel' — the POST-shower state — so a live shower tick never actually
+// reached it; it was changed to 'nude' (matching the player's own shower and
+// the masturbate drive), with the leftover 'nude' reverting to 'dressed' the
+// following tick via npcClothingForContext. 'towel' is still reachable
+// through ACTION_DEFS' afterClothing (the player-invoked self.shower verb,
+// outside this drive-only harness) but is no longer what the DRIVE path
+// itself sets — asserting 'nude' is what this check has actually protected
+// since that fix landed.
+check('the nude clothing state is reached during a live shower tick',
+      repaired.res.some(id => repaired.clothing[id].nude),
       `states seen: ${repaired.res.map(id => Object.keys(repaired.clothing[id]).join('/')).join(' | ')}`);
 check('NPC showers now meter water/shower utilities onto the bills',
       repaired.meters.includes('showers') && repaired.meters.includes('waterHeating'),

@@ -155,7 +155,13 @@ check('a door blocks sight essentially completely', api(`
 `), `got ${api(`String(reachMultipliers(__gs, '${DOOR_ROOM}', 'sight')['${DOOR_NEIGHBOUR}'])`)}`);
 
 console.log('\nChannels behave differently (D5)');
-api(`__set('kitchen', 'sink_kitchen', 'dishes', 'many');`);
+// Food-overhaul Phase 4 (D9) rerouted the 'dishes' emit to read the DERIVED
+// dishLevelOf(obj.dishes map), not the vestigial obj.state.dishes field —
+// __set('dishes', 'many') has done nothing since. Use the real writer.
+api(`(() => {
+  const sink = Object.values(__gs.objects['room_kitchen']).find(o => o.defId === 'sink_kitchen');
+  addDishUnits(sink, { plate: DISH_TUNING.sinkDirtyAtMany });
+})();`);
 check('sight does not leave its room',
       api(`perceiveSignals(__gs, 'player', 'kitchen').some(r => r.signalId === 'dirty_dishes')`) === true &&
       api(`perceiveSignals(__gs, 'player', 'dining').some(r => r.signalId === 'dirty_dishes')`) === false);
@@ -248,8 +254,15 @@ check('no STANDING signal is orphaned', api(`
         for (const payload of Object.values(byValue)) emitted.add(payload.signal);
       }
     }
+    // 'dust' is a documented exception (signals.js's deriveStandingSignals,
+    // Actions & Activities Overhaul Phase 9, D17/D49): it's a ROOM condition
+    // read straight from world.rooms[roomId].dirt, not an object's emits —
+    // "a room condition, not an object's, so it has no OBJECT_DEFS.emits
+    // entry to walk above." Naming it here (rather than loosening the check
+    // generally) keeps a real future orphan failing loudly.
+    const knownRoomDerived = new Set(['dust']);
     const standing = Object.entries(SIGNAL_DEFS).filter(([, d]) => !d.decayPerTick).map(([id]) => id);
-    const orphans = standing.filter(s => !emitted.has(s));
+    const orphans = standing.filter(s => !emitted.has(s) && !knownRoomDerived.has(s));
     if (orphans.length) console.log('        orphaned: ' + orphans.join(', '));
     return orphans.length === 0;
   })()

@@ -133,7 +133,12 @@ check('no source file reads room.odor any more', (() => {
 check('a freshly built room shell has no odor field',
       api(`!('odor' in __gs.world.rooms.kitchen)`),
       `keys: ${JSON.stringify(api(`Object.keys(__gs.world.rooms.kitchen)`))}`);
-check('FOLDER_VERSIONS.world bumped to 4', api(`FOLDER_VERSIONS.world`) === 4);
+// Pinned to the exact post-odor-removal value at first; later, unrelated
+// save-shape changes have since bumped world to 6 (see MIGRATIONS.world).
+// The real invariant is "the odor migration's target version shipped and is
+// still reachable," not "nothing has bumped it since" — >= survives that.
+check('FOLDER_VERSIONS.world bumped to at least 4', api(`FOLDER_VERSIONS.world`) >= 4,
+  `now ${api('FOLDER_VERSIONS.world')}`);
 check('a 3->4 world migration is registered',
       api(`MIGRATIONS.world.some(m => m.to === 4)`));
 check('the migration strips odor from a legacy room shell', api(`
@@ -225,8 +230,12 @@ check('every declared STANDING signal has a reachable emitter', api(`
     for (const def of Object.values(OBJECT_DEFS))
       for (const byValue of Object.values(def.emits || {}))
         for (const p of Object.values(byValue)) emitted.add(p.signal);
+    // 'dust' is a documented exception (signals.js's deriveStandingSignals,
+    // Actions & Activities Overhaul Phase 9, D17/D49): a ROOM condition read
+    // straight from world.rooms[roomId].dirt, with no OBJECT_DEFS.emits entry.
+    const knownRoomDerived = new Set(['dust']);
     const standing = Object.entries(SIGNAL_DEFS).filter(([, d]) => !d.decayPerTick).map(([id]) => id);
-    const orphans = standing.filter(s => !emitted.has(s));
+    const orphans = standing.filter(s => !emitted.has(s) && !knownRoomDerived.has(s));
     if (orphans.length) console.log('        orphaned: ' + orphans.join(', '));
     return orphans.length === 0;
   })()

@@ -450,6 +450,12 @@ const SIM_OVERTURE_ALLOWED = [
   // stays at the door), so the answer moved into OVERTURE beside the rest of
   // what a channel means. sim.js asks and writes; the claim above is unchanged.
   /^const \{ roomId: waitRoom, activity: waitActivity \} = overtureWaitRoom\(gameState, npcs\[id\]\);$/,
+  // Intimacy & Voyeurism Phase 14: the third-party infidelity footprint
+  // carries a partner's already-resolved `overture` into the batched
+  // npcUpdates the same way it carries needs/mood/commitment/etc. right
+  // beside it — a CARRY of a value drives.js already computed, not a build
+  // or clear of the record.
+  /^if \(pn\.overture\) u\.overture = pn\.overture;$/,
 ];
 check('sim.js only ages, carries and holds — it never builds or clears the record',
       SIM_OVERTURE_LINES.length === SIM_OVERTURE_ALLOWED.length

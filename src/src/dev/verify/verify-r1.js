@@ -66,11 +66,18 @@ api(`
 `);
 check('one line per character present, and only those present',
       api(`__s.presence.length`) === 2, JSON.stringify(api(`__s.presence.map(p => p.line)`)));
+// Intimacy & Voyeurism Phase 7 (D11, landed after these checks) appends an
+// outfit-flavor tail to a presence line ("...Someone's dressed to
+// impress.") whenever the NPC's outfit crosses the notable-prose threshold
+// — scene.js's own presenceLines comment documents this. The activity
+// phrase these checks care about is no longer guaranteed to be the last
+// thing in the line, so the end anchor ($) is now the wrong assertion for
+// "does the phrase read correctly" — checking it occurs (anywhere) is.
 check('the default frame reads correctly',
-      api(`__s.presence.some(p => /is making coffee\\.$/.test(p.line))`),
+      api(`__s.presence.some(p => /is making coffee\\./.test(p.line))`),
       JSON.stringify(api(`__s.presence.map(p => p.line)`)));
 check('PRESENCE_PHRASES overrides the ones that read badly',
-      api(`__s.presence.some(p => /skincare routine\\.$/.test(p.line) && !/is skincare/.test(p.line))`),
+      api(`__s.presence.some(p => /skincare routine\\./.test(p.line) && !/is skincare/.test(p.line))`),
       'the default would produce "X is skincare routine"');
 check('an activity-less character still gets a line', api(`
   (() => {
@@ -78,7 +85,7 @@ check('an activity-less character still gets a line', api(`
     const id = Object.keys(g.npcs)[0];
     g.npcs[id].location = g.player.location;
     g.npcs[id].activity = '';
-    return composeScene(g, {}).presence.some(p => /is here\\.$/.test(p.line));
+    return composeScene(g, {}).presence.some(p => /is here\\./.test(p.line));
   })()
 `));
 check('every PRESENCE_PHRASES template has a {name} slot', api(`

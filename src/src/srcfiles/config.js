@@ -10576,6 +10576,14 @@ const DRIVE_DEFS = {
       baseAppeal: 0.30,
       temperamentWeights: { conscientiousness: 0.20 },
       blockAppeal: { morning: 1.4, prep: 1.5, evening: 1.3, wind_down: 1.3 },
+      // Missing since this drive's own landing. Without it, cognition.js's
+      // openCommitment falls back to a flat CLOCK.tickMinutes (30) hold —
+      // not a crash, but every other drive declares its own duration rather
+      // than riding that generic fallback, and 30 minutes to change clothes
+      // is a long beat for what should be quiet and quick. Matches the
+      // player's own wardrobe.change_outfit (ACTION_TUNING.changeOutfitMinutes)
+      // — the same act, the same duration either way it happens.
+      holdMinutes: 5,
     },
   },
   // The swim drive (Phase 6's "nude_swim variant" premise): swimming is a
@@ -10625,10 +10633,10 @@ const DRIVE_DEFS = {
     timeOfDay: ['leisure', 'evening', 'wind_down'],
     utility: {
       // A wind-down indulgence, not a duty — same shape as swim's openness
-      // pull, plus a neuroticism pull (the anxious unwind here more than
+      // pull, plus a volatility pull (the anxious unwind here more than
       // the even-keeled do).
       baseAppeal: 0.16,
-      temperamentWeights: { openness: 0.10, neuroticism: 0.10 },
+      temperamentWeights: { openness: 0.10, volatility: 0.10 },
       holdMinutes: ACTION_TUNING.saunaMinutes,
       blockAppeal: { leisure: 1.1, evening: 1.2, wind_down: 1.3 },
     },

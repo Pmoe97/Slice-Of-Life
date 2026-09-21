@@ -321,7 +321,13 @@ await check('a floored target is never a participant and the verbs leave ZERO in
     const clothingBefore = h.npcs[r1].clothing;
     const lastIntimateBefore = getRelationship(h, r1, r2, false).lastIntimateDay;
     const conf = applyConfrontNpc(h, r1, 0, { location: h.player.location });
-    const spread = applySpreadSecret(h, r1, 0, r3);
+    // applyConfrontNpc spends ledger entry 0 (spendCodexEntry) — reusing the
+    // same index for spread makes applySpreadSecret refuse outright
+    // (entry.spent), which is not the intimacy-floor invariant this check
+    // exists to prove. A second, independent witnessed entry gives spread
+    // something real to consume instead.
+    notePlayerWitnessedEntry(h, r1, 'saw_with_X', day, h.npcs[r1].residency.room, { otherNpcId: r3 });
+    const spread = applySpreadSecret(h, r1, 1, r3);
     notePlayerWitnessedEntry(h, r3, 'peeked_masturbation', day, h.npcs[r3].residency.room, {});
     notePlayerWitnessedEntry(h, ids.find(id => id !== r1 && id !== r3), 'peeked_masturbation', day, h.npcs[r1].residency.room, {});
     const others = ids.filter(id => id !== r1 && id !== r3);
@@ -338,9 +344,21 @@ await check('a floored target is never a participant and the verbs leave ZERO in
 await check('the willingness floor itself is byte-unchanged by a full pass of all three verbs',
   api(`(() => {
     const { h, ids, r1, r2, r3 } = cheatFixture(20260816, 3);
+    // A genuine hostile floor, not the fixture's default stranger one: the
+    // "shame" outcome's own tension spike (applyConfrontNpc's documented
+    // effect) moves relPlayer.tension off zero, which is exactly the signal
+    // npcIsStrangerTo's stranger floor uses to decide "no prior interaction"
+    // — so a stranger-floored target legitimately stops reading as a
+    // stranger the moment it is confronted at all, floor or no floor. A
+    // properly hostile target (tension already saturating the hostile
+    // floor) stays floored regardless of that same small additional spike.
+    warmTowardPlayer(h, r1, { tension: 1.0 });
     const before = willingness(h, h.npcs[r1], 'player', 'sex', {});
     applyConfrontNpc(h, r1, 0, { location: h.player.location });
-    applySpreadSecret(h, r1, 0, r3);
+    // Second entry — see the sibling check above for why entry 0 is spent
+    // by confront and cannot also serve spread.
+    notePlayerWitnessedEntry(h, r1, 'saw_with_X', h.meta.clock.day, h.npcs[r1].residency.room, { otherNpcId: r3 });
+    applySpreadSecret(h, r1, 1, r3);
     const after = willingness(h, h.npcs[r1], 'player', 'sex', {});
     return before === after;
   })()`));

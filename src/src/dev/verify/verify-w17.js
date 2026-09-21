@@ -319,6 +319,15 @@ await check('a completed throuple applies the full footprint: both partners undr
     const room = h.player.location;
     warmTowardPlayer(h, r1); warmTowardPlayer(h, r2);
     h.npcs[r1].location = room; h.npcs[r2].location = room;
+    // warmTowardPlayer only sets relPlayer — the r1<->r2 castWeb pair is
+    // whatever SIM_generateHouse happened to roll, which can be genuinely
+    // adversarial (this seed's own roll: affection -0.36/-0.87 both ways).
+    // The check wants "castWeb warmed both ways" against a neutral
+    // baseline, not "the +0.1 REL_DELTA landed" against whatever the dice
+    // gave this pair — a hostile enough starting roll leaves the post-delta
+    // value negative even though the delta applied correctly.
+    const pairKeyStr = pairKey(r1, r2);
+    h.world.castWeb[pairKeyStr] = createBlankPair(r1, r2);
     const bed = Object.values(h.objects?.['room_' + room] || {}).find(o => o.defId === 'bed');
     const res = applyBoundaryThrouple(h, r1, r2, { location: room });
     const key = [r1, r2].sort().join('|');
@@ -457,17 +466,23 @@ await check('the resolver: silent success leaves the NPC beside you, sated, an u
       h.npcs[r1].needs = { ...(h.npcs[r1].needs || {}), desire: 80 }; h.npcs[r1].location = 'hallway_a';
       return h;
     };
-    let silent = null, caught = null;
-    for (let s = 9000; s < 9600 && (!silent || !caught); s++) {
+    let silentSeed = null, caughtSeed = null;
+    for (let s = 9000; s < 9600 && (silentSeed === null || caughtSeed === null); s++) {
       const h = sneakState(s, 0.2);
       const [r1] = residentsOf(h);
       const res = trySneakIntoBed(h.npcs[r1], r1, { location: 'hallway_a' }, h);
       if (!res) continue;
-      if (!silent && !res.caught) silent = { s, h };
-      if (!caught && res.caught) caught = { s, h };
+      if (silentSeed === null && !res.caught) silentSeed = s;
+      if (caughtSeed === null && res.caught) caughtSeed = s;
     }
+    // dev-verify-harness-gotchas shape 7: the classification loop's own
+    // trySneakIntoBed call already applied the resolver's real effects
+    // (ADJUST_NEED desire -40, the affection REL_DELTA) to h — reusing that
+    // SAME mutated npc for the real assertion below would double-apply them
+    // (desire landing 40 short of 80+desireRelease). Rebuild fresh from the
+    // seed the loop found instead, so the resolver runs exactly once.
     // silent
-    const hs = silent.h; const [rs] = residentsOf(hs);
+    const hs = sneakState(silentSeed, 0.2); const [rs] = residentsOf(hs);
     const pRoom = hs.player.location;
     const bed = Object.values(hs.objects?.['room_' + pRoom] || {}).find(o => o.defId === 'bed');
     const before = hs.npcs[rs].relPlayer;
@@ -480,7 +495,7 @@ await check('the resolver: silent success leaves the NPC beside you, sated, an u
       && bed?.state?.made === 'unmade';
     // caught — D31: a pending record now, no relPlayer/suspicion consequence
     // fires until the player's own choice resolves it (verify-aa-p5.js).
-    const hc = caught.h; const [rc] = residentsOf(hc);
+    const hc = sneakState(caughtSeed, 0.2); const [rc] = residentsOf(hc);
     const beforeC = JSON.stringify(hc.npcs[rc].relPlayer);
     const resC = trySneakIntoBed(hc.npcs[rc], rc, { location: 'hallway_a' }, hc);
     const afterC = JSON.stringify(hc.npcs[rc].relPlayer);

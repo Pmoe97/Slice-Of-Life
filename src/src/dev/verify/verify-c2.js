@@ -651,7 +651,16 @@ check('a released commitment does not come back through the merge', api(`
       const nowAbs = clockToAbsolute(g.meta.clock);
       const had = g.npcs[id].commitment;
       g = resolveBatch(g, 1).state;
-      if (had && had.completesAtAbs - nowAbs <= CLOCK.tickMinutes && g.npcs[id].commitment &&
+      // ageCommitment (cognition.js) reads gameState.meta.clock as it stood
+      // BEFORE this tick's advance (resolveTick destructures meta.clock once
+      // at the top), and releases only once that PRE-tick "now" has reached
+      // completesAtAbs — one tick later than "due within the next
+      // CLOCK.tickMinutes" suggested. Traced directly: at nowAbs ==
+      // completesAtAbs - tickMinutes the commitment survives unchanged (30
+      // minutes still to run by the clock ageCommitment actually reads); it
+      // is replaced only on the tick where nowAbs == completesAtAbs. <= 0
+      // is the real "already due" boundary, not <= tickMinutes.
+      if (had && had.completesAtAbs - nowAbs <= 0 && g.npcs[id].commitment &&
           g.npcs[id].commitment.startedAtAbs === had.startedAtAbs) return false;
     }
     return true;

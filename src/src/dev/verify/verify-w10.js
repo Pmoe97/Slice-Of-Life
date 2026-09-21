@@ -222,6 +222,14 @@ check('a familiar-phase NPC is warm even below the comfort bar (phase in warmPha
         const npc = Object.values(h.npcs)[0];
         warmNpc(npc, { comfort: 0.3, room: 'bedroom_1' });
         npc.relPlayer.conversationPhase = 'familiar';
+        // warmNpc never touches temperament, leaving npcDeviancy to whatever
+        // SIM_generateHouse happened to roll — the sibling check just above
+        // this one explicitly pins openness/assertiveness low so the WARM
+        // (non-deviant) branch is guaranteed rather than left to seed luck;
+        // this check needs the same pin, or a deviant roll of THIS npc reads
+        // warmDeviant instead, which is a different (correct, just untested-
+        // here) branch.
+        npc.bible.temperament = { ...(npc.bible.temperament || {}), openness: -1, assertiveness: -1 };
         return peekOutcomeWeights(h, npc) === PEEK_OUTCOMES.weightTables.warm;
       })()`));
 check('a near-stranger (all relPlayer axes at default) reads cold (confront 4)',

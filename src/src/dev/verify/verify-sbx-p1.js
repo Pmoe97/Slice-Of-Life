@@ -228,19 +228,43 @@ const llmSrc = srcOf('llm.js');
 check('mergeProseIntoBible is defined beside expandCharacterProse in llm.js',
       /function mergeProseIntoBible\(bible, prose, authoredFields = \[\]\)/.test(llmSrc));
 check('the D12 why-physical-survived comment is present in llm.js', /accidental and undocumented/.test(llmSrc));
-check('mergeProseIntoBible has exactly one call site across src/src/srcfiles (approveCastAndStartGame)',
+// The Seasonal Calendar & Sandbox plan (Phase B7) added a second, legitimate
+// caller — applySandboxRoommateProse, expanding prose for a roommate added
+// to an already-running sandbox game, mirroring approveCastAndStartGame's own
+// authoredFields-lock + validateCharacter gate line for line — so "exactly
+// one call site" stopped being the invariant worth protecting the moment
+// that shipped. What actually matters (B1/D12): the merge FUNCTION itself
+// stays singular in llm.js (never re-implemented inline), and every caller
+// re-enters through validateCharacter before the merged bible reaches
+// npc.bible, so a player-authored field can never survive one caller's gate
+// and not another's. A genuinely new, unreviewed call site should still fail
+// loudly rather than silently join the allowlist, so the known-good set is
+// named explicitly here rather than just counted.
+check('mergeProseIntoBible is called only from the known, reviewed call sites, and every one re-validates through validateCharacter',
       (() => {
         const files = fs.readdirSync(SRCFILES).filter(f => f.endsWith('.js'));
+        const known = ['approveCastAndStartGame', 'applySandboxRoommateProse'];
         const sites = [];
         for (const f of files) {
           if (f === 'llm.js') continue;
           const src = srcOf(f);
-          for (const [i, line] of src.split('\n').entries()) {
-            if (line.includes('mergeProseIntoBible(')) sites.push(`${f}:${i + 1}`);
+          const lines = src.split('\n');
+          for (const [i, line] of lines.entries()) {
+            if (!line.includes('mergeProseIntoBible(')) continue;
+            const enclosingFn = (() => {
+              for (let j = i; j >= 0; j--) {
+                const m = lines[j].match(/^(?:async )?function (\w+)/);
+                if (m) return m[1];
+              }
+              return null;
+            })();
+            const validatesNearby = lines.slice(i, i + 15).some(l => l.includes('validateCharacter('));
+            sites.push({ where: `${f}:${i + 1}`, enclosingFn, validatesNearby });
           }
         }
-        return sites;
-      })().length === 1);
+        return sites.length === known.length
+          && sites.every(s => known.includes(s.enclosingFn) && s.validatesNearby);
+      })());
 
 const cfgSrc = srcOf('config.js');
 check('config.js schema entry carries the D12 comment', /authoredFields: \{ type: 'array', required: false, default: \[\], maxItems: 20 \}/.test(cfgSrc));

@@ -137,11 +137,17 @@ console.log('\n3. D19 guard fires (assert, don\'t rebase)');
   catch (e) { threw = e.message; }
   check('a valid heaviest sandbox passes the guard (no throw)', threw === null, threw || '');
 
-  // Rebasing day to 5 must throw with a D19 message.
-  let threw5 = null, msg5 = '';
-  try { api(`g = house(20260822, 1); g.clock.day = 5; try { applySandboxPreset(g, { house: { preset: 'restored' } }); 'no-throw'; } catch (e) { e.message; }`) }
-  catch (e) { threw5 = e.message; }
-  check('day !== 1 throws (D19)', threw5 && /D19/.test(threw5), threw5 || 'no throw');
+  // Rebasing day to 5 must throw with a D19 message. The inner script catches
+  // its own throw (so it can hand back e.message as a string) — the bug this
+  // fixes is that api(...)'s return value was never captured, so threw5 read
+  // null forever and the outer catch (which only fires on a VM-level error)
+  // never had anything to catch: the check always failed regardless of what
+  // applySandboxPreset actually did.
+  let msg5 = null;
+  try {
+    msg5 = api(`g = house(20260822, 1); g.clock.day = 5; try { applySandboxPreset(g, { house: { preset: 'restored' } }); null; } catch (e) { e.message; }`);
+  } catch (e) { msg5 = e.message; }
+  check('day !== 1 throws (D19)', !!msg5 && /D19/.test(msg5), msg5 || 'no throw');
 }
 
 // ---------------------------------------------------------------- 4

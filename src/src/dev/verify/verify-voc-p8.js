@@ -105,7 +105,6 @@ const pressure = api(`(function () {
     return gs;
   };
   let baseSum = 0, afterSum = 0, ct = 0;
-  let soloBase = null, soloAfter = null;
   for (const n of [1,3,5,7]) {
     for (let s = 0; s < 20; s++) {
       const gs = mk(s, n);
@@ -114,9 +113,19 @@ const pressure = api(`(function () {
       incomeRentShare = real;
       const a = computeRent(gs.npcs, gs);
       baseSum += b.playerShare; afterSum += a.playerShare; ct++;
-      if (s === 0 && n === 1) { soloBase = b.playerShare; soloAfter = a.playerShare; }
     }
   }
+  incomeRentShare = real;
+
+  // Month-one (solo) is a DIFFERENT code path, not "n=1" in the loop above —
+  // n=1 generates one contributing roommate (opening.soloStart requires
+  // residentCount === 0 exactly; see SIM_generateHouse). Sample that branch
+  // directly rather than mislabeling a 1-roommate house as "solo".
+  const gsSolo = mk('solo', 0);
+  incomeRentShare = () => ECONOMY.rent.defaultRoommateShare;
+  const soloBase = computeRent(gsSolo.npcs, gsSolo).playerShare;
+  incomeRentShare = real;
+  const soloAfter = computeRent(gsSolo.npcs, gsSolo).playerShare;
   incomeRentShare = real;
   return {
     ct,

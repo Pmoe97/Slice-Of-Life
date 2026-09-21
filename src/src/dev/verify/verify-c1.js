@@ -47,6 +47,19 @@ api(`
     const g = { meta: { seed: h.seed, clock: h.clock, contentConfig: null, sessionLog: [] },
                 player: h.player, npcs: h.npcs, world: h.world, objects: h.objects };
     for (const k of Object.keys(g.world.upgrades)) g.world.upgrades[k] = { tier: 'functional', condition: 100 };
+    // Intimacy & Voyeurism Phase 14 (D14): sext_partner's whole door is an
+    // outside-partner record (world.outsidePartners), which a freshly
+    // generated house has no reason to roll. Seeded directly for EVERY
+    // resident (not just one — an asymmetric seed made "two NPCs with
+    // identical state score identically" fail, since scoring the same state
+    // object as a different id changed sext_partner's own candidacy) rather
+    // than through the real ensureOutsidePartners RNG gate (partnerChance),
+    // which this test does not want to depend on — the point is
+    // reachability, not the odds of having one.
+    g.world.outsidePartners = {};
+    for (const rid of __ids(g)) {
+      g.world.outsidePartners[rid] = { npcId: 'outside_test_partner_' + rid, sinceDay: 1, lastVisitDay: null };
+    }
     return g;
   };
   __ids = (g) => Object.keys(g.npcs).filter(id => g.npcs[id].residency.status === 'resident');
@@ -57,10 +70,25 @@ api(`
     const id = __ids(g)[0];
     const n = g.npcs[id];
     return { ...n,
-      needs: { ...n.needs, ...needs },
+      // Intimacy & Voyeurism Phase 13/14/17: desire is a scored need like any
+      // other, but its OWN reachability was never added to ATTAINABLE/NEEDY —
+      // those predate the desire need entirely. Unlike the six needs above,
+      // "most motivated" for desire means the HIGH end, not the low one
+      // (masturbate/intimate/sext_partner/sneak_into_bed all gate on desire
+      // ABOVE a floor), so it is set directly here rather than folded into
+      // the generic ATTAINABLE-driven merge.
+      needs: { ...n.needs, ...needs, desire: 100 },
       flags: {},
       bible: { ...n.bible, temperament: { warmth: 0, volatility: 0, openness: 0,
-                                          conscientiousness: 0, assertiveness: 0, selfAwareness: 0 } } };
+                                          conscientiousness: 0, assertiveness: 0, selfAwareness: 0 } },
+      // change_clothes' candidacy compares the CURRENT outfit against the
+      // block's target type (outfitMatchesType) — a freshly rolled outfit's
+      // garments already carry enough overlapping traits (blouse reads as
+      // both 'work' and 'everyday', etc.) to match every block's target
+      // vacuously, so the drive could never become a candidate no matter
+      // what time of day was swept. Pure swim gear carries neither trait,
+      // forcing a genuine mismatch against every non-swim block.
+      outfit: { swimwear: 'swim_trunks' } };
   };
 
   // Every signal in the game, perceived at a modest intensity — just over the
@@ -133,6 +161,54 @@ api(`
       g.npcs[id].bible.temperament = t;
       return { ...npc, __room: 'pool_room',
                bible: { ...npc.bible, temperament: t, occupation: { ...occ, contentWork: true } } };
+    },
+    // PRIVATE, TOGETHER: a co-located resident, in the SAME private bedroom —
+    // what intimate and content_collab actually need on top of PRIVATE's
+    // solo setup (D3/D13, D19). findIntimatePartner reads the LIVE gameState
+    // (co-location, willingness), never the npc copy scoreCandidates
+    // scores, so the partner's location/needs/castWeb are written straight
+    // onto g. A same-house roommate on day one is a STRANGER by design
+    // (willingness.js's npcIsStrangerTo) — a hard floor no amount of desire
+    // clears — so the pair's castWeb axes are warmed here the same way
+    // ensureOutsidePartners warms an outside partner's, rather than left at
+    // SIM_generateHouse's rolled (often adversarial) defaults.
+    (g, npc) => {
+      const id = __ids(g)[0];
+      const [, partnerId] = __ids(g);
+      const own = g.npcs[id].residency.room;
+      g.player.location = 'living_room';
+      g.player.flags = {};
+      g.npcs[partnerId] = { ...g.npcs[partnerId], location: own, commitment: null, activity: '',
+        needs: { ...g.npcs[partnerId].needs, desire: 100, mood: 0.8 },
+        bible: { ...g.npcs[partnerId].bible,
+          temperament: { ...g.npcs[partnerId].bible.temperament, volatility: 1, openness: 1, assertiveness: 1 } } };
+      const occ = g.npcs[id].bible.occupation || {};
+      g.npcs[id].bible.occupation = { ...occ, contentWork: true };
+      const warm = { trust: 0.9, affection: 0.9, tension: 0, respect: 0.9, comfort: 0.9, desire: 0.9 };
+      const key = [id, partnerId].sort().join('|');
+      g.world.castWeb[key] = { ...(g.world.castWeb[key] || {}),
+        axes: { [id + '→' + partnerId]: { ...warm }, [partnerId + '→' + id]: { ...warm } } };
+      const t = { ...npc.bible.temperament, volatility: 1, openness: 1, assertiveness: 1 };
+      return { ...npc, __room: own,
+               bible: { ...npc.bible, temperament: t, occupation: { ...occ, contentWork: true } } };
+    },
+    // SNEAK: the player genuinely asleep in their own room, the NPC in the
+    // adjacent hallway, door unlocked — sneak_into_bed's whole door
+    // (boundarySneakCandidacy: deviancy + desire floors, the player's
+    // vulnerable-state flag, adjacency, an unlocked door). No willingness
+    // gate here by design (see that function's own comment — the player is
+    // asleep, never a consenting participant), so this arrangement needs
+    // nothing beyond the NPC's own traits and the player's state.
+    (g, npc) => {
+      g.player.location = 'bedroom_player';
+      g.player.flags = { _vulnerableState: 'sleeping' };
+      const hall = (ROOM_ADJACENCY['bedroom_player'] || []).find(r => r !== 'bedroom_player') || 'hallway_a';
+      const bucket = g.objects['room_bedroom_player'] || (g.objects['room_bedroom_player'] = {});
+      const door = Object.values(bucket).find(o => o.defId === 'bedroom_door');
+      if (door) door.state = { ...door.state, lock: 'unlocked' };
+      else bucket.__door = { id: '__door', defId: 'bedroom_door', state: { lock: 'unlocked' } };
+      const t = { ...npc.bible.temperament, openness: 1, assertiveness: 1 };
+      return { ...npc, __room: hall, bible: { ...npc.bible, temperament: t } };
     },
   ];
 `);

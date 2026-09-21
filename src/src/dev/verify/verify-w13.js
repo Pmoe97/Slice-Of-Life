@@ -313,6 +313,15 @@ await check('a SECOND act is recorded as sex, not first_sex (history distinguish
         h.npcs[a].needs.desire = 100; h.npcs[b].needs.desire = 100;
         h.npcs[a].flags._driveCooldowns = {}; h.npcs[b].flags._driveCooldowns = {};
         tryIntimatePair(h.npcs[a], a, resolvedFor(room), h, DRIVE_DEFS.intimate);
+        // The first act leaves BOTH parties holding a real 40-minute
+        // 'intimate' commitment (invariant 7's own trace) — findIntimatePartner
+        // excludes any candidate whose p.commitment is truthy (busy is busy),
+        // so an immediate second call at the same simulated instant can never
+        // find a partner at all, same as it couldn't mid-act in real play.
+        // A real elapsed-time gap would let this expire on its own; clearing
+        // it here stands in for that gap, the same way resetting desire and
+        // _driveCooldowns already stands in for satiation/cooldown elapsing.
+        delete h.npcs[a].commitment; delete h.npcs[b].commitment;
         h.npcs[a].needs.desire = 100; h.npcs[b].needs.desire = 100;
         h.npcs[a].flags._driveCooldowns = {}; h.npcs[b].flags._driveCooldowns = {};
         tryIntimatePair(h.npcs[a], a, resolvedFor(room), h, DRIVE_DEFS.intimate);
