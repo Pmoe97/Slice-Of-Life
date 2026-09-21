@@ -620,15 +620,32 @@ function sharedActivityCredit(npc, day, minutes) {
   return { credited, used };
 }
 
+// interests[].skill wiring (2026-09-21, locked decision A): when the entry
+// names an `interestTag` and the participant carries a matching interest,
+// the credit this activity pays scales continuously with their skill at it —
+// never the minutes cap, which sharedActivityCredit above already owns.
+// Optional and per-participant: an entry with no interestTag, or an NPC with
+// no matching interest, pays the base rate unchanged (returns 1). Pure.
+function sharedActivitySkillMultiplier(def, npc) {
+  const tag = def?.shared?.interestTag;
+  if (!tag) return 1;
+  const match = (npc?.bible?.interests || []).find(i => i?.name === tag);
+  if (!match || typeof match.skill !== 'number') return 1;
+  return 1 + Math.max(0, Math.min(100, match.skill)) / SHARED_ACTIVITY.skillMultiplierDivisor;
+}
+
 // The delta this activity pays for `minutes` of it, from the named rate the
 // entry declares. Fails closed on an unnamed or unknown rate (D23/D29's shape):
 // an entry that names a tier nobody authored pays nothing, rather than
-// defaulting to the most generous one on the table. Pure.
-function sharedActivityDelta(def, minutes) {
+// defaulting to the most generous one on the table. `npc` is optional —
+// existing callers that pass none simply see no skill multiplier applied.
+// Pure.
+function sharedActivityDelta(def, minutes, npc) {
   const rate = SHARED_ACTIVITY.rates[def?.shared?.rate];
   if (!rate || !(minutes > 0)) return null;
+  const mult = sharedActivitySkillMultiplier(def, npc);
   const out = {};
-  for (const [axis, perHour] of Object.entries(rate)) out[axis] = perHour * minutes / 60;
+  for (const [axis, perHour] of Object.entries(rate)) out[axis] = perHour * minutes / 60 * mult;
   return out;
 }
 
@@ -675,13 +692,36 @@ function resolveSharedActivity(gameState, def, ctx, minutes) {
     }
 
     const { credited, used } = sharedActivityCredit(npc, day, minutes);
-    const delta = sharedActivityDelta(def, credited);
+    const delta = sharedActivityDelta(def, credited, npc);
     if (delta) {
       npc = applyRelDelta(npc, delta, day);
       npc.flags = { ...(npc.flags || {}), _sharedActivity: { day, minutes: used + credited } };
     }
     result.credited[id] = credited;
     gameState.npcs[id] = npc;
+
+    // interests[].skill wiring, decision C (2026-09-21): whoever ELSE is
+    // sharing this activity can notice a genuinely skilled participant —
+    // the same interestTag match Decision A's credit multiplier reads,
+    // through notice.js's hobby_skill kind. Below the floor, nobody forms an
+    // opinion at all (this is about a skilled hobbyist being noticed, not
+    // mediocrity being gossiped about); at or above it, quality rises with
+    // skill but never drops below neutral. Explicit perceiverIds (D83) — no
+    // signal needed, being in the room for it IS the perception.
+    const tag = def.shared.interestTag;
+    const match = tag && (npc.bible?.interests || []).find(i => i?.name === tag);
+    const floor = SHARED_ACTIVITY.hobbySkillNoticeFloor;
+    if (match && typeof match.skill === 'number' && match.skill >= floor) {
+      const bystanders = ids.filter(x => x !== id);
+      if (bystanders.length > 0 && typeof noticeSubject === 'function') {
+        const quality = clamp(0.5 + (Math.min(100, match.skill) - floor) / (100 - floor) * 0.5, 0.5, 1);
+        noticeSubject(gameState, {
+          kind: 'hobby_skill', ref: `${id}_${tag}`, aboutNpcId: id, day,
+          category: tag, quality, perceiverIds: bystanders,
+          meta: { name: npc.bible?.name || 'your roommate', label: tag },
+        });
+      }
+    }
   }
   return result;
 }

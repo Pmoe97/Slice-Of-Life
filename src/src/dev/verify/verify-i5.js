@@ -254,6 +254,126 @@ check('zero credited minutes pay nothing', api(`
   sharedActivityDelta({ shared: { rate: 'confiding' } }, 0) === null
   && sharedActivityDelta({ shared: { rate: 'confiding' } }, -30) === null
 `));
+
+// ---------------------------------------------------------------------------
+console.log('\ninterests[].skill wiring (2026-09-21, locked decision A) — Reserved, no longer dead');
+check('no interestTag on the entry -> the multiplier is a no-op even with a matching interest', api(`
+  JSON.stringify(sharedActivityDelta({ shared: { rate: 'parallel' } }, 60, { bible: { interests: [{ name: 'cooking', skill: 39 }] } }))
+  === JSON.stringify(sharedActivityDelta({ shared: { rate: 'parallel' } }, 60))
+`));
+check('an interestTag with no matching NPC interest pays the base rate unchanged', api(`
+  JSON.stringify(sharedActivityDelta({ shared: { rate: 'parallel', interestTag: 'cooking' } }, 60, { bible: { interests: [{ name: 'gaming', skill: 39 }] } }))
+  === JSON.stringify(sharedActivityDelta({ shared: { rate: 'parallel' } }, 60))
+`));
+check('a matching interest at skill 0 still pays the base rate (no free bonus for an untested match)', api(`
+  JSON.stringify(sharedActivityDelta({ shared: { rate: 'parallel', interestTag: 'cooking' } }, 60, { bible: { interests: [{ name: 'cooking', skill: 0 }] } }))
+  === JSON.stringify(sharedActivityDelta({ shared: { rate: 'parallel' } }, 60))
+`));
+check('a matching interest at real skill pays strictly MORE than the base rate on every axis', api(`
+  (() => {
+    const base = sharedActivityDelta({ shared: { rate: 'parallel' } }, 60);
+    const boosted = sharedActivityDelta({ shared: { rate: 'parallel', interestTag: 'cooking' } }, 60, { bible: { interests: [{ name: 'cooking', skill: 39 }] } });
+    return boosted.affection > base.affection && boosted.comfort > base.comfort;
+  })()
+`));
+check('a hand-authored skill above the 0-39 generation range still clamps sanely (100 -> 2.25x, not unbounded)', api(`
+  (() => {
+    const base = sharedActivityDelta({ shared: { rate: 'parallel' } }, 60);
+    const boosted = sharedActivityDelta({ shared: { rate: 'parallel', interestTag: 'cooking' } }, 60, { bible: { interests: [{ name: 'cooking', skill: 100 }] } });
+    return Math.abs(boosted.affection / base.affection - 2.25) < 1e-9;
+  })()
+`));
+check('every entry naming an interestTag names a real INTEREST_POOL interest', api(`
+  Object.keys(ACTION_DEFS).filter(id => ACTION_DEFS[id]?.shared?.interestTag)
+    .every(id => INTEREST_POOL.some(i => i.name === ACTION_DEFS[id].shared.interestTag))
+`));
+
+// ---------------------------------------------------------------------------
+console.log('\ninterests[].skill wiring, decision C (2026-09-21) — hobby_skill notices');
+check('a bystander notices a skilled cook: opinion fact lands with the right shape', api(`
+  (() => {
+    const g = __mk(555001);
+    const [skilled, bystander] = __ids(g);
+    g.npcs[skilled].bible.interests = [{ name: 'cooking', tags: ['domestic'], skill: 39 }];
+    __do(g, 'self.cook', [skilled, bystander], 30);
+    const f = (g.npcs[bystander].memory.facts || [])
+      .find(x => x.kind === 'opinion' && x.subject && x.subject.kind === 'hobby_skill');
+    return !!f && f.subject.ref === skilled + '_cooking' && f.category === 'cooking'
+      && f.text.includes(g.npcs[skilled].bible.name);
+  })()
+`));
+check('below the notice floor, nobody forms an opinion at all', api(`
+  (() => {
+    const g = __mk(555002);
+    const [skilled, bystander] = __ids(g);
+    g.npcs[skilled].bible.interests = [{ name: 'cooking', tags: [], skill: SHARED_ACTIVITY.hobbySkillNoticeFloor - 1 }];
+    __do(g, 'self.cook', [skilled, bystander], 30);
+    return (g.npcs[bystander].memory.facts || []).every(f => !(f.kind === 'opinion' && f.subject?.kind === 'hobby_skill'));
+  })()
+`));
+check('a mismatched interest (no cooking on the skilled resident) never fires the notice', api(`
+  (() => {
+    const g = __mk(555003);
+    const [skilled, bystander] = __ids(g);
+    g.npcs[skilled].bible.interests = [{ name: 'gardening', tags: [], skill: 39 }];
+    __do(g, 'self.cook', [skilled, bystander], 30);
+    return (g.npcs[bystander].memory.facts || []).every(f => !(f.kind === 'opinion' && f.subject?.kind === 'hobby_skill'));
+  })()
+`));
+check('with only the skilled resident present, nobody notices — they never opine about themself', api(`
+  (() => {
+    const g = __mk(555004);
+    const [skilled] = __ids(g);
+    g.npcs[skilled].bible.interests = [{ name: 'cooking', tags: [], skill: 39 }];
+    __do(g, 'self.cook', [skilled], 30);
+    return (g.npcs[skilled].memory.facts || []).every(f => !(f.kind === 'opinion' && f.subject?.kind === 'hobby_skill'));
+  })()
+`));
+check('the notice fires at most once (dedup is per skilled-npc-per-interest, not per activity instance)', api(`
+  (() => {
+    const g = __mk(555005);
+    const [skilled, bystander] = __ids(g);
+    g.npcs[skilled].bible.interests = [{ name: 'cooking', tags: [], skill: 39 }];
+    __do(g, 'self.cook', [skilled, bystander], 30);
+    __do(g, 'self.cook', [skilled, bystander], 30);
+    return (g.npcs[bystander].memory.facts || [])
+      .filter(f => f.kind === 'opinion' && f.subject?.kind === 'hobby_skill').length === 1;
+  })()
+`));
+check('the relationship term reads the bystander-to-skilled castWeb pair, not relPlayer', api(`
+  (() => {
+    const g1 = __mk(555006);
+    const [skilled1, bystander1] = __ids(g1);
+    g1.npcs[skilled1].bible.interests = [{ name: 'cooking', tags: [], skill: 39 }];
+    const pairKey1 = [skilled1, bystander1].sort().join('|');
+    g1.world.castWeb[pairKey1].axes[bystander1 + '→' + skilled1] = { trust: 0.9, affection: 0.9, tension: 0, respect: 0.9, comfort: 0, desire: 0 };
+    __do(g1, 'self.cook', [skilled1, bystander1], 30);
+    const vHigh = g1.npcs[bystander1].memory.facts.find(f => f.subject?.kind === 'hobby_skill').valence;
+
+    const g2 = __mk(555006);
+    const [skilled2, bystander2] = __ids(g2);
+    g2.npcs[skilled2].bible.interests = [{ name: 'cooking', tags: [], skill: 39 }];
+    const pairKey2 = [skilled2, bystander2].sort().join('|');
+    g2.world.castWeb[pairKey2].axes[bystander2 + '→' + skilled2] = { trust: -0.9, affection: -0.9, tension: 0.9, respect: -0.9, comfort: 0, desire: 0 };
+    __do(g2, 'self.cook', [skilled2, bystander2], 30);
+    const vLow = g2.npcs[bystander2].memory.facts.find(f => f.subject?.kind === 'hobby_skill').valence;
+
+    return vHigh > vLow;
+  })()
+`), 'a bystander who is warm toward the skilled resident should read their skill more kindly than one who resents them — if this used relPlayer instead, the two runs would tie');
+
+check('every existing (player-subject) notice kind is unaffected: opinionValence with no aboutNpcId still reads npc.relPlayer', api(`
+  (() => {
+    const g = __mk(555007);
+    const [id] = __ids(g);
+    g.npcs[id].relPlayer.affection = 0.9; g.npcs[id].relPlayer.tension = 0;
+    const vWarm = opinionValence(g.npcs[id], { kind: 'skill_levelup', ref: 'cooking', day: 1, meta: { to: 5 } }, g, id);
+    g.npcs[id].relPlayer.affection = -0.9; g.npcs[id].relPlayer.tension = 0.9;
+    const vCold = opinionValence(g.npcs[id], { kind: 'skill_levelup', ref: 'cooking', day: 1, meta: { to: 5 } }, g, id);
+    return vWarm > vCold;
+  })()
+`), 'passing a perceiverId must not redirect an ordinary player-subject opinion to castWeb');
+
 check('resolveSharedActivity on an entry with no `shared` does nothing at all', api(`
   (() => {
     const g = __mk();

@@ -784,6 +784,18 @@ function renderSandboxRoommateIdentity(r, i) {
   const occCats = [...new Set(OCCUPATION_POOL.map(o => o.category))];
   form.appendChild(sbxField('Occupation', sbxSelectControl(`${i}|occupationCategory`, occCats, partial.occupationCategory, 'Roll, or type a job', true)));
 
+  // Sandbox prior-relationship feature (2026-09-21): who this person already
+  // is to the player, not just who they are. Leaving this unset (the default
+  // "Strangers" roll option) is byte-identical to today — every roommate
+  // starts flat, met on day 1. A closed pool, not free-typed (D1/D2's free-
+  // type exception is for prose; these ids drive real relPlayer axes through
+  // SIM's applyPriorRelationship, so an unrecognized string would silently
+  // do nothing rather than author anything).
+  form.appendChild(sbxField('Relationship with you',
+    sbxSelectControl(`${i}|priorRelationship`,
+      PRIOR_RELATIONSHIP_KINDS.map(k => ({ value: k.id, label: k.label })),
+      partial.priorRelationship, 'Strangers (default)')));
+
   // Appearance studio entry.
   const pickers = document.createElement('div');
   pickers.className = 'sbx-field sbx-full';
@@ -1643,7 +1655,7 @@ function handleSandboxFieldEvent(e) {
     if (fieldPath.startsWith('values.')) { sbxWriteMultiSelect(r, 'values', idx); return; }
     if (fieldPath === 'gender' || fieldPath === 'species' || fieldPath === 'occupationCategory' ||
         fieldPath === 'baggage' || fieldPath === 'wound' || fieldPath === 'want' ||
-        fieldPath === 'blindSpot' || fieldPath === 'boundary') {
+        fieldPath === 'blindSpot' || fieldPath === 'boundary' || fieldPath === 'priorRelationship') {
       if (v) r.partial[fieldPath] = v; else delete r.partial[fieldPath];
       sandboxRefreshRoommateSubline(r, idx);
       return;
@@ -1910,6 +1922,7 @@ function roommateAuthoredFields(partial) {
   if (touched(p.want)) out.push('want');
   if (touched(p.blindSpot)) out.push('blindSpot');
   if (touched(p.boundary)) out.push('boundary');
+  if (touched(p.priorRelationship)) out.push('priorRelationship');
   if (p.physical && typeof p.physical === 'object' && Object.keys(p.physical).length > 0) out.push('physical');
   // AI-Assisted Character Generation Phase 5. The rule is unchanged —
   // presence in the partial IS the authored set — these keys simply had no

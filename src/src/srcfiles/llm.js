@@ -734,6 +734,25 @@ function buildNpcBlockV2(npc, query, channel, day, gameState) {
 
   // [Relationship with player]
   block += `[Relationship with player]: ${rel.conversationPhase || 'early'} — ${relationshipDirective(npc)}\n`;
+  // Sandbox prior-relationship feature (2026-09-21): priorRelationshipKind
+  // names what this person actually is to the player (SIM's
+  // applyPriorRelationship, PRIOR_RELATIONSHIP_KINDS) — told to the model
+  // plainly, not left for it to infer from the axes alone.
+  if (rel.priorRelationshipKind) {
+    const kindDef = PRIOR_RELATIONSHIP_KINDS.find(k => k.id === rel.priorRelationshipKind);
+    if (kindDef) block += `  They are your ${kindDef.label.toLowerCase()}.\n`;
+  }
+  // firstMetDay was reserved for "daysKnown in the player model" (correctness
+  // plan Phase 5) and Plan 4 never built it (2026-09-21 re-audit) — wired the
+  // same additive-prompt-line way as [History] above. Every roommate today
+  // still starts at firstMetDay === day 1, so this is a no-op on day 1 itself
+  // (daysKnown 0, line omitted) and only starts saying anything true once
+  // play has actually gone on for a while — or once a Sandbox prior
+  // relationship backdates it, which is exactly what now does.
+  if (typeof day === 'number' && typeof rel.firstMetDay === 'number') {
+    const daysKnown = Math.max(0, day - rel.firstMetDay);
+    if (daysKnown > 0) block += `  You've known them for ${daysKnown} day${daysKnown === 1 ? '' : 's'}.\n`;
+  }
   block += `  trust ${rel.trust}, affection ${rel.affection}, tension ${rel.tension}, respect ${rel.respect}`;
   if (rel.comfort !== undefined) block += `, comfort ${rel.comfort}`;
   if (rel.desire !== undefined) block += `, desire ${rel.desire}`;
