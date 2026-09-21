@@ -1,12 +1,26 @@
 # Audit — sleeping NPCs contradicted across panes (2026-09-05)
 
-**Status: INVESTIGATED, NOT FIXED.** Written from a user report the day Phase 7
-of the night-scene plan closed: *"when you walk into a room it says 'They are
-asleep' in one pane and 'They look up at you as you walk in' in another … I feel
-like there are other possible triggers that contradict the NPC's sleeping
-state."* There were. Four confirmed, all reproduced by running the code, plus
-the structural cause that produced all four. No paired prompt — this is an audit,
-not a phased overhaul.
+**Status: FIXED AND VERIFIED.** Found stale during a 2026-09-21 find-and-improve
+session: this doc still read "INVESTIGATED, NOT FIXED," but the fix it scoped
+had actually shipped days earlier, in **0.13.0 (2026-09-10)** — bundled into a
+commit whose message didn't call it out and never routed back to update this
+doc's status header. All four bugs below are fixed, the harness this doc asked
+for exists and passes, and the fix is patch-noted (0.13.0: *"A sleeping resident
+could be offered to the AI narrator as a conversation speaker, 'witness' you
+entering her room or breaking a house rule while unconscious, get summoned to a
+shared meal, or count as someone who might walk in on you — all while genuinely
+asleep. One shared 'is this person actually conscious right now' check now
+covers every one of these."*). See **Resolution** near the bottom for exactly
+what shipped, where, and how it was re-verified this session. The original
+report and investigation below are kept as the design record; only the status
+header and the two sections marked below were updated.
+
+Written from a user report the day Phase 7 of the night-scene plan closed:
+*"when you walk into a room it says 'They are asleep' in one pane and 'They look
+up at you as you walk in' in another … I feel like there are other possible
+triggers that contradict the NPC's sleeping state."* There were. Four confirmed,
+all reproduced by running the code, plus the structural cause that produced all
+four. No paired prompt — this is an audit, not a phased overhaul.
 
 Nothing here is night-scene code. The night scene made it visible (it is the one
 feature that parks you in a room with a sleeper for a long time) but every bug
@@ -166,16 +180,52 @@ sleep. **Reproduced with `activity: 'sleeping'` during a `leisure` block:**
    `getPresentNpcIds` to decide an NPC ACTS must pass its result through
    `npcIsAsleep`.**
 
-## Not investigated
+## Resolution (added 2026-09-21 — verified, not re-implemented)
 
-- `peek.js:37/564`, `commitments.js:262`, `drives.js:1019`,
-  `signals.js:520/569`, `image.js:1744`, `inventory.js:59`, `actions.js:63` also
-  read `getPresentNpcIds`. Some of those are legitimately sleep-agnostic (a
-  sleeping body still occupies a room, still appears in a scene image, still
-  blocks privacy). Each needs the question asked separately: *does this decide
-  that she DOES something, or only that she IS somewhere?* Only the first kind
-  needs the gate.
-- Whether the LLM ever contradicts sleep from the AMBIENT block alone (it is
-  told `(currently sleeping)` there and instructed to mention in narration
-  only). Worth a look once fix 2 lands, since that becomes the sleeper's only
-  route into the prompt.
+All six items above shipped as written, in **`e178f4a`** (0.13.0, 2026-09-10):
+
+1. `npcIsAsleep(npc)` lives at `sim.js:4174`, exactly the predicate proposed.
+2. `getSceneParticipants` (`sim.js:4179`) splits `awakeIds`/`sleepingIds` and
+   folds sleepers into `ambient` — bug 1 (offered as a speaker) is closed.
+3. `stealth.js`'s room-entry witness (was line 80, now `presentIds.includes
+   (ownerId) && !npcIsAsleep(owner)` at line 108) **and** the laundry-snoop
+   witness (line 543, not called out by number in the original report but the
+   same hole) both gate on it — bug 2 is closed for both sites.
+4. `flags.js:77` filters its witness set the same way — bug 3 is closed.
+5. All three block-based checks now read `block === 'sleep' || npcIsAsleep(npc)`
+   — `overture.js:720` (`mealJoinEligible`), `interruption.js:75`, and
+   `commitments.js:266` (meal attendees, not separately named above but the
+   same shape) — bug 4 is closed. **`cognition.js:794`'s `ageCommitment` is a
+   deliberate, documented exception**: a first attempt added `npcIsAsleep`
+   there too, but that function runs every tick against the NPC's *own active
+   commitment*, and `sleep_recover`'s commitment sets `activityOverride:
+   'napping'` for its hold — so the check self-cancelled the very nap that
+   triggered it (measured: `verify-c2`/`verify-c5`'s event-driven-scheduling
+   invariants). Reverted to `block === 'sleep'` only, left commented in place.
+   Correct call — a napper should keep sleeping when nothing else is trying to
+   wake her.
+6. `verify-sleep-consistency.js` exists, is auto-discovered by `run-all.js`,
+   and **re-run this session: 9/9 passed** — the original 4 items plus a fifth
+   guard not in the original scope (`resolveSpeakerIds` drops any dialogue line
+   the model hallucinates for a sleeper, the last-line-of-defense check).
+
+**The "Not investigated" list, re-checked this session:** `commitments.js` is
+now gated (see item 5). Of the rest, `peek.js:37` (`peekFocusOccupant`) and
+`signals.js:522/585` (`roomLightVisible`/`deriveDoorCues`) are legitimately
+IS-somewhere — they identify who/what is present, not that a sleeper acted;
+`resolvePeep` (`stealth.js:131`) already branches on sleep downstream of
+`peek.js`'s call. `image.js:1784` (`takePhoto`) is also fine as-is — a sleeping
+subject correctly *can* appear in a photo. `drives.js:1026`
+(`findIntimatePartner`) turned out to already have its own inline guard
+(`actv === 'sleeping' || actv === 'napping' || actv === 'showering'`, a 16th
+hand-rolled copy, not a gap) filtering candidates before the willingness gate
+even runs. `inventory.js:59` and `actions.js:63` are generic context-builders
+(`presentNpcIds` handed to downstream code) rather than a decision site
+themselves — whether every consumer of that context correctly treats a
+sleeper as unable to act is still, strictly, an open per-action question, but
+nothing found while checking this made it look live. Not chased further.
+
+The LLM/AMBIENT-block question (does the model ever narrate a sleeper as awake
+from the `(currently sleeping)` ambient line alone) is still open — it needs a
+live model call to observe, which this doc's original author flagged and this
+session had no way to check either.

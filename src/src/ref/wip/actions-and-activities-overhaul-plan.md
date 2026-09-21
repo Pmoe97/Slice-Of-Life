@@ -1,11 +1,14 @@
 # Actions & Activities Overhaul — filling the apartment with things to do
 
-Status: **planned — not started**. Design session complete 2026-08-30; a
-partner design-review session complete 2026-08-31 (D30–D36 added, Pets cut,
-sauna placement locked, file references fixed against the live codebase).
-The design gate is clear — only Q4 (cook-off judging/stakes) is still
-parked, and it's deferred to Phase 17, far downstream. Last updated
-2026-08-31.
+Status: **18 of 19 phases built and verified.** Design session complete
+2026-08-30; a partner design-review session complete 2026-08-31 (D30–D36
+added, Pets cut, sauna placement locked, file references fixed against the
+live codebase). Implementation ran 2026-08-31 through 2026-09-02, closing
+every phase except **Phase 19 (Audio & sound track, D29)** — see the
+Handoff below and the Status table near the bottom. Q4 (cook-off
+judging/stakes) remains parked, deferred to whichever future session
+builds the cook-off event type. Does NOT move to `complete/` yet — Phase 19
+is real, unstarted work, not paperwork. Last updated 2026-09-05.
 
 Companions:
 - `src/src/ref/complete/asks-and-attachments-plan.md` (the Ask system this plan's
