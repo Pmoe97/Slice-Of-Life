@@ -201,6 +201,12 @@ const DRIVE_CANDIDACY = {
   // door makes it impossible. boundarySneakCandidacy is pure (reads only).
   sneak_into_bed: (npc, npcId, gameState, ctx) =>
     boundarySneakCandidacy(npc, npcId, gameState, ctx),
+  // Side Projects (projects.js, 0.14.2): a resident at home with a project
+  // they're still into. Below its engagement threshold the project gathers
+  // dust — that is the whole of how personality reaches this drive (see
+  // projects.js). Pure; typeof-guarded because projects.js loads later.
+  work_on_project: (npc, npcId, gameState, ctx) =>
+    typeof projectDriveCandidate === 'function' && projectDriveCandidate(npc, npcId, gameState, ctx),
 };
 
 // Everything that decides an NPC *may* do this drive at all, mirroring
@@ -446,7 +452,17 @@ function scoreDrive(driveId, npc, ctx) {
     pastime = u.pastimeWeight;
   }
 
-  const appeal = base + need + signal + motive + desireBias + willingnessBias + pastime;
+  // Seasons & weather Phase 3 (W5) — the weather lean. A drive may declare
+  // `utility.weather: { hot, cold }`; on a hot or cold day (seasons.js's
+  // weatherDriveLean, WEATHER_TUNING.drives) it gains that much appeal. Only
+  // facility-gated drives carry one (swim, sauna): a lean on an always-
+  // available drive would reshuffle the idle-pastime budget every rainy day.
+  let weather = 0;
+  if (u.weather && typeof weatherDriveLean === 'function') {
+    weather = weatherDriveLean(u.weather, ctx.gameState);
+  }
+
+  const appeal = base + need + signal + motive + desireBias + willingnessBias + pastime + weather;
 
   // D7 — personality, as `1 + Σ(temperament[axis] × weight[axis])`. This is the
   // THIRD use of the idiom INTERRUPTION.personalityWeights established and
@@ -488,7 +504,7 @@ function scoreDrive(driveId, npc, ctx) {
   // to `score` whenever a drive's pastime term was non-zero — breaking the
   // debugging surface this field exists for (verify-c1.js's own regression
   // test asserts the sum) for every idle-pastime-preferred drive.
-  return { driveId, score, terms: { base, need, signal, motive, desireBias, willingnessBias, pastime, temperament, block, recency } };
+  return { driveId, score, terms: { base, need, signal, motive, desireBias, willingnessBias, pastime, weather, temperament, block, recency } };
 }
 
 // --- Scoring everything this NPC could do -------------------------------
@@ -914,7 +930,9 @@ function frontDoorAnchor(gameState) {
 // reindex (sim.js).
 function workBlockEndAbs(npc, clock) {
   const template = SCHEDULES[npc.bible.scheduleTemplate] || SCHEDULES.standard;
-  const dayType = isWeekend(clock.day) ? 'weekend' : 'weekday';
+  // Occasions Phase 2 (D14): the shared day-type pick (sim.js) — a holiday
+  // they aren't working has no work block to end.
+  const dayType = scheduleDayTypeFor(npc, clock.day);
   const daySched = template[dayType] || template.weekday;
   let workEndMinute = 0;
   let found = false;
@@ -1408,7 +1426,8 @@ function isPrivacyRoom(roomId, npc) {
 // wind_down at 23:30 is heading to bed, not nowhere.
 function nextScheduleBoundary(npc, clock) {
   const template = SCHEDULES[npc?.bible?.scheduleTemplate] || SCHEDULES.standard;
-  const dayType = isWeekend(clock.day) ? 'weekend' : 'weekday';
+  // Occasions Phase 2 (D14): same shared pick as resolveScheduleActivity.
+  const dayType = scheduleDayTypeFor(npc, clock.day);
   const daySched = template[dayType] || template.weekday;
   let bestBlock = null;
   let bestStart = Infinity;

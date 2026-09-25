@@ -1285,6 +1285,11 @@ body {
    word about you — a towel, sleepwear, a swimsuit. Dim but not faint: it is
    about the player, not about a door across the hall. */
 .sr-self { color: var(--sr-dim); font-style: italic; }
+/* Occasions Phase 3: a room dressed for a holiday. */
+.sr-decor { color: var(--color-warning, #e0a83a); font-style: italic; }
+/* Seasons & weather Phase 2: the weather at the window — a backdrop, dim
+   and italic like a sense drifting in from elsewhere. */
+.sr-weather { color: var(--sr-dim); font-style: italic; }
 
 /* An attention callout (D11): in the prose, but set apart. Reads as part of
    the fiction rather than as a system notification. */
@@ -5393,11 +5398,17 @@ body {
     display: inline-block; overflow: hidden; text-overflow: ellipsis;
     vertical-align: bottom;
   }
-  /* Time ("08:01", 5 fixed-width digits/punctuation) needs ~46px at fs-sm —
-     measured, not guessed, after the font-size fix above actually landed —
-     so Day gets what's left of the 140px box rather than an even split. */
-  #header #hdr-day { max-width: 76px; }
-  #header #hdr-time { max-width: 46px; }
+  /* Seasons & weather Phase 2: the clock carries the sky's emoji now
+     ("15:24 🌧️" measures 51–54px at fs-sm; the bare "15:24" is 30px), which
+     the old 46px cap clipped to "15:24 …". The date gives up its weekday
+     here instead — "Thu 26 Winter" (84px) was clipped to "Thu 26 Wi…",
+     hiding the season, while "26 Winter" is 58px — and the two caps still
+     sum to the same 122px of the 140px box. A holiday's emoji on the date
+     ("26 Winter 🎁", 78px) still clips on a phone; it's in the log and the
+     calendar. */
+  #header #hdr-day .hdr-wd { display: none; }
+  #header #hdr-day { max-width: 68px; }
+  #header #hdr-time { max-width: 54px; }
   /* Phase 10 (D12): the speed cluster rides with Money — hidden on mobile
      for the same reason, only location + utility buttons survive there. */
   #hdr-speed-sep, #header #hdr-speed { display: none; }
@@ -7184,6 +7195,28 @@ body {
 .bank-owed-value { font-size: var(--fs-sm); font-weight: 700; }
 .bank-owed-row.cutoff .bank-owed-value { color: var(--color-negative); }
 
+/* Calendar Year view (occasions-and-holidays-plan.md Phase 1, D3) —
+   render.calendar.js. Four seasons of exactly 5x7 days. */
+.cal-year-header h3 { margin: 0 0 2px; }
+.cal-seasons { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--space-3); margin-top: var(--space-2); }
+.cal-season { background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-md, 6px); padding: var(--space-2); }
+.cal-season-title { font-weight: 700; margin-bottom: 4px; }
+.cal-season-spring .cal-season-title { color: #8fd694; }
+.cal-season-summer .cal-season-title { color: #f2c14e; }
+.cal-season-autumn .cal-season-title { color: #e8894b; }
+.cal-season-winter .cal-season-title { color: #8ec5ff; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.cal-dow { text-align: center; font-size: 10px; opacity: 0.55; padding-bottom: 2px; }
+.cal-cell { position: relative; min-height: 30px; border-radius: 4px; background: var(--color-bg); border: 1px solid transparent;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 2px 0; font: inherit; color: inherit; cursor: pointer; }
+.cal-cell .cal-dom { font-size: 11px; line-height: 1.1; }
+.cal-cell .cal-marks { font-size: 11px; line-height: 1.1; }
+.cal-cell.cal-past { opacity: 0.45; }
+.cal-cell.cal-marked { background: var(--color-surface-hover, rgba(255,255,255,0.06)); }
+.cal-cell.cal-today { border-color: var(--color-accent); box-shadow: 0 0 0 1px var(--color-accent) inset; }
+.cal-cell.cal-selected { background: var(--color-accent-dim); border-color: var(--color-accent); }
+.cal-detail { margin-top: var(--space-2); min-height: 1.2em; }
+
 /* DailyGrid (actions-and-activities-overhaul-plan.md Phase 14, D23) */
 .pz-solved-banner { color: var(--color-positive, #6cf6a9); font-weight: 700; }
 .pz-layout { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: flex-start; }
@@ -8386,7 +8419,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=184"></script>
+<script src="src/src/srcfiles/config.js?v=204"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -8400,9 +8433,9 @@ body {
      render.computer.js and studio.js, all of which build controls with it.
      Registered in dev/verify/loadgame.js's ORDER in the same commit. -->
 <script src="src/src/srcfiles/fields.js?v=1"></script>
-<script src="src/src/srcfiles/defs.world.js?v=52"></script>
-<script src="src/src/srcfiles/defs.actions.js?v=57"></script>
-<script src="src/src/srcfiles/defs.computer.js?v=46"></script>
+<script src="src/src/srcfiles/defs.world.js?v=53"></script>
+<script src="src/src/srcfiles/defs.actions.js?v=64"></script>
+<script src="src/src/srcfiles/defs.computer.js?v=50"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
      at runtime; IMAGE's titleGallery consumes genTitlePrompt. -->
@@ -8432,7 +8465,7 @@ body {
 <!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
      player-facing release history. Pure data, no dependencies, grouped with
      the other defs.* files for the same reason defs.dreams.js is. -->
-<script src="src/src/srcfiles/defs.patchnotes.js?v=5"></script>
+<script src="src/src/srcfiles/defs.patchnotes.js?v=24"></script>
 <!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
      WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
      ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
@@ -8441,8 +8474,8 @@ body {
 <!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/src/srcfiles/orbital.js?v=12"></script>
-<script src="src/src/srcfiles/state.js?v=72"></script>
-<script src="src/src/srcfiles/sim.js?v=105"></script>
+<script src="src/src/srcfiles/state.js?v=77"></script>
+<script src="src/src/srcfiles/sim.js?v=112"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
@@ -8464,22 +8497,22 @@ body {
      calls composeMeanwhileTicker. Registered in dev/verify/loadgame.js's
      ORDER in the same commit (invariant 6). -->
 <script src="src/src/srcfiles/meanwhile.js?v=1"></script>
-<script src="src/src/srcfiles/scene.js?v=18"></script>
-<script src="src/src/srcfiles/items.js?v=32"></script>
+<script src="src/src/srcfiles/scene.js?v=20"></script>
+<script src="src/src/srcfiles/items.js?v=33"></script>
 <!-- Inventory overhaul Phase 1: pure inventory query/sort/describe helpers
      (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
      time) and before render.js/ui.js, which call it at runtime. -->
 <script src="src/src/srcfiles/inventory.js?v=24"></script>
-<script src="src/src/srcfiles/effects.js?v=44"></script>
+<script src="src/src/srcfiles/effects.js?v=48"></script>
 <!-- Food-overhaul Phase 5: the pure cooking engine (cooking.js) — after
      effects.js (uses clamp) and items.js (makePlate/freshnessOf); its
      functions are called at runtime by defs.actions.js and render.js. -->
 <script src="src/src/srcfiles/cooking.js?v=4"></script>
 <script src="src/src/srcfiles/taste.js?v=1"></script>
-<script src="src/src/srcfiles/drives.js?v=46"></script>
+<script src="src/src/srcfiles/drives.js?v=51"></script>
 <!-- NPC utility scoring (npc-cognition-plan.md). Loads after drives.js: it
      reuses driveGateValue / isOnCooldown / DRIVE_COOLDOWN_KEY from it. -->
-<script src="src/src/srcfiles/cognition.js?v=31"></script>
+<script src="src/src/srcfiles/cognition.js?v=34"></script>
 <!-- NPC initiative (npc-initiative-plan.md Phase 3). Loads after cognition.js:
      scoreCandidates calls scoreOvertures, and evaluateDrives calls the writers
      here for the tick it wins. -->
@@ -8488,8 +8521,8 @@ body {
 <script src="src/src/srcfiles/intent.js?v=18"></script>
 <script src="src/src/srcfiles/skills.js?v=20"></script>
 <script src="src/src/srcfiles/stealth.js?v=24"></script>
-<script src="src/src/srcfiles/time.js?v=30"></script>
-<script src="src/src/srcfiles/computer.js?v=76"></script>
+<script src="src/src/srcfiles/time.js?v=32"></script>
+<script src="src/src/srcfiles/computer.js?v=79"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -8506,7 +8539,7 @@ body {
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
 <script src="src/src/srcfiles/phone.js?v=22"></script>
-<script src="src/src/srcfiles/npc.js?v=63"></script>
+<script src="src/src/srcfiles/npc.js?v=65"></script>
 <!-- Aspirations & Creative Careers Phase 3 (D9/D56): the Notice & Opinion
      layer (notice.js) — after npc.js (addMemoryFact, MEMORY_IMPORTANCE,
      EMOTIONAL_WEIGHTS' reader) and signals.js (emitTransient,
@@ -8528,7 +8561,7 @@ body {
      that calls ambientTempC/npcComfortBandC/temperatureClothingBiasWeight
      at runtime (npc.js's npcOutfitForContext, sim.js's resolveTick,
      computer.js's accrueHvacForDay — all below it, called at runtime only). -->
-<script src="src/src/srcfiles/temperature.js?v=1"></script>
+<script src="src/src/srcfiles/temperature.js?v=2"></script>
 <!-- Actions & Activities Overhaul Phase 9 (D17/D49): the ambient per-room
      dirt layer's write path + pure signal-intensity helper (dirt.js) — after
      world.js (refreshRoomCleanliness) and effects.js (clamp), both above it;
@@ -8562,7 +8595,7 @@ body {
      and called by sim.js at runtime only. -->
 <script src="src/src/srcfiles/rumination.js?v=15"></script>
 <script src="src/src/srcfiles/prompt.js?v=20"></script>
-<script src="src/src/srcfiles/llm.js?v=49"></script>
+<script src="src/src/srcfiles/llm.js?v=56"></script>
 <!-- CONCEPT — the character-concept engine (description -> validated draft).
      AI-Assisted Character Generation Phase 2. Sits after llm.js (whose prompt
      conventions it follows) and before the UI layer that calls it. Reads
@@ -8575,7 +8608,7 @@ body {
      ui.js; x5.js itself is pure and calls no model. -->
 <script src="src/src/srcfiles/x5.js?v=17"></script>
 <script src="src/src/srcfiles/interruption.js?v=24"></script>
-<script src="src/src/srcfiles/image.js?v=40"></script>
+<script src="src/src/srcfiles/image.js?v=44"></script>
 <!-- Avatars & Sprite Studio Phase 1: the permanent override store (kv.sprites)
      and resolveSprite, the ONE function allowed to read a sprite blob. After
      image.js because the resolver falls through to cutoutKey / getCachedImage
@@ -8641,7 +8674,47 @@ body {
      file to only one of the two lists is the rumination.js scar. -->
 <script src="src/src/srcfiles/nightscene.js?v=1"></script>
 <script src="src/src/srcfiles/pregnancy.js?v=3"></script>
-<script src="src/src/srcfiles/render.js?v=95"></script>
+<!-- Birthdays (birthdays-and-occasions-plan.md Phase 1): pure domain logic —
+     derived birthdays, the player's known/remembered record, the day-rollover
+     pass and the prompt/Calendar readers. Beside pregnancy.js, its sibling
+     life-event module; only runtime calls out (npc.js/sim.js/drives.js), so
+     no load-time dependency. Registered in dev/verify/loadgame.js's ORDER in
+     the same change (the rumination.js scar). -->
+<script src="src/src/srcfiles/birthdays.js?v=1"></script>
+<!-- Occasions (occasions-and-holidays-plan.md Phase 1): the ONE calendar
+     reader — the year's holidays, festivity, the prompt date line, the
+     Calendar rows and year-grid model. Pure domain logic beside its sibling
+     birthdays.js; runtime calls only. Registered in dev/verify/loadgame.js's
+     ORDER in the same change (the rumination.js scar). -->
+<script src="src/src/srcfiles/occasions.js?v=5"></script>
+<!-- Seasons & weather (seasons-and-weather-plan.md Phase 1): daily weather,
+     the outdoor temperature curve, daylight and the sky line. Pure and
+     derived; runtime calls only (temperature.js/llm.js/render.js typeof-guard
+     it). Registered in dev/verify/loadgame.js's ORDER in the same change. -->
+<script src="src/src/srcfiles/seasons.js?v=9"></script>
+<!-- House notes (0.14.2): the roommates' half of the fridge — they read your
+     notes, scribble replies, and leave their own for real, stored reasons.
+     Pure domain logic; sim.js (resolveTick), defs.actions.js, render.js and
+     ui.js reach it at runtime only. Registered in dev/verify/loadgame.js's
+     ORDER in the same change (the rumination.js scar). -->
+<script src="src/src/srcfiles/housenotes.js?v=4"></script>
+<!-- What's On (0.14.2): the house TV has shows on it — seasons that air, episodes
+     with something in them, roommates who follow shows by taste, one living-room
+     screen everyone shares, and spoilers. Pure domain logic; sim.js (resolveTick),
+     defs.actions.js, effects.js, computer.js, llm.js, render.js and ui.js reach it
+     at runtime only. Registered in dev/verify/loadgame.js's ORDER in the same
+     change. -->
+<script src="src/src/srcfiles/tv.js?v=1"></script>
+<!-- Side Projects (0.14.2): each roommate has something of their own on the go —
+     a song on guitar, a painting, a novel, a scarf — drawn from their interests.
+     You hear them get better, they finish (skill for real, work on the walls)
+     or quietly give up, and one who's fond of you may be making it for you.
+     Pure domain logic plus the work_on_project drive's resolver; sim.js,
+     drives.js, cognition.js, defs.actions.js, effects.js, llm.js, render.js and
+     ui.js reach it at runtime only. Registered in dev/verify/loadgame.js's ORDER
+     in the same change. -->
+<script src="src/src/srcfiles/projects.js?v=3"></script>
+<script src="src/src/srcfiles/render.js?v=106"></script>
 <!-- Night Scene Phase 3b: the Living Tableau's PAINTER. After render.js
      (shares its rules: idempotent, no state mutation, no rolls) and after
      actionwindow.js, whose awShow/awHide it calls to claim the overlay. NOT
@@ -8649,13 +8722,19 @@ body {
      loader deliberately stops before the render layer, exactly as
      render.spritestudio.js does. -->
 <script src="src/src/srcfiles/render.nightscene.js?v=1"></script>
-<script src="src/src/srcfiles/render.computer.js?v=73"></script>
+<script src="src/src/srcfiles/render.computer.js?v=78"></script>
 <!-- Avatars & Sprite Studio Phase 4: the studio's verbs and its screens.
      render.spritestudio.js extends COMPUTER_RENDERERS, so it must load AFTER
      render.computer.js declares it; spritestudio.js holds the actions and is
      registered in dev/verify/loadgame.js's ORDER in the same commit. -->
 <script src="src/src/srcfiles/spritestudio.js?v=1"></script>
-<script src="src/src/srcfiles/render.spritestudio.js?v=1"></script>
+<script src="src/src/srcfiles/render.spritestudio.js?v=2"></script>
+<!-- Occasions Phase 1: the year-grid view (Calendar's Year tab; later the
+     birthday picker). Extends COMPUTER_RENDERERS like render.spritestudio.js,
+     so it loads after render.computer.js. Pure view code — NOT in
+     dev/verify/loadgame.js's ORDER (the loader stops before the render
+     layer). -->
+<script src="src/src/srcfiles/render.calendar.js?v=2"></script>
 <script src="src/src/srcfiles/render.desktop.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
@@ -8736,9 +8815,9 @@ body {
      Registered in BOTH this list and loadgame.js's ORDER, same commit. -->
 <script src="src/src/srcfiles/platform.js?v=6"></script>
 <script src="src/src/srcfiles/aspirations.js?v=2"></script>
-<script src="src/src/srcfiles/asks.js?v=20"></script>
-<script src="src/src/srcfiles/ui.js?v=175"></script>
-<script src="src/src/srcfiles/ui.computer.js?v=67"></script>
+<script src="src/src/srcfiles/asks.js?v=21"></script>
+<script src="src/src/srcfiles/ui.js?v=184"></script>
+<script src="src/src/srcfiles/ui.computer.js?v=68"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
      site header with fake address bar + internal back/forward, footer, 404,

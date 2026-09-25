@@ -887,8 +887,12 @@ function removeFromCart(gameState, defId, opts = {}) {
   if (holder) holder[key] = cart.filter(c => c.defId !== defId);
 }
 
-function cartSubtotal(cart, catalog) {
-  return cart.reduce((sum, c) => sum + ((catalog || ITEM_DEFS)[c.defId]?.price || 0) * c.units, 0);
+// `gameState` (optional): prices as of today — seasonal produce reads
+// itemPriceNow (seasons.js, Seasons & weather Phase 4); without it, or for
+// anything that isn't produce, the sticker price.
+function cartSubtotal(cart, catalog, gameState) {
+  const priceOf = (def) => (gameState && typeof itemPriceNow === 'function') ? itemPriceNow(def, gameState) : def?.price;
+  return cart.reduce((sum, c) => sum + (priceOf((catalog || ITEM_DEFS)[c.defId]) || 0) * c.units, 0);
 }
 
 // SPEND_MONEY covers the cart total + one flat delivery fee, and each
@@ -903,7 +907,7 @@ function checkoutCart(gameState, opts = {}) {
   const catalog = opts.catalog || ITEM_DEFS;
   const { holder, key, cart } = resolveCart(gameState, opts.cartPath);
   if (cart.length === 0) return { ok: false, reason: 'Your cart is empty.' };
-  const total = cartSubtotal(cart, catalog) + ECONOMY.deliveryFee;
+  const total = cartSubtotal(cart, catalog, gameState) + ECONOMY.deliveryFee;
   if (gameState.player.money < total) return { ok: false, reason: `Can't afford ${total} (you have ${Math.round(gameState.player.money)}).` };
 
   gameState.player.money -= total;
@@ -1935,27 +1939,46 @@ async function resolveImReply(gameState, npcId, text) {
 
   const context = assembleImContext(gameState, npcId);
   const result = await callImLLM(context, text);
+  // Birthdays (birthdays-and-occasions-plan.md D6): texting happy birthday
+  // counts exactly like saying it — checked AFTER applyProposal (which
+  // replaces npcs[npcId]), and on both paths, since the text was delivered
+  // whether or not a reply came back.
+  const noteBirthday = () => {
+    const wish = typeof noteBirthdayWish === 'function' ? noteBirthdayWish(gameState, npcId, text, 'text') : null;
+    if (wish) thread.msgs.push({ from: 'system', text: wish.beat, day: gameState.meta.clock.day, tick });
+    return !!wish;
+  };
   if (result.valid && result.proposal) {
     const applied = await applyProposal(result.proposal, context, gameState, text);
     for (const entry of applied.logEntries) {
       if (entry.type === 'dialogue') thread.msgs.push({ from: 'npc', text: entry.text, day: gameState.meta.clock.day, tick });
     }
-    return { ok: true, updatedNpcIds: applied.updatedNpcIds };
+    const ids = applied.updatedNpcIds || [];
+    if (noteBirthday() && !ids.includes(npcId)) ids.push(npcId);
+    return { ok: true, updatedNpcIds: ids };
   }
   thread.msgs.push({ from: 'system', text: `${npc.bible.name} hasn't replied yet.`, day: gameState.meta.clock.day, tick });
-  return { ok: true, updatedNpcIds: [] };
+  return { ok: true, updatedNpcIds: noteBirthday() ? [npcId] : [] };
 }
 
 // --- Stream app ---
 
+// What's On (tv.js, 0.14.2): shows air now — seasons drop weekly or whole,
+// and an episode has something in it. tv.js's tvStreamWatch owns your place
+// (world.tv.progress, which the living-room TV and your roommates share) and
+// the line; resumePoints/watchHistory keep being written in the shape they
+// always had. Without tv.js (a harness that doesn't load it) this is the old
+// counter.
 function watchEpisode(gameState, showId) {
   const show = STREAM_DEFS[showId];
   if (!show) return { ok: false, reason: 'No such show.' };
   const stream = gameState.world.computer.apps.stream;
-  const episode = (stream.resumePoints[showId] || 0) + 1;
-  stream.resumePoints[showId] = episode;
+  const tv = typeof tvStreamWatch === 'function' ? tvStreamWatch(gameState, showId) : null;
+  if (tv && !tv.ok) return tv;
+  const episode = tv ? tv.episode : (stream.resumePoints[showId] || 0) + 1;
+  stream.resumePoints[showId] = Math.max(stream.resumePoints[showId] || 0, episode);
   stream.watchHistory.push({ showId, episode, day: gameState.meta.clock.day });
-  return { ok: true, show, episode };
+  return { ok: true, show, episode, line: tv ? tv.line : null };
 }
 
 // --- Bills (Phase 3) ---
@@ -3133,7 +3156,7 @@ function getGroceryApp(gameState) {
 function getGroceryOrderTotals(gameState, tipPctOverride) {
   const app = getGroceryApp(gameState);
   const cart = app?.cart || [];
-  const subtotal = cartSubtotal(cart, ITEM_DEFS);
+  const subtotal = cartSubtotal(cart, ITEM_DEFS, gameState);
   const deliveryFee = cart.length > 0 ? GROCERY_TUNING.deliveryFee : 0;
   const serviceFee = Math.round(subtotal * GROCERY_TUNING.serviceFeeRate);
   const tipPct = tipPctOverride != null ? tipPctOverride : (app?.tipPct ?? GROCERY_TUNING.defaultTipPct);

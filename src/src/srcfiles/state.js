@@ -61,7 +61,9 @@ const SAVE_KEYS = [
   // ensurePlayerKitchen); player.aspirations (Phase 14, D47 —
   // aspirations.js's ensurePlayerAspirations); player.incomeLog /
   // independenceWeeks / independenceNextDay (Phase 15, D50 — effects.js's
-  // applyEarnMoney and aspirations.js's processIndependenceForDay).
+  // applyEarnMoney and aspirations.js's processIndependenceForDay);
+  // player.birthdays (birthdays-and-occasions-plan.md Phase 1 —
+  // birthdays.js's ensurePlayerBirthdays).
   // world.computer.apps.social_feed.profile (Phase 9,
   // D58 — platform.js's ensureChatterProfile, also in defaultComputerState)
   // rides the `computer` world key below; npc.chatter (Phase 9 —
@@ -105,6 +107,25 @@ const SAVE_KEYS = [
     // precedent — see WORLD_KEY_FALLBACKS below. Hung pieces and placed
     // decor are NOT here: they are room objects (the `objects` folder).
     'roomDecorOverrides',
+    // Occasions Phase 3 (occasions-and-holidays-plan.md): who put which
+    // holiday's decorations up, and when they came down (occasions.js's
+    // world.occasions.decor). The first stored holiday state — a response
+    // (roadmap invariant 2). Additive-default precedent — WORLD_KEY_FALLBACKS.
+    'occasions',
+    // House notes (housenotes.js, 0.14.2): when each roommate last wrote a
+    // note and about what, today's house count, and which addressed note
+    // last moved whom. The notes themselves are room objects (`objects`).
+    // Additive-default precedent — WORLD_KEY_FALLBACKS.
+    'houseNotes',
+    // What's On (tv.js, 0.14.2): everyone's place in every show, who is on
+    // the sofa, what the living-room TV is playing, and what you've already
+    // had spoiled. Additive-default precedent — WORLD_KEY_FALLBACKS.
+    'tv',
+    // Side Projects (projects.js, 0.14.2): each roommate's project — what,
+    // how far, how into it they are — what they finished or gave up on, and
+    // the finished work on display around the flat. Additive-default
+    // precedent — WORLD_KEY_FALLBACKS.
+    'projects',
   ] },
   { folder: 'npcs', all: true },
   { folder: 'objects', all: true },
@@ -231,6 +252,20 @@ const WORLD_KEY_FALLBACKS = {
   // exactly what a save from before this existed should read as — no
   // migration, the same additive-default precedent.
   roomDecorOverrides: () => ({}),
+  // Occasions Phase 3: nothing decorated yet is exactly what an older save
+  // reads as; occasions.js's ensureWorldOccasions fills the sub-shape lazily.
+  occasions: () => ({ decor: {} }),
+  // House notes (0.14.2): nobody has written one yet is exactly what an older
+  // save reads as; housenotes.js's ensureHouseNotes fills the sub-shape lazily.
+  houseNotes: () => ({ motiveDay: {}, authorDay: {}, houseDay: { day: 0, count: 0 }, feltDay: {} }),
+  // What's On (0.14.2): nobody has watched anything yet is exactly what an
+  // older save reads as; tv.js's ensureTv fills the sub-shape lazily (and
+  // adopts the player's old Streamly resume points once).
+  tv: () => ({ progress: {}, lastWatched: {}, together: {}, sittings: {}, nowPlaying: null, spoiled: {}, spoiledBy: {}, spoilDay: {}, seeded: {} }),
+  // Side Projects (0.14.2): nobody has started anything yet is exactly what an
+  // older save reads as; the pass seeds each resident the first time it sees
+  // them (projects.js's projSeedPerson), most of them already partway in.
+  projects: () => ({ people: {}, displayed: [] }),
 };
 
 // World keys whose on-disk value needs more than a bare "absent → default"
@@ -1572,7 +1607,8 @@ function captureSave(gs, kind, opts = {}) {
   // renderScene now stamps with the plate key) — this recompute is only the
   // fallback for autosaves, which never pass it.
   const sceneKey = opts.sceneKey
-    || (roomId ? plateKey(roomId, clock.phase || getPhase(minutes), sceneDetailSignature(gs.objects?.[`room_${roomId}`]), imageStyleToken()) : null);
+    || (roomId ? plateKey(roomId, clock.phase || getPhase(minutes), sceneDetailSignature(gs.objects?.[`room_${roomId}`]), imageStyleToken(),
+      typeof windowViewToken === 'function' ? windowViewToken(gs, roomId) : null) : null);
 
   const log = meta.sessionLog || [];
   const headlineEntry = [...log].reverse()

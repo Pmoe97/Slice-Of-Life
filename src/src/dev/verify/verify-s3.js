@@ -274,6 +274,10 @@ check('no transient def is orphaned', api(`
     // branch calls emitTransient(...) directly for whoever is physically
     // attending, same custom-path shape as footsteps/cooking above.
     emitted.add('party_noise');
+    // Side Projects round 3 (0.14.2): projectPracticeNoise (projects.js) emits
+    // it where a roommate is practising guitar/DJ; verify-projects.js proves
+    // the emitter fires and is perceived next door.
+    emitted.add('practice');
     const transients = Object.entries(SIGNAL_DEFS).filter(([, d]) => d.decayPerTick).map(([id]) => id);
     const orphans = transients.filter(id => !emitted.has(id));
     if (orphans.length) console.log('        orphaned: ' + orphans.join(', '));

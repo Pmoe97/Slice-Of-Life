@@ -130,7 +130,7 @@ function renderCatalog(body, gs, app, screen) {
     const item = document.createElement('div');
     item.className = 'cs-catalog-row';
     const price = row.payPerBlock != null ? `$${row.payPerBlock}/block`
-      : row.price != null ? `$${row.price}`
+      : row.price != null ? `$${typeof itemPriceNow === 'function' ? itemPriceNow(row, gs) : row.price}`
       : row.cost != null ? `$${row.cost}`
       : row.costPerVisit != null ? `$${row.costPerVisit}/visit`
       : '';
@@ -164,6 +164,18 @@ function resolveScreenSource(gs, screen) {
   // has one definition read from two surfaces.
   if (screen.source === 'commitments') {
     return upcomingCommitments(gs);
+  }
+  // birthdays-and-occasions-plan.md D10: the Calendar's Birthdays tab.
+  if (screen.source === 'birthdays') {
+    return typeof knownBirthdayRows === 'function' ? knownBirthdayRows(gs) : [];
+  }
+  // occasions-and-holidays-plan.md D3: the Calendar's Holidays tab.
+  if (screen.source === 'holidays') {
+    return typeof holidayRows === 'function' ? holidayRows(gs) : [];
+  }
+  // Side Projects (projects.js, 0.14.2): the Calendar's Events tab.
+  if (screen.source === 'project_events') {
+    return typeof projectCalendarEvents === 'function' ? projectCalendarEvents(gs) : [];
   }
   if (screen.source.startsWith('state:')) {
     return screen.source.slice(6).split('.').reduce((cur, key) => cur?.[key], gs.world.computer);
@@ -473,6 +485,15 @@ function renderStreamly(body, gs, app, screen) {
       <div class="str-card-genre">${show.genre}</div>
       <div class="str-card-meta">${show.episodeTicks} ticks · mood +${show.moodGain}</div>
     `;
+    // What's On (tv.js, 0.14.2): where the season is, where you are, and
+    // who in the flat watches it.
+    const tvMeta = typeof tvStreamCardMeta === 'function' ? tvStreamCardMeta(gs, show.id) : '';
+    if (tvMeta) {
+      const meta = document.createElement('div');
+      meta.className = 'str-card-meta';
+      meta.textContent = tvMeta;
+      card.appendChild(meta);
+    }
     grid.appendChild(card);
   }
   body.appendChild(grid);
@@ -487,7 +508,10 @@ function renderStreamly(body, gs, app, screen) {
 function renderNile(body, gs, app, screen) {
   const defs = CATALOG_DEFS[screen.catalog] || ITEM_DEFS;
   const cart = resolveCart(gs, screen.cartPath).cart;
-  const cartTotal = cart.reduce((sum, row) => sum + (defs[row.defId]?.price || 0) * row.units, 0);
+  // Seasons & weather Phase 4: today's price (seasonal produce moves by a
+  // dollar; everything else, decor included, is its sticker price).
+  const priceOf = (def) => typeof itemPriceNow === 'function' ? itemPriceNow(def, gs) : def?.price;
+  const cartTotal = cart.reduce((sum, row) => sum + (priceOf(defs[row.defId]) || 0) * row.units, 0);
 
   const layout = document.createElement('div');
   layout.className = 'nile-layout';
@@ -500,13 +524,14 @@ function renderNile(body, gs, app, screen) {
     if (!def) continue;
     const card = document.createElement('div');
     card.className = 'nile-card';
+    const seasonNote = typeof produceSeasonNote === 'function' ? produceSeasonNote(def.id, gs) : null;
     card.innerHTML = `
       <div class="nile-thumb" style="background: linear-gradient(135deg, ${hashToColor(def.id)}, ${hashToColor(def.id + 'x')});">
         <span class="nile-thumb-label">${def.label.charAt(0)}</span>
       </div>
       <div class="nile-card-title">${def.label}</div>
-      <div class="nile-card-cat">${def.category}</div>
-      <div class="nile-card-price">${def.price}</div>
+      <div class="nile-card-cat">${def.category}${seasonNote ? ` · ${seasonNote}` : ''}</div>
+      <div class="nile-card-price">${priceOf(def)}</div>
     `;
     const btn = document.createElement('button');
     btn.className = 'btn tiny nile-add-btn';
@@ -529,7 +554,7 @@ function renderNile(body, gs, app, screen) {
       const def = defs[row.defId];
       const item = document.createElement('div');
       item.className = 'nile-cart-item';
-      item.innerHTML = `<span>${def?.label || row.defId} × ${row.units}</span><span class="dim tiny">${(def?.price || 0) * row.units}</span>`;
+      item.innerHTML = `<span>${def?.label || row.defId} × ${row.units}</span><span class="dim tiny">${(priceOf(def) || 0) * row.units}</span>`;
       const rm = document.createElement('button');
       rm.className = 'btn tiny';
       rm.setAttribute('data-action', screen.cartRowAction);
@@ -2434,7 +2459,8 @@ function renderGroceryCart(body, gs, app, screen) {
     const def = ITEM_DEFS[line.defId];
     const row = document.createElement('div');
     row.className = 'dd-menu-row';
-    row.innerHTML = `<div><div class="dd-dish">${def?.label || line.defId} × ${line.units}</div><div class="dim tiny">$${(def?.price || 0) * line.units}</div></div>`;
+    const unit = typeof itemPriceNow === 'function' ? itemPriceNow(def, gs) : def?.price;
+    row.innerHTML = `<div><div class="dd-dish">${def?.label || line.defId} × ${line.units}</div><div class="dim tiny">$${(unit || 0) * line.units}</div></div>`;
     const minus = document.createElement('button');
     minus.className = 'btn tiny btn-secondary';
     minus.setAttribute('data-action', 'grocery.remove-from-cart');
@@ -3298,9 +3324,15 @@ function renderRoomListQueue(body, gs, app, screen) {
   for (const entry of sorted) {
     const row = document.createElement('div');
     row.className = 'rl-queue-row';
-    if (entry.status === 'ready') {
-      row.setAttribute('data-action', 'classifieds.view-stub');
-      row.setAttribute('data-row-id', entry.stubId);
+    // A ready entry opens its applicant by npcId, never by re-finding the
+    // browse stub: stubs are pruned STUB_RETENTION_DAYS after their day
+    // (generateApplicantStubsForDay), but the applicant they produced lives
+    // on in gs.npcs. Routing through classifieds.view-stub made every inbox
+    // row older than that a silent dead click (doClassifiedsViewStub bails
+    // on a missing stub) while it still read "Ready — click to view".
+    if (entry.status === 'ready' && entry.npcId) {
+      row.setAttribute('data-action', 'classifieds.view-applicant');
+      row.setAttribute('data-row-id', entry.npcId);
       row.style.cursor = 'pointer';
     }
     const avatar = document.createElement('div');

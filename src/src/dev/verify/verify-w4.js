@@ -23,9 +23,12 @@ check('every entry carries all five stats as numbers',
       api(`Object.values(CLOTHING_DEFS).every(d =>
         ['attraction','comfort','modesty','thermal','reveal']
           .every(s => typeof d.stats?.[s] === 'number' && d.stats[s] >= 0 && d.stats[s] <= 1))`));
-check('every entry has traits, styleTags, and a price (buyable)',
+// giftOnly (Side Projects, 0.14.2): a hand-knit scarf a roommate made you
+// exists only as that present — never sold, so never priced. The exemption
+// is that one flag, and a giftOnly def must still NOT be priced.
+check('every entry has traits, styleTags, and a price (buyable) — except a giftOnly present, which has none',
       api(`Object.values(CLOTHING_DEFS).every(d =>
-        Array.isArray(d.traits) && d.traits.length > 0 && Array.isArray(d.styleTags) && typeof d.price === 'number')`));
+        Array.isArray(d.traits) && d.traits.length > 0 && Array.isArray(d.styleTags) && (d.giftOnly ? d.price == null : typeof d.price === 'number'))`));
 check('every slot has at least one item to wear',
       api(`CLOTHING_SLOTS.every(s => Object.values(CLOTHING_DEFS).some(d => d.slot === s))`));
 check('clothing is non-stackable (one item = one wardrobe slot)',
@@ -35,11 +38,12 @@ check('clothing carries no consumable/perishable (clothes do not spoil)',
 
 // ---------------------------------------------------------------- 2
 console.log('\n2. Nile catalog');
-check('every clothing item is on Nile (priced ITEM_DEF → SHOP_CATALOG_LIST)',
-      api(`Object.keys(CLOTHING_DEFS).every(id => SHOP_CATALOG_LIST.some(row => row.id === id))`));
-check('clothing sorts under its own group, not Other',
-      api(`Object.values(CLOTHING_DEFS).every(d => d.sortGroup === 'clothing')`) +
-      ' (sortGroup stamped explicitly, the stamping loop cannot override it)');
+check('every clothing item is on Nile (priced ITEM_DEF → SHOP_CATALOG_LIST), and no giftOnly present is',
+      api(`Object.keys(CLOTHING_DEFS).every(id => SHOP_CATALOG_LIST.some(row => row.id === id) === !CLOTHING_DEFS[id].giftOnly)`));
+// (This used to append its note to the api() result — a non-empty string, so
+// the check could never fail. Found 2026-09-24; the note lives in the name.)
+check('clothing sorts under its own group, not Other (sortGroup stamped explicitly, the stamping loop cannot override it)',
+      api(`Object.values(CLOTHING_DEFS).every(d => d.sortGroup === 'clothing')`));
 check('SORT_GROUPS knows the clothing group',
       api(`!!SORT_GROUPS.clothing && SORT_GROUPS.clothing.label === 'Clothing'`));
 

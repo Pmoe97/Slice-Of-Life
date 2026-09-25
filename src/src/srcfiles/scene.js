@@ -435,6 +435,13 @@ function composeScene(gameState, sceneState) {
   // or the newborn's presence. Guarded on typeof (scene.js loads first).
   const pregnancySelf = (typeof pregnancySelfLine === 'function') ? pregnancySelfLine(gameState) : null;
   const selfLine = [self, pregnancySelf].filter(Boolean).join(' ');
+  // Occasions Phase 3: a room dressed for a holiday says so, right after
+  // you. Guarded on typeof (scene.js loads before occasions.js).
+  const decor = (typeof decorSceneLine === 'function') ? decorSceneLine(gameState, roomId, clock.day) : null;
+  // seasons-and-weather-plan Phase 2 (W4): the weather as it reaches this
+  // room — rain on the glass, snow past the window, a storm heard through
+  // the walls. Text only; guarded the same way (scene.js loads first).
+  const weather = (typeof weatherRoomCue === 'function') ? (weatherRoomCue(gameState, roomId)?.text || null) : null;
 
   const log = gameState.meta.sessionLog || [];
   const beats = log
@@ -451,10 +458,12 @@ function composeScene(gameState, sceneState) {
   return {
     heading,
     self: selfLine,
+    decor,
     presence: presenceLines(gameState, roomId),
     doorCues,
     sensory,
     callouts,
+    weather,
     meanwhile,
     beats,
     history: sceneHistory(gameState),

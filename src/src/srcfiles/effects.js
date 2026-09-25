@@ -1360,6 +1360,70 @@ const EFFECT_DEFS = {
     ),
     apply: applyResolveDoorEvent,
   },
+  // Occasions Phase 3 (occasions-and-holidays-plan.md): putting a holiday's
+  // decorations up / taking them down. Trusted-only — the self.decorate /
+  // self.take_down_decor verbs produce these; the narrator never decorates.
+  // The appliers call occasions.js (typeof-guarded: effects.js loads first).
+  // `who` is 'player' or an npc id.
+  DECORATE_OCCASION: {
+    paramShape: ['occasionId', 'who'], llm: false, implemented: true,
+    validate: (p) => (typeof OCCASION_DECOR === 'object' && !!OCCASION_DECOR[p.occasionId]) || 'Nothing to decorate for.',
+    apply: (p, ctx) => {
+      if (typeof putUpDecorations === 'function') putUpDecorations(ctx.gameState, p.occasionId, p.who || 'player', ctx.gameState.meta.clock.day);
+    },
+  },
+  // What's On (tv.js, 0.14.2): the player's Watch TV. Trusted-only — the
+  // self.watch_tv verb decides the show and episode in prepare (tv.js's
+  // tvPlanPlayerWatch) and this writes it: your place, the place of whoever
+  // saw it with you (`who`, comma-separated npc ids or '-'), and the screen.
+  TV_WATCH: {
+    paramShape: ['showId', 'n', 'rerun', 'who'], llm: false, implemented: true,
+    validate: (p) => (typeof tvShowDef === 'function' && !!tvShowDef(p.showId) && Number(p.n) >= 1) || 'Nothing to watch.',
+    apply: (p, ctx) => {
+      if (typeof tvApplyPlayerWatch !== 'function') return;
+      const who = String(p.who || '-') === '-' ? [] : String(p.who).split(',').filter(Boolean);
+      tvApplyPlayerWatch(ctx.gameState, p.showId, Number(p.n), String(p.rerun) === '1', who, ACTION_TUNING.tvMinutes);
+    },
+  },
+  // Side Projects (projects.js, 0.14.2): the player asked a roommate about
+  // their project. Trusted-only — the self.encourage_project verb picks who in
+  // prepare; the narrator never gets to hand out encouragement. The applier
+  // lifts their engagement, warms them to you a little and gives them the
+  // memory, once a day per roommate.
+  PROJECT_ENCOURAGE: {
+    paramShape: ['npcId'], llm: false, implemented: true,
+    validate: (p, ctx) => (typeof projActive === 'function' && !!projActive(ctx.gameState, p.npcId)) || 'They aren\'t working on anything.',
+    apply: (p, ctx) => {
+      if (typeof projectApplyEncourage === 'function') projectApplyEncourage(ctx.gameState, p.npcId);
+    },
+  },
+  // Bang on the Wall / Ask for Quiet (projects.js): quiet for the rest of the
+  // day, a little less heart for the project, and a sore spot toward you.
+  // mode 'wall' | 'here' picks the memory. Target fixed in prepare.
+  PROJECT_HUSH: {
+    paramShape: ['npcId', 'mode'], llm: false, implemented: true,
+    validate: (p, ctx) => (typeof projActive === 'function' && !!projActive(ctx.gameState, p.npcId)) || 'Nobody is practising.',
+    apply: (p, ctx) => {
+      if (typeof projectApplyHush === 'function') projectApplyHush(ctx.gameState, p.npcId, p.mode === 'here' ? 'here' : 'wall');
+    },
+  },
+  // Jam Session (projects.js): heart, a step of progress (never finishing a
+  // stage for them), warmth toward you and a memory, once a day per roommate.
+  // The player's skill XP and mood ride as ordinary ADD_SKILL_XP/ADJUST_NEED.
+  PROJECT_JAM: {
+    paramShape: ['npcId'], llm: false, implemented: true,
+    validate: (p, ctx) => (typeof projActive === 'function' && !!projActive(ctx.gameState, p.npcId)) || 'They aren\'t working on anything.',
+    apply: (p, ctx) => {
+      if (typeof projectApplyJam === 'function') projectApplyJam(ctx.gameState, p.npcId);
+    },
+  },
+  TAKE_DOWN_DECOR: {
+    paramShape: ['occasionId', 'who'], llm: false, implemented: true,
+    validate: (p) => (typeof OCCASION_DECOR === 'object' && !!OCCASION_DECOR[p.occasionId]) || 'No such decorations.',
+    apply: (p, ctx) => {
+      if (typeof takeDownDecorations === 'function') takeDownDecorations(ctx.gameState, p.occasionId, p.who || 'player', ctx.gameState.meta.clock.day);
+    },
+  },
   SPAWN_OBJECT: {
     // Phase 6 hobby placement — see applySpawnObject. Trusted-only: the
     // narrator doesn't get to put furniture in rooms.

@@ -27,7 +27,16 @@
 // table.
 function ambientTempC(gameState) {
   const day = gameState?.meta?.clock?.day || 1;
-  const outdoor = THERMOSTAT_TUNING.seasonOutdoorC[getSeasonIndex(day)];
+  // seasons-and-weather-plan.md Phase 1 (W2): the outdoor side is now the
+  // real day's weather and hour (seasons.js's outdoorTempC) — a smooth
+  // curve whose season MEANS equal seasonOutdoorC by construction, so the
+  // house is on average exactly as warm as before, but a cold snap or a hot
+  // afternoon now reaches in. typeof-guarded (temperature.js loads before
+  // seasons.js; a harness may load it alone): the flat season value is the
+  // fallback.
+  const outdoor = typeof outdoorTempC === 'function'
+    ? outdoorTempC(gameState)
+    : THERMOSTAT_TUNING.seasonOutdoorC[getSeasonIndex(day)];
   const targetC = gameState?.world?.thermostat?.targetC ?? THERMOSTAT_TUNING.defaultC;
   return outdoor + (targetC - outdoor) * THERMOSTAT_TUNING.hvacEfficiency;
 }

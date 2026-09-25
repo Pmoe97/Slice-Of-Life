@@ -1574,11 +1574,16 @@ const ASK_GIFT = {
     const reason = match === 'interest' ? 'gift_interest'
       : match === 'want' ? 'gift_want'
       : match === 'wound' ? 'gift_wound' : 'gift_miss';
+    // birthdays-and-occasions-plan.md D8: a present on their birthday. A pure
+    // read (the mark is written by postEffects); the field only appears when
+    // true, so every non-birthday decision keeps its exact old shape.
+    const birthday = typeof birthdayGiftBonusApplies === 'function' && birthdayGiftBonusApplies(gs, npcId);
     return {
       accept: true,
       reason,
       giftMatch: match,          // rides for effects()/leafNote()
       giftLabel: def.label,      // rides for leafNote() — a known def label
+      ...(birthday ? { birthday: true } : {}),
     };
   },
   // D12 — the gift is remembered on every actual outcome (the memory IS the
@@ -1595,20 +1600,39 @@ const ASK_GIFT = {
     const who = (npc.bible && npc.bible.name) || 'them';
     const G = ASK_TUNING.gift;
     const delta = decision.giftMatch ? (G.relDeltas[decision.giftMatch] || 0) : 0;
+    // birthdays-and-occasions-plan.md D8: on their birthday the memory says
+    // so, and the birthday bonus rides on top of the match delta (a miss
+    // still earns it — the occasion is what was remembered).
+    const bdayLines = (decision.birthday && typeof birthdayGiftEffectLines === 'function') ? birthdayGiftEffectLines(gs, npcId) : [];
     const lines = [
       `MOVE_ITEM ${defId} 1 player ${npcId}`,
-      decision.giftMatch
+      bdayLines.length
+        ? `MEMORY_FACT ${npcId} ${fillBirthdayText(BIRTHDAY_TUNING.giftFact, { name: who, item: label })}${decision.giftMatch ? ' It really landed.' : ''}`
+        : decision.giftMatch
         ? `MEMORY_FACT ${npcId} The player gave ${who} the ${label}, and it really landed.`
         : `MEMORY_FACT ${npcId} The player gave ${who} the ${label}; they accepted it politely.`,
     ];
     if (delta > 0) lines.push(`REL_DELTA ${npcId} ${G.relAxis} +${delta.toFixed(2)}`);
+    lines.push(...bdayLines);
     return lines;
+  },
+  // birthdays-and-occasions-plan.md D8: the birthday mark (once per birthday)
+  // and the beat doConvSend paints, stamped onto the decision it reads.
+  postEffects(gs, npc, npcId, decision) {
+    if (!decision.accept || !decision.birthday || typeof noteBirthdayGift !== 'function') return;
+    const note = noteBirthdayGift(gs, npcId);
+    if (note) decision.birthdayBeat = note.beat;
   },
   // The directive already says mechanics (items) are handled automatically;
   // this tells the writer how to be in-character about the gift itself.
   // The label is a def label (data, never player input), so it interpolates.
   leafNote(decision) {
     const label = decision.giftLabel || 'the gift';
+    if (decision.birthday) {
+      return `- It's your birthday, and they gave you a present: ${label}. ${decision.giftMatch
+        ? 'It is genuinely your kind of thing, and they remembered the day — let both land.'
+        : "It's not quite your thing, but they remembered your birthday — that's what reaches you."}`;
+    }
     if (decision.giftMatch === 'interest') {
       return `- They gave you: ${label}. It is genuinely your kind of thing — react with real pleasure, because they paid attention.`;
     }

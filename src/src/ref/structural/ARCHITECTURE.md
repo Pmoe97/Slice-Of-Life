@@ -152,24 +152,102 @@ between folders together.
 
 ## Load order
 
-`index.html`'s `<script>` tags are the dependency graph. Current order (all
-tagged `?v=N` for cache-busting — bump **every** tag together, since a
-partial bump is how you get a client running half-old code):
+`index.html`'s `<script>` tags are the dependency graph — the source of
+truth whenever this list and the page disagree. Every tag carries `?v=N` for
+cache-busting: bump the tag of **every file you changed**, in the same edit
+(a changed file behind an unbumped tag is how a client ends up running
+half-old code). Current order, 91 files, regenerated from the tags
+2026-09-23:
 
 ```
-config.js → icons.js → defs.world.js → defs.actions.js → defs.computer.js
-→ defs.menu.js → defs.intro.js → defs.design.js → defs.dreams.js → defs.patchnotes.js → defs.works.js → orbital.js → state.js → sim.js
-→ commitments.js → world.js
-→ signals.js → meanwhile.js → scene.js → items.js → inventory.js → effects.js → cooking.js
-→ taste.js → drives.js
-→ cognition.js → actions.js → intent.js → skills.js → stealth.js → time.js
-→ computer.js → works.js → tracker.js → phone.js → npc.js → notice.js → willingness.js → rumination.js → prompt.js
-→ llm.js → x5.js → interruption.js
-→ image.js → sprites.js → avatar.js → peek.js → dreams.js → actionwindow.js
-→ render.js → render.computer.js → spritestudio.js → render.spritestudio.js → render.desktop.js
-→ render.phone.js → chatter.js → platform.js → aspirations.js → asks.js → ui.js → ui.computer.js → afterhours.js
+config.js → defs.settings.js → settings.js → icons.js → fields.js
+→ defs.world.js → defs.actions.js → defs.computer.js → defs.menu.js
+→ defs.intro.js → defs.design.js → defs.placement.js → defs.dreams.js
+→ defs.patchnotes.js → defs.works.js → orbital.js → state.js → sim.js
+→ commitments.js → world.js → movement.js → movement.present.js → signals.js
+→ meanwhile.js → scene.js → items.js → inventory.js → effects.js → cooking.js
+→ taste.js → drives.js → cognition.js → overture.js → actions.js → intent.js
+→ skills.js → stealth.js → time.js → computer.js → works.js → tracker.js
+→ debuglog.js → phone.js → npc.js → notice.js → flags.js → temperature.js
+→ dirt.js → willingness.js → relationships.js → codex.js → rumination.js
+→ prompt.js → llm.js → concept.js → x5.js → interruption.js → image.js
+→ sprites.js → avatar.js → peek.js → dreams.js → actionwindow.js → boundary.js
+→ nightscene.js → pregnancy.js → birthdays.js → occasions.js → seasons.js
+→ render.js → render.nightscene.js → render.computer.js → spritestudio.js
+→ render.spritestudio.js → render.calendar.js → render.desktop.js
+→ render.phone.js → money.js → mail.js → puzzles.js → chatter.js → platform.js
+→ aspirations.js → asks.js → ui.js → ui.computer.js → afterhours.js
 → ui.windowmanager.js → ui.phone.js → studio.js → menu.js
 ```
+
+`dev/verify/loadgame.js`'s `ORDER` mirrors this for the Node harnesses,
+minus the DOM layer by design (`render*.js`, `ui*.js`, `afterhours.js`,
+`menu.js` — it "stops before render/ui"; a harness that needs one of their
+functions lifts it by name, as `verify-roomlist-inbox.js` and
+`verify-weather.js` do). Three files sit at a different position there, each
+explained in its own comment: `defs.placement.js`, `codex.js`,
+`spritestudio.js`. Order only matters for top-level reads (the rule at the
+end of this section), which is why those differences are safe.
+
+**Modules the notes below don't otherwise cover** — one line each, from the
+file's own header (read it for the full story):
+- `defs.settings.js` / `settings.js` — the one settings schema and its
+  store (Settings & Pause Overhaul): browser-local `kv.menu`, never in a
+  save record; the SFW flag is the one setting that patches the live game.
+- `fields.js` — shared form-control builders for the character editors
+  (AI character generation Phase 1): free-text-capable fields, so a value
+  outside a pick-list can be shown and kept instead of silently erased.
+- `defs.placement.js` — where furniture IS (npc-avatar-liveliness Phase 2):
+  one table the floor plan draws and the action-anchor resolver walks NPCs
+  to, moved out of `render.js` so a Node harness can verify it.
+- `movement.js` — the physical layer (continuous behavior engine C4): real
+  walks to an activity's stand-point in game time; `npc.location` is a
+  projection of position, written the moment a walk enters a room.
+- `movement.present.js` — the presentation layer for those walks (avatar
+  liveliness Phase 1): reads the sim's positions, never writes them.
+- `overture.js` — NPC initiative: the acts an NPC directs at a person
+  (approach, text, propose, knock), ranked in the same list as drives.
+- `debuglog.js` — the troubleshooting export log (`logDebugEvent`, the
+  single writer), saved per machine and never exported with a save slot.
+- `flags.js` — the flags & conditions engine (house rules, boundary flags,
+  an NPC's own comfort flags): a named rule an NPC checks at decision time.
+- `temperature.js` — the thermostat's pure math: ambient temperature (now
+  reading `seasons.js`'s outdoor curve), HVAC's multiplier, NPC comfort
+  bands and the wardrobe's thermal bias.
+- `dirt.js` — ambient per-room dirt (dust and foot traffic), the mess that
+  has no object to be dirty on.
+- `relationships.js` — emergent NPC↔NPC couples: a once-a-day formation
+  pass over co-location and compatibility, nothing scripted.
+- `codex.js` — the per-character knowledge ledger's readers and its three
+  spendable verbs (Confront / Spread / Matchmake); deterministic, no LLM.
+- `concept.js` — one typed sentence in, a validated character DRAFT out;
+  never constructs a character itself.
+- `boundary.js` — boundary acts as risk systems with their own narrow gate,
+  never a relaxed willingness; `nightscene.js` / `render.nightscene.js` are
+  the night scene's decider and painter over its resolvers.
+- `pregnancy.js` — conception, term, birth and the baby's presence; only a
+  completed, willing act can start one, and every roll is seeded.
+- `money.js` — the bidirectional NPC loan ledger (`player.moneyLedger`).
+- `mail.js` — the front door made real: the daily mailbox and the single
+  pending "who's there" door event.
+- `puzzles.js` — DailyGrid, the seeded daily crossword's pure logic.
+
+`birthdays.js` → `occasions.js` → `seasons.js` (Seasons & Occasions,
+2026-09-22/23 — `ref/wip/SEASONS-AND-OCCASIONS-ROADMAP.md`) sit after
+`pregnancy.js` and before `render.js`, with `render.calendar.js` after
+`render.spritestudio.js`. `occasions.js` owns "what is today" (the holiday
+calendar, the holiday work model, decorations — `world.occasions` is its one
+stored state); `seasons.js` owns "what is it like outside" and stores
+nothing: the weather chain and front times, the outdoor temperature curve
+(`ambientTempC` reads it; HVAC billing does not), daylight, the sky line in
+both prompts and the HUD, the weather cue in rooms that see outside, the sky
+watch (ui.js `narrateSkyChanges`, reset in time.js `startClockLoop`), the
+balcony weight in every room picker, swim/sauna leans, seasonal produce
+prices (`itemPriceNow`, read by both shops' carts), cravings, how NPCs dress
+to go out, seasonal mood beats, and the window-view token in plate keys.
+Most of their consumers (scene.js, drives.js, sim.js, npc.js, cognition.js,
+computer.js, image.js, temperature.js…) load EARLIER than they do, so every
+such call is `typeof`-guarded; it's all call-time, never load-time.
 
 `defs.works.js` / `works.js` (Aspirations & Creative Careers Phase 4,
 2026-09-18, D17–D20/D56): the works engine — the player's own catalog.
@@ -288,13 +366,7 @@ after `image.js`, because `resolveSprite` falls through to that file's
 verbs) sits after `render.computer.js` alongside `studio.js`'s own pairing
 convention; `render.spritestudio.js` (its screens) follows it immediately,
 mirroring how `studio.js` and `render.computer.js`'s Character Studio
-renderers are split. This diagram was already stale in several other places
-before this plan touched it (`defs.settings.js`/`settings.js`, `fields.js`,
-`overture.js`, `debuglog.js`, `relationships.js`, `codex.js`, `concept.js`,
-`boundary.js`, `pregnancy.js` are all missing above) — out of scope for this
-plan to backfill; `index.html`'s own `<script>` tags are the actual source of
-truth if this list and the page ever disagree.
-```
+renderers are split.
 
 `studio.js` sits immediately before `menu.js` for a specific reason: menu.js's
 last line invokes `boot()`, so anything loading after it runs once boot has

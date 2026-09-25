@@ -163,6 +163,23 @@ function isWeekend(day) {
   return getWeekday(day) >= 5;
 }
 
+// Occasions Phase 2 (occasions-and-holidays-plan.md D14): the ONE place a
+// schedule's day type is chosen. A weekend is a weekend; a holiday this NPC
+// isn't working (occasions.js's holidayWorkPlan — the job, the premium, their
+// money and work ethic, their festivity) runs their `weekend` schedule too,
+// so everything downstream — drives, availability, asks, who's home — follows
+// for free. Guarded on typeof: sim.js loads long before occasions.js, and a
+// harness may load sim.js alone (then this is exactly the old isWeekend pick).
+// Plan invariant 3: no other site decides "is it a day off" itself.
+function scheduleDayTypeFor(npc, day) {
+  if (isWeekend(day)) return 'weekend';
+  if (npc && typeof holidayWorkPlan === 'function') {
+    const plan = holidayWorkPlan(npc, day);
+    if (plan && !plan.works) return 'weekend';
+  }
+  return 'weekday';
+}
+
 // Working-day arithmetic (external-world plan Phase 4). Del's crew works
 // weekdays only, so a renovation job's durationDays are WORKING days: this
 // returns the calendar day on which `workingDays` of actual work have been
@@ -693,7 +710,8 @@ function isOfficeDay(npc, clock) {
 // given save reproduces a given week (C6), and deliberately NOT stored: it is
 // a pure function of identity and date, so it needs no field and no migration.
 function isGigDay(npc, clock, npcId) {
-  if (isWeekend(clock?.day ?? 1)) return false;
+  // Occasions Phase 2 (D14): a holiday they've taken off is no gig day either.
+  if (scheduleDayTypeFor(npc, clock?.day ?? 1) === 'weekend') return false;
   const rate = VOCATION_TUNING.selfEmployedGigDayChance;
   if (!(rate > 0)) return false;
   const who = npcId || npc?.bible?.name || 'anon';
@@ -1403,7 +1421,7 @@ function resolveScheduleActivity(npc, clock, gameState, npcId) {
     }
   }
   const template = SCHEDULES[npc.bible.scheduleTemplate] || SCHEDULES.standard;
-  const dayType = isWeekend(clock.day) ? 'weekend' : 'weekday';
+  const dayType = scheduleDayTypeFor(npc, clock.day);
   const sched = template[dayType] || template.weekday;
 
   // continuous-cadence-closure-plan Phase 2 (D3): SCHEDULES' ranges are now
@@ -1627,7 +1645,21 @@ function resolveRoomForActivity(block, npcId, npcs, rng, clock, gameState) {
 
   // Pick the activity string first so we can route by it
   const acts = ACTIVITY_TABLES[block] || ACTIVITY_TABLES.leisure;
-  const activity = acts[Math.floor(rng() * acts.length)];
+  let activity = acts[Math.floor(rng() * acts.length)];
+
+  // Seasons & weather Phase 3: the balcony is weighted by how inviting it is
+  // outside (roomWeatherWeight, seasons.js; 1 for every other room, and when
+  // seasons.js isn't loaded).
+  const wx = (roomId, opts) => (typeof roomWeatherWeight === 'function' && gameState) ? roomWeatherWeight(gameState, roomId, opts) : 1;
+  // An activity that only happens outside, on a day outside is off the list,
+  // becomes its indoor counterpart ("stepping outside" in a storm is
+  // watching it from the window).
+  const swap = (typeof WEATHER_TUNING !== 'undefined') && WEATHER_TUNING.outside?.activitySwap?.[activity];
+  if (swap) {
+    const only = ACTIVITY_ROOM_PREFERENCES[activity];
+    const rooms = Array.isArray(only) ? only : [only];
+    if (rooms.every(r => wx(r) === 0)) activity = swap;
+  }
 
   // Check if this activity has a room preference
   const pref = ACTIVITY_ROOM_PREFERENCES[activity];
@@ -1652,13 +1684,13 @@ function resolveRoomForActivity(block, npcId, npcs, rng, clock, gameState) {
       if (!npcCommonRoomAccessible(r)) return false;
       return true;
     });
-    if (valid.length > 0) {
-      const weighted = valid.map(roomId => {
-        const occCount = getPresentNpcIds(npcs, roomId).length;
-        const capacity = ROOMS[roomId].capacity;
-        const weight = occCount >= capacity ? 1 / SCENE.crowdAvoidanceWeight : 1;
-        return { roomId, weight };
-      });
+    const weighted = valid.map(roomId => {
+      const occCount = getPresentNpcIds(npcs, roomId).length;
+      const capacity = ROOMS[roomId].capacity;
+      const weight = occCount >= capacity ? 1 / SCENE.crowdAvoidanceWeight : 1;
+      return { roomId, weight: weight * wx(roomId) };
+    }).filter(c => c.weight > 0);
+    if (weighted.length > 0) {
       targetRoom = weightedPick(rng, weighted, c => c.weight).roomId;
     }
   }
@@ -1669,8 +1701,9 @@ function resolveRoomForActivity(block, npcId, npcs, rng, clock, gameState) {
       const occCount = getPresentNpcIds(npcs, roomId).length;
       const capacity = ROOMS[roomId].capacity;
       const weight = occCount >= capacity ? 1 / SCENE.crowdAvoidanceWeight : 1;
-      return { roomId, weight };
-    });
+      // Any common room: the weather only takes the balcony away here.
+      return { roomId, weight: weight * wx(roomId, { boost: false }) };
+    }).filter(c => c.weight > 0);
     targetRoom = weightedPick(rng, candidates, c => c.weight).roomId;
   }
 
@@ -2268,7 +2301,10 @@ function resolveTick(gameState, minutesThisTick = CLOCK.tickMinutes) {
             day: meta.clock.day, tick: getTickIndex(meta.clock.minutes), roomId: location, npcId: id,
             type: 'temperature_complaint', moodDelta: 0,
             template: lines[Math.floor(rng() * lines.length)],
-            data: {}, seenByPlayer: false,
+            // `cold` (0.14.2): which way they were uncomfortable — read by
+            // housenotes.js, whose thermostat note says "freezing" or
+            // "roasting" to match the complaint it follows.
+            data: { cold }, seenByPlayer: false,
           });
         }
         // D13: thermostatSelfAdjustChance(npc) is still a raw PER-TICK chance
@@ -2935,6 +2971,52 @@ function resolveTick(gameState, minutesThisTick = CLOCK.tickMinutes) {
   // tick produced, while `resolved` still holds this tick's real locations.
   // One writer, after every emitter has run — see eventParticipants for why
   // this cannot wait for UI's advanceAndResolve.
+  // House notes (housenotes.js, 0.14.2): residents tidy away their own old
+  // notes, read every note where they're standing (yours included), maybe
+  // scribble a reply, and — at the fridge with you out of the room — may
+  // leave one of their own for a real, stored reason. On the FINAL locations,
+  // like the proximity pass above; own rng stream, so no other roll moves.
+  // Relationship deltas land the drive way (processNpcRelDeltas), carried
+  // into npcUpdates where an earlier writer this tick already put a
+  // relPlayer — resolveBatch's rebuild would otherwise clobber the delta.
+  if (typeof resolveHouseNotesTick === 'function') {
+    const notes = resolveHouseNotesTick(gameState, npcUpdates, activeNpcIds, minutesThisTick);
+    for (const evt of notes.events) newEvents.push(evt);
+    if (notes.relDeltas.length > 0) {
+      processNpcRelDeltas(gameState, notes.relDeltas);
+      for (const rd of notes.relDeltas) {
+        if (npcUpdates[rd.a] && npcUpdates[rd.a].relPlayer) npcUpdates[rd.a].relPlayer = gameState.npcs[rd.a].relPlayer;
+      }
+    }
+  }
+
+  // What's On (tv.js, 0.14.2): the living-room TV plays one thing. Whoever
+  // ended this tick on the sofa 'watching TV' joins what's on or puts their
+  // next episode on, and an episode that finished is seen by whoever was
+  // there for it; a roommate who's ahead of you on a show may let it slip.
+  // Reads the FINAL locations/activities like the passes above and never
+  // decides whether anyone watches; own rng stream, so no other roll moves.
+  // It names the show in this tick's watch_tv events (hence newEvents).
+  if (typeof resolveTvTick === 'function') {
+    const tv = resolveTvTick(gameState, npcUpdates, activeNpcIds, minutesThisTick, newEvents);
+    for (const evt of tv.events) newEvents.push(evt);
+  }
+
+  // Side Projects (projects.js, 0.14.2): once a day per resident — seed anyone
+  // new, let an idle project lose a little heart (or a determined one win it
+  // back), give up on one that has gathered dust long enough, and start the
+  // next when it's time. The sessions themselves are the work_on_project
+  // drive's, above; this pass never decides whether anyone works on anything.
+  // Own seededRng streams, so no other roll moves. It also tells this tick's
+  // off-screen 'hobby' event with the person's real project (hence newEvents).
+  // It also sounds out anyone practising something loud (guitar, DJ) on the
+  // FINAL locations and lets whoever hears it react — complain or listen —
+  // once a day each, scaled by minutesThisTick.
+  if (typeof resolveProjectsTick === 'function') {
+    const proj = resolveProjectsTick(gameState, npcUpdates, activeNpcIds, newEvents, minutesThisTick);
+    for (const evt of proj.events) newEvents.push(evt);
+  }
+
   stampEventParticipants(newEvents, resolved, gameState.player && gameState.player.location);
 
   return { npcUpdates, newEvents, peepResults: allPeepResults };

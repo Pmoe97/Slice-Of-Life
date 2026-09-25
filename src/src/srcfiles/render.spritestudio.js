@@ -946,7 +946,8 @@ function renderSpriteScenePreview(gs, ed, sourceCanvas) {
   const roomId = gs.player && gs.player.location;
   const phase = gs.meta && gs.meta.clock && gs.meta.clock.phase;
   if (roomId && typeof getScenePlate === 'function') {
-    getScenePlate(roomId, phase, gs.objects && gs.objects[`room_${roomId}`]).then((res) => {
+    getScenePlate(roomId, phase, gs.objects && gs.objects[`room_${roomId}`],
+      typeof windowViewToken === 'function' ? windowViewToken(gs, roomId) : null).then((res) => {
       if (res && res.url && plate.isConnected) plate.src = res.url;
     }).catch(() => {});
   }

@@ -70,23 +70,34 @@ api(`
   // events, the same episodes, the same importance — and neither of D15's two
   // fields. It is the counterfactual every occupancy figure below is measured
   // against, so none of them depends on a magic number.
+  //
+  // The strip covers EVERY episode writer, not just this loop's: a tick pass
+  // may write a tagged episode of its own (projects.js's practice pass — the
+  // guitarist remembers who complained, with both as participants, since
+  // 2026-09-24), and leaving that one tagged gave the "old writer" 5 inferred
+  // facts. The counterfactual is a world where no episode carries either
+  // field, so addMemoryEpisode itself is wrapped for the stripped run.
   __simulateLoop = (seed, ticks, opts) => {
     opts = opts || {};
+    const realAdd = addMemoryEpisode;
+    if (opts.stripFields) addMemoryEpisode = (npc, day, text, importance) => realAdd(npc, day, text, importance, '', []);
     let g = __mk(seed);
     let events = 0;
-    for (let t = 0; t < ticks; t++) {
-      const r = resolveBatch(g, 1);
-      g = r.state;
-      for (const evt of r.events) {
-        const npc = g.npcs[evt.npcId];
-        if (!npc) continue;
-        events++;
-        g.npcs[evt.npcId] = addMemoryEpisode(
-          npc, evt.day, formatEventText(evt, g.npcs), __eventImportance(evt),
-          opts.stripFields ? '' : eventEmotionalTag(evt),
-          opts.stripFields ? [] : (evt.participants || []));
+    try {
+      for (let t = 0; t < ticks; t++) {
+        const r = resolveBatch(g, 1);
+        g = r.state;
+        for (const evt of r.events) {
+          const npc = g.npcs[evt.npcId];
+          if (!npc) continue;
+          events++;
+          g.npcs[evt.npcId] = addMemoryEpisode(
+            npc, evt.day, formatEventText(evt, g.npcs), __eventImportance(evt),
+            opts.stripFields ? '' : eventEmotionalTag(evt),
+            opts.stripFields ? [] : (evt.participants || []));
+        }
       }
-    }
+    } finally { addMemoryEpisode = realAdd; }
     const out = { events, residents: [] };
     for (const id of __ids(g)) {
       const m = g.npcs[id].memory || {};
@@ -312,12 +323,14 @@ console.log(`\n(D15) OCCUPANCY — ${HOUSES} households x 3 residents x ${DAYS} 
 
 const live = { residents: [], events: 0 };
 const dead = { residents: [], events: 0 };
+let houseByHouse = 0;
 for (let i = 0; i < HOUSES; i++) {
   const seed = 20260811 + i * 7919;
   const a = J(`__simulateLoop(${seed}, ${DAYS * DAY}, {})`);
   const b = J(`__simulateLoop(${seed}, ${DAYS * DAY}, { stripFields: true })`);
   live.events += a.events; live.residents.push(...a.residents);
   dead.events += b.events; dead.residents.push(...b.residents);
+  houseByHouse += Math.abs(a.events - b.events);
 }
 const sum = (rs, f) => rs.reduce((acc, r) => acc + f(r), 0);
 const any = (rs, f) => rs.filter(r => f(r) > 0).length;
@@ -350,10 +363,23 @@ console.log(`        open questions ${sum(live.residents, r => r.openQuestions)}
 // still byte-identical; only episodes==episodes, the strong structural
 // invariant, is asserted exactly). Measured at 0.17% population-wide;
 // 0.5% leaves headroom without going numb to an actually-decoupled arm.
-const eventDrift = Math.abs(live.events - dead.events) / Math.max(live.events, 1);
-check(`the two runs are the same simulation, differing only in the fields (${live.events} vs ${dead.events} events, ${(eventDrift * 100).toFixed(2)}% apart)`,
-      eventDrift < 0.005 && sum(live.residents, r => r.episodes) === sum(dead.residents, r => r.episodes),
-      `${live.events} vs ${dead.events} events, ${sum(live.residents, r => r.episodes)} vs ${sum(dead.residents, r => r.episodes)} episodes`);
+//
+// It WAS numb to one (found 2026-09-24, Side Projects). That figure was the
+// NET difference in event totals, and per-house differences cancel: the same
+// twelve houses run as two genuinely DECOUPLED simulations (arm b on a
+// different seed — nothing shared but the cast) scored 0.06% and 0.18% on two
+// seed sets and would have passed with room to spare, while the real, coupled
+// arms scored 0.64% and 0.67% on those seed sets with no change at all — it
+// passed on its own seeds by luck of cancellation (+7 and -7 in two houses).
+// So the drift is now measured HOUSE BY HOUSE, where nothing can cancel:
+// coupled arms 0.54–0.67% (0.59–0.85% once projects.js's work_on_project
+// drive landed — a project's progress is path-dependent, so one displaced
+// session shifts the next milestone), decoupled arms 3.3–3.5%, across three
+// seed sets. 1.5% sits between the two with room either side.
+const eventDrift = houseByHouse / Math.max(live.events, 1);
+check(`the two runs are the same simulation, differing only in the fields (${live.events} vs ${dead.events} events; ${houseByHouse} apart house by house, ${(eventDrift * 100).toFixed(2)}%)`,
+      eventDrift < 0.015 && sum(live.residents, r => r.episodes) === sum(dead.residents, r => r.episodes),
+      `${live.events} vs ${dead.events} events, ${houseByHouse} apart house by house, ${sum(live.residents, r => r.episodes)} vs ${sum(dead.residents, r => r.episodes)} episodes`);
 check('the pre-Phase-2 writer yields 0 facts and 0 open questions across the whole population',
       sum(dead.residents, r => r.facts) === 0 && sum(dead.residents, r => r.openQuestions) === 0,
       'this is the plan\'s Evidence, re-derived — if it is non-zero the counterfactual is not the old writer');

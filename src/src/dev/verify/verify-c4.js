@@ -63,14 +63,24 @@ api(`
   // can be perceived through. measure-cognition.js spent its whole life
   // hardcoding 'heavy' where the ladder said 'cluttered' (README rule 5); this
   // cannot drift from defs.world.js because it reads it.
+  //
+  // ...but only through a state key the def's OWN dirtyWhen names (0.14.2).
+  // "Emits" is not "dirty": a note on the fridge emits a sight signal in both
+  // its read states (that is how it catches your eye), and a stereo emits
+  // music by volume — neither is mess, and neither has a dirtyWhen entry. The
+  // emits-only rule counted every note as a mess-house-day the moment
+  // roommates began writing them (house notes), inverting the tidy-vs-untidy
+  // check below with no change in anyone's cleaning (clean_common and
+  // investigate_smell counts were identical with the notes pass on and off).
+  // dirtyWhen is still read from defs.world.js, never listed here.
+  __dirtKeys = (def) => Object.keys((def && def.emits) || {}).filter(k => def.dirtyWhen && def.dirtyWhen[k]);
   __dirtyCount = (g) => {
     let n = 0;
     for (const objs of Object.values(g.objects)) for (const o of Object.values(objs)) {
-      const emits = OBJECT_DEFS[o.defId] && OBJECT_DEFS[o.defId].emits;
-      if (!emits) continue;
-      for (const [k, byValue] of Object.entries(emits)) {
+      const def = OBJECT_DEFS[o.defId];
+      for (const k of __dirtKeys(def)) {
         const cur = o.state && o.state[k];
-        if (cur !== undefined && byValue[cur]) { n++; break; }
+        if (cur !== undefined && def.emits[k][cur]) { n++; break; }
       }
     }
     return n;
@@ -78,7 +88,7 @@ api(`
   __dirtCapable = (g) => {
     let n = 0;
     for (const objs of Object.values(g.objects)) for (const o of Object.values(objs))
-      if (OBJECT_DEFS[o.defId] && OBJECT_DEFS[o.defId].emits) n++;
+      if (__dirtKeys(OBJECT_DEFS[o.defId]).length > 0) n++;
     return n;
   };
   // Every {defId, stateKey} any DRIVE_DEFS entry's own leaves table can ever

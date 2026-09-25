@@ -420,6 +420,32 @@ const APP_DEFS = {
         },
         rowAction: 'calendar.cancel', rowActionLabel: 'Clear',
       },
+      // Side Projects (projects.js, 0.14.2): the roommates' booked shows — an
+      // open mic, a screening in the living room, the good cause's big day —
+      // soonest first (projectCalendarEvents). Read-only: they're not yours
+      // to clear. Its own tab until the Agenda merge folds the lists together.
+      events: {
+        label: 'Events', renderer: 'list', source: 'project_events',
+        emptyText: 'Nobody has anything booked.',
+        labelFn: (row) => projectEventRowLabel(row),
+      },
+      // birthdays-and-occasions-plan.md D10: every roommate whose birthday
+      // you know, soonest first (BIRTHDAYS' knownBirthdayRows). Read-only —
+      // no row action; remembering happens in person or by text.
+      // occasions-and-holidays-plan.md D3: holidays need no discovery — the
+      // whole coming year, soonest first (OCCASIONS' holidayRows), and the
+      // year laid out as four 5x7 seasons (render.calendar.js).
+      holidays: {
+        label: 'Holidays', renderer: 'list', source: 'holidays',
+        emptyText: 'No holidays on the calendar.',
+        labelFn: (row) => holidayRowLabel(row),
+      },
+      year: { label: 'Year', renderer: 'calendar-year' },
+      birthdays: {
+        label: 'Birthdays', renderer: 'list', source: 'birthdays',
+        emptyText: "No birthdays noted yet. Ask a roommate when theirs is — or someone might tip you off.",
+        labelFn: (row) => birthdayRowLabel(row),
+      },
     },
   },
   // DailyGrid (actions-and-activities-overhaul-plan.md Phase 14, D23): a
@@ -1291,22 +1317,333 @@ const ESCORT_OFFERED_ROTATION = [
 ];
 
 // --- Shows: free to watch, cost time, lift mood. ---
+// What's On (tv.js, 0.14.2): every show also carries a `tv` block — when its
+// seasons air and who tends to like it. The flat fields above it are
+// Streamly's and mean what they always meant.
+//   format        'serial' (an arc per season: premiere → middle → twist →
+//                 finale), 'competition' (a season of eliminations and a
+//                 winner) or 'episodic' (every episode stands alone).
+//   release       'weekly' (one episode a week on the premiere's weekday) or
+//                 'full' (the whole season drops on premiere day).
+//   premiere      the day season 1 began. Negative = it was already running
+//                 when the game opened; day 1 is a Sunday (getWeekday), so a
+//                 weekly show's weekday is fixed by this number.
+//   seasonEpisodes / cycleWeeks   episodes per season, and weeks from one
+//                 season's premiere to the next (the gap is the hiatus).
+//   runtime       minutes the living-room TV takes to play one episode.
+//   interests     INTEREST_POOL names that pull someone toward it.
+//   temper        temperament axes that lean toward (+) or away from (-) it.
+//   profession    an occupation category that watches it mostly to yell at
+//                 it (the nurse who hate-watches the hospital drama).
+// Episode beats live in TV_EPISODE_BEATS below, keyed by the same id.
 const STREAM_DEFS = {
-  the_neighborhood: { id: 'the_neighborhood', label: 'The Neighborhood', genre: 'sitcom', episodeTicks: 2, moodGain: 0.08 },
-  murder_actually: { id: 'murder_actually', label: 'Murder, Actually', genre: 'crime drama', episodeTicks: 3, moodGain: 0.05 },
-  bake_off_but_worse: { id: 'bake_off_but_worse', label: 'Bake Off (But Worse)', genre: 'reality', episodeTicks: 2, moodGain: 0.1 },
+  the_neighborhood: { id: 'the_neighborhood', label: 'The Neighborhood', genre: 'sitcom', episodeTicks: 2, moodGain: 0.08,
+    tv: { format: 'episodic', release: 'weekly', premiere: -387, seasonEpisodes: 10, cycleWeeks: 14, runtime: 30,
+      interests: ['comedy', 'film'], temper: { warmth: 0.25 } } },
+  murder_actually: { id: 'murder_actually', label: 'Murder, Actually', genre: 'crime drama', episodeTicks: 3, moodGain: 0.05,
+    tv: { format: 'serial', release: 'weekly', premiere: -160, seasonEpisodes: 8, cycleWeeks: 20, runtime: 60,
+      interests: ['true crime', 'reading', 'film'], temper: { conscientiousness: 0.15, openness: 0.1 } } },
+  bake_off_but_worse: { id: 'bake_off_but_worse', label: 'Bake Off (But Worse)', genre: 'reality', episodeTicks: 2, moodGain: 0.1,
+    tv: { format: 'competition', release: 'weekly', premiere: -396, seasonEpisodes: 10, cycleWeeks: 26, runtime: 60,
+      interests: ['cooking', 'crafting', 'art'], temper: { warmth: 0.3 }, profession: 'food' } },
   // --- New shows (P8 content volume) ---
-  deep_space_nine_to_five: { id: 'deep_space_nine_to_five', label: 'Deep Space Nine-to-Five', genre: 'sci-fi comedy', episodeTicks: 3, moodGain: 0.07 },
-  the_great_debate: { id: 'the_great_debate', label: 'The Great Debate', genre: 'talk show', episodeTicks: 2, moodGain: 0.06 },
-  wilderness: { id: 'wilderness', label: 'Wilderness', genre: 'nature documentary', episodeTicks: 4, moodGain: 0.04 },
-  hot_ones_remake: { id: 'hot_ones_remake', label: 'Hot Ones (Remake)', genre: 'interview', episodeTicks: 2, moodGain: 0.09 },
-  code_black_comedy: { id: 'code_black_comedy', label: 'Code Black', genre: 'medical drama', episodeTicks: 3, moodGain: 0.05 },
-  renovation_rescue: { id: 'renovation_rescue', label: 'Renovation Rescue', genre: 'reality', episodeTicks: 2, moodGain: 0.08 },
-  late_night_snacks: { id: 'late_night_snacks', label: 'Late Night Snacks', genre: 'cooking', episodeTicks: 2, moodGain: 0.07 },
-  true_crime_files: { id: 'true_crime_files', label: 'True Crime Files', genre: 'true crime', episodeTicks: 4, moodGain: 0.03 },
-  stand_up_hour: { id: 'stand_up_hour', label: 'Stand-Up Hour', genre: 'comedy', episodeTicks: 2, moodGain: 0.12 },
-  apartment_hunters: { id: 'apartment_hunters', label: 'Apartment Hunters', genre: 'reality', episodeTicks: 2, moodGain: 0.06 },
+  deep_space_nine_to_five: { id: 'deep_space_nine_to_five', label: 'Deep Space Nine-to-Five', genre: 'sci-fi comedy', episodeTicks: 3, moodGain: 0.07,
+    tv: { format: 'serial', release: 'full', premiere: -40, seasonEpisodes: 8, cycleWeeks: 30, runtime: 30,
+      interests: ['gaming', 'coding', 'film'], temper: { openness: 0.3 } } },
+  the_great_debate: { id: 'the_great_debate', label: 'The Great Debate', genre: 'talk show', episodeTicks: 2, moodGain: 0.06,
+    tv: { format: 'episodic', release: 'weekly', premiere: -136, seasonEpisodes: 10, cycleWeeks: 16, runtime: 45,
+      interests: ['politics', 'writing', 'reading'], temper: { assertiveness: 0.3 } } },
+  wilderness: { id: 'wilderness', label: 'Wilderness', genre: 'nature documentary', episodeTicks: 4, moodGain: 0.04,
+    tv: { format: 'episodic', release: 'full', premiere: -100, seasonEpisodes: 6, cycleWeeks: 40, runtime: 50,
+      interests: ['hiking', 'gardening', 'photography', 'travel'], temper: { openness: 0.2, volatility: -0.2 } } },
+  hot_ones_remake: { id: 'hot_ones_remake', label: 'Hot Ones (Remake)', genre: 'interview', episodeTicks: 2, moodGain: 0.09,
+    tv: { format: 'episodic', release: 'weekly', premiere: -5, seasonEpisodes: 8, cycleWeeks: 18, runtime: 30,
+      interests: ['cooking', 'comedy', 'music'], temper: { volatility: 0.2 } } },
+  code_black_comedy: { id: 'code_black_comedy', label: 'Code Black', genre: 'medical drama', episodeTicks: 3, moodGain: 0.05,
+    tv: { format: 'serial', release: 'weekly', premiere: -330, seasonEpisodes: 10, cycleWeeks: 22, runtime: 45,
+      interests: ['film', 'volunteering'], temper: { volatility: 0.15, warmth: 0.1 }, profession: 'health' } },
+  renovation_rescue: { id: 'renovation_rescue', label: 'Renovation Rescue', genre: 'reality', episodeTicks: 2, moodGain: 0.08,
+    tv: { format: 'episodic', release: 'weekly', premiere: -140, seasonEpisodes: 9, cycleWeeks: 15, runtime: 45,
+      interests: ['crafting', 'art', 'gardening'], temper: { conscientiousness: 0.2 }, profession: 'trades' } },
+  late_night_snacks: { id: 'late_night_snacks', label: 'Late Night Snacks', genre: 'cooking', episodeTicks: 2, moodGain: 0.07,
+    tv: { format: 'episodic', release: 'weekly', premiere: -113, seasonEpisodes: 8, cycleWeeks: 16, runtime: 30,
+      interests: ['cooking', 'partying'], temper: { warmth: 0.2 } } },
+  true_crime_files: { id: 'true_crime_files', label: 'True Crime Files', genre: 'true crime', episodeTicks: 4, moodGain: 0.03,
+    tv: { format: 'serial', release: 'full', premiere: -60, seasonEpisodes: 6, cycleWeeks: 36, runtime: 50,
+      interests: ['true crime', 'writing'], temper: { openness: 0.15, warmth: -0.1 } } },
+  stand_up_hour: { id: 'stand_up_hour', label: 'Stand-Up Hour', genre: 'comedy', episodeTicks: 2, moodGain: 0.12,
+    tv: { format: 'episodic', release: 'weekly', premiere: -14, seasonEpisodes: 8, cycleWeeks: 12, runtime: 45,
+      interests: ['comedy', 'partying', 'writing'], temper: { assertiveness: 0.1, openness: 0.1 } } },
+  apartment_hunters: { id: 'apartment_hunters', label: 'Apartment Hunters', genre: 'reality', episodeTicks: 2, moodGain: 0.06,
+    tv: { format: 'episodic', release: 'weekly', premiere: -264, seasonEpisodes: 8, cycleWeeks: 16, runtime: 30,
+      interests: ['fashion', 'art', 'travel'], temper: { conscientiousness: 0.1 } } },
 };
 const STREAM_DEFS_LIST = Object.values(STREAM_DEFS);
+
+// What's On (tv.js, 0.14.2): what actually happens in each episode.
+// `cast` fills the {tokens}: a string is the same every season, an array is
+// drawn once per season (tv.js's tvSeasonCast), so each season of the
+// mystery has its own victim and its own killer. Picks within one array are
+// distinct, so {suspect} and {culprit} drawn from the same list never land on
+// the same person. Pools by format:
+//   serial       premiere / middle / twist / finale
+//   competition  premiere / middle / semifinal / finale
+//   episodic     any (+ an optional finale)
+// A middle pool needs at least seasonEpisodes - 3 lines so no episode in a
+// season repeats one (verify-tv.js holds that). Beats are what the player
+// reads after "you watch S2 E5", what a roommate remembers, and what they
+// blurt out when they spoil it — so each one is a whole, finished sentence.
+// Two keys naming the SAME list draw without replacement from it (tv.js's
+// tvSeasonCast) — that is what keeps the red herring and the killer apart.
+const TV_MURDER_SUSPECTS = ['the vicar', 'the widow', 'the groundskeeper', 'the twin brothers', 'the mayor', 'the housekeeper'];
+const TV_BAKERS = ['Hamish', 'Priya', 'Dot', 'Kwame', 'Saoirse', 'Benny', 'Ingrid', 'Tomasz', 'Lulu', 'Wendell'];
+const TV_EPISODE_BEATS = {
+  the_neighborhood: {
+    cast: { a: 'Gus', b: 'Dolores', c: 'the landlord' },
+    any: [
+      '{a} accidentally adopts {c}\'s cat and hides it in his apartment for the whole episode.',
+      '{b} starts a neighborhood watch and immediately catches {a}.',
+      'The whole building fakes a gas leak to get out of the potluck.',
+      '{a} and {b} get locked out on the roof and have to talk about their feelings. They hate it.',
+      'Somebody\'s dog eats a winning scratch card, and nobody takes it well.',
+      '{c} raises the rent and the building unionizes by the second act.',
+      'A misdelivered parcel sends {a} down a rabbit hole of other people\'s lives.',
+      '{b}\'s ex moves into 4B. The laugh track does a lot of work.',
+      'The power goes out and everyone plays charades by candlelight. It\'s one of the good ones.',
+      '{a} tries to return a casserole dish and ends up at a stranger\'s wedding.',
+      '{b} secretly enters the building in a balcony-garden contest and loses to a tomato.',
+      'A bake sale for a new boiler spirals into a turf war over lemon bars.',
+    ],
+    finale: [
+      'The season ends on a cliffhanger: the building has been sold. It has been sold at the end of most seasons.',
+      '{a} finally tells {b} how he feels, at a fire drill, in a bathrobe.',
+    ],
+  },
+  murder_actually: {
+    cast: {
+      lead: 'Inspector Hale',
+      place: ['a seaside village', 'a cathedral town', 'a snowed-in ski lodge', 'a crumbling family vineyard', 'a sleepy canal town'],
+      victim: ['the harbourmaster', 'a retired stage magician', 'the bakery heiress', 'the church organist', 'a celebrity gardener'],
+      suspect: TV_MURDER_SUSPECTS,
+      culprit: TV_MURDER_SUSPECTS,
+    },
+    premiere: [
+      '{victim} turns up dead in {place}, and {lead} is sure it was no accident before the opening credits end.',
+      'A body in a locked study, and nobody in {place} is telling the truth. {lead} arrives in the rain.',
+    ],
+    middle: [
+      '{lead} stares at a teacup for most of the episode. It turns out to matter.',
+      '{suspect}\'s alibi starts to wobble.',
+      'Somebody finds a second will. There is always a second will.',
+      'The whole village is sure it was {suspect}, which is how you know it wasn\'t.',
+      'Someone in {place} is lying about the night of the storm, and {lead} knows exactly who.',
+      'A clue in the parish register, and {lead} smiles for the first time all series.',
+      'An anonymous letter, a missing dog and a very suspicious bicycle.',
+    ],
+    twist: [
+      '{suspect} is cleared, and a second body turns up before the credits.',
+      'The twist: {victim} was not who everyone thought they were.',
+    ],
+    finale: [
+      '{lead} gathers everyone in the drawing room and names the killer: {culprit}.',
+      'It was {culprit}. Of course it was {culprit}. {lead} knew in episode two.',
+    ],
+  },
+  bake_off_but_worse: {
+    cast: { judge: 'Marguerite', fav: TV_BAKERS, rival: TV_BAKERS, winner: TV_BAKERS },
+    premiere: [
+      'Ten nervous bakers, one tent, and a signature bake that ends with a sponge on the floor. {fav} is already everyone\'s favorite.',
+      'A new tent, a new year, and {rival} announces in the first five minutes that they "don\'t do soggy bottoms."',
+    ],
+    middle: [
+      'Bread week. {rival}\'s loaf could stop a door.',
+      'A custard refuses to set and {fav} cries in the walk-in fridge. You cry a little too.',
+      '{judge} calls a tart "brave." It is not a compliment.',
+      'The showstopper is a gingerbread house, and one of them collapses on camera, slowly, like a building demolition.',
+      '{rival} uses shop-bought pastry and the whole tent goes silent.',
+      'Somebody puts rosemary in a trifle. The judges have questions.',
+      'The technical is a pastry nobody has heard of, including, it seems, {judge}.',
+      '{fav} gets the handshake from {judge}, and the tent erupts.',
+    ],
+    semifinal: [
+      'Semi-final: {fav} and {rival} are both through, and the tent is very tense.',
+    ],
+    finale: [
+      'The final: {winner} wins with a cake shaped like their grandmother\'s house, and everyone in the tent cries.',
+      '{winner} takes the cake stand. {rival} gives a long speech about "the journey."',
+      '{fav} wins. Everybody saw it coming from week one, and it does not matter at all. You cheer.',
+    ],
+  },
+  deep_space_nine_to_five: {
+    cast: { lead: 'Ensign Pell', ai: 'the station computer', alien: 'the Vorlax' },
+    premiere: [
+      '{lead}\'s first day in Accounts on a space station at the edge of the galaxy. The printer is sentient and hates her.',
+      'A new season, a new quarter, and {ai} has promoted {lead} to middle management without asking.',
+    ],
+    middle: [
+      'An alien delegation arrives for a meeting that should have been an email.',
+      '{ai} schedules a mandatory fun day. Nobody survives it emotionally.',
+      '{lead} discovers the expense reports are being filed by a time-travelling version of herself.',
+      'A wormhole opens in the break room, and somebody still asks who took their yogurt.',
+      '{alien} declare war over a reply-all.',
+      'Team-building on a hostile moon. {lead}\'s trust fall is not caught.',
+    ],
+    twist: [
+      'The quarterly audit reveals the whole station has been a front all along.',
+    ],
+    finale: [
+      '{lead} saves the galaxy with a spreadsheet and is rewarded with a mug that says World\'s Okayest Ensign.',
+      '{alien} sign a peace treaty in the break room, and {lead} has to minute it.',
+    ],
+  },
+  the_great_debate: {
+    cast: { host: 'Carla Venn' },
+    any: [
+      'The panel argues about whether a hot dog is a sandwich for a full segment, and {host} never quite recovers.',
+      'A politician walks off mid-answer, and the empty chair gets the biggest laugh of the night.',
+      'A debate about four-day weeks turns into a debate about the word "synergy."',
+      'Two economists nearly come to blows over rent control. You pick a side.',
+      'The studio audience votes and it comes out a perfect tie. {host} looks tired.',
+      'A guest brings charts. The charts are wrong. Everyone notices live.',
+      'A debate about screen time, broadcast to a room full of people watching a screen.',
+      'A retired judge and a teenage chess champion agree on everything, and it\'s unsettling.',
+      '{host} asks one simple follow-up question and a senator visibly aches.',
+    ],
+    finale: [
+      'The season finale is a debate about the show itself. Everyone loses.',
+    ],
+  },
+  wilderness: {
+    cast: { narrator: 'the narrator' },
+    any: [
+      'A baby otter learns to float, then learns to float better. You make a small noise.',
+      'Two stags fight over a meadow, and {narrator} stays extremely calm about it.',
+      'A snow leopard waits eleven minutes for one jump. It is worth every minute.',
+      'The deep-sea episode. There is a fish that is mostly teeth and regret.',
+      'One goose in the migration keeps going the wrong way, and {narrator} is very gentle about it.',
+      'A bowerbird decorates his nest with blue bottle caps and gets rejected anyway. Relatable.',
+      'A whole episode on fungi. You will never look at a forest floor the same way.',
+    ],
+    finale: [
+      'The last episode is about the film crew, and somebody cries over a turtle hatchling.',
+    ],
+  },
+  hot_ones_remake: {
+    cast: { host: 'Dex' },
+    any: [
+      'A movie star makes it to wing six and starts answering questions nobody asked.',
+      'A chef rates every sauce like it\'s a wine, and wing eight ends him.',
+      'A pop singer drinks milk straight from the carton like it owes her money.',
+      'The guest breezes through all ten wings, and {host} looks personally hurt.',
+      'A comedian\'s bit dies on wing four. So, briefly, does the comedian.',
+      'Somebody\'s publicist can be heard yelling off camera by the last wing.',
+      'A marathon runner claims the heat is "just a feeling." By wing seven the feeling is winning.',
+      'The guest tries to out-interview {host} and gets the hottest sauce early.',
+    ],
+  },
+  code_black_comedy: {
+    cast: { lead: 'Dr. Okafor', rival: 'Dr. Lynch' },
+    premiere: [
+      'A new year of residents and a six-car pileup before the opening credits. {lead} does not sleep.',
+      '{lead} comes back from a suspension on the busiest night of the year.',
+    ],
+    middle: [
+      '{rival} diagnoses a rare disease from across the room, by smell.',
+      'Two surgeons argue about their relationship over an open patient.',
+      'A power cut mid-surgery, and they finish by phone torches.',
+      '{lead} breaks every rule to save a kid, and the board is Not Happy.',
+      'The episode where everyone gets the flu, including, somehow, the building.',
+      'An old flame of {rival}\'s turns up as a patient. The heart monitor beeps meaningfully.',
+      'A heatwave, a broken air conditioner and a man with a harpoon.',
+      'The interns run a betting pool on {lead} and {rival}. You would also bet.',
+    ],
+    twist: [
+      '{rival} collapses in the final minute. Credits. Nothing else.',
+    ],
+    finale: [
+      '{lead} and {rival} finally kiss in a supply closet as the hospital is being evacuated.',
+      'The hospital loses its funding and {lead} gives a speech on the roof. There are helicopters.',
+    ],
+  },
+  renovation_rescue: {
+    cast: { host: 'Tamsin' },
+    any: [
+      'A couple\'s "small wall" turns out to be load-bearing. {host}\'s face says everything.',
+      'They find a second, older kitchen hiding behind the kitchen.',
+      'The reveal is a gray-on-gray open plan the owners pretend to love.',
+      'The budget runs out at the bathroom, so the bathroom is a bucket for a week.',
+      'An entire episode about grout. It is weirdly gripping.',
+      'They restore a staircase from 1890 and you feel something about craftsmanship.',
+      'A family discovers their "vintage" floor is linoleum printed to look like wood, and it\'s devastating.',
+      '{host} talks a man out of an indoor koi pond, gently, over three segments.',
+    ],
+    finale: [
+      '{host} renovates her own mother\'s porch and loses her composure over a hand-turned railing.',
+    ],
+  },
+  late_night_snacks: {
+    cast: { host: 'Rudy' },
+    any: [
+      '{host} makes a grilled cheese at two in the morning and talks about his divorce. Best television all week.',
+      'A whole episode on instant noodles, three ways. The third way involves an egg and a blowtorch.',
+      '{host}\'s mother guest-stars and corrects his dumplings on camera.',
+      'Nachos as architecture. {host} brings a spirit level.',
+      '{host} fries leftover pizza in a pan and genuinely changes your life.',
+      '{host} cooks for a sleepy night-shift crew and everyone goes quiet eating.',
+      'A toast episode. Just toast. Eleven kinds. It\'s riveting.',
+      '{host} attempts a soufflé at 3am and narrates its collapse like a nature documentary.',
+    ],
+  },
+  true_crime_files: {
+    cast: {
+      case: ['the Alder Creek disappearance', 'the Harbor Street fires', 'the missing jeweler of Birch Lane', 'the lottery-ticket murders', 'the Cold Hollow letters'],
+      suspect: ['the next-door neighbor', 'the ex-husband', 'the landlord', 'the night manager', 'the best friend'],
+    },
+    premiere: [
+      '{case}: grainy footage, a slow zoom on a porch light, and an interview with {suspect}, who seems very nervous.',
+      'A new case, {case}, and a first episode that is mostly a phone ringing in an empty house.',
+    ],
+    middle: [
+      'A cold-case detective reads old notes aloud, and you get up to check the lock on the door.',
+      'A reconstruction of {suspect}\'s car. It\'s the wrong color, which turns out to matter.',
+      'A podcast host gets more screen time than the actual detectives.',
+      'The episode is mostly ominous drone footage of a lake.',
+      'A witness remembers one detail, twenty years late, in a very calm voice.',
+    ],
+    twist: [
+      'A letter nobody had opened in twenty years, and it changes everything.',
+    ],
+    finale: [
+      'No arrest. The last shot is {suspect}\'s porch light, still on. You will think about it all week.',
+      'DNA, finally. It was never {suspect}, and the last ten minutes are the family. It\'s a lot.',
+    ],
+  },
+  stand_up_hour: {
+    cast: {},
+    any: [
+      'A comic does twenty minutes on living with roommates, and it lands a little too close to home.',
+      'A set about landlords gets a standing ovation from a room full of people who rent.',
+      'The comedian\'s crowd work goes badly wrong, and it\'s the funniest part of the hour.',
+      'A deadpan comic reads out his grocery list, and for some reason "eggs" destroys you.',
+      'Somebody does a whole bit about passive-aggressive fridge notes. You go very still.',
+      'A set about being thirty and still sharing a bathroom. Uncomfortably accurate.',
+      'A comic tells one story for the whole hour, and the punchline is worth it.',
+      'A heckler turns out to be the comic\'s mom.',
+    ],
+  },
+  apartment_hunters: {
+    cast: { buyer: ['Doug', 'Trina', 'Marcus', 'Pearl', 'Imogen'] },
+    any: [
+      'A couple turns down a gorgeous flat because the backsplash is "a lot."',
+      '{buyer} needs a place with room for a drum kit and three iguanas. The realtor keeps smiling.',
+      'Somebody says "open concept" eleven times in one episode.',
+      'They pick the one with the worst commute and you shout at the screen.',
+      'A studio the size of a closet is described as "cozy" by a very brave realtor.',
+      'The budget is fantasy, the listings are real, and the math is heartbreaking.',
+      '{buyer} falls in love with a bathtub and ignores everything else about the house.',
+      'The realtor opens a door onto a second, secret bedroom. {buyer} screams.',
+    ],
+  },
+};
 
 // ===== /SECTION: DEFS.COMPUTER =====

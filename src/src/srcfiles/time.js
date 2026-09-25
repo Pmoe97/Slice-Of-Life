@@ -447,13 +447,27 @@ async function runSimCheckpoint(minutes) {
 }
 
 // --- Update the clock display in the header (smooth, without full render) ---
+// The header's date and clock carry the holiday and sky emojis, so they're
+// painted by the same function render() uses (paintHeaderClock, render.js) —
+// writing the bare text here stripped both a frame after every render. Once
+// per game-minute, not per frame: the sky line costs more than a string.
+let lastHeaderClockKey = null;
+
 function updateClockDisplay() {
   if (!currentGameState) return;
   const m = Math.floor(currentGameState.meta.clock.minutes);
-  const hdrTime = document.getElementById('hdr-time');
-  if (hdrTime) hdrTime.textContent = formatTime(m);
-  const hdrDay = document.getElementById('hdr-day');
-  if (hdrDay) hdrDay.textContent = formatDateShort(currentGameState.meta.clock.day);
+  const key = `${currentGameState.meta.clock.day}:${m}`;
+  if (typeof paintHeaderClock === 'function') {
+    if (key !== lastHeaderClockKey) {
+      lastHeaderClockKey = key;
+      paintHeaderClock(currentGameState);
+    }
+  } else {
+    const hdrTime = document.getElementById('hdr-time');
+    if (hdrTime) hdrTime.textContent = formatTime(m);
+    const hdrDay = document.getElementById('hdr-day');
+    if (hdrDay) hdrDay.textContent = formatDateShort(currentGameState.meta.clock.day);
+  }
   const csClock = document.getElementById('cs-clock');
   if (csClock) csClock.textContent = `Day ${currentGameState.meta.clock.day} — ${formatTime(m)}`;
   const phoneClock = document.getElementById('phone-clock');
@@ -480,6 +494,9 @@ function startClockLoop() {
   // Adopt the current day so a fresh session doesn't replay a rollover for
   // the day it loaded into.
   lastRolledOverDay = currentGameState?.meta?.clock?.day ?? null;
+  // Seasons & weather Phase 2: the same for the sky watch (ui.js) — a fresh
+  // session starts watching from now.
+  if (typeof resetSkyWatch === 'function') resetSkyWatch(currentGameState);
   const gen = ++clockGeneration;
   clockRafId = requestAnimationFrame(() => clockFrame(gen));
 }

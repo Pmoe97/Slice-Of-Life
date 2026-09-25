@@ -564,7 +564,7 @@ async function getPlayerPortraitImage(portrait) {
 // getSceneImage are gone, and buildImagePrompt survives ONLY as
 // buildPhotoPrompt, scoped to the camera (see its own note for why a photo
 // legitimately keeps its people).
-function buildBackgroundPrompt(roomId, phase, roomObjects) {
+function buildBackgroundPrompt(roomId, phase, roomObjects, view) {
   const room = ROOMS[roomId];
   const roomName = String(room?.name || roomId);
   const roomType = room?.type || 'common';
@@ -572,6 +572,14 @@ function buildBackgroundPrompt(roomId, phase, roomObjects) {
 
   let prompt = `Interior of a ${roomType === 'bedroom' ? 'cozy bedroom' : roomName.toLowerCase()} in a shared apartment, ${light}. `;
   prompt += roomObjectsPhrase(roomObjects) || fallbackRoomPhrase(roomId, roomType);
+  // Seasons & weather Phase 6 (W9): a room that sees outside shows the
+  // season and the sky (seasons.js's windowViewToken — a small bounded set,
+  // also in the plate key). No token, no clause: windowless rooms unchanged.
+  const viewPhrase = (view && typeof windowViewPhrase === 'function') ? windowViewPhrase(view, roomId) : null;
+  if (viewPhrase) {
+    const lead = weatherRoomExposure(roomId) === 'outside' ? 'Open to the sky' : 'Through the window';
+    prompt += ` ${lead}: ${viewPhrase}. `;
+  }
 
   // Room state that belongs in the picture even with nobody in it — a laid
   // table and a dish-piled sink are facts about the ROOM (sceneDetailSignature
@@ -609,9 +617,12 @@ function backgroundNegPrompt() {
   return `${IMAGE_NEGATIVE.scene}, ${PLATE_PEOPLE_BAN}`;
 }
 
-function plateKey(roomId, phase, detail, styleToken) {
+// `view` (Seasons & weather Phase 6): the window-view token for a room that
+// sees outside — appended LAST, so a windowless room's key is byte-identical
+// to before and every cached plate for it stays valid.
+function plateKey(roomId, phase, detail, styleToken, view) {
   return `plate_${IMAGE_PROMPT_VERSION}_${roomId}_${phase}_${detail || 'plain'}`
-    + `_${sceneOrientation()}` + (styleToken ? `_${styleToken}` : '');
+    + `_${sceneOrientation()}` + (styleToken ? `_${styleToken}` : '') + (view ? `_v${view}` : '');
 }
 
 // Deterministic like every other generated surface here — same room, same
@@ -625,16 +636,16 @@ function composePlateSeed(key) {
 // Cache-then-generate under the plate key — one plate serves every cast and
 // every save that shares a room/phase/room-state, which is the cost fix
 // this whole plan exists for (see the plan's Evidence section).
-async function getScenePlate(roomId, phase, roomObjects) {
+async function getScenePlate(roomId, phase, roomObjects, view) {
   const detail = sceneDetailSignature(roomObjects);
   const styleToken = imageStyleToken();
-  const key = plateKey(roomId, phase, detail, styleToken);
+  const key = plateKey(roomId, phase, detail, styleToken, view);
 
   const cached = await getCachedImage(key);
   if (cached) return { url: createObjectUrl(key, cached), cached: true, key };
 
   try {
-    const prompt = applyImageStyle(buildBackgroundPrompt(roomId, phase, roomObjects));
+    const prompt = applyImageStyle(buildBackgroundPrompt(roomId, phase, roomObjects, view));
     const resolution = IMAGE_CACHE.resolutions.scene[sceneOrientation()];
     const result = await generateImageTracked(prompt, {
       resolution,
@@ -1593,19 +1604,34 @@ function composeNightFramePrompt(gs, targetId, frame) {
   // ("draw the sheet back off her"), so it is used verbatim rather than run
   // through the instrument/part frame, which would produce the nonsense "your
   // whole hand drawing her hair".
-  const act = (motion.family === 'move' && motion.phrase)
+  //
+  // Then the register (boundary.js's nightRegister), exactly as the prose path
+  // (composeNightLine) has always run it: the tables are authored in the
+  // feminine with `{o}` marking the object case ("ease {o} out of her curl",
+  // her_body's standalone '{o}'). This prompt skipped it, so the raw `{o}`
+  // reached root.generateImage — whose plugin evaluates its prompt as a
+  // Perchance template — and threw 'Your curly block "{o}" doesn't appear to
+  // have the correct syntax' on nearly every tap; a male target was also
+  // described as "her". Diagnosed on the live page by the Perchance AI helper,
+  // 2026-09-23. Only the TARGET's words go through it: the player's own visual
+  // clause keeps its pronouns whatever the target's sex.
+  const act = nightRegister((motion.family === 'move' && motion.phrase)
     ? `you ${motion.phrase}`
     : `${instrument ? instrument.standalone : 'your hand'} ${motion.gerund} `
-      + `${nightTargetPhrase(part, frame.side)}`;
+      + `${nightTargetPhrase(part, frame.side)}`, target);
 
-  const staging = [
+  // The staging is the target's too, and just as feminine-authored ("on her
+  // back", "her shirt pushed up"), so it takes the same register — without it
+  // a male target was "deeply asleep in bed … on her back" (found fixing the
+  // `{o}` leak above; the harness's own fixture target is a man).
+  const staging = nightRegister([
     pose ? pose.label.toLowerCase() : '',
     covers ? covers.label.toLowerCase() : '',
     // Phase 7: and what she is wearing, from the record rather than from the
     // sim's frozen 'sleepwear'. nightClothingClause is shared with the image
     // KEY's token above, so the prompt and the key can never disagree.
     frame.clothing ? nightClothingClause(frame.clothing) : '',
-  ].filter(Boolean).join(', ');
+  ].filter(Boolean).join(', '), target);
 
   // Named rather than pronouned. Every OTHER "her" reaching this prompt comes
   // out of the tables (the pose labels, nightTargetPhrase's standalone forms,
@@ -1613,7 +1639,7 @@ function composeNightFramePrompt(gs, targetId, frame) {
   // clause is the prompt's own, and a bare pronoun here would contradict the
   // sex the visual clause above states outright whenever the target is not a
   // woman. See the plan's Handoff on the register question.
-  const herName = (target && target.bible && target.bible.name) || 'her';
+  const herName = (target && target.bible && target.bible.name) || nightRegister('{o}', target);
   return `${her}, deeply asleep in bed, eyes closed, ${staging}. `
     + `${you} beside ${herName} in the dark, ${act}. `
     + 'Close intimate framing on the contact, dim night light, moonlight through the blinds, '
@@ -1723,10 +1749,26 @@ function releaseImageSlot() {
   if (next) next();
   else imageGenerationsInFlight--;
 }
+// Perchance's text-to-image plugin evaluates the prompt as a Perchance
+// TEMPLATE, so `{…}` and `[…]` are syntax to it: a stray one throws ("Your
+// curly block … doesn't appear to have the correct syntax" — the night
+// scene's unregistered `{o}`, 2026-09-23) instead of drawing. Composers still
+// resolve their own tokens; this is the backstop at the one door every prompt
+// passes through, because text the game doesn't author reaches it too — a
+// player-typed description or custom style (free text is always valid). No
+// prompt uses template syntax on purpose (the styles and negatives were
+// checked), so brackets simply become parentheses, which image models read as
+// ordinary grouping. The dev harness stubs root, so only the live page ever
+// showed the throw.
+function imagePromptSafe(text) {
+  return typeof text === 'string' ? text.replace(/[{[]/g, '(').replace(/[}\]]/g, ')') : text;
+}
 async function generateImageTracked(prompt, opts) {
   await acquireImageSlot();
   try {
-    return await root.generateImage(prompt, opts);
+    const safeOpts = (opts && typeof opts.negativePrompt === 'string')
+      ? { ...opts, negativePrompt: imagePromptSafe(opts.negativePrompt) } : opts;
+    return await root.generateImage(imagePromptSafe(prompt), safeOpts);
   } finally {
     releaseImageSlot();
   }
@@ -1909,9 +1951,16 @@ const CONV_SCENE_BEATS = [
   'nodding along, considering',
   'a comfortable pause in the conversation',
 ];
-function buildConversationScenePrompt(gameState, npc, panelIndex) {
+// Takes the NPC's id, not the record: an NPC record never carries its own
+// `id` (the id is only the key into gameState.npcs), so `npc.id` was always
+// undefined here. That silently broke the whole panel since F3 shipped —
+// every NPC shared the key `convscene_undefined_<n>`, and ui.js's
+// "still the same conversation?" check could never match (see
+// maybeShowConversationScene).
+function buildConversationScenePrompt(gameState, npcId, panelIndex) {
+  const npc = gameState.npcs[npcId];
   const roomId = gameState.player.location;
-  const npcClause = buildVisualCharacterClause(npc, { gameState, npcId: npc.id });
+  const npcClause = buildVisualCharacterClause(npc, { gameState, npcId });
   const playerClause = buildVisualCharacterClause(gameState.player, { gameState, isPlayer: true });
   const room = ROOMS[roomId]?.name || roomId;
   const mood = moodLabel(npc.mood);
@@ -1921,9 +1970,9 @@ function buildConversationScenePrompt(gameState, npc, panelIndex) {
     + (sceneOrientation() === 'landscape' ? 'wide composition, both figures visible.' : 'tall vertical composition, both figures visible.');
 }
 
-async function generateConversationSceneImage(gameState, npc, panelIndex) {
-  const prompt = buildConversationScenePrompt(gameState, npc, panelIndex);
-  const key = `${npc.id}_${panelIndex || 0}`;
+async function generateConversationSceneImage(gameState, npcId, panelIndex) {
+  const prompt = buildConversationScenePrompt(gameState, npcId, panelIndex);
+  const key = `${npcId}_${panelIndex || 0}`;
   const stylePart = imageStyleToken();
   const cacheKey = `convscene_${key}${stylePart ? '_' + stylePart : ''}`;
   const seed = hashStr(cacheKey);
@@ -1936,6 +1985,7 @@ async function generateConversationSceneImage(gameState, npc, panelIndex) {
       negativePrompt: IMAGE_NEGATIVE.scene,
     });
     const blob = await canvasToBlob(result.canvas);
+    if (!blob) return { url: null, prompt, key, seed, error: 'empty frame' };
     await setCachedImage(cacheKey, blob);
     return { url: createObjectUrl(cacheKey, blob), prompt, key, seed, cached: false };
   } catch (e) {

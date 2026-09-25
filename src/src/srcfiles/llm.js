@@ -26,6 +26,17 @@ function buildSensoryLine(scene) {
   return `- What you can sense: ${parts.join('; ')}.`;
 }
 
+// seasons-and-weather-plan Phase 2 (W4): the weather as it reaches the room
+// the player is in — its own line, so the sensory line above stays about the
+// room ("nothing much registers" is still true of a clean room in a storm).
+// Carries its own leading newline, so it adds nothing — not even a blank
+// line — when there's nothing to say.
+function weatherCueLine(scene) {
+  const cue = scene?.weatherCue;
+  if (!cue?.text) return '';
+  return `\n- The weather, from this room: ${cue.text}.`;
+}
+
 // The fullness/ledger clause appended to the player's status line. Pure and
 // defensive (old/partial contexts may lack the fields) — the narrator only
 // ever sees what this hands it.
@@ -117,6 +128,10 @@ function buildHomeContextBlock(gameState) {
     }
     let line = `- ${def.name}: ${parts.join(', ')}`;
     if (facNotes.length > 0) line += ` (${facNotes.join('; ')})`;
+    // Occasions Phase 3: a room's holiday decorations are part of the home
+    // every resident knows (typeof guard — llm.js loads before occasions.js).
+    const decorNote = typeof decorHomeNote === 'function' ? decorHomeNote(gameState, roomId) : '';
+    if (decorNote) line += ` [${decorNote}]`;
     lines.push(line);
   }
   if (lines.length === 0) return '';
@@ -217,6 +232,24 @@ function buildTurnTypeDirective(context, playerAction) {
   return '';
 }
 
+// Occasions (occasions-and-holidays-plan.md D4): the date, the season stage,
+// today's occasion and the next one coming. Before this the scene prompt
+// carried only "Day N" and the IM prompt no date at all. '' when
+// occasions.js isn't loaded (typeof guard: llm.js loads first).
+function sceneDateLine(gameState, withRoom) {
+  if (!gameState || typeof occasionDateLine !== 'function') return '';
+  let line = occasionDateLine(gameState);
+  // seasons-and-weather-plan.md Phase 1 (W4): the sky — condition, how it
+  // feels, and the light. Scene AND IM prompt (the weather is the same across
+  // town, so a texting roommate knows it too).
+  if (typeof skyLine === 'function') line += `\n- ${skyLine(gameState)}`;
+  // Occasions Phase 3: the room you're standing in, if it's decorated — the
+  // scene prompt only (withRoom); someone texting isn't standing in it.
+  const decor = withRoom && typeof decorSceneLine === 'function' ? decorSceneLine(gameState, gameState.player?.location) : null;
+  if (decor) line += `\n- Decorations here: ${decor}`;
+  return line;
+}
+
 function buildScenePrompt(context, playerAction) {
   const { scene, player, activeNpcs, ambientNpcs, worldEvents, gameState } = context;
   // Bug report (2026-08-28): the explicit-narration rule only lands when the
@@ -238,8 +271,9 @@ CURRENT SCENE:
 ${homeContextLine(gameState, activeNpcs)}
 ${buildHomeContextBlock(gameState)}
 - Time: ${scene.phase}, ${scene.time}, Day ${scene.day}
+${sceneDateLine(gameState, true)}
 - Cleanliness: ${scene.cleanliness > 70 ? 'tidy' : scene.cleanliness > 40 ? 'lived-in' : 'messy'}
-${buildSensoryLine(scene)}
+${buildSensoryLine(scene)}${weatherCueLine(scene)}
 ${conversationContinuityLine(context, gameState)}
 ${conversationDepartureLine(context, gameState)}
 PLAYER:
@@ -434,6 +468,7 @@ function buildImPrompt(context, message) {
 ${buildStyleSection(context.contentConfig)}
 ${buildContentSection(context.contentConfig)}
 ${buildNpcBlockV2(npc, message, 'im', context.day, context.gameState)}
+${sceneDateLine(context.gameState)}
 Texting style: ${npc.bible.speech.textingStyle}.
 ${transcript ? `\nTHE CONVERSATION SO FAR (oldest first — "You" is ${npc.name}, "Them" is the player):\n${transcript}\n` : ''}
 THE PLAYER JUST TEXTED: "${message}"
@@ -611,6 +646,39 @@ function buildNpcBlockV2(npc, query, channel, day, gameState) {
     block += `[Pregnancy]: ${npc.name} is visibly pregnant. Conversation should acknowledge the bump naturally.\n`;
   } else if (gameState && typeof hasBabyPresence === 'function' && hasBabyPresence(gameState, npc.id)) {
     block += `[Baby]: ${npc.name} has a new baby at home — tired, delighted, and liable to mention it.\n`;
+  }
+  // Birthdays (birthdays-and-occasions-plan.md D9): the real date always, and
+  // around the day whether the player has remembered — so "when's your
+  // birthday?" gets the date the Calendar will show, and the day itself
+  // plays. Residents only (null otherwise); guarded on typeof for the same
+  // load-order reason as the pregnancy line above.
+  if (gameState && typeof birthdayPromptLine === 'function') {
+    const bdayLine = birthdayPromptLine(gameState, npc.id);
+    if (bdayLine) block += `${bdayLine}\n`;
+  }
+  // Occasions (occasions-and-holidays-plan.md D4): today's holiday, or one
+  // coming up within the lead-in, and how this person feels about it
+  // (festivity, D6/D7). Same typeof guard — llm.js loads before occasions.js.
+  if (gameState && typeof occasionPromptLine === 'function') {
+    const occLine = occasionPromptLine(gameState, npc.id);
+    if (occLine) block += `${occLine}\n`;
+  }
+  // What's On (tv.js, 0.14.2): the show they're hooked on, what just
+  // happened in it, and where the player is relative to them — so "have you
+  // seen the new Murder, Actually?" has an answer, and so does a spoiler.
+  // Same typeof guard — llm.js loads before tv.js.
+  if (gameState && typeof tvPromptLine === 'function') {
+    const tvLine = tvPromptLine(gameState, npc.id);
+    if (tvLine) block += `${tvLine}\n`;
+  }
+  // Side Projects (projects.js, 0.14.2): what they're making or learning, how
+  // far along, how they feel about it, whether the player asked, and what they
+  // finished or gave up on before — so "how's the guitar going?" has an
+  // answer, and a secret present stays secret. Same typeof guard — llm.js
+  // loads before projects.js.
+  if (gameState && typeof projectPromptLine === 'function') {
+    const projLine = projectPromptLine(gameState, npc.id);
+    if (projLine) block += `${projLine}\n`;
   }
   // Phase 0: explicit age + gender for the LLM
   if (typeof b.age === 'number') block += `[Identity]: ${b.age}-year-old ${b.gender || 'female'}\n`;

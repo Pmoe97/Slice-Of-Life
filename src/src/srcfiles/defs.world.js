@@ -1439,6 +1439,16 @@ const ITEM_DEFS = {
   // record is the truth, the item is its physical half (sellable now,
   // hangable in Phase 16, giveable like any gift). Not buyable: no price.
   player_art: { id: 'player_art', label: 'Painting', nouns: ['painting', 'piece', 'canvas', 'artwork', 'picture'], category: 'gift', stackable: false, maxStack: 1 },
+  // Side Projects (projects.js, 0.14.2): keepsakes a roommate made you in
+  // secret — unpriced, so never sold; meta.title ("from Mira") names who.
+  // Deliberately not player_art: that one is a catalogued work of YOURS (the
+  // Works tab, hanging, selling), and a present is not for sale. Category
+  // 'decor', not 'gift': ui.js's Give picker hands over the FIRST gift-category
+  // item, and nobody should regift the portrait a roommate painted of them;
+  // sortGroup keeps it in the bag's Gifts section all the same.
+  gift_portrait: { id: 'gift_portrait', giftOnly: true, label: 'Portrait of You', nouns: ['portrait', 'painting', 'picture'], category: 'decor', sortGroup: 'gift', stackable: false, maxStack: 1 },
+  gift_painting: { id: 'gift_painting', giftOnly: true, label: 'Little Painting', nouns: ['painting', 'little painting', 'picture'], category: 'decor', sortGroup: 'gift', stackable: false, maxStack: 1 },
+  gift_photo_print: { id: 'gift_photo_print', giftOnly: true, label: 'Framed Photo', nouns: ['photo', 'framed photo', 'print', 'picture'], category: 'decor', sortGroup: 'gift', stackable: false, maxStack: 1 },
   flowers: { id: 'flowers', label: 'Flowers', nouns: ['flowers'], category: 'gift', stackable: true, maxStack: 3, price: 15, buyQty: 1 },
   chocolate_box: { id: 'chocolate_box', label: 'Box of Chocolates', nouns: ['chocolates', 'chocolate box'], category: 'gift', stackable: true, maxStack: 3, price: 10, buyQty: 1 },
 
@@ -1529,6 +1539,17 @@ const ITEM_DEFS = {
   sun_hat: { id: 'sun_hat', label: 'Sun Hat', nouns: ['sun hat', 'wide-brim hat'], category: 'casual', sortGroup: 'clothing', slot: 'accessory', stackable: false, maxStack: 1, price: 14, buyQty: 1, stats: { attraction: 0.06, comfort: 0.1, modesty: 0, thermal: 0.05, reveal: 0 }, traits: ['everyday', 'swim'], styleTags: ['summer', 'wide-brim'] },
   bracelet: { id: 'bracelet', label: 'Bracelet', nouns: ['bracelet', 'bangle'], category: 'casual', sortGroup: 'clothing', slot: 'accessory', stackable: false, maxStack: 1, price: 15, buyQty: 1, stats: { attraction: 0.15, comfort: 0, modesty: 0, thermal: 0, reveal: 0 }, traits: ['sexy', 'everyday'], styleTags: ['bohemian'] },
   high_tops: { id: 'high_tops', label: 'High-Top Sneakers', nouns: ['high tops', 'high-top sneakers'], category: 'casual', sortGroup: 'clothing', slot: 'shoes', stackable: false, maxStack: 1, price: 50, buyQty: 1, stats: { attraction: 0.15, comfort: 0.2, modesty: 0, thermal: 0.15, reveal: 0 }, traits: ['everyday', 'sport'], styleTags: ['street', 'bold'] },
+  // Side Projects (projects.js, 0.14.2): what a roommate who adores you makes
+  // you in secret. Real clothing — put it in the wardrobe and wear it — but
+  // with NO price, so the shop catalog (every priced def) never sells one.
+  // Each instance carries meta.title ("from Mira"), so it reads "Hand-Knit
+  // Scarf: from Mira" in the bag, and meta.madeBy. `giftOnly` marks a def
+  // that exists only as a present — the one exemption verify-w4's "every
+  // clothing item is buyable on Nile" rule allows.
+  handknit_scarf: { id: 'handknit_scarf', giftOnly: true, label: 'Hand-Knit Scarf', nouns: ['scarf', 'hand-knit scarf', 'knitted scarf'], category: 'casual', sortGroup: 'clothing', slot: 'accessory', stackable: false, maxStack: 1, stats: { attraction: 0.05, comfort: 0.25, modesty: 0.05, thermal: 0.3, reveal: 0 }, traits: ['everyday', 'comfortable'], styleTags: ['knit', 'cozy', 'handmade'] },
+  handknit_hat: { id: 'handknit_hat', giftOnly: true, label: 'Hand-Knit Hat', nouns: ['hat', 'hand-knit hat', 'knitted hat'], category: 'casual', sortGroup: 'clothing', slot: 'accessory', stackable: false, maxStack: 1, stats: { attraction: 0.05, comfort: 0.2, modesty: 0, thermal: 0.2, reveal: 0 }, traits: ['everyday', 'comfortable'], styleTags: ['knit', 'slouchy', 'handmade'] },
+  handknit_socks: { id: 'handknit_socks', giftOnly: true, label: 'Hand-Knit Socks', nouns: ['socks', 'hand-knit socks', 'knitted socks'], category: 'lounge', sortGroup: 'clothing', slot: 'socks', stackable: false, maxStack: 1, stats: { attraction: 0, comfort: 0.35, modesty: 0, thermal: 0.25, reveal: 0 }, traits: ['everyday', 'comfortable'], styleTags: ['knit', 'thick', 'handmade'] },
+  handmade_shirt: { id: 'handmade_shirt', giftOnly: true, label: 'Handmade Shirt', nouns: ['shirt', 'handmade shirt'], category: 'casual', sortGroup: 'clothing', slot: 'top', stackable: false, maxStack: 1, stats: { attraction: 0.2, comfort: 0.2, modesty: 0.45, thermal: 0.2, reveal: 0.05 }, traits: ['everyday', 'versatile'], styleTags: ['tailored', 'handmade'] },
 };
 
 // --- Sort groups (inventory overhaul Phase 1) ---

@@ -1733,6 +1733,9 @@ function assembleContext(gameState, sceneState) {
       // scoped flag could not represent at all.
       signals: mergePerceived(perceiveSignals(gameState, 'player', roomId))
         .map(rec => ({ ...rec, phrase: signalPhrase(rec, gameState) })),
+      // seasons-and-weather-plan Phase 2 (W4): the weather as it reaches this
+      // room ({ text, via } or null) — its own prompt line, beside the senses.
+      weatherCue: typeof weatherRoomCue === 'function' ? weatherRoomCue(gameState, roomId) : null,
     },
     player: {
       name: 'You',
@@ -2591,13 +2594,20 @@ function npcOutfitForContext(npc, gameState, block, activity, npcId) {
   // behavior, since bias.stats.thermal simply isn't set when nothing is
   // uncomfortable. Never changes the TYPE, same non-thrashing guarantee the
   // styleLean comment above already relies on.
-  const thermalBias = temperatureClothingBiasWeight(gameState, npc, npcId);
   const outfitType = outfitTypeForContext(npc, block, activity, gameState?.meta?.clock, npcId);
+  // Seasons & weather Phase 5 (W7): dressed to go OUT. 'work' is only ever
+  // chosen for someone whose day takes them out of the flat (D14, in
+  // outfitTypeForContext), so it dresses for the weather outside
+  // (seasons.js's outdoorDressBias) — the coat on a cold morning, no jacket
+  // at all on a hot one. Every indoor fit still reads the thermostat. Type
+  // unchanged either way, so change_clothes can't thrash.
+  const out = (outfitType === 'work' && typeof outdoorDressBias === 'function') ? outdoorDressBias(gameState) : null;
+  const thermalBias = out ? out.thermal : temperatureClothingBiasWeight(gameState, npc, npcId);
   const combinedLean = [...(Array.isArray(lean) ? lean : []), ...typicalAttireStyleLean(npc, outfitType)];
   return composeOutfit(
     outfitType,
     npcWardrobeItems(gameState, npc),
-    { styleLean: combinedLean, stats: thermalBias ? { thermal: thermalBias } : {} }
+    { styleLean: combinedLean, stats: thermalBias ? { thermal: thermalBias } : {}, skipSlots: out ? out.skipSlots : [] }
   );
 }
 

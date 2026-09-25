@@ -209,9 +209,15 @@ check('at least one surface exists per note-worthy room', api(`
 check('every surfaces:true def is a real object', api(`
   Object.entries(OBJECT_DEFS).filter(([, d]) => d.surfaces).length > 0
 `));
+// House notes (0.14.2) gave NOTE_TEMPLATES its consumer (housenotes.js) and,
+// with it, a voice per author: motive → texting style → lines, the
+// BIRTHDAY_TUNING shape. Still "every entry a non-empty string", one level
+// deeper — and every motive must carry a `default` pool, the fallback for an
+// author with no style. verify-house-notes.js covers the rest.
 check('NOTE_TEMPLATES entries are all non-empty strings', api(`
-  Object.values(NOTE_TEMPLATES).every(list => Array.isArray(list) && list.length > 0
-    && list.every(t => typeof t === 'string' && t.trim().length > 0))
+  Object.values(NOTE_TEMPLATES).every(byStyle => byStyle && Array.isArray(byStyle.default) && byStyle.default.length > 0
+    && Object.values(byStyle).every(list => Array.isArray(list) && list.length > 0
+      && list.every(t => typeof t === 'string' && t.trim().length > 0)))
 `));
 check('the note signal has prose for all three bands', api(`
   ['faint','clear','strong'].every(b => SIGNAL_DEFS.note.phrases[b]?.length > 0)

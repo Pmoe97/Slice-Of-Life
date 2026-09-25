@@ -18,9 +18,15 @@ function check(name, cond, detail) {
 }
 
 console.log('\nD6 — the plate prompt structurally cannot carry a character');
+// The parameters by NAME, not a count (dev-verify gotcha #9: a pinned count
+// goes stale the moment a legitimate parameter lands). Seasons & weather
+// Phase 6 added `view` — the window-view token, a fact about the SKY, never
+// about who is in the room. A future parameter must be added here by name,
+// on purpose; a character one still fails loudly.
+const PARAMS = (fn) => JSON.parse(api(`JSON.stringify(${fn}.toString().match(/^[^(]*\\(([^)]*)\\)/)[1].split(',').map(s => s.trim()).filter(Boolean))`));
 check('buildBackgroundPrompt takes no npc/player argument at all — not filtered out, never accepted',
-  api(`buildBackgroundPrompt.length`) === 3,
-  `arity was ${api('buildBackgroundPrompt.length')}, expected 3 (roomId, phase, roomObjects)`);
+  JSON.stringify(PARAMS('buildBackgroundPrompt')) === JSON.stringify(['roomId', 'phase', 'roomObjects', 'view']),
+  `params were ${JSON.stringify(PARAMS('buildBackgroundPrompt'))}, expected (roomId, phase, roomObjects, view)`);
 // WORD-BOUNDARY matching, deliberately: a naive substring check passes
 // here but reports a false leak on the dining room, whose fallback phrase
 // contains "c-hair-s". Both rooms are checked so the boundary rule itself
@@ -58,8 +64,8 @@ check('backgroundNegPrompt still carries the surface\'s usual negative (blurry/d
 
 console.log('\nD2 — plateKey carries no characters, ever');
 check('plateKey has no npc/player parameter — cast cannot enter the key even by mistake',
-  api(`plateKey.length`) === 4,
-  `arity was ${api('plateKey.length')}, expected 4 (roomId, phase, detail, styleToken)`);
+  JSON.stringify(PARAMS('plateKey')) === JSON.stringify(['roomId', 'phase', 'detail', 'styleToken', 'view']),
+  `params were ${JSON.stringify(PARAMS('plateKey'))}, expected (roomId, phase, detail, styleToken, view)`);
 check('two calls with identical (room, phase, detail, style) are the SAME key regardless of who is imagined present',
   api(`plateKey('kitchen', 'morning', '', '') === plateKey('kitchen', 'morning', '', '')`),
   'trivially true by construction, but it is the point: nothing about cast can perturb this');

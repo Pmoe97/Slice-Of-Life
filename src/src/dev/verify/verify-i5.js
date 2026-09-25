@@ -141,11 +141,21 @@ check('only `confiding` moves trust — the tiers are a real distinction', api(`
     return withTrust.length === 1 && withTrust[0] === 'confiding';
   })()
 `));
-check('every shared entry carries a fact AND at least one narration template', api(`
+// The entries whose DYNAMIC builder names the company itself, so they carry no
+// shared templates, each with why — a third one appearing here unnamed still
+// fails the check below (harness gotcha 9: name the legitimate sites).
+//   self.watch_tv — What's On (tv.js, 0.14.2): who was on the sofa and what
+//     was on are one sentence (tvWatchNarration); verify-tv.js section 6
+//     holds that the line names the roommate.
+const SELF_NARRATING_SHARED = ['self.watch_tv'];
+check('every shared entry carries a fact AND the two-person version (templates, or a named self-narrating builder)', api(`
   (() => {
+    const selfNarrating = ${JSON.stringify(SELF_NARRATING_SHARED)};
     const bad = __shared().filter(id => {
-      const s = ACTION_DEFS[id].shared;
-      return !s.fact || !Array.isArray(s.templates) || s.templates.length === 0;
+      const d = ACTION_DEFS[id]; const s = d.shared;
+      if (!s.fact) return true;
+      if (selfNarrating.includes(id)) return d.narration.mode !== 'dynamic' || typeof d.narration.build !== 'function';
+      return !Array.isArray(s.templates) || s.templates.length === 0;
     });
     if (bad.length) console.log('        ' + bad.join(', '));
     return bad.length === 0;
@@ -157,7 +167,7 @@ check('every fact and every template substitutes {name}', api(`
     for (const id of __shared()) {
       const s = ACTION_DEFS[id].shared;
       if (!s.fact.includes('{name}')) bad.push(id + ':fact');
-      s.templates.forEach((t, i) => { if (!t.includes('{name}')) bad.push(id + ':tpl' + i); });
+      (s.templates || []).forEach((t, i) => { if (!t.includes('{name}')) bad.push(id + ':tpl' + i); });
     }
     if (bad.length) console.log('        ' + bad.join(', '));
     return bad.length === 0;
@@ -616,13 +626,16 @@ check('the credit ledger is stamped with the day it belongs to', api(`
 // ---------------------------------------------------------------------------
 console.log('\nThe narration is the two-person version (D17)');
 
+// self.relax: the template-mode entry with shared templates — the shape these
+// two checks were written against (self.watch_tv had it until What's On,
+// 0.14.2, gave TV a dynamic line; see SELF_NARRATING_SHARED above).
 check('company gets the shared line, not the solo one', api(`
   (() => {
     const g = __mk(); const id = __ids(g)[0];
-    const def = ACTION_DEFS['self.watch_tv'];
+    const def = ACTION_DEFS['self.relax'];
     const c = __stage(g, [id]);
-    const shared = resolveSharedActivity(g, def, c, 30);
-    const line = narrateAction(def, c, prepareSocialAction(c), shared);
+    const shared = resolveSharedActivity(g, def, c, 15);
+    const line = narrateAction(def, c, null, shared);
     const want = def.shared.templates.map(t => t.replace('{name}', g.npcs[id].bible.name));
     return want.includes(line);
   })()
@@ -630,12 +643,21 @@ check('company gets the shared line, not the solo one', api(`
 check('alone gets the solo line', api(`
   (() => {
     const g = __mk();
-    const def = ACTION_DEFS['self.watch_tv'];
+    const def = ACTION_DEFS['self.relax'];
     const c = __stage(g, []);
-    const line = narrateAction(def, c, prepareSocialAction(c), resolveSharedActivity(g, def, c, 30));
-    return def.narration.templates.includes(line);
+    const line = narrateAction(def, c, null, resolveSharedActivity(g, def, c, 15));
+    return def.narration.mode === 'template' && def.narration.templates.includes(line);
   })()
 `));
+check('a self-narrating shared entry names the company all the same (Watch TV)', api(`
+  (() => {
+    const g = __mk(); const id = __ids(g)[0];
+    const def = ACTION_DEFS['self.watch_tv'];
+    const c = __stage(g, [id]);
+    const line = narrateAction(def, c, def.prepare(c), resolveSharedActivity(g, def, c, 30));
+    return line.includes(g.npcs[id].bible.name) && !line.includes('{name}');
+  })()
+`), 'D17: the two-person version, from the builder rather than a template');
 check('two roommates are ONE line naming both', api(`
   (() => {
     const g = __mk(); const ids = __ids(g).slice(0, 2);
@@ -689,12 +711,18 @@ check('and resolves it BEFORE the clock advances', (() => {
   // file, which is unrelated to call order.
   return src.indexOf('resolveSharedActivity(live') < src.indexOf('advanceAndResolveMinutes(minutes)');
 })(), 'the participants are who was here when it started, not who wandered in');
-check('watchTvNarration is gone, and nothing still calls it', (() => {
+check('watchTvNarration is gone, and its What\'s On successor narrates presence, never affection', (() => {
   let n = 0;
   for (const f of fs.readdirSync(SRC).filter(f => f.endsWith('.js'))) {
     n += (codeOf(f).match(/watchTvNarration/g) || []).length;
   }
-  return n === 0;
+  // The 0.14.2 builder (defs.actions.js's watchTvShowNarration → tv.js's
+  // tvWatchNarration) names whoever is on the sofa from the plan's
+  // sharedActivityParticipants list; neither body may branch on affection.
+  const body = (src, name) => { const i = src.indexOf('function ' + name + '('); return i < 0 ? '' : src.slice(i, src.indexOf('\n}', i)); };
+  const a = body(codeOf('defs.actions.js'), 'watchTvShowNarration');
+  const b = body(codeOf('tv.js'), 'tvWatchNarration');
+  return n === 0 && a && b && !/affection/.test(a + b) && /sharedActivityParticipants/.test(codeOf('defs.actions.js').slice(codeOf('defs.actions.js').indexOf('function prepareWatchTv(')));
 })(), 'R8 the other way: its one branch fired on affection, never on presence');
 
 // ---------------------------------------------------------------------------

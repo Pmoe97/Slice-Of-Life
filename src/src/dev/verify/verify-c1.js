@@ -210,6 +210,21 @@ api(`
       const t = { ...npc.bible.temperament, openness: 1, assertiveness: 1 };
       return { ...npc, __room: hall, bible: { ...npc.bible, temperament: t } };
     },
+    // Side Projects (projects.js, 0.14.2): work_on_project's door is a
+    // project they're still into (projectDriveCandidate). An ordinary one —
+    // a song on guitar, a few sessions in, keen — in their own bedroom, where
+    // the kind happens. Nothing rigged beyond having a hobby.
+    (g, npc) => {
+      const id = __ids(g)[0];
+      const own = g.npcs[id].residency.room;
+      g.player.location = 'living_room';
+      g.player.flags = {};
+      const w = ensureProjects(g);
+      w.people[id] = { active: { n: 1, kind: 'guitar', interest: 'music', work: 'Harbour Lights', startedDay: 1, stage: 1, stageSessions: 2,
+        sessions: 6, bad: 0, engagement: 0.7, lastDay: 1, lastRoom: own, dustSince: null, encouragedDay: null, gift: null },
+        history: [], nextStartDay: null, dayDone: g.meta.clock.day, count: 1 };
+      return { ...npc, __room: own };
+    },
   ];
 `);
 

@@ -216,6 +216,36 @@ const ORDER = [
   // real game state (relationships.js/willingness.js/npc.js are loaded
   // above it).
   'pregnancy.js',
+  // birthdays.js (birthdays-and-occasions-plan.md Phase 1) sits directly
+  // after pregnancy.js in index.html too — real position, not a divergence.
+  // Pure domain logic (derived birthdays, the rollover pass, the prompt and
+  // Calendar readers) with only runtime calls into npc.js/sim.js/drives.js,
+  // so it loads cleanly here and is directly testable.
+  'birthdays.js',
+  // occasions.js (occasions-and-holidays-plan.md Phase 1) sits directly after
+  // birthdays.js in index.html too — real position. Pure domain logic (the
+  // holiday roster readers, festivity, prompt lines, the Calendar's row and
+  // year-grid models) with only runtime calls out; render.calendar.js, its
+  // painter, is render layer and deliberately not listed here.
+  'occasions.js',
+  // seasons.js (seasons-and-weather-plan.md Phase 1) sits right after
+  // occasions.js in index.html too — real position. Pure and derived
+  // (weather chain, temperature curve, daylight, sky line); temperature.js
+  // and llm.js reach it only at runtime.
+  'seasons.js',
+  // housenotes.js (0.14.2) sits right after seasons.js in index.html too —
+  // real position. Pure domain logic (the tick pass sim.js calls, the read
+  // narration, the Write Back helpers) with only runtime calls out.
+  'housenotes.js',
+  // tv.js (What's On, 0.14.2) sits right after housenotes.js in index.html
+  // too — real position. Pure domain logic (show calendar, taste, the
+  // living-room screen's tick pass sim.js calls, the Watch TV plan and line,
+  // the prompt line) with only runtime calls out.
+  'tv.js',
+  // projects.js (Side Projects, 0.14.2) sits right after tv.js in index.html
+  // too — real position. Pure domain logic plus the work_on_project resolver
+  // drives.js calls and the daily pass sim.js calls; only runtime calls out.
+  'projects.js',
   // money.js (actions-and-activities-overhaul-plan.md Phase 4, D9) — the
   // bidirectional ledger. Pure reads plus a mutating adjustMoneyLedger, no
   // load-time dependencies; sits directly before asks.js here exactly as it

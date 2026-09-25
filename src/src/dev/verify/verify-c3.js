@@ -324,10 +324,25 @@ for (const c of cases) {
   // THE CROSS-CONTROL, and the plan's "margin larger than the run-to-run
   // spread". The same houses, the same group of drives, an axis those drives do
   // not declare: the group must barely move.
+  //
+  // "Those drives do not declare" is now enforced, not assumed: the control
+  // counts only the group's drives that carry no weight on the control axis.
+  // clean_common is in warmth's group (warmth 0.1) AND is conscientiousness'
+  // flagship (0.4 — "tidy" in the first case above), so counting it made the
+  // control measure a real, intended conscientiousness effect (~114 vs ~52)
+  // and pass only when another drive swung the opposite way to cancel it.
+  // Found 2026-09-23 when Seasons P3's weather room choice evened
+  // seek_company out and the whole-group sum jumped from 7% to 16%. Measured
+  // at 28 households on two seed sets, the undeclared drives alone
+  // (seek_company + chat): 3% and 4% with the weather, 17% and 9% without it
+  // — so the old sum had also been hiding a real conscientiousness pull on
+  // seek_company behind clean_common. The control is exactly as strict as
+  // before about everything it was built to catch, and stricter about that.
   const chi = arms[`${c.other}+`], clo = arms[`${c.other}-`];
-  const ca = tally(chi, keys), cb = tally(clo, keys);
+  const controlKeys = keys.filter(k => !((CANDIDATE_WEIGHTS[k] || {})[c.other]));
+  const ca = tally(chi, controlKeys), cb = tally(clo, controlKeys);
   const controlMargin = Math.abs(ca - cb) / Math.max(ca, cb, 1);
-  const controlSigns = houseSigns(chi, clo, keys);
+  const controlSigns = houseSigns(chi, clo, controlKeys);
   // Per household, not only in the total — and measured the same way the margin
   // above is, against the wrong axis on the same houses.
   //

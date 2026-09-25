@@ -979,7 +979,13 @@ function composeOutfit(wantedType, itemIds, bias = {}) {
     return s;
   };
   const outfit = {};
+  // Seasons & weather Phase 5: `bias.skipSlots` leaves a slot empty — heading
+  // out on a hot day means no outer layer at all (npc.js's work fit), which
+  // no amount of thermal bias could achieve: every slot is otherwise filled
+  // with its best candidate, and a coat's 'work' trait outscores any heat.
+  const skip = new Set(bias.skipSlots || []);
   for (const slot of CLOTHING_SLOTS) {
+    if (skip.has(slot)) continue;
     const candidates = (itemIds || [])
       .map(id => ({ id, def: CLOTHING_DEFS[id] }))
       .filter(c => c.def && c.def.slot === slot)

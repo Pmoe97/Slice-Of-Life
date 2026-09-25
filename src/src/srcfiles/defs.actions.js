@@ -436,17 +436,18 @@ const ACTION_DEFS = {
     // watching with someone who likes you beats watching alone (social
     // time pays; see prepareSocialAction/buildWatchTvEffects).
     timeCost: { base: ACTION_TUNING.tvMinutes },
+    // What's On (tv.js, 0.14.2): there is something ON now — a show, an
+    // episode, what happens in it — so the line is built from the plan
+    // prepare made, company included. No shared `templates` any more ("you
+    // watch whatever is on" was exactly the hole): narrateAction falls
+    // through to the dynamic builder, which names who was there itself.
     shared: {
       rate: 'companionable',
       fact: 'You and {name} watched TV together.',
-      templates: [
-        'You watch TV with {name}. Neither of you is really following it, which is fine.',
-        '{name} takes the other end of the sofa and you watch whatever is on until it ends.',
-      ],
     },
-    prepare: prepareSocialAction,
+    prepare: prepareWatchTv,
     buildEffects: buildWatchTvEffects,
-    narration: { mode: 'template', templates: ['You watch some TV. Mindless, relaxing.'] },
+    narration: { mode: 'dynamic', build: watchTvShowNarration },
     // Action outcome window Phase 6 (D3/D5): a repetitive-motion verb — one
     // representative "watching TV" frame, reused. Archetype.
     outcomeWindow: {
@@ -1108,6 +1109,65 @@ const ACTION_DEFS = {
     buildEffects: buildBinNoteEffects,
     narration: { mode: 'dynamic', build: binNoteNarration },
   },
+  // Side Projects (projects.js, 0.14.2): ask a roommate about the thing
+  // they're making or learning. Offered while someone in the room has one on
+  // the go and you haven't asked them today (someone at it right now first).
+  // They show you where it's up to — or wince, if it's been gathering dust —
+  // and being asked genuinely helps: engagement, a little warmth, a memory.
+  'self.encourage_project': {
+    id: 'self.encourage_project', label: 'Ask About Project',
+    verbs: ['encourage', 'cheer on', 'ask about their project', 'ask about the project', 'how is the project going'],
+    source: { kind: 'self' },
+    group: 'project', chipPriority: 45,
+    requires: ['projectMakerHere'],
+    timeCost: { base: PROJECT_TUNING.encourage.minutes },
+    prepare: prepareEncourageProject,
+    buildEffects: buildEncourageProjectEffects,
+    narration: { mode: 'dynamic', build: encourageProjectNarration },
+  },
+  // Side Projects, round 3 (0.14.2): practice you can hear. Bang on the Wall
+  // is offered while someone in ANOTHER room is practising something loud
+  // (guitar, DJ) and you can hear it from here; Ask for Quiet while they're
+  // in the room with you. Either buys quiet for the rest of the day, at a
+  // price: they lose a little heart for it and it stings.
+  'self.bang_on_wall': {
+    id: 'self.bang_on_wall', label: 'Bang on the Wall',
+    verbs: ['bang on the wall', 'knock on the wall', 'tell them to keep it down', 'keep it down'],
+    source: { kind: 'self' },
+    group: 'project', chipPriority: 40,
+    requires: ['practiceNextDoor'],
+    timeCost: { base: PROJECT_TUNING.noise.hush.minutes },
+    prepare: prepareBangOnWall,
+    buildEffects: buildHushProjectEffects,
+    narration: { mode: 'dynamic', build: hushProjectNarration },
+  },
+  'self.ask_quiet': {
+    id: 'self.ask_quiet', label: 'Ask for Quiet',
+    verbs: ['ask for quiet', 'ask them to stop playing', 'ask them to be quiet'],
+    source: { kind: 'self' },
+    group: 'project', chipPriority: 40,
+    requires: ['practiserHere'],
+    timeCost: { base: PROJECT_TUNING.noise.hush.minutes },
+    prepare: prepareAskQuiet,
+    buildEffects: buildHushProjectEffects,
+    narration: { mode: 'dynamic', build: hushProjectNarration },
+  },
+  // Jam Sessions (the user's name, 2026-09-24): join a roommate who is at
+  // their project right now — play along, hold the pins, keep the splits.
+  // Trains the skill that project uses, cheers you both up, warms them to
+  // you and moves the project on a step (never finishing a stage for them).
+  // Once a day per roommate; not with someone who can't stand you.
+  'self.jam_session': {
+    id: 'self.jam_session', label: 'Jam Session',
+    verbs: ['jam', 'jam session', 'join in', 'help with their project', 'play along'],
+    source: { kind: 'self' },
+    group: 'project', chipPriority: 46,
+    requires: ['jamPartnerHere'],
+    timeCost: { base: PROJECT_TUNING.jam.minutes },
+    prepare: prepareJamSession,
+    buildEffects: buildJamSessionEffects,
+    narration: { mode: 'dynamic', build: jamSessionNarration },
+  },
   'self.workout': {
     id: 'self.workout', label: 'Work Out', verbs: ['work out', 'workout', 'exercise', 'lift weights'],
     source: { kind: 'room', roomIds: ['gym'] },
@@ -1229,7 +1289,9 @@ const ACTION_DEFS = {
         '{name} takes the lounger next to yours, book in hand. You doze more than you read.',
       ],
     },
-    narration: { mode: 'template', templates: ['You stretch out on a lounger and let the afternoon go by.'] },
+    // Seasons & weather Phase 3: the light it happens in — sun through the
+    // glass, rain against it, or the pool lights at night (sunbatheLine).
+    narration: { mode: 'dynamic', build: sunbatheNarration },
     outcomeWindow: {
       tier: 'C', trigger: 'player', dismissal: 'tap',
       image: { kind: 'archetype', variant: 'sunbathe', phrase: 'stretched out on a poolside lounger, sunglasses on, completely unbothered' },
@@ -1390,6 +1452,44 @@ const ACTION_DEFS = {
       image: { kind: 'archetype', variant: 'tend_balcony_plant', phrase: 'tending the potted plants on the balcony, watering can in hand' },
     },
   },
+  // --- Occasion decorations (occasions-and-holidays-plan.md Phase 3) ---
+  // Put a holiday's decorations up in the room they belong in, from `lead`
+  // days before (OCCASION_DECOR); take them down once it's over. Both chips
+  // exist only inside their window (the requirement fails otherwise, and
+  // renderActionChips skips unavailable chips), so they never clutter an
+  // ordinary day. The write is a trusted DSL effect (DECORATE_OCCASION /
+  // TAKE_DOWN_DECOR) — occasions.js owns the state.
+  'self.decorate': {
+    id: 'self.decorate', label: 'Decorate', verbs: ['decorate', 'put up decorations', 'hang decorations', 'decorate for the holiday'],
+    source: { kind: 'room', roomIds: ['living_room', 'dining', 'balcony'] },
+    // Its own group, not 'chill': render.js's defBucketFor would fold 'chill'
+    // into the Relax ▸ submenu, and a verb that exists a few days a year has
+    // to be visible, not one tap deep (caught live, 2026-09-22).
+    group: 'occasion', chipPriority: 28,
+    requires: ['decorWindowOpen'],
+    timeCost: { base: OCCASION_TUNING.decor.playerMinutes },
+    prepare: prepareDecorate,
+    buildEffects: buildDecorateEffects,
+    shared: {
+      rate: 'companionable',
+      fact: 'You and {name} decorated for the holiday together.',
+      templates: [
+        '{name} pitches in. It takes twice as long and is twice as much fun.',
+        'You and {name} decorate together, arguing cheerfully about where everything goes.',
+      ],
+    },
+    narration: { mode: 'dynamic', build: decorateNarration },
+  },
+  'self.take_down_decor': {
+    id: 'self.take_down_decor', label: 'Take Down Decorations', verbs: ['take down the decorations', 'pack up the decorations', 'put the decorations away'],
+    source: { kind: 'room', roomIds: ['living_room', 'dining', 'balcony'] },
+    group: 'occasion', chipPriority: 12,
+    requires: ['decorTakeDownable'],
+    timeCost: { base: 20 },
+    prepare: prepareTakeDownDecor,
+    buildEffects: buildTakeDownDecorEffects,
+    narration: { mode: 'dynamic', build: takeDownDecorNarration },
+  },
   // --- Lockers (D22): "store swim gear / change — a wardrobe hook" ---
   // Byte-identical shape to wardrobe.interact/wardrobe.change_outfit/
   // wardrobe.open (see that block's comment) — a container:true object with
@@ -1546,9 +1646,10 @@ const ACTION_DEFS = {
     group: 'chill', chipPriority: 15,
     requires: [],
     timeCost: { base: ACTION_TUNING.balconyMinutes },
-    effects: [
-      `ADJUST_NEED player mood +${ACTION_TUNING.balconyMoodGain}`,
-    ],
+    // Seasons & weather Phase 3: the balcony is IN the weather — a perfect
+    // afternoon is worth twice an ordinary one, a thunderstorm almost nothing,
+    // and the line says which (balconySitWeather, seasons.js).
+    buildEffects: buildBalconySitEffects,
     shared: {
       rate: 'confiding',
       fact: 'You and {name} sat out on the balcony together.',
@@ -1557,7 +1658,7 @@ const ACTION_DEFS = {
         '{name} comes out and leans on the rail beside you. Somewhere in the next half hour you both stop making conversation and just talk.',
       ],
     },
-    narration: { mode: 'template', templates: ['You sit on the balcony and watch the street below. The city hums on without you.'] },
+    narration: { mode: 'dynamic', build: balconySitNarration },
     outcomeWindow: {
       tier: 'C', trigger: 'player', dismissal: 'tap',
       image: { kind: 'archetype', variant: 'balcony', phrase: 'sitting on the balcony looking out at the city, relaxed' },
@@ -1892,6 +1993,12 @@ const ACTION_REQUIREMENT_CHECKERS = {
   // disagree about who counts as "here" (residents only, excluding
   // sleeping/showering).
   residentsPresent: (ctx) => sharedActivityParticipants(ctx).length > 0 || 'Nobody around to play with.',
+  // Occasions Phase 3: the Decorate / Take Down chips exist only inside
+  // their windows (occasions.js owns the dates and the record).
+  decorWindowOpen: (ctx) => (typeof occasionToDecorate === 'function'
+    && !!occasionToDecorate(ctx.gameState, ctx.gameState.meta.clock.day, ctx.roomId)) || 'Nothing to decorate for.',
+  decorTakeDownable: (ctx) => (typeof decorToTakeDown === 'function'
+    && !!decorToTakeDown(ctx.gameState, ctx.gameState.meta.clock.day, ctx.roomId)) || 'No decorations to take down.',
   roomIs: (ctx, ...roomIds) => roomIds.includes(ctx.gameState.player.location) || 'Wrong room for that.',
   skillAtLeast: (ctx, skillId, lvl) => skillLevelSafe(ctx.gameState.player, skillId) >= Number(lvl) || `Requires ${skillId} level ${lvl}.`,
   hasFlag: (ctx, who, key) => !!resolveFlagBagSafe(ctx, who)[key] || 'Conditions not met.',
@@ -2049,6 +2156,26 @@ const ACTION_REQUIREMENT_CHECKERS = {
   readNoteHere: (ctx) => {
     const note = firstNoteInRoom(ctx, 'read');
     return !!note || 'Read it first.';
+  },
+  // Side Projects (projects.js, 0.14.2): the same pick prepare makes, so the
+  // chip and the click can never disagree about who there is to ask.
+  projectMakerHere: (ctx) => {
+    if (typeof projectEncourageTarget !== 'function') return 'Nobody here is working on anything.';
+    return !!projectEncourageTarget(ctx.gameState, ctx.roomId) || 'Nobody here has a project you haven\'t asked about today.';
+  },
+  // Side Projects round 3: the same picks prepare makes (projectHushTarget /
+  // projectJamTarget), so chip and click agree.
+  practiceNextDoor: (ctx) => {
+    if (typeof projectHushTarget !== 'function') return 'You can\'t hear anyone practising.';
+    return !!projectHushTarget(ctx.gameState, ctx.roomId, 'wall') || 'You can\'t hear anyone practising.';
+  },
+  practiserHere: (ctx) => {
+    if (typeof projectHushTarget !== 'function') return 'Nobody here is practising.';
+    return !!projectHushTarget(ctx.gameState, ctx.roomId, 'here') || 'Nobody here is practising.';
+  },
+  jamPartnerHere: (ctx) => {
+    if (typeof projectJamTarget !== 'function') return 'Nobody here is working on anything.';
+    return !!projectJamTarget(ctx.gameState, ctx.roomId) || 'Nobody here is at their project right now.';
   },
   doorLocked: (ctx) => {
     const door = findObjectInRoom(ctx, 'bedroom_door') || findObjectInRoom(ctx, 'bathroom_door');
@@ -2649,24 +2776,83 @@ function prepareSocialAction(ctx) {
   return { affection: presentResidentAffection(ctx) };
 }
 
+// Occasions Phase 3 — self.decorate / self.take_down_decor. prepare picks
+// the occasion ONCE (occasions.js), so the effect and the line can't
+// disagree about which holiday it was.
+function prepareDecorate(ctx) {
+  const day = ctx.gameState.meta.clock.day;
+  const occasionId = typeof occasionToDecorate === 'function' ? occasionToDecorate(ctx.gameState, day, ctx.roomId) : null;
+  return { occasionId };
+}
+function buildDecorateEffects(ctx, prepared) {
+  if (!prepared?.occasionId) return [];
+  return [
+    `DECORATE_OCCASION ${prepared.occasionId} player`,
+    `ADJUST_NEED player mood +${OCCASION_TUNING.decor.playerMood}`,
+  ];
+}
+function decorateNarration(ctx, prepared) {
+  return OCCASION_DECOR[prepared?.occasionId]?.playerUp || 'You put up the decorations.';
+}
+// Seasons & weather Phase 3 — the balcony and the loungers read the weather.
+// Guarded on typeof like every seasons.js reader (defs load first); without
+// it they fall back to the pre-weather line and gain.
+function buildBalconySitEffects(ctx) {
+  const mult = typeof balconySitWeather === 'function' ? balconySitWeather(ctx.gameState).moodMult : 1;
+  return [`ADJUST_NEED player mood +${(ACTION_TUNING.balconyMoodGain * mult).toFixed(3)}`];
+}
+function balconySitNarration(ctx) {
+  return typeof balconySitWeather === 'function' ? balconySitWeather(ctx.gameState).line
+    : 'You sit on the balcony and watch the street below. The city hums on without you.';
+}
+function sunbatheNarration(ctx) {
+  return typeof sunbatheLine === 'function' ? sunbatheLine(ctx.gameState)
+    : 'You stretch out on a lounger and let the afternoon go by.';
+}
+function prepareTakeDownDecor(ctx) {
+  const day = ctx.gameState.meta.clock.day;
+  const occasionId = typeof decorToTakeDown === 'function' ? decorToTakeDown(ctx.gameState, day, ctx.roomId) : null;
+  return { occasionId };
+}
+function buildTakeDownDecorEffects(ctx, prepared) {
+  return prepared?.occasionId ? [`TAKE_DOWN_DECOR ${prepared.occasionId} player`] : [];
+}
+function takeDownDecorNarration(ctx, prepared) {
+  const label = OCCASION_DEFS[prepared?.occasionId]?.label || 'holiday';
+  return fillOccasionText(OCCASION_TUNING.decor.lines.playerDown, { label });
+}
+
 function buildWatchTvEffects(ctx, prepared) {
   const base = ACTION_TUNING.tvMoodGain;
   const affection = prepared?.affection ?? 0;
   const bonus = affection > 0 ? Math.round(affection * MOOD_TARGET.social.activityScale * 100) / 100 : 0;
-  return [`ADJUST_NEED player mood +${Math.round((base + bonus) * 100) / 100}`];
+  const out = [`ADJUST_NEED player mood +${Math.round((base + bonus) * 100) / 100}`];
+  // What's On (0.14.2): the episode the plan chose, and who saw it with you.
+  const tv = prepared?.tv;
+  if (tv) out.push(`TV_WATCH ${tv.showId} ${tv.n} ${tv.rerun ? 1 : 0} ${(tv.withIds || []).join(',') || '-'}`);
+  return out;
 }
 
-// `watchTvNarration` is GONE (initiative plan Phase 5). It existed for one
-// branch — "you watch TV with someone who actually likes you" — which fired on
-// affection rather than on presence, so it stayed silent for the whole of an
-// untouched playthrough (every relationship axis generates at 0) and would have
-// contradicted the shared template the moment affection moved. narrateAction
-// prefers `def.shared.templates` whenever somebody is actually in the room now,
-// which is the two-person version D17 asks for, so what is left of this action's
-// narration is one solo line and a dynamic builder for it would be a function
-// that only ever returns a constant. The def is `mode: 'template'` again;
-// prepareSocialAction stays, because buildWatchTvEffects still needs the
-// affection-scaled mood impulse.
+// What's On (tv.js, 0.14.2). The initiative plan's Phase 5 retired an older
+// narration builder (it fired on affection rather than presence) and left this
+// verb one solo line plus the shared templates, "whatever is on". There is
+// something on now, so the builder is back — and it names the company itself
+// (tv.js's tvWatchNarration), from the SAME sharedActivityParticipants list
+// the shared delta and the mood impulse read, so the three can't disagree
+// about who was on the sofa. prepareSocialAction's affection still feeds the
+// mood impulse unchanged.
+function prepareWatchTv(ctx) {
+  const withIds = sharedActivityParticipants(ctx);
+  const tv = typeof tvPlanPlayerWatch === 'function' ? tvPlanPlayerWatch(ctx.gameState, withIds) : null;
+  return { ...prepareSocialAction(ctx), tv };
+}
+
+function watchTvShowNarration(ctx, prepared) {
+  const line = typeof tvWatchNarration === 'function' ? tvWatchNarration(ctx.gameState, prepared?.tv) : null;
+  if (line) return line;
+  const withIds = sharedActivityParticipants(ctx);
+  return withIds.length ? `You watch TV with ${sharedActivityNames(ctx.gameState, withIds)}.` : 'You watch some TV. Mindless, relaxing.';
+}
 
 // --- Buyable hobbies (inventory overhaul Phase 6, D13) ---
 // createHobbyAction generates one ACTION_DEFS entry per hobby OBJECT_DEFS
@@ -3930,9 +4116,14 @@ function buildBinNoteEffects(ctx, prepared) {
 
 // The note's actual words are the narration — there is no separate reading
 // UI, because a note is three lines and a modal for it would be ceremony.
+// House notes (0.14.2): housenotes.js's noteReadingText composes it now —
+// the same three attribution cases plus who it's for, every reply scrawled
+// underneath, and who has seen a note of yours. The inline body below is the
+// fallback for a build without that file.
 function readNoteNarration(ctx, prepared) {
   const note = prepared?.note;
   if (!note) return 'There is nothing here to read.';
+  if (typeof noteReadingText === 'function') return noteReadingText(ctx.gameState, note);
   const authorId = note.meta?.authorId;
   const name = authorId === 'player' ? null : ctx.gameState.npcs?.[authorId]?.bible?.name;
   // Three real cases, each written out rather than composed from a fragment:
@@ -3945,6 +4136,56 @@ function readNoteNarration(ctx, prepared) {
 
 function binNoteNarration(ctx, prepared) {
   return prepared?.note ? 'You take the note down and bin it.' : 'There is no note to take down.';
+}
+
+// --- self.encourage_project runtime logic (Side Projects, 0.14.2) ---
+// Who you ask, and the line for where their project stood BEFORE you asked,
+// decided once in prepare (projects.js's projectPlanEncourage) — so a dusty
+// project reads as dusty even though asking is what dusts it off.
+function prepareEncourageProject(ctx) {
+  return { plan: typeof projectPlanEncourage === 'function' ? projectPlanEncourage(ctx.gameState, ctx.roomId) : null };
+}
+
+function buildEncourageProjectEffects(ctx, prepared) {
+  const id = prepared?.plan?.npcId;
+  return id ? [`PROJECT_ENCOURAGE ${id}`, `ADJUST_NEED player mood +0.02`] : [];
+}
+
+function encourageProjectNarration(ctx, prepared) {
+  return prepared?.plan?.line || 'Nobody here is working on anything right now.';
+}
+
+// --- self.bang_on_wall / self.ask_quiet runtime logic (Side Projects round 3) ---
+function prepareHushProject(ctx, mode) {
+  return { plan: typeof projectPlanHush === 'function' ? projectPlanHush(ctx.gameState, ctx.roomId, mode) : null };
+}
+
+function prepareBangOnWall(ctx) { return prepareHushProject(ctx, 'wall'); }
+function prepareAskQuiet(ctx) { return prepareHushProject(ctx, 'here'); }
+
+function buildHushProjectEffects(ctx, prepared) {
+  const plan = prepared?.plan;
+  return plan ? [`PROJECT_HUSH ${plan.npcId} ${plan.mode}`] : [];
+}
+
+function hushProjectNarration(ctx, prepared) {
+  return prepared?.plan?.line || 'It has gone quiet on its own.';
+}
+
+// --- self.jam_session runtime logic (Side Projects round 3) ---
+function prepareJamSession(ctx) {
+  return { plan: typeof projectPlanJam === 'function' ? projectPlanJam(ctx.gameState, ctx.roomId) : null };
+}
+
+function buildJamSessionEffects(ctx, prepared) {
+  const plan = prepared?.plan;
+  if (!plan) return [];
+  const J = PROJECT_TUNING.jam;
+  return [`PROJECT_JAM ${plan.npcId}`, `ADD_SKILL_XP ${plan.skill} ${J.xp}`, `ADJUST_NEED player mood +${J.mood}`];
+}
+
+function jamSessionNarration(ctx, prepared) {
+  return prepared?.plan?.line || 'Nobody here is at their project right now.';
 }
 
 // --- self.lock_door / self.unlock_door runtime logic ---

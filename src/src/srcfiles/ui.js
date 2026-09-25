@@ -230,6 +230,11 @@ async function advanceAndResolve(ticks, opts = {}) {
     await processDayRollover(d);
   }
 
+  // Seasons & weather Phase 2: what the sky did during this advance — a
+  // front arriving, the rain stopping, the sun going down. After the
+  // rollover, so a new day's headline reads first.
+  narrateSkyChanges();
+
   // Actions & Activities Overhaul Phase 12 (D21): sweep world.doorEvent
   // after the rollover loop (not before) so a door event created BY today's
   // rollover (a delivery's ETA hitting, or a solicitor's roll landing) gets
@@ -256,6 +261,48 @@ async function advanceAndResolve(ticks, opts = {}) {
   return events; // the events objects are the same references stored in
                  // currentGameState.world.events, so a caller marking one
                  // e.g. seenByPlayer mutates the real state, not a copy.
+}
+
+// --- The sky watch (seasons-and-weather-plan Phase 2) ---
+// The last moment the sky was checked, as an absolute game-minute — this
+// session only, never saved (weather is derived, R5). Every advance, on both
+// paths, narrates what the sky did since (skyWatchLines, seasons.js, decides
+// what and how); startClockLoop resets it the way it adopts the rollover
+// day, so a load never replays a change from before it.
+let skyWatchAbs = null;
+
+function resetSkyWatch(gs) {
+  skyWatchAbs = gs?.meta?.clock ? clockToAbsolute(gs.meta.clock) : null;
+}
+
+function narrateSkyChanges() {
+  if (typeof skyWatchLines !== 'function' || !currentGameState?.meta?.clock) return;
+  const now = clockToAbsolute(currentGameState.meta.clock);
+  const from = skyWatchAbs;
+  skyWatchAbs = now;
+  if (from == null) return;
+  const slept = currentGameState.player?.flags?._vulnerableState === 'sleeping';
+  for (const line of skyWatchLines(currentGameState, from, now, { slept, roomId: currentGameState.player?.location })) {
+    addLogEntry('narration', line);
+  }
+  // Phase 5 (W8): the year's first snow lifts everyone a little, the moment
+  // it starts (the same staleness guard as the lines above).
+  if (typeof firstSnowBetween === 'function' && now - from <= WEATHER_TUNING.watch.staleMin
+      && firstSnowBetween(currentGameState, from, now)) {
+    applySeasonalMoodEffects(seasonalLiftEffects(currentGameState));
+  }
+}
+
+// Seasons & weather Phase 5 (W8): apply seasons.js's seasonal mood lines
+// (MOOD_DELTA for the player's impulse pool and each resident) — the one
+// trusted-producer write for the lift and the dark-weeks dip.
+function applySeasonalMoodEffects(lines) {
+  if (!lines || lines.length === 0) return;
+  const residents = Object.keys(currentGameState.npcs || {}).filter(id => currentGameState.npcs[id]?.residency?.status === 'resident');
+  const effCtx = buildEffectContext(currentGameState, residents, residents, {}, []);
+  const effects = [];
+  for (const line of lines) for (const e of parseEffectDSL(line)) if (e) effects.push(e);
+  applyEffects(effects, effCtx);
 }
 
 // --- Day rollover: rent, deliveries, quests ---
@@ -359,6 +406,40 @@ async function processDayRollover(day) {
   // above uses. Deterministic and idempotent per pregnancy record.
   if (typeof processPregnanciesForDay === 'function') {
     for (const line of processPregnanciesForDay(currentGameState, day)) {
+      addLogEntry('narration', line);
+    }
+  }
+  // Occasions (occasions-and-holidays-plan.md Phase 1, D5): today's holiday
+  // (or tonight's night of a run) and tomorrow's eve line. Before the
+  // birthday pass so the day's headline reads first. Pure, returns lines.
+  if (typeof processOccasionsForDay === 'function') {
+    for (const line of processOccasionsForDay(currentGameState, day).lines) {
+      addLogEntry('narration', line);
+    }
+  }
+  // Seasons & weather Phase 1: the first day of a season, the year's first
+  // snow, a storm or cold snap rolling in. After the day's occasion, so the
+  // holiday stays the headline. Pure, returns lines.
+  if (typeof processWeatherForDay === 'function') {
+    for (const line of processWeatherForDay(currentGameState, day).lines) {
+      addLogEntry('narration', line);
+    }
+  }
+  // Seasons & weather Phase 5 (W8): the year's first warm day (a line and a
+  // lift for everyone) and the dark weeks' small, floored dip for the
+  // sensitive. Pure pass returns lines + effect lines; applied here.
+  if (typeof seasonalMoodForDay === 'function') {
+    const mood = seasonalMoodForDay(currentGameState, day);
+    for (const line of mood.lines) addLogEntry('narration', line);
+    applySeasonalMoodEffects(mood.effects);
+  }
+  // Birthdays (birthdays-and-occasions-plan.md Phase 1, D4/D5/D7): yesterday's
+  // birthdays resolve (the forget sting), today's are announced, and the
+  // two-days-out heads-up texts go out (delivered into the IM threads by the
+  // pass itself). After the relationship pass, whose castWeb the tip-off
+  // reads; same pure-pass-returns-lines shape as the pregnancy pass above.
+  if (typeof processBirthdaysForDay === 'function') {
+    for (const line of processBirthdaysForDay(currentGameState, day).lines) {
       addLogEntry('narration', line);
     }
   }
@@ -3725,12 +3806,18 @@ async function doUnlockDoorFromOutside(roomId) {
 // needs free text and the effects pipeline has nowhere to put a text box.
 // Reading and binning ARE ordinary object-sourced actions. Reuses the shared
 // #modal-overlay the same way doConvAskLeave does — no new infrastructure.
-function openWriteNoteModal() {
+// House notes (0.14.2): the same modal writes back on a housemate's note
+// (`replyToId`, from the Write Back chip) — a line on the bottom rather than
+// a new sheet — and a new note gains a "For" picker, because who a note is
+// addressed to decides who answers it and whom it moves.
+function openWriteNoteModal(replyToId) {
   if (!currentGameState) return;
   const roomId = currentGameState.player.location;
   const roomObjects = currentGameState.objects?.[`room_${roomId}`] || {};
   const surface = Object.values(roomObjects).find(o => OBJECT_DEFS[o.defId]?.surfaces);
-  if (!surface) { addLogEntry('system', 'Nothing here to leave a note on.'); return; }
+  const replyTo = replyToId ? roomObjects[replyToId] : null;
+  if (replyToId && (!replyTo || replyTo.defId !== 'note')) { addLogEntry('system', 'That note is gone.'); return; }
+  if (!replyTo && !surface) { addLogEntry('system', 'Nothing here to leave a note on.'); return; }
 
   const overlay = document.getElementById('modal-overlay');
   const title = document.getElementById('modal-title');
@@ -3738,20 +3825,47 @@ function openWriteNoteModal() {
   const actions = document.getElementById('modal-actions');
   if (!overlay || !title || !body || !actions) return;
 
-  title.textContent = `Leave a note on the ${OBJECT_DEFS[surface.defId].label}`;
-  body.innerHTML = `<textarea id="note-text" rows="4" maxlength="${NOTE_TUNING.maxLength}"
-    style="width:100%;resize:vertical" placeholder="Write something…"></textarea>`;
-  actions.innerHTML = `<button class="btn" data-action="confirm-write-note">Leave It</button>`
-    + `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>`;
+  const textBox = `<textarea id="note-text" rows="${replyTo ? 2 : 4}" maxlength="${NOTE_TUNING.maxLength}"
+    style="width:100%;resize:vertical" placeholder="${replyTo ? 'Scribble something underneath…' : 'Write something…'}"></textarea>`;
+  if (replyTo) {
+    const author = currentGameState.npcs?.[replyTo.meta?.authorId]?.bible?.name || 'Someone';
+    title.textContent = `Write back on ${author}'s note`;
+    body.innerHTML = `<p style="margin:0 0 8px;opacity:0.8">"${escapeHtml(replyTo.meta?.text || '')}"</p>${textBox}`;
+    actions.innerHTML = `<button class="btn" data-action="confirm-write-note" data-obj-id="${escapeHtml(replyTo.id)}">Write It</button>`
+      + `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>`;
+  } else {
+    const residents = Object.keys(currentGameState.npcs || {})
+      .filter(id => currentGameState.npcs[id]?.residency?.status === 'resident' && currentGameState.npcs[id]?.bible?.name);
+    const forPicker = residents.length === 0 ? '' : `<label style="display:block;margin:0 0 8px">For
+      <select id="note-for" style="margin-left:6px">
+        <option value="">Anyone</option>
+        ${residents.map(id => `<option value="${escapeHtml(id)}">${escapeHtml(currentGameState.npcs[id].bible.name)}</option>`).join('')}
+      </select></label>`;
+    title.textContent = `Leave a note on the ${OBJECT_DEFS[surface.defId].label}`;
+    body.innerHTML = forPicker + textBox;
+    actions.innerHTML = `<button class="btn" data-action="confirm-write-note">Leave It</button>`
+      + `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>`;
+  }
   overlay.setAttribute('data-open', '');
   setTimeout(() => document.getElementById('note-text')?.focus(), 50);
 }
 
-async function doWriteNote() {
+async function doWriteNote(replyToId) {
   const text = document.getElementById('note-text')?.value || '';
+  const addressedTo = document.getElementById('note-for')?.value || null;
   closeModal();
   if (!text.trim()) return;
   const roomId = currentGameState.player.location;
+  if (replyToId) {
+    const note = addPlayerNoteReply(currentGameState, replyToId, roomId, text);
+    if (!note) { addLogEntry('system', "There's no room left on that note."); return; }
+    const author = currentGameState.npcs?.[note.meta?.authorId]?.bible?.name;
+    addLogEntry('narration', `You scribble a reply on the bottom of ${author ? `${author}'s` : 'the'} note.`);
+    await advanceAndResolveMinutes(NOTE_TUNING.writeMinutes);
+    render(currentGameState, currentSceneState);
+    await saveAtBoundary('write-note-reply', currentGameState);
+    return;
+  }
   const roomObjects = currentGameState.objects?.[`room_${roomId}`] || {};
   const surface = Object.values(roomObjects).find(o => OBJECT_DEFS[o.defId]?.surfaces);
   const note = spawnNote(currentGameState, {
@@ -3759,12 +3873,14 @@ async function doWriteNote() {
     attachedTo: surface?.id || null,
     authorId: 'player',
     text,
+    addressedTo: addressedTo && currentGameState.npcs?.[addressedTo] ? addressedTo : null,
   });
   if (!note) { addLogEntry('system', 'There are already too many notes up here.'); return; }
   // A note you wrote yourself is already read — it should not sit there
   // shouting at its own author.
   note.state = { ...note.state, read: 'read' };
-  addLogEntry('narration', `You leave a note on the ${OBJECT_DEFS[surface.defId].label.toLowerCase()}.`);
+  const forName = note.meta.addressedTo ? currentGameState.npcs[note.meta.addressedTo]?.bible?.name : null;
+  addLogEntry('narration', `You leave a note${forName ? ` for ${forName}` : ''} on the ${OBJECT_DEFS[surface.defId].label.toLowerCase()}.`);
   await advanceAndResolveMinutes(NOTE_TUNING.writeMinutes);
   render(currentGameState, currentSceneState);
   await saveAtBoundary('write-note', currentGameState);
@@ -6026,8 +6142,13 @@ async function handleAction(action, npcId, extra) {
     case 'write-note':
       openWriteNoteModal();
       break;
+    // House notes (0.14.2): Write Back on a housemate's note — the same
+    // modal, carrying which note via data-obj-id.
+    case 'write-note-reply':
+      openWriteNoteModal(extra?.objId);
+      break;
     case 'confirm-write-note':
-      await doWriteNote();
+      await doWriteNote(extra?.objId);
       break;
     // aspirations-and-creative-careers Phase 5 (D21): the manuscript chips.
     case 'write-manuscript-start':
@@ -6695,11 +6816,21 @@ async function doLookAround() {
     if (present.length > 0) {
       desc += present.map(id => {
         const npc = currentGameState.npcs[id];
-        return `${npc.bible.name || 'Someone'} is here, ${npc.activity || 'doing nothing'}.`;
+        let activity = typeof tvActivityLabel === 'function' ? tvActivityLabel(currentGameState, id, npc.activity) : npc.activity;
+        if (typeof projectActivityLabel === 'function') activity = projectActivityLabel(currentGameState, id, activity);
+        return `${npc.bible.name || 'Someone'} is here, ${activity || 'doing nothing'}.`;
       }).join(' ');
     } else {
       desc += 'You are alone.';
     }
+    // What's On (tv.js, 0.14.2): what the living-room TV is playing.
+    const tvLine = typeof tvRoomLine === 'function' ? tvRoomLine(currentGameState, roomId) : null;
+    if (tvLine) desc += ` ${tvLine}`;
+    // Side Projects (projects.js, 0.14.2): the roommates' finished work on
+    // the walls (and anything they made you), and a project gathering dust
+    // where it was left.
+    const projLines = typeof projectRoomLines === 'function' ? projectRoomLines(currentGameState, roomId) : [];
+    if (projLines.length) desc += ` ${projLines.join(' ')}`;
     addLogEntry('narration', desc);
     surfaceRoomEvidence(roomId);
     render(currentGameState, currentSceneState);
@@ -6993,7 +7124,16 @@ function convAddBubble(from, text, tag) {
 // illustrated panel, per the player's chosen cadence, then generates and
 // paints it in. Fire-and-forget from doConvSend, like showActionMomentModal
 // — a slow/failed generation should never hold up the conversation itself.
-async function maybeShowConversationScene(npc) {
+//
+// Bug report (2026-09-23): "the scene images never arrive — I see it
+// generating, then nothing." This took the NPC record and read `npc.id`,
+// but an NPC record never carries its own id (it is only the key into
+// gameState.npcs), so npcId was always undefined. Generation ran, the
+// bubble cleared, and then the closed/switched check below compared the
+// real convState.npcId against undefined and returned — every panel was
+// thrown away, since F3 first shipped. It takes the id now, from doConvSend.
+async function maybeShowConversationScene(npcId) {
+  const npc = currentGameState?.npcs?.[npcId];
   const mode = settingsCache?.sceneVisualizerMode || 'off';
   if (mode === 'off' || !convState || !npc) return;
   let due = false;
@@ -7009,7 +7149,6 @@ async function maybeShowConversationScene(npc) {
     if (label !== convState.sceneVisLastMood) { due = true; convState.sceneVisLastMood = label; }
   }
   if (!due) return;
-  const npcId = npc.id;
   // 2026-08-31 (chat-image persistence): the panel is now one of a numbered
   // sequence (deterministic prompt+seed per panel, LRU-cached under
   // convscene_<npc>_<panelN>), so the same save reproduces the same panels
@@ -7030,7 +7169,7 @@ async function maybeShowConversationScene(npc) {
   // runAskPhotoFlow already uses for its own convShowGeneratingImage call.
   let result;
   try {
-    result = await generateConversationSceneImage(currentGameState, npc, panelN);
+    result = await generateConversationSceneImage(currentGameState, npcId, panelN);
   } catch (e) {
     console.warn('Conversation scene generation failed:', e);
     result = { url: null };
@@ -8136,6 +8275,24 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
         askTurn.applyEffects();
         applied.updatedNpcIds.push(myNpcId);
       }
+      // Birthdays (birthdays-and-occasions-plan.md D6/D8): at the same single
+      // effect-application moment, after applyProposal — which replaces
+      // npcs[myNpcId], so an earlier write would land on a detached object.
+      // A birthday gift's beat was stamped onto the decision by
+      // ASK_GIFT.postEffects; any player-worded line (plain or an ask's
+      // flavor) is checked for a wish, or for learning when the birthday is.
+      if (typeof noteBirthdayWish === 'function') {
+        const bdayBeats = [];
+        if (askTurn && askTurn.decision.birthdayBeat) bdayBeats.push(askTurn.decision.birthdayBeat);
+        if (!forcedText && !structuredDefId) {
+          const wish = noteBirthdayWish(currentGameState, myNpcId, text, 'spoken');
+          if (wish) bdayBeats.push(wish.beat);
+        }
+        if (bdayBeats.length) {
+          for (const beat of bdayBeats) convAddBeat(beat);
+          if (!applied.updatedNpcIds.includes(myNpcId)) applied.updatedNpcIds.push(myNpcId);
+        }
+      }
       // Also persist key beats to the main session log so the scene
       // viewer retains context after the conversation closes.
       const allLogs = [...applied.logEntries, ...((pass2 && pass2.logEntries) || [])];
@@ -8149,8 +8306,7 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
       currentSceneState = advanceEngagement(currentSceneState, speakerIds);
       // F3: fire-and-forget, after the turn's own dialogue/beats are already
       // painted in — never blocks the reply the player is waiting on.
-      const sceneNpc = currentGameState.npcs?.[myNpcId];
-      if (sceneNpc) maybeShowConversationScene(sceneNpc);
+      if (currentGameState.npcs?.[myNpcId]) maybeShowConversationScene(myNpcId);
     }
 
     // Phase 3 (D13/D21): resolve the departure lifecycle now the reply is

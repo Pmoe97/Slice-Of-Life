@@ -320,6 +320,23 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
     // existed for).
     if (!investigateResult?.stillWalking) updatedNpc = setCooldown(updatedNpc, driveId, nowAbs);
 
+  } else if (drive.isProjectDrive) {
+    // Side Projects (projects.js, 0.14.2): an hour on the thing they're making
+    // or learning. The resolver picks the room and the activity from the
+    // project's kind, moves it along (or doesn't — some sessions go nowhere),
+    // and tells it; a finish may text the player. typeof-guarded: projects.js
+    // loads after this file.
+    const projectResult = typeof tryWorkOnProject === 'function'
+      ? tryWorkOnProject(updatedNpc, npcId, resolved, gameState, rng, drive) : null;
+    if (projectResult) {
+      if (projectResult.locationOverride) locationOverride = projectResult.locationOverride;
+      if (projectResult.activityOverride) activityOverride = projectResult.activityOverride;
+      events.push(...projectResult.events);
+      if (projectResult.imMessages) imMessages.push(...projectResult.imMessages);
+      acted = true;
+    }
+    updatedNpc = setCooldown(updatedNpc, driveId, nowAbs);
+
   } else if (drive.isGiftDrive) {
     const giftResult = tryGiveGift(updatedNpc, npcId, resolved, gameState);
     if (giftResult) {
@@ -694,8 +711,12 @@ function resolveStandardDrive(driveId, drive, c) {
       const occCount = getPresentNpcIds(npcs, roomId).length;
       const capacity = ROOMS[roomId].capacity;
       const weight = occCount >= capacity ? 1 / SCENE.crowdAvoidanceWeight : 1;
-      return { roomId, weight };
-    });
+      // Seasons & weather Phase 3: nobody comes out for company onto a
+      // balcony in a storm — but a fine day doesn't pull them out to an empty
+      // one either (boost: false; see roomWeatherWeight).
+      const wx = typeof roomWeatherWeight === 'function' ? roomWeatherWeight(gameState, roomId, { boost: false }) : 1;
+      return { roomId, weight: weight * wx };
+    }).filter(r => r.weight > 0);
     const picked = weightedPick(rng, rooms, r => r.weight);
     if (picked) locationOverride = picked.roomId;
     activityOverride = drive.activityOverride || 'hanging out';
@@ -735,13 +756,17 @@ function resolveStandardDrive(driveId, drive, c) {
       .filter(r => r && ROOMS[r] && r !== location
         && (ROOMS[r].type !== 'bedroom' || r === own)
         && npcCommonRoomAccessible(r));
-    if (candidates.length > 0) {
-      const weighted = candidates.map(roomId => {
-        const occCount = getPresentNpcIds(npcs, roomId).length;
-        const capacity = ROOMS[roomId].capacity;
-        const weight = occCount >= capacity ? 1 / SCENE.crowdAvoidanceWeight : 1;
-        return { roomId, weight };
-      });
+    // Seasons & weather Phase 3: the balcony is weighted by how inviting it
+    // is outside (roomWeatherWeight, seasons.js) — read out there on a fine
+    // afternoon, never in a storm. Where, never whether: the drive already won.
+    const weighted = candidates.map(roomId => {
+      const occCount = getPresentNpcIds(npcs, roomId).length;
+      const capacity = ROOMS[roomId].capacity;
+      const weight = occCount >= capacity ? 1 / SCENE.crowdAvoidanceWeight : 1;
+      const wx = typeof roomWeatherWeight === 'function' ? roomWeatherWeight(gameState, roomId) : 1;
+      return { roomId, weight: weight * wx };
+    }).filter(c => c.weight > 0);
+    if (weighted.length > 0) {
       const picked = weightedPick(rng, weighted, c => c.weight);
       // Code-review fix: was `picked !== location` — picked is the whole
       // {roomId, weight} candidate object (weightedPick returns the item,
@@ -877,6 +902,11 @@ function resolveStandardDrive(driveId, drive, c) {
   // narration, the dream harvester, the knowledge layer) took that at face
   // value.
   if (drive.eventTemplate && !drive.npcToNpc) {
+    // Seasons & weather Phase 3: told with the weather when it's the story —
+    // reading out on the balcony in the sun, curled up while the rain came
+    // down (driveWeatherTemplate, seasons.js; null keeps the plain one). Read
+    // for the same destination the stamp below uses.
+    const weatherTemplate = typeof driveWeatherTemplate === 'function' ? driveWeatherTemplate(gameState, drive, locationOverride || location) : null;
     const evt = {
       day: gameState.meta.clock.day,
       tick: currentTick,
@@ -885,7 +915,7 @@ function resolveStandardDrive(driveId, drive, c) {
       type: driveId,
       moodDelta: drive.eventMood || 0,
       data: {},
-      template: drive.eventTemplate,
+      template: weatherTemplate || drive.eventTemplate,
       seenByPlayer: false,
     };
     if (drive.cleansRoom && location) {
@@ -1480,7 +1510,11 @@ function tryEatFood(npc, npcId, resolved, gameState, rng, drive) {
   // Taste tie-break (D23): when two foods restore the same hunger, the one
   // the NPC actually likes wins — appetite for what you like is a
   // preference, never a gate (the hunger number still decides first).
-  const tasteWeight = (entry) => tasteBandRow(tasteBandForStack(entry.sample, taste)).weight;
+  // Seasons & weather Phase 4 (W6): plus the day's craving — soup on a cold
+  // day, a salad on a hot one (seasonalFoodLean) — too small to cross a
+  // taste band, so it only decides between two foods they feel the same about.
+  const tasteWeight = (entry) => tasteBandRow(tasteBandForStack(entry.sample, taste)).weight
+    + (typeof seasonalFoodLean === 'function' ? seasonalFoodLean(gameState, entry.sample?.meta?.plate?.recipeKey, entry.defId) : 0);
 
   // Greedy plan over a bank: most-satisfying first, one unit (a serving for
   // a plate) at a time, until the hunger target or the food runs out.
@@ -1593,7 +1627,10 @@ function tryEatFood(npc, npcId, resolved, gameState, rng, drive) {
     const event = {
       day, tick, roomId: 'kitchen', npcId,
       type: 'eat', moodDelta: 0.03,
-      data: { items: cooked.recipe.label.toLowerCase() },
+      // `cooked` (0.14.2): marks the batch-cook path apart from a raid —
+      // housenotes.js's leftovers note reads it (a boolean, so the event's
+      // {placeholder} fill skips it).
+      data: { items: cooked.recipe.label.toLowerCase(), cooked: true },
       template: '{name} cooked {items} from the pantry — the fridge was bare.',
       seenByPlayer: false,
     };
@@ -1652,7 +1689,10 @@ function npcAutoCookMeal(npc, npcId, gameState, rng, taste, baseHunger) {
   const recipes = availableRecipes(pool);
   if (recipes.length === 0) return null;
   const profile = taste || npcTaste(npc);
-  const scored = recipes.map(r => ({ recipe: r, weight: tasteBandRow(tasteBandForRecipe(r, profile)).weight }));
+  // Seasons & weather Phase 4 (W6): the day's craving breaks ties within a
+  // taste band — a hearty recipe on a cold day, a fresh one on a hot day.
+  const lean = (r) => (typeof seasonalFoodLean === 'function' ? seasonalFoodLean(gameState, r.id) : 0);
+  const scored = recipes.map(r => ({ recipe: r, weight: tasteBandRow(tasteBandForRecipe(r, profile)).weight + lean(r) }));
   const best = Math.max(...scored.map(s => s.weight));
   const top = scored.filter(s => s.weight === best);
   const { recipe } = top[Math.floor(rng() * top.length)];

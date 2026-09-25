@@ -2201,7 +2201,10 @@ async function doStreamWatch(showId, device) {
 
     await advanceAndResolve(result.show.episodeTicks);
     currentGameState.player = decayPlayerNeeds(currentGameState.player, result.show.episodeTicks * CLOCK.tickMinutes, currentGameState);
-    addLogEntry('narration', `You watch episode ${result.episode} of ${result.show.label}.`);
+    // What's On (0.14.2): the episode's line (what happened, who you just
+    // overtook) when tv.js wrote one; the old counter line otherwise.
+    const streamLine = result.line || `You watch episode ${result.episode} of ${result.show.label}.`;
+    addLogEntry('narration', streamLine);
     renderComputerScreen(currentGameState);
     render(currentGameState, currentSceneState);
     await saveAtBoundary('stream-watch', currentGameState);
@@ -2217,7 +2220,7 @@ async function doStreamWatch(showId, device) {
       },
     }, {
       applied: (streamResult && streamResult.applied) || [],
-      narration: `You watch episode ${result.episode} of ${result.show.label}.`,
+      narration: streamLine,
       minutesSpent: result.show.episodeTicks * CLOCK.tickMinutes,
     });
   } finally {

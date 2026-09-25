@@ -108,15 +108,48 @@ function renderConvBubble(gs) {
 }
 
 // --- Header ---
-function renderHeader(gs) {
-  const { meta, player } = gs;
+// The header's date and clock, decorated: the day's holiday emoji on the
+// date, the sky's on the clock, the full text on hover. Its own function
+// because the clock loop repaints these two every game-minute
+// (updateClockDisplay, time.js) — which used to write the bare text, so both
+// emojis vanished a frame after render() drew them (found live, Seasons P2).
+function paintHeaderClock(gs) {
+  const meta = gs.meta;
   const hdrDay = document.getElementById('hdr-day');
   const hdrTime = document.getElementById('hdr-time');
+  if (hdrDay) {
+    // Occasions (occasions-and-holidays-plan.md D3): the day's holiday rides
+    // the date as its emoji only — the short form is space-constrained (see
+    // formatDateShort) — with the full name on hover.
+    const badge = typeof occasionBadge === 'function' ? occasionBadge(meta.clock.day) : '';
+    const emoji = badge ? badge.split(' ')[0] : '';
+    // The weekday in its own span ("Thu 26 Winter" is formatDateShort's
+    // shape) so the phone layout can drop it: there the date box is too
+    // narrow for all of it, and "26 Winter" keeps the season, "Thu 26 Wi…"
+    // didn't.
+    const full = formatDateShort(meta.clock.day);
+    const cut = full.indexOf(' ');
+    const wd = document.createElement('span');
+    wd.className = 'hdr-wd';
+    wd.textContent = full.slice(0, cut + 1);
+    hdrDay.replaceChildren(wd, full.slice(cut + 1) + (emoji ? ` ${emoji}` : ''));
+    hdrDay.title = badge ? badge.slice(emoji.length).trim() : '';
+  }
+  if (hdrTime) {
+    // Seasons & weather Phase 1: the sky rides the clock as one emoji (night
+    // aware), the full sky line on hover.
+    const w = typeof weatherNow === 'function' ? weatherNow(gs) : null;
+    hdrTime.textContent = formatTime(meta.clock.minutes) + (w && w.emoji ? ` ${w.emoji}` : '');
+    hdrTime.title = typeof skyLine === 'function' ? skyLine(gs) : '';
+  }
+}
+
+function renderHeader(gs) {
+  const { meta, player } = gs;
   const hdrMoney = document.getElementById('hdr-money');
   const hdrRoom = document.getElementById('hdr-room');
 
-  if (hdrDay) hdrDay.textContent = formatDateShort(meta.clock.day);
-  if (hdrTime) hdrTime.textContent = formatTime(meta.clock.minutes);
+  paintHeaderClock(gs);
   if (hdrMoney) hdrMoney.textContent = `$${player.money}`;
   if (hdrRoom) {
     const roomName = ROOMS[player.location]?.name || player.location;
@@ -1097,15 +1130,22 @@ function sceneArtContext(gs, sceneState) {
   // to see it or the dining room would keep serving its cached empty-table
   // art through dinner.
   const roomObjects = gs.objects?.[`room_${roomId}`];
-  const sceneKey = plateKey(roomId, phase, sceneDetailSignature(roomObjects), imageStyleToken());
+  // Seasons & weather Phase 6 (W9): the window view — a room that sees
+  // outside gets a plate per season/sky look (seasons.js windowViewToken,
+  // a small bounded set), null everywhere else.
+  const view = typeof windowViewToken === 'function' ? windowViewToken(gs, roomId) : null;
+  const detail = sceneDetailSignature(roomObjects);
+  const sceneKey = plateKey(roomId, phase, detail, imageStyleToken(), view);
   // The prompt is exactly what IMAGE feeds generateImage (style-applied),
   // so the info modal's text matches the pixels byte for byte. D11: this
   // now describes the PLATE — rerolling replaces the backdrop, never the
   // cutouts.
-  const prompt = applyImageStyle(buildBackgroundPrompt(roomId, phase, roomObjects));
+  const prompt = applyImageStyle(buildBackgroundPrompt(roomId, phase, roomObjects, view));
   const seed = composePlateSeed(sceneKey);
-  const overlay = layoutSceneCutouts(gs, sceneState, sceneKey);
-  return { roomId, phase, activeNpcs, roomObjects, sceneKey, prompt, seed, overlay };
+  // The layout seeds on the key WITHOUT the view, so people don't shuffle
+  // across the room when it starts to rain.
+  const overlay = layoutSceneCutouts(gs, sceneState, plateKey(roomId, phase, detail, imageStyleToken()));
+  return { roomId, phase, activeNpcs, roomObjects, sceneKey, prompt, seed, overlay, view };
 }
 
 function renderScene(gs, sceneState) {
@@ -1153,7 +1193,7 @@ function renderScene(gs, sceneState) {
   // every state change would be expensive), not an oversight. A laid table is
   // the one exception, because it is a thing the player did on purpose and
   // the scene is about it.
-  getScenePlate(roomId, phase, ctx.roomObjects).then(result => {
+  getScenePlate(roomId, phase, ctx.roomObjects, ctx.view).then(result => {
     if (img.getAttribute('data-scene-key') !== ctx.sceneKey) return; // scene moved on before this resolved
     if (result.url) img.src = result.url;
     img.removeAttribute('data-loading'); // D12: plate failure degrades to the placeholder, never a blocked render
@@ -1353,7 +1393,13 @@ function renderPresentList(gs, sceneState) {
       }
     }
     card.querySelector('.npc-mood').textContent = `Mood: ${moodLabel(npc.mood)}`;
-    card.querySelector('.npc-activity').textContent = npc.activity || '';
+    // What's On (tv.js, 0.14.2): "watching Murder, Actually" rather than
+    // "watching TV" for someone on the sofa with a show on.
+    // Side Projects (projects.js, 0.14.2): "practising guitar (‘Harbour
+    // Lights’)" for someone at their project.
+    let cardActivity = typeof tvActivityLabel === 'function' ? tvActivityLabel(gs, npcId, npc.activity) : npc.activity;
+    if (typeof projectActivityLabel === 'function') cardActivity = projectActivityLabel(gs, npcId, cardActivity);
+    card.querySelector('.npc-activity').textContent = cardActivity || '';
     container.appendChild(node);
   }
 }
@@ -3742,14 +3788,15 @@ function maybeChipNudgeHint() {
 
 // Bucketing: which named group a Here chip belongs to, by likeness — the
 // object you're interacting with (a device, the bed, a container) or the
-// family of act (food, hygiene, relaxation, notes). ACTION_DEFS.group is
+// family of act (food, hygiene, relaxation, a roommate's project, notes).
+// ACTION_DEFS.group is
 // the declarative half; hand-built chips (computer/sleep/containers) are
 // tagged with an explicit `bucket` when they're created. A bucket only
 // becomes a real group chip when it has something to show (2+ leaves, or
 // a single child that is itself a group) — one-off actions stay flat so a
 // lone chip never hides behind an extra tap.
-const HERE_BUCKET_ORDER = ['devices', 'containers', 'bed', 'food', 'hygiene', 'relax', 'notes'];
-const HERE_BUCKET_LABELS = { devices: 'Devices', containers: 'Containers', bed: 'Bed', food: 'Food', hygiene: 'Bathroom', relax: 'Relax', notes: 'Notes' };
+const HERE_BUCKET_ORDER = ['devices', 'containers', 'bed', 'food', 'hygiene', 'relax', 'project', 'notes'];
+const HERE_BUCKET_LABELS = { devices: 'Devices', containers: 'Containers', bed: 'Bed', food: 'Food', hygiene: 'Bathroom', relax: 'Relax', project: 'Project', notes: 'Notes' };
 
 function defBucketFor(action) {
   const g = ACTION_DEFS[action]?.group;
@@ -3760,6 +3807,10 @@ function defBucketFor(action) {
   if (g === 'living_room' || g === 'chill') return 'relax';
   if (g === 'intimacy') return 'bed';
   if (g === 'here') return 'notes';
+  // Side Projects (projects.js): Ask About Project, Jam Session, Bang on the
+  // Wall, Ask for Quiet — they were filed under Notes while they shared the
+  // fridge notes' 'here' group.
+  if (g === 'project') return 'project';
   return null;
 }
 
@@ -4007,10 +4058,26 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
   const roomObjectsHere = gs.objects?.[`room_${roomId}`] || {};
   const surface = Object.values(roomObjectsHere).find(o => OBJECT_DEFS[o.defId]?.surfaces);
   const noteCount = Object.values(roomObjectsHere).filter(o => o.defId === 'note').length;
+  // House notes (0.14.2): both writing verbs sit in the Notes bucket beside
+  // Read/Bin, so a fridge with notes on it groups them under "Notes ▸" (a
+  // lone Leave a Note chip still shows flat — partitionHereChips' rule).
   if (surface && noteCount < NOTE_TUNING.maxPerRoom) {
     hereChips.push({
       label: `Leave a Note on the ${OBJECT_DEFS[surface.defId].label}`,
       action: 'write-note',
+      bucket: 'notes',
+    });
+  }
+  // Write Back: the newest note by a housemate that you've read, with room
+  // on the bottom for a line of yours (housenotes.js's playerReplyableNote).
+  const replyable = typeof playerReplyableNote === 'function' ? playerReplyableNote(gs, roomId) : null;
+  if (replyable) {
+    const author = gs.npcs?.[replyable.meta.authorId]?.bible?.name;
+    hereChips.push({
+      label: author ? `Write Back on ${author}'s Note` : 'Write Back on the Note',
+      action: 'write-note-reply',
+      bucket: 'notes',
+      extra: { objId: replyable.id },
     });
   }
 
@@ -4249,6 +4316,14 @@ function renderSceneReader(gs, sceneState) {
       el.textContent = scene.self;
       est.appendChild(el);
     }
+    // Occasions Phase 3: the room's holiday decorations, after you and
+    // before the people.
+    if (scene.decor) {
+      const el = document.createElement('div');
+      el.className = 'sr-decor';
+      el.textContent = scene.decor;
+      est.appendChild(el);
+    }
     for (const p of scene.presence) {
       const el = document.createElement('div');
       el.className = 'sr-presence';
@@ -4280,6 +4355,14 @@ function renderSceneReader(gs, sceneState) {
       el.textContent = sentence(sig.here
         ? sig.phrase
         : `${sig.phrase}, drifting in from the ${sig.sourceRoomName}`);
+      est.appendChild(el);
+    }
+    // Seasons & weather Phase 2: the weather as it reaches this room, after
+    // the room's own senses — the outside is the backdrop.
+    if (scene.weather) {
+      const el = document.createElement('div');
+      el.className = 'sr-weather';
+      el.textContent = sentence(scene.weather);
       est.appendChild(el);
     }
     // Continuous-cadence-closure Phase 8 (D9): the ambient "meanwhile"

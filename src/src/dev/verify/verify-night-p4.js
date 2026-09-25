@@ -257,13 +257,18 @@ console.log('\n--- 3. D33: the prompt says what the mechanics say ---');
   check('it never renders an undefined into player-visible text', !/undefined/.test(p), p);
   // D33's two-label rule: prose (and an image prompt IS prose) takes the
   // STANDALONE label, because nothing has established the region.
+  // Registered (nightRegister) since 2026-09-23: the tables are authored in
+  // the feminine and this fixture's target is whatever the house rolls — a
+  // man, as it happens — so the raw-table text these checks used to look for
+  // was the bug (a male target described as "her"; `{o}` reaching the image
+  // plugin). The register is what the prompt must match.
   check("it uses the part's STANDALONE label, not the tray label",
-    p.includes(api(`BOUNDARY.nightScene.parts.nipple.plural`)), p);
+    p.includes(api(`nightRegister(BOUNDARY.nightScene.parts.nipple.plural, __G.npcs[__ID])`)), p);
   check("it uses the motion's gerund", p.includes(api(`BOUNDARY.nightScene.motions.roll.gerund`)), p);
   check("it uses the instrument's standalone form",
     p.includes(api(`BOUNDARY.nightScene.instruments.fingers.standalone`)), p);
   check('it states the pose and the covers (D34 is the "state" half of the key)',
-    p.includes('on her back') && p.includes('covers off'), p);
+    p.includes(api(`nightRegister('on her back', __G.npcs[__ID])`)) && p.includes('covers off'), p);
   check('it says she is asleep, which is the one thing the picture must not get wrong',
     /asleep/i.test(p) && /eyes closed/i.test(p), p);
   check('and the negative prompt says it a second time, where it counts most',
@@ -279,7 +284,7 @@ console.log('\n--- 3. D33: the prompt says what the mechanics say ---');
     const partId = Object.keys(BOUNDARY.nightScene.parts).find(p => BOUNDARY.nightScene.parts[p].region === 'move');
     return { partId,
       p: composeNightFramePrompt(__G, __ID, { ...__axes({ partId, motionId: 'roll_to_front', instrumentId: 'hand', side: '-' }), shape: 'landscape' }),
-      phrase: BOUNDARY.nightScene.motions.roll_to_front.phrase };
+      phrase: nightRegister(BOUNDARY.nightScene.motions.roll_to_front.phrase, __G.npcs[__ID]) };
   })()`);
   check('a Move uses its own authored phrase rather than the instrument frame',
     moveOk.p.includes(moveOk.phrase) && !/whole hand rolling/.test(moveOk.p), moveOk.p);
@@ -290,7 +295,7 @@ console.log('\n--- 3. D33: the prompt says what the mechanics say ---');
   // prompt and a real key. The image and the mechanics are composed from one
   // action id, so a frame can never depict an act the resolver would refuse.
   const sweep = J(`(() => {
-    let checked = 0, badPrompt = 0, badKey = 0, undef = 0;
+    let checked = 0, badPrompt = 0, badKey = 0, undef = 0, tpl = 0, tplSample = null;
     const keys = new Set();
     for (const state of [{ pose: 'back', covers: 'off' }, { pose: 'side_toward', covers: 'turned_back' },
                          { pose: 'front', covers: 'covered' }, { pose: 'curled', covers: 'off' }]) {
@@ -311,17 +316,54 @@ console.log('\n--- 3. D33: the prompt says what the mechanics say ---');
                 if (!key || key.indexOf('undefined') >= 0) badKey++;
                 if (!prompt || prompt.length < 60) badPrompt++;
                 if (prompt.indexOf('undefined') >= 0) undef++;
+                if (/[{}\\[\\]]/.test(prompt)) { tpl++; if (!tplSample) tplSample = prompt.match(/.{0,30}[{}\\[\\]].{0,30}/)[0]; }
               }
             }
           }
         }
       }
     }
-    return { checked, badPrompt, badKey, undef, distinct: keys.size };
+    return { checked, badPrompt, badKey, undef, tpl, tplSample, distinct: keys.size };
   })()`);
   check(`every offerable action composes a key (${sweep.checked} swept)`, sweep.badKey === 0, JSON.stringify(sweep));
   check('every offerable action composes a prompt', sweep.badPrompt === 0, JSON.stringify(sweep));
   check('and not one of them renders "undefined"', sweep.undef === 0, JSON.stringify(sweep));
+  // The live bug, 2026-09-23 (diagnosed by the Perchance AI helper): the
+  // image plugin evaluates its prompt as a Perchance TEMPLATE, so any `{…}`
+  // or `[…]` reaching root.generateImage is parsed as template syntax — the
+  // unregistered `{o}` threw 'Your curly block "{o}" doesn't appear to have
+  // the correct syntax' on nearly every tap.
+  check('and not one of them carries template syntax ({ } [ ]) into the image plugin', sweep.tpl === 0, JSON.stringify({ tpl: sweep.tpl, sample: sweep.tplSample }));
+  // Both registers, on the moves that carry `{o}`: the same frame for a man
+  // and for a woman reads "him/his" and "her", with no token left over.
+  const reg = J(`(() => {
+    const npc = __G.npcs[__ID];
+    const partId = Object.keys(BOUNDARY.nightScene.parts).find(p => BOUNDARY.nightScene.parts[p].region === 'move');
+    const as = (gender) => {
+      __G.npcs[__ID] = { ...npc, bible: { ...npc.bible, gender } };
+      const out = ['uncurl', 'roll_to_back', 'draw_sheet_back'].map(m =>
+        composeNightFramePrompt(__G, __ID, { ...__axes({ partId, motionId: m, instrumentId: 'hand', side: '-', pose: 'back' }), shape: 'landscape' }));
+      __G.npcs[__ID] = npc;
+      return out;
+    };
+    const tail = (p) => p.slice(p.indexOf(' in the dark, ') + 14, p.indexOf('. Close intimate'));
+    return { male: as('male').map(tail), female: as('female').map(tail), maleStaging: as('male')[1].match(/eyes closed, ([^.]*)\\./)[1] };
+  })()`);
+  check('a man is "him/his" in every move, the staging included; nothing feminine and no token left',
+    reg.male.every(a => /\b(him|his)\b/.test(a) && !/\{o\}|\bher\b/.test(a)) && /on his back/.test(reg.maleStaging), JSON.stringify(reg));
+  check('…and a woman stays "her"', reg.female.every(a => /\bher\b/.test(a) && !/\{o\}/.test(a)), JSON.stringify(reg.female));
+  // The backstop at the one door (image.js's generateImageTracked): whatever a
+  // composer misses — or a player types into a description — reaches the
+  // plugin as parentheses, never as template syntax.
+  const door = await A(`(async () => {
+    const real = root.generateImage; let cap = null;
+    root.generateImage = (p, o) => { cap = { p, o }; return Promise.resolve({ canvas: __gen.canvas }); };
+    try { await generateImageTracked('a {o} and [b|c] here', { negativePrompt: 'no {x}', seed: 3 }); }
+    finally { root.generateImage = real; }
+    return cap;
+  })()`);
+  check('and the one door into the image plugin turns any stray { } [ ] into parentheses, prompt and negative alike',
+    door && door.p === 'a (o) and (b|c) here' && door.o.negativePrompt === 'no (x)' && door.o.seed === 3, JSON.stringify(door));
   check('the sweep is broad enough to be worth trusting', sweep.checked > 500, String(sweep.checked));
   check('distinct actions get distinct keys (no accidental collapse)',
     sweep.distinct > sweep.checked * 0.5, `${sweep.distinct} of ${sweep.checked}`);

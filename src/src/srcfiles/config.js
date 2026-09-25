@@ -4071,6 +4071,20 @@ const SIGNAL_DEFS = {
   // so an ordinary two-person chat can never accidentally read as (or
   // threshold-tune against) a party. Emitted per attendee per tick (sim.js
   // Pass 2, SIGNALS_EMIT.partyNoise), so several guests keep it topped up.
+  // Side Projects (projects.js, 0.14.2): a roommate practising — guitar, a DJ
+  // controller — the same bars over and over. Emitted each tick they're at it
+  // (projects.js's tick pass, a custom path like party_noise below). Salience
+  // is deliberately low: at full intensity it stays far under the 0.70
+  // callout bar, so it never breaks anyone's pursuit on its own — the
+  // reactions are the pass's, on purpose.
+  practice: {
+    channel: 'sound', salience: 0.35, decayPerTick: 0.5,
+    phrases: {
+      faint:  ['somewhere in the flat, someone is playing the same few bars again'],
+      clear:  ['someone practising nearby — stop, start, the same bars again'],
+      strong: ['someone practising right here, stopping and starting on the same bars'],
+    },
+  },
   party_noise: {
     channel: 'sound', salience: 0.5, decayPerTick: 0.2,
     phrases: {
@@ -4390,35 +4404,456 @@ const NOTE_TUNING = {
   writeMinutes: 5,
 };
 
-// Authored note text for NPC-written notes, grouped by the reason someone
-// would leave one. Roadmap R1: composed from authored phrases, never
-// generated, so a note costs nothing and can never contradict the state that
-// prompted it. `{name}` is the addressee.
+// --- House notes (housenotes.js, 0.14.2) ---
+// The roommates' half of the fridge. The perception plan built notes and let
+// only the PLAYER write them; the initiative plan (D6) then counted
+// "NPC-authored notes" as already built, and nothing ever wrote one — this
+// table sat here for six weeks with no consumer. housenotes.js is the
+// consumer: roommates stick notes up for a REAL, stored reason (a full sink, a
+// full bin, a noise complaint they already made, a thermostat they already
+// grumbled about, something rotten they binned, leftovers they cooked, a
+// repair you paid for), read every note in any room they're in (yours
+// included), and scribble short replies on the bottom of each other's.
 //
-// NOTHING WRITES THESE YET — notes are player-authored in Phase 4. The NPC
-// side is roadmap Plan 5 (an NPC with an unresolved grievance or an open
-// question leaves one instead of waiting to be clicked). Declared here with
-// that consumer named, which is the one form of R8 exception the roadmap
-// allows.
+// Roadmap R1: authored, never generated — a note costs nothing and can never
+// contradict the state that prompted it. Keyed motive → the AUTHOR's
+// bible.speech.textingStyle (TEXTING_STYLES), `default` for an NPC with none,
+// the same shape BIRTHDAY_TUNING's pools use. Placeholders: {container}
+// (binned), {items} (leftovers), {facility} (thanks_repair). Lines never name
+// the author — the read narration already says whose handwriting it is.
 const NOTE_TEMPLATES = {
-  chore_grievance: [
-    "the dishes have been in the sink for three days. i'm not doing them again.",
-    "whoever left the pan on the stove — it's your pan now. it lives there.",
-    "bins. please. i've done it four weeks running.",
-  ],
-  thanks: [
-    "thanks for sorting the boiler thing. genuinely. — {name}",
-    "you didn't have to clean up last night but you did, so. thanks.",
-  ],
-  food: [
-    "made too much, there's some in the fridge with your name on it. literally, i wrote your name on it.",
-    "the milk is off. i've binned it. sorry.",
-  ],
-  logistics: [
-    "rent's due friday and i get paid thursday, so don't panic when mine's late.",
-    "landlord called about the window. i said we'd ring back.",
-    "out till late — don't wait up.",
-  ],
+  dishes: {
+    terse: ['Dishes. Today.', 'The sink is not storage.'],
+    'emoji-heavy': ["🍽️🍽️🍽️ the sink is FULL 😤 whoever's these are pls 🙏", "dishes 🧽➡️🍽️ it's not hard 🙃"],
+    'all-lowercase': ["the dishes are piling up again. i'm not doing them this time.", "whoever left the pan on the stove — it's your pan now. it lives there."],
+    'properly-punctuated': ['To whoever it may concern: the sink is full. Again. Please wash your own dishes.', 'A gentle reminder that dishes do not wash themselves. Thank you.'],
+    'stream-of-consciousness': ['ok so i went to make toast and there were no clean plates so i ate it off a paper towel like an animal. the sink. please.', "not pointing fingers but there's a pot in there developing its own personality and i'm not ready to meet it"],
+    'meme-laden': ['the sink has achieved sentience. it demands tribute (washing)', "me: *opens cupboard* the plates: *all in the sink* the plates: 'we live here now'"],
+    default: ["The sink's full again. Can whoever these belong to sort them out?", "Dishes, please. They won't wash themselves."],
+  },
+  bins: {
+    terse: ['Bins.', 'Trash is full. Take it out.'],
+    'emoji-heavy': ['🗑️ is FULL 🤢 someone pls 🙏', 'the bin is overflowing 👀🗑️ not it 🙅'],
+    'all-lowercase': ["bins. please. it's not always my turn.","the bin is full and it's starting to smell. just saying"],
+    'properly-punctuated': ["The rubbish needs taking out. I would appreciate it if it weren't always me.", 'Please empty the bin when it is full rather than balancing things on top.'],
+    'stream-of-consciousness': ['the bin has reached jenga levels and i refuse to be the one who plays the final piece', "every time i open the bin it looks at me like i owe it something. i do not. it's someone else's turn"],
+    'meme-laden': ['the trash can is a load-bearing structure now. do not touch. (please touch. take it out.)', 'bin status: full. vibes: rancid.'],
+    default: ["The bin's full. Someone else's turn.", "Can someone take the trash out? It's getting ripe."],
+  },
+  noise: {
+    terse: ['Some of us sleep.', 'Music. Volume. Late. No.'],
+    'emoji-heavy': ['🎶🔊 the walls are thin 😴🙃 pls', 'loved the free concert 🎤... said nobody who had work 😴'],
+    'all-lowercase': ['some of us have work in the morning.', "could we keep it down after eleven. that's all."],
+    'properly-punctuated': ["I'd appreciate it if the noise could be kept down in the evenings. The walls are thin.", 'A request: quieter after 11pm, please. Thank you.'],
+    'stream-of-consciousness': ["i could hear every word of that through my wall and now it's stuck in my head and i didn't even get to choose it", 'not to be dramatic but the bass earlier rearranged my organs slightly'],
+    'meme-laden': ["the neighbours didn't need a free concert but they got one anyway", 'me, learning every lyric against my will'],
+    default: ['Could we keep the noise down at night? Some of us are trying to sleep.', 'Bit loud earlier. Just asking for some quiet after eleven.'],
+  },
+  cold: {
+    terse: ["It's freezing. Heat up, please.", 'Thermostat. Warmer.'],
+    'emoji-heavy': ['🥶🥶🥶 who turned the heat down?? ❄️', "it's giving arctic 🧊 pls turn the heat up 🙏"],
+    'all-lowercase': ["it's freezing in here. can we agree on a temperature that isn't 'outside'", 'who keeps turning the heat down. i can see my breath'],
+    'properly-punctuated': ['It has been very cold in the flat. Could we keep the heating a little higher, please?', "Please don't turn the thermostat down so far. It's genuinely cold."],
+    'stream-of-consciousness': ["i'm currently wearing two jumpers and a dressing gown and i'm still cold which i think is a sign", "it's so cold the butter on the counter is harder than the butter in the fridge. i don't know what that means scientifically"],
+    'meme-laden': ['me in my own home: 🧊 survival mode', "the thermostat said 'character building' and set it to arctic"],
+    default: ["It's freezing in here — can the heating go up a notch?", "Whoever keeps turning the heat down: please don't. It's cold."],
+  },
+  hot: {
+    terse: ['Too hot. Turn it down.', 'Thermostat. Lower.'],
+    'emoji-heavy': ["🥵🔥 it's a sauna in here 😩", "who turned the heat up?? 🌡️📈 i'm melting 🫠"],
+    'all-lowercase': ["whoever keeps turning the heat up: we're not made of money", "it's boiling in here. can we turn it down a bit"],
+    'properly-punctuated': ['It is far too warm in the flat, and the heating bill will reflect it. Please turn it down.', "Could we keep the thermostat lower? It's stifling."],
+    'stream-of-consciousness': ['it is so hot in here i opened the fridge just to stand in it for a bit and then felt guilty about the electricity so i closed it', 'i think the heating is on but i also think i might be a rotisserie chicken now'],
+    'meme-laden': ['this apartment is a certified sauna now. membership fee: our heating bill', 'me opening every window because someone set it to tropical'],
+    default: ["It's roasting in here — can we turn the heat down?", "Heating's up too high again. The bill's going to be brutal."],
+  },
+  binned: {
+    terse: ['Something in the {container} went off. Binned it.', '{container}: cleared. It was bad.'],
+    'emoji-heavy': ['something in the {container} went 🤢💀 binned it 🗑️', 'RIP whatever was in the {container} 🪦🤢 it is gone now'],
+    'all-lowercase': ["something in the {container} had gone off. i've binned it. sorry if it was yours.", 'binned something from the {container}. it was not ok'],
+    'properly-punctuated': ["Something in the {container} had gone off, so I've thrown it out. Please keep an eye on dates.", 'I found something spoiled in the {container} and disposed of it.'],
+    'stream-of-consciousness': ["i opened the {container} and something looked back at me so i binned it, i hope it wasn't anyone's science project", "whatever was in the {container} had evolved past food. it's in the bin now. may it rest"],
+    'meme-laden': ["the {container} had a biohazard situation. crisis averted. you're welcome", 'found a new lifeform in the {container}. evicted it'],
+    default: ["Something in the {container} had gone off — I've binned it.", 'Heads up: threw out something rotten from the {container}.'],
+  },
+  leftovers: {
+    terse: ['Leftover {items} in the fridge. Yours if you want it.', 'Made {items}. There is extra. Eat it.'],
+    'emoji-heavy': ["made {items} 🍲 there's extra in the fridge for you 💛", 'leftovers alert 🚨 {items} in the fridge 😋 help yourself'],
+    'all-lowercase': ["made too much {items}, there's some in the fridge with your name on it. literally, i wrote your name on it.", "there's {items} in the fridge if you're hungry. don't let it go to waste"],
+    'properly-punctuated': ["I made {items} and there's plenty left. Please help yourself — it's in the fridge.", "There are leftovers of {items} in the fridge. They're for you, if you'd like them."],
+    'stream-of-consciousness': ["i made {items} and got carried away with quantities so there's a lot in the fridge and it's yours, i'm serious, eat it", 'ok so the recipe said serves three and i believed it. {items} in the fridge. go.'],
+    'meme-laden': ["{items} in the fridge. it's free real estate", "chef's kiss {items} in the fridge. tasting menu for one (you)"],
+    default: ["Made too much {items} — there's some in the fridge for you.", 'Leftover {items} in the fridge. Help yourself.'],
+  },
+  thanks_repair: {
+    terse: ['{facility} works. Thanks.', 'Thanks for the {facility}.'],
+    'emoji-heavy': ["the {facility} WORKS 🎉🙌 thank youuu 💛", "{facility} fixed?? 😭🙏 you're a hero"],
+    'all-lowercase': ['thanks for sorting the {facility} thing. genuinely.', "the {facility} is fixed and i've never been happier. thank you"],
+    'properly-punctuated': ["Thank you for getting the {facility} sorted. It's made a real difference.", 'Just wanted to say thank you for arranging the {facility} work.'],
+    'stream-of-consciousness': ["i didn't realise how much the {facility} was annoying me until it wasn't broken anymore. thank you. i mean it", 'the {facility} works now and honestly my whole week is better, i know that sounds dramatic but it is true'],
+    'meme-laden': ['{facility} patch notes: fixed. dev team (you): thanked', 'the {facility} glow-up is real. housemate of the year'],
+    default: ['Thanks for getting the {facility} fixed.', 'The {facility} is so much better now — thank you.'],
+  },
+  // Side Projects (projects.js, 0.14.2). {done}/{Done} is the kind's
+  // "what I just managed" ("did one strict pull-up", "picked the first cherry
+  // tomatoes") with no pronoun in it; {work} is the bake ("the sourdough loaf").
+  project_done: {
+    terse: ['{Done}.', 'Update: {done}.'],
+    'emoji-heavy': ['📢 i {done}!!! 🥳', 'I {done} 🎉🎉 thanks for putting up with me 🙏'],
+    'all-lowercase': ['fyi i {done}. thanks for putting up with it', "i {done}. that's all. carry on"],
+    'properly-punctuated': ['A small announcement: I {done}. Thank you all for your patience.', 'Thank you for putting up with it — I {done}.'],
+    'stream-of-consciousness': ["i {done} and i've told everyone i know so now i'm telling the fridge", 'update for the fridge: i {done}. weeks of this. thank you for not complaining (much)'],
+    'meme-laden': ['breaking news: local roommate {done}', 'achievement unlocked: {done}'],
+    default: ['Just so everyone knows: I {done}.', 'News: I {done}. Thanks for putting up with it.'],
+  },
+  project_baking: {
+    terse: ["Baking. Don't touch the oven settings.", "Oven's mine for now. Baking."],
+    'emoji-heavy': ["🍞 baking experiment in progress 🧪 don't touch the oven 🙏", "the kitchen smells AMAZING and that's all me 🥐✨"],
+    'all-lowercase': ["still trying to get {work} right. oven's on, don't touch it", "if the oven's warm that's me. baking again"],
+    'properly-punctuated': ['Please do not change the oven temperature; I am still perfecting {work}.', 'A note to say the oven is in use. Baking in progress.'],
+    'stream-of-consciousness': ["attempt number i've honestly lost count at {work}. i'm close. i can feel it", "i'm so close with {work}. if you smell something good that's me, if you smell something bad that's also me"],
+    'meme-laden': ['the kitchen is a bakery now. no refunds', 'me vs {work}: round who even knows'],
+    default: ['Baking experiment in progress. The oven is spoken for.', "If the kitchen smells amazing, that's my baking. You're welcome."],
+  },
+};
+
+// Replies scrawled on the bottom of someone else's note, keyed by what kind
+// of note it is (housenotes.js's noteReplyKind: an NPC note's motive maps to
+// one; a player note is read by HOUSE_NOTE_TUNING's patterns) → the REPLIER's
+// texting style. A reply never claims to know more than a note's kind: "wasn't
+// me" answers any complaint, "ask {other}" any question. {other} is another
+// housemate's name — a line with it is skipped when there is nobody to blame.
+const NOTE_REPLY_LINES = {
+  sorry: {
+    terse: ['Sorry. Will fix.', 'My bad. On it.'],
+    'emoji-heavy': ['oops 😅 my bad, sorting it 🙏', 'sorry sorry sorry 🙈'],
+    'all-lowercase': ['sorry, that was me. sorting it tonight', "my bad. won't happen again"],
+    'properly-punctuated': ["Apologies — that was me. I'll take care of it.", "Sorry about that. I'll deal with it today."],
+    'stream-of-consciousness': ['ok yes that was probably me, i was going to do it and then i sat down and the sofa got me. doing it now', "i'm so sorry i genuinely forgot, i'm writing this as penance"],
+    'meme-laden': ['guilty as charged. sentence: chore duty', 'it me. i am the problem. fixing it'],
+    default: ["Sorry — that was me. I'll sort it.", 'My fault. On it.'],
+  },
+  defensive: {
+    terse: ['Not me.', "Wasn't me."],
+    'emoji-heavy': ["wasn't me 🙄", "don't look at me 👀🙅"],
+    'all-lowercase': ["wasn't me.", 'ok mum'],
+    'properly-punctuated': ["For the record, that wasn't me.", "I've done my share, thank you."],
+    'stream-of-consciousness': ['i would like it on the record that i have not so much as looked at it this week and i resent the implication', "i'm not saying it wasn't me but i'm saying a lot of people live here"],
+    'meme-laden': ['this note is a personal attack and i will be ignoring it', 'sir this is a fridge'],
+    default: ["Wasn't me.", "Don't look at me."],
+  },
+  question: {
+    terse: ['No idea.', 'Ask {other}.'],
+    'emoji-heavy': ['no clue 🤷', 'ask {other} 👀'],
+    'all-lowercase': ['no idea. ask {other}', 'not sure tbh'],
+    'properly-punctuated': ["I'm not sure — perhaps ask {other}?", "No idea, I'm afraid."],
+    'stream-of-consciousness': ['no idea but now i also want to know, someone report back', "i don't know but my money's on {other}"],
+    'meme-laden': ['the answer is lost to time', '{other} knows. {other} always knows'],
+    default: ['No idea — ask {other}?', 'Not sure, sorry.'],
+  },
+  thanked: {
+    terse: ['Anytime.', 'No problem.'],
+    'emoji-heavy': ['aww 🥹💛', 'anytime!! 🫶'],
+    'all-lowercase': ['aw. anytime', "you're welcome :)"],
+    'properly-punctuated': ["You're very welcome.", 'It was no trouble at all.'],
+    'stream-of-consciousness': ["ok this made my day and i'm keeping this note forever, no you can't have it back", "stop i'm going to cry in the kitchen"],
+    'meme-laden': ['achievement unlocked: appreciated', 'wholesome note detected. saving to camera roll'],
+    default: ['Anytime.', "Aw — you're welcome."],
+  },
+  touched: {
+    terse: ['Thanks.', 'Appreciated.'],
+    'emoji-heavy': ['🥹💛💛', 'stoppp 🥹 thank you'],
+    'all-lowercase': ['aw thank you', 'this is really sweet. thanks'],
+    'properly-punctuated': ["That's very kind — thank you.", 'Thank you. That means a lot.'],
+    'stream-of-consciousness': ["ok who's cutting onions in here", "i read this three times and i'm not crying you're crying"],
+    'meme-laden': ['wholesome note detected. saving to camera roll', 'this note has been added to the hall of fame'],
+    default: ['Aw, thank you.', "That's sweet — thanks."],
+  },
+  grateful: {
+    terse: ['Thanks.', 'Appreciated.'],
+    'emoji-heavy': ['omg thank you 😋🙏', "you're a legend 🏆"],
+    'all-lowercase': ['legend.', 'thank you!! ate some already'],
+    'properly-punctuated': ["Thank you, that's very kind.", 'Much appreciated — thank you.'],
+    'stream-of-consciousness': ["i have already had some and i regret nothing, thank you, i'm writing this with my mouth full", "this is the nicest thing that's happened to me all week and i'm not even joking"],
+    'meme-laden': ['10/10 would eat again', 'absolute legend behaviour'],
+    default: ['Thank you!', 'Legend.'],
+  },
+  plain: {
+    terse: ['Noted.', 'OK.'],
+    'emoji-heavy': ['👍', 'noted ✅'],
+    'all-lowercase': ['ok', 'noted'],
+    'properly-punctuated': ['Noted, thank you.', 'Understood.'],
+    'stream-of-consciousness': ['noted, filed, will think about it at 3am', 'ok i read this twice to make sure and yes, noted'],
+    'meme-laden': ['seen ✔✔', 'note acknowledged. note respected.'],
+    default: ['Noted.', 'OK, thanks.'],
+  },
+  // Side Projects (0.14.2): under a housemate's news (project_done).
+  cheer: {
+    terse: ['Nice.', 'Well done.'],
+    'emoji-heavy': ['🎉🎉🎉 YES', 'so proud 🥹👏'],
+    'all-lowercase': ['congrats. genuinely', 'about time. well done'],
+    'properly-punctuated': ['Congratulations — well deserved.', 'Well done. Truly.'],
+    'stream-of-consciousness': ['wait this is amazing?? congrats!!', 'i knew you would. i mean i hoped. congrats'],
+    'meme-laden': ['legend behaviour', 'we stan a finisher'],
+    default: ['Congrats!!', 'Proud of you.'],
+  },
+};
+
+// The numbers behind housenotes.js. Per-minute chances follow the
+// continuous-cadence convention (chanceOverMinutes), so a note is as likely
+// over one 30-minute tick as over thirty 1-minute checkpoints.
+const HOUSE_NOTE_TUNING = {
+  // Only the kitchen fridge — the household's noticeboard. Roommates READ
+  // notes in any room they stand in; they WRITE them here, and only while
+  // you're not in the room (a note is what you leave instead of saying it).
+  npcWriteRoom: 'kitchen',
+  // What each motive is about (the memory episode / Chatter line), whether
+  // it is a warm note (addressed to you, 'warmth' theme) or a gripe
+  // (unaddressed — "whoever" is the whole genre), and how a housemate
+  // replying to it reads it.
+  motives: {
+    dishes:        { about: 'the dishes',     warm: false, replyKind: 'gripe' },
+    bins:          { about: 'the bins',       warm: false, replyKind: 'gripe' },
+    noise:         { about: 'the noise', warm: false, replyKind: 'gripe' },
+    cold:          { about: 'the heating',    warm: false, replyKind: 'gripe' },
+    hot:           { about: 'the heating',    warm: false, replyKind: 'gripe' },
+    binned:        { about: 'something that went off in the {container}', warm: false, replyKind: 'plain' },
+    leftovers:     { about: 'leftover {items}', warm: true, replyKind: 'offer' },
+    thanks_repair: { about: 'the {facility}', warm: true, replyKind: 'thanks' },
+    // Side Projects (projects.js, 0.14.2): news about their own project —
+    // unaddressed (the whole flat), `proud` (its own chance, below), and a
+    // finish gets congratulated rather than apologised to.
+    project_done:   { about: 'some good news', proud: true, replyKind: 'news' },
+    project_baking: { about: 'the oven',       proud: true, replyKind: 'plain' },
+  },
+  // How recently the thing a note is about must have happened (days back
+  // from today, inclusive) — a noise complaint from last night, a repair
+  // that finished this week.
+  recentEventDays: 1,
+  repairThanksDays: 3,
+  // Gripes: a per-minute chance while the motive is live and they're at the
+  // fridge, scaled by passiveAggression() (0..1). At 0.012 a typical
+  // housemate (0.35) standing in a messy kitchen for half an hour writes one
+  // about one time in eight — a messy week yields a note or two, not a wall.
+  gripeChancePerMinute: 0.012,
+  // passiveAggression = base + conscientiousness·c − assertiveness·a −
+  // warmth·w, clamped 0..1. The tidy care; the unassertive write it down
+  // instead of saying it; the warm let it go.
+  paBase: 0.35, paConscientiousness: 0.3, paAssertiveness: 0.35, paWarmth: 0.15,
+  // Warm notes: per-minute chance × (warmBase + warmth·warmWarmth), only for
+  // a housemate at least this fond of you.
+  warmChancePerMinute: 0.02,
+  warmBase: 0.3, warmWarmth: 0.5,
+  warmMinAffection: 0.2,
+  // Proud notes (Side Projects): per-minute chance × (proudBase + warmth·w +
+  // assertiveness·a) — sharing your news is a warm, forward thing to do.
+  proudChancePerMinute: 0.015,
+  proudBase: 0.4, proudWarmth: 0.3, proudAssertiveness: 0.2,
+  // Rate caps: one note per author per day, this many per house per day, and
+  // no repeating the same motive within motiveCooldownDays. A motive that
+  // already has a note up (anyone's) is never doubled.
+  maxNpcNotesPerDay: 2,
+  motiveCooldownDays: 3,
+  // An author takes their own note down once you've read it and it's this
+  // old, or at maxAgeDays regardless. Your notes are never taken down for you.
+  takeDownAfterReadDays: 2,
+  maxAgeDays: 6,
+  // Replies: at most this many on one note (yours included), one per person.
+  maxReplies: 3,
+  replyBaseChance: 0.3,
+  replyTargetedMult: 2,     // the note is addressed to them, or names them
+  replyAffectionWeight: 0.5,
+  replyPlainMult: 0.6,      // "noted" is the least necessary reply there is
+  replyMaxChance: 0.85,
+  // Sorry vs defensive on a complaint: warmth and fondness for the author
+  // pull toward sorry, volatility and tension toward defensive, with a small
+  // per-note jitter so the same person isn't a machine about it.
+  sorryWarmth: 0.5, sorryAffection: 0.6, sorryVolatility: 0.4, sorryTension: 0.5, sorryJitter: 0.15,
+  // What a note addressed TO someone does when they read it (yours only —
+  // the deliberate act is addressing it). Once per person per day, so a stack
+  // of thank-you notes is one thank-you.
+  thanksAffection: 0.02,
+  gripeTension: 0.02,
+  // Reading a player note, by class (patterns are case-insensitive). Order:
+  // a strong complaint wins outright, then thanks, well-wishes, offers, a
+  // weak complaint, a question, and anything else is plain. "thanks for
+  // doing the dishes" is thanks, not a complaint about dishes.
+  // ("again" is deliberately absent: "thanks again!!" is not a complaint.)
+  strongGripePattern: "\\b(stop|seriously|stole|stolen|hands off|don'?t touch|do not touch|not yours|who (ate|took|used|drank|finished|left|broke|keeps)|ate my|took my|used my|drank my|pay me|owe[sd]? me|disgusting|gross|unacceptable)\\b",
+  thanksPattern: "\\b(thanks|thank you|thx|ty|cheers|appreciated?|grateful|you'?re (the best|amazing|a star|a legend))\\b|<3|♥|❤",
+  wishPattern: "\\b(happy (birthday|holidays?|new year|valentine'?s)|congrats|congratulations|good luck|well done|proud of (you|u)|welcome (home|back)|feel better|get well|love (you|ya|u))\\b",
+  offerPattern: "\\b(help yourse(lf|lves)|free|for (everyone|anyone|all|you)|leftovers?|i made|i baked|i bought|cake|cookies|pizza|biscuits|have some|take some|feel free|enjoy)\\b",
+  weakGripePattern: '\\b(dish(es)?|sink|clean(ing|ed)?|mess(y)?|tidy|trash|bins?|rubbish|garbage|noise|noisy|loud|quiet|music|volume|smells?|stinks?|thermostat|heating|please|pls)\\b',
+};
+
+// --- What's On (tv.js, 0.14.2) ---
+// The numbers behind the house TV: who follows which show, how the living
+// room's one screen is shared, and how often a roommate who is ahead of you
+// lets something slip. The shows themselves (schedules, beats) are content
+// and live with their catalog in defs.computer.js (STREAM_DEFS[*].tv,
+// TV_EPISODE_BEATS). Nothing here decides WHETHER anyone watches TV — the
+// watch_tv drive and the schedule tables already do — only WHAT is on.
+const TV_TUNING = {
+  // The room with the television. NPC viewers are residents standing here
+  // whose activity is exactly 'watching TV' (the drive's activityOverride
+  // and the schedule tables' idle string — the same key signals.js maps).
+  room: 'living_room',
+  viewingActivity: 'watching TV',
+  // The screen only plays with this facility working — the same one the
+  // player's Watch TV requires. (The watch_tv drive itself has no facility
+  // gate, so a roommate may still sit in front of a broken set; nothing's on.)
+  facility: 'living_room_entertainment',
+  // Taste: affinity(show) = jitter + interest matches + temperament lean +
+  // profession. followCount shows at most, each above followMin; everyone
+  // follows at least their single favorite, whatever it scores.
+  jitter: 0.35,
+  interestWeight: 0.45,
+  interestCap: 0.9,
+  temperWeight: 1,
+  professionBonus: 0.5,
+  followCount: 3,
+  followMin: 0.25,
+  // A roommate's place in a show they follow, the first time the TV sees
+  // them: this many episodes behind the latest (drawn once, per show). Fans
+  // are mostly caught up; nobody starts at zero on a show they love.
+  seedLag: [0, 0, 0, 1, 1, 2],
+  // One sitting plays at most this many fresh episodes back to back before
+  // the TV drifts to reruns (a binge has an end, even on a quiet night).
+  maxChain: 3,
+  // Caught up on everything they follow, a roommate starts something new on
+  // this share of days (else they rewatch an old favorite). What they start
+  // is their taste plus wordOfMouth per housemate already watching it — the
+  // flat gets each other into shows.
+  discoverChance: 0.5,
+  wordOfMouth: 0.35,
+  // You were "there" for an episode if you sat down before its halfway mark.
+  presentFraction: 0.5,
+  // How recently you must have watched a show for a roommate to think of
+  // you as watching it (spoilers and the prompt line both read this).
+  activeDays: 14,
+  // Spoilers: a per-minute chance while a roommate who is ahead of you on a
+  // show you're watching shares a room with you (awake, once per roommate
+  // per day). Over ~3 hours together that's about an even chance. Whether it
+  // comes out or they catch themselves is temperament: blurt ≥ blurtAt.
+  // blurt = base + volatility·v + assertiveness·a − conscientiousness·c − warmth·w.
+  spoiler: {
+    perMinute: 0.004,
+    base: 0.45, volatility: 0.3, assertiveness: 0.2, conscientiousness: 0.3, warmth: 0.2,
+    blurtAt: 0.4,
+  },
+};
+
+// --- Side Projects (projects.js, 0.14.2) ---
+// The numbers behind the roommates' own projects: how often one is on the go,
+// how fast it moves, how easily it stalls, and what finishing it pays. The
+// projects themselves (kinds, works, every line) are content and live with
+// their reader in projects.js (PROJECT_KINDS). The drive that gives a project
+// time is DRIVE_DEFS.work_on_project, below.
+const PROJECT_TUNING = {
+  // The first time the pass sees a resident, they are already partway into
+  // something on this share of seeds (else they start within the first week).
+  // Seeded projects start at a drawn stage so day one is not a flat of beginners.
+  seedChance: 0.8,
+  seedStages: [0, 0, 1, 1, 2],
+  firstStartDays: [1, 7],
+  // After finishing (or giving up) a project, the next one starts this many
+  // days later — longer after a failure, which smarts.
+  restAfterFinish: [3, 10],
+  restAfterAbandon: [7, 16],
+  // Good sessions each stage needs, unless the kind sets its own. At the
+  // ~0.6 sessions a day an engaged roommate manages, a project runs about
+  // five weeks.
+  stageSessions: [4, 6, 6, 4],
+  // Engagement (0..1) — how into it they are. Below workThreshold the project
+  // is not a candidate at all: it sits there gathering dust.
+  startEngagement: 0.65,
+  opennessStart: 0.15,        // × openness: novelty carries the start
+  workThreshold: 0.28,
+  goodSession: 0.03,
+  badSession: 0.08,           // × (1 + max(0, volatility))
+  milestone: 0.15,
+  // Every day the novelty wears off a little: dailyFade × (1 − 0.6·c),
+  // conscientiousness c ∈ [-1, 1]. A day with no session at all costs
+  // idleDecay × (1 − 0.5·c) more; a low mood (below lowMood) lowMoodDecay.
+  // Tuned so the steady finish, the flaky mostly don't, and a middling
+  // temperament is a coin flip that encouragement can tip.
+  dailyFade: 0.03,
+  idleDecay: 0.01,
+  lowMood: -0.25,
+  lowMoodDecay: 0.03,
+  // The determined pick a stalled project back up on their own: per day
+  // below the threshold, + rebound × max(0, conscientiousness).
+  rebound: 0.06,
+  // This many days below the threshold and it's over.
+  abandonAfterDays: 9,
+  // Chance a session goes badly: base + hardStage (stage 2 is the hard part)
+  // + volatility·v − conscientiousness·c − goodMood (mood above 0.3),
+  // clamped to [badMin, badMax].
+  bad: { base: 0.14, hardStage: 0.1, volatility: 0.1, conscientiousness: 0.07, goodMood: 0.06, min: 0.03, max: 0.45 },
+  // Interest skill (bible.interests[].skill, 0..100) earned along the way.
+  skillPerMilestone: 2,
+  skillOnAbandon: 1,
+  // Finishing: a text to the player if they weren't in the room for it and
+  // the maker likes them at least this much (relPlayer.affection).
+  shareAffection: 0.1,
+  // A project that starts while the maker is this fond of the player may be a
+  // secret gift (on giftChance of starts, for kinds that make one).
+  giftAffection: 0.35,
+  giftChance: 0.5,
+  // The player's Encourage: once a day per roommate.
+  encourage: { engagement: 0.25, affection: 0.02, minutes: 10 },
+  // A housemate asking about it in a chat (npc_chat): a small lift, once a
+  // day per project. Smaller than yours on purpose — you asking means more.
+  chatEncourage: 0.06,
+  // Practice the flat can hear (the user asked for drama, 2026-09-24). A
+  // roommate at a noisy kind's activity emits the 'practice' sound each tick
+  // (intensity by kind × stage — the early, stop-start stages are the worst);
+  // anyone awake who hears it at or above `hearAt` may react, once a day
+  // each, on a per-minute chance: complain (a real event, friction between
+  // the two, a knock to the practiser's heart, fuel for a fridge-note gripe)
+  // or, if it's getting good and they like them, stop to listen. Your Bang on
+  // the Wall / Ask for Quiet silences them for the rest of the day.
+  //
+  // Measured 2026-09-24 (6 houses × 3 weeks, a guitarist and a DJ in each):
+  // sound carries about one room in this flat (a hop costs 0.5, a door 0.45),
+  // so bedroom practice reaches the hallway and the open room beyond it,
+  // never the next bedroom — the living-room guitar is what most of the flat
+  // hears. At 0.55/0.6 and 12% a tick that was 7 reactions in 18 house-weeks;
+  // at these numbers it is ~35 — about one a week per musician, two
+  // complaints to every listen, the complaints early while it's rough.
+  noise: {
+    kinds: { guitar: 0.8, dj: 0.95 },
+    stageFactor: [1.15, 1.0, 0.95, 0.85],
+    hearAt: 0.08,
+    reactChancePerMinute: 1 - Math.pow(1 - 0.3, 1 / 30),
+    // annoyance = base + early (stage ≤ 1) − warmth·w + volatility·v +
+    // tension·t − affection·a (toward the practiser) + lateNight (from 22:00);
+    // at or above complainAt it's a complaint, else a listen if stage ≥ 2.
+    annoyance: { base: 0.35, early: 0.2, warmth: 0.25, volatility: 0.25, tension: 0.5, affection: 0.5, lateNight: 0.3, lateFrom: 1320 },
+    complainAt: 0.45,
+    // Consequences, both small: a complaint costs the practiser heart and
+    // adds friction (an assertive practiser answers by playing LOUDER, which
+    // costs more); a listen lifts both.
+    complainEngagement: 0.05, complainTension: 0.02, escalateTension: 0.04, escalateAt: 0.3,
+    listenEngagement: 0.04, listenAffection: 0.01,
+    // Yours: Bang on the Wall (from next door) / Ask for Quiet (in the room).
+    hush: { engagement: 0.1, tension: 0.03, affection: -0.01, minutes: 1 },
+  },
+  // A show with a date (the open mic, the screening, the good cause's day):
+  // booked this many days out on reaching the final stage, so it sits on
+  // your calendar for most of a week before it happens.
+  event: { leadDays: 5 },
+  // Jam Sessions (the user's name for joining in): 45 minutes at it with them,
+  // once a day per roommate. Engagement and a step of progress for them (never
+  // past the end of a stage — the milestone stays their own moment), warmth
+  // toward you and a memory; skill XP in the matching skill and a mood lift
+  // for you. Not offered to someone this far from liking you (tension −
+  // affection), nor on a secret present.
+  jam: { minutes: 45, engagement: 0.15, affection: 0.03, comfort: 0.02, xp: 8, mood: 0.04, refuseAt: 0.3 },
+  // Finished works on display in the flat (Look Around), newest first.
+  maxDisplayed: 8,
+  // How many finished/abandoned projects each person remembers.
+  historyCap: 6,
 };
 
 // Emission strengths for the acts that produce transient signals (Phase 3).
@@ -6133,6 +6568,30 @@ const EVENT_IMPORTANCE = {
   // Actions & Activities Overhaul Phase 17 (D26): the same shape as
   // music_too_loud — a party-noise complaint is a real social beat.
   party_loud:          'social',
+  // House notes (housenotes.js, 0.14.2): sticking a note on the fridge is a
+  // deliberate, visible act — ticker- and Chatter-worthy ("I left a note on
+  // the fridge about the dishes"). Reading and replying (note_read /
+  // note_reply) carry their own numeric importance on the event instead, so
+  // they stay off the ticker and the feed.
+  note_left:           'social',
+  note_left_warm:      'social',
+  // Side Projects (projects.js, 0.14.2): starting one, a milestone, or giving
+  // up is a real beat — ticker- and Chatter-worthy ("got through the bridge
+  // without stopping"); finishing is what they'll remember. An ordinary
+  // session is listed as 'ambient' ON PURPOSE: it keeps the lowest memory
+  // weight, but a listed band is what lets the Meanwhile ticker carry it —
+  // hearing a roommate get better through the wall, a few bars at a time, is
+  // the point. (project_gift carries a numeric importance on the event
+  // instead: it is discovered in person, never posted.)
+  project_session:     'ambient',
+  project_started:     'social',
+  project_milestone:   'social',
+  project_abandoned:   'social',
+  project_finished:    'significant',
+  // The flat hearing someone practise: a complaint through the wall is a
+  // real beat (the music_too_loud shape), and so is stopping to listen.
+  practice_complaint:  'social',
+  practice_listen:     'social',
   npc_chat:            'social',
   eat:                 'social',
   guest:               'social',
@@ -6178,6 +6637,20 @@ const EVENT_EMOTION = {
   gift:                'warmth',
   breakage:            'embarrassment',
   burnt_food:          'embarrassment',
+  // What's On (tv.js, 0.14.2): blurting out the end of somebody's show is a
+  // small social gaffe. The near miss (tv_near_spoiler) is untagged — they
+  // caught themselves; nothing happened.
+  tv_spoiler:          'embarrassment',
+  // Side Projects (projects.js, 0.14.2): getting somewhere is a small success,
+  // finishing a real one; quitting is a failure; making something for someone
+  // is warmth. An ordinary session and a start are untagged — nothing felt
+  // like anything yet.
+  project_milestone:   'success',
+  project_finished:    'success',
+  project_abandoned:   'failure',
+  project_gift:        'warmth',
+  practice_complaint:  'domestic',
+  practice_listen:     'warmth',
   // Actions & Activities Overhaul Phase 8 (D16): a temperature complaint is a
   // small domestic gripe — the same theme house-rule violations use
   // (flags.js), never 'argument' (nobody's angry, just uncomfortable).
@@ -6211,6 +6684,12 @@ const EVENT_EMOTION = {
   music_too_loud:      'argument',
   // Actions & Activities Overhaul Phase 17 (D26): same noise-irritation theme.
   party_loud:          'argument',
+  // House notes (housenotes.js, 0.14.2): a gripe on the fridge is the most
+  // domestic thing there is; a leftovers or thank-you note is warmth.
+  note_left:           'domestic',
+  note_left_warm:      'warmth',
+  note_read:           'domestic',
+  note_reply:          'domestic',
 };
 
 // --- Infidelity (Intimacy & Voyeurism Phase 14, D14) -----------------------
@@ -7701,6 +8180,9 @@ const ACTIVITY_ROOM_PREFERENCES = {
   'texting': ['living_room', 'balcony'],
   'reading news': ['kitchen', 'living_room'],
   'reading in bed': null, // null = stay in bedroom
+  // Seasons & weather Phase 3: what "stepping outside" becomes when outside
+  // is off the list (WEATHER_TUNING.outside.activitySwap) — rooms that see out.
+  'watching the weather from the window': ['living_room', 'dining', 'kitchen'],
 };
 
 // --- Off-screen event tables (deterministic, no LLM) ---
@@ -8875,6 +9357,27 @@ const PEEK_VIEW_ACT = {
   'planning a shoot':       { safe: 'making notes on a laptop', explicit: 'making notes on a laptop' },
   'at the laptop':          { safe: 'at a laptop', explicit: 'at a laptop' },
   working:                  { safe: 'working', explicit: 'working' },
+
+  // Side Projects (projects.js, 0.14.2) — every PROJECT_KINDS activity that
+  // isn't already a row above ('reading', 'doing yoga', 'exercising' and
+  // 'playing games' are). Nothing private about any of them.
+  'practising guitar':      { safe: 'playing a guitar', explicit: 'playing a guitar' },
+  'practising on the decks': { safe: 'at a DJ controller in headphones', explicit: 'at a DJ controller in headphones' },
+  'painting':               { safe: 'painting at an easel', explicit: 'painting at an easel' },
+  'writing':                { safe: 'writing at a laptop', explicit: 'writing at a laptop' },
+  'working on a zine':      { safe: 'cutting and pasting pages', explicit: 'cutting and pasting pages' },
+  'poring over case files': { safe: 'surrounded by printouts', explicit: 'surrounded by printouts' },
+  'knitting':               { safe: 'knitting', explicit: 'knitting' },
+  'at the sewing machine':  { safe: 'at a sewing machine', explicit: 'at a sewing machine' },
+  'baking':                 { safe: 'baking, flour on their hands', explicit: 'baking, flour on their hands' },
+  'editing photos':         { safe: 'editing photos on a laptop', explicit: 'editing photos on a laptop' },
+  'coding a side project':  { safe: 'typing fast at a laptop', explicit: 'typing fast at a laptop' },
+  'editing a short film':   { safe: 'scrubbing through video on a laptop', explicit: 'scrubbing through video on a laptop' },
+  'tending seedlings':      { safe: 'tending pots of seedlings', explicit: 'tending pots of seedlings' },
+  'drawing up birth charts': { safe: 'drawing circles on paper, a book open beside them', explicit: 'drawing circles on paper, a book open beside them' },
+  'rehearsing a stand-up set': { safe: 'muttering to themselves, gesturing', explicit: 'muttering to themselves, gesturing' },
+  'practising a language':  { safe: 'repeating phrases under their breath', explicit: 'repeating phrases under their breath' },
+  'making calls and lists': { safe: 'on the phone, a list in hand', explicit: 'on the phone, a list in hand' },
   _default: { safe: 'just in there', explicit: 'just in there' },
 };
 
@@ -9536,6 +10039,689 @@ const NPC_GIFT_TUNING = {
   // Categories the drive will gift, in preference order — the kinds of
   // thing you'd hand someone. Toiletries/cleaning/keys stay theirs.
   categoryOrder: ['gift', 'food', 'snack', 'drink', 'media', 'comfort'],
+};
+
+// --- Birthdays (birthdays-and-occasions-plan.md Phase 1, D1–D12) ---
+// Every NPC has a birthday: a day-of-year on the 140-day calendar, DERIVED
+// from bible.genSeed (never stored — old saves need no migration, the same
+// discipline taste.js uses), with an explicit bible.birthday override for
+// authored characters. BIRTHDAYS (birthdays.js) is the only reader. The
+// player-side record (what you know, whether you remembered) rides
+// player.birthdays, lazily defaulted by ensurePlayerBirthdays.
+//
+// Magnitudes sit deliberately BELOW a well-matched gift (ASK_TUNING.gift
+// interest 0.12): saying happy birthday is a small, free, always-available
+// gesture, and the stacked best case (wish + a matched birthday gift) is
+// 0.06 + 0.12 + 0.06 = 0.24 affection in one day — a real moment, not a
+// relationship shortcut. The forget sting is smaller than the wish and only
+// lands on a roommate fond enough to have expected it (D7).
+const BIRTHDAY_TUNING = {
+  seedSalt: 51413,          // mixed into genSeed so birthdays don't correlate with any other genSeed draw
+  headsUpDays: 2,           // a housemate (or the birthday NPC) texts this many days ahead (D4)
+  promptSoonDays: 3,        // the prompt line mentions "coming up" inside this window (D9)
+  // D4 — who tips you off. A housemate who is fond of the birthday NPC AND at
+  // least friendly with you; the strongest such pair wins, deterministically.
+  tipsterNpcAffection: 0.3,
+  tipsterPlayerAffection: 0.15,
+  // D4 — failing a tipster, the birthday NPC may mention it themselves:
+  // only when fond of you and not shy about it.
+  fishPlayerAffection: 0.35,
+  fishMinAssertiveness: 0,
+  // D7 — only a roommate at least this fond of you EXPECTS you to remember.
+  // Same "fond" bar the gift_to_player drive uses (NPC_GIFT_TUNING).
+  expectAffection: 0.35,
+  dayOfMood: 0.08,          // the birthday NPC wakes up in a better mood (D5)
+  wish: { affection: 0.06, trust: 0.02, mood: 0.10, playerMood: 0.04, factImportance: 0.5 },
+  giftBonus: { affection: 0.06, mood: 0.08 },   // ON TOP of ASK_TUNING.gift's match delta (D8)
+  forgot: { affection: -0.05, tension: 0.04, mood: -0.10, factImportance: 0.6 },
+  // D6 — what counts as acknowledging it. Deliberately generous: on the day,
+  // ANY mention of the birthday to their face or by text counts ("what are
+  // you doing for your birthday?" is remembering). Matched case-insensitively.
+  wishPattern: '\\bbirth\\s*day|\\bb-?day\\b|\\bhbd\\b|happy returns|\\bcumple',
+  // Authored text pools, keyed by the SENDER's bible.speech.textingStyle
+  // (TEXTING_STYLES); `default` covers an NPC with no style. {name} is the
+  // birthday NPC, {when} the weekday it falls on. Lines use the name, never
+  // a pronoun, for the birthday NPC.
+  tipOffLines: {
+    terse: ["{name}'s birthday is {when}. FYI.", "Heads up. {name}. Birthday. {when}."],
+    'emoji-heavy': ["🎂🎉 {name}'s birthday is {when}!! act surprised 🤫", "PSA 🚨 {name} birthday {when} 🎈🎈 you didn't hear it from me"],
+    'all-lowercase': ["hey so {name}'s birthday is {when}. just saying", "{name}'s birthday is {when}. figured you'd want to know"],
+    'properly-punctuated': ["Quick note: {name}'s birthday is on {when}. I thought you'd want to know.", "Just so you're not caught off guard, {name}'s birthday is {when}."],
+    'stream-of-consciousness': ["ok so i was planning something small for {name} on {when} because birthday and then i realised i never told you. so. {when}. birthday. you're welcome", "not to be dramatic but {name}'s birthday is {when} and if nobody makes a fuss i will make a fuss about nobody making a fuss"],
+    'meme-laden': ["reminder that {name} is legally required to be celebrated on {when}", "{name}'s birthday arc starts {when}. be there"],
+    default: ["Heads up — {name}'s birthday is {when}.", "Don't let on I told you, but {name}'s birthday is {when}."],
+  },
+  fishLines: {
+    terse: ["Birthday's {when}. No fuss.", "{when}'s my birthday. Just so you know."],
+    'emoji-heavy': ["not to be that person but it's my birthday {when} 🎂👀", "🎉 birthday {when} 🎉 no pressure 🙃"],
+    'all-lowercase': ["not that anyone's counting but my birthday's {when}", "so it's my birthday {when}. no big deal. unless"],
+    'properly-punctuated': ["Not that I'm fishing, but my birthday is on {when}.", "I don't usually mention it, but {when} is my birthday."],
+    'stream-of-consciousness': ["i'm not going to make it a whole thing but it IS my birthday {when} and i'm telling you purely for information purposes", "anyway unrelated but my birthday is {when} and i am definitely not hinting at anything"],
+    'meme-laden': ["birthday szn arrives {when}. tributes accepted", "me casually mentioning my birthday is {when} for the third time (it's the first time)"],
+    default: ["My birthday's {when}, by the way. No pressure.", "Just so you know — it's my birthday {when}."],
+  },
+  // Narration and beats (D5/D6/D7). {name} / {date} / {item} placeholders.
+  dayOfLine: "🎂 It's {name}'s birthday today.",
+  dayOfHint: ' Say happy birthday in person or by text — a gift lands even better.',
+  wishBeatSpoken: '🎂 {name} lights up — you remembered.',
+  wishBeatText: '🎂 {name} was glad you remembered.',
+  giftBeat: '🎁 A birthday present — {name} is going to remember this one.',
+  learnBeat: "📅 You make a note: {name}'s birthday is the {date}. (Added to your Calendar.)",
+  forgotLine: "{name}'s birthday came and went yesterday without a word from you. {name} noticed.",
+  wishFact: "The player remembered {name}'s birthday and said so.",
+  giftFact: 'The player gave {name} the {item} for their birthday.',
+  forgotFact: "The player said nothing on {name}'s birthday — not a word, all day.",
+};
+
+// --- Occasions (occasions-and-holidays-plan.md Phase 1, D1–D9) ---
+// The year's holidays. SEASONS-AND-OCCASIONS-ROADMAP.md R1 binds every row:
+// NO RELIGION, anywhere — each is a non-religious cultural festival with
+// familiar traditions, and nobody observes one because of a faith. Names are
+// the familiar ones where the holiday is already broadly non-religious
+// (Valentine's Day, Halloween, Thanksgiving, New Year's), descriptive analogs
+// otherwise (R3). OCCASIONS (occasions.js) is the ONLY reader (R11): nothing
+// else computes a holiday date.
+//
+// A row: season + dom (day of season, 1..35) place it; `span` > 1 makes it a
+// run (Lantern Nights, Giving Week) — counted in `spanUnit`s ('night' by
+// default; Giving Week is 'day'). 140 days is exactly 20 weeks,
+// so every row falls on the same weekday every year — the plan's table
+// documents it and verify-occasions.js pins it. `closure` feeds the Phase 2
+// work model (major = most workplaces shut; partial = offices close early;
+// none = an ordinary working day). `busyFor` names the occupation
+// categories that get busier (tips/premium) that day. `lines` are the
+// rollover narration pools: `eve` logs the day BEFORE, `morning` on the day,
+// `night` on each later night of a span ({n}/{total} placeholders). `blurb`
+// is what the LLM is told the day is. `traditions` is the declarative list
+// the later phases build (D17) — documentation until then.
+const OCCASION_DEFS = {
+  new_years_day: { id: 'new_years_day', label: "New Year's Day", emoji: '🎊', season: 'spring', dom: 1, closure: 'major',
+    blurb: "New Year's Day — the first day of the year: slow brunches, resolutions said out loud, small luck envelopes of cash between friends, a fresh start",
+    lines: { morning: ["🎊 New Year's Day. A new year starts quietly — the apartment still smells faintly of last night.", "🎊 It's New Year's Day. Fresh calendar, same apartment — and somehow it feels like a clean slate."] },
+    traditions: ['brunch', 'resolutions', 'luck_envelopes', 'fresh_start_clean'] },
+  fools_day: { id: 'fools_day', label: "Fools' Day", emoji: '🃏', season: 'spring', dom: 4, closure: 'none',
+    blurb: "Fools' Day — harmless pranks and fake-outs; everyone's a little on guard",
+    lines: { morning: ["🃏 Fools' Day. Check the sugar before it goes in your coffee.", "🃏 It's Fools' Day — trust nothing anyone in this apartment says before noon."] },
+    traditions: ['pranks'] },
+  valentines_day: { id: 'valentines_day', label: "Valentine's Day", emoji: '💝', season: 'spring', dom: 14, closure: 'none', busyFor: ['food', 'hospitality', 'adult', 'service'],
+    blurb: "Valentine's Day — cards, chocolates and flowers; date nights for couples, commiseration nights for the single",
+    lines: { eve: ["Valentine's Day is tomorrow. The shops have been pink for a week."], morning: ["💝 Valentine's Day. Cards, chocolates, flowers — and a certain tension about who's getting what from whom.", "💝 It's Valentine's Day. Somewhere in this apartment, someone is pretending not to care."] },
+    traditions: ['cards', 'chocolates', 'flowers', 'date_night', 'singles_night'] },
+  color_day: { id: 'color_day', label: 'Color Day', emoji: '🎨', season: 'spring', dom: 21, closure: 'none',
+    blurb: 'Color Day — a spring festival of throwing colored powder and water at each other, sweets, and letting old grudges go',
+    lines: { morning: ["🎨 Color Day. Half the city is throwing colored powder at the other half — and the balcony is looking tempting.", "🎨 It's Color Day. Nobody's clothes are safe today, and nobody's supposed to hold a grudge."] },
+    traditions: ['color_fight', 'sweets', 'forgive'] },
+  spring_festival_eve: { id: 'spring_festival_eve', label: 'Spring Festival Eve', emoji: '🥚', season: 'spring', dom: 28, closure: 'none',
+    blurb: 'Spring Festival Eve — dyeing eggs, getting flowers into water, getting ready for tomorrow',
+    lines: { morning: ["🥚 Spring Festival Eve — the night for dyeing eggs and getting the flowers in water."] },
+    traditions: ['egg_dyeing'] },
+  spring_festival: { id: 'spring_festival', label: 'Spring Festival', emoji: '🌷', season: 'spring', dom: 29, closure: 'major',
+    blurb: 'Spring Festival — the celebration of spring: egg hunts, giving each other flowers, a long spring brunch, chocolate rabbits',
+    lines: { morning: ["🌷 Spring Festival. Flowers on the windowsills, eggs hidden in odd places, and a brunch that goes on far too long.", "🌷 It's Spring Festival. Everything's in bloom, including somebody's mood."] },
+    traditions: ['egg_hunt', 'flowers', 'brunch', 'chocolate'] },
+  rest_day: { id: 'rest_day', label: 'Rest Day', emoji: '🍔', season: 'summer', dom: 2, closure: 'major', busyFor: ['food'],
+    blurb: 'Rest Day — a day off in honor of working people: barbecues, doing nothing at all, absolutely no chores',
+    lines: { eve: ["Rest Day tomorrow — a long weekend for nearly everyone."], morning: ["🍔 Rest Day. A Monday off for the workers of the world — the balcony grill is practically calling.", "🍔 It's Rest Day. Chores are, by long tradition, illegal."] },
+    traditions: ['barbecue', 'no_chores'] },
+  parents_day: { id: 'parents_day', label: "Parents' Day", emoji: '📞', season: 'summer', dom: 8, closure: 'none',
+    blurb: "Parents' Day — calling (or pointedly not calling) your parents; bittersweet for anyone with a complicated family",
+    lines: { morning: ["📞 Parents' Day. Phones are ringing all over the building.", "📞 It's Parents' Day. You catch yourself thinking about your grandfather."] },
+    traditions: ['call_parents'] },
+  midsummer: { id: 'midsummer', label: 'Midsummer', emoji: '☀️', season: 'summer', dom: 18, closure: 'major', busyFor: ['food', 'service', 'music', 'security'],
+    blurb: 'Midsummer — the longest day of the year: flower crowns, pool parties, barbecues, sparklers and fireworks after dark',
+    lines: { eve: ["Midsummer tomorrow — the longest day of the year, and a Wednesday off."], morning: ["☀️ Midsummer — the longest day of the year. The light won't quit until late tonight.", "☀️ It's Midsummer. Pool, grill, fireworks after dark: the whole summer in one day."] },
+    traditions: ['flower_crowns', 'pool_party', 'barbecue', 'fireworks'] },
+  giving_week: { id: 'giving_week', label: 'Giving Week', emoji: '🤲', season: 'summer', dom: 28, span: 6, spanUnit: 'day', closure: 'none',
+    blurb: 'Giving Week — six days of small kindnesses: doing each other\'s chores, leaving treats, dropping coins in the jar for a good cause',
+    lines: { morning: ["🤲 Giving Week begins — six days of small kindnesses. Someone's already done the dishes, and it wasn't you."], night: ["🤲 Giving Week, day {n} of {total}."] },
+    traditions: ['kindnesses', 'giving_jar'] },
+  sharing_feast: { id: 'sharing_feast', label: 'Sharing Feast', emoji: '🍯', season: 'summer', dom: 34, closure: 'none',
+    blurb: 'the Sharing Feast — the end of Giving Week: a big shared table of sweets and food, new clothes, and the jar handed on to a good cause',
+    lines: { morning: ["🍯 The Sharing Feast. Everyone's cooking something sweet, and the jar from Giving Week is full."] },
+    traditions: ['feast', 'new_clothes', 'giving_jar'] },
+  tax_day_summer: { id: 'tax_day_summer', label: 'Tax Day', emoji: '🧾', season: 'summer', dom: 35, closure: 'none',
+    blurb: 'Tax Day — the tax period closes tonight',
+    lines: { morning: ['🧾 Tax Day. The tax period closes tonight.'] }, traditions: [] },
+  harvest_moon: { id: 'harvest_moon', label: 'Harvest Moon', emoji: '🌕', season: 'autumn', dom: 10, closure: 'none',
+    blurb: 'Harvest Moon — the big autumn full moon: moon-viewing, harvest pies and mooncakes, lanterns, calling family',
+    lines: { morning: ["🌕 Harvest Moon tonight — the biggest, brightest full moon of the year. The balcony will have the best view."] },
+    traditions: ['moon_viewing', 'mooncakes', 'call_family'] },
+  halloween: { id: 'halloween', label: 'Halloween', emoji: '🎃', season: 'autumn', dom: 21, closure: 'none', busyFor: ['service', 'adult'],
+    blurb: 'Halloween — costumes, carved pumpkins, trick-or-treaters at the door, candy, horror movies and costume parties',
+    lines: { eve: ["Halloween is tomorrow. Have you thought about a costume?"], morning: ["🎃 Halloween. Costumes tonight, candy at the door, and at least one horror movie nobody will admit scared them.", "🎃 It's Halloween. Somebody has definitely been planning their costume for weeks."] },
+    traditions: ['costumes', 'pumpkins', 'trick_or_treat', 'horror_night', 'costume_party'] },
+  remembrance_night: { id: 'remembrance_night', label: 'Remembrance Night', emoji: '🕯️', season: 'autumn', dom: 22, closure: 'none',
+    blurb: "Remembrance Night — lighting candles for loved ones who have died, cooking their favorite dish, telling stories about them",
+    lines: { morning: ["🕯️ Remembrance Night. A candle in the window for the people who aren't here anymore. You think of your grandfather."] },
+    traditions: ['candles', 'favorite_dish', 'stories'] },
+  thanksgiving: { id: 'thanksgiving', label: 'Thanksgiving', emoji: '🦃', season: 'autumn', dom: 26, closure: 'major',
+    blurb: "Thanksgiving — the big shared feast where everyone brings a dish, going round the table saying what you're grateful for, sports on TV, the nap after, leftovers for days",
+    lines: { eve: ["Thanksgiving tomorrow. The fridge is about to get very, very full."], morning: ["🦃 Thanksgiving. The big one — a shared feast, the gratitude round, and leftovers for days.", "🦃 It's Thanksgiving. Somebody's already arguing about the stuffing."] },
+    traditions: ['feast', 'gratitude', 'sports_tv', 'leftovers'] },
+  sale_day: { id: 'sale_day', label: 'Sale Day', emoji: '🛍️', season: 'autumn', dom: 27, closure: 'none', busyFor: ['service'],
+    blurb: 'Sale Day — the biggest shopping day of the year: discounts everywhere, and people who swore they wouldn\'t, buying anyway',
+    lines: { morning: ["🛍️ Sale Day. Every shop online is shouting about discounts."] },
+    traditions: ['sales'] },
+  lantern_nights: { id: 'lantern_nights', label: 'Lantern Nights', emoji: '🏮', season: 'winter', dom: 8, span: 6, closure: 'none',
+    blurb: 'Lantern Nights — six winter nights of light: one more lantern lit in the window each night, fried sweets, a small gift each night, and card games',
+    lines: { eve: ["Lantern Nights start tomorrow — six nights of lanterns in the window."], morning: ["🏮 Lantern Nights begin — one lantern in the window tonight, one more each night for six nights."], night: ["🏮 Lantern Nights, night {n} of {total} — {n} lanterns in the window tonight."] },
+    traditions: ['lanterns', 'fried_sweets', 'nightly_gifts', 'card_games'] },
+  midwinter_eve: { id: 'midwinter_eve', label: 'Midwinter Eve', emoji: '✨', season: 'winter', dom: 24, closure: 'partial',
+    blurb: 'Midwinter Eve — trimming the tree, baking cookies, hanging stockings, carols',
+    lines: { morning: ["✨ Midwinter Eve. Tree lights, cookies in the oven, stockings hung, and carols from somewhere down the hall."] },
+    traditions: ['tree', 'cookies', 'stockings', 'carols'] },
+  midwinter: { id: 'midwinter', label: 'Midwinter', emoji: '🎁', season: 'winter', dom: 25, closure: 'major',
+    blurb: 'Midwinter — the biggest holiday of the year: the gift swap under the tree, the big dinner, cozy movies, hot drinks',
+    lines: { morning: ["🎁 Midwinter. The biggest holiday of the year — presents under the tree, a big dinner, something cozy on the TV.", "🎁 It's Midwinter. Whatever this year has been, today it's warm in here."] },
+    traditions: ['gift_swap', 'feast', 'cozy_movie', 'hot_drinks'] },
+  new_years_eve: { id: 'new_years_eve', label: "New Year's Eve", emoji: '🎆', season: 'winter', dom: 35, closure: 'partial', busyFor: ['service', 'music', 'security', 'hospitality', 'adult', 'food'],
+    blurb: "New Year's Eve — the last night of the year: parties, the midnight countdown, noisemakers, fireworks, the midnight kiss, resolutions",
+    lines: { morning: ["🎆 New Year's Eve. The last day of the year — the countdown's tonight."] },
+    traditions: ['party', 'countdown', 'fireworks', 'midnight_kiss', 'resolutions'] },
+  tax_day_winter: { id: 'tax_day_winter', label: 'Tax Day', emoji: '🧾', season: 'winter', dom: 35, closure: 'none',
+    blurb: 'Tax Day — the tax period closes tonight',
+    lines: { morning: ['🧾 Tax Day, too. The tax period closes at midnight.'] }, traditions: [] },
+};
+
+// --- Weather & daylight (seasons-and-weather-plan.md Phase 1, W1–W4) ---
+// One condition per day, a smooth yearly temperature curve, and sunrise/
+// sunset — all DERIVED from meta.seed + the day (roadmap R5/R6), never
+// stored. SEASONS (seasons.js) is the only reader (R11).
+//
+// The chain: tomorrow keeps today's condition with `persistence` (fronts last
+// a few days); otherwise it redraws from the DAY's mix — the season's `mix`
+// minus any condition whose temperature gate the day's baseline fails (no
+// snow on a mild day). So the long-run share of each condition is its mix
+// weight wherever its gate allows it — tune the weights, get that climate.
+//
+// Temperature (W2): piecewise-linear through four season-midpoint anchors,
+// SOLVED at load so each season's average equals THERMOSTAT_TUNING.
+// seasonOutdoorC exactly; each condition's offset is re-centred per DAY
+// (minus that day's mix's expected offset), so weather never shifts a
+// season's mean either — it only makes days differ. Plus a diurnal swing (coldest
+// ~03:00, warmest ~15:00). NPC comfort/clothing read it through
+// temperature.js's ambientTempC; HVAC billing does not (it uses the seasonal
+// UTILITY_HVAC_SEASONAL rate), so this moves no bill.
+const WEATHER_TUNING = {
+  seedSalt: 'weather_v1',
+  // The chance tomorrow simply keeps today's condition; a condition's own
+  // `persist` overrides it. Per-condition since Phase 2: at one shared 0.55 a
+  // thunderstorm averaged 2.4 days and ran 12 days straight, fog 17 and rain
+  // 22 (200 sampled years) — a storm is an afternoon, a heatwave is a week.
+  // The redraw weights are compensated (weatherRedrawMix, seasons.js), so each
+  // condition's long-run share is still exactly its `mix` weight — and the
+  // season means, which lean on that, don't move.
+  persistence: 0.55,
+  conditions: {
+    clear:     { emoji: '☀️', nightEmoji: '🌙', offsetC: 2,  sky: 'clear and bright', nightSky: 'a clear night' },
+    cloudy:    { emoji: '☁️', offsetC: -1, sky: 'grey and overcast', persist: 0.5 },
+    rain:      { emoji: '🌧️', offsetC: -2, sky: 'steady rain', persist: 0.4 },
+    storm:     { emoji: '⛈️', offsetC: -3, sky: 'a thunderstorm', persist: 0.1 },
+    fog:       { emoji: '🌫️', offsetC: -1, sky: 'thick fog', persist: 0.2 },
+    // Temperature gates (maxBaseC / minBaseC, against the day's seasonal
+    // BASELINE): without them early/late winter — which sit between the
+    // season anchors — snowed at 10°C (caught in a sample year, 2026-09-23).
+    heat:      { emoji: '🥵', offsetC: 6,  sky: 'a heatwave', minBaseC: 24, persist: 0.7 },
+    cold_snap: { emoji: '🥶', offsetC: -7, sky: 'a bitter cold snap', maxBaseC: 10, persist: 0.62 },
+    snow:      { emoji: '❄️', offsetC: -4, sky: 'snowing', maxBaseC: 6, persist: 0.4 },
+  },
+  mix: {
+    spring: { clear: 4, cloudy: 3, rain: 3, storm: 0.5, fog: 1 },
+    summer: { clear: 6, cloudy: 1.5, rain: 1, storm: 1.5, heat: 1.5 },
+    autumn: { clear: 3, cloudy: 3, rain: 3, storm: 0.5, fog: 2, cold_snap: 0.3 },
+    winter: { clear: 2.5, cloudy: 3, rain: 1, fog: 1, snow: 2.5, cold_snap: 1 },
+  },
+  // Day/night swing (±°C around the day's mean), by season — real winters
+  // swing less than summers; at a flat ±4 a winter snowfall read 7°C by
+  // mid-afternoon. It averages to zero over a day, so season means are unmoved.
+  diurnalC: { spring: 4, summer: 5, autumn: 3.5, winter: 2.5 },
+  // Temperature in words (first cut the value is at or below).
+  feelWords: [[0, 'freezing'], [7, 'cold'], [13, 'chilly'], [19, 'mild'], [25, 'warm'], [99, 'hot']],
+  // Sunrise / sunset (minute of day) at each season's midpoint; linear
+  // between midpoints. Long summer evenings, dark winter afternoons.
+  daylight: { spring: [390, 1170], summer: [330, 1290], autumn: [420, 1110], winter: [470, 1010] },
+  // Rollover narration: the first day of summer/autumn/winter (spring's
+  // first day is New Year's Day — the occasions pass already speaks). A
+  // change of weather is NOT narrated here since Phase 2 — it lands at a time
+  // of day (`front`), and the sky watch narrates it then (`changes`).
+  lines: {
+    seasonTurn: {
+      summer: "☀️ First day of summer. The mornings are warm already.",
+      autumn: "🍂 First day of autumn. There's a crispness in the air that wasn't there yesterday.",
+      winter: '❄️ First day of winter. The radiators have started clanking.',
+    },
+  },
+
+  // --- Phase 2: ambience ---
+  // When a front arrives: a change of condition lands at a seeded minute of
+  // the day in [0, turnLatestMin), not at midnight, and the temperature eases
+  // from the old condition's offset to the new one over rampMin — so "it's
+  // started snowing" can happen at 14:20 without the thermometer stepping.
+  // turnLatestMin + rampMin stays inside the day, so the ease always finishes
+  // before midnight. A separate salt: the chain itself is unchanged.
+  front: { seedSalt: 'weather_front_v1', turnLatestMin: 1320, rampMin: 120 },
+  // Which rooms see outside. 'window' rooms get the weather through the
+  // glass; 'outside' (the balcony) is in it; the rest are windowless and only
+  // hear a storm. Authored (no room carried a window flag); W9's window views
+  // read the same table.
+  rooms: {
+    balcony: 'outside',
+    living_room: 'window', dining: 'window', kitchen: 'window', study: 'window',
+    bedroom_player: 'window', bedroom_1: 'window', bedroom_2: 'window', bedroom_3: 'window',
+    gym: 'window', pool_room: 'window',
+  },
+  // The weather as it reaches a room (the scene reader, and its own line in
+  // the scene prompt). window / outside, by light: morning (the first 90
+  // minutes after sunrise) and dusk (the last hour before sunset) fall back
+  // to day; night. anywhere: heard through the walls of a windowless room. A
+  // value is a string or { <season>: string, default: string }. A missing
+  // entry means nothing worth saying — a cloudy night is just dark.
+  cues: {
+    clear: {
+      window: {
+        morning: { summer: 'early sun already streaming in through the window', default: 'early sun slanting low through the window' },
+        day: { summer: 'hot sun pouring in through the window', winter: 'thin, bright winter sun slanting through the window', default: 'sunlight falling across the floor from the window' },
+        dusk: 'low sun through the window, turning everything gold',
+        night: { winter: 'a hard, clear night beyond the glass, stars sharp over the rooftops', default: 'a clear night beyond the glass, a few stars over the rooftops' },
+      },
+      outside: {
+        morning: { summer: 'early sun on the rail, the day already warm', winter: 'low early sun, the air sharp and cold', default: 'early sun on the rail, the air still fresh' },
+        day: { summer: 'the sun hot on your skin and the tiles warm underfoot', winter: 'crisp, bright air, the sun giving almost no warmth', default: 'sun on your face and a breeze across the rail' },
+        dusk: 'the sun sinking behind the rooftops, the sky going orange',
+        night: 'a clear sky overhead, the city lights spread out below',
+      },
+    },
+    cloudy: {
+      window: { day: 'flat grey light from the window', dusk: 'the grey at the window deepening toward dark' },
+      outside: { day: 'a low grey sky pressing down over the rooftops', night: 'a starless sky, the clouds lit orange by the city' },
+    },
+    rain: {
+      window: {
+        day: { autumn: 'cold rain streaking down the window', summer: 'warm summer rain running down the window', default: 'rain streaking down the window' },
+        night: 'rain ticking against the dark glass',
+      },
+      outside: { day: 'rain spattering the balcony tiles and dripping from the rail', night: 'rain hissing down on the balcony in the dark' },
+    },
+    storm: {
+      window: { day: 'rain lashing the window, thunder rolling over the rooftops', night: 'lightning whitening the window, the thunder right on top of it' },
+      outside: { day: 'rain sheeting sideways across the balcony, thunder close enough to feel', night: 'rain sheeting across the balcony, the sky splitting white with lightning' },
+      anywhere: 'thunder rumbling somewhere outside',
+    },
+    fog: {
+      window: { day: 'fog pressed white against the window', night: 'the streetlights blurred to soft halos in the fog' },
+      outside: { day: 'fog so thick the next building has vanished', night: 'fog hanging wet and cold around the balcony light' },
+    },
+    heat: {
+      window: { day: 'heat shimmering off the rooftops beyond the window', dusk: 'the evening outside still hazy with heat', night: 'a warm, airless night pressing at the window' },
+      outside: { day: 'heat coming up off the balcony tiles, the air thick and still', night: 'the night air still warm out here, not a breath of wind' },
+    },
+    cold_snap: {
+      window: { day: 'frost feathered across the corners of the window', night: 'frost creeping over the black glass' },
+      outside: { day: 'air so cold it hurts to breathe, the rail rimed with frost', night: 'a bitter, still cold, your breath clouding in the dark' },
+    },
+    snow: {
+      window: { day: 'snow drifting past the window, the rooftops across the street turning white', night: 'snow falling through the glow of the streetlight outside' },
+      outside: { day: 'snow settling on the rail and the chairs', night: 'snow falling soft and silent in the dark' },
+    },
+  },
+  // A change of weather, narrated by the sky watch (ui.js) when it lands:
+  // `live` if you're awake for it, `slept` if it happened while you slept.
+  // Precedence: the year's first snow, then a specific pair (the general
+  // rules would word these wrong), then a start (a change INTO the
+  // condition), then an end (a change OUT of it into one with no start
+  // line). Clear ↔ cloudy stays silent.
+  changes: {
+    firstSnow: { live: "❄️ It's started snowing — the first snow of the year.", slept: '❄️ It snowed while you slept — the first snow of the year.' },
+    pairs: {
+      'storm>rain': { live: "The thunder's moved off, but it's still raining.", slept: "The storm blew over while you slept; it's still raining." },
+      'snow>rain': { live: '🌧️ The snow has turned to rain.', slept: '🌧️ The snow turned to rain while you slept.' },
+      'rain>snow': { live: '❄️ The rain has turned to snow.', slept: '❄️ The rain turned to snow while you slept.' },
+    },
+    starts: {
+      snow: { live: "❄️ It's started snowing.", slept: '❄️ It snowed while you slept.' },
+      rain: { live: "🌧️ It's started to rain.", slept: '🌧️ It started raining while you slept.' },
+      storm: { live: '⛈️ A thunderstorm rolls in.', slept: '⛈️ A thunderstorm rolled in while you slept.' },
+      fog: { live: '🌫️ Fog is rolling in — you can barely see across the street.', slept: '🌫️ Fog rolled in while you slept — you can barely see across the street.' },
+      // Worded as onsets: the temperature eases in over front.rampMin, so at
+      // the moment a heatwave arrives it isn't sweltering yet.
+      heat: { live: "🥵 The air's turned heavy and hot — a heatwave is settling in.", slept: '🥵 A heatwave settled over the city while you slept.' },
+      cold_snap: { live: "🥶 The cold's biting harder by the hour — a cold snap.", slept: '🥶 A cold snap set in while you slept.' },
+    },
+    ends: {
+      rain: { live: "The rain's stopped.", slept: 'The rain stopped while you slept.' },
+      storm: { live: 'The storm has passed.', slept: 'The storm blew itself out while you slept.' },
+      snow: { live: "It's stopped snowing.", slept: 'It stopped snowing while you slept.' },
+      fog: { live: "The fog's lifted.", slept: 'The fog lifted while you slept.' },
+      heat: { live: 'The heatwave has broken.', slept: 'The heatwave broke while you slept.' },
+      cold_snap: { live: 'The cold snap has eased.', slept: 'The cold snap eased while you slept.' },
+    },
+  },
+  // Sunrise and sunset, narrated live only (never on waking; morning light is
+  // the default) and only in a room that sees outside. First cut the clock
+  // is below WHEN THE LINE IS LOGGED wins — the end of the advance that
+  // crossed the sun, up to liveSpanMin later — so "isn't even five" is never
+  // printed at half past. A winter dark before five is the season speaking.
+  light: {
+    sunset: [[1020, "🌆 It's dark out already, and it isn't even five."], [1260, "🌆 It's getting dark outside."], [1440, "🌆 It's only now getting dark, and it's gone nine."]],
+    sunrise: [[360, "🌅 It's getting light out, and it isn't even six."], [450, "🌅 It's getting light outside."], [1440, "🌅 It's only just getting light."]],
+  },
+  // The sky watch: a change is narrated live only when the advance that
+  // crossed it covered at most liveSpanMin (you were there, watching) — a
+  // long action or a sleep gets the change of weather (worded for sleep when
+  // you slept) but never the light. An advance longer than staleMin (a load,
+  // a jump) narrates nothing.
+  watch: { liveSpanMin: 90, staleMin: 1080 },
+
+  // --- Phase 3: what people do about it (W5) ---
+  // How inviting it is OUTSIDE right now (outsideAppeal): the condition's
+  // factor [daylight, dark] times the temperature's. 1 is neutral, ~3 a
+  // perfect spring afternoon, 0 a thunderstorm. It weights the balcony
+  // wherever someone picks a room (an idle pastime's rooms, the schedule's
+  // "reading"/"on a phone call"/"stepping outside", "come out to the common
+  // area") — a weight on WHERE, never a score on WHETHER, so no drive wins or
+  // loses a tick over it (the idle-pastime appeal budget is fragile; see
+  // seasons-and-weather-plan Phase 3). Below minAppeal the balcony is off the
+  // list; fineAt and up, it's a fine day (or night) to be out there.
+  outside: {
+    condition: {
+      clear: [2.5, 1.3], cloudy: [1, 0.6], rain: [0.1, 0.1], storm: [0, 0], fog: [0.4, 0.3],
+      snow: [0.6, 0.3], heat: [0.5, 1.2], cold_snap: [0.2, 0.1],
+    },
+    // [°C at or below, factor] — first match wins.
+    temp: [[0, 0.25], [8, 0.5], [14, 0.85], [27, 1.2], [32, 0.8], [99, 0.5]],
+    minAppeal: 0.2,
+    fineAt: 1.5,
+    // A schedule activity whose only place is outside, on a day outside is
+    // off the list, becomes this (its rooms in ACTIVITY_ROOM_PREFERENCES).
+    activitySwap: { 'stepping outside': 'watching the weather from the window' },
+  },
+  // A drive's weather lean (DRIVE_DEFS utility.weather: { hot, cold }): a
+  // day at or above hotC (or a heatwave) is hot; at or below coldC (or a
+  // cold snap, or snow) is cold. Only swim (hot) and sauna (cold) carry one,
+  // and both are facility-gated — see weatherDriveLean.
+  drives: { hotC: 30, coldC: 2 },
+  // "While ___" — how a grim day reads from indoors, for an idle pastime's
+  // event (a drive's `weatherTemplates.cozy`).
+  cozy: {
+    rain: 'the rain came down outside', storm: 'the storm rattled the windows',
+    snow: 'the snow came down outside', fog: 'the fog pressed against the windows',
+    cold_snap: 'the cold bit outside',
+  },
+  // The player's "Sit on the Balcony", by condition — [daylight, dark] —
+  // with `clearCold` for a clear day at or below coldC. Mood is the verb's
+  // base gain times outsideAppeal, clamped to moodRange: a perfect afternoon
+  // is worth twice an ordinary one, and a storm almost nothing.
+  balconySit: {
+    coldC: 5,
+    moodRange: [0.25, 2],
+    lines: {
+      clear: ["You sit out in the sun with your feet up on the rail. For a quarter of an hour the city is somebody else's problem.",
+        'You sit out under a clear sky. A few stars make it past the city lights.'],
+      clearCold: ['You sit out bundled in your coat, your breath clouding, the thin winter sun on your face.',
+        "You last a few minutes under the hard, clear sky before the cold wins. The stars were worth it."],
+      cloudy: ['You sit on the balcony and watch the street below. The city hums on without you.',
+        'You sit out in the dark. The clouds glow orange with the light of the city.'],
+      rain: ['You stand in the doorway and watch the rain come down on the balcony. Oddly, it helps.',
+        'You stand in the doorway listening to the rain on the balcony in the dark. Oddly, it helps.'],
+      storm: ['You last about a minute out there before a crack of thunder sends you back inside, soaked.',
+        'You last about a minute out there before the lightning sends you back inside, soaked.'],
+      fog: ['You sit out in the fog. The street below has disappeared, and for a while so has everything else.',
+        'You sit out in the fog. The streetlights are soft halos, and the city has gone very quiet.'],
+      snow: ['You stand out in the falling snow until your hands go numb. Worth it.',
+        'Snow falls soft and silent past the balcony light. You stay out longer than you meant to.'],
+      heat: ['You last five minutes in the heat before the tiles drive you back inside.',
+        "You sit out in the warm night air. It's the only bearable place in the apartment."],
+      cold_snap: ['You step out, gasp at the cold, and step straight back in.',
+        'You step out into the bitter dark, gasp, and step straight back in.'],
+    },
+  },
+  // Sunbathe (the pool room's loungers, under its windows): the light it
+  // happens in. sun = a clear or heatwave day.
+  sunbathe: {
+    sun: 'You stretch out on a lounger in the sun through the glass and let the afternoon go by.',
+    day: 'You stretch out on a lounger and let the afternoon go by, the sky grey beyond the glass.',
+    wet: 'You stretch out on a lounger and listen to the weather against the glass. Nowhere to be.',
+    night: 'You stretch out on a lounger under the pool lights and let the evening go by.',
+  },
+
+  // --- Phase 4: seasonal food (W6) ---
+  // Fresh produce by season: a WHOLE-DOLLAR change to the sticker price
+  // (prices here are whole dollars, so a percentage on a $1 tomato rounds to
+  // nothing), never below $1, never unavailable. Both shops read it —
+  // itemPriceNow, seasons.js — because Nile and QuickCart sell the same
+  // tomato. A negative delta shows "in season" on the card, a positive one
+  // "out of season". Over a year the deltas net to zero except the tomato,
+  // which can't go under $1 in summer: winter tomatoes simply cost double.
+  produce: {
+    tomato:   { winter: 1 },
+    lettuce:  { summer: -1, winter: 1 },
+    potatoes: { autumn: -1, spring: 1 },
+  },
+  // Cravings: a recipe's `lean` on a day whose mean temperature is at or
+  // below coldC (hearty) or at or above hotC (fresh). Added to the taste
+  // band's weight where an NPC chooses what to cook or eat (drives.js), and
+  // deliberately smaller than the smallest gap between two bands (hate 0.1 →
+  // dislike 0.4), so it only ever breaks a tie inside a band — a liked salad
+  // still beats a neutral soup in January. Items (not plates) by defId.
+  food: {
+    coldC: 10, hotC: 22, lean: 0.25,
+    recipes: { soup: 'hearty', loaded_potato: 'hearty', pasta: 'hearty', frozen_pizza: 'hearty', salad: 'fresh', sandwich: 'fresh' },
+    items: { instant_noodles: 'hearty' },
+  },
+
+  // --- Phase 5: wardrobe and mood (W7/W8) ---
+  // Dressed to go OUT: the 'work' outfit is only ever chosen for someone
+  // whose day takes them out of the flat (npc.js outfitTypeForContext, D14),
+  // so it dresses for the weather outside instead of the thermostat — at or
+  // below coldC toward the warmest layer (the coat), at or above hotC no outer
+  // layer at all (a thermal bias alone kept the coat on at 27°C: its
+  // work/formal traits outscore any heat). Between them, the usual pick.
+  // Indoors nothing changes: the house has a thermostat, and the indoor pick
+  // already follows it (a winter at 21°C sits under most roommates' comfort
+  // band ~70% of the time).
+  dressOut: { coldC: 10, hotC: 20 },
+  // NPC mood is an accumulator (sim.js adds capped deltas, nothing eases it
+  // back), so the seasons touch it only in day-sized beats, never per tick:
+  //  - a LIFT for everyone (you as a decaying impulse, roommates directly) on
+  //    the year's first properly warm day (a day mean ≥ warmDayC — told in
+  //    the morning) and when the year's first snow starts (at the moment the
+  //    sky watch sees it);
+  //  - a DIP in the darkest weeks (daylight under darkDayMinutes) for the
+  //    sensitive (temperament volatility ≥ darkVolatility): darkDip a day,
+  //    and only out of mood above darkFloor — it can take the shine off a
+  //    good mood, never drag anyone below neutral.
+  // --- Phase 6: window views (W9) ---
+  // The scene plate of a room that sees outside (`rooms` above) carries a
+  // view: a token in its cache key and a clause in its prompt. The set is
+  // SMALL on purpose — every token is another plate to generate per room and
+  // phase — so conditions fold into four looks (fog → grey, storm → wet, heat
+  // → sun, cold snap → grey) and night into three. Snow is winter's only, so
+  // the daytime set is 13, the night set 3. `sky` maps condition → look;
+  // `day` is by season × look, `night` by look (clear/grey → dark).
+  views: {
+    sky: { clear: 'sun', heat: 'sun', cloudy: 'grey', fog: 'grey', cold_snap: 'grey', rain: 'wet', storm: 'wet', snow: 'snow' },
+    day: {
+      spring: { sun: 'a bright spring day outside, fresh green trees', grey: 'a grey spring sky outside, trees in new leaf', wet: 'spring rain streaking the glass, a wet green street outside' },
+      summer: { sun: 'blazing summer sunshine outside, lush green trees', grey: 'a hazy grey summer sky outside, full green trees', wet: 'summer rain streaking the glass, a wet street outside' },
+      autumn: { sun: 'crisp autumn sunshine outside, orange and red trees', grey: 'a grey autumn sky outside, half-bare orange trees', wet: 'autumn rain streaking the glass, wet leaves on the street outside' },
+      winter: { sun: 'pale winter sunshine outside, bare trees', grey: 'a heavy grey winter sky outside, bare branches', wet: 'cold winter rain streaking the glass, bare wet trees outside', snow: 'snow falling outside, rooftops white with snow' },
+    },
+    // By exposure: the balcony is IN the night, not looking at it.
+    night: {
+      window: { dark: 'the window dark, city lights beyond', wet: 'rain on the dark window glass', snow: 'snow falling past the dark window' },
+      outside: { dark: 'a night sky over the city lights', wet: 'rain falling in the dark', snow: 'snow falling softly in the dark' },
+    },
+  },
+  mood: {
+    warmDayC: 17, liftMood: 0.03,
+    firstWarmLine: "🌷 It's going to be the first properly warm day of the year. You can feel the whole building exhale.",
+    darkDayMinutes: 580, darkVolatility: 0.4, darkDip: 0.01, darkFloor: 0.05,
+  },
+};
+
+// --- Occasion decorations (occasions-and-holidays-plan.md Phase 3) ---
+// Which occasions get decorated, where, and how it reads. One room per set
+// (the set lives in that room's scene, prompt and — later — image). `lead` is
+// how many days before the occasion YOU can put it up (the Decorate chip);
+// `npcLead` is when a festive roommate does it if you haven't — later, on
+// purpose, so the player gets the first chance. OCCASIONS' decor functions are
+// the only readers; world.occasions.decor stores who put it up and when.
+const OCCASION_DECOR = {
+  midwinter: { room: 'living_room', lead: 7, npcLead: 4,
+    phrase: 'a tree strung with lights, stockings along the shelf, paper snowflakes taped to the window',
+    npcUp: "{name} spent the evening putting up the Midwinter tree — the living room smells like pine now.",
+    playerUp: "You dig your grandfather's old box of Midwinter decorations out of the hall closet. The lights still work — mostly — and the tree goes up." },
+  halloween: { room: 'living_room', lead: 5, npcLead: 3,
+    phrase: 'carved pumpkins grinning on the table, fake cobwebs in the corners, a plastic skeleton slumped by the door',
+    npcUp: "{name} decorated for Halloween. There's a plastic skeleton by the door now, and it is judging you.",
+    playerUp: 'You carve a pumpkin, drape fake cobwebs over everything, and prop a plastic skeleton by the door.' },
+  lantern_nights: { room: 'living_room', lead: 1, npcLead: 1,
+    phrase: 'a row of paper lanterns along the windowsill',
+    npcUp: '{name} set a row of paper lanterns along the living room windowsill, ready for Lantern Nights.',
+    playerUp: 'You line the windowsill with paper lanterns, ready for the first night.' },
+  valentines_day: { room: 'dining', lead: 2, npcLead: 1,
+    phrase: 'paper hearts taped to the window and a jar of roses on the table',
+    npcUp: "{name} taped paper hearts to the dining room window. Nobody's asked who they're for.",
+    playerUp: 'You tape paper hearts to the dining room window and put a jar of roses on the table.' },
+  spring_festival: { room: 'dining', lead: 2, npcLead: 1,
+    phrase: 'flowers in every jar and vase, and a bowl of painted eggs on the table',
+    npcUp: '{name} filled every jar in the dining room with flowers for the Spring Festival.',
+    playerUp: 'You fill every jar and vase with flowers and set out a bowl of painted eggs.' },
+  thanksgiving: { room: 'dining', lead: 3, npcLead: 1,
+    phrase: 'a centerpiece of gourds and autumn leaves on the dining table',
+    npcUp: '{name} set a centerpiece of gourds and autumn leaves on the dining table for Thanksgiving.',
+    playerUp: 'You arrange gourds and autumn leaves into a centerpiece for the dining table.' },
+  new_years_eve: { room: 'living_room', lead: 0, npcLead: 0,
+    phrase: 'streamers, a cluster of gold balloons and a glittery HAPPY NEW YEAR banner',
+    npcUp: '{name} hung streamers and a glittery HAPPY NEW YEAR banner in the living room.',
+    playerUp: 'You hang streamers, tie up a cluster of gold balloons and pin a glittery HAPPY NEW YEAR banner over the sofa.' },
+  midsummer: { room: 'balcony', lead: 1, npcLead: 0,
+    phrase: 'flower garlands and string lights along the balcony rail',
+    npcUp: '{name} strung flower garlands and lights along the balcony rail for Midsummer.',
+    playerUp: 'You wind flower garlands and string lights along the balcony rail.' },
+  harvest_moon: { room: 'balcony', lead: 0, npcLead: 0,
+    phrase: 'paper lanterns strung along the balcony rail',
+    npcUp: '{name} strung paper lanterns along the balcony rail for the Harvest Moon.',
+    playerUp: 'You string paper lanterns along the balcony rail for the moon.' },
+};
+
+const OCCASION_TUNING = {
+  // D4/D9 — the lead-in: a major occasion (and any row with an eve line) is
+  // "coming up" in the prompt inside this many days.
+  leadDays: 3,
+  // D6 — festivity: a genSeed-seeded base in [0.5 ± jitter], plus leans,
+  // clamped 0..1. Leans are small; a single trait never decides it.
+  festivitySeedSalt: 70913,
+  festivityJitter: 0.18,
+  festivityTemperament: { warmth: 0.14, openness: 0.08 },
+  festivityTraits: {
+    nostalgic: 0.12, warm: 0.1, playful: 0.1, expressive: 0.08, dramatic: 0.08, generous: 0.08, nurturing: 0.08, sensitive: 0.05,
+    cynical: -0.14, cold: -0.12, stoic: -0.1, serious: -0.06, understated: -0.06,
+  },
+  festivityValues: { tradition: 0.14, connection: 0.08, harmony: 0.05, independence: -0.06 },
+  // D7 — a person's feeling about ONE occasion wobbles around their festivity.
+  affinitySeedSalt: 88211,
+  affinityJitter: 0.15,
+  // How the prompt puts a festivity number into words (first match wins).
+  festivityWords: [
+    [0.8, 'loves this holiday'],
+    [0.6, 'enjoys it'],
+    [0.4, 'takes it or leaves it'],
+    [0.22, "isn't really a holiday person"],
+    [-1, 'finds all the fuss a bit much'],
+  ],
+  // Season stages for the prompt's date line (D4): day-of-season cut points.
+  seasonStages: [[11, 'early'], [23, 'mid'], [35, 'late']],
+  // --- Phase 3: decorations ---
+  decor: {
+    decorAffinity: 0.62,      // a roommate this keen on the occasion puts it up if you haven't
+    // A roommate's decorations come down 1..7 days after the occasion ends —
+    // sooner for the conscientious, later for the rest (conscientiousness
+    // −1..1 mapped onto the range).
+    takedownDays: { min: 1, max: 7 },
+    playerAutoDownDays: 14,   // yours linger until you take them down — or this long, then someone does
+    lingerNoticeDays: 4,      // "still up" is remarked on once, this many days after it ended
+    playerMinutes: 45,
+    playerMood: 0.06,
+    // Daily mood while a set is up in the house (per resident, by their
+    // feeling about that occasion). Tiny: ambience, not a lever.
+    moodFestive: 0.02, moodGrump: -0.012, festiveCut: 0.6, grumpCut: 0.25,
+    lines: {
+      down: '{name} took down the {label} decorations.',
+      playerDown: 'You pack the {label} decorations away until next year.',
+      autoDown: "The {label} decorations finally came down — somebody got tired of waiting for you to do it.",
+      linger: 'The {label} decorations are still up.',
+    },
+  },
+  // --- Phase 2: the holiday work model (R4, D10–D16) ---
+  // The user's design, verbatim intent: "Would this job naturally be off on
+  // this holiday? Would this job offer overtime for this holiday? Depending
+  // on financial situation, and personality-based work-ethic, would this NPC
+  // voluntarily CHOOSE to work if that option was available? How 'Festive'
+  // is this NPC?" — including the person who LOVES holiday shifts for the
+  // premium pay. occasions.js's holidayWorkPlan is the one reader.
+  work: {
+    seedSalt: 40417,
+    // D11 — a job's holiday policy. Precedence: an occupation row's own
+    // `holidayPolicy`, then titlePolicy, then incomeSource (self → 'self';
+    // means/none → 'none'), then categoryPolicy, then 'closed'.
+    categoryPolicy: {
+      tech: 'closed', finance: 'closed', legal: 'closed', science: 'closed', education: 'closed',
+      arts: 'closed', media: 'closed', wellness: 'closed', fitness: 'closed',
+      health: 'staffed', security: 'staffed', hospitality: 'staffed',
+      food: 'open', service: 'open', adult: 'open',
+      trades: 'oncall', music: 'self', none: 'none',
+    },
+    titlePolicy: {
+      // Health work that keeps office hours; news and support that never stop.
+      Therapist: 'closed', 'Telehealth Counsellor': 'closed',
+      Journalist: 'staffed', 'Customer Support Rep': 'staffed',
+    },
+    // `open` businesses still shut on the biggest days.
+    openClosedOn: ['midwinter', 'thanksgiving', 'new_years_day'],
+    // Share of staff rostered on a holiday.
+    rosterShare: { staffed: 0.5, open: 0.6 },
+    swapChance: 0.5,        // a festive rostered worker who asks off gets it this often
+    calloutChance: 0.25,    // trades: an emergency call-out lands
+    // Pay multipliers on offer: staffed holiday premium, busy-day tips/demand
+    // (the occasion's busyFor includes the job's category), trades call-outs.
+    premium: { staffed: 1.5, busy: 1.3, oncall: 2.0 },
+    // Calibrated 2026-09-22 (verify-occasions-work.js §3/§7): at 0.6 / 1.0 the
+    // premium out-pulled festivity so hard that an AVERAGE nurse volunteered
+    // (staffed jobs 18/19 working on Midwinter) and a 0.95-festive electrician
+    // still took double-time call-outs. The volunteer should be notable — the
+    // user's "loves holiday shifts for the pay" person — not the norm.
+    premiumWeight: 0.4,     // how much a multiplier pulls toward working: (premium - 1) * weight
+    // homePull = festivity-for-this-occasion * occasionWeight[closure].
+    occasionWeight: { major: 1.3, partial: 0.8 },
+    askOffMargin: 0.2,      // homePull must beat workPull by this to ask off a rostered shift
+    volunteerMargin: 0.3,   // workPull must beat homePull by this to volunteer
+    selfMargin: 0.35,       // self-employed work the holiday past this margin…
+    selfMarginBusy: 0.15,   // …or this, when it's a busy day for their line of work
+    moneyNeed: {
+      band: { low: 0.55, mid: 0.3, high: 0.1 },
+      spendingLean: { free_spender: 0.15, frugal: 0.1 },
+      traits: { materialistic: 0.15, ambitious: 0.1 },
+    },
+    workEthic: {
+      traits: { reliable: 0.15, methodical: 0.15, perfectionist: 0.15, lazy: -0.25 },
+      values: { ambition: 0.1, contentment: -0.1 },
+    },
+    // D15 — mood at the rollover onto the holiday.
+    mood: { offFestive: 0.07, volunteered: 0.03, rosteredFestive: -0.05, swapFailed: -0.08, festiveCut: 0.6 },
+    // D13 — the reason, in words, for the prompt and the morning line.
+    reasonPhrases: {
+      closed: 'has the day off — work is closed',
+      not_rostered: 'has the day off — not on the holiday roster',
+      asked_off: 'was on the roster but swapped the shift to have the day off',
+      rostered: 'is working it — on the holiday roster',
+      swap_failed: 'is stuck working it — tried to swap the shift and couldn\'t',
+      volunteered: 'picked up the holiday shift for the premium pay, and doesn\'t mind a bit',
+      called_out: 'got called out on an emergency job at double time',
+      self_working: 'is working anyway — holidays are good business',
+      self_off: 'is taking the day off',
+    },
+  },
 };
 
 // --- Masturbation (Phase 3) ---
@@ -10701,6 +11887,11 @@ const DRIVE_DEFS = {
       temperamentWeights: { openness: 0.15, conscientiousness: -0.10 },
       holdMinutes: 60, // was holdTicks 2 — 2 × 30-min ticks
       blockAppeal: { leisure: 1.2, midday: 1.1, evening: 1.0 },
+      // Seasons & weather Phase 3 (W5): the pool on a hot day. Only on a hot
+      // day (WEATHER_TUNING.drives.hotC or a heatwave), so the spring-built
+      // measurements above never see it; measured in its own season instead
+      // (seasons-and-weather-plan Phase 3 notes).
+      weather: { hot: 0.04 },
     },
     activityOverride: 'swimming laps',
     eventTemplate: '{name} went for a swim.',
@@ -10744,6 +11935,9 @@ const DRIVE_DEFS = {
       temperamentWeights: { openness: 0.10, volatility: 0.10 },
       holdMinutes: ACTION_TUNING.saunaMinutes,
       blockAppeal: { leisure: 1.1, evening: 1.2, wind_down: 1.3 },
+      // Seasons & weather Phase 3 (W5): the sauna on a bitter day — the
+      // same small lean as swim's hot one, the other end of the year.
+      weather: { cold: 0.04 },
     },
     moveToRoom: ['pool_room'],
     // Nudity is NOT setsClothing here — design invariant 4 (see
@@ -11111,6 +12305,13 @@ const DRIVE_DEFS = {
     // Same rooms the schedule routes 'reading' to (ACTIVITY_ROOM_PREFERENCES).
     moveToRoom: ['study', 'living_room', 'balcony'],
     eventTemplate: '{name} curled up with a book for a while.',
+    // Seasons & weather Phase 3: the same event, told with the weather when
+    // the weather is the story (driveWeatherTemplate, seasons.js). Text only
+    // — nothing here touches the score.
+    weatherTemplates: {
+      outsideFine: ['{name} read out on the balcony in the sun.', '{name} read out on the balcony in the evening air.'],
+      cozy: '{name} curled up with a book while {weather}.',
+    },
     eventMood: 0.03,
     cooldownMinutes: 420,
     utility: {
@@ -11132,6 +12333,9 @@ const DRIVE_DEFS = {
     activityOverride: 'watching TV',
     moveToRoom: ['living_room'],
     eventTemplate: '{name} put the TV on and sprawled across the couch.',
+    weatherTemplates: {
+      cozy: '{name} put a film on and burrowed into the couch while {weather}.',
+    },
     eventMood: 0.03,
     cooldownMinutes: 420,
     // A screen on shows up on the bills, the same way a shower or a load of
@@ -11156,6 +12360,10 @@ const DRIVE_DEFS = {
     activityOverride: 'scrolling social media',
     moveToRoom: ['living_room', 'balcony', 'bedroom'],
     eventTemplate: '{name} scrolled through their phone for a while.',
+    weatherTemplates: {
+      outsideFine: ['{name} scrolled through their phone out on the balcony in the sun.', '{name} scrolled through their phone out on the balcony in the evening air.'],
+      cozy: '{name} scrolled through their phone under a blanket while {weather}.',
+    },
     eventMood: 0.02,
     cooldownMinutes: 360,
     utility: {
@@ -11163,6 +12371,52 @@ const DRIVE_DEFS = {
       holdMinutes: 60,
       blockAppeal: { leisure: 1.1 },
       pastimeWeight: 0.06,
+    },
+  },
+
+  // --- Side Projects (projects.js, 0.14.2) ----------------------------------
+  // Measured before this existed (four weeks, three houses, twelve residents,
+  // the real resolveBatch): 'playing guitar' 10 ticks in total, 'painting' 7,
+  // 'crafting' 13, 'journaling' 5 — about one half-hour per person per month
+  // — against 1,469 of 'reading', 1,314 of 'watching TV' and 851 of
+  // 'scrolling social media'. Everyone had interests with a skill number, and
+  // nothing in their day ever touched them.
+  //
+  // This is the time for the one thing they're making or learning. Candidacy
+  // (cognition.js DRIVE_CANDIDACY → projects.js projectDriveCandidate) is an
+  // active project they're still into; the custom resolver (tryWorkOnProject,
+  // the isProjectDrive branch in evaluateDrives) picks the room and activity
+  // from the project's kind, moves it along, and tells the event. Not an idle
+  // pastime (no isIdlePastime: it is gated, never the universal fallback), no
+  // temperamentWeights: personality reaches it through the project's own
+  // engagement (projects.js), which decides whether it's a candidate at all.
+  //
+  // Its score is set to fill the free time the idle pastimes leave — not to
+  // outbid swimming or company. First pass (0.45, leisure ×1.1) beat a
+  // neutral swimmer's 0.444 in the daytime and took the gap ticks swim lives
+  // on (verify-w6's deviant cast stopped swimming nude at all), and because
+  // conscientious people keep their projects going it pulled their
+  // seek_company down enough to fail verify-c3's warmth cross-control (11%
+  // against a 9.5% bar; 3% without the drive). Measured over four settings:
+  // 0.43, flat by day, a little stronger in the evening and before bed,
+  // passes both with room (c3's control 7% against 10.5%) and keeps ~0.6
+  // sessions a resident-day — the project mostly replaces a TV or phone
+  // slot, which is the point. Re-run verify-c1/c2/c3/w6 on any change here.
+  work_on_project: {
+    gates: [], weight: 0.3,
+    isProjectDrive: true,
+    timeOfDay: ['midday', 'leisure', 'evening', 'wind_down'],
+    // The resolver applies these (it returns before resolveStandardDrive).
+    effects: [
+      { type: 'ADJUST_NEED', params: { who: 'self', need: 'stimulation', delta: 12 } },
+      { type: 'MOOD_DELTA', params: { who: 'self', delta: 0.03 } },
+    ],
+    eventMood: 0.03,
+    cooldownMinutes: 600,
+    utility: {
+      baseAppeal: 0.43,
+      holdMinutes: 75,
+      blockAppeal: { leisure: 1.0, midday: 1.0, evening: 1.05, wind_down: 1.1 },
     },
   },
 };
@@ -12004,7 +13258,7 @@ const DRIVE_COOLDOWN_KEY = '_driveCooldowns';
 // header). The two triggers can coincide; when they don't, a plan-completion
 // bump still needs a real reason a save-version check would care about, or
 // at minimum a patch notes entry — this string IS the app's version list.
-const GAME_VERSION = '0.14.1';
+const GAME_VERSION = '0.14.2';
 
 const SAVE_TUNING = {
   manualBaseSlots: 12,       // manual_0..manual_11; grow on demand above this

@@ -67,7 +67,13 @@ const ambient = J(`(() => {
   const g = __mk(1, 1);   // day 1 = spring
   __setTarget(g, THERMOSTAT_TUNING.defaultC);
   const spring = ambientTempC(g);
-  const expectedSpring = 18 + (THERMOSTAT_TUNING.defaultC - 18) * THERMOSTAT_TUNING.hvacEfficiency;
+  // seasons-and-weather-plan.md Phase 1 (W2) changed the OUTDOOR side of this
+  // blend on purpose: it was the flat season value (18 in spring), it is now
+  // seasons.js's outdoorTempC (that day's weather and hour; its season MEAN is
+  // still 18 — verify-weather.js pins that). The blend formula itself is
+  // unchanged, so the exact-match check stands against the live outdoor value.
+  const outdoorSpring = typeof outdoorTempC === 'function' ? outdoorTempC(g) : 18;
+  const expectedSpring = outdoorSpring + (THERMOSTAT_TUNING.defaultC - outdoorSpring) * THERMOSTAT_TUNING.hvacEfficiency;
   g.meta.clock.day = 106; // winter
   const winterCold = ambientTempC(g);
   __setTarget(g, THERMOSTAT_TUNING.maxC);
@@ -126,7 +132,12 @@ const discomfort = J(`(() => {
   __setTarget(g, THERMOSTAT_TUNING.minC);
   const cold = { d: temperatureDiscomfort(g, npc, ids[0]), bias: temperatureClothingBiasWeight(g, npc, ids[0]) };
   __setTarget(g, THERMOSTAT_TUNING.maxC);
-  g.meta.clock.day = 1; // spring, so maxC setting actually reads hot given hvacEfficiency < 1
+  // A genuinely warm moment, so the maxC setting reads hot given
+  // hvacEfficiency < 1. Was "day 1 = spring" against the old flat 18°C; under
+  // seasons-and-weather-plan.md Phase 1's smooth curve day 1 is the COLD edge
+  // of spring (and the harness clock is morning), so a summer afternoon
+  // states the test's own premise instead of assuming it.
+  g.meta.clock.day = 53; g.meta.clock.minutes = 900;
   const hot = { d: temperatureDiscomfort(g, npc, ids[0]), bias: temperatureClothingBiasWeight(g, npc, ids[0]) };
   __setTarget(g, (b.minC + b.maxC) / 2);
   const mid = { d: temperatureDiscomfort(g, npc, ids[0]), bias: temperatureClothingBiasWeight(g, npc, ids[0]) };
