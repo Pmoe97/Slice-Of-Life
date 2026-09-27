@@ -83,6 +83,7 @@ between folders together.
 | `src/src/ref/complete/asks-and-attachments-plan.md` | **The conversation attachments menu + the coded-ask system** — the FUOC-style `+` surface adapted to SoL's deterministic spine. A nested Request tree of hardcoded ask types resolve deterministically (`decide()` pure over state+seed — flavor text shapes only the LLM's phrasing) and are *phrased, never decided*, by the LLM: `$AskId <flavor>` syntax, dim tag chips on ask bubbles, writer `effects` stripped on ask turns, the repeat-ask ladder (2nd = resistance without REL_DELTA, 3+ = negative delta + escalating stance), scheduled asks that bind real commitments through a calendar modal with free-slot probing, meal types inferred from time-of-day (`requestMeal`, D10), loan/chore asks with real writes (`EARN_MONEY` + the `_loanOwed` player flag + its Phase-10 repayment leaf `ask_repay`), willingness-routed intimacy asks, generated-image photo asks + camera-roll sharing, and gift asks from inventory with an interest-matched REL_DELTA. **Complete — all 12 phases, D1–D29 locked**, Phase 11's full-plan audit and Phase 12's fixes both verified live. Moved from `wip/` 2026-08-18. Paired with `asks-llm-prompt.md` and `asks-and-attachments-handoff-prompt.md`. |
 | `src/src/ref/complete/asks-llm-prompt.md` | **The reusable LLM prompt for the ask system** — the ask-directive block appended to the existing scene prompt on ask turns (placeholder fill rules, the decline-stance ladder, the scheduling-confirm variant, the template fallback — pass 1 via `buildAskFallbackLine` and pass 2 in `runAskScheduleFlow`, both wired as of Phase 10 — and the "gate the effect-strip at `doConvSend`, not inside `callLLM`" implementation note). |
 | `src/src/ref/complete/asks-and-attachments-handoff-prompt.md` | **The session prompt for the ask plan** — the one-phase-per-session protocol (Step 0 Status-table orientation with the dependency-graph exceptions, Step 1 Handoff/citations/stop-and-flag, Step 2 the ask invariants — decision-before-LLM, flavor-never-decides, effect-strip gated at `doConvSend`, seeded determinism — plus load-order and willingness-gate rules, Step 3 the mandatory Handoff overwrite). Hand this to an implementation session, not the plan — though there is nothing left to implement; a fresh session opening it will find the plan already complete. |
+| `src/src/ref/wip/conversation-and-messaging-overhaul-plan.md` | **Talking & texting (0.14.3) — all phases built and verified 2026-09-27; stays in `wip/` for the user's four (confirm) calls (D3 name, D5 colours, D6 fridge reach, D7 set).** Chat images carry an `anchor` (the line they followed, taken at request time) and reopen in place (`convPlaceImages`); a scene *director* (`draftConversationScene`, image.js) reads the last ten spoken lines and drafts the moment each panel draws, with the identity clauses unchanged; the `+` menu is **Interact**, opens at its root, and a leaf opens a composer (`renderAskComposer`, ui.js) whose argument chips (amount, gift/loan, event kind, guests) ride `resolveAsk`'s structured `extra` — never `decide()`; one giving pipeline (`giftSources`/`giveGiftUnit`, inventory.js) that reaches ready food in the fridge/pantry and gives ONE serving of a plate, advancing the goal it satisfies; and Messages gets the phone's Interact (`remote: true` leaves, the same composer and `resolveAsk`, `resolveImReply` with the directive, transfers, photos in the thread, plans through the shared `askSchedulePickAndBook`), textContent-only rendering and a 400-message thread cap (`pushImMessage`). Verified by `verify-conv-images.js`, `verify-conv-scene.js`, `verify-ask-composer.js`, `verify-gift-flow.js`, `verify-im-asks.js`. |
 | `src/src/ref/complete/player-creation-and-intro-plan.md` | The other half of `game-opening-plan.md`, which shipped the opening's mechanics and never shipped its protagonist or its fiction. Adds the full-screen **Player Design studio** (`src/src/srcfiles/studio.js`, seven tabs generated from one table and validated through the same `validateNpcField` the Character Studio uses), first-class `player.name`/`surname`/`portrait`, the **`physical.intimate`** layer on player and NPCs alike behind a three-part fail-closed gate in `getPhysicalDescriptionForPrompt`, and the pregenerated-image opening cutscene (`src/src/srcfiles/defs.intro.js`). **Built — all 6 phases, D1–D20, 54 assertions in `verify-intro.js`.** Also fixed the defect that motivated it: `menu.new-game` had been opening the legacy 2-roommate cast form, so the solo start `ECONOMY.opening.soloStart` and the whole rent model assume was **not what New Game did** — `startSoloGame` existed and was reachable from no button. The 16 pregenerated intro images landed 2026-08-14, which is what moved this to `complete/`. |
 | `src/src/ref/complete/ai-character-generation-plan.md` | Describe a character in one sentence and the AI fills the whole sheet — name, looks, personality, history — into every surface that studio built plus the sandbox roommate editor and the in-game Character Studio, as an editable draft the player reviews before confirming (never constructed directly — invariant 2). One engine (`src/src/srcfiles/concept.js`) across four scopes; free text decided by `CHARACTER_SCHEMA`'s own `enum` gate rather than a second hand-maintained list (`src/src/srcfiles/fields.js`'s `comboControl`); an authored fill replaces the start-of-game prose call rather than adding to it (D9, proven live at zero `generateText` calls on a described-roommate sandbox start); a live rewrite goes through the same validate → no-op-skip → write → revision loop the manual Character Studio editor uses, previewed as a diff behind an explicit confirm. Deletes the half-built `generateCharacterWithAI` it replaces, which asked for zero appearance. **Complete — all 7 phases, D1–D14 locked, built and verified 2026-08-26.** Full detail — including the two upstream bugs its own verification caught (`fillFallback` ignoring `authoredFields`, `collectStudioDraft` silently deleting uncontrolled keys) — is in the plan's Handoff history; see also `src/src/ref/README.md`'s `complete/` row. |
 | `src/src/ref/patterns/perchance-agent-handoff-prompt.md` | The original generic one-phase-per-session protocol (each overhaul now has its own; this is the ancestor) |
@@ -1265,7 +1266,7 @@ fallback, no brace-matching tier) since IM's contract is narrower —
 dialogue and tiny deltas only, no narration field, no effects.
 
 **Threads are session state** (`apps.im.threads: {npcId: {msgs, unread}}`),
-sent via `computer.js`'s `sendImMessage` — player-initiated (called from
+sent via `computer.js`'s `appendPlayerImMessage` + `resolveImReply` — player-initiated (called from
 a click, not a tick), so the async LLM call inside it doesn't touch the
 zero-LLM-in-ticks invariant. A failed/unparseable reply appends a system
 line ("hasn't replied yet") to the thread rather than losing the
@@ -1279,6 +1280,27 @@ don't need to know about each other. The input's value is read
 synchronously by `UI.COMPUTER`'s `doImSend` before anything re-renders,
 so losing the DOM node on the next `renderComputerScreen` call (which
 always rebuilds `cs-body`) never loses what was typed.
+
+**Asks by text (conversation overhaul D7/D8, 0.14.3).** A `+` beside the
+field opens the phone's Interact: `asks.js`'s `askRemoteCategories()` —
+the ask leaves flagged `remote: true` (plans, invites, the four money
+leaves, photos, apology, boundaries, ask-about-them; nothing physical).
+A leaf opens the SAME composer the conversation uses (`ui.js`
+`renderAskComposer`, host-agnostic) and the send (`ui.computer.js`
+`doImAskSend`) runs the SAME `resolveAsk` against `assembleImContext`
+(`channel: 'im'`, which words the directive for a text), then
+`resolveImReply(…, { askTurn })` — effects/mood deltas stripped, template
+fallback on a failed call — then the ask's own second halves (the shared
+calendar helper `askSchedulePickAndBook`; the photo pipeline, whose image
+is stored on the message with the chat-image record contract), then its
+effects once. Money shows as a `transfer` on the message
+(`askTurn.effectData()` is what actually moved). UI state is module-level
+in `ui.computer.js` (`IM_ASK_SHEET`, `IM_COMPOSER`, `IM_DRAFTS`,
+`IM_PENDING_IMAGE`) because both devices render the one thread.
+`render.computer.js` draws every message through `renderImBubble` —
+**textContent only**; model or player text never reaches `innerHTML`. Every
+writer appends through `pushImMessage`, which trims the thread to
+`IM_PROMPT.threadCap` (400).
 
 **Two small, reusable extensions to existing machinery**, both needed for
 the thread list specifically:

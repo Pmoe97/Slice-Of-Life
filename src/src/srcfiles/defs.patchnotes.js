@@ -36,6 +36,28 @@ const PATCHNOTES_KIND_LABELS = {
 
 const PATCH_NOTES = [
   {
+    version: '0.14.3',
+    date: '2026-09-27',
+    title: 'Talking & Texting',
+    summary: "Conversations got a lot easier to do things in. The + menu is now "
+      + "Interact, money has proper amount buttons instead of guessing from what "
+      + "you typed, giving someone a meal for a goal finally works the way you'd "
+      + "expect, and Messages can do nearly everything a face-to-face talk can.",
+    changes: [
+      { kind: 'fixed', text: "Closing a conversation and opening it again piled every scene picture up at the bottom, in one long row after all the talking. Each picture now goes back exactly where it happened, right after the line it showed. A picture that was still being drawn while you kept talking also used to land below the replies that came in meanwhile; it now takes the spot where it started." },
+      { kind: 'fixed', text: "The Scene visualizer didn't read the conversation at all, so it drew almost the same picture of the two of you over and over. Now a quick pass reads what was just said and describes that moment — who's leaning in, who's laughing, who just put their mug down — before the picture is drawn, and it's told what the last picture showed so the next one moves on. Faces and outfits stay the same from picture to picture." },
+      { kind: 'changed', text: "The + menu in a conversation is now called Interact, and it opens on its full list every time instead of jumping straight to Affection. Each kind of request has its own colour, so money, plans and affection are easy to tell apart." },
+      { kind: 'changed', text: "Picking something from Interact no longer drops a code like \"$RequestMeal <Optional>\" into your text box. A small panel opens above the box instead, with buttons for the choices that request needs, and whatever you type becomes an optional message to go with it. You can Tab and use the arrow keys between the buttons, or tap them. Esc or ✕ cancels it." },
+      { kind: 'changed', text: "Money is buttons now, not guesswork. Give Money has amount buttons ($5 to $100, or type any amount up to what you have) and a Gift / Loan switch — no more hoping the story read the amount out of your message, or getting $40 when you didn't say. Asking to borrow shows how much this person would lend at most, and paying someone back or asking for your money back starts at the full amount owed. What you picked shows on your message, like \"Give Money · $20 · Loan\"." },
+      { kind: 'changed', text: "Inviting someone lets you pick what it's for (dinner, hanging out, a pool party) and tap which other roommates to bring along, instead of writing it into the message." },
+      { kind: 'fixed', text: "Giving a meal for a goal now works. A meal you cook goes in the fridge, and before, nothing could hand it to anyone from there, so the Care Package goal got stuck on \"Give the meal\". Give a Gift now lists food in the fridge and pantry as well as your bag, says where each thing is, and puts whatever your goal needs at the top with a \"For your goal\" badge. Giving someone a home-cooked meal hands over one serving, not the whole batch; they'll eat it when they're hungry. From another room it's \"I saved you a plate — it's in the fridge\"; in the kitchen you hand it over." },
+      { kind: 'fixed', text: "Giving something in a conversation now counts toward the goal it's for, and the conversation tells you when a goal moves on or finishes. The Give button next to a roommate now opens the conversation with the gift list ready, instead of silently handing over the first thing in your bag, and it says what it's for (\"Give a Meal to Mira\"). After you hand something over, just keep talking to finish a \"check in with them\" step; you don't have to leave and start a new conversation any more. The Bonding Night goal's \"snacks or drinks\" step now accepts drinks." },
+      { kind: 'added', text: "Messages can do much more now. The new + next to the text box offers everything that works by text: make plans (the calendar opens right on your phone and they text back to confirm), invite people over for dinner or a party, send or lend money, borrow money, pay someone back or ask for yours back, ask for a photo (it arrives right in the chat and stays there), share or post a photo, apologize, ask for space, or ask about them. It works the same way as asking face to face, and the same things decide the answer. Money shows up in the chat as a transfer, so you can see what was sent and what came back." },
+      { kind: 'fixed', text: "A message containing symbols like < and > could come out garbled in Messages, because the text was read as page code. Messages now always shows exactly what was written. Very long text threads also no longer make your save file grow forever; a thread keeps its latest 400 messages." },
+      { kind: 'fixed', text: "Roommates were sometimes told the wrong side of a request, as if you had made their decision for them (\"They said yes to spending time together\"), which could make a reply come out oddly. Every request now tells them plainly what they decided. Giving someone money or returning something you borrowed is no longer described to them as being turned down." },
+    ],
+  },
+  {
     version: '0.14.2',
     date: '2026-09-25',
     title: 'Seasons, Holidays & Birthdays',

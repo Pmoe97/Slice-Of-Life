@@ -1,6 +1,6 @@
 # Conversation & Messaging Overhaul
 
-Status: **in progress — Phases 1–5 built and verified; Phase 6 (close-out) next.** Opened 2026-09-27 from the user's bug/QoL
+Status: **All six phases built and verified (0.14.3). Stays in `wip/` until the user answers the four (confirm) calls below.** Opened 2026-09-27 from the user's bug/QoL
 list ("We need to fix conversing in this game").
 Last updated 2026-09-27.
 
@@ -27,7 +27,7 @@ something lands; they must never disagree.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 6 (close-out).
+**Resume at:** nothing to build. Open: the user's answers to the (confirm) calls (see *Open questions for the user*), then move this plan to `complete/`.
 
 **Last session's notes:** Plan written from a survey of `ui.js`
 (conversation overlay, ask menu, gift/borrow pickers), `asks.js`,
@@ -304,13 +304,48 @@ serving + goal hook), `ui.js` (picker, chip → conversation).
 ### Phase 6 — Close-out
 Full suite, patch notes (0.14.2 entry), ARCHITECTURE/README rows.
 
+## Open questions for the user
+
+Decided on the user's behalf and built; each is easy to change:
+
+1. **D3 — the name "Interact".** Replaces "Asks"/"Requests" on the + menu
+   (conversation and Messages). Alternatives: "Actions", "Do…", "More".
+2. **D5 — Gift = green, Loan = amber.** The Give Money switch's colours
+   (and the transfer card's edge in Messages).
+3. **D6 — the gift list reaches the flat's fridge and pantry.** Anything
+   ready to eat that isn't labelled as someone else's can be given, one
+   serving at a time; from outside the kitchen it's "I saved you a plate".
+   The alternative is bag-only plus a "take it out of the fridge" step.
+4. **D7 — what texting can do.** Everything but the physical asks (hugs and
+   the rest of Affection, handing over an item, borrowing/returning,
+   follow-me/tour, chores). Chores by text ("can you do the dishes?") is the
+   obvious candidate to add.
+
+## Close-out notes (2026-09-27)
+
+- The review pass before pushing found and fixed one leak of my own: the
+  in-person composer host outlives each composer, so `renderAskComposer`
+  re-added a keydown listener on every open (each stale copy re-clicked the
+  same chip). It binds through `onkeydown` now; `verify-ask-composer.js`
+  asserts no pile-up and fails on the old code.
+- `buildImPrompt`'s transcript now describes what a text *was* when it has
+  little text of its own — `[Give Money · $35 · Loan] [sent you $35 as a
+  loan]`, `[sent a photo: …]` — so the next reply knows money changed hands.
+- Live-checked at the end, all in `dev-harness.html` with a stubbed model:
+  a conversation with scene panels + a shared photo reopens in exactly the
+  live order; the director runs once per panel, sees the newest line, and
+  its moment is in the stored panel prompt.
+- Not done, deliberately (future work, not in scope): NPCs *initiating*
+  asks over text; chores by text (question 4); a real model's phrasing of
+  the texting directive (every check here used a stubbed model).
+
 ## Status
 
 | Phase | State |
 |---|---|
 | 1 — Images stay in place | built + verified (`verify-conv-images.js` 32) |
 | 2 — Scene director | built + verified (`verify-conv-scene.js` 42) |
-| 3 — Interact composer | built + verified (`verify-ask-composer.js` 69; live in the harness) |
+| 3 — Interact composer | built + verified (`verify-ask-composer.js` 70; live in the harness) |
 | 4 — Gifts | built + verified (`verify-gift-flow.js` 51; live in the harness) |
-| 5 — Messages | built + verified (`verify-im-asks.js` 52; live on phone + computer) |
-| 6 — Close-out | not started |
+| 5 — Messages | built + verified (`verify-im-asks.js` 54; live on phone + computer) |
+| 6 — Close-out | done — full suite 6,781+ pass / the same 12 known failures as the baseline (verify-c2 ×9, verify-i4 ×2, verify-p4 ×1, all in the triage doc); `GAME_VERSION` 0.14.3 + patch notes; ARCHITECTURE/README/verify README rows; `asks-llm-prompt.md` synced |

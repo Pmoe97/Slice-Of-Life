@@ -46,7 +46,11 @@ const FAKE_DOM_SRC = `
       dispatch(type, ev) {
         const e = { type, target: this, key: ev && ev.key, preventDefault() {}, ...(ev || {}) };
         let node = this;
-        while (node) { for (const fn of (node._listeners()[type] || [])) fn(e); node = node.parentNode; }
+        while (node) {
+          for (const fn of (node._listeners()[type] || [])) fn(e);
+          if (typeof node['on' + type] === 'function') node['on' + type](e);
+          node = node.parentNode;
+        }
       },
       click() { this.dispatch('click'); },
       focus() { __doc.activeElement = this; },

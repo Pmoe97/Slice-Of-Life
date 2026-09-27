@@ -8040,8 +8040,11 @@ function renderAskComposer(host, leaf, state, opts) {
   }
 
   // Arrow keys move along a chip group (and pick, in a radio group), so the
-  // whole strip is drivable from the keyboard without a mouse.
-  host.addEventListener('keydown', (e) => {
+  // whole strip is drivable from the keyboard without a mouse. Bound through
+  // the `onkeydown` PROPERTY, not addEventListener: the conversation's host
+  // element outlives each composer, so a listener per render would pile up
+  // (every stale copy re-clicking the same chip on each key press).
+  host.onkeydown = (e) => {
     if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
     const group = e.target.closest && e.target.closest('.ask-chips');
     if (!group || e.target.tagName === 'INPUT') return;
@@ -8053,7 +8056,7 @@ function renderAskComposer(host, leaf, state, opts) {
     const next = items[(at + step + items.length) % items.length];
     next.focus();
     if (group.getAttribute('role') === 'radiogroup') next.click();
-  });
+  };
 
   sync();
 }

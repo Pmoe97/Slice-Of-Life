@@ -340,7 +340,12 @@ api(`__chip('amount', '$50').click(); __chip('mode', 'Loan').click();`);
 check('tapping $50 and Loan updates the composer state', J(`JSON.stringify(convComposer.values)`) === '{"amount":50,"mode":"loan"}');
 check('…and exactly one chip per group is checked',
   J(`['amount', 'mode'].every(arg => __host.querySelectorAll('.ask-chip[aria-checked="true"]').filter(c => c.closest('[data-arg="' + arg + '"]')).length === 1)`));
+// Re-open the composer a few times on the SAME host first: the arrow-key
+// handler must not stack (one press, one step).
+api(`for (let i = 0; i < 3; i++) { openConvComposer('GiveMoney'); } __host = __byId['conv-composer']; __chip('amount', '$50').click(); __chip('mode', 'Loan').click();`);
 api(`__chip('mode', 'Loan').dispatch('keydown', { key: 'ArrowLeft' });`);
+check('re-opening the composer on the same host does not pile up key handlers',
+  J(`(__host._listeners().keydown || []).length === 0 && typeof __host.onkeydown === 'function'`));
 check('an arrow key moves along a radio group and picks (keyboard-only use)',
   J(`convComposer.values.mode === 'gift' && __doc.activeElement === __chip('mode', 'Gift')`));
 api(`__custom = __host.querySelector('.ask-chip-custom').children[0]; __custom.value = '999'; __custom.dispatch('input');`);

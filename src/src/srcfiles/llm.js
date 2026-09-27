@@ -382,7 +382,7 @@ CRITICAL RULES:
 }
 
 // --- The ask-directive block (asks plan Phase 1) ---
-// Compiled from src/src/ref/wip/asks-llm-prompt.md — that file is the source of
+// Compiled from src/src/ref/complete/asks-llm-prompt.md — that file is the source of
 // truth for this wording; keep the two in sync whenever one changes. The
 // writer receives the semantic reason/stance words, never the numbers behind
 // the decision (placeholder fill rules in the prompt doc). The `---`-fenced
@@ -435,7 +435,7 @@ function buildAskDirective({ askLabel, askId, flavorText, accept, reasonPhrase, 
 // The SECOND LLM pass of a schedule:true ask: after the calendar modal
 // confirmed a window and the commitment already exists, this tells the
 // writer to phrase the sign-off ("see you then!"). Compiled verbatim from
-// src/src/ref/wip/asks-llm-prompt.md's scheduling-confirm variant — that file
+// src/src/ref/complete/asks-llm-prompt.md's scheduling-confirm variant — that file
 // is the source of truth; keep the two in sync. Shares the `---`-fenced
 // shape of the ask-directive block so the scene-prompt prefix before it
 // stays as cache-friendly as the first pass.
@@ -468,9 +468,24 @@ function buildImPrompt(context, message) {
   // of the conversation was the five-entry shared memory.recent buffer — so
   // a long text exchange was invisible to the model writing the next line.
   const thread = context.imThread || [];
+  // Conversation overhaul D7: a texted ask's tag, a photo and a transfer
+  // have little or no text of their own — say what they were, so the next
+  // reply knows money changed hands or a photo was sent ("You" is the
+  // character, "Them" the player, as in the header below).
+  const imLine = (m) => {
+    const bits = [];
+    if (m.tag && m.from === 'player') bits.push(`[${m.tag}]`);
+    if (m.transfer) {
+      const what = m.transfer.mode === 'loan' ? ' as a loan' : m.transfer.mode === 'repay' ? ' paying back a debt' : '';
+      bits.push(m.from === 'player' ? `[sent you $${m.transfer.amount}${what}]` : `[sent them $${m.transfer.amount}${what}]`);
+    }
+    if (m.image) bits.push(`[sent a photo: ${m.image.caption || 'a photo'}]`);
+    if (m.text) bits.push(m.text);
+    return bits.join(' ');
+  };
   const transcript = thread
     .filter(m => m.from === 'player' || m.from === 'npc')
-    .map(m => `${m.from === 'player' ? 'Them' : 'You'}: ${m.text}`)
+    .map(m => `${m.from === 'player' ? 'Them' : 'You'}: ${imLine(m)}`)
     .join('\n');
 
   let prompt = `You are the narrator for a slice-of-life apartment simulation, writing ${npc.name}'s side of a text-message conversation with the player. This is texting, not a scene — no narration, no scene-setting, just their reply.

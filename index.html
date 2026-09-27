@@ -8485,7 +8485,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=204"></script>
+<script src="src/src/srcfiles/config.js?v=205"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -8531,7 +8531,7 @@ body {
 <!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
      player-facing release history. Pure data, no dependencies, grouped with
      the other defs.* files for the same reason defs.dreams.js is. -->
-<script src="src/src/srcfiles/defs.patchnotes.js?v=24"></script>
+<script src="src/src/srcfiles/defs.patchnotes.js?v=25"></script>
 <!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
      WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
      ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
@@ -8568,14 +8568,14 @@ body {
 <!-- Inventory overhaul Phase 1: pure inventory query/sort/describe helpers
      (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
      time) and before render.js/ui.js, which call it at runtime. -->
-<script src="src/src/srcfiles/inventory.js?v=24"></script>
+<script src="src/src/srcfiles/inventory.js?v=25"></script>
 <script src="src/src/srcfiles/effects.js?v=48"></script>
 <!-- Food-overhaul Phase 5: the pure cooking engine (cooking.js) — after
      effects.js (uses clamp) and items.js (makePlate/freshnessOf); its
      functions are called at runtime by defs.actions.js and render.js. -->
 <script src="src/src/srcfiles/cooking.js?v=4"></script>
 <script src="src/src/srcfiles/taste.js?v=1"></script>
-<script src="src/src/srcfiles/drives.js?v=51"></script>
+<script src="src/src/srcfiles/drives.js?v=52"></script>
 <!-- NPC utility scoring (npc-cognition-plan.md). Loads after drives.js: it
      reuses driveGateValue / isOnCooldown / DRIVE_COOLDOWN_KEY from it. -->
 <script src="src/src/srcfiles/cognition.js?v=34"></script>
@@ -8588,7 +8588,7 @@ body {
 <script src="src/src/srcfiles/skills.js?v=20"></script>
 <script src="src/src/srcfiles/stealth.js?v=24"></script>
 <script src="src/src/srcfiles/time.js?v=32"></script>
-<script src="src/src/srcfiles/computer.js?v=79"></script>
+<script src="src/src/srcfiles/computer.js?v=80"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -8605,7 +8605,7 @@ body {
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
 <script src="src/src/srcfiles/phone.js?v=22"></script>
-<script src="src/src/srcfiles/npc.js?v=65"></script>
+<script src="src/src/srcfiles/npc.js?v=66"></script>
 <!-- Aspirations & Creative Careers Phase 3 (D9/D56): the Notice & Opinion
      layer (notice.js) — after npc.js (addMemoryFact, MEMORY_IMPORTANCE,
      EMOTIONAL_WEIGHTS' reader) and signals.js (emitTransient,
@@ -8661,7 +8661,7 @@ body {
      and called by sim.js at runtime only. -->
 <script src="src/src/srcfiles/rumination.js?v=15"></script>
 <script src="src/src/srcfiles/prompt.js?v=20"></script>
-<script src="src/src/srcfiles/llm.js?v=56"></script>
+<script src="src/src/srcfiles/llm.js?v=57"></script>
 <!-- CONCEPT — the character-concept engine (description -> validated draft).
      AI-Assisted Character Generation Phase 2. Sits after llm.js (whose prompt
      conventions it follows) and before the UI layer that calls it. Reads
@@ -8674,7 +8674,7 @@ body {
      ui.js; x5.js itself is pure and calls no model. -->
 <script src="src/src/srcfiles/x5.js?v=17"></script>
 <script src="src/src/srcfiles/interruption.js?v=24"></script>
-<script src="src/src/srcfiles/image.js?v=44"></script>
+<script src="src/src/srcfiles/image.js?v=45"></script>
 <!-- Avatars & Sprite Studio Phase 1: the permanent override store (kv.sprites)
      and resolveSprite, the ONE function allowed to read a sprite blob. After
      image.js because the resolver falls through to cutoutKey / getCachedImage
@@ -8780,7 +8780,7 @@ body {
      ui.js reach it at runtime only. Registered in dev/verify/loadgame.js's ORDER
      in the same change. -->
 <script src="src/src/srcfiles/projects.js?v=3"></script>
-<script src="src/src/srcfiles/render.js?v=106"></script>
+<script src="src/src/srcfiles/render.js?v=107"></script>
 <!-- Night Scene Phase 3b: the Living Tableau's PAINTER. After render.js
      (shares its rules: idempotent, no state mutation, no rolls) and after
      actionwindow.js, whose awShow/awHide it calls to claim the overlay. NOT
@@ -8788,7 +8788,7 @@ body {
      loader deliberately stops before the render layer, exactly as
      render.spritestudio.js does. -->
 <script src="src/src/srcfiles/render.nightscene.js?v=1"></script>
-<script src="src/src/srcfiles/render.computer.js?v=78"></script>
+<script src="src/src/srcfiles/render.computer.js?v=79"></script>
 <!-- Avatars & Sprite Studio Phase 4: the studio's verbs and its screens.
      render.spritestudio.js extends COMPUTER_RENDERERS, so it must load AFTER
      render.computer.js declares it; spritestudio.js holds the actions and is
@@ -8881,9 +8881,9 @@ body {
      Registered in BOTH this list and loadgame.js's ORDER, same commit. -->
 <script src="src/src/srcfiles/platform.js?v=6"></script>
 <script src="src/src/srcfiles/aspirations.js?v=2"></script>
-<script src="src/src/srcfiles/asks.js?v=21"></script>
-<script src="src/src/srcfiles/ui.js?v=184"></script>
-<script src="src/src/srcfiles/ui.computer.js?v=68"></script>
+<script src="src/src/srcfiles/asks.js?v=22"></script>
+<script src="src/src/srcfiles/ui.js?v=185"></script>
+<script src="src/src/srcfiles/ui.computer.js?v=69"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
      site header with fake address bar + internal back/forward, footer, 404,

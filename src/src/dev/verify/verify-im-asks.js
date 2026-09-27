@@ -232,6 +232,9 @@ check('Give Money by text moves the chip amount exactly once', money.money === 2
 check('the player\'s text carries the ask\'s tag and the transfer (out, as a loan)',
   mine && mine.tag === 'Give Money · $35 · Loan' && mine.transfer && mine.transfer.amount === 35 && mine.transfer.dir === 'out' && mine.transfer.mode === 'loan', JSON.stringify(mine));
 check('…and their reply follows it', money.msgs[money.msgs.length - 1].from === 'npc');
+check('the next text\'s prompt knows money changed hands (a transfer is not an empty line)',
+  J(`(() => { const id = __ids(currentGameState)[0]; return buildImPrompt(assembleImContext(currentGameState, id), 'did it arrive?'); })()`)
+    .includes('Them: [Give Money · $35 · Loan] [sent you $35 as a loan] for the groceries'));
 check('nothing is left in flight (the send guard and the typing dots are cleared)', !money.sending && !money.pending);
 const loan = await A(`(async () => {
   currentGameState = __mk(); const id = __ids(currentGameState)[0];
@@ -264,6 +267,7 @@ const photo = await A(`(async () => {
 check('an accepted photo request lands IN the thread as their photo', photo.from === 'npc' && photo.image && photo.image.kind === 'askphoto', JSON.stringify(photo).slice(0, 200));
 check('…with the chat-image record contract (id, prompt, seed) so it re-paints and rerolls',
   photo.image && photo.image.id && photo.image.prompt && typeof photo.image.seed === 'number');
+check('…and the next prompt knows a photo was sent', J(`(() => { const id = __ids(currentGameState)[0]; return buildImPrompt(assembleImContext(currentGameState, id), 'nice'); })()`).includes('You: [sent a photo: '));
 const composed = await A(`(async () => {
   currentGameState = __mk(); const id = __ids(currentGameState)[0];
   IM_COMPOSER = { npcId: id, askId: 'GiveMoney', values: { amount: 999, mode: 'gift' } };
