@@ -397,7 +397,9 @@ function buildAskDirective({ askLabel, askId, flavorText, accept, reasonPhrase, 
     `- The request: ${askLabel} (${askId})`,
     `- The player's words: "${flavorText || '—'}"`,
     `- Your character's decision: ${accept ? 'ACCEPTED' : 'DECLINED'}`,
-    `- Why, in one plain line: ${reasonPhrase}`,
+    // Conversation overhaul D9: the reason phrases speak ABOUT the character
+    // ("they" = ${npcName}), while everything else here speaks TO them ("you").
+    `- Why, in one plain line ("they" here means ${npcName}): ${reasonPhrase}`,
     `- Your attitude toward the player right now: ${stance}`,
   ];
   if (ladderLine) lines.push(ladderLine);

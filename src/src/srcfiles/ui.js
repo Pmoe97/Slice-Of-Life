@@ -7155,6 +7155,14 @@ async function maybeShowConversationScene(npcId) {
   // and the persisted record can re-paint it on reopen. The counter lives on
   // npc.flags and only ever increments within an OPEN conversation.
   const panelN = (npc.flags._convSceneN = (npc.flags._convSceneN || 0) + 1);
+  // Conversation overhaul D1: where this panel belongs is decided NOW, at
+  // request time — the line it illustrates is the newest one in the buffer.
+  // Generation takes a while and the player can keep talking meanwhile, so
+  // reading the anchor at delivery time would file the picture under a later
+  // exchange (the "every image ends up at the bottom" report).
+  const anchor = convImageAnchor(npc);
+  const requestedDay = currentGameState?.meta?.clock?.day;
+  const requestedMinutes = currentGameState?.meta?.clock?.minutes;
   const removeGen = convShowGeneratingImage();
   // Bug report (2026-09-01): this await used to be bare. generateConversation
   // SceneImage guards its OWN generateImageTracked call in a try/catch and
@@ -7173,23 +7181,31 @@ async function maybeShowConversationScene(npcId) {
   } catch (e) {
     console.warn('Conversation scene generation failed:', e);
     result = { url: null };
-  } finally {
-    if (removeGen) removeGen();
   }
-  if (!convState || convState.npcId !== npcId) return; // conversation closed/switched mid-generation
+  const placeholder = removeGen && removeGen.el;
+  if (!convState || convState.npcId !== npcId) { // conversation closed/switched mid-generation
+    if (removeGen) removeGen();
+    return;
+  }
   if (result.url) {
     const record = {
       kind: 'scene', from: 'npc', tag: '🎨 Scene', caption: '',
-      day: currentGameState?.meta?.clock?.day,
-      tick: getTickIndex(currentGameState?.meta?.clock?.minutes),
+      day: requestedDay,
+      tick: getTickIndex(requestedMinutes),
+      minutes: requestedMinutes,
+      anchor,
       cacheKey: result.key,
       prompt: result.prompt,
       seed: result.seed,
       negativePrompt: IMAGE_NEGATIVE.scene,
+      ...(result.moment ? { moment: result.moment } : {}),
     };
     convPushImage(record);
-    convAddImageBubble('npc', result.url, '', '🎨 Scene', record);
+    // D1 — the finished panel takes the placeholder's spot, so a reply that
+    // landed while it was generating stays BELOW the picture it followed.
+    convAddImageBubble('npc', result.url, '', '🎨 Scene', record, placeholder);
   } else {
+    if (removeGen) removeGen();
     // Bug report (2026-09-13): a failed generation left this function
     // silent — convShowGeneratingImage's bubble is correctly removed above
     // either way, but nothing ever told the player it failed, so a due
@@ -7200,7 +7216,11 @@ async function maybeShowConversationScene(npcId) {
   }
 }
 
-function convAddImageBubble(from, url, text, tag, record) {
+// `replaceEl` (optional, conversation overhaul D1): a placeholder already in
+// the log — the new bubble takes its exact spot instead of going to the
+// bottom. A placeholder that's gone (the log was rebuilt) falls back to a
+// normal append.
+function convAddImageBubble(from, url, text, tag, record, replaceEl) {
   const log = document.getElementById('conv-log');
   if (!log) return null;
   const el = document.createElement('div');
@@ -7223,7 +7243,12 @@ function convAddImageBubble(from, url, text, tag, record) {
     bodyEl.textContent = text;
     el.appendChild(bodyEl);
   }
-  log.appendChild(el);
+  if (replaceEl && replaceEl.parentNode === log) {
+    log.insertBefore(el, replaceEl);
+    replaceEl.remove();
+  } else {
+    log.appendChild(el);
+  }
   // D17.5 — every chat image is registerable too: the ⓘ float + reroll modal.
   // The closure holds the SAME record object convPushImage persisted, so
   // rerollChatImage edits the durable copy (see convRenderImages).
@@ -7265,49 +7290,132 @@ function convPushImage(record) {
   }
 }
 
-// Re-paint the persisted chat images above the separator. Returns how many
-// it drew synchronously (0 = none to show); pixels arrive asynchronously:
-// placeholder first, then getChatImageUrl fills from the LRU (or regenerates
-// under the same deterministic key) if the img is still connected.
+// Conversation overhaul D1 — the line a chat image follows: the newest
+// scene-channel entry in the NPC's recent buffer, stamped the way the buffer
+// stamps it (tick = clock MINUTES, the npc.js naming wart). Null when they
+// have never spoken face to face. Pure read.
+function convImageAnchor(npc) {
+  const recent = npc?.memory?.recent;
+  if (!Array.isArray(recent)) return null;
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const e = recent[i];
+    if ((e.channel || 'scene') !== 'scene' || !e.text) continue;
+    return { day: e.day || 0, tick: e.tick || 0, text: e.text };
+  }
+  return null;
+}
+
+// A persisted chat image as a data-past bubble (not yet in the log). Pixels
+// arrive asynchronously: placeholder first, then getChatImageUrl fills from
+// the LRU (or regenerates under the same deterministic key) if the img is
+// still connected.
+function convPastImageEl(record) {
+  const el = document.createElement('div');
+  el.className = 'conv-bubble conv-bubble-photo';
+  el.setAttribute('data-from', record.from);
+  el.setAttribute('data-past', '');
+  if (record.tag) {
+    const tagEl = document.createElement('div');
+    tagEl.className = 'conv-tag';
+    tagEl.textContent = record.tag;
+    el.appendChild(tagEl);
+  }
+  const img = document.createElement('img');
+  img.className = 'conv-photo';
+  img.alt = '';
+  img.src = getPlaceholder();
+  el.appendChild(img);
+  if (record.caption) {
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'conv-bubble-text';
+    bodyEl.textContent = record.caption;
+    el.appendChild(bodyEl);
+  }
+  setImageMeta(img, {
+    label: record.tag || 'Image',
+    prompt: record.prompt,
+    seed: record.seed,
+    negativePrompt: record.negativePrompt || null,
+    reroll: (fields) => rerollChatImage(record, img, fields),
+  });
+  Promise.resolve(getChatImageUrl(record)).then(result => {
+    if (result && result.url && img.isConnected) img.src = result.url;
+  }).catch(() => {});
+  return el;
+}
+
+// Re-paint ONLY the persisted chat images (no text rows). Kept for callers
+// that want the pictures alone; the conversation pane itself uses
+// convRenderHistory, which puts each picture back where it happened.
 function convRenderImages(npc) {
   const log = document.getElementById('conv-log');
   const list = npc?.flags?._convImages || [];
   if (!log || list.length === 0) return 0;
-  for (const record of list) {
-    const el = document.createElement('div');
-    el.className = 'conv-bubble conv-bubble-photo';
-    el.setAttribute('data-from', record.from);
-    el.setAttribute('data-past', '');
-    if (record.tag) {
-      const tagEl = document.createElement('div');
-      tagEl.className = 'conv-tag';
-      tagEl.textContent = record.tag;
-      el.appendChild(tagEl);
-    }
-    const img = document.createElement('img');
-    img.className = 'conv-photo';
-    img.alt = '';
-    img.src = getPlaceholder();
-    el.appendChild(img);
-    if (record.caption) {
-      const bodyEl = document.createElement('div');
-      bodyEl.className = 'conv-bubble-text';
-      bodyEl.textContent = record.caption;
-      el.appendChild(bodyEl);
-    }
-    log.appendChild(el);
-    setImageMeta(img, {
-      label: record.tag || 'Image',
-      prompt: record.prompt,
-      seed: record.seed,
-      negativePrompt: record.negativePrompt || null,
-      reroll: (fields) => rerollChatImage(record, img, fields),
-    });
-    getChatImageUrl(record).then(result => {
-      if (result.url && img.isConnected) img.src = result.url;
-    });
-  }
+  for (const record of list) log.appendChild(convPastImageEl(record));
   return list.length;
+}
+
+// Conversation overhaul D1 — where each persisted image goes among the
+// recalled rows. Pure: returns Map(rowIndex -> [record]) where -1 means
+// "before the first row". An image sits right after the row its anchor names
+// (the LAST row matching day + tick + text — the newest occurrence of a
+// repeated line is the one it followed). An anchor that has aged out of the
+// 40-entry buffer, or a record from before anchors existed, falls back to
+// time: after the last row at or before the image's moment. Legacy records
+// stored `tick` as a tick INDEX, so their moment is tick × tickMinutes.
+function convPlaceImages(rows, images) {
+  const placed = new Map();
+  const put = (idx, rec) => { if (!placed.has(idx)) placed.set(idx, []); placed.get(idx).push(rec); };
+  const tickMin = (typeof CLOCK !== 'undefined' && CLOCK.tickMinutes) || 30;
+  const timeOf = (r) => (r.day || 0) * 1440 + (r.tick || 0);
+  for (const rec of images || []) {
+    let at = null;
+    const a = rec && rec.anchor;
+    if (a && a.text) {
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const r = rows[i];
+        if (r.kind === 'time') continue;
+        if (r.rawText === a.text && (r.day || 0) === (a.day || 0) && (r.tick || 0) === (a.tick || 0)) { at = i; break; }
+      }
+    }
+    if (at === null) {
+      const minutes = typeof rec.minutes === 'number' ? rec.minutes : (rec.tick || 0) * tickMin;
+      const t = (rec.day || 0) * 1440 + minutes;
+      at = -1;
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i].kind === 'time') continue;
+        if (timeOf(rows[i]) <= t) at = i;
+      }
+    }
+    put(at, rec);
+  }
+  return placed;
+}
+
+// Conversation overhaul D1 — the recalled half of the pane: text rows and
+// persisted images, merged in the order they happened (this used to draw
+// every row and THEN every image, so reopening a talk stacked all its
+// pictures at the bottom). A shared photo anchored to its own
+// "[shared a photo: …]" line replaces that line — the picture IS the turn.
+// Returns how many elements it drew (0 = nothing to recall).
+function convRenderHistory(npc) {
+  const log = document.getElementById('conv-log');
+  if (!log) return 0;
+  const rows = recallSceneExchanges(npc, currentGameState?.meta?.clock?.day);
+  const images = npc?.flags?._convImages || [];
+  if (rows.length === 0 && images.length === 0) return 0;
+  const placed = convPlaceImages(rows, images);
+  let drawn = 0;
+  for (const rec of placed.get(-1) || []) { log.appendChild(convPastImageEl(rec)); drawn++; }
+  rows.forEach((row, i) => {
+    const here = placed.get(i) || [];
+    const replacesRow = row.kind === 'bubble' && row.from === 'player'
+      && /^\[shared a photo: /.test(row.rawText || '')
+      && here.some(rec => rec.kind === 'shared');
+    if (!replacesRow) { log.appendChild(convRecalledRowEl(row)); drawn++; }
+    for (const rec of here) { log.appendChild(convPastImageEl(rec)); drawn++; }
+  });
+  return drawn;
 }
 // Both LLM passes of an ask turn paint through this (asks plan Phase 4): the
 // player's own bubble is added by the caller, this only draws the NPC side.
@@ -7348,43 +7456,45 @@ function askBubbleDisplay(text) {
   return leaf ? { label: leaf.label, body: parsed.flavor || leaf.defaultFlavor || '' } : null;
 }
 
+// One recalled row as a data-past element (not yet in the log).
+function convRecalledRowEl(row) {
+  const el = document.createElement('div');
+  if (row.kind === 'time') {
+    el.className = 'conv-time';
+    el.textContent = row.label;
+  } else if (row.kind === 'beat') {
+    el.className = 'conv-beat';
+    el.textContent = row.text;
+  } else {
+    el.className = 'conv-bubble';
+    el.setAttribute('data-from', row.from);
+    const askDisp = row.from === 'player' ? askBubbleDisplay(row.text) : null;
+    if (askDisp) {
+      const tagEl = document.createElement('div');
+      tagEl.className = 'conv-tag';
+      tagEl.textContent = askDisp.label;
+      el.appendChild(tagEl);
+      if (askDisp.body) {
+        const bodyEl = document.createElement('div');
+        bodyEl.className = 'conv-bubble-text';
+        bodyEl.textContent = askDisp.body;
+        el.appendChild(bodyEl);
+      }
+    } else {
+      el.textContent = row.text;
+    }
+  }
+  el.setAttribute('data-past', '');
+  return el;
+}
+
+// The text rows alone (no images) — kept for callers that want only the
+// words; the pane itself draws through convRenderHistory (D1).
 function convRenderRecalled(npc) {
   const log = document.getElementById('conv-log');
   if (!log) return 0;
   const rows = recallSceneExchanges(npc, currentGameState?.meta?.clock?.day);
-  if (rows.length === 0) return 0;
-
-  for (const row of rows) {
-    const el = document.createElement('div');
-    if (row.kind === 'time') {
-      el.className = 'conv-time';
-      el.textContent = row.label;
-    } else if (row.kind === 'beat') {
-      el.className = 'conv-beat';
-      el.textContent = row.text;
-    } else {
-      el.className = 'conv-bubble';
-      el.setAttribute('data-from', row.from);
-      const askDisp = row.from === 'player' ? askBubbleDisplay(row.text) : null;
-      if (askDisp) {
-        const tagEl = document.createElement('div');
-        tagEl.className = 'conv-tag';
-        tagEl.textContent = askDisp.label;
-        el.appendChild(tagEl);
-        if (askDisp.body) {
-          const bodyEl = document.createElement('div');
-          bodyEl.className = 'conv-bubble-text';
-          bodyEl.textContent = askDisp.body;
-          el.appendChild(bodyEl);
-        }
-      } else {
-        el.textContent = row.text;
-      }
-    }
-    el.setAttribute('data-past', '');
-    log.appendChild(el);
-  }
-
+  for (const row of rows) log.appendChild(convRecalledRowEl(row));
   return rows.length;
 }
 
@@ -7412,7 +7522,11 @@ function convShowGeneratingImage() {
   el.innerHTML = '<span class="conv-typing-icon">🖼</span><span class="dot"></span><span class="dot"></span><span class="dot"></span>';
   log.appendChild(el);
   convScrollToBottom();
-  return () => { if (el.parentNode) el.remove(); };
+  // The remover also carries the element (conversation overhaul D1), so a
+  // finished image can take this bubble's exact place in the log.
+  const remove = () => { if (el.parentNode) el.remove(); };
+  remove.el = el;
+  return remove;
 }
 
 function convSetStatus(text) {
@@ -7453,9 +7567,10 @@ function openConversationOverlay(npcId) {
     log.innerHTML = '';
     // D13 + 2026-08-31: recalled rows AND persisted chat images share the
     // top half; the 'Now' separator appears if either drew anything.
-    const rows = convRenderRecalled(npc);
-    const imgs = convRenderImages(npc);
-    if (rows > 0 || imgs > 0) {
+    // Conversation overhaul D1: drawn MERGED, each image where it happened
+    // (they used to be appended after every row, stacking at the bottom).
+    const drawn = convRenderHistory(npc);
+    if (drawn > 0) {
       const sep = document.createElement('div');
       sep.className = 'conv-separator';
       sep.textContent = 'Now';
@@ -8513,6 +8628,9 @@ async function runAskPhotoFlow(askTurn, context) {
       kind: 'askphoto', from: 'npc', tag: '📷 Photo',
       caption: record.caption, day,
       tick: getTickIndex(currentGameState?.meta?.clock?.minutes),
+      minutes: currentGameState?.meta?.clock?.minutes,
+      // D1: pass 1 already wrote their "sure, here" line — the photo follows it.
+      anchor: convImageAnchor(npc),
       id: record.id,
       prompt: record.prompt,
       seed: record.seed,
@@ -8829,6 +8947,8 @@ async function doConvSharePhoto(photoId) {
     kind: 'shared', from: 'player', tag: 'Shared Photo', caption: photo.caption,
     day: gs?.meta?.clock?.day,
     tick: getTickIndex(gs?.meta?.clock?.minutes),
+    minutes: gs?.meta?.clock?.minutes,
+    anchor: convImageAnchor(gs.npcs[myNpcId]), // re-pointed at the share's own line below (D1)
     photoId: photo.id,
     prompt: photo.prompt,
     seed: photo.seed,
@@ -8836,23 +8956,44 @@ async function doConvSharePhoto(photoId) {
   };
   convPushImage(record);
   const img = convAddImageBubble('player', getPlaceholder(), `📷 ${photo.caption}`, 'Shared Photo', record);
-  getPhotoImage(photo).then(result => { if (result.url && img) img.src = result.url; });
+  getPhotoImage(photo).then(result => { if (result.url && img) img.src = result.url; }).catch(() => {});
+  if (currentGameState?.player?.conversation?.npcId === myNpcId) currentGameState.player.conversation.spoken = true;
   const removeTyping = convShowTyping();
   convSetStatus('Thinking…');
   try {
+    // Conversation overhaul E11: the same per-turn presence check doConvSend
+    // makes — someone who walked out can't react to your photo.
+    if (!conversationPartnerPresent(currentGameState, myNpcId)) {
+      removeTyping();
+      endDepartureConversation(myNpcId, 'gone');
+      return;
+    }
     // Same real-time conversation clock as doConvSend — see its comment.
     await advanceAndResolve(0);
+    currentSceneState = reconcileScenePresence(currentSceneState, currentGameState);
     const context = assembleContext(currentGameState, currentSceneState);
+    context.conversationNpcId = myNpcId;
     const result = await callLLM(context, text);
     removeTyping();
+    if (!conversationPartnerPresent(currentGameState, myNpcId)) {
+      endDepartureConversation(myNpcId, 'gone');
+      return;
+    }
     if (result.valid && result.proposal) {
       const applied = await applyProposal(result.proposal, context, currentGameState, text);
+      // D1: the share is now a line in their memory — hang the picture on it,
+      // so reopening shows the photo exactly where it was shown.
+      const shareLine = convImageAnchor(currentGameState.npcs[myNpcId] && {
+        memory: { recent: (currentGameState.npcs[myNpcId].memory?.recent || []).filter(e => e.text === text) },
+      });
+      if (shareLine) record.anchor = shareLine;
       convRenderProposal(applied);
       if (applied.logEntries.length > 0) {
         addLogEntry('narration', `[Talking to ${currentGameState.npcs[myNpcId]?.bible?.name || 'them'}] ${applied.logEntries.filter(e => e.type === 'dialogue').map(e => `${e.speaker}: "${e.text}"`).join(' ')}`);
       }
       await compactMemoryIfNeeded([...applied.updatedNpcIds, ...(applied.effectNpcIds || [])]);
       currentSceneState = advanceEngagement(currentSceneState, resolveSpeakerIds(result.proposal.dialogue, context.activeNpcs));
+      if (currentGameState.npcs?.[myNpcId]) maybeShowConversationScene(myNpcId);
     } else {
       convAddBeat(`They seem distracted and don't respond.`);
     }

@@ -70,9 +70,13 @@ const ASK_REASON_PHRASES = {
   // fallback keeps every other leaf's lookup unchanged.
   below: "they're not in the mood for that right now",
   below_photo: "they're not comfortable sharing that right now",
-  floor_stranger: "they barely know you",
-  floor_hostile: "there's too much bad blood between you right now",
-  floor_cold_shoulder: "they've gone cold on you",
+  // Conversation overhaul D9: in these phrases "they" is ALWAYS the NPC and
+  // the other party is "the player" (buildAskDirective labels the line so);
+  // three of them used to say "you" for the player, while every leafNote
+  // below uses "you" for the NPC — the writer was reading two conventions.
+  floor_stranger: "they barely know the player",
+  floor_hostile: "there's too much bad blood between them and the player right now",
+  floor_cold_shoulder: "they've gone cold on the player",
   floor_actively_refusing: "they've already said no, and they meant it",
   floor_asleep: "they're fast asleep",
   floor: "it's not possible right now",
@@ -107,8 +111,15 @@ const ASK_REASON_PHRASES = {
   feature_refused: "they already said no to that one, and a no is final",
   below_feature: "they're not comfortable with that going up where people can see it",
   // aspirations-and-creative-careers Phase 13 (D45): $SubscriptionTalk.
-  subscription_fine: "it's your money and your business — they're genuinely fine with it",
-  subscription_boundary: "it's not something they want in the relationship, and they're asking you not to",
+  subscription_fine: "it's the player's money and their business — they're genuinely fine with it",
+  subscription_boundary: "it's not something they want in the relationship, and they're asking the player not to",
+  // Conversation overhaul D10 (2026-09-27): three verdicts that had no phrase
+  // and fell through to "it's not the right time" — a warm hand-over told the
+  // writer it had been turned down. `collect` also splits CollectMoney off
+  // `repay`, whose phrase describes the PLAYER settling up, not the NPC.
+  give_money: "the player is giving them money",
+  return: "the player is returning something they borrowed",
+  collect: "the player is asking them to pay back what they owe, and they're settling it",
 };
 
 function askReasonPhrase(reason) {
@@ -359,12 +370,71 @@ function mealLabelForWindow(startMinute, endMinute) {
 // hit up for hundreds). Pure. The amount feeds the WRITES (EARN_MONEY +
 // _loanOwed) — it deliberately never touches decide(), so flavor can't flip
 // the verdict (D1); the phase cap is the size control.
-function loanAmountFromFlavor(flavor, rel) {
+function loanCapFor(rel) {
   const phase = (rel && rel.conversationPhase) || 'early';
-  const cap = ASK_TUNING.loan.maxByPhase[phase] || ASK_TUNING.loan.defaultAmount;
+  return ASK_TUNING.loan.maxByPhase[phase] || ASK_TUNING.loan.defaultAmount;
+}
+function loanAmountFromFlavor(flavor, rel) {
+  const cap = loanCapFor(rel);
   const m = String(flavor || '').match(/\$(\d+)/);
   const amount = m ? Number(m[1]) : ASK_TUNING.loan.defaultAmount;
   return Math.max(0, Math.min(amount, cap));
+}
+
+// --- Conversation overhaul D4/D5: structured ask arguments ---------------
+// A leaf's optional `args` list is what the composer (ui.js
+// renderAskComposer) draws as chips: an amount (presets + custom), a choice
+// (segmented, colour-toned), or a multi (toggles). Every getter is pure over
+// (gs, npc, npcId). The picked values come back through resolveAsk's
+// `extra` — { amount, mode, kind, guests } — the same structured channel
+// giftDefId and the calendar slot use: they shape the WRITES and the words,
+// never whether a leaf says yes (D1). Typed `$GiveMoney $20 loan` still works
+// through the flavor parsers, as the fallback when no structured value came.
+const ASK_AMOUNT_PRESETS = [5, 10, 20, 40, 50, 100, 200, 300, 500];
+function askAmountArg({ label, max, initial, hint, presets }) {
+  return {
+    id: 'amount', kind: 'amount', label: label || 'Amount', max, initial, hint,
+    presets: presets || ((gs, npc, npcId) => {
+      const m = max(gs, npc, npcId);
+      return ASK_AMOUNT_PRESETS.filter(v => v <= m).slice(-5);
+    }),
+  };
+}
+// A structured amount, sanitized: whole dollars clamped to [0, max]; null
+// when none was given (so the caller falls back to the flavor parser).
+function askArgAmount(extra, max) {
+  if (!extra || extra.amount == null || extra.amount === '') return null;
+  const n = Math.floor(Number(extra.amount));
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.min(n, Math.max(0, max)));
+}
+// The resolved arg values for display ("$20 · Loan"), for the bubble's tag.
+// Pure; reads the leaf's own arg definitions for the labels.
+function askArgSummary(leaf, values, gs, npc, npcId) {
+  if (!leaf || !Array.isArray(leaf.args) || !values) return '';
+  const bits = [];
+  for (const arg of leaf.args) {
+    const v = values[arg.id];
+    if (v == null || v === '' || (Array.isArray(v) && v.length === 0)) continue;
+    if (arg.kind === 'amount') bits.push(`$${v}`);
+    else if (arg.kind === 'choice') {
+      const opts = typeof arg.options === 'function' ? arg.options(gs, npc, npcId) : arg.options;
+      const o = (opts || []).find(x => x.id === v);
+      if (o) bits.push(o.label);
+    } else if (arg.kind === 'multi') {
+      const opts = typeof arg.options === 'function' ? arg.options(gs, npc, npcId) : arg.options;
+      const names = (opts || []).filter(x => v.includes(x.id)).map(x => x.label);
+      if (names.length) bits.push(`with ${names.join(', ')}`);
+    }
+  }
+  return bits.join(' · ');
+}
+
+// The loan the player is asking for: the structured amount when the composer
+// sent one (clamped to the phase cap), else the flavor parser.
+function loanAmountFor(extra, flavor, rel) {
+  const structured = askArgAmount(extra, loanCapFor(rel));
+  return structured != null ? structured : loanAmountFromFlavor(flavor, rel);
 }
 
 // Phase 10 — the amount a repayment actually settles. `$20` in the flavor
@@ -373,10 +443,13 @@ function loanAmountFromFlavor(flavor, rel) {
 // (SPEND_MONEY + the ledger reduction), never a decision input — the accept
 // is never at stake (D21's precedent: the loan amount feeds only writes).
 // Pure — moneyOwedByPlayer (money.js) reads the ledger (falling back to the
-// not-yet-migrated legacy flag), never writes it.
-function repayAmountFor(gs, npcId, flavor) {
+// not-yet-migrated legacy flag), never writes it. `extra` (D5) is the
+// composer's structured amount, preferred over the flavor when present.
+function repayAmountFor(gs, npcId, flavor, extra) {
   const owed = moneyOwedByPlayer(gs, npcId);
   const money = Math.max(0, gs?.player?.money || 0);
+  const structured = askArgAmount(extra, Math.min(owed, money));
+  if (structured != null) return owed > 0 && money > 0 ? structured : 0;
   const m = String(flavor || '').match(/\$(\d+)/);
   const want = m ? Number(m[1]) : owed;
   if (!(want > 0 && owed > 0 && money > 0)) return 0;
@@ -484,8 +557,8 @@ const ASK_HANGOUT = {
   // exact time is settled NEXT (the modal), so they don't invent one.
   leafNote(decision) {
     return decision.accept
-      ? "- They said yes to spending time together. Be warmly agreeable — the exact time is settled next, so don't invent a specific time yet."
-      : "- They don't feel like hanging out. Decline in character, matching your stance, without being harsh.";
+      ? "- You said yes to spending time with them. Be warmly agreeable — the exact time is settled next, so don't invent a specific time yet."
+      : "- You don't feel like hanging out with them right now. Decline in character, matching your stance, without being harsh.";
   },
 };
 
@@ -543,8 +616,8 @@ const ASK_MEAL = {
   // exact time is settled NEXT (the modal), so they don't invent one.
   leafNote(decision) {
     return decision.accept
-      ? "- They said yes to sharing a meal. Be warmly agreeable — the exact time is settled next, so don't invent a specific time yet."
-      : "- They don't feel like sharing a meal right now. Decline in character, matching your stance, without being harsh.";
+      ? "- You said yes to sharing a meal with them. Be warmly agreeable — the exact time is settled next, so don't invent a specific time yet."
+      : "- You don't feel like sharing a meal with them right now. Decline in character, matching your stance, without being harsh.";
   },
 };
 
@@ -610,14 +683,47 @@ function inviteExtraGuestsFromFlavor(gameState, flavor, excludeNpcId) {
 // the returned decision (like ASK_GIFT's giftMatch/giftLabel) for
 // runAskScheduleFlow (ui.js) to read before the commitment is created.
 // Resident-only (D5) and schedule:true (D8/D9), like its siblings.
+// Conversation overhaul D5 — the Invite/Party composer chips. The event kinds
+// are exactly the playerInvitable COMMITMENT_KINDS (the same list
+// inviteKindFromFlavor searches), and the guests are the other residents.
+// Structured picks win; the flavor parsers remain the typed-`$` fallback.
+const INVITE_KIND_CHIP_LABELS = { meal: 'Dinner', hangout: 'Hang out', pool_party: 'Pool party' };
+function inviteKindOptions() {
+  return Object.entries(COMMITMENT_KINDS)
+    .filter(([, def]) => def.playerInvitable)
+    .map(([id, def]) => ({ id, label: INVITE_KIND_CHIP_LABELS[id] || String(def.label || id).replace(/^(a|an) /, ''), tone: 'cool' }));
+}
+function inviteGuestOptions(gs, npc, npcId) {
+  return Object.entries((gs && gs.npcs) || {})
+    .filter(([id, n]) => id !== npcId && n?.residency?.status === 'resident' && n?.bible?.name)
+    .map(([id, n]) => ({ id, label: n.bible.name }));
+}
+function inviteKindFor(flavor, extra) {
+  const k = extra && extra.kind;
+  if (k && COMMITMENT_KINDS[k] && COMMITMENT_KINDS[k].playerInvitable) return k;
+  return inviteKindFromFlavor(flavor);
+}
+function inviteGuestsFor(gs, flavor, npcId, extra) {
+  if (extra && Array.isArray(extra.guests)) {
+    // Only real, resident, other people — never the partner, never a stranger.
+    return extra.guests.filter(id => id !== npcId && gs?.npcs?.[id]?.residency?.status === 'resident');
+  }
+  return inviteExtraGuestsFromFlavor(gs, flavor, npcId);
+}
+
 const ASK_INVITE = {
   id: 'Invite',
   category: 'invite',
   label: 'Invite',
-  help: '<event + who else — e.g. dinner with Elena>',
+  help: 'pick what, and who else to bring',
   template: '$Invite <Optional>',
   defaultFlavor: 'Want to make plans?',
   schedule: true,
+  remote: true, // D7 — making plans over text is the most natural thing in the world
+  args: [
+    { id: 'kind', kind: 'choice', label: 'For', options: () => inviteKindOptions(), initial: () => 'hangout' },
+    { id: 'guests', kind: 'multi', label: 'Also invite', options: inviteGuestOptions },
+  ],
   available: (gs, npc) =>
     npc.residency?.status === 'resident' && hasFreeSlotsAhead(gs, npc),
   decide(gs, npc, npcId, flavor, ctx, seedCtx) {
@@ -630,8 +736,8 @@ const ASK_INVITE = {
     const accept = score + noise >= ASK_TUNING.acceptThreshold;
     return {
       accept, reason: accept ? 'accept' : 'cool',
-      inviteKind: inviteKindFromFlavor(flavor),
-      inviteExtraIds: inviteExtraGuestsFromFlavor(gs, flavor, npcId),
+      inviteKind: inviteKindFor(flavor, seedCtx),
+      inviteExtraIds: inviteGuestsFor(gs, flavor, npcId, seedCtx),
     };
   },
   // D12 — accepted/declined both remembered, same shape as ASK_HANGOUT/
@@ -675,12 +781,16 @@ const ASK_PARTY = {
   id: 'HouseParty',
   category: 'invite',
   label: 'Throw a Party',
-  help: '<optional: who else — e.g. with Elena and Marcus>',
+  help: 'pick who else to rope in',
   template: '$HouseParty <Optional>',
   defaultFlavor: 'Want to throw a party?',
   schedule: true,
+  remote: true, // D7
   kind: 'party',
   roomId: COMMITMENT_KINDS.party.roomId,
+  args: [
+    { id: 'guests', kind: 'multi', label: 'Also invite', options: inviteGuestOptions },
+  ],
   available: (gs, npc) =>
     npc.residency?.status === 'resident' && hasFreeSlotsAhead(gs, npc),
   decide(gs, npc, npcId, flavor, ctx, seedCtx) {
@@ -693,7 +803,7 @@ const ASK_PARTY = {
     const accept = score + noise >= ASK_TUNING.acceptThreshold;
     return {
       accept, reason: accept ? 'accept' : 'cool',
-      inviteExtraIds: inviteExtraGuestsFromFlavor(gs, flavor, npcId),
+      inviteExtraIds: inviteGuestsFor(gs, flavor, npcId, seedCtx),
     };
   },
   effects(gs, npc, npcId, decision, data) {
@@ -840,6 +950,15 @@ const ASK_LOAN = {
   help: '<optional: amount — e.g. $20>',
   template: '$RequestLoan <Optional>',
   defaultFlavor: 'Could you spot me some money?',
+  remote: true, // Conversation overhaul D7 — asking over text works fine
+  // D5 — how much, as a chip: capped by how close you are (the phase cap was
+  // always the size control; the composer just shows it).
+  args: [askAmountArg({
+    label: 'Borrow',
+    max: (gs, npc) => loanCapFor(npc && npc.relPlayer),
+    initial: (gs, npc) => Math.min(ASK_TUNING.loan.defaultAmount, loanCapFor(npc && npc.relPlayer)),
+    hint: (gs, npc) => `Up to $${loanCapFor(npc && npc.relPlayer)} — how close you are sets the limit`,
+  })],
   available: () => true, // anyone standing in front of you can be hit up
   decide(gs, npc, npcId, flavor, ctx, seedCtx) {
     if (!this.available(gs, npc, ctx)) return { accept: false, reason: 'unavailable' };
@@ -850,7 +969,9 @@ const ASK_LOAN = {
     const rng = askSeed(gs, npcId, this.category, seedCtx.day, seedCtx.count);
     const noise = (rng() - 0.5) * 2 * ASK_TUNING.acceptNoiseRange;
     const accept = score + noise >= ASK_TUNING.acceptThreshold;
-    return { accept, reason: accept ? 'accept' : 'cool' };
+    // The amount rides along for the writer's note only — it was computed
+    // AFTER the verdict and never enters the score (D1).
+    return { accept, reason: accept ? 'accept' : 'cool', loanAmount: loanAmountFor(seedCtx, flavor, rel) };
   },
   // D12 — accepted: EARN_MONEY + memory + _loanOwed (postEffects, below).
   // Declined: memory only (nothing on first ask; the ladder's generic
@@ -858,7 +979,8 @@ const ASK_LOAN = {
   effects(gs, npc, npcId, decision, data) {
     const about = flavorBrief(data && data.flavor, 80);
     const suffix = about ? ` (${about})` : '';
-    const amount = loanAmountFromFlavor(data && data.flavor, npc.relPlayer);
+    const amount = loanAmountFor(data, data && data.flavor, npc.relPlayer);
+    if (data) data.loanAmount = amount;
     const who = (npc.bible && npc.bible.name) || 'them';
     return [
       decision.accept ? `EARN_MONEY ${amount} loan from ${who}` : null,
@@ -876,15 +998,19 @@ const ASK_LOAN = {
   // _askCounts, the D33 pickpocket window).
   postEffects(gs, npc, npcId, decision, data) {
     if (!decision.accept) return;
-    const amount = loanAmountFromFlavor(data && data.flavor, (gs.npcs && gs.npcs[npcId] && gs.npcs[npcId].relPlayer) || {});
+    // The SAME amount the EARN_MONEY line just moved (stashed by effects()),
+    // never a recomputation against state that may have shifted since.
+    const amount = (data && data.loanAmount != null) ? data.loanAmount
+      : loanAmountFor(data, data && data.flavor, (gs.npcs && gs.npcs[npcId] && gs.npcs[npcId].relPlayer) || {});
     adjustMoneyLedger(gs, npcId, 'playerOwes', amount);
   },
   // The directive already says the money is handled automatically; this only
   // tells the writer how to be in-character about it.
   leafNote(decision) {
+    const amt = decision.loanAmount ? `$${decision.loanAmount}` : 'the money';
     return decision.accept
-      ? "- You agreed to lend them the money. Acknowledge it in character — the money itself is already handled, so don't describe a transaction or handover happening."
-      : "- You're not lending them money right now. Decline in character, matching your stance — you can be soft or firm, but not unkind.";
+      ? `- They asked to borrow ${amt} and you agreed to lend it. Acknowledge it in character — the money itself is already handled, so don't describe a transaction or handover happening.`
+      : `- They asked to borrow ${amt} and you're not lending it right now. Decline in character, matching your stance — you can be soft or firm, but not unkind.`;
   },
 };
 
@@ -905,6 +1031,18 @@ const ASK_REPAY = {
   help: '<optional: amount — e.g. $20; blank pays it all back>',
   template: '$RequestRepay <Optional>',
   defaultFlavor: "Here's what I owe you.",
+  remote: true, // D7 — paying someone back is a transfer, not a handover
+  // D5 — defaults to everything owed (capped by the wallet).
+  args: [askAmountArg({
+    label: 'Pay back',
+    max: (gs, npc, npcId) => Math.min(moneyOwedByPlayer(gs, npcId), Math.max(0, gs?.player?.money || 0)),
+    initial: (gs, npc, npcId) => Math.min(moneyOwedByPlayer(gs, npcId), Math.max(0, gs?.player?.money || 0)),
+    presets: (gs, npc, npcId) => {
+      const max = Math.min(moneyOwedByPlayer(gs, npcId), Math.max(0, gs?.player?.money || 0));
+      return [...new Set([...ASK_AMOUNT_PRESETS.filter(v => v < max).slice(-3), max])].filter(v => v > 0);
+    },
+    hint: (gs, npc, npcId) => `You owe $${moneyOwedByPlayer(gs, npcId)} · you have $${Math.max(0, gs?.player?.money || 0)}`,
+  })],
   // D5 — the menu gate and decide()'s belt-and-braces re-check. Presence is
   // true by definition mid-conversation; the real gates are an open _loanOwed
   // entry for THIS npc and money on hand. willingnessTargetId maps the npc
@@ -920,8 +1058,9 @@ const ASK_REPAY = {
     // Always accepted — a repaid debt has no verdict to roll, so there is
     // nothing to seed (the gift/intimacy/photo leaves draw no noise for the
     // same reason). The amount is deliberately NOT read here: it feeds the
-    // writes only, exactly like the loan amount (D21).
-    return { accept: true, reason: 'repay' };
+    // writes only, exactly like the loan amount (D21). It rides on the
+    // decision for the writer's note only (conversation overhaul D5).
+    return { accept: true, reason: 'repay', repayAmount: repayAmountFor(gs, npcId, flavor, seedCtx) };
   },
   // D12 — the repayment is remembered: SPEND_MONEY (real money leaves the
   // player) + a MEMORY_FACT on the npc. The amount is computed ONCE here and
@@ -930,7 +1069,7 @@ const ASK_REPAY = {
   // would cap against the already-shrunk wallet and leave the flag wrong.
   effects(gs, npc, npcId, decision, data) {
     if (!decision.accept) return [];
-    const amount = repayAmountFor(gs, npcId, data && data.flavor);
+    const amount = repayAmountFor(gs, npcId, data && data.flavor, data);
     if (amount <= 0) return [];
     data.repayAmount = amount;
     const who = (npc.bible && npc.bible.name) || 'them';
@@ -950,7 +1089,8 @@ const ASK_REPAY = {
     adjustMoneyLedger(gs, npcId, 'playerOwes', -amount);
   },
   leafNote(decision) {
-    return "- They're paying you back what you lent them. Accept it in character — the money itself is already handled; react like someone being paid back (however this character would), without describing a transaction or counting notes.";
+    const amt = decision.repayAmount ? `$${decision.repayAmount} of ` : '';
+    return `- They're paying you back ${amt}what you lent them. Accept it in character — the money itself is already handled; react like someone being paid back (however this character would), without describing a transaction or counting notes.`;
   },
 };
 
@@ -969,11 +1109,19 @@ function giveMoneyModeFromFlavor(flavor) {
 // ask_loan's REQUEST cap) — giving away your own money needs no plausibility
 // ceiling the way asking a near-stranger for hundreds does. Pure; feeds the
 // writes only (D21's precedent).
-function giveMoneyAmountFor(gs, flavor) {
+function giveMoneyAmountFor(gs, flavor, extra) {
   const money = Math.max(0, gs?.player?.money || 0);
+  // Conversation overhaul D5: the composer's chip, when there is one.
+  const structured = askArgAmount(extra, money);
+  if (structured != null) return structured;
   const m = String(flavor || '').match(/\$(\d+)/);
   const amount = m ? Number(m[1]) : ASK_TUNING.loan.defaultAmount;
   return Math.max(0, Math.min(amount, money));
+}
+// Gift or loan: the composer's toggle first, the flavor's mode word second.
+function giveMoneyModeFor(flavor, extra) {
+  if (extra && (extra.mode === 'gift' || extra.mode === 'loan')) return extra.mode;
+  return giveMoneyModeFromFlavor(flavor);
 }
 
 // ask_give_money — Phase 4 (D9): hand money to whoever you're talking to, no
@@ -981,17 +1129,45 @@ function giveMoneyAmountFor(gs, flavor) {
 // verdict IS the transaction" shape as ask_gift/ask_repay); the flavor's
 // mode word decides whether it's a no-strings gift or a loan the NPC now
 // owes back (npcOwes), never whether it lands.
+//
+// Conversation overhaul D5 (user report: "We do not need the AI to read the
+// optional text and determine how much the player intended to send"): the
+// amount and gift/loan are now chips in the composer. The flavor parsers
+// above stay as the fallback for typed `$GiveMoney $20 loan`.
 const ASK_GIVE_MONEY = {
   id: 'GiveMoney',
   category: 'money',
   label: 'Give Money',
-  help: '<optional: amount and gift/loan — e.g. $20 loan>',
+  help: 'pick how much, and whether it’s a gift or a loan',
   template: '$GiveMoney <Optional>',
   defaultFlavor: 'Here, take this.',
+  remote: true, // D7 — a transfer over text
+  args: [
+    askAmountArg({
+      label: 'Send',
+      max: (gs) => Math.max(0, gs?.player?.money || 0),
+      initial: (gs) => Math.min(20, Math.max(0, gs?.player?.money || 0)),
+      hint: (gs) => `You have $${Math.max(0, gs?.player?.money || 0)}`,
+    }),
+    {
+      id: 'mode', kind: 'choice', label: 'As a',
+      options: [
+        { id: 'gift', label: 'Gift', sub: 'no strings', tone: 'positive' },
+        { id: 'loan', label: 'Loan', sub: 'they owe you', tone: 'warning' },
+      ],
+      initial: () => 'gift',
+    },
+  ],
   available: (gs) => (gs?.player?.money || 0) > 0,
   decide(gs, npc, npcId, flavor, ctx, seedCtx) {
     if (!this.available(gs, npc, ctx)) return { accept: false, reason: 'unavailable' };
-    return { accept: true, reason: 'give_money' };
+    // Amount + mode ride along for the writer's note (they never decide —
+    // nothing here can say no).
+    return {
+      accept: true, reason: 'give_money',
+      giveAmount: giveMoneyAmountFor(gs, flavor, seedCtx),
+      giveMode: giveMoneyModeFor(flavor, seedCtx),
+    };
   },
   // D12 — the hand-over is remembered either way; a no-strings gift also
   // moves affection (a loan carries no relationship delta of its own — see
@@ -1001,9 +1177,9 @@ const ASK_GIVE_MONEY = {
   // precedent, same reasoning as ask_repay's data.repayAmount).
   effects(gs, npc, npcId, decision, data) {
     if (!decision.accept) return [];
-    const amount = giveMoneyAmountFor(gs, data && data.flavor);
+    const amount = giveMoneyAmountFor(gs, data && data.flavor, data);
     if (amount <= 0) return [];
-    const mode = giveMoneyModeFromFlavor(data && data.flavor);
+    const mode = giveMoneyModeFor(data && data.flavor, data);
     data.giveAmount = amount;
     data.giveMode = mode;
     const who = (npc.bible && npc.bible.name) || 'them';
@@ -1020,11 +1196,16 @@ const ASK_GIVE_MONEY = {
     if (!decision.accept || !((data && data.giveAmount) > 0)) return;
     if (data.giveMode === 'loan') adjustMoneyLedger(gs, npcId, 'npcOwes', data.giveAmount);
   },
+  // Conversation overhaul D9: the character is the one RECEIVING the money
+  // ("You just handed them money" had it backwards).
   leafNote(decision) {
     if (decision.reason !== 'give_money') {
-      return "- You don't have any money to give them right now. Deflect briefly, in character.";
+      return "- They went to give you money but have none on them. React briefly, in character.";
     }
-    return "- You just handed them money, no ask involved. Acknowledge it warmly in character — the money itself is already handled; don't describe counting cash or a formal handover.";
+    const amt = decision.giveAmount ? `$${decision.giveAmount}` : 'some money';
+    return decision.giveMode === 'loan'
+      ? `- They just lent you ${amt} — a loan, so they'll want it back. React in character, however this person takes being helped out — the money itself is already handled; don't describe counting cash or a formal handover.`
+      : `- They just gave you ${amt}, no strings attached. React in character — however this person takes a gift of money — the money itself is already handled; don't describe counting cash or a formal handover.`;
   },
 };
 
@@ -1040,20 +1221,29 @@ const ASK_COLLECT_MONEY = {
   help: '<optional: amount — e.g. $20; blank collects it all>',
   template: '$CollectMoney <Optional>',
   defaultFlavor: "You still owe me, you know.",
+  remote: true, // D7 — asking for it back over text works too
+  args: [askAmountArg({
+    label: 'Ask for',
+    max: (gs, npc, npcId) => moneyOwedToPlayer(gs, npcId),
+    initial: (gs, npc, npcId) => moneyOwedToPlayer(gs, npcId),
+    presets: (gs, npc, npcId) => {
+      const owed = moneyOwedToPlayer(gs, npcId);
+      return [...new Set([...ASK_AMOUNT_PRESETS.filter(v => v < owed).slice(-3), owed])].filter(v => v > 0);
+    },
+    hint: (gs, npc, npcId) => `They owe you $${moneyOwedToPlayer(gs, npcId)}`,
+  })],
   available: (gs, npc, ctx) => {
     const npcId = willingnessTargetId(gs, npc, ctx);
     return !!npcId && moneyOwedToPlayer(gs, npcId) > 0;
   },
   decide(gs, npc, npcId, flavor, ctx, seedCtx) {
     if (!this.available(gs, npc, ctx)) return { accept: false, reason: 'unavailable' };
-    return { accept: true, reason: 'repay' };
+    // D10: its own reason — `repay` described the PLAYER settling up.
+    return { accept: true, reason: 'collect', collectAmount: collectAmountFor(gs, npcId, flavor, seedCtx) };
   },
   effects(gs, npc, npcId, decision, data) {
     if (!decision.accept) return [];
-    const owed = moneyOwedToPlayer(gs, npcId);
-    const m = String((data && data.flavor) || '').match(/\$(\d+)/);
-    const want = m ? Number(m[1]) : owed;
-    const amount = (want > 0 && owed > 0) ? Math.max(0, Math.min(want, owed)) : 0;
+    const amount = collectAmountFor(gs, npcId, data && data.flavor, data);
     if (amount <= 0) return [];
     data.collectAmount = amount;
     const who = (npc.bible && npc.bible.name) || 'them';
@@ -1069,9 +1259,22 @@ const ASK_COLLECT_MONEY = {
     adjustMoneyLedger(gs, npcId, 'npcOwes', -amount);
   },
   leafNote(decision) {
-    return "- You're paying back money you borrowed from them. Accept it in character — the money itself is already handled; don't describe counting cash.";
+    const amt = decision.collectAmount ? `$${decision.collectAmount}` : 'the money';
+    return `- They asked for ${amt} of what you borrowed from them back, and you're paying it. Settle it in character — the money itself is already handled; don't describe counting cash.`;
   },
 };
+
+// What a collect call actually brings in: the composer's amount, else `$N` in
+// the flavor, else everything owed — never more than is owed. Pure.
+function collectAmountFor(gs, npcId, flavor, extra) {
+  const owed = moneyOwedToPlayer(gs, npcId);
+  if (!(owed > 0)) return 0;
+  const structured = askArgAmount(extra, owed);
+  if (structured != null) return structured;
+  const m = String(flavor || '').match(/\$(\d+)/);
+  const want = m ? Number(m[1]) : owed;
+  return want > 0 ? Math.max(0, Math.min(want, owed)) : 0;
+}
 
 // ask_chore — the Phase 6 chore leaf (D12): \"do X now\". Decide by AFFECTION
 // with an energy term (a tired NPC is less likely to take on a task right
@@ -1179,12 +1382,12 @@ const ASK_PHOTO = {
   },
   leafNote(decision) {
     if (decision.accept) {
-      return "- They said yes to sending you a photo. Acknowledge it in character — the photo itself appears on its own right after you speak, so keep to your words and manner and don't describe the picture's contents.";
+      return "- You said yes to sending them a photo. Acknowledge it in character — the photo itself appears on its own right after you speak, so keep to your words and manner and don't describe the picture's contents.";
     }
     if ((decision.reason || '').startsWith('floor_')) {
-      return "- This is a hard no — they will not send that, period. Decline in character, matching your stance; do not leave room for more persuasion.";
+      return "- This is a hard no — you will not send that, period. Decline in character, matching your stance; do not leave room for more persuasion.";
     }
-    return "- They're not comfortable sharing that right now. Decline in character, honestly and without cruelty — a soft no doesn't need a lecture or a promise for later.";
+    return "- You're not comfortable sharing that right now. Decline in character, honestly and without cruelty — a soft no doesn't need a lecture or a promise for later.";
   },
 };
 
@@ -1414,16 +1617,16 @@ const ASK_FEATURE = {
   leafNote(decision) {
     if (decision.accept) {
       return decision.level === 'intimate'
-        ? "- They agreed to let you post that private photo with them in it. Respond in character — the yes is theirs and freely given; don't waver on it, and don't describe the photo."
-        : "- They're fine with you posting that photo with them in it. Acknowledge it warmly and in character; don't describe the picture.";
+        ? "- You agree to let them post that private photo with you in it. Respond in character — the yes is yours and freely given; don't waver on it, and don't describe the photo."
+        : "- You're fine with them posting that photo with you in it. Acknowledge it warmly and in character; don't describe the picture.";
     }
     if (decision.reason === 'feature_refused') {
-      return "- They already said no to posting that photo, and they mean it. Decline again, briefly and in character — the answer is settled.";
+      return "- You already said no to them posting that photo, and you mean it. Decline again, briefly and in character — the answer is settled.";
     }
     if ((decision.reason || '').startsWith('floor_')) {
-      return "- This is a hard no — they will not have that posted with them in it. Decline in character, matching your stance; do not leave room for more persuasion.";
+      return "- This is a hard no — you will not have that posted with you in it. Decline in character, matching your stance; do not leave room for more persuasion.";
     }
-    return "- They'd rather that photo didn't go up with them in it. Decline in character, honestly and without cruelty; a no is a no.";
+    return "- You'd rather that photo didn't go up with you in it. Decline in character, honestly and without cruelty; a no is a no.";
   },
 };
 
@@ -1857,19 +2060,22 @@ function makeAffectionAsk(actId, { id, label, template, defaultFlavor }) {
       }
     },
     leafNote(decision) {
+      // Conversation overhaul D9: "you" is the character being asked, "they"
+      // the player — these used to say "Your touch just woke them", i.e. the
+      // character had woken the player.
       if (decision.reason === 'sleep_undisturbed') {
-        return "- They are fast asleep and never stir. Write this beat as narration only — do not invent dialogue or a reaction for someone who is unconscious and does not know anything happened.";
+        return "- You are fast asleep and never stir — you don't know anything happened. Write this beat as narration only; no dialogue and no reaction from you.";
       }
       if (decision.reason === 'sleep_wake_hostile') {
-        return "- Your touch just woke them, and they are shocked and angry — this is a real boundary violation from where they're standing. Write their furious, betrayed reaction in character; do not soften it.";
+        return "- Their touch just woke you, and you are shocked and angry — this is a real boundary violation from where you're standing. React in character, furious and betrayed; do not soften it.";
       }
       if (decision.reason === 'sleep_wake_receptive') {
-        return "- Your touch woke them, and instead of pulling away they lean into it, sleepy and warm. Write a soft, drowsy, genuinely receptive reaction in character.";
+        return "- Their touch woke you, and instead of pulling away you lean into it, sleepy and warm. React in character: soft, drowsy, genuinely receptive.";
       }
       if (decision.accept) {
-        return `- They welcomed the ${label.toLowerCase()}. Respond warmly and in character, matching how close you two are — do not undersell it, and do not talk them out of their own yes.`;
+        return `- You welcome the ${label.toLowerCase()}. Respond warmly and in character, matching how close you two are — do not undersell it, and do not talk yourself out of your own yes.`;
       }
-      return `- They are not receptive to a ${label.toLowerCase()} right now. Decline in character, gently — this is a small, low-stakes no, not a wound; do not overplay the refusal.`;
+      return `- You're not receptive to a ${label.toLowerCase()} right now. Decline in character, gently — this is a small, low-stakes no, not a wound; do not overplay the refusal.`;
     },
   };
 }
@@ -1988,22 +2194,23 @@ const ASK_INTIMACY = {
   // already forbid renegotiation; these make the consent itself the thing
   // the writer must not undermine.
   leafNote(decision) {
+    // Conversation overhaul D9: "you" is the character being asked.
     if (decision.reason === 'sleep_undisturbed') {
-      return "- They are fast asleep and never stir. Write this beat as narration only — do not invent dialogue or a reaction for someone who is unconscious and does not know anything happened.";
+      return "- You are fast asleep and never stir — you don't know anything happened. Write this beat as narration only; no dialogue and no reaction from you.";
     }
     if (decision.reason === 'sleep_wake_hostile') {
-      return "- This just woke them, and they are shocked and angry — a real boundary violation from where they're standing. Write their furious, betrayed reaction in character; do not soften it.";
+      return "- This just woke you, and you are shocked and angry — a real boundary violation from where you're standing. React in character, furious and betrayed; do not soften it.";
     }
     if (decision.reason === 'sleep_wake_receptive') {
-      return "- This woke them, and instead of pulling away they lean into it, sleepy and warm. Write a soft, drowsy, genuinely receptive reaction in character — intimate, not a full scene.";
+      return "- This woke you, and instead of pulling away you lean into it, sleepy and warm. React in character: soft, drowsy, genuinely receptive — intimate, not a full scene.";
     }
     if (decision.accept) {
-      return "- They consented, freely and in their own voice. Respond warmly and in character — the game has already handled everything that follows, so only your words and manner belong here. Do not waver, and do not talk them out of their own yes.";
+      return "- You consent, freely and in your own voice. Respond warmly and in character — the game has already handled everything that follows, so only your words and manner belong here. Do not waver, and do not talk yourself out of your own yes.";
     }
     if ((decision.reason || '').startsWith('floor_')) {
       return "- This is a hard no and it is not open to negotiation. Decline in character, matching your stance; do not leave an opening for more persuasion. If the reason is coldness or hostility, let it show in how you hold yourself.";
     }
-    return "- They're not willing right now. Decline in character, honestly and without cruelty. A no is a no — do not hint that more persuasion would change it.";
+    return "- You're not willing right now. Decline in character, honestly and without cruelty. A no is a no — do not hint that more persuasion would change it.";
   },
 };
 
