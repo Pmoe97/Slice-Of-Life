@@ -288,65 +288,8 @@ check('every remote leaf resolves through the same registry as in person',
 
 // ------------------------------------------------------------------ 7
 console.log('\n7. D3/D4 in ui.js: the menu opens at the top, a leaf opens the composer');
-api(`
-  function __el(tag) {
-    const attrs = new Map(), listeners = {}, style = {}, classes = new Set();
-    const el = {
-      tag: String(tag).toUpperCase(), children: [], parentNode: null, hidden: false, disabled: false,
-      value: '', placeholder: '', type: '', min: '', max: '', step: '', inputMode: '', tabIndex: 0,
-      _text: '',
-      get textContent() { return this._text + this.children.map(c => c.textContent).join(''); },
-      set textContent(v) { this._text = String(v); this.children.forEach(c => { c.parentNode = null; }); this.children = []; },
-      get className() { return [...classes].join(' '); },
-      set className(v) { classes.clear(); String(v).split(/\\s+/).filter(Boolean).forEach(c => classes.add(c)); },
-      classList: {
-        add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c),
-        toggle: (c, on) => { const want = on === undefined ? !classes.has(c) : !!on; if (want) classes.add(c); else classes.delete(c); return want; },
-      },
-      style: { setProperty: (k, v) => { style[k] = v; }, getPropertyValue: (k) => style[k] || '' },
-      setAttribute(k, v) { attrs.set(k, String(v)); },
-      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
-      hasAttribute(k) { return attrs.has(k); },
-      removeAttribute(k) { attrs.delete(k); },
-      appendChild(c) { c.parentNode = this; this.children.push(c); return c; },
-      addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
-      dispatch(type, ev) {
-        const e = { type, target: this, key: ev && ev.key, preventDefault() {}, ...(ev || {}) };
-        let node = this;
-        while (node) { for (const fn of (node._listeners()[type] || [])) fn(e); node = node.parentNode; }
-      },
-      click() { this.dispatch('click'); },
-      focus() { __doc.activeElement = this; },
-      _listeners: () => listeners,
-      _matches(sel) {
-        return sel.split(',').some(one => {
-          const m = one.trim().match(/^([a-z]*)((?:\\.[\\w-]+)*)((?:\\[[^\\]]+\\])*)$/i);
-          if (!m) return false;
-          if (m[1] && m[1].toUpperCase() !== el.tag) return false;
-          for (const c of (m[2].match(/\\.[\\w-]+/g) || [])) if (!classes.has(c.slice(1))) return false;
-          for (const a of (m[3].match(/\\[[^\\]]+\\]/g) || [])) {
-            const am = a.match(/^\\[([\\w-]+)(?:="([^"]*)")?\\]$/);
-            if (!attrs.has(am[1])) return false;
-            if (am[2] !== undefined && attrs.get(am[1]) !== am[2]) return false;
-          }
-          return true;
-        });
-      },
-      querySelectorAll(sel) {
-        const out = [];
-        const walk = (n) => { for (const c of n.children) { if (c._matches(sel)) out.push(c); walk(c); } };
-        walk(this);
-        return out;
-      },
-      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
-      closest(sel) { let n = this; while (n) { if (n._matches && n._matches(sel)) return n; n = n.parentNode; } return null; },
-    };
-    return el;
-  }
-  var __byId = {};
-  var __doc = { activeElement: null, createElement: (t) => __el(t), getElementById: (id) => __byId[id] || null };
-  document = __doc;
-`);
+const { FAKE_DOM_SRC } = require('./fakedom.js');
+api(FAKE_DOM_SRC);
 const LIFT = ['renderAskComposer', 'askToneVar', 'openAskMenu', 'askMenuRender', 'openConvComposer', 'closeConvComposer', 'convComposerReady'];
 const lifted = Object.fromEntries(LIFT.map((n) => [n, bodies(UI, n)]));
 for (const [name, list] of Object.entries(lifted)) {

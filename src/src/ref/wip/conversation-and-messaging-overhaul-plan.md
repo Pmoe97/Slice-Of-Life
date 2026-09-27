@@ -1,6 +1,6 @@
 # Conversation & Messaging Overhaul
 
-Status: **in progress — Phases 1–4 built and verified; Phase 5 next.** Opened 2026-09-27 from the user's bug/QoL
+Status: **in progress — Phases 1–5 built and verified; Phase 6 (close-out) next.** Opened 2026-09-27 from the user's bug/QoL
 list ("We need to fix conversing in this game").
 Last updated 2026-09-27.
 
@@ -27,7 +27,7 @@ something lands; they must never disagree.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 5 (Messages).
+**Resume at:** Phase 6 (close-out).
 
 **Last session's notes:** Plan written from a survey of `ui.js`
 (conversation overlay, ask menu, gift/borrow pickers), `asks.js`,
@@ -67,6 +67,28 @@ checkRelConsequences refuses), now through the same picker and writer.
 Live-checked: chip → conversation → picker (fridge plate pinned "For your
 goal") → 3→2 servings in the fridge, 1 in their things → goal advances →
 the next line completes the Care Package.
+
+Phase 5 (same session): the Messages controller is in `ui.computer.js`
+(`IM_ASK_SHEET`, `IM_COMPOSER`, `IM_DRAFTS`, `IM_PENDING_IMAGE`,
+`doImAskSend`, `runImAskScheduleFlow`, `runImAskPhotoFlow`,
+`imNoteTransfer`); `render.computer.js` draws it (`renderImBubble`,
+`renderImAskSheet`). The calendar half of a schedule ask is now ONE helper,
+`askSchedulePickAndBook` (ui.js), used by both the conversation and
+Messages. `resolveImReply` takes `{ askTurn | askDirective, fallbackLine,
+recordPlayer, context }`; `resolveAsk` passes `ctx.channel` to
+`buildAskDirective`, which words the block for a text when it is 'im', and
+exposes `effectData()` so a transfer bubble shows what actually moved. Every
+thread writer goes through `pushImMessage` (cap: `IM_PROMPT.threadCap`,
+400). Two smaller calls made while building: the generic amount presets now
+SPREAD across the allowed range (a $300 cap offers $5…$300, not the five
+largest) and the ladder dropped $50; a half-typed message survives the
+re-renders the sheet causes (`IM_DRAFTS`). Live-checked on the phone at
+390×844 and the computer window at 1280×900: markup in a message renders
+literally, Give Money $50 → a "−$50 Sent · gift" card, Hang Out → the
+calendar modal above the phone → a commitment and a confirming text, a Loan
+→ "+$40 Received · loan", a photo request → the photo in the thread.
+`verify-i4.js`'s two red checks are the triage doc's known commitment/drive
+race — red before this change too.
 
 **Blockers / flagged deviations:** None.
 
@@ -290,5 +312,5 @@ Full suite, patch notes (0.14.2 entry), ARCHITECTURE/README rows.
 | 2 — Scene director | built + verified (`verify-conv-scene.js` 42) |
 | 3 — Interact composer | built + verified (`verify-ask-composer.js` 69; live in the harness) |
 | 4 — Gifts | built + verified (`verify-gift-flow.js` 51; live in the harness) |
-| 5 — Messages | not started |
+| 5 — Messages | built + verified (`verify-im-asks.js` 52; live on phone + computer) |
 | 6 — Close-out | not started |

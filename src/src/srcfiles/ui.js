@@ -6024,6 +6024,26 @@ async function handleAction(action, npcId, extra) {
     case 'im.send':
       await doImSend(extra?.rowId, extra?.device);
       break;
+    // Conversation overhaul D7 — the Messages + sheet and composer
+    // (ui.computer.js). The thread is the one Messages is showing.
+    case 'im.ask-sheet':
+      doImAskSheet(currentGameState.world.computer.apps.im.viewingNpcId, 'toggle', null, extra?.device);
+      break;
+    case 'im.ask-cat':
+      doImAskSheet(currentGameState.world.computer.apps.im.viewingNpcId, 'cat', extra?.rowId, extra?.device);
+      break;
+    case 'im.ask-back':
+      doImAskSheet(currentGameState.world.computer.apps.im.viewingNpcId, 'back', null, extra?.device);
+      break;
+    case 'im.ask-close':
+      doImAskSheet(currentGameState.world.computer.apps.im.viewingNpcId, 'close', null, extra?.device);
+      break;
+    case 'im.ask-leaf':
+      await doImAskLeaf(currentGameState.world.computer.apps.im.viewingNpcId, extra?.rowId, extra?.device);
+      break;
+    case 'im.ask-cancel':
+      doImAskCancel(extra?.device);
+      break;
     case 'stream.watch':
       await doStreamWatch(extra?.rowId, extra?.device);
       break;
@@ -8774,18 +8794,16 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
   }
 }
 
-// Asks plan Phase 4 (D8/D9) — stage 2 of a schedule:true ask. Stage 1
-// (decide + pass-1 phrasing) already ran and said yes; here the player
-// picks a genuinely free window from the calendar modal, the hard-block
-// recheck runs (a safety net only — the modal only offers free windows),
-// a real commitment is created so the NPC actually shows up for the window,
-// and a second LLM pass phrases the sign-off through
-// buildSchedulingConfirmDirective (template fallback if the call fails).
-// Returns { logEntries } — the pass-2 entries for the session log — or
-// null when the player cancels.
-async function runAskScheduleFlow(askTurn, context, playerAction) {
-  const convNpcId = convState?.npcId; // snapshot — the overlay may close mid-modal
-  const npc = currentGameState.npcs?.[convNpcId];
+// Asks plan Phase 4 (D8/D9) — the calendar half of a schedule:true ask,
+// shared by the conversation (runAskScheduleFlow) and Messages
+// (ui.computer.js, conversation overhaul D7). The player picks a genuinely
+// free window from the modal; the hard-block recheck runs (a safety net only
+// — the modal only offers free windows); a real commitment is created so the
+// NPC actually shows up. `beat(text)` voices the in-between lines in
+// whichever surface asked. Returns { slot, when, dayLabel, name,
+// extraAnswers } or null when the player cancels.
+async function askSchedulePickAndBook(askTurn, npcId, beat) {
+  const npc = currentGameState.npcs?.[npcId];
   if (!npc) return null;
   const name = npc.bible?.name || 'they';
   // Phase 1 (D2, actions-and-activities-overhaul-plan.md): $Invite parses its
@@ -8803,7 +8821,7 @@ async function runAskScheduleFlow(askTurn, context, playerAction) {
   for (let tries = 0; tries < 5; tries++) {
     slot = await openAskScheduleModal({
       title: `${askTurn.ask.label} — when works for ${name}?`,
-      npcId: convNpcId,
+      npcId,
       mealLabels: resolvedKind === 'meal', // Phase 5 (D10): label rows that land in a meal slot
     });
     if (!slot) return null;
@@ -8811,9 +8829,9 @@ async function runAskScheduleFlow(askTurn, context, playerAction) {
     const { block } = resolveScheduleActivity(npc, absoluteToClock(slot.startAbs));
     if (slot.endAbs > nowAbs && !COMMITMENT_TUNING.busyBlocks.includes(block)) break;
     slot = null;
-    convAddBeat(`${name}'s plans just shifted — that window won't work anymore. Pick another?`);
+    beat(`${name}'s plans just shifted — that window won't work anymore. Pick another?`);
   }
-  if (!slot) { convAddBeat('You leave the plans open.'); return null; }
+  if (!slot) { beat('You leave the plans open.'); return null; }
 
   // The NPC pre-accepted deterministically in stage 1, so they are passed
   // as proposerId: createCommitment honors that by putting them straight
@@ -8826,7 +8844,7 @@ async function runAskScheduleFlow(askTurn, context, playerAction) {
     startAbs: slot.startAbs, endAbs: slot.endAbs,
     roomId: resolvedRoomId,
     invitedIds: extraInvitedIds,
-    proposerId: convNpcId,
+    proposerId: npcId,
     host: 'player',
   });
   askTurn.setSlot(slot);
@@ -8838,19 +8856,33 @@ async function runAskScheduleFlow(askTurn, context, playerAction) {
   const meal = resolvedKind === 'meal'
     ? mealLabelForWindow(slot.startAbs % 1440, slot.endAbs % 1440) : null;
   const dayLabel = meal ? `${meal.label}, ${when.dayLabel}` : when.dayLabel;
+  const extraAnswers = extraInvitedIds.map((extraId) => {
+    const extraName = currentGameState.npcs?.[extraId]?.bible?.name || 'They';
+    return extraResponses?.[extraId]?.accept ? `${extraName} is in too.` : `${extraName} isn't up for it.`;
+  });
+  return { slot, when, dayLabel, name, extraAnswers };
+}
+
+// Asks plan Phase 4 (D8/D9) — stage 2 of a schedule:true ask. Stage 1
+// (decide + pass-1 phrasing) already ran and said yes; here the player
+// picks a genuinely free window from the calendar modal, the hard-block
+// recheck runs (a safety net only — the modal only offers free windows),
+// a real commitment is created so the NPC actually shows up for the window,
+// and a second LLM pass phrases the sign-off through
+// buildSchedulingConfirmDirective (template fallback if the call fails).
+// Returns { logEntries } — the pass-2 entries for the session log — or
+// null when the player cancels.
+async function runAskScheduleFlow(askTurn, context, playerAction) {
+  const convNpcId = convState?.npcId; // snapshot — the overlay may close mid-modal
+  // Conversation overhaul D7: the modal loop + booking are shared with
+  // Messages (askSchedulePickAndBook); only the voice differs.
+  const booked = await askSchedulePickAndBook(askTurn, convNpcId, convAddBeat);
+  if (!booked) return null;
+  const { name, when, dayLabel } = booked;
   // Phase 1 (D2): narrate the extra invitees' own answers — a deterministic
   // system line, not a second LLM pass, matching invariant 1 (decide before
   // decorate: the writer below only ever speaks for convNpcId).
-  if (extraInvitedIds.length) {
-    for (const extraId of extraInvitedIds) {
-      const extraNpc = currentGameState.npcs?.[extraId];
-      const extraName = extraNpc?.bible?.name || 'They';
-      const accepted = extraResponses?.[extraId]?.accept;
-      addLogEntry('narration', accepted
-        ? `${extraName} is in too.`
-        : `${extraName} isn't up for it.`);
-    }
-  }
+  for (const line of booked.extraAnswers) addLogEntry('narration', line);
 
   const removeTyping = convShowTyping();
   convSetStatus('Thinking…');

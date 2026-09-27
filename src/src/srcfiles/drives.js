@@ -1860,7 +1860,8 @@ function isRoomAdjacent(roomA, roomB) {
 function processNpcImMessages(gameState, messages) {
   for (const msg of messages) {
     const thread = ensureImThread(gameState, msg.npcId);
-    thread.msgs.push({
+    // Conversation overhaul D8: through pushImMessage, so the thread is capped.
+    pushImMessage(gameState, msg.npcId, {
       from: 'npc',
       text: msg.text,
       day: gameState.meta.clock.day,

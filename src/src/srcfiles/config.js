@@ -7065,6 +7065,10 @@ const PHASE_THRESHOLDS = {
 // presented as five interleaved lines that also contained in-person dialogue.
 const IM_PROMPT = {
   threadDepth: 12,         // trailing messages of the real thread shown to the model
+  // Conversation overhaul D8 (E8): threads grew without bound in the save —
+  // every text ever sent, forever. The model only ever sees the last
+  // threadDepth; the screen shows a thread's recent history. Oldest trimmed.
+  threadCap: 400,
 };
 
 // Demotion (active -> ambient) must always be narrated as an in-fiction

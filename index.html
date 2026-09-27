@@ -6965,6 +6965,26 @@ body {
 .im-typing .dot:nth-child(2) { animation-delay: 0.2s; }
 .im-typing .dot:nth-child(3) { animation-delay: 0.4s; }
 @keyframes im-typing-bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-4px); opacity: 1; } }
+/* Conversation overhaul D7 — Messages gets the phone's Interact: a + beside
+   the field opens a sheet of the asks a phone can carry (same rows and tones
+   as the conversation's menu), a leaf opens the shared composer
+   (.ask-composer) above the field, and the thread shows what an ask did —
+   its header tag, money as a transfer card, a photo they sent. */
+.im-plus-btn { flex-shrink: 0; width: 32px; font-size: var(--fs-md); font-weight: 700; line-height: 1; }
+.im-plus-btn[aria-expanded="true"] { background: var(--color-accent-dim); }
+.im-ask-sheet { flex-shrink: 0; display: flex; flex-direction: column; max-height: 45%; margin-bottom: 6px; background: var(--color-surface); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); overflow: hidden; }
+.im-ask-head { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); border-bottom: 1px solid var(--color-border); }
+.im-ask-title { flex: 1; min-width: 0; font-size: var(--fs-sm); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.im-ask-body { overflow-y: auto; padding: var(--space-1); display: flex; flex-direction: column; gap: 2px; }
+.im-composer { margin-bottom: 6px; border: 1px solid var(--color-border); border-left: 3px solid var(--ask-tone); border-radius: var(--radius-md); padding: var(--space-2); max-height: 50%; }
+.im-msg-tag { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; opacity: 0.75; margin-bottom: 2px; }
+.im-msg-transfer { min-width: 150px; }
+.im-transfer { display: flex; flex-direction: column; gap: 1px; padding: 6px 10px; margin: 2px 0 4px; border-radius: 8px; background: rgba(0, 0, 0, 0.18); border-left: 3px solid var(--color-positive); }
+.im-transfer[data-mode="loan"] { border-left-color: var(--color-warning); }
+.im-transfer-amount { font-size: var(--fs-md); font-weight: 700; }
+.im-transfer-what { font-size: var(--fs-xs); opacity: 0.8; }
+.im-msg-bubble[data-from="npc"] .im-transfer { background: var(--color-surface); }
+.im-typing-icon { font-size: 1.1em; line-height: 1; margin-right: 2px; }
 
 /* In-person conversation overlay. A focused chat-like interface layered
    over the scene viewer while talking to an NPC. Distinct from the IM app:

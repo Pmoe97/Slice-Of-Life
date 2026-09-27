@@ -390,13 +390,18 @@ function loanAmountFromFlavor(flavor, rel) {
 // giftDefId and the calendar slot use: they shape the WRITES and the words,
 // never whether a leaf says yes (D1). Typed `$GiveMoney $20 loan` still works
 // through the flavor parsers, as the fallback when no structured value came.
-const ASK_AMOUNT_PRESETS = [5, 10, 20, 40, 50, 100, 200, 300, 500];
+const ASK_AMOUNT_PRESETS = [5, 10, 20, 40, 100, 200, 300, 500];
 function askAmountArg({ label, max, initial, hint, presets }) {
   return {
     id: 'amount', kind: 'amount', label: label || 'Amount', max, initial, hint,
+    // Up to five amounts SPREAD across what's allowed — the smallest, the
+    // ceiling, and steps between — so a $300 cap offers $5…$300, not just
+    // the five largest.
     presets: presets || ((gs, npc, npcId) => {
       const m = max(gs, npc, npcId);
-      return ASK_AMOUNT_PRESETS.filter(v => v <= m).slice(-5);
+      const all = ASK_AMOUNT_PRESETS.filter(v => v <= m);
+      if (all.length <= 5) return all;
+      return [...new Set([0, 1, 2, 3, 4].map(i => all[Math.round(i * (all.length - 1) / 4)]))];
     }),
   };
 }
@@ -2674,6 +2679,7 @@ function resolveAsk(gameState, npcId, askId, flavor, ctx, extra) {
     ladderLine,
     npcName: (npc.bible && npc.bible.name) || 'your roommate',
     leafNote: leaf.leafNote ? leaf.leafNote(decision) : null,
+    channel: ctx && ctx.channel, // conversation overhaul D7 — 'im' words it for a text
   });
   // Phase 4 (D8): effect lines are built LAZILY so the caller can pass the
   // calendar-chosen slot (setSlot) before applyEffects — the hangout leaf's
@@ -2704,6 +2710,10 @@ function resolveAsk(gameState, npcId, askId, flavor, ctx, extra) {
     setSlot(slot) {
       if (slot) effectData = { ...effectData, slot };
     },
+    // Conversation overhaul D7 — what the effects actually wrote (a money
+    // leaf stamps giveAmount/repayAmount/collectAmount/loanAmount here), so
+    // Messages can show the real transfer. Read after applyEffects().
+    effectData() { return effectData; },
     applyEffects() {
       const effectLines = buildEffectLines();
       let applied = [];

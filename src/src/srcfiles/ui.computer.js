@@ -2094,12 +2094,230 @@ function imScopeForDevice(device) {
   return device === 'phone' ? document.getElementById('phone-screen') : document;
 }
 
+// --- Conversation overhaul D7: the phone's version of Interact -------------
+// User report (2026-09-27): "The Messages app currently has virtually zero
+// functionality … It has none of the things that would make sense like
+// picture-exchanges, asks, money, etc." A `+` beside the text field opens a
+// sheet of the asks a phone can carry (asks.js askRemoteCategories — the
+// leaves flagged `remote: true`); picking one opens the SAME composer the
+// conversation uses (ui.js renderAskComposer), and the send runs the SAME
+// resolveAsk: decided before the model writes, the writer's effects
+// stripped, the ask's own effects applied once. The thread is shared by the
+// computer and the phone, so this state is too: whichever device shows the
+// thread shows the sheet/composer. Rendered by render.computer.js
+// renderMessages, which reads these three.
+let IM_ASK_SHEET = null;   // { npcId, catId } while the + sheet is open
+let IM_COMPOSER = null;    // { npcId, askId, values } while an ask is being composed
+const IM_DRAFTS = {};      // npcId → the half-typed message (a re-render rebuilds the input)
+const IM_PENDING_IMAGE = new Set(); // npcIds with a photo being generated for the thread
+
+function imRerender() {
+  renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+}
+
+// The context a remote ask decides against: the IM context (channel 'im',
+// so the directive is worded for a text) — the same one the reply uses.
+function imAskContext(npcId) {
+  return assembleImContext(currentGameState, npcId);
+}
+
+function doImAskSheet(npcId, action, rowId, device) {
+  if (!npcId) return;
+  if (action === 'toggle') IM_ASK_SHEET = (IM_ASK_SHEET && IM_ASK_SHEET.npcId === npcId) ? null : { npcId, catId: null };
+  else if (action === 'cat') IM_ASK_SHEET = { npcId, catId: rowId || null };
+  else if (action === 'back') IM_ASK_SHEET = { npcId, catId: null };
+  else IM_ASK_SHEET = null;
+  imRerender();
+}
+
+async function doImAskLeaf(npcId, askId, device) {
+  const gs = currentGameState;
+  const npc = gs?.npcs?.[npcId];
+  if (!npc || !askId) return;
+  IM_ASK_SHEET = null;
+  // Share a Photo — the camera roll, into the thread (the Photos app's own
+  // share path, doPhoneCameraShare).
+  const share = ASK_SHARE_TYPES[askId];
+  if (share) {
+    imRerender();
+    if (share.available && !share.available(gs)) return;
+    const photo = await openConvPhotoPicker();
+    if (photo) { await doPhoneCameraShare(photo.id, npcId); imRerender(); }
+    return;
+  }
+  const leaf = ASK_TYPES[askId];
+  if (!leaf || !leaf.remote) { imRerender(); return; }
+  if (leaf.available && !leaf.available(gs, npc, imAskContext(npcId))) { imRerender(); return; }
+  // Post a Photo of Us — picker-first, the pick is the structured payload.
+  if (leaf.feature) {
+    imRerender();
+    const photo = await openConvFeaturePicker(npcId);
+    if (photo) await doImAskSend(npcId, device, { askId, values: { featurePhotoId: photo.id }, flavor: '' });
+    return;
+  }
+  IM_COMPOSER = { npcId, askId, values: askArgDefaults(leaf, gs, npc, npcId) };
+  imRerender();
+  const scope = imScopeForDevice(device);
+  const firstChip = scope?.querySelector('.im-composer .ask-chip[aria-checked="true"]')
+    || scope?.querySelector('.im-composer button.ask-chip');
+  (firstChip || scope?.querySelector('#cs-chat-input'))?.focus();
+}
+
+function doImAskCancel(device) {
+  IM_COMPOSER = null;
+  imRerender();
+  imScopeForDevice(device)?.querySelector('#cs-chat-input')?.focus();
+}
+
+// The texted ask turn. Mirrors doConvSend's ask branch step for step:
+// decide first (resolveAsk), phrase second (resolveImReply with the
+// directive — effects stripped, template fallback), then the ask's own
+// second halves (the calendar, the photo), then its effects once.
+async function doImAskSend(npcId, device, composed) {
+  const gs = currentGameState;
+  const npc = gs?.npcs?.[npcId];
+  const leaf = ASK_TYPES[composed?.askId];
+  if (!npc || !leaf || imSending) return;
+  imSending = true;
+  IM_PENDING_REPLY.add(npcId);
+  const flavor = (composed.flavor || '').trim();
+  const body = flavor || leaf.defaultFlavor || '';
+  const summary = askArgSummary(leaf, composed.values, gs, npc, npcId);
+  const appended = appendPlayerImMessage(gs, npcId, body, { tag: summary ? `${leaf.label} · ${summary}` : leaf.label, askId: leaf.id });
+  if (!appended.ok) { addLogEntry('system', appended.reason); imSending = false; IM_PENDING_REPLY.delete(npcId); return; }
+  imRerender();
+  try {
+    // Same ordering doConvSend keeps: the (no-op) batch first, so the ask's
+    // seed reads the exact state this turn saves (asks plan D1/D6).
+    await advanceAndResolve(0);
+    const ctx = imAskContext(npcId);
+    const askTurn = resolveAsk(currentGameState, npcId, leaf.id, flavor, ctx, composed.values);
+    if (!askTurn) return;
+    const reply = await resolveImReply(currentGameState, npcId, body, { askTurn, context: ctx });
+    if (!reply.ok) addLogEntry('system', reply.reason);
+    IM_PENDING_REPLY.delete(npcId);
+    imRerender();
+    if (askTurn.ask.schedule && askTurn.decision.accept) await runImAskScheduleFlow(askTurn, npcId, body);
+    if (askTurn.ask.photo && askTurn.decision.accept) await runImAskPhotoFlow(askTurn, npcId);
+    askTurn.applyEffects();
+    imNoteTransfer(npcId, askTurn, appended.msg);
+    await advanceAndResolve(0);
+    imRerender();
+    render(currentGameState, currentSceneState);
+    // The same judged surface as any text (Plan X-5 D17) — see doImSend.
+    if (await assessSceneIfFull()) render(currentGameState, currentSceneState);
+    await chronicleIfFull();
+    await saveAtBoundary('im-ask', currentGameState);
+  } catch (e) {
+    console.warn('Texted ask failed:', e);
+    pushImMessage(currentGameState, npcId, { from: 'system', text: 'That didn’t go through. Try again.', day: currentGameState.meta.clock.day, tick: getTickIndex(currentGameState.meta.clock.minutes) });
+  } finally {
+    IM_PENDING_REPLY.delete(npcId);
+    imSending = false;
+    imRerender();
+  }
+}
+
+// D7 — money shows as a transfer, not a sentence. The player's own message
+// carries what they sent; what came back (a loan they agreed to, a debt
+// collected) arrives as its own bubble from them. Reads what the effects
+// actually wrote (askTurn.effectData), after applyEffects.
+function imNoteTransfer(npcId, askTurn, playerMsg) {
+  if (!askTurn || !askTurn.decision.accept) return;
+  const data = askTurn.effectData ? askTurn.effectData() : {};
+  const gs = currentGameState;
+  const stamp = { day: gs.meta.clock.day, tick: getTickIndex(gs.meta.clock.minutes) };
+  const id = askTurn.ask.id;
+  if (id === 'GiveMoney' && data.giveAmount > 0 && playerMsg) playerMsg.transfer = { amount: data.giveAmount, dir: 'out', mode: data.giveMode || 'gift' };
+  else if (id === 'RequestRepay' && data.repayAmount > 0 && playerMsg) playerMsg.transfer = { amount: data.repayAmount, dir: 'out', mode: 'repay' };
+  else if (id === 'RequestLoan' && data.loanAmount > 0) pushImMessage(gs, npcId, { from: 'npc', text: '', transfer: { amount: data.loanAmount, dir: 'in', mode: 'loan' }, ...stamp });
+  else if (id === 'CollectMoney' && data.collectAmount > 0) pushImMessage(gs, npcId, { from: 'npc', text: '', transfer: { amount: data.collectAmount, dir: 'in', mode: 'repay' }, ...stamp });
+}
+
+// D7 — a plan made by text: the same calendar modal and booking as in
+// person (ui.js askSchedulePickAndBook), then a confirming text.
+async function runImAskScheduleFlow(askTurn, npcId, playerText) {
+  const gs = currentGameState;
+  const note = (text) => pushImMessage(gs, npcId, { from: 'system', text, day: gs.meta.clock.day, tick: getTickIndex(gs.meta.clock.minutes) });
+  const booked = await askSchedulePickAndBook(askTurn, npcId, (t) => { note(t); imRerender(); });
+  if (!booked) { imRerender(); return null; }
+  for (const line of booked.extraAnswers) note(line);
+  IM_PENDING_REPLY.add(npcId);
+  imRerender();
+  try {
+    await resolveImReply(gs, npcId, playerText, {
+      askDirective: buildSchedulingConfirmDirective({
+        askLabel: askTurn.ask.label, npcName: booked.name, dayLabel: booked.dayLabel,
+        timeLabel: booked.when.timeLabel, slotLabel: booked.when.slotLabel,
+      }),
+      fallbackLine: `${booked.name} confirms — ${booked.dayLabel} at ${booked.when.timeLabel}.`,
+      recordPlayer: false,
+    });
+  } finally {
+    IM_PENDING_REPLY.delete(npcId);
+    imRerender();
+  }
+  return booked;
+}
+
+// D7 — a photo they agreed to send arrives IN the thread: the in-person
+// photo pipeline (draft → deterministic record → shared cache), stored on
+// the message with the same record contract as a chat image, so it
+// persists, re-paints on reopen, and rerolls through the ⓘ.
+async function runImAskPhotoFlow(askTurn, npcId) {
+  const gs = currentGameState;
+  const npc = gs.npcs?.[npcId];
+  if (!npc) return;
+  const day = askDay(gs);
+  const serial = nextAskPhotoSerial(npc);
+  let draft = null;
+  try { draft = await draftAskPhotoPrompt(gs, npc, askTurn.flavor, serial); }
+  catch (e) { console.warn('Texted photo draft skipped:', e); }
+  const record = buildAskPhotoRecord(gs, npc, npcId, askTurn.flavor, day, serial, draft);
+  IM_PENDING_IMAGE.add(npcId);
+  imRerender();
+  let url = null;
+  try { url = (await getAskPhotoImage(record)).url; }
+  catch (e) { console.warn('Texted photo failed:', e); }
+  IM_PENDING_IMAGE.delete(npcId);
+  const stamp = { day: gs.meta.clock.day, tick: getTickIndex(gs.meta.clock.minutes) };
+  if (url) {
+    pushImMessage(gs, npcId, {
+      from: 'npc', text: '', ...stamp,
+      image: {
+        kind: 'askphoto', from: 'npc', tag: '📷 Photo', caption: record.caption, day,
+        tick: stamp.tick, minutes: gs.meta.clock.minutes,
+        id: record.id, prompt: record.prompt, seed: record.seed, negativePrompt: IMAGE_NEGATIVE.photo,
+      },
+    });
+  } else {
+    pushImMessage(gs, npcId, { from: 'system', text: `${npc.bible?.name || 'They'} tried to send you a photo, but it didn't come through.`, ...stamp });
+  }
+  imRerender();
+}
+
 async function doImSend(npcId, device) {
   if (!npcId || imSending) return;
   const scope = imScopeForDevice(device);
   const input = scope?.querySelector('#cs-chat-input');
+  // D7 — a composed ask sends through its own path (an empty message is
+  // fine: the chips ARE the ask). A composer that isn't ready doesn't send.
+  if (IM_COMPOSER && IM_COMPOSER.npcId === npcId) {
+    const leaf = ASK_TYPES[IM_COMPOSER.askId];
+    const npc = currentGameState?.npcs?.[npcId];
+    if (!askArgsReady(leaf, IM_COMPOSER.values, currentGameState, npc, npcId).ok) return;
+    const composed = { askId: IM_COMPOSER.askId, values: JSON.parse(JSON.stringify(IM_COMPOSER.values || {})), flavor: input?.value || '' };
+    IM_COMPOSER = null;
+    delete IM_DRAFTS[npcId];
+    if (input) { input.value = ''; input.blur(); }
+    await doImAskSend(npcId, device, composed);
+    imScopeForDevice(device)?.querySelector('#cs-chat-input')?.focus();
+    return;
+  }
   const text = input?.value.trim();
   if (!text) return;
+  delete IM_DRAFTS[npcId];
   // Clear the input and set the guard IMMEDIATELY, before any await —
   // this is what stops a second click in the same tick from reading the
   // same text and firing a duplicate send.

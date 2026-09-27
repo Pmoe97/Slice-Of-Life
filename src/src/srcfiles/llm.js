@@ -387,12 +387,18 @@ CRITICAL RULES:
 // writer receives the semantic reason/stance words, never the numbers behind
 // the decision (placeholder fill rules in the prompt doc). The `---`-fenced
 // block is the whole injected section.
-function buildAskDirective({ askLabel, askId, flavorText, accept, reasonPhrase, stance, ladderLine, npcName, leafNote }) {
+// Conversation overhaul D7: `channel: 'im'` words the same block for a TEXT
+// — "sent over text", and texts instead of an *action* — with every rule
+// that matters (decided first, no renegotiation, no mechanics) unchanged.
+function buildAskDirective({ askLabel, askId, flavorText, accept, reasonPhrase, stance, ladderLine, npcName, leafNote, channel }) {
+  const im = channel === 'im';
   const lines = [
     '',
     '---',
     '',
-    '[ASK CONTEXT — the player used the Request menu. You are NOT deciding the outcome of this request; it has already been decided. You are only writing the in-character response.]',
+    im
+      ? '[ASK CONTEXT — the player sent this request by text. You are NOT deciding the outcome of this request; it has already been decided. You are only writing the in-character reply text.]'
+      : '[ASK CONTEXT — the player used the Request menu. You are NOT deciding the outcome of this request; it has already been decided. You are only writing the in-character response.]',
     '',
     `- The request: ${askLabel} (${askId})`,
     `- The player's words: "${flavorText || '—'}"`,
@@ -415,7 +421,9 @@ function buildAskDirective({ askLabel, askId, flavorText, accept, reasonPhrase, 
   );
   if (leafNote) lines.push(leafNote);
   lines.push(
-    '- 1-3 short sentences. One optional brief action in *asterisks*.',
+    im
+      ? '- 1-3 short texts in your own texting style. No *actions* and no narration — this is a text message.'
+      : '- 1-3 short sentences. One optional brief action in *asterisks*.',
     "- Emit no effects, no state changes, no summary of the game's mechanics.",
     '',
     '---',
@@ -492,6 +500,11 @@ CRITICAL RULES:
 - topic is optional — a short label for what this exchange was about.
 - advocateFor is optional and RARE — only a natural, earned suggestion from this NPC, never forced.
 - 1-3 short messages max, not a paragraph. No narration field — dialogue only.`;
+
+  // Conversation overhaul D7: an ask sent by text carries the same decided-
+  // first directive a spoken one does (buildAskDirective, channel 'im'), or
+  // the scheduling sign-off's. Appended last, as buildScenePrompt does.
+  if (context.askDirective) prompt += `\n${context.askDirective}\n`;
 
   return prompt;
 }
