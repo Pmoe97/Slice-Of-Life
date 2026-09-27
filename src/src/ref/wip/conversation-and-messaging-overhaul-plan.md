@@ -1,6 +1,6 @@
 # Conversation & Messaging Overhaul
 
-Status: **in progress — Phase 1.** Opened 2026-09-27 from the user's bug/QoL
+Status: **in progress — Phases 1–3 built and verified; Phase 4 next.** Opened 2026-09-27 from the user's bug/QoL
 list ("We need to fix conversing in this game").
 Last updated 2026-09-27.
 
@@ -27,12 +27,26 @@ something lands; they must never disagree.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 1.
+**Resume at:** Phase 4 (gifts).
 
 **Last session's notes:** Plan written from a survey of `ui.js`
 (conversation overlay, ask menu, gift/borrow pickers), `asks.js`,
 `image.js` (F3 scene panel), `computer.js`/`ui.computer.js`/
 `render.computer.js` (Messages), `llm.js` (IM prompt).
+
+2026-09-27 (second session): Phases 1–2 were already built by the first
+session (cut off mid-Phase 3); this session finished Phase 3. The composer
+is `renderAskComposer` in `ui.js` — host-agnostic on purpose, so Phase 5's
+Messages sheet reuses it rather than growing a second one. Pure helpers it
+reads live in `asks.js`: `askCategoryOf`, `askRemoteCategories`,
+`askArgDefaults`, `askArgsReady`, `askArgSummary`. Live-checked in
+`dev-harness.html` with Playwright (stubbed `root.generateText`/
+`generateImage`) at 1280×900 and 390×844: menu opens at the root titled
+Interact, a $50 Loan chip moves $50 and records it on the ledger, the bubble
+reads "Give Money · $50 · Loan", Escape cancels the composer before it
+pauses the talk. `verify-acc-p13.js` pinned the old "asking you not to"
+phrase — updated to D9's "asking the player not to" (the assertion was
+wrong, not the code).
 
 **Blockers / flagged deviations:** None.
 
@@ -252,9 +266,9 @@ Full suite, patch notes (0.14.2 entry), ARCHITECTURE/README rows.
 
 | Phase | State |
 |---|---|
-| 1 — Images stay in place | not started |
-| 2 — Scene director | not started |
-| 3 — Interact composer | not started |
+| 1 — Images stay in place | built + verified (`verify-conv-images.js` 32) |
+| 2 — Scene director | built + verified (`verify-conv-scene.js` 42) |
+| 3 — Interact composer | built + verified (`verify-ask-composer.js` 69; live in the harness) |
 | 4 — Gifts | not started |
 | 5 — Messages | not started |
 | 6 — Close-out | not started |

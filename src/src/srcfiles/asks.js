@@ -472,6 +472,7 @@ const ASK_INFO = {
   // untouched, the bubble body shows this canned line instead of nothing.
   // Never an input to decide()/the directive (D1) — the flavor stays empty.
   defaultFlavor: 'Tell me about yourself.',
+  remote: true, // Conversation overhaul D7 — offered in Messages too
   available: (gs, npc, ctx) => true, // anyone standing in front of you can be asked about themselves
   // seedCtx = { day, count, ladderPenalty } — resolveAsk fills it: day +
   // count seed the deterministic noise (D6), and EVERY leaf must subtract
@@ -521,6 +522,7 @@ const ASK_HANGOUT = {
   help: '<optional: what you want to do — e.g. watch a movie>',
   template: '$RequestHangout <Optional>',
   defaultFlavor: 'Do you want to hang out?',
+  remote: true, // D7
   schedule: true,                 // Phase 4: calendar modal + commitment (D8/D9)
   kind: 'hangout',
   roomId: COMMITMENT_KINDS.hangout.roomId, // 'living_room' — the shared hangout spot
@@ -577,6 +579,7 @@ const ASK_MEAL = {
   help: '<optional: what/when — e.g. coffee early>',
   template: '$RequestMeal <Optional>',
   defaultFlavor: 'Want to grab a meal together?',
+  remote: true, // D7
   schedule: true,                 // Phase 4 machinery: calendar modal + commitment (D8/D9)
   kind: 'meal',
   roomId: 'dining',               // COMMITMENT_KINDS.meal — the shared table, same room doInviteDinner books
@@ -947,7 +950,7 @@ const ASK_LOAN = {
   id: 'RequestLoan',
   category: 'money',
   label: 'Loan Request',
-  help: '<optional: amount — e.g. $20>',
+  help: 'pick how much to borrow',
   template: '$RequestLoan <Optional>',
   defaultFlavor: 'Could you spot me some money?',
   remote: true, // Conversation overhaul D7 — asking over text works fine
@@ -1028,7 +1031,7 @@ const ASK_REPAY = {
   id: 'RequestRepay',
   category: 'money',
   label: 'Repay a Loan',
-  help: '<optional: amount — e.g. $20; blank pays it all back>',
+  help: 'pick how much to pay back',
   template: '$RequestRepay <Optional>',
   defaultFlavor: "Here's what I owe you.",
   remote: true, // D7 — paying someone back is a transfer, not a handover
@@ -1147,6 +1150,11 @@ const ASK_GIVE_MONEY = {
       label: 'Send',
       max: (gs) => Math.max(0, gs?.player?.money || 0),
       initial: (gs) => Math.min(20, Math.max(0, gs?.player?.money || 0)),
+      // Everyday amounts, not the top of the wallet — the custom box covers
+      // anything bigger (the generic rule picks the five LARGEST presets
+      // under the ceiling, which suits a loan's small phase cap but offered
+      // $50–$500 to a player with a few thousand in the bank).
+      presets: (gs) => [5, 10, 20, 50, 100].filter(v => v <= Math.max(0, gs?.player?.money || 0)),
       hint: (gs) => `You have $${Math.max(0, gs?.player?.money || 0)}`,
     }),
     {
@@ -1218,7 +1226,7 @@ const ASK_COLLECT_MONEY = {
   id: 'CollectMoney',
   category: 'money',
   label: 'Collect a Debt',
-  help: '<optional: amount — e.g. $20; blank collects it all>',
+  help: 'pick how much to ask for back',
   template: '$CollectMoney <Optional>',
   defaultFlavor: "You still owe me, you know.",
   remote: true, // D7 — asking for it back over text works too
@@ -1346,6 +1354,10 @@ const ASK_PHOTO = {
   template: '$RequestPhoto <Optional>',
   defaultFlavor: 'Can you send me a photo?',
   photo: true, // accepted asks render a generated image bubble (ui.js runAskPhotoFlow)
+  // D7 — over text the photo lands in the thread (ui.computer.js). The
+  // privacy gate below reads the NPC's OWN room, so it means the same thing
+  // whether or not the player is standing in it.
+  remote: true,
   // D5 — the menu gate. NPC presence is true by definition inside a
   // conversation; the real check is "private enough" = alone with them.
   available: (gs, npc, ctx) => {
@@ -1542,6 +1554,7 @@ const ASK_SHARE_PHOTO = {
   category: 'photos',
   label: 'Share a Photo',
   help: 'send one from your camera roll',
+  remote: true, // D7 — Messages already takes photos; the + sheet offers it too
   available: (gs) => (gs?.world?.phone?.camera?.roll?.length || 0) > 0,
 };
 
@@ -1565,6 +1578,7 @@ const ASK_FEATURE = {
   help: 'pick a photo with them in it — ask before it goes up',
   defaultFlavor: 'Can I post this one with you in it?',
   feature: true,
+  remote: true, // D7 — asking before you post works just as well by text
   available: (gs, npc, ctx) => {
     // NPC records carry no id of their own — the key is found by identity,
     // the same way ASK_PHOTO's presence check compares objects.
@@ -2232,6 +2246,7 @@ const ASK_APOLOGIZE = {
   template: '$Apologize <Optional>',
   defaultFlavor: "I'm sorry — I really am.",
   help: '<optional>',
+  remote: true, // D7 — a texted apology is still an apology
   available: () => true,
   decide(gs, npc, npcId, flavor, ctx, seedCtx) {
     const unresolved = getUnresolvedGrievances(npc);
@@ -2323,6 +2338,7 @@ const ASK_BOUNDARY = {
   defaultFlavor: 'Hey, can you knock before you come into my room?',
   help: '<optional>',
   boundaryDefId: 'no_enter_room',
+  remote: true, // D7
   available: () => true,
   decide(gs, npc, npcId, flavor, ctx, seedCtx) {
     const active = (npc.flags && npc.flags._boundaryRules) || [];
@@ -2387,6 +2403,7 @@ const ASK_SUBSCRIPTION_TALK = {
   defaultFlavor: "I pay for someone's private page on Chatter — are you okay with that?",
   help: '<optional: whose, or why>',
   boundaryDefId: 'no_private_subscriptions',
+  remote: true, // D7
   available: () => true,
   decide(gs, npc, npcId, flavor, ctx, seedCtx) {
     const active = (npc.flags && npc.flags._playerBoundaries) || [];
@@ -2443,33 +2460,36 @@ const ASK_SUBSCRIPTION_TALK = {
 // pseudo-leaf (Phase 8), so image requesting and image sending share one
 // surface exactly like FUOC's attachments menu.
 const ASK_CATEGORIES = [
-  { id: 'meals', label: '🍽️ Meals & Plans', children: [ASK_MEAL] },
-  { id: 'hangouts', label: '🎮 Hangouts', children: [ASK_HANGOUT] },
+  // Conversation overhaul D4: `tone` tints the composer's label and the menu
+  // row's edge (a theme colour token: --color-<tone>), so a money ask, a
+  // plan and an affection ask read differently at a glance.
+  { id: 'meals', label: '🍽️ Meals & Plans', tone: 'warm', children: [ASK_MEAL] },
+  { id: 'hangouts', label: '🎮 Hangouts', tone: 'cool', children: [ASK_HANGOUT] },
   // Phase 1 (D1/D2, actions-and-activities-overhaul-plan.md): the
   // multi-person invite. Sits alongside, not instead of, the two single-
   // target leaves above — see ASK_INVITE's own header for why.
-  { id: 'invite', label: '📅 Invite', children: [ASK_INVITE, ASK_PARTY] },
+  { id: 'invite', label: '📅 Invite', tone: 'cool', children: [ASK_INVITE, ASK_PARTY] },
   // Phase 4 of actions-and-activities-overhaul-plan.md (D9): the bidirectional
   // ledger's other two leaves — GiveMoney (player gives) and CollectMoney
   // (call in what an NPC owes YOU) — alongside the original loan/repay pair.
-  { id: 'money', label: '💰 Money', children: [ASK_LOAN, ASK_REPAY, ASK_GIVE_MONEY, ASK_COLLECT_MONEY] },
+  { id: 'money', label: '💰 Money', tone: 'positive', children: [ASK_LOAN, ASK_REPAY, ASK_GIVE_MONEY, ASK_COLLECT_MONEY] },
   // Phase 4 (D8): Borrow/Return join Gift — all three are inventory-picker
   // leaves over an item, not a typed template.
-  { id: 'gifts', label: '🎁 Gifts', children: [ASK_GIFT, ASK_BORROW, ASK_RETURN_ITEM] },
-  { id: 'chores', label: '🧹 Help Around', children: [ASK_CHORE] },
+  { id: 'gifts', label: '🎁 Gifts', tone: 'warm', children: [ASK_GIFT, ASK_BORROW, ASK_RETURN_ITEM] },
+  { id: 'chores', label: '🧹 Help Around', tone: 'accent', children: [ASK_CHORE] },
   // Phase 6 of actions-and-activities-overhaul-plan.md (D11).
-  { id: 'follow', label: '🚶 Follow', children: [ASK_FOLLOW, ASK_TOUR] },
-  { id: 'photos', label: '📷 Photos', children: [ASK_PHOTO, ASK_SHARE_PHOTO, ASK_FEATURE] }, // Phase 8 (D11); $Feature — aspirations-and-creative-careers Phase 11 (D33)
+  { id: 'follow', label: '🚶 Follow', tone: 'accent', children: [ASK_FOLLOW, ASK_TOUR] },
+  { id: 'photos', label: '📷 Photos', tone: 'cool', children: [ASK_PHOTO, ASK_SHARE_PHOTO, ASK_FEATURE] }, // Phase 8 (D11); $Feature — aspirations-and-creative-careers Phase 11 (D33)
   // actions-and-activities-overhaul-plan.md Phase 2 (D5-D7): the ladder.
   // RequestIntimacy moved here from its own 'intimacy' category — it keeps
   // its willingness gate as its whole decision; the other four are the new,
   // lighter casual-physical asks. This is D6's pre-expand target (openAskMenu,
   // ui.js) and the surface that replaced the old standalone Make-a-Move chip.
-  { id: 'affection', label: '🤗 Affection', children: [ASK_HUG, ASK_KISS_CHEEK, ASK_KISS_LIPS, ASK_CUDDLE, ASK_INTIMACY] },
+  { id: 'affection', label: '🤗 Affection', tone: 'desire', children: [ASK_HUG, ASK_KISS_CHEEK, ASK_KISS_LIPS, ASK_CUDDLE, ASK_INTIMACY] },
   // Phase 7 of actions-and-activities-overhaul-plan.md (D12/D13).
-  { id: 'apology', label: '🙏 Apologize', children: [ASK_APOLOGIZE] },
-  { id: 'boundary', label: '🛑 Ask for Space', children: [ASK_BOUNDARY, ASK_SUBSCRIPTION_TALK] }, // $SubscriptionTalk — aspirations-and-creative-careers Phase 13 (D45)
-  { id: 'info', label: '💬 Ask About Them', children: [ASK_INFO] },
+  { id: 'apology', label: '🙏 Apologize', tone: 'warning', children: [ASK_APOLOGIZE] },
+  { id: 'boundary', label: '🛑 Ask for Space', tone: 'negative', children: [ASK_BOUNDARY, ASK_SUBSCRIPTION_TALK] }, // $SubscriptionTalk — aspirations-and-creative-careers Phase 13 (D45)
+  { id: 'info', label: '💬 Ask About Them', tone: 'accent', children: [ASK_INFO] },
 ];
 
 // AskId → leaf. One flat map so parseAskInput's tag lookup is O(1) and an
@@ -2484,6 +2504,51 @@ for (const cat of ASK_CATEGORIES) {
     if (ASK_TYPES[leaf.id]) console.warn(`ASK_TYPES: duplicate ask id ${leaf.id}`);
     ASK_TYPES[leaf.id] = leaf;
   }
+}
+
+// Conversation overhaul D4/D7 — the category a leaf is filed under (for its
+// tone and its menu breadcrumb). Pure; null for an unfiled leaf.
+function askCategoryOf(leafOrId) {
+  const id = typeof leafOrId === 'string' ? leafOrId : leafOrId && leafOrId.id;
+  if (!id) return null;
+  return ASK_CATEGORIES.find(c => c.children.some(ch => ch.id === id)) || null;
+}
+
+// D7 — the phone's version of the Interact tree: the same categories, each
+// cut down to its `remote: true` leaves, empty categories dropped. Pure —
+// availability is still the caller's live check against (gs, npc, ctx), the
+// same way the in-person menu greys rows.
+function askRemoteCategories() {
+  return ASK_CATEGORIES
+    .map(cat => ({ ...cat, children: cat.children.filter(ch => ch.remote) }))
+    .filter(cat => cat.children.length > 0);
+}
+
+// D5 — the composer's starting values for a leaf's argument chips. Pure over
+// (gs, npc, npcId); a leaf with no args returns {}.
+function askArgDefaults(leaf, gs, npc, npcId) {
+  const out = {};
+  for (const arg of (leaf && leaf.args) || []) {
+    if (arg.kind === 'multi') out[arg.id] = [];
+    else if (typeof arg.initial === 'function') out[arg.id] = arg.initial(gs, npc, npcId);
+    else if (arg.initial != null) out[arg.id] = arg.initial;
+  }
+  return out;
+}
+
+// D5 — can the composer send yet? An amount arg whose ceiling is 0 (an empty
+// wallet, nothing owed) or whose value is under $1 blocks the send, with the
+// reason the composer shows. Pure; `{ ok: true }` for a leaf with no args.
+function askArgsReady(leaf, values, gs, npc, npcId) {
+  for (const arg of (leaf && leaf.args) || []) {
+    if (arg.kind !== 'amount') continue;
+    const max = typeof arg.max === 'function' ? arg.max(gs, npc, npcId) : Infinity;
+    const v = Math.floor(Number(values && values[arg.id]));
+    if (!(max >= 1)) return { ok: false, reason: 'Nothing to send.' };
+    if (!Number.isFinite(v) || v < 1) return { ok: false, reason: 'Pick an amount.' };
+    if (v > max) return { ok: false, reason: `Up to $${max}.` };
+  }
+  return { ok: true };
 }
 
 // D3 — `$AskId <flavor>`; a bare `$AskId` with no flavor is allowed. Whether

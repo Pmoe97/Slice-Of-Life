@@ -7054,6 +7054,40 @@ body {
 .conv-ask-help { display: block; font-size: var(--fs-xs); color: var(--color-text-faint); margin-top: 1px; }
 .conv-ask-hint { padding: var(--space-1) var(--space-4); font-size: var(--fs-xs); color: var(--color-text-dim); border-top: 1px solid var(--color-border); text-align: left; }
 .conv-ask-hint[hidden] { display: none !important; }
+/* Conversation overhaul D3/D4/D5 — the Interact menu's colour edges and the
+   composer. Each category carries a theme tone (asks.js ASK_CATEGORIES
+   `tone`), set as --ask-tone on its row and on the composer, so money, plans
+   and affection read apart at a glance. Chips are real buttons: aria-checked
+   (one-of) / aria-pressed (toggles) are the selected state, and the same
+   rules serve the phone's Messages sheet. */
+.conv-ask-cat, .conv-ask-row { border-left: 3px solid transparent; }
+.conv-ask-cat:not(.is-disabled), .conv-ask-row:not(:disabled) { border-left-color: var(--ask-tone, transparent); }
+.ask-composer { --ask-tone: var(--color-accent); flex-shrink: 0; display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2) var(--space-4); border-top: 1px solid var(--color-border); border-left: 3px solid var(--ask-tone); background: var(--color-surface); background: color-mix(in srgb, var(--ask-tone) 8%, var(--color-surface)); max-height: 40vh; overflow-y: auto; }
+.ask-composer[hidden] { display: none !important; }
+.ask-composer-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.ask-composer-pill { flex-shrink: 0; font-size: var(--fs-xs); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ask-tone); border: 1px solid var(--ask-tone); border-radius: 999px; padding: 2px var(--space-2); }
+.ask-composer-status { flex: 1; min-width: 0; font-size: var(--fs-xs); color: var(--color-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask-composer-status.is-blocked { color: var(--color-warning); }
+.ask-composer-cancel { flex-shrink: 0; background: none; border: none; border-radius: var(--radius-sm); padding: 2px 8px; color: var(--color-text-dim); font-size: var(--fs-sm); cursor: pointer; }
+.ask-composer-cancel:hover, .ask-composer-cancel:focus-visible { color: var(--color-text); background: var(--color-surface-alt); }
+.ask-arg { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
+.ask-arg-label { min-width: 5em; font-size: var(--fs-xs); color: var(--color-text-dim); }
+.ask-chips { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.ask-chip { --chip-tone: var(--ask-tone); display: inline-flex; align-items: center; gap: 4px; min-height: 32px; padding: 4px 12px; border: 1px solid var(--color-border-strong); border-radius: 999px; background: var(--color-surface-alt); color: var(--color-text); font-family: var(--font-sans); font-size: var(--fs-sm); cursor: pointer; }
+.ask-chip:hover { border-color: var(--chip-tone); }
+.ask-chip:focus-visible, .ask-chip-custom:focus-within { outline: 2px solid var(--chip-tone); outline-offset: 1px; }
+.ask-chip[aria-checked="true"], .ask-chip[aria-pressed="true"], .ask-chip-custom.is-on { background: var(--chip-tone); border-color: var(--chip-tone); color: var(--color-bg); font-weight: 600; }
+.ask-chip-sub { font-size: var(--fs-xs); font-weight: 400; opacity: 0.75; }
+.ask-chip-custom { cursor: text; padding-right: 6px; }
+.ask-chip-custom input { width: 4.5em; padding: 0; border: none; background: transparent; color: inherit; font: inherit; outline: none; -moz-appearance: textfield; }
+.ask-chip-custom input::-webkit-outer-spin-button, .ask-chip-custom input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.ask-arg-hint { width: 100%; padding-left: calc(5em + var(--space-2)); font-size: var(--fs-xs); color: var(--color-text-faint); }
+@media (max-width: 600px) {
+  .ask-composer { padding: var(--space-2) var(--space-3); }
+  .ask-arg-label { width: 100%; min-width: 0; }
+  .ask-arg-hint { padding-left: 0; }
+  .ask-chip { min-height: 38px; }
+}
 @media (max-width: 600px) {
   .conv-box { width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0; border: none; }
   .conv-header { padding: var(--space-2) var(--space-3); }
@@ -8092,8 +8126,15 @@ body {
       </div>
     </div>
     <div class="conv-log" id="conv-log"></div>
+    <!-- Conversation overhaul D4/D5 — the Interact composer. Picking a leaf
+         from the + menu opens this strip: the ask's tinted label, its
+         argument chips (amount / gift-or-loan / what / who else — real
+         buttons, Tab + arrow keys + touch), and the input below becomes the
+         optional message. Built by ui.js renderAskComposer (shared with the
+         phone's Messages). -->
+    <div class="ask-composer" id="conv-composer" hidden></div>
     <div class="conv-input-row">
-      <button class="btn btn-secondary conv-attach-btn" id="conv-attach-btn" title="Requests — pick a specific ask" aria-label="Open the request menu">+</button>
+      <button class="btn btn-secondary conv-attach-btn" id="conv-attach-btn" title="Interact — plans, gifts, money, photos, affection, apologies" aria-label="Open the Interact menu">+</button>
       <input type="text" id="conv-input" placeholder="Say or do something..." autocomplete="off">
       <button class="btn" id="conv-send-btn">Say</button>
       <!-- Asks & attachments plan Phase 2 — the Request tree. A popover
@@ -8107,7 +8148,7 @@ body {
       <div class="conv-ask-menu" id="conv-ask-menu" hidden>
         <div class="conv-ask-head">
           <button class="btn btn-secondary tiny" id="conv-ask-back-btn" hidden aria-label="Back">←</button>
-          <div class="conv-ask-title" id="conv-ask-title">Asks</div>
+          <div class="conv-ask-title" id="conv-ask-title">Interact</div>
           <button class="btn btn-secondary tiny" id="conv-ask-close-btn" aria-label="Close">✕</button>
         </div>
         <div class="conv-ask-body" id="conv-ask-body"></div>

@@ -7593,8 +7593,10 @@ function openConversationOverlay(npcId) {
   const input = document.getElementById('conv-input');
   if (input) { input.value = ''; setTimeout(() => input.focus(), 50); }
   // Asks plan Phase 2 — a fresh conversation opens with the Request menu
-  // closed and the ask hint cleared.
+  // closed and the ask hint cleared (and, conversation overhaul D4, no
+  // half-composed ask left over from someone else).
   closeAskMenu();
+  closeConvComposer();
   updateAskHint();
 }
 
@@ -7605,6 +7607,7 @@ function closeConversationOverlay() {
   // Asks plan Phase 2 — a closed conversation must not leave the Request
   // menu or its hint behind.
   closeAskMenu();
+  closeConvComposer();
   updateAskHint();
   // Initiative plan Phase 3 (D9): the durable half of "in conversation". The
   // tick decides whether to open an overture and cannot see TIME's context
@@ -7670,15 +7673,12 @@ function askMenuIsOpen() {
 
 function openAskMenu() {
   if (!convState || convState.sending || !currentGameState) return;
-  // actions-and-activities-overhaul-plan.md Phase 2 (D6): "the chat modal's
-  // Ask button pre-expands the new Affection category when the conversation
-  // is with someone present" — a live conversation partner is present by
-  // construction, so this is the every-open default; the existing Back
-  // button (askMenuGoBack) reaches the top-level category list in one tap.
-  // A UX shortcut to the same tree, never a separate flow — the category
-  // that replaced the old standalone Make-a-Move chip is the one that opens
-  // first.
-  askMenuPath = ['affection'];
+  // Conversation overhaul D3 (user report, 2026-09-27: "When you open the
+  // 'Asks' menu … it automatically opens to the 'affection' page"): the menu
+  // opens on the category list every time. This reverses actions-and-
+  // activities D6, which pre-expanded Affection as a stand-in for the old
+  // Make-a-Move chip — at the user's request.
+  askMenuPath = [];
   askMenuRender();
   const m = document.getElementById('conv-ask-menu');
   if (m) m.hidden = false;
@@ -7711,7 +7711,9 @@ function askMenuRender() {
   const ctx = assembleContext(gs, currentSceneState);
   const catId = askMenuPath[askMenuPath.length - 1];
   const cat = catId ? ASK_CATEGORIES.find(c => c.id === catId) || null : null;
-  if (title) title.textContent = cat ? `Asks ▸ ${cat.label}` : 'Asks';
+  // D3 — "Interact": the menu holds gifts, money, photos, plans and apologies,
+  // not just requests, so "Asks" stopped describing it.
+  if (title) title.textContent = cat ? `Interact ▸ ${cat.label}` : 'Interact';
   if (backBtn) backBtn.hidden = !cat;
   body.textContent = '';
   const items = cat ? cat.children : ASK_CATEGORIES;
@@ -7723,6 +7725,7 @@ function askMenuRender() {
       row.className = 'conv-ask-cat';
       row.setAttribute('data-ask-cat', item.id);
       row.textContent = item.label;
+      row.style.setProperty('--ask-tone', askToneVar(item.tone)); // D4 — the category's colour edge
       const hasLive = item.children.some(ch => !ch.available || ch.available(gs, npc, ctx));
       if (!hasLive) { row.disabled = true; row.classList.add('is-disabled'); }
       body.appendChild(row);
@@ -7731,6 +7734,7 @@ function askMenuRender() {
       const row = document.createElement('button');
       row.className = 'conv-ask-row';
       row.setAttribute('data-ask-id', item.id);
+      row.style.setProperty('--ask-tone', askToneVar(cat && cat.tone));
       const label = document.createElement('span');
       label.className = 'conv-ask-label';
       label.textContent = item.label;
@@ -7757,6 +7761,7 @@ function askMenuInsertLeaf(askId) {
   if (shareLeaf) {
     if (shareLeaf.available && !shareLeaf.available(currentGameState)) return;
     closeAskMenu();
+    closeConvComposer();
     openConvPhotoPicker().then(photo => { if (photo) doConvSharePhoto(photo.id); });
     return;
   }
@@ -7767,6 +7772,8 @@ function askMenuInsertLeaf(askId) {
   // state can move between the menu render and the click.
   const ctx = assembleContext(currentGameState, currentSceneState);
   if (leaf.available && !leaf.available(currentGameState, npc, ctx)) return;
+  // A picker leaf is its own turn — any half-composed ask gives way to it.
+  if (leaf.gift || leaf.borrow || leaf.returnItem || leaf.feature) closeConvComposer();
   // Phase 9 — a gift leaf has no template: the item is chosen from the
   // inventory picker, then the turn runs as an ask through doConvGiveGift.
   // Same picker-first shape as the camera-roll share flow, but the result
@@ -7797,16 +7804,11 @@ function askMenuInsertLeaf(askId) {
     openConvFeaturePicker(convState.npcId).then(pick => { if (pick) doConvFeaturePhoto(pick.id); });
     return;
   }
-  const input = document.getElementById('conv-input');
-  if (!input) return;
-  input.value = leaf.template;
-  input.focus();
-  const marker = '<Optional>';
-  const idx = leaf.template.indexOf(marker);
-  if (idx >= 0) input.setSelectionRange(idx, idx + marker.length);
-  else input.setSelectionRange(leaf.template.length, leaf.template.length);
+  // Conversation overhaul D4: every other leaf opens the composer — its
+  // argument chips above the input, the input as the optional message —
+  // instead of pasting a `$Template <Optional>` for the player to edit.
   closeAskMenu();
-  updateAskHint();
+  openConvComposer(askId);
 }
 
 // Asks plan Phase 2 — the hint line under the input. While the input carries
@@ -7830,6 +7832,251 @@ function updateAskHint() {
   }
   hint.textContent = msg;
   hint.hidden = !msg;
+}
+
+// --- Conversation overhaul D4/D5: the Interact composer ---------------------
+// Picking a leaf used to paste `$RequestMeal <Optional>` into the text box,
+// and a money leaf then had to find the amount in whatever the player typed.
+// Now it opens a strip above the input: the ask's label (tinted by its
+// category, ✕ to cancel), its ARGUMENT chips (amount, gift/loan, what kind of
+// plans, who else), and the text box becomes the optional message. The picks
+// ride resolveAsk's structured `extra` — never decide()'s verdict (D1). Typed
+// `$AskId words` still works for anyone who uses it.
+//
+// renderAskComposer is shared with the phone's Messages (ui.computer.js,
+// D7): it draws into any host, keeps its state in the plain `state` object
+// the caller owns (so a re-render can redraw it), and reports changes back.
+// Chips are real buttons: Tab moves between them, arrow keys move within a
+// group, touch taps them.
+let convComposer = null; // { askId, values } while a leaf is being composed in person
+
+function askToneVar(tone) {
+  return `var(--color-${tone || 'accent'})`;
+}
+
+function renderAskComposer(host, leaf, state, opts) {
+  const { gs, npc, npcId, onChange, onCancel } = opts || {};
+  if (!host || !leaf || !state) return;
+  host.textContent = '';
+  const cat = askCategoryOf(leaf);
+  host.style.setProperty('--ask-tone', askToneVar(cat && cat.tone));
+  host.setAttribute('data-ask-id', leaf.id);
+
+  const head = document.createElement('div');
+  head.className = 'ask-composer-head';
+  const pill = document.createElement('span');
+  pill.className = 'ask-composer-pill';
+  const icon = cat ? String(cat.label).split(' ')[0] : '';
+  pill.textContent = `${icon ? icon + ' ' : ''}${leaf.label}`;
+  head.appendChild(pill);
+  const status = document.createElement('span');
+  status.className = 'ask-composer-status';
+  head.appendChild(status);
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'ask-composer-cancel';
+  cancel.setAttribute('aria-label', `Cancel ${leaf.label}`);
+  cancel.textContent = '✕';
+  cancel.addEventListener('click', () => { if (onCancel) onCancel(); });
+  head.appendChild(cancel);
+  host.appendChild(head);
+
+  const values = state.values || (state.values = {});
+  const syncers = [];
+  const sync = () => {
+    for (const fn of syncers) fn();
+    const ready = askArgsReady(leaf, values, gs, npc, npcId);
+    status.textContent = ready.ok ? (leaf.help && !/^</.test(leaf.help) ? leaf.help : '') : ready.reason;
+    status.classList.toggle('is-blocked', !ready.ok);
+    if (onChange) onChange(ready);
+  };
+
+  for (const arg of leaf.args || []) {
+    const row = document.createElement('div');
+    row.className = 'ask-arg';
+    row.setAttribute('data-arg', arg.id);
+    const label = document.createElement('span');
+    label.className = 'ask-arg-label';
+    label.textContent = arg.label || arg.id;
+    row.appendChild(label);
+    const chips = document.createElement('div');
+    chips.className = 'ask-chips';
+    chips.setAttribute('role', arg.kind === 'multi' ? 'group' : 'radiogroup');
+    chips.setAttribute('aria-label', arg.label || arg.id);
+    row.appendChild(chips);
+
+    if (arg.kind === 'amount') {
+      const max = typeof arg.max === 'function' ? arg.max(gs, npc, npcId) : Infinity;
+      const presets = typeof arg.presets === 'function' ? arg.presets(gs, npc, npcId) : (arg.presets || []);
+      const chipEls = [];
+      for (const v of presets) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ask-chip';
+        b.setAttribute('role', 'radio');
+        b.textContent = `$${v}`;
+        b.addEventListener('click', () => { values[arg.id] = v; sync(); });
+        chips.appendChild(b);
+        chipEls.push([v, b]);
+      }
+      const custom = document.createElement('label');
+      custom.className = 'ask-chip ask-chip-custom';
+      custom.textContent = '$';
+      const inp = document.createElement('input');
+      inp.type = 'number';
+      inp.min = '1';
+      if (Number.isFinite(max)) inp.max = String(max);
+      inp.step = '1';
+      inp.inputMode = 'numeric';
+      inp.placeholder = 'other';
+      inp.setAttribute('aria-label', `${arg.label || 'Amount'} — other amount`);
+      inp.addEventListener('input', () => {
+        const n = Math.floor(Number(inp.value));
+        values[arg.id] = inp.value === '' ? null : (Number.isFinite(n) ? n : null);
+        sync();
+      });
+      // Enter in the amount box sends, the same as Enter in the message box.
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); if (opts.onSubmit) opts.onSubmit(); }
+      });
+      custom.appendChild(inp);
+      chips.appendChild(custom);
+      syncers.push(() => {
+        let matched = false;
+        for (const [v, b] of chipEls) {
+          const on = values[arg.id] === v;
+          matched = matched || on;
+          b.setAttribute('aria-checked', on ? 'true' : 'false');
+          b.tabIndex = 0;
+        }
+        custom.classList.toggle('is-on', !matched && values[arg.id] != null);
+        if (matched && document.activeElement !== inp) inp.value = '';
+        else if (!matched && values[arg.id] != null && document.activeElement !== inp) inp.value = String(values[arg.id]);
+      });
+      const hint = typeof arg.hint === 'function' ? arg.hint(gs, npc, npcId) : arg.hint;
+      if (hint) {
+        const h = document.createElement('span');
+        h.className = 'ask-arg-hint';
+        h.textContent = hint;
+        row.appendChild(h);
+      }
+    } else if (arg.kind === 'choice') {
+      const options = typeof arg.options === 'function' ? arg.options(gs, npc, npcId) : (arg.options || []);
+      const chipEls = [];
+      for (const o of options) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ask-chip';
+        b.setAttribute('role', 'radio');
+        if (o.tone) b.style.setProperty('--chip-tone', askToneVar(o.tone));
+        b.textContent = o.label;
+        if (o.sub) {
+          const sub = document.createElement('span');
+          sub.className = 'ask-chip-sub';
+          sub.textContent = o.sub;
+          b.appendChild(sub);
+        }
+        b.addEventListener('click', () => { values[arg.id] = o.id; sync(); });
+        chips.appendChild(b);
+        chipEls.push([o.id, b]);
+      }
+      syncers.push(() => {
+        for (const [id, b] of chipEls) b.setAttribute('aria-checked', values[arg.id] === id ? 'true' : 'false');
+      });
+    } else if (arg.kind === 'multi') {
+      const options = typeof arg.options === 'function' ? arg.options(gs, npc, npcId) : (arg.options || []);
+      if (options.length === 0) continue; // nobody else to invite — no empty row
+      if (!Array.isArray(values[arg.id])) values[arg.id] = [];
+      const chipEls = [];
+      for (const o of options) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ask-chip';
+        b.textContent = o.label;
+        b.addEventListener('click', () => {
+          const list = values[arg.id];
+          const at = list.indexOf(o.id);
+          if (at >= 0) list.splice(at, 1); else list.push(o.id);
+          sync();
+        });
+        chips.appendChild(b);
+        chipEls.push([o.id, b]);
+      }
+      syncers.push(() => {
+        for (const [id, b] of chipEls) b.setAttribute('aria-pressed', values[arg.id].includes(id) ? 'true' : 'false');
+      });
+    }
+    host.appendChild(row);
+  }
+
+  // Arrow keys move along a chip group (and pick, in a radio group), so the
+  // whole strip is drivable from the keyboard without a mouse.
+  host.addEventListener('keydown', (e) => {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+    const group = e.target.closest && e.target.closest('.ask-chips');
+    if (!group || e.target.tagName === 'INPUT') return;
+    const items = Array.from(group.querySelectorAll('button.ask-chip'));
+    const at = items.indexOf(e.target);
+    if (at < 0) return;
+    e.preventDefault();
+    const step = (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ? -1 : 1;
+    const next = items[(at + step + items.length) % items.length];
+    next.focus();
+    if (group.getAttribute('role') === 'radiogroup') next.click();
+  });
+
+  sync();
+}
+
+// The ready check the send button and Enter share.
+function convComposerReady() {
+  if (!convComposer) return { ok: true };
+  const leaf = ASK_TYPES[convComposer.askId];
+  const npc = currentGameState?.npcs?.[convState?.npcId];
+  return askArgsReady(leaf, convComposer.values, currentGameState, npc, convState?.npcId);
+}
+
+function openConvComposer(askId) {
+  const leaf = ASK_TYPES[askId];
+  const npcId = convState?.npcId;
+  const npc = currentGameState?.npcs?.[npcId];
+  const host = document.getElementById('conv-composer');
+  if (!leaf || !npc || !host) return;
+  convComposer = { askId, values: askArgDefaults(leaf, currentGameState, npc, npcId) };
+  const sendBtn = document.getElementById('conv-send-btn');
+  renderAskComposer(host, leaf, convComposer, {
+    gs: currentGameState, npc, npcId,
+    onChange: (ready) => { if (sendBtn && !convState?.sending) sendBtn.disabled = !ready.ok; },
+    onCancel: () => { closeConvComposer(); document.getElementById('conv-input')?.focus(); },
+    onSubmit: () => handleAction('conv.send'),
+  });
+  host.hidden = false;
+  const input = document.getElementById('conv-input');
+  if (input) {
+    // A typed `$Template` left in the box would fight the composer.
+    if (input.value.trim().startsWith('$')) input.value = '';
+    input.placeholder = 'Add a message (optional)';
+  }
+  if (sendBtn) sendBtn.textContent = 'Send';
+  updateAskHint();
+  // Land on the first chip when there is one — Tab/arrows from there — else
+  // straight in the message box.
+  const firstChip = host.querySelector('.ask-chip[aria-checked="true"]') || host.querySelector('button.ask-chip');
+  (firstChip || input)?.focus();
+  convScrollToBottom();
+}
+
+function closeConvComposer() {
+  convComposer = null;
+  const host = document.getElementById('conv-composer');
+  if (host) { host.hidden = true; host.textContent = ''; host.removeAttribute('data-ask-id'); }
+  const input = document.getElementById('conv-input');
+  if (input) input.placeholder = 'Say or do something...';
+  const sendBtn = document.getElementById('conv-send-btn');
+  if (sendBtn) {
+    sendBtn.textContent = 'Say';
+    if (!convState?.sending) sendBtn.disabled = false;
+  }
 }
 
 async function doTalk(npcId) {
@@ -8149,6 +8396,7 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
   const myNpcId = convState.npcId;
   const input = document.getElementById('conv-input');
   let text = forcedText;
+  let composed = null; // conversation overhaul D4 — { askId, values, flavor }
   if (giftDefId) {
     const stack = (currentGameState?.player?.inventory || []).find(s => s.defId === giftDefId && (s.qty || 0) > 0);
     if (!stack) return; // item vanished between the picker and the send
@@ -8179,6 +8427,21 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
     const name = currentGameState?.npcs?.[convState?.npcId]?.bible?.name || 'them';
     text = `You show ${name} the photo "${photo.caption}" and ask if you can post it with them in it.`;
     if (input) input.value = '';
+  } else if (!forcedText && convComposer) {
+    // Conversation overhaul D4/D5 — a composed ask: the chips are the
+    // structured payload (resolveAsk's `extra`, like giftDefId), the text
+    // box — possibly empty — is the flavor. A composer that isn't ready
+    // (no amount, an empty wallet) doesn't send; its own status line says
+    // why.
+    if (!convComposerReady().ok) return;
+    composed = {
+      askId: convComposer.askId,
+      values: JSON.parse(JSON.stringify(convComposer.values || {})),
+      flavor: (input?.value || '').trim(),
+    };
+    text = composed.flavor;
+    if (input) input.value = '';
+    closeConvComposer();
   } else {
     text = forcedText || input?.value.trim();
     if (!text) return;
@@ -8193,11 +8456,12 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
   // decision, just a normal turn. A gift/borrow/return turn carries no
   // $-text at all.
   const structuredDefId = giftDefId || borrowDefId || returnDefId || featurePhotoId;
-  const parsedAsk = (forcedText || structuredDefId) ? null : parseAskInput(text);
+  const parsedAsk = (forcedText || structuredDefId || composed) ? null : parseAskInput(text);
   const askLeaf = giftDefId ? ASK_TYPES.RequestGift
     : borrowDefId ? ASK_TYPES.BorrowItem
     : returnDefId ? ASK_TYPES.ReturnItem
     : featurePhotoId ? ASK_TYPES.Feature
+    : composed ? ASK_TYPES[composed.askId] || null
     : (parsedAsk ? ASK_TYPES[parsedAsk.askId] || null : null);
 
   // Player's message appears instantly in the conversation log. Forced
@@ -8212,8 +8476,14 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
     // D4 — a bare ask (untouched `<Optional>`) renders the leaf's canned
     // defaultFlavor as the body instead of an empty one. Display-only: the
     // flavor handed to resolveAsk below stays exactly what was parsed (D1).
-    const body = parsedAsk ? (parsedAsk.flavor || askLeaf.defaultFlavor || '') : text;
-    convAddBubble('player', body, askLeaf.label);
+    const body = parsedAsk ? (parsedAsk.flavor || askLeaf.defaultFlavor || '')
+      : composed ? (composed.flavor || askLeaf.defaultFlavor || '')
+      : text;
+    // D5 — the chips the player picked read on the bubble's header
+    // ("Give Money · $20 · Gift"), so the turn says what was actually sent.
+    const argSummary = composed
+      ? askArgSummary(askLeaf, composed.values, currentGameState, currentGameState?.npcs?.[myNpcId], myNpcId) : '';
+    convAddBubble('player', body, argSummary ? `${askLeaf.label} · ${argSummary}` : askLeaf.label);
     // Bug report (2026-08-26): `text` still held the raw `$RequestIntimacy
     // <flavor>` input below this point, and both the callLLM prompt and
     // applyProposal's memory.recent write use `text` as the player's turn —
@@ -8297,8 +8567,9 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
     // the structured `extra` payload — never through the flavor (D1/invariant 2).
     const askTurn = askLeaf
       ? resolveAsk(currentGameState, myNpcId, askLeaf.id,
-          structuredDefId ? text : parsedAsk.flavor, context,
-          giftDefId ? { giftDefId } : borrowDefId ? { borrowDefId } : returnDefId ? { returnDefId } : featurePhotoId ? { featurePhotoId } : undefined)
+          structuredDefId ? text : composed ? composed.flavor : parsedAsk.flavor, context,
+          giftDefId ? { giftDefId } : borrowDefId ? { borrowDefId } : returnDefId ? { returnDefId }
+            : featurePhotoId ? { featurePhotoId } : composed ? composed.values : undefined)
       : null;
 
     const result = await callLLM(
@@ -10927,7 +11198,8 @@ function attachEventHandlers() {
   const convInput = document.getElementById('conv-input');
   if (convInput) {
     convInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey && convInput.value.trim()) {
+      // A composed ask (D4) sends with an empty message — the chips ARE the ask.
+      if (e.key === 'Enter' && !e.shiftKey && (convInput.value.trim() || convComposer)) {
         e.preventDefault();
         handleAction('conv.send');
       }
@@ -10947,7 +11219,7 @@ function attachEventHandlers() {
     if (e.key !== 'Escape') return;
     const convOverlay = document.getElementById('conversation-overlay');
     if (!convOverlay || !convOverlay.hasAttribute('data-open')) return;
-    if (askMenuIsOpen()) return;
+    if (askMenuIsOpen() || convComposer) return;
     pauseConversationOverlay();
   });
   const convOverlayEl = document.getElementById('conversation-overlay');
@@ -10985,7 +11257,13 @@ function attachEventHandlers() {
     convInput.addEventListener('input', updateAskHint);
   }
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && askMenuIsOpen()) closeAskMenu();
+    if (e.key !== 'Escape') return;
+    if (askMenuIsOpen()) closeAskMenu();
+    // D4 — the next Escape cancels a half-composed ask before it pauses the talk.
+    else if (convComposer && document.getElementById('conversation-overlay')?.hasAttribute('data-open')) {
+      closeConvComposer();
+      document.getElementById('conv-input')?.focus();
+    }
   });
 
   // Drawer toggles (mobile) — the two drawers slide in from opposite
