@@ -7012,6 +7012,11 @@ body {
 .conv-gift-pick:hover { background: var(--color-surface); }
 .conv-gift-pick-name { font-size: var(--fs-sm); color: var(--color-text); }
 .conv-gift-pick-meta { font-size: var(--fs-xs); color: var(--color-text-dim); }
+/* Conversation overhaul D6 — what satisfies this person's open goal step is
+   pinned first and marked, and the goal itself is named above the grid. */
+.conv-gift-pick.is-goal { border-color: var(--color-positive); box-shadow: inset 3px 0 0 var(--color-positive); }
+.conv-gift-pick-badge { font-size: var(--fs-xs); font-weight: 700; color: var(--color-positive); letter-spacing: 0.03em; }
+.conv-gift-goal-note { margin: 0 0 var(--space-2); font-size: var(--fs-sm); color: var(--color-text-dim); }
 /* Scene reader Phase 5 (D14) — the recalled half. Everything above the
    separator carries [data-past]: dimmed, and the player bubble drops its
    accent fill for the neutral surface treatment, so "past" reads structurally

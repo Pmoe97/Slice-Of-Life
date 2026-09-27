@@ -1,6 +1,6 @@
 # Conversation & Messaging Overhaul
 
-Status: **in progress — Phases 1–3 built and verified; Phase 4 next.** Opened 2026-09-27 from the user's bug/QoL
+Status: **in progress — Phases 1–4 built and verified; Phase 5 next.** Opened 2026-09-27 from the user's bug/QoL
 list ("We need to fix conversing in this game").
 Last updated 2026-09-27.
 
@@ -27,7 +27,7 @@ something lands; they must never disagree.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 4 (gifts).
+**Resume at:** Phase 5 (Messages).
 
 **Last session's notes:** Plan written from a survey of `ui.js`
 (conversation overlay, ask menu, gift/borrow pickers), `asks.js`,
@@ -47,6 +47,26 @@ reads "Give Money · $50 · Loan", Escape cancels the composer before it
 pauses the talk. `verify-acc-p13.js` pinned the old "asking you not to"
 phrase — updated to D9's "asking the player not to" (the assertion was
 wrong, not the code).
+
+Phase 4 (same session): `inventory.js` owns the giving model —
+`giftSources` (bag minus borrowed/key/rotten, plus ready food in any
+fridge/pantry that isn't someone else's), `giftGoalFor`/`giftMatchesGoal`,
+`findGiftSource` (re-find a pick in live state) and `giveGiftUnit` (the one
+writer; one serving of a plate). ASK_GIFT moves through `giveGiftUnit` in
+postEffects — its old `MOVE_ITEM` line took the first stack of the def and
+moved a plate whole. Two things beyond the plan, both needed for the user's
+Care Package to actually finish: (1) the Bonding Night step says "snacks or
+drinks" but matched category `food` only, which contains no drink —
+`GIFT_GOAL_CATEGORIES` makes the step take what its words say; (2) a chain
+goal's `talk` step only completed when a conversation OPENED (doTalk), so
+after handing the meal over mid-talk "Check in with X" never ticked until
+the player closed and reopened — doConvSend now completes a waiting talk
+step on the next spoken turn. The scene chip still has a wordless path for
+someone who won't talk (a cold shoulder can't be talked to at all —
+checkRelConsequences refuses), now through the same picker and writer.
+Live-checked: chip → conversation → picker (fridge plate pinned "For your
+goal") → 3→2 servings in the fridge, 1 in their things → goal advances →
+the next line completes the Care Package.
 
 **Blockers / flagged deviations:** None.
 
@@ -269,6 +289,6 @@ Full suite, patch notes (0.14.2 entry), ARCHITECTURE/README rows.
 | 1 — Images stay in place | built + verified (`verify-conv-images.js` 32) |
 | 2 — Scene director | built + verified (`verify-conv-scene.js` 42) |
 | 3 — Interact composer | built + verified (`verify-ask-composer.js` 69; live in the harness) |
-| 4 — Gifts | not started |
+| 4 — Gifts | built + verified (`verify-gift-flow.js` 51; live in the harness) |
 | 5 — Messages | not started |
 | 6 — Close-out | not started |

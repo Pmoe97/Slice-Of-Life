@@ -1775,10 +1775,12 @@ const ASK_GIFT = {
   gift: true,
   // D5 — presence is true by definition mid-conversation; the real gate is
   // "is there something to give". decide() re-checks it (belt and braces).
+  // Conversation overhaul D6: the source list is giftSources — the bag AND
+  // ready food in the fridge/pantry (a cooked meal lands in the fridge).
   available: (gs, npc, ctx) => {
     const roomId = (npc && npc.location) || (ctx && ctx.scene && ctx.scene.roomId) || null;
     const present = !roomId || getPresentNpcIds((gs && gs.npcs) || {}, roomId).some(id => gs.npcs[id] === npc);
-    return present && giftableStacks(gs).length > 0;
+    return present && giftSources(gs).length > 0;
   },
   decide(gs, npc, npcId, flavor, ctx, seedCtx) {
     if (!this.available(gs, npc, ctx)) return { accept: false, reason: 'unavailable' };
@@ -1787,6 +1789,10 @@ const ASK_GIFT = {
     // No item (a hand-typed `$RequestGift`): there is nothing to give, and
     // flavor must never be promoted into the item slot (D1).
     if (!def) return { accept: false, reason: 'unavailable' };
+    // D6 — the picked thing must still be where the picker saw it (eaten,
+    // moved or spoiled since → nothing to give).
+    const src = findGiftSource(gs, giftPickOf(seedCtx));
+    if (!src) return { accept: false, reason: 'unavailable' };
     const match = giftMatchKind(def, npc);
     const reason = match === 'interest' ? 'gift_interest'
       : match === 'want' ? 'gift_want'
@@ -1795,12 +1801,20 @@ const ASK_GIFT = {
     // read (the mark is written by postEffects); the field only appears when
     // true, so every non-birthday decision keeps its exact old shape.
     const birthday = typeof birthdayGiftBonusApplies === 'function' && birthdayGiftBonusApplies(gs, npcId);
+    // D6 — where it came from and what it is ride along ONLY when they say
+    // something (a plate, food, the fridge), so an ordinary present from the
+    // bag keeps its exact decision shape (verify-birthdays pins it).
+    const food = GIFT_READY_FOOD.has(def.category);
+    const handed = src.where === 'bag' || ['kitchen', 'dining'].includes(gs && gs.player && gs.player.location);
     return {
       accept: true,
       reason,
       giftMatch: match,          // rides for effects()/leafNote()
-      giftLabel: def.label,      // rides for leafNote() — a known def label
+      giftLabel: src.label,      // rides for leafNote() — a def/plate label, never player text
       ...(birthday ? { birthday: true } : {}),
+      ...(food ? { giftFood: true } : {}),
+      ...(src.isPlate ? { giftPlate: true } : {}),
+      ...(src.where !== 'bag' ? { giftWhere: src.where, giftHanded: handed } : {}),
     };
   },
   // D12 — the gift is remembered on every actual outcome (the memory IS the
@@ -1821,13 +1835,21 @@ const ASK_GIFT = {
     // so, and the birthday bonus rides on top of the match delta (a miss
     // still earns it — the occasion is what was remembered).
     const bdayLines = (decision.birthday && typeof birthdayGiftEffectLines === 'function') ? birthdayGiftEffectLines(gs, npcId) : [];
+    // D6: the move itself is postEffects' giveGiftUnit (one serving of a
+    // plate, from the bag OR the fridge) — MOVE_ITEM could only take the
+    // first stack of a def out of the bag, and moved a plate's whole batch.
+    const given = decision.giftLabel || label;
+    const giftLine = decision.giftPlate
+      ? `MEMORY_FACT ${npcId} The player saved ${who} a plate of ${given}${decision.giftMatch ? ', and it really landed' : ' — a kind thought'}.`
+      : (decision.giftFood && decision.giftWhere)
+        ? `MEMORY_FACT ${npcId} The player set aside the ${given} for ${who} — a kind thought.`
+      : decision.giftMatch
+        ? `MEMORY_FACT ${npcId} The player gave ${who} the ${given}, and it really landed.`
+        : `MEMORY_FACT ${npcId} The player gave ${who} the ${given}; they accepted it politely.`;
     const lines = [
-      `MOVE_ITEM ${defId} 1 player ${npcId}`,
       bdayLines.length
         ? `MEMORY_FACT ${npcId} ${fillBirthdayText(BIRTHDAY_TUNING.giftFact, { name: who, item: label })}${decision.giftMatch ? ' It really landed.' : ''}`
-        : decision.giftMatch
-        ? `MEMORY_FACT ${npcId} The player gave ${who} the ${label}, and it really landed.`
-        : `MEMORY_FACT ${npcId} The player gave ${who} the ${label}; they accepted it politely.`,
+        : giftLine,
     ];
     if (delta > 0) lines.push(`REL_DELTA ${npcId} ${G.relAxis} +${delta.toFixed(2)}`);
     lines.push(...bdayLines);
@@ -1835,8 +1857,12 @@ const ASK_GIFT = {
   },
   // birthdays-and-occasions-plan.md D8: the birthday mark (once per birthday)
   // and the beat doConvSend paints, stamped onto the decision it reads.
-  postEffects(gs, npc, npcId, decision) {
-    if (!decision.accept || !decision.birthday || typeof noteBirthdayGift !== 'function') return;
+  postEffects(gs, npc, npcId, decision, data) {
+    if (!decision.accept) return;
+    // D6 — the hand-over (one unit; one serving of a plate).
+    const moved = giveGiftUnit(gs, giftPickOf(data), npcId);
+    if (moved.ok) decision.giftMoved = moved;
+    if (!decision.birthday || typeof noteBirthdayGift !== 'function') return;
     const note = noteBirthdayGift(gs, npcId);
     if (note) decision.birthdayBeat = note.beat;
   },
@@ -1859,9 +1885,25 @@ const ASK_GIFT = {
     if (decision.giftMatch === 'wound') {
       return `- They gave you: ${label}. It speaks to something that has hurt you — react softly, genuinely moved.`;
     }
+    // D6 — food is looked-after, not judged as a present.
+    if (decision.giftFood) {
+      const saved = decision.giftWhere && !decision.giftHanded;
+      const what = decision.giftPlate ? `a plate of their cooking (${label})` : label;
+      return saved
+        ? `- They saved you ${what} — it's waiting for you in the ${decision.giftWhere}. React in character, however this person takes being looked after; no need to eat it right now.`
+        : `- They brought you ${what}. React in character, however this person takes being looked after — you don't have to eat it this second.`;
+    }
     return `- They gave you: ${label}. It is not quite your thing, but they made the gesture — accept it graciously, without gushing or pretending it is exactly what you wanted.`;
   },
 };
+
+// D6 — a gift pick out of resolveAsk's structured payload (the picker's
+// { defId, from, index, label }; a bare giftDefId is a bag pick, which is
+// what every caller before D6 sent).
+function giftPickOf(data) {
+  if (!data || !data.giftDefId) return null;
+  return { defId: data.giftDefId, from: data.giftFrom || 'player', index: data.giftIndex, label: data.giftLabel };
+}
 
 // ask_borrow — Phase 4 of actions-and-activities-overhaul-plan.md (D8):
 // temporary transfer with a return expectation, the item-shaped sibling of

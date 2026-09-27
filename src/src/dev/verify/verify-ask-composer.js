@@ -42,7 +42,14 @@ function bodies(src, name) {
     re.lastIndex = from;
     const m = re.exec(src);
     if (!m) break;
-    let depth = 0, started = false, j = m.index;
+    // Skip the parameter list first — a default like `opts = {}` would
+    // otherwise close the body at depth 0.
+    let j = m.index + m[0].length, parens = 1;
+    for (; j < src.length && parens > 0; j++) {
+      if (src[j] === '(') parens++;
+      else if (src[j] === ')') parens--;
+    }
+    let depth = 0, started = false;
     for (; j < src.length; j++) {
       if (src[j] === '{') { depth++; started = true; }
       else if (src[j] === '}') { depth--; if (started && depth === 0) { j++; break; } }

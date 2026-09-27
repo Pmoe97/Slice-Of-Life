@@ -4319,13 +4319,23 @@ async function doToggleHouseRule() {
   await saveAtBoundary('house-rule-toggle', currentGameState);
 }
 
-// Give item: gives a meal/food/gift item from inventory to an NPC.
-// Used to complete chain quest 'give_item' steps. The first matching
-// item in the player's inventory is consumed. Intimacy & Voyeurism Phase 16
-// (D2/D14): gifting a COLD-SHOULDERING NPC is a reparation act even without
-// a quest — the render chip offers it whenever the NPC is cold (render.js)
-// — and a landed gift ratchets their severity down one (the plan's gift
-// reparation, one per giftCooldownDays window).
+// Give item: the scene chip ("Give Meal to Mira") for a goal's give_item
+// step, and — Intimacy & Voyeurism Phase 16 (D2/D14) — the reparation gift
+// to someone giving you the cold shoulder (the render chip offers it
+// whenever the NPC is cold; a landed gift ratchets their severity down one,
+// one per giftCooldownDays window).
+//
+// Conversation overhaul D6 (user report, 2026-09-27: giving a meal for a
+// goal "doesn't seem to make sense"): this used to hand over the FIRST
+// matching item in the bag without asking which, and never said a word —
+// while the conversation's Give a Gift moved items but never counted for a
+// goal, and neither could see the cooked meal sitting in the fridge. Now
+// there is one flow: the chip opens (or resumes) the conversation straight
+// into the gift picker, where the goal's item is pinned first, and the gift
+// runs as an ordinary ask turn — their reply, the one-serving hand-over,
+// the goal step. Someone who won't talk to you (a cold shoulder, or a talk
+// they refuse) still gets the wordless hand-over, through the same picker
+// and the same one-serving write.
 async function doGiveItem(npcId) {
   if (!currentGameState) return;
   const npc = currentGameState.npcs[npcId];
@@ -4335,55 +4345,56 @@ async function doGiveItem(npcId) {
   // so any other future call site (or a stale chip click after the NPC
   // left) could hand something to someone who isn't in the room.
   if (!getPresentNpcIds(currentGameState.npcs, currentGameState.player.location).includes(npcId)) return;
-  // Find the active chain quest step
-  const quest = (currentGameState.world.quests?.active || []).find(q =>
-    q.type === 'chain' && q.npcId === npcId &&
-    q.steps[q.currentStep]?.type === 'give_item' && !q.steps[q.currentStep]?.done
-  );
-  // Cold-shoulder repair branch (Phase 16): a cold NPC accepts any
-  // gift-category item as reparation. The quest branch keeps its own
-  // itemCategory (meal/food/gift); absent a quest AND a cold-shoulder, the
-  // chip does not exist and this handler has nothing to do.
-  const cs = coldShoulderState(npc, currentGameState.meta.clock.day);
-  const step = quest && quest.steps[quest.currentStep];
-  const wantCategory = quest ? (step.itemCategory || null) : (cs.active ? 'gift' : null);
-  if (!quest && !wantCategory) return;
-  // Find matching item in inventory
-  const inv = currentGameState.player.inventory || [];
-  const idx = inv.findIndex(stack => {
-    const def = ITEM_DEFS[stack.defId];
-    return def && (!wantCategory || def.category === wantCategory);
-  });
-  if (idx < 0) {
-    addLogEntry('system', `You don't have a ${wantCategory || 'suitable item'} to give.`);
+  const day = currentGameState.meta.clock.day;
+  const goal = giftGoalFor(currentGameState, npcId);
+  const cs = coldShoulderState(npc, day);
+  const wantCategory = goal ? goal.category : (cs.active ? 'gift' : null);
+  if (!goal && !wantCategory) return;
+  const name = npc.bible?.name || 'them';
+
+  // D6 — in conversation (already, or opened now unless they're cold).
+  if (!(convState && convState.npcId === npcId) && !cs.active) await doTalk(npcId);
+  if (convState && convState.npcId === npcId) {
+    const pick = await openConvGiftPicker({ npcId });
+    if (pick) await doConvGiveGift(pick);
     return;
   }
-  const stack = inv[idx];
-  const itemLabel = ITEM_DEFS[stack.defId]?.label || 'something';
-  // Consume one from the stack
-  inv[idx] = { ...stack, qty: stack.qty - 1 };
-  if (inv[idx].qty <= 0) inv.splice(idx, 1);
-  addLogEntry('narration', `You give ${itemLabel} to ${npc.bible.name || 'them'}.`);
-  // Complete the step
-  if (quest) checkChainQuestProgress('give_item', npcId, step.itemCategory);
-  let npcOut = npc;
+
+  // The wordless hand-over (they won't talk to you right now).
+  const pick = await openConvGiftPicker({ npcId, onlyCategory: wantCategory, title: `Leave something for ${name}` });
+  if (!pick) return;
+  const moved = giveGiftUnit(currentGameState, pick, npcId);
+  if (!moved.ok) {
+    addLogEntry('system', `That's not there any more.`);
+    return;
+  }
+  const itemLabel = moved.label || 'something';
+  addLogEntry('narration', moved.where === 'bag'
+    ? `You give ${itemLabel} to ${name}.`
+    : `You leave ${moved.isPlate ? `a plate of ${itemLabel}` : itemLabel} out for ${name}.`);
+  const goalMet = !!goal && giftMatchesGoal(goal.category, moved.category);
+  if (goalMet) checkChainQuestProgress('give_item', npcId, goal.category);
+  let npcOut = currentGameState.npcs[npcId];
   let windowNarration;
-  if (cs.active) {
+  let deltas = { affection: 0.05 };
+  if (cs.active && (moved.category === 'gift' || goalMet)) {
     // The reparation ratchet — one severity per landed gift (cooldown +
     // minDaysBeforeRepair enforced inside noteColdShoulderRepair).
-    const res = noteColdShoulderRepair(npc, 'gift', currentGameState.meta.clock.day);
+    const res = noteColdShoulderRepair(npcOut, 'gift', day);
+    deltas = COLD_SHOULDER.repairRelDeltas;
     if (res.repaired) {
-      npcOut = applyRelDelta(npc, COLD_SHOULDER.repairRelDeltas, currentGameState.meta.clock.day);
+      npcOut = applyRelDelta(npcOut, COLD_SHOULDER.repairRelDeltas, day);
       if (res.severity <= 0) {
         windowNarration = `${npc.bible.name || 'They'} looks at you properly for the first time in days. The cold is gone.`;
       } else {
         windowNarration = `${npc.bible.name || 'They'} takes the ${itemLabel}, looking at it for a long moment. "Thank you," they say, quietly.`;
       }
     } else {
+      deltas = {};
       windowNarration = `${npc.bible.name || 'They'} leaves the ${itemLabel} where it is. Not yet.`;
     }
   } else {
-    npcOut = applyRelDelta(npc, { affection: 0.05 }, currentGameState.meta.clock.day);
+    npcOut = applyRelDelta(npcOut, deltas, day);
     windowNarration = 'They seem touched.';
   }
   addLogEntry('narration', windowNarration);
@@ -4391,13 +4402,12 @@ async function doGiveItem(npcId) {
   render(currentGameState, currentSceneState);
   await saveAtBoundary('give-item', currentGameState);
   // action-outcome-window-plan Phase 6 (D3): giving an item is a real
-  // relational beat. The strip reads the real effects — the gift consumed and
+  // relational beat. The strip reads the real effects — the gift given and
   // the relationship axis the repair actually moved — and the frame is fresh
   // (this exchange, this once, D5).
   const applied = [
-    { type: 'CONSUME_ITEM', params: { defId: stack.defId, qty: 1 } },
+    { type: 'CONSUME_ITEM', params: { defId: moved.defId, qty: 1 } },
   ];
-  const deltas = cs.active ? COLD_SHOULDER.repairRelDeltas : { affection: 0.05 };
   for (const [axis, delta] of Object.entries(deltas)) {
     applied.push({ type: 'REL_DELTA', params: { npcId, axis, delta } });
   }
@@ -7780,7 +7790,7 @@ function askMenuInsertLeaf(askId) {
   // IS an ask (decision, strip, deterministic match).
   if (leaf.gift) {
     closeAskMenu();
-    openConvGiftPicker().then(pick => { if (pick) doConvGiveGift(pick.defId); });
+    openConvGiftPicker().then(pick => { if (pick) doConvGiveGift(pick); });
     return;
   }
   // Phase 4 of actions-and-activities-overhaul-plan.md (D8) — Borrow/Return
@@ -8397,12 +8407,23 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
   const input = document.getElementById('conv-input');
   let text = forcedText;
   let composed = null; // conversation overhaul D4 — { askId, values, flavor }
-  if (giftDefId) {
-    const stack = (currentGameState?.player?.inventory || []).find(s => s.defId === giftDefId && (s.qty || 0) > 0);
-    if (!stack) return; // item vanished between the picker and the send
-    const def = ITEM_DEFS[giftDefId] || ITEM_DEFS._unknown;
+  // Conversation overhaul D6: the gift argument is a pick { defId, from,
+  // index, label } — the bag or the fridge/pantry. A bare defId (every
+  // caller before D6) is a bag pick.
+  const giftPick = giftDefId && typeof giftDefId === 'object' ? giftDefId
+    : giftDefId ? { defId: giftDefId, from: 'player' } : null;
+  if (giftPick) giftDefId = giftPick.defId;
+  if (giftPick) {
+    const src = findGiftSource(currentGameState, giftPick);
+    if (!src) return; // item vanished (eaten, moved, spoiled) between the picker and the send
+    giftPick.index = src.index;
+    giftPick.label = src.label;
     const name = currentGameState?.npcs?.[convState?.npcId]?.bible?.name || 'them';
-    text = `You hand ${name} the ${def.label || 'gift'}.`;
+    const inKitchen = ['kitchen', 'dining'].includes(currentGameState?.player?.location);
+    const thing = src.isPlate ? `a plate of ${src.label}` : `the ${src.label}`;
+    text = src.where === 'bag' ? `You hand ${name} the ${src.label}.`
+      : inKitchen ? `You get ${thing} out of the ${src.where} and hand it to ${name}.`
+      : `You tell ${name} you saved them ${thing} — it's in the ${src.where}.`;
     if (input) input.value = '';
   } else if (borrowDefId) {
     const npc = currentGameState?.npcs?.[convState?.npcId];
@@ -8497,6 +8518,10 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
     convAddBubble('player', text);
   }
 
+  // D6 — read BEFORE this turn: was a chain goal already waiting on a talk
+  // step? (A gift this turn can open one; that one waits for the next line.)
+  const talkStepWaiting = chainTalkStepWaiting(currentGameState, myNpcId);
+
   // A real turn (player words, a gift, or an NPC opening line) is
   // "participating in dialogue" — the condition that keeps the paused
   // conversation (and its avatar bubble) alive after the overlay closes
@@ -8568,7 +8593,8 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
     const askTurn = askLeaf
       ? resolveAsk(currentGameState, myNpcId, askLeaf.id,
           structuredDefId ? text : composed ? composed.flavor : parsedAsk.flavor, context,
-          giftDefId ? { giftDefId } : borrowDefId ? { borrowDefId } : returnDefId ? { returnDefId }
+          giftPick ? { giftDefId: giftPick.defId, giftFrom: giftPick.from, giftIndex: giftPick.index, giftLabel: giftPick.label }
+            : borrowDefId ? { borrowDefId } : returnDefId ? { returnDefId }
             : featurePhotoId ? { featurePhotoId } : composed ? composed.values : undefined)
       : null;
 
@@ -8660,6 +8686,21 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
         }
         askTurn.applyEffects();
         applied.updatedNpcIds.push(myNpcId);
+        // Conversation overhaul D6 — a gift handed over in conversation
+        // counts toward the goal it satisfies (the Care Package's meal) and,
+        // for someone giving you the cold shoulder, as reparation — exactly
+        // what the old scene chip did, now on the one giving path.
+        if (askTurn.ask.gift && askTurn.decision.accept) convGiftFollowThrough(myNpcId, askTurn.decision.giftMoved);
+      }
+      // D6 — a chain goal's "Check in with {name}" step is done by TALKING:
+      // the next thing the player says in this conversation completes it,
+      // not only a conversation opening (doTalk's checkQuestCompletion) —
+      // so giving the meal and then chatting finishes the Care Package
+      // without closing and reopening the talk.
+      if (talkStepWaiting && !forcedText && !(askTurn && askTurn.ask.gift)) {
+        const q = chainQuestFor(currentGameState, myNpcId);
+        checkQuestCompletion(myNpcId);
+        convGoalBeat(q);
       }
       // Birthdays (birthdays-and-occasions-plan.md D6/D8): at the same single
       // effect-application moment, after applyProposal — which replaces
@@ -8969,11 +9010,16 @@ function openConvPhotoPicker() {
 
 // Asks plan Phase 9 — the inventory picker for gifting into the
 // conversation. Same shared-modal + grid shape as the camera-roll picker
-// above; the tiles are the bag's giftable stacks (inventory.js
-// giftableStacks — the same rule the availability gate uses), text-only
-// (inventory items have no thumbnail). Resolves { defId } or null on
-// cancel; doConvGiveGift owns the send.
-function openConvGiftPicker() {
+// above; text tiles (inventory items have no thumbnail). Resolves a gift
+// pick { defId, from, index, label } or null on cancel; doConvGiveGift owns
+// the send.
+//
+// Conversation overhaul D6: the tiles are giftSources — the bag AND ready
+// food in the fridge/pantry — each saying where it is, and anything that
+// satisfies this person's open goal step is pinned first with a "For your
+// goal" badge (the Care Package's cooked meal, sitting in the fridge, is
+// the first thing on the list). `opts.npcId` defaults to the conversation.
+function openConvGiftPicker(opts = {}) {
   return new Promise((resolve) => {
     const overlay = document.getElementById('modal-overlay');
     const titleEl = document.getElementById('modal-title');
@@ -8982,29 +9028,42 @@ function openConvGiftPicker() {
     if (!overlay || !titleEl || !body || !actions) { resolve(null); return; }
     if (typeof hideLoading === 'function') hideLoading();
     const finish = (pick) => { overlay.removeAttribute('data-open'); resolve(pick); };
-    const stacks = giftableStacks(currentGameState);
-    if (stacks.length === 0) { resolve(null); return; }
-    titleEl.textContent = 'Give a Gift';
+    const gs = currentGameState;
+    const npcId = opts.npcId || convState?.npcId;
+    const entries = giftPickerEntries(gs, npcId, opts);
+    if (entries.length === 0) { resolve(null); return; }
+    const name = gs?.npcs?.[npcId]?.bible?.name || 'them';
+    titleEl.textContent = opts.title || `Give ${name} something`;
     body.textContent = '';
+    const goal = giftGoalFor(gs, npcId);
+    if (goal) {
+      const note = document.createElement('p');
+      note.className = 'conv-gift-goal-note';
+      note.textContent = `Goal: ${goal.desc}`;
+      body.appendChild(note);
+    }
     const grid = document.createElement('div');
     grid.className = 'conv-gift-picker';
-    for (const stack of stacks) {
-      const def = stackDef(stack);
-      const label = def.id === '_unknown' ? (stack?.meta?.origName || def.label) : def.label;
+    for (const e of entries) {
       const tile = document.createElement('button');
       tile.type = 'button';
-      tile.className = 'conv-gift-pick';
-      tile.setAttribute('aria-label', `Give ${label}`);
+      tile.className = 'conv-gift-pick' + (e.forGoal ? ' is-goal' : '');
+      tile.setAttribute('aria-label', `Give ${e.label}${e.forGoal ? ' (for your goal)' : ''}`);
+      if (e.forGoal) {
+        const badge = document.createElement('span');
+        badge.className = 'conv-gift-pick-badge';
+        badge.textContent = '★ For your goal';
+        tile.appendChild(badge);
+      }
       const nameEl = document.createElement('span');
       nameEl.className = 'conv-gift-pick-name';
-      nameEl.textContent = label;
+      nameEl.textContent = e.label;
       tile.appendChild(nameEl);
       const metaEl = document.createElement('span');
       metaEl.className = 'conv-gift-pick-meta';
-      const group = (SORT_GROUPS[def.sortGroup] || {}).label || def.category || 'Item';
-      metaEl.textContent = (stack.qty > 1 ? `×${stack.qty} · ` : '') + group;
+      metaEl.textContent = giftPickerMeta(e);
       tile.appendChild(metaEl);
-      tile.addEventListener('click', () => finish({ defId: stack.defId }));
+      tile.addEventListener('click', () => finish({ defId: e.defId, from: e.from, index: e.index, label: e.label }));
       grid.appendChild(tile);
     }
     body.appendChild(grid);
@@ -9019,13 +9078,89 @@ function openConvGiftPicker() {
   });
 }
 
+// D6 — the picker's rows, in order: goal matches first, then the bag, then
+// the kitchen. `opts.onlyCategory` narrows to one goal category (the
+// cold-shoulder hand-over takes gifts only). Pure over gs.
+function giftPickerEntries(gs, npcId, opts = {}) {
+  const goal = giftGoalFor(gs, npcId);
+  const rank = { bag: 1, fridge: 2, pantry: 3 };
+  return giftSources(gs)
+    .filter(e => !opts.onlyCategory || giftMatchesGoal(opts.onlyCategory, e.category))
+    .map(e => ({ ...e, forGoal: !!goal && giftMatchesGoal(goal.category, e.category) }))
+    .sort((a, b) => (b.forGoal - a.forGoal) || ((rank[a.where] || 9) - (rank[b.where] || 9)));
+}
+
+// "1 serving (3 left) · In the fridge", "×2 · Snacks · In your bag".
+function giftPickerMeta(e) {
+  const where = e.where === 'bag' ? 'In your bag' : `In the ${e.where}`;
+  if (e.isPlate) return `1 serving${e.servingsLeft > 1 ? ` (${e.servingsLeft} left)` : ''} · ${where}`;
+  const def = stackDef(e.stack);
+  const group = (SORT_GROUPS[def.sortGroup] || {}).label || def.category || 'Item';
+  return `${e.qty > 1 ? `×${e.qty} · ` : ''}${group} · ${where}`;
+}
+
+// --- Conversation overhaul D6: gifts and goals ---------------------------
+// The first active quest for this person — the same one checkQuestCompletion
+// reads (it finds by npcId), so the talk-step check below can never disagree
+// with the function it guards.
+function chainQuestFor(gs, npcId) {
+  return (gs?.world?.quests?.active || []).find(q => q.npcId === npcId) || null;
+}
+function chainTalkStepWaiting(gs, npcId) {
+  const q = chainQuestFor(gs, npcId);
+  const step = q && q.type === 'chain' && q.steps && q.steps[q.currentStep];
+  return !!step && step.type === 'talk' && !step.done;
+}
+
+// A "★" beat in the conversation when a goal moves, so the player sees the
+// gift or the chat counted without reading the main log. `quest` is the
+// record captured BEFORE the progress call (it is mutated in place).
+function convGoalBeat(quest) {
+  if (!quest) return;
+  const done = !(currentGameState?.world?.quests?.active || []).includes(quest);
+  if (done) { convAddBeat(`★ Goal complete: ${quest.title}`); return; }
+  const next = quest.steps && quest.steps[quest.currentStep];
+  if (next) convAddBeat(`★ ${quest.title} — next: ${next.desc}`);
+}
+
+// After a gift lands (asks.js giveGiftUnit moved it — `moved` says what):
+// advance the goal step it satisfies, and ratchet a cold shoulder down the
+// way the old scene chip did (Intimacy & Voyeurism Phase 16's reparation —
+// a gift-category item, or the thing their goal asked for). Returns the
+// repair result or null.
+function convGiftFollowThrough(npcId, moved) {
+  const gs = currentGameState;
+  if (!gs || !moved || !moved.ok) return null;
+  const goal = giftGoalFor(gs, npcId);
+  let goalMet = false;
+  if (goal && giftMatchesGoal(goal.category, moved.category)) {
+    const q = (gs.world.quests?.active || []).find(x => x.type === 'chain' && x.npcId === npcId
+      && x.steps?.[x.currentStep]?.type === 'give_item');
+    // checkChainQuestProgress compares categories strictly; the step's own
+    // category is passed because giftMatchesGoal already decided the match
+    // (a drink satisfies "snacks or drinks").
+    checkChainQuestProgress('give_item', npcId, goal.category);
+    convGoalBeat(q);
+    goalMet = true;
+  }
+  const npc = gs.npcs?.[npcId];
+  const day = gs.meta.clock.day;
+  const cs = npc ? coldShoulderState(npc, day) : { active: false };
+  if (!cs.active || !(moved.category === 'gift' || goalMet)) return null;
+  const res = noteColdShoulderRepair(npc, 'gift', day);
+  if (res.repaired) gs.npcs[npcId] = applyRelDelta(gs.npcs[npcId], COLD_SHOULDER.repairRelDeltas, day);
+  return res;
+}
+
 // Asks plan Phase 9 — give an inventory item as a gift. The picker chose
 // the def; the send runs as a normal ASK turn through doConvSend (decision
 // first, writer effects stripped, deterministic match → MOVE_ITEM /
 // REL_DELTA / MEMORY_FACT through the ask pipeline), reusing the exact
 // pipeline instead of a parallel path.
-function doConvGiveGift(defId) {
-  return doConvSend(null, defId);
+function doConvGiveGift(pick) {
+  // D6 — a pick ({ defId, from, index, label }); a bare defId still works
+  // and means "from the bag", the only source there used to be.
+  return doConvSend(null, pick);
 }
 
 // aspirations-and-creative-careers Phase 11 (D33) — the $Feature picker:
