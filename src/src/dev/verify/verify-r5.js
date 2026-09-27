@@ -190,13 +190,18 @@ console.log('\nThe pane is wired to it, and the markup it emits is styled');
 const UI = fs.readFileSync(path.join(SRCDIR, 'ui.js'), 'utf8');
 const HTML = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 const openFn = UI.slice(UI.indexOf('function openConversationOverlay'), UI.indexOf('function closeConversationOverlay'));
-const recallFn = UI.slice(UI.indexOf('function convRenderRecalled'), UI.indexOf('function convShowTyping'));
+// Conversation overhaul D1 (2026-09-27): the pane now draws through
+// convRenderHistory, which MERGES recalled rows and persisted chat images in
+// the order they happened; the per-row markup lives in convRecalledRowEl
+// (convRenderRecalled is that builder in a loop). Same intent as before —
+// the slices just follow the functions to where they now live.
+const recallFn = UI.slice(UI.indexOf('function convRecalledRowEl'), UI.indexOf('function convShowTyping'));
 
 check('openConversationOverlay renders history instead of stopping at empty',
-      /convRenderRecalled\(npc\)/.test(openFn),
+      /convRenderHistory\(npc\)/.test(openFn),
       'the one line that made R4 a missing feature was `log.innerHTML = \'\'` with nothing after it');
 check('it still clears first, so re-opening cannot double the history',
-      /log\.innerHTML = ''/.test(openFn) && openFn.indexOf("log.innerHTML = ''") < openFn.indexOf('convRenderRecalled'));
+      /log\.innerHTML = ''/.test(openFn) && openFn.indexOf("log.innerHTML = ''") < openFn.indexOf('convRenderHistory'));
 check('and it scrolls to the live end only AFTER the overlay is shown',
       openFn.indexOf("setAttribute('data-open'") < openFn.indexOf('convScrollToBottom'),
       'while display:none the log has no layout, so an earlier scroll silently does nothing');
@@ -212,8 +217,8 @@ check('it is a projection — no filtering or timestamp logic of its own',
 // anything — 'rows.length === 0' inside convRenderRecalled no longer has
 // any relationship to where 'conv-separator' gets created at all.
 check('the separator is drawn only when there is something above it',
-      openFn.indexOf('rows > 0 || imgs > 0') < openFn.indexOf('conv-separator')
-      && openFn.indexOf('rows > 0 || imgs > 0') >= 0);
+      openFn.indexOf('drawn > 0') < openFn.indexOf('conv-separator')
+      && openFn.indexOf('drawn > 0') >= 0);
 // Bound tightly to convAddBeat/convAddBubble themselves, not out to the
 // Phase 5 comment block — 2026-08-31's convRenderImages (a DIFFERENT,
 // legitimate past-content renderer for persisted chat images) now sits in

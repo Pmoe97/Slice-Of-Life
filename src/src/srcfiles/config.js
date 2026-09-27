@@ -7065,6 +7065,10 @@ const PHASE_THRESHOLDS = {
 // presented as five interleaved lines that also contained in-person dialogue.
 const IM_PROMPT = {
   threadDepth: 12,         // trailing messages of the real thread shown to the model
+  // Conversation overhaul D8 (E8): threads grew without bound in the save —
+  // every text ever sent, forever. The model only ever sees the last
+  // threadDepth; the screen shows a thread's recent history. Oldest trimmed.
+  threadCap: 400,
 };
 
 // Demotion (active -> ambient) must always be narrated as an in-fiction
@@ -13258,7 +13262,7 @@ const DRIVE_COOLDOWN_KEY = '_driveCooldowns';
 // header). The two triggers can coincide; when they don't, a plan-completion
 // bump still needs a real reason a save-version check would care about, or
 // at minimum a patch notes entry — this string IS the app's version list.
-const GAME_VERSION = '0.14.2';
+const GAME_VERSION = '0.14.3';
 
 const SAVE_TUNING = {
   manualBaseSlots: 12,       // manual_0..manual_11; grow on demand above this

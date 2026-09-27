@@ -4319,13 +4319,23 @@ async function doToggleHouseRule() {
   await saveAtBoundary('house-rule-toggle', currentGameState);
 }
 
-// Give item: gives a meal/food/gift item from inventory to an NPC.
-// Used to complete chain quest 'give_item' steps. The first matching
-// item in the player's inventory is consumed. Intimacy & Voyeurism Phase 16
-// (D2/D14): gifting a COLD-SHOULDERING NPC is a reparation act even without
-// a quest — the render chip offers it whenever the NPC is cold (render.js)
-// — and a landed gift ratchets their severity down one (the plan's gift
-// reparation, one per giftCooldownDays window).
+// Give item: the scene chip ("Give Meal to Mira") for a goal's give_item
+// step, and — Intimacy & Voyeurism Phase 16 (D2/D14) — the reparation gift
+// to someone giving you the cold shoulder (the render chip offers it
+// whenever the NPC is cold; a landed gift ratchets their severity down one,
+// one per giftCooldownDays window).
+//
+// Conversation overhaul D6 (user report, 2026-09-27: giving a meal for a
+// goal "doesn't seem to make sense"): this used to hand over the FIRST
+// matching item in the bag without asking which, and never said a word —
+// while the conversation's Give a Gift moved items but never counted for a
+// goal, and neither could see the cooked meal sitting in the fridge. Now
+// there is one flow: the chip opens (or resumes) the conversation straight
+// into the gift picker, where the goal's item is pinned first, and the gift
+// runs as an ordinary ask turn — their reply, the one-serving hand-over,
+// the goal step. Someone who won't talk to you (a cold shoulder, or a talk
+// they refuse) still gets the wordless hand-over, through the same picker
+// and the same one-serving write.
 async function doGiveItem(npcId) {
   if (!currentGameState) return;
   const npc = currentGameState.npcs[npcId];
@@ -4335,55 +4345,56 @@ async function doGiveItem(npcId) {
   // so any other future call site (or a stale chip click after the NPC
   // left) could hand something to someone who isn't in the room.
   if (!getPresentNpcIds(currentGameState.npcs, currentGameState.player.location).includes(npcId)) return;
-  // Find the active chain quest step
-  const quest = (currentGameState.world.quests?.active || []).find(q =>
-    q.type === 'chain' && q.npcId === npcId &&
-    q.steps[q.currentStep]?.type === 'give_item' && !q.steps[q.currentStep]?.done
-  );
-  // Cold-shoulder repair branch (Phase 16): a cold NPC accepts any
-  // gift-category item as reparation. The quest branch keeps its own
-  // itemCategory (meal/food/gift); absent a quest AND a cold-shoulder, the
-  // chip does not exist and this handler has nothing to do.
-  const cs = coldShoulderState(npc, currentGameState.meta.clock.day);
-  const step = quest && quest.steps[quest.currentStep];
-  const wantCategory = quest ? (step.itemCategory || null) : (cs.active ? 'gift' : null);
-  if (!quest && !wantCategory) return;
-  // Find matching item in inventory
-  const inv = currentGameState.player.inventory || [];
-  const idx = inv.findIndex(stack => {
-    const def = ITEM_DEFS[stack.defId];
-    return def && (!wantCategory || def.category === wantCategory);
-  });
-  if (idx < 0) {
-    addLogEntry('system', `You don't have a ${wantCategory || 'suitable item'} to give.`);
+  const day = currentGameState.meta.clock.day;
+  const goal = giftGoalFor(currentGameState, npcId);
+  const cs = coldShoulderState(npc, day);
+  const wantCategory = goal ? goal.category : (cs.active ? 'gift' : null);
+  if (!goal && !wantCategory) return;
+  const name = npc.bible?.name || 'them';
+
+  // D6 — in conversation (already, or opened now unless they're cold).
+  if (!(convState && convState.npcId === npcId) && !cs.active) await doTalk(npcId);
+  if (convState && convState.npcId === npcId) {
+    const pick = await openConvGiftPicker({ npcId });
+    if (pick) await doConvGiveGift(pick);
     return;
   }
-  const stack = inv[idx];
-  const itemLabel = ITEM_DEFS[stack.defId]?.label || 'something';
-  // Consume one from the stack
-  inv[idx] = { ...stack, qty: stack.qty - 1 };
-  if (inv[idx].qty <= 0) inv.splice(idx, 1);
-  addLogEntry('narration', `You give ${itemLabel} to ${npc.bible.name || 'them'}.`);
-  // Complete the step
-  if (quest) checkChainQuestProgress('give_item', npcId, step.itemCategory);
-  let npcOut = npc;
+
+  // The wordless hand-over (they won't talk to you right now).
+  const pick = await openConvGiftPicker({ npcId, onlyCategory: wantCategory, title: `Leave something for ${name}` });
+  if (!pick) return;
+  const moved = giveGiftUnit(currentGameState, pick, npcId);
+  if (!moved.ok) {
+    addLogEntry('system', `That's not there any more.`);
+    return;
+  }
+  const itemLabel = moved.label || 'something';
+  addLogEntry('narration', moved.where === 'bag'
+    ? `You give ${itemLabel} to ${name}.`
+    : `You leave ${moved.isPlate ? `a plate of ${itemLabel}` : itemLabel} out for ${name}.`);
+  const goalMet = !!goal && giftMatchesGoal(goal.category, moved.category);
+  if (goalMet) checkChainQuestProgress('give_item', npcId, goal.category);
+  let npcOut = currentGameState.npcs[npcId];
   let windowNarration;
-  if (cs.active) {
+  let deltas = { affection: 0.05 };
+  if (cs.active && (moved.category === 'gift' || goalMet)) {
     // The reparation ratchet — one severity per landed gift (cooldown +
     // minDaysBeforeRepair enforced inside noteColdShoulderRepair).
-    const res = noteColdShoulderRepair(npc, 'gift', currentGameState.meta.clock.day);
+    const res = noteColdShoulderRepair(npcOut, 'gift', day);
+    deltas = COLD_SHOULDER.repairRelDeltas;
     if (res.repaired) {
-      npcOut = applyRelDelta(npc, COLD_SHOULDER.repairRelDeltas, currentGameState.meta.clock.day);
+      npcOut = applyRelDelta(npcOut, COLD_SHOULDER.repairRelDeltas, day);
       if (res.severity <= 0) {
         windowNarration = `${npc.bible.name || 'They'} looks at you properly for the first time in days. The cold is gone.`;
       } else {
         windowNarration = `${npc.bible.name || 'They'} takes the ${itemLabel}, looking at it for a long moment. "Thank you," they say, quietly.`;
       }
     } else {
+      deltas = {};
       windowNarration = `${npc.bible.name || 'They'} leaves the ${itemLabel} where it is. Not yet.`;
     }
   } else {
-    npcOut = applyRelDelta(npc, { affection: 0.05 }, currentGameState.meta.clock.day);
+    npcOut = applyRelDelta(npcOut, deltas, day);
     windowNarration = 'They seem touched.';
   }
   addLogEntry('narration', windowNarration);
@@ -4391,13 +4402,12 @@ async function doGiveItem(npcId) {
   render(currentGameState, currentSceneState);
   await saveAtBoundary('give-item', currentGameState);
   // action-outcome-window-plan Phase 6 (D3): giving an item is a real
-  // relational beat. The strip reads the real effects — the gift consumed and
+  // relational beat. The strip reads the real effects — the gift given and
   // the relationship axis the repair actually moved — and the frame is fresh
   // (this exchange, this once, D5).
   const applied = [
-    { type: 'CONSUME_ITEM', params: { defId: stack.defId, qty: 1 } },
+    { type: 'CONSUME_ITEM', params: { defId: moved.defId, qty: 1 } },
   ];
-  const deltas = cs.active ? COLD_SHOULDER.repairRelDeltas : { affection: 0.05 };
   for (const [axis, delta] of Object.entries(deltas)) {
     applied.push({ type: 'REL_DELTA', params: { npcId, axis, delta } });
   }
@@ -6014,6 +6024,26 @@ async function handleAction(action, npcId, extra) {
     case 'im.send':
       await doImSend(extra?.rowId, extra?.device);
       break;
+    // Conversation overhaul D7 — the Messages + sheet and composer
+    // (ui.computer.js). The thread is the one Messages is showing.
+    case 'im.ask-sheet':
+      doImAskSheet(currentGameState.world.computer.apps.im.viewingNpcId, 'toggle', null, extra?.device);
+      break;
+    case 'im.ask-cat':
+      doImAskSheet(currentGameState.world.computer.apps.im.viewingNpcId, 'cat', extra?.rowId, extra?.device);
+      break;
+    case 'im.ask-back':
+      doImAskSheet(currentGameState.world.computer.apps.im.viewingNpcId, 'back', null, extra?.device);
+      break;
+    case 'im.ask-close':
+      doImAskSheet(currentGameState.world.computer.apps.im.viewingNpcId, 'close', null, extra?.device);
+      break;
+    case 'im.ask-leaf':
+      await doImAskLeaf(currentGameState.world.computer.apps.im.viewingNpcId, extra?.rowId, extra?.device);
+      break;
+    case 'im.ask-cancel':
+      doImAskCancel(extra?.device);
+      break;
     case 'stream.watch':
       await doStreamWatch(extra?.rowId, extra?.device);
       break;
@@ -7155,6 +7185,14 @@ async function maybeShowConversationScene(npcId) {
   // and the persisted record can re-paint it on reopen. The counter lives on
   // npc.flags and only ever increments within an OPEN conversation.
   const panelN = (npc.flags._convSceneN = (npc.flags._convSceneN || 0) + 1);
+  // Conversation overhaul D1: where this panel belongs is decided NOW, at
+  // request time — the line it illustrates is the newest one in the buffer.
+  // Generation takes a while and the player can keep talking meanwhile, so
+  // reading the anchor at delivery time would file the picture under a later
+  // exchange (the "every image ends up at the bottom" report).
+  const anchor = convImageAnchor(npc);
+  const requestedDay = currentGameState?.meta?.clock?.day;
+  const requestedMinutes = currentGameState?.meta?.clock?.minutes;
   const removeGen = convShowGeneratingImage();
   // Bug report (2026-09-01): this await used to be bare. generateConversation
   // SceneImage guards its OWN generateImageTracked call in a try/catch and
@@ -7173,23 +7211,31 @@ async function maybeShowConversationScene(npcId) {
   } catch (e) {
     console.warn('Conversation scene generation failed:', e);
     result = { url: null };
-  } finally {
-    if (removeGen) removeGen();
   }
-  if (!convState || convState.npcId !== npcId) return; // conversation closed/switched mid-generation
+  const placeholder = removeGen && removeGen.el;
+  if (!convState || convState.npcId !== npcId) { // conversation closed/switched mid-generation
+    if (removeGen) removeGen();
+    return;
+  }
   if (result.url) {
     const record = {
       kind: 'scene', from: 'npc', tag: '🎨 Scene', caption: '',
-      day: currentGameState?.meta?.clock?.day,
-      tick: getTickIndex(currentGameState?.meta?.clock?.minutes),
+      day: requestedDay,
+      tick: getTickIndex(requestedMinutes),
+      minutes: requestedMinutes,
+      anchor,
       cacheKey: result.key,
       prompt: result.prompt,
       seed: result.seed,
       negativePrompt: IMAGE_NEGATIVE.scene,
+      ...(result.moment ? { moment: result.moment } : {}),
     };
     convPushImage(record);
-    convAddImageBubble('npc', result.url, '', '🎨 Scene', record);
+    // D1 — the finished panel takes the placeholder's spot, so a reply that
+    // landed while it was generating stays BELOW the picture it followed.
+    convAddImageBubble('npc', result.url, '', '🎨 Scene', record, placeholder);
   } else {
+    if (removeGen) removeGen();
     // Bug report (2026-09-13): a failed generation left this function
     // silent — convShowGeneratingImage's bubble is correctly removed above
     // either way, but nothing ever told the player it failed, so a due
@@ -7200,7 +7246,11 @@ async function maybeShowConversationScene(npcId) {
   }
 }
 
-function convAddImageBubble(from, url, text, tag, record) {
+// `replaceEl` (optional, conversation overhaul D1): a placeholder already in
+// the log — the new bubble takes its exact spot instead of going to the
+// bottom. A placeholder that's gone (the log was rebuilt) falls back to a
+// normal append.
+function convAddImageBubble(from, url, text, tag, record, replaceEl) {
   const log = document.getElementById('conv-log');
   if (!log) return null;
   const el = document.createElement('div');
@@ -7223,7 +7273,12 @@ function convAddImageBubble(from, url, text, tag, record) {
     bodyEl.textContent = text;
     el.appendChild(bodyEl);
   }
-  log.appendChild(el);
+  if (replaceEl && replaceEl.parentNode === log) {
+    log.insertBefore(el, replaceEl);
+    replaceEl.remove();
+  } else {
+    log.appendChild(el);
+  }
   // D17.5 — every chat image is registerable too: the ⓘ float + reroll modal.
   // The closure holds the SAME record object convPushImage persisted, so
   // rerollChatImage edits the durable copy (see convRenderImages).
@@ -7265,49 +7320,132 @@ function convPushImage(record) {
   }
 }
 
-// Re-paint the persisted chat images above the separator. Returns how many
-// it drew synchronously (0 = none to show); pixels arrive asynchronously:
-// placeholder first, then getChatImageUrl fills from the LRU (or regenerates
-// under the same deterministic key) if the img is still connected.
+// Conversation overhaul D1 — the line a chat image follows: the newest
+// scene-channel entry in the NPC's recent buffer, stamped the way the buffer
+// stamps it (tick = clock MINUTES, the npc.js naming wart). Null when they
+// have never spoken face to face. Pure read.
+function convImageAnchor(npc) {
+  const recent = npc?.memory?.recent;
+  if (!Array.isArray(recent)) return null;
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const e = recent[i];
+    if ((e.channel || 'scene') !== 'scene' || !e.text) continue;
+    return { day: e.day || 0, tick: e.tick || 0, text: e.text };
+  }
+  return null;
+}
+
+// A persisted chat image as a data-past bubble (not yet in the log). Pixels
+// arrive asynchronously: placeholder first, then getChatImageUrl fills from
+// the LRU (or regenerates under the same deterministic key) if the img is
+// still connected.
+function convPastImageEl(record) {
+  const el = document.createElement('div');
+  el.className = 'conv-bubble conv-bubble-photo';
+  el.setAttribute('data-from', record.from);
+  el.setAttribute('data-past', '');
+  if (record.tag) {
+    const tagEl = document.createElement('div');
+    tagEl.className = 'conv-tag';
+    tagEl.textContent = record.tag;
+    el.appendChild(tagEl);
+  }
+  const img = document.createElement('img');
+  img.className = 'conv-photo';
+  img.alt = '';
+  img.src = getPlaceholder();
+  el.appendChild(img);
+  if (record.caption) {
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'conv-bubble-text';
+    bodyEl.textContent = record.caption;
+    el.appendChild(bodyEl);
+  }
+  setImageMeta(img, {
+    label: record.tag || 'Image',
+    prompt: record.prompt,
+    seed: record.seed,
+    negativePrompt: record.negativePrompt || null,
+    reroll: (fields) => rerollChatImage(record, img, fields),
+  });
+  Promise.resolve(getChatImageUrl(record)).then(result => {
+    if (result && result.url && img.isConnected) img.src = result.url;
+  }).catch(() => {});
+  return el;
+}
+
+// Re-paint ONLY the persisted chat images (no text rows). Kept for callers
+// that want the pictures alone; the conversation pane itself uses
+// convRenderHistory, which puts each picture back where it happened.
 function convRenderImages(npc) {
   const log = document.getElementById('conv-log');
   const list = npc?.flags?._convImages || [];
   if (!log || list.length === 0) return 0;
-  for (const record of list) {
-    const el = document.createElement('div');
-    el.className = 'conv-bubble conv-bubble-photo';
-    el.setAttribute('data-from', record.from);
-    el.setAttribute('data-past', '');
-    if (record.tag) {
-      const tagEl = document.createElement('div');
-      tagEl.className = 'conv-tag';
-      tagEl.textContent = record.tag;
-      el.appendChild(tagEl);
-    }
-    const img = document.createElement('img');
-    img.className = 'conv-photo';
-    img.alt = '';
-    img.src = getPlaceholder();
-    el.appendChild(img);
-    if (record.caption) {
-      const bodyEl = document.createElement('div');
-      bodyEl.className = 'conv-bubble-text';
-      bodyEl.textContent = record.caption;
-      el.appendChild(bodyEl);
-    }
-    log.appendChild(el);
-    setImageMeta(img, {
-      label: record.tag || 'Image',
-      prompt: record.prompt,
-      seed: record.seed,
-      negativePrompt: record.negativePrompt || null,
-      reroll: (fields) => rerollChatImage(record, img, fields),
-    });
-    getChatImageUrl(record).then(result => {
-      if (result.url && img.isConnected) img.src = result.url;
-    });
-  }
+  for (const record of list) log.appendChild(convPastImageEl(record));
   return list.length;
+}
+
+// Conversation overhaul D1 — where each persisted image goes among the
+// recalled rows. Pure: returns Map(rowIndex -> [record]) where -1 means
+// "before the first row". An image sits right after the row its anchor names
+// (the LAST row matching day + tick + text — the newest occurrence of a
+// repeated line is the one it followed). An anchor that has aged out of the
+// 40-entry buffer, or a record from before anchors existed, falls back to
+// time: after the last row at or before the image's moment. Legacy records
+// stored `tick` as a tick INDEX, so their moment is tick × tickMinutes.
+function convPlaceImages(rows, images) {
+  const placed = new Map();
+  const put = (idx, rec) => { if (!placed.has(idx)) placed.set(idx, []); placed.get(idx).push(rec); };
+  const tickMin = (typeof CLOCK !== 'undefined' && CLOCK.tickMinutes) || 30;
+  const timeOf = (r) => (r.day || 0) * 1440 + (r.tick || 0);
+  for (const rec of images || []) {
+    let at = null;
+    const a = rec && rec.anchor;
+    if (a && a.text) {
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const r = rows[i];
+        if (r.kind === 'time') continue;
+        if (r.rawText === a.text && (r.day || 0) === (a.day || 0) && (r.tick || 0) === (a.tick || 0)) { at = i; break; }
+      }
+    }
+    if (at === null) {
+      const minutes = typeof rec.minutes === 'number' ? rec.minutes : (rec.tick || 0) * tickMin;
+      const t = (rec.day || 0) * 1440 + minutes;
+      at = -1;
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i].kind === 'time') continue;
+        if (timeOf(rows[i]) <= t) at = i;
+      }
+    }
+    put(at, rec);
+  }
+  return placed;
+}
+
+// Conversation overhaul D1 — the recalled half of the pane: text rows and
+// persisted images, merged in the order they happened (this used to draw
+// every row and THEN every image, so reopening a talk stacked all its
+// pictures at the bottom). A shared photo anchored to its own
+// "[shared a photo: …]" line replaces that line — the picture IS the turn.
+// Returns how many elements it drew (0 = nothing to recall).
+function convRenderHistory(npc) {
+  const log = document.getElementById('conv-log');
+  if (!log) return 0;
+  const rows = recallSceneExchanges(npc, currentGameState?.meta?.clock?.day);
+  const images = npc?.flags?._convImages || [];
+  if (rows.length === 0 && images.length === 0) return 0;
+  const placed = convPlaceImages(rows, images);
+  let drawn = 0;
+  for (const rec of placed.get(-1) || []) { log.appendChild(convPastImageEl(rec)); drawn++; }
+  rows.forEach((row, i) => {
+    const here = placed.get(i) || [];
+    const replacesRow = row.kind === 'bubble' && row.from === 'player'
+      && /^\[shared a photo: /.test(row.rawText || '')
+      && here.some(rec => rec.kind === 'shared');
+    if (!replacesRow) { log.appendChild(convRecalledRowEl(row)); drawn++; }
+    for (const rec of here) { log.appendChild(convPastImageEl(rec)); drawn++; }
+  });
+  return drawn;
 }
 // Both LLM passes of an ask turn paint through this (asks plan Phase 4): the
 // player's own bubble is added by the caller, this only draws the NPC side.
@@ -7348,43 +7486,45 @@ function askBubbleDisplay(text) {
   return leaf ? { label: leaf.label, body: parsed.flavor || leaf.defaultFlavor || '' } : null;
 }
 
+// One recalled row as a data-past element (not yet in the log).
+function convRecalledRowEl(row) {
+  const el = document.createElement('div');
+  if (row.kind === 'time') {
+    el.className = 'conv-time';
+    el.textContent = row.label;
+  } else if (row.kind === 'beat') {
+    el.className = 'conv-beat';
+    el.textContent = row.text;
+  } else {
+    el.className = 'conv-bubble';
+    el.setAttribute('data-from', row.from);
+    const askDisp = row.from === 'player' ? askBubbleDisplay(row.text) : null;
+    if (askDisp) {
+      const tagEl = document.createElement('div');
+      tagEl.className = 'conv-tag';
+      tagEl.textContent = askDisp.label;
+      el.appendChild(tagEl);
+      if (askDisp.body) {
+        const bodyEl = document.createElement('div');
+        bodyEl.className = 'conv-bubble-text';
+        bodyEl.textContent = askDisp.body;
+        el.appendChild(bodyEl);
+      }
+    } else {
+      el.textContent = row.text;
+    }
+  }
+  el.setAttribute('data-past', '');
+  return el;
+}
+
+// The text rows alone (no images) — kept for callers that want only the
+// words; the pane itself draws through convRenderHistory (D1).
 function convRenderRecalled(npc) {
   const log = document.getElementById('conv-log');
   if (!log) return 0;
   const rows = recallSceneExchanges(npc, currentGameState?.meta?.clock?.day);
-  if (rows.length === 0) return 0;
-
-  for (const row of rows) {
-    const el = document.createElement('div');
-    if (row.kind === 'time') {
-      el.className = 'conv-time';
-      el.textContent = row.label;
-    } else if (row.kind === 'beat') {
-      el.className = 'conv-beat';
-      el.textContent = row.text;
-    } else {
-      el.className = 'conv-bubble';
-      el.setAttribute('data-from', row.from);
-      const askDisp = row.from === 'player' ? askBubbleDisplay(row.text) : null;
-      if (askDisp) {
-        const tagEl = document.createElement('div');
-        tagEl.className = 'conv-tag';
-        tagEl.textContent = askDisp.label;
-        el.appendChild(tagEl);
-        if (askDisp.body) {
-          const bodyEl = document.createElement('div');
-          bodyEl.className = 'conv-bubble-text';
-          bodyEl.textContent = askDisp.body;
-          el.appendChild(bodyEl);
-        }
-      } else {
-        el.textContent = row.text;
-      }
-    }
-    el.setAttribute('data-past', '');
-    log.appendChild(el);
-  }
-
+  for (const row of rows) log.appendChild(convRecalledRowEl(row));
   return rows.length;
 }
 
@@ -7412,7 +7552,11 @@ function convShowGeneratingImage() {
   el.innerHTML = '<span class="conv-typing-icon">🖼</span><span class="dot"></span><span class="dot"></span><span class="dot"></span>';
   log.appendChild(el);
   convScrollToBottom();
-  return () => { if (el.parentNode) el.remove(); };
+  // The remover also carries the element (conversation overhaul D1), so a
+  // finished image can take this bubble's exact place in the log.
+  const remove = () => { if (el.parentNode) el.remove(); };
+  remove.el = el;
+  return remove;
 }
 
 function convSetStatus(text) {
@@ -7453,9 +7597,10 @@ function openConversationOverlay(npcId) {
     log.innerHTML = '';
     // D13 + 2026-08-31: recalled rows AND persisted chat images share the
     // top half; the 'Now' separator appears if either drew anything.
-    const rows = convRenderRecalled(npc);
-    const imgs = convRenderImages(npc);
-    if (rows > 0 || imgs > 0) {
+    // Conversation overhaul D1: drawn MERGED, each image where it happened
+    // (they used to be appended after every row, stacking at the bottom).
+    const drawn = convRenderHistory(npc);
+    if (drawn > 0) {
       const sep = document.createElement('div');
       sep.className = 'conv-separator';
       sep.textContent = 'Now';
@@ -7478,8 +7623,10 @@ function openConversationOverlay(npcId) {
   const input = document.getElementById('conv-input');
   if (input) { input.value = ''; setTimeout(() => input.focus(), 50); }
   // Asks plan Phase 2 — a fresh conversation opens with the Request menu
-  // closed and the ask hint cleared.
+  // closed and the ask hint cleared (and, conversation overhaul D4, no
+  // half-composed ask left over from someone else).
   closeAskMenu();
+  closeConvComposer();
   updateAskHint();
 }
 
@@ -7490,6 +7637,7 @@ function closeConversationOverlay() {
   // Asks plan Phase 2 — a closed conversation must not leave the Request
   // menu or its hint behind.
   closeAskMenu();
+  closeConvComposer();
   updateAskHint();
   // Initiative plan Phase 3 (D9): the durable half of "in conversation". The
   // tick decides whether to open an overture and cannot see TIME's context
@@ -7555,15 +7703,12 @@ function askMenuIsOpen() {
 
 function openAskMenu() {
   if (!convState || convState.sending || !currentGameState) return;
-  // actions-and-activities-overhaul-plan.md Phase 2 (D6): "the chat modal's
-  // Ask button pre-expands the new Affection category when the conversation
-  // is with someone present" — a live conversation partner is present by
-  // construction, so this is the every-open default; the existing Back
-  // button (askMenuGoBack) reaches the top-level category list in one tap.
-  // A UX shortcut to the same tree, never a separate flow — the category
-  // that replaced the old standalone Make-a-Move chip is the one that opens
-  // first.
-  askMenuPath = ['affection'];
+  // Conversation overhaul D3 (user report, 2026-09-27: "When you open the
+  // 'Asks' menu … it automatically opens to the 'affection' page"): the menu
+  // opens on the category list every time. This reverses actions-and-
+  // activities D6, which pre-expanded Affection as a stand-in for the old
+  // Make-a-Move chip — at the user's request.
+  askMenuPath = [];
   askMenuRender();
   const m = document.getElementById('conv-ask-menu');
   if (m) m.hidden = false;
@@ -7596,7 +7741,9 @@ function askMenuRender() {
   const ctx = assembleContext(gs, currentSceneState);
   const catId = askMenuPath[askMenuPath.length - 1];
   const cat = catId ? ASK_CATEGORIES.find(c => c.id === catId) || null : null;
-  if (title) title.textContent = cat ? `Asks ▸ ${cat.label}` : 'Asks';
+  // D3 — "Interact": the menu holds gifts, money, photos, plans and apologies,
+  // not just requests, so "Asks" stopped describing it.
+  if (title) title.textContent = cat ? `Interact ▸ ${cat.label}` : 'Interact';
   if (backBtn) backBtn.hidden = !cat;
   body.textContent = '';
   const items = cat ? cat.children : ASK_CATEGORIES;
@@ -7608,6 +7755,7 @@ function askMenuRender() {
       row.className = 'conv-ask-cat';
       row.setAttribute('data-ask-cat', item.id);
       row.textContent = item.label;
+      row.style.setProperty('--ask-tone', askToneVar(item.tone)); // D4 — the category's colour edge
       const hasLive = item.children.some(ch => !ch.available || ch.available(gs, npc, ctx));
       if (!hasLive) { row.disabled = true; row.classList.add('is-disabled'); }
       body.appendChild(row);
@@ -7616,6 +7764,7 @@ function askMenuRender() {
       const row = document.createElement('button');
       row.className = 'conv-ask-row';
       row.setAttribute('data-ask-id', item.id);
+      row.style.setProperty('--ask-tone', askToneVar(cat && cat.tone));
       const label = document.createElement('span');
       label.className = 'conv-ask-label';
       label.textContent = item.label;
@@ -7642,6 +7791,7 @@ function askMenuInsertLeaf(askId) {
   if (shareLeaf) {
     if (shareLeaf.available && !shareLeaf.available(currentGameState)) return;
     closeAskMenu();
+    closeConvComposer();
     openConvPhotoPicker().then(photo => { if (photo) doConvSharePhoto(photo.id); });
     return;
   }
@@ -7652,13 +7802,15 @@ function askMenuInsertLeaf(askId) {
   // state can move between the menu render and the click.
   const ctx = assembleContext(currentGameState, currentSceneState);
   if (leaf.available && !leaf.available(currentGameState, npc, ctx)) return;
+  // A picker leaf is its own turn — any half-composed ask gives way to it.
+  if (leaf.gift || leaf.borrow || leaf.returnItem || leaf.feature) closeConvComposer();
   // Phase 9 — a gift leaf has no template: the item is chosen from the
   // inventory picker, then the turn runs as an ask through doConvGiveGift.
   // Same picker-first shape as the camera-roll share flow, but the result
   // IS an ask (decision, strip, deterministic match).
   if (leaf.gift) {
     closeAskMenu();
-    openConvGiftPicker().then(pick => { if (pick) doConvGiveGift(pick.defId); });
+    openConvGiftPicker().then(pick => { if (pick) doConvGiveGift(pick); });
     return;
   }
   // Phase 4 of actions-and-activities-overhaul-plan.md (D8) — Borrow/Return
@@ -7682,16 +7834,11 @@ function askMenuInsertLeaf(askId) {
     openConvFeaturePicker(convState.npcId).then(pick => { if (pick) doConvFeaturePhoto(pick.id); });
     return;
   }
-  const input = document.getElementById('conv-input');
-  if (!input) return;
-  input.value = leaf.template;
-  input.focus();
-  const marker = '<Optional>';
-  const idx = leaf.template.indexOf(marker);
-  if (idx >= 0) input.setSelectionRange(idx, idx + marker.length);
-  else input.setSelectionRange(leaf.template.length, leaf.template.length);
+  // Conversation overhaul D4: every other leaf opens the composer — its
+  // argument chips above the input, the input as the optional message —
+  // instead of pasting a `$Template <Optional>` for the player to edit.
   closeAskMenu();
-  updateAskHint();
+  openConvComposer(askId);
 }
 
 // Asks plan Phase 2 — the hint line under the input. While the input carries
@@ -7715,6 +7862,254 @@ function updateAskHint() {
   }
   hint.textContent = msg;
   hint.hidden = !msg;
+}
+
+// --- Conversation overhaul D4/D5: the Interact composer ---------------------
+// Picking a leaf used to paste `$RequestMeal <Optional>` into the text box,
+// and a money leaf then had to find the amount in whatever the player typed.
+// Now it opens a strip above the input: the ask's label (tinted by its
+// category, ✕ to cancel), its ARGUMENT chips (amount, gift/loan, what kind of
+// plans, who else), and the text box becomes the optional message. The picks
+// ride resolveAsk's structured `extra` — never decide()'s verdict (D1). Typed
+// `$AskId words` still works for anyone who uses it.
+//
+// renderAskComposer is shared with the phone's Messages (ui.computer.js,
+// D7): it draws into any host, keeps its state in the plain `state` object
+// the caller owns (so a re-render can redraw it), and reports changes back.
+// Chips are real buttons: Tab moves between them, arrow keys move within a
+// group, touch taps them.
+let convComposer = null; // { askId, values } while a leaf is being composed in person
+
+function askToneVar(tone) {
+  return `var(--color-${tone || 'accent'})`;
+}
+
+function renderAskComposer(host, leaf, state, opts) {
+  const { gs, npc, npcId, onChange, onCancel } = opts || {};
+  if (!host || !leaf || !state) return;
+  host.textContent = '';
+  const cat = askCategoryOf(leaf);
+  host.style.setProperty('--ask-tone', askToneVar(cat && cat.tone));
+  host.setAttribute('data-ask-id', leaf.id);
+
+  const head = document.createElement('div');
+  head.className = 'ask-composer-head';
+  const pill = document.createElement('span');
+  pill.className = 'ask-composer-pill';
+  const icon = cat ? String(cat.label).split(' ')[0] : '';
+  pill.textContent = `${icon ? icon + ' ' : ''}${leaf.label}`;
+  head.appendChild(pill);
+  const status = document.createElement('span');
+  status.className = 'ask-composer-status';
+  head.appendChild(status);
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'ask-composer-cancel';
+  cancel.setAttribute('aria-label', `Cancel ${leaf.label}`);
+  cancel.textContent = '✕';
+  cancel.addEventListener('click', () => { if (onCancel) onCancel(); });
+  head.appendChild(cancel);
+  host.appendChild(head);
+
+  const values = state.values || (state.values = {});
+  const syncers = [];
+  const sync = () => {
+    for (const fn of syncers) fn();
+    const ready = askArgsReady(leaf, values, gs, npc, npcId);
+    status.textContent = ready.ok ? (leaf.help && !/^</.test(leaf.help) ? leaf.help : '') : ready.reason;
+    status.classList.toggle('is-blocked', !ready.ok);
+    if (onChange) onChange(ready);
+  };
+
+  for (const arg of leaf.args || []) {
+    const row = document.createElement('div');
+    row.className = 'ask-arg';
+    row.setAttribute('data-arg', arg.id);
+    const label = document.createElement('span');
+    label.className = 'ask-arg-label';
+    label.textContent = arg.label || arg.id;
+    row.appendChild(label);
+    const chips = document.createElement('div');
+    chips.className = 'ask-chips';
+    chips.setAttribute('role', arg.kind === 'multi' ? 'group' : 'radiogroup');
+    chips.setAttribute('aria-label', arg.label || arg.id);
+    row.appendChild(chips);
+
+    if (arg.kind === 'amount') {
+      const max = typeof arg.max === 'function' ? arg.max(gs, npc, npcId) : Infinity;
+      const presets = typeof arg.presets === 'function' ? arg.presets(gs, npc, npcId) : (arg.presets || []);
+      const chipEls = [];
+      for (const v of presets) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ask-chip';
+        b.setAttribute('role', 'radio');
+        b.textContent = `$${v}`;
+        b.addEventListener('click', () => { values[arg.id] = v; sync(); });
+        chips.appendChild(b);
+        chipEls.push([v, b]);
+      }
+      const custom = document.createElement('label');
+      custom.className = 'ask-chip ask-chip-custom';
+      custom.textContent = '$';
+      const inp = document.createElement('input');
+      inp.type = 'number';
+      inp.min = '1';
+      if (Number.isFinite(max)) inp.max = String(max);
+      inp.step = '1';
+      inp.inputMode = 'numeric';
+      inp.placeholder = 'other';
+      inp.setAttribute('aria-label', `${arg.label || 'Amount'} — other amount`);
+      inp.addEventListener('input', () => {
+        const n = Math.floor(Number(inp.value));
+        values[arg.id] = inp.value === '' ? null : (Number.isFinite(n) ? n : null);
+        sync();
+      });
+      // Enter in the amount box sends, the same as Enter in the message box.
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); if (opts.onSubmit) opts.onSubmit(); }
+      });
+      custom.appendChild(inp);
+      chips.appendChild(custom);
+      syncers.push(() => {
+        let matched = false;
+        for (const [v, b] of chipEls) {
+          const on = values[arg.id] === v;
+          matched = matched || on;
+          b.setAttribute('aria-checked', on ? 'true' : 'false');
+          b.tabIndex = 0;
+        }
+        custom.classList.toggle('is-on', !matched && values[arg.id] != null);
+        if (matched && document.activeElement !== inp) inp.value = '';
+        else if (!matched && values[arg.id] != null && document.activeElement !== inp) inp.value = String(values[arg.id]);
+      });
+      const hint = typeof arg.hint === 'function' ? arg.hint(gs, npc, npcId) : arg.hint;
+      if (hint) {
+        const h = document.createElement('span');
+        h.className = 'ask-arg-hint';
+        h.textContent = hint;
+        row.appendChild(h);
+      }
+    } else if (arg.kind === 'choice') {
+      const options = typeof arg.options === 'function' ? arg.options(gs, npc, npcId) : (arg.options || []);
+      const chipEls = [];
+      for (const o of options) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ask-chip';
+        b.setAttribute('role', 'radio');
+        if (o.tone) b.style.setProperty('--chip-tone', askToneVar(o.tone));
+        b.textContent = o.label;
+        if (o.sub) {
+          const sub = document.createElement('span');
+          sub.className = 'ask-chip-sub';
+          sub.textContent = o.sub;
+          b.appendChild(sub);
+        }
+        b.addEventListener('click', () => { values[arg.id] = o.id; sync(); });
+        chips.appendChild(b);
+        chipEls.push([o.id, b]);
+      }
+      syncers.push(() => {
+        for (const [id, b] of chipEls) b.setAttribute('aria-checked', values[arg.id] === id ? 'true' : 'false');
+      });
+    } else if (arg.kind === 'multi') {
+      const options = typeof arg.options === 'function' ? arg.options(gs, npc, npcId) : (arg.options || []);
+      if (options.length === 0) continue; // nobody else to invite — no empty row
+      if (!Array.isArray(values[arg.id])) values[arg.id] = [];
+      const chipEls = [];
+      for (const o of options) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ask-chip';
+        b.textContent = o.label;
+        b.addEventListener('click', () => {
+          const list = values[arg.id];
+          const at = list.indexOf(o.id);
+          if (at >= 0) list.splice(at, 1); else list.push(o.id);
+          sync();
+        });
+        chips.appendChild(b);
+        chipEls.push([o.id, b]);
+      }
+      syncers.push(() => {
+        for (const [id, b] of chipEls) b.setAttribute('aria-pressed', values[arg.id].includes(id) ? 'true' : 'false');
+      });
+    }
+    host.appendChild(row);
+  }
+
+  // Arrow keys move along a chip group (and pick, in a radio group), so the
+  // whole strip is drivable from the keyboard without a mouse. Bound through
+  // the `onkeydown` PROPERTY, not addEventListener: the conversation's host
+  // element outlives each composer, so a listener per render would pile up
+  // (every stale copy re-clicking the same chip on each key press).
+  host.onkeydown = (e) => {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+    const group = e.target.closest && e.target.closest('.ask-chips');
+    if (!group || e.target.tagName === 'INPUT') return;
+    const items = Array.from(group.querySelectorAll('button.ask-chip'));
+    const at = items.indexOf(e.target);
+    if (at < 0) return;
+    e.preventDefault();
+    const step = (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ? -1 : 1;
+    const next = items[(at + step + items.length) % items.length];
+    next.focus();
+    if (group.getAttribute('role') === 'radiogroup') next.click();
+  };
+
+  sync();
+}
+
+// The ready check the send button and Enter share.
+function convComposerReady() {
+  if (!convComposer) return { ok: true };
+  const leaf = ASK_TYPES[convComposer.askId];
+  const npc = currentGameState?.npcs?.[convState?.npcId];
+  return askArgsReady(leaf, convComposer.values, currentGameState, npc, convState?.npcId);
+}
+
+function openConvComposer(askId) {
+  const leaf = ASK_TYPES[askId];
+  const npcId = convState?.npcId;
+  const npc = currentGameState?.npcs?.[npcId];
+  const host = document.getElementById('conv-composer');
+  if (!leaf || !npc || !host) return;
+  convComposer = { askId, values: askArgDefaults(leaf, currentGameState, npc, npcId) };
+  const sendBtn = document.getElementById('conv-send-btn');
+  renderAskComposer(host, leaf, convComposer, {
+    gs: currentGameState, npc, npcId,
+    onChange: (ready) => { if (sendBtn && !convState?.sending) sendBtn.disabled = !ready.ok; },
+    onCancel: () => { closeConvComposer(); document.getElementById('conv-input')?.focus(); },
+    onSubmit: () => handleAction('conv.send'),
+  });
+  host.hidden = false;
+  const input = document.getElementById('conv-input');
+  if (input) {
+    // A typed `$Template` left in the box would fight the composer.
+    if (input.value.trim().startsWith('$')) input.value = '';
+    input.placeholder = 'Add a message (optional)';
+  }
+  if (sendBtn) sendBtn.textContent = 'Send';
+  updateAskHint();
+  // Land on the first chip when there is one — Tab/arrows from there — else
+  // straight in the message box.
+  const firstChip = host.querySelector('.ask-chip[aria-checked="true"]') || host.querySelector('button.ask-chip');
+  (firstChip || input)?.focus();
+  convScrollToBottom();
+}
+
+function closeConvComposer() {
+  convComposer = null;
+  const host = document.getElementById('conv-composer');
+  if (host) { host.hidden = true; host.textContent = ''; host.removeAttribute('data-ask-id'); }
+  const input = document.getElementById('conv-input');
+  if (input) input.placeholder = 'Say or do something...';
+  const sendBtn = document.getElementById('conv-send-btn');
+  if (sendBtn) {
+    sendBtn.textContent = 'Say';
+    if (!convState?.sending) sendBtn.disabled = false;
+  }
 }
 
 async function doTalk(npcId) {
@@ -8034,12 +8429,24 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
   const myNpcId = convState.npcId;
   const input = document.getElementById('conv-input');
   let text = forcedText;
-  if (giftDefId) {
-    const stack = (currentGameState?.player?.inventory || []).find(s => s.defId === giftDefId && (s.qty || 0) > 0);
-    if (!stack) return; // item vanished between the picker and the send
-    const def = ITEM_DEFS[giftDefId] || ITEM_DEFS._unknown;
+  let composed = null; // conversation overhaul D4 — { askId, values, flavor }
+  // Conversation overhaul D6: the gift argument is a pick { defId, from,
+  // index, label } — the bag or the fridge/pantry. A bare defId (every
+  // caller before D6) is a bag pick.
+  const giftPick = giftDefId && typeof giftDefId === 'object' ? giftDefId
+    : giftDefId ? { defId: giftDefId, from: 'player' } : null;
+  if (giftPick) giftDefId = giftPick.defId;
+  if (giftPick) {
+    const src = findGiftSource(currentGameState, giftPick);
+    if (!src) return; // item vanished (eaten, moved, spoiled) between the picker and the send
+    giftPick.index = src.index;
+    giftPick.label = src.label;
     const name = currentGameState?.npcs?.[convState?.npcId]?.bible?.name || 'them';
-    text = `You hand ${name} the ${def.label || 'gift'}.`;
+    const inKitchen = ['kitchen', 'dining'].includes(currentGameState?.player?.location);
+    const thing = src.isPlate ? `a plate of ${src.label}` : `the ${src.label}`;
+    text = src.where === 'bag' ? `You hand ${name} the ${src.label}.`
+      : inKitchen ? `You get ${thing} out of the ${src.where} and hand it to ${name}.`
+      : `You tell ${name} you saved them ${thing} — it's in the ${src.where}.`;
     if (input) input.value = '';
   } else if (borrowDefId) {
     const npc = currentGameState?.npcs?.[convState?.npcId];
@@ -8064,6 +8471,21 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
     const name = currentGameState?.npcs?.[convState?.npcId]?.bible?.name || 'them';
     text = `You show ${name} the photo "${photo.caption}" and ask if you can post it with them in it.`;
     if (input) input.value = '';
+  } else if (!forcedText && convComposer) {
+    // Conversation overhaul D4/D5 — a composed ask: the chips are the
+    // structured payload (resolveAsk's `extra`, like giftDefId), the text
+    // box — possibly empty — is the flavor. A composer that isn't ready
+    // (no amount, an empty wallet) doesn't send; its own status line says
+    // why.
+    if (!convComposerReady().ok) return;
+    composed = {
+      askId: convComposer.askId,
+      values: JSON.parse(JSON.stringify(convComposer.values || {})),
+      flavor: (input?.value || '').trim(),
+    };
+    text = composed.flavor;
+    if (input) input.value = '';
+    closeConvComposer();
   } else {
     text = forcedText || input?.value.trim();
     if (!text) return;
@@ -8078,11 +8500,12 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
   // decision, just a normal turn. A gift/borrow/return turn carries no
   // $-text at all.
   const structuredDefId = giftDefId || borrowDefId || returnDefId || featurePhotoId;
-  const parsedAsk = (forcedText || structuredDefId) ? null : parseAskInput(text);
+  const parsedAsk = (forcedText || structuredDefId || composed) ? null : parseAskInput(text);
   const askLeaf = giftDefId ? ASK_TYPES.RequestGift
     : borrowDefId ? ASK_TYPES.BorrowItem
     : returnDefId ? ASK_TYPES.ReturnItem
     : featurePhotoId ? ASK_TYPES.Feature
+    : composed ? ASK_TYPES[composed.askId] || null
     : (parsedAsk ? ASK_TYPES[parsedAsk.askId] || null : null);
 
   // Player's message appears instantly in the conversation log. Forced
@@ -8097,8 +8520,14 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
     // D4 — a bare ask (untouched `<Optional>`) renders the leaf's canned
     // defaultFlavor as the body instead of an empty one. Display-only: the
     // flavor handed to resolveAsk below stays exactly what was parsed (D1).
-    const body = parsedAsk ? (parsedAsk.flavor || askLeaf.defaultFlavor || '') : text;
-    convAddBubble('player', body, askLeaf.label);
+    const body = parsedAsk ? (parsedAsk.flavor || askLeaf.defaultFlavor || '')
+      : composed ? (composed.flavor || askLeaf.defaultFlavor || '')
+      : text;
+    // D5 — the chips the player picked read on the bubble's header
+    // ("Give Money · $20 · Gift"), so the turn says what was actually sent.
+    const argSummary = composed
+      ? askArgSummary(askLeaf, composed.values, currentGameState, currentGameState?.npcs?.[myNpcId], myNpcId) : '';
+    convAddBubble('player', body, argSummary ? `${askLeaf.label} · ${argSummary}` : askLeaf.label);
     // Bug report (2026-08-26): `text` still held the raw `$RequestIntimacy
     // <flavor>` input below this point, and both the callLLM prompt and
     // applyProposal's memory.recent write use `text` as the player's turn —
@@ -8111,6 +8540,10 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
   } else {
     convAddBubble('player', text);
   }
+
+  // D6 — read BEFORE this turn: was a chain goal already waiting on a talk
+  // step? (A gift this turn can open one; that one waits for the next line.)
+  const talkStepWaiting = chainTalkStepWaiting(currentGameState, myNpcId);
 
   // A real turn (player words, a gift, or an NPC opening line) is
   // "participating in dialogue" — the condition that keeps the paused
@@ -8182,8 +8615,10 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
     // the structured `extra` payload — never through the flavor (D1/invariant 2).
     const askTurn = askLeaf
       ? resolveAsk(currentGameState, myNpcId, askLeaf.id,
-          structuredDefId ? text : parsedAsk.flavor, context,
-          giftDefId ? { giftDefId } : borrowDefId ? { borrowDefId } : returnDefId ? { returnDefId } : featurePhotoId ? { featurePhotoId } : undefined)
+          structuredDefId ? text : composed ? composed.flavor : parsedAsk.flavor, context,
+          giftPick ? { giftDefId: giftPick.defId, giftFrom: giftPick.from, giftIndex: giftPick.index, giftLabel: giftPick.label }
+            : borrowDefId ? { borrowDefId } : returnDefId ? { returnDefId }
+            : featurePhotoId ? { featurePhotoId } : composed ? composed.values : undefined)
       : null;
 
     const result = await callLLM(
@@ -8274,6 +8709,21 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
         }
         askTurn.applyEffects();
         applied.updatedNpcIds.push(myNpcId);
+        // Conversation overhaul D6 — a gift handed over in conversation
+        // counts toward the goal it satisfies (the Care Package's meal) and,
+        // for someone giving you the cold shoulder, as reparation — exactly
+        // what the old scene chip did, now on the one giving path.
+        if (askTurn.ask.gift && askTurn.decision.accept) convGiftFollowThrough(myNpcId, askTurn.decision.giftMoved);
+      }
+      // D6 — a chain goal's "Check in with {name}" step is done by TALKING:
+      // the next thing the player says in this conversation completes it,
+      // not only a conversation opening (doTalk's checkQuestCompletion) —
+      // so giving the meal and then chatting finishes the Care Package
+      // without closing and reopening the talk.
+      if (talkStepWaiting && !forcedText && !(askTurn && askTurn.ask.gift)) {
+        const q = chainQuestFor(currentGameState, myNpcId);
+        checkQuestCompletion(myNpcId);
+        convGoalBeat(q);
       }
       // Birthdays (birthdays-and-occasions-plan.md D6/D8): at the same single
       // effect-application moment, after applyProposal — which replaces
@@ -8347,18 +8797,16 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
   }
 }
 
-// Asks plan Phase 4 (D8/D9) — stage 2 of a schedule:true ask. Stage 1
-// (decide + pass-1 phrasing) already ran and said yes; here the player
-// picks a genuinely free window from the calendar modal, the hard-block
-// recheck runs (a safety net only — the modal only offers free windows),
-// a real commitment is created so the NPC actually shows up for the window,
-// and a second LLM pass phrases the sign-off through
-// buildSchedulingConfirmDirective (template fallback if the call fails).
-// Returns { logEntries } — the pass-2 entries for the session log — or
-// null when the player cancels.
-async function runAskScheduleFlow(askTurn, context, playerAction) {
-  const convNpcId = convState?.npcId; // snapshot — the overlay may close mid-modal
-  const npc = currentGameState.npcs?.[convNpcId];
+// Asks plan Phase 4 (D8/D9) — the calendar half of a schedule:true ask,
+// shared by the conversation (runAskScheduleFlow) and Messages
+// (ui.computer.js, conversation overhaul D7). The player picks a genuinely
+// free window from the modal; the hard-block recheck runs (a safety net only
+// — the modal only offers free windows); a real commitment is created so the
+// NPC actually shows up. `beat(text)` voices the in-between lines in
+// whichever surface asked. Returns { slot, when, dayLabel, name,
+// extraAnswers } or null when the player cancels.
+async function askSchedulePickAndBook(askTurn, npcId, beat) {
+  const npc = currentGameState.npcs?.[npcId];
   if (!npc) return null;
   const name = npc.bible?.name || 'they';
   // Phase 1 (D2, actions-and-activities-overhaul-plan.md): $Invite parses its
@@ -8376,7 +8824,7 @@ async function runAskScheduleFlow(askTurn, context, playerAction) {
   for (let tries = 0; tries < 5; tries++) {
     slot = await openAskScheduleModal({
       title: `${askTurn.ask.label} — when works for ${name}?`,
-      npcId: convNpcId,
+      npcId,
       mealLabels: resolvedKind === 'meal', // Phase 5 (D10): label rows that land in a meal slot
     });
     if (!slot) return null;
@@ -8384,9 +8832,9 @@ async function runAskScheduleFlow(askTurn, context, playerAction) {
     const { block } = resolveScheduleActivity(npc, absoluteToClock(slot.startAbs));
     if (slot.endAbs > nowAbs && !COMMITMENT_TUNING.busyBlocks.includes(block)) break;
     slot = null;
-    convAddBeat(`${name}'s plans just shifted — that window won't work anymore. Pick another?`);
+    beat(`${name}'s plans just shifted — that window won't work anymore. Pick another?`);
   }
-  if (!slot) { convAddBeat('You leave the plans open.'); return null; }
+  if (!slot) { beat('You leave the plans open.'); return null; }
 
   // The NPC pre-accepted deterministically in stage 1, so they are passed
   // as proposerId: createCommitment honors that by putting them straight
@@ -8399,7 +8847,7 @@ async function runAskScheduleFlow(askTurn, context, playerAction) {
     startAbs: slot.startAbs, endAbs: slot.endAbs,
     roomId: resolvedRoomId,
     invitedIds: extraInvitedIds,
-    proposerId: convNpcId,
+    proposerId: npcId,
     host: 'player',
   });
   askTurn.setSlot(slot);
@@ -8411,19 +8859,33 @@ async function runAskScheduleFlow(askTurn, context, playerAction) {
   const meal = resolvedKind === 'meal'
     ? mealLabelForWindow(slot.startAbs % 1440, slot.endAbs % 1440) : null;
   const dayLabel = meal ? `${meal.label}, ${when.dayLabel}` : when.dayLabel;
+  const extraAnswers = extraInvitedIds.map((extraId) => {
+    const extraName = currentGameState.npcs?.[extraId]?.bible?.name || 'They';
+    return extraResponses?.[extraId]?.accept ? `${extraName} is in too.` : `${extraName} isn't up for it.`;
+  });
+  return { slot, when, dayLabel, name, extraAnswers };
+}
+
+// Asks plan Phase 4 (D8/D9) — stage 2 of a schedule:true ask. Stage 1
+// (decide + pass-1 phrasing) already ran and said yes; here the player
+// picks a genuinely free window from the calendar modal, the hard-block
+// recheck runs (a safety net only — the modal only offers free windows),
+// a real commitment is created so the NPC actually shows up for the window,
+// and a second LLM pass phrases the sign-off through
+// buildSchedulingConfirmDirective (template fallback if the call fails).
+// Returns { logEntries } — the pass-2 entries for the session log — or
+// null when the player cancels.
+async function runAskScheduleFlow(askTurn, context, playerAction) {
+  const convNpcId = convState?.npcId; // snapshot — the overlay may close mid-modal
+  // Conversation overhaul D7: the modal loop + booking are shared with
+  // Messages (askSchedulePickAndBook); only the voice differs.
+  const booked = await askSchedulePickAndBook(askTurn, convNpcId, convAddBeat);
+  if (!booked) return null;
+  const { name, when, dayLabel } = booked;
   // Phase 1 (D2): narrate the extra invitees' own answers — a deterministic
   // system line, not a second LLM pass, matching invariant 1 (decide before
   // decorate: the writer below only ever speaks for convNpcId).
-  if (extraInvitedIds.length) {
-    for (const extraId of extraInvitedIds) {
-      const extraNpc = currentGameState.npcs?.[extraId];
-      const extraName = extraNpc?.bible?.name || 'They';
-      const accepted = extraResponses?.[extraId]?.accept;
-      addLogEntry('narration', accepted
-        ? `${extraName} is in too.`
-        : `${extraName} isn't up for it.`);
-    }
-  }
+  for (const line of booked.extraAnswers) addLogEntry('narration', line);
 
   const removeTyping = convShowTyping();
   convSetStatus('Thinking…');
@@ -8513,6 +8975,9 @@ async function runAskPhotoFlow(askTurn, context) {
       kind: 'askphoto', from: 'npc', tag: '📷 Photo',
       caption: record.caption, day,
       tick: getTickIndex(currentGameState?.meta?.clock?.minutes),
+      minutes: currentGameState?.meta?.clock?.minutes,
+      // D1: pass 1 already wrote their "sure, here" line — the photo follows it.
+      anchor: convImageAnchor(npc),
       id: record.id,
       prompt: record.prompt,
       seed: record.seed,
@@ -8580,11 +9045,16 @@ function openConvPhotoPicker() {
 
 // Asks plan Phase 9 — the inventory picker for gifting into the
 // conversation. Same shared-modal + grid shape as the camera-roll picker
-// above; the tiles are the bag's giftable stacks (inventory.js
-// giftableStacks — the same rule the availability gate uses), text-only
-// (inventory items have no thumbnail). Resolves { defId } or null on
-// cancel; doConvGiveGift owns the send.
-function openConvGiftPicker() {
+// above; text tiles (inventory items have no thumbnail). Resolves a gift
+// pick { defId, from, index, label } or null on cancel; doConvGiveGift owns
+// the send.
+//
+// Conversation overhaul D6: the tiles are giftSources — the bag AND ready
+// food in the fridge/pantry — each saying where it is, and anything that
+// satisfies this person's open goal step is pinned first with a "For your
+// goal" badge (the Care Package's cooked meal, sitting in the fridge, is
+// the first thing on the list). `opts.npcId` defaults to the conversation.
+function openConvGiftPicker(opts = {}) {
   return new Promise((resolve) => {
     const overlay = document.getElementById('modal-overlay');
     const titleEl = document.getElementById('modal-title');
@@ -8593,29 +9063,42 @@ function openConvGiftPicker() {
     if (!overlay || !titleEl || !body || !actions) { resolve(null); return; }
     if (typeof hideLoading === 'function') hideLoading();
     const finish = (pick) => { overlay.removeAttribute('data-open'); resolve(pick); };
-    const stacks = giftableStacks(currentGameState);
-    if (stacks.length === 0) { resolve(null); return; }
-    titleEl.textContent = 'Give a Gift';
+    const gs = currentGameState;
+    const npcId = opts.npcId || convState?.npcId;
+    const entries = giftPickerEntries(gs, npcId, opts);
+    if (entries.length === 0) { resolve(null); return; }
+    const name = gs?.npcs?.[npcId]?.bible?.name || 'them';
+    titleEl.textContent = opts.title || `Give ${name} something`;
     body.textContent = '';
+    const goal = giftGoalFor(gs, npcId);
+    if (goal) {
+      const note = document.createElement('p');
+      note.className = 'conv-gift-goal-note';
+      note.textContent = `Goal: ${goal.desc}`;
+      body.appendChild(note);
+    }
     const grid = document.createElement('div');
     grid.className = 'conv-gift-picker';
-    for (const stack of stacks) {
-      const def = stackDef(stack);
-      const label = def.id === '_unknown' ? (stack?.meta?.origName || def.label) : def.label;
+    for (const e of entries) {
       const tile = document.createElement('button');
       tile.type = 'button';
-      tile.className = 'conv-gift-pick';
-      tile.setAttribute('aria-label', `Give ${label}`);
+      tile.className = 'conv-gift-pick' + (e.forGoal ? ' is-goal' : '');
+      tile.setAttribute('aria-label', `Give ${e.label}${e.forGoal ? ' (for your goal)' : ''}`);
+      if (e.forGoal) {
+        const badge = document.createElement('span');
+        badge.className = 'conv-gift-pick-badge';
+        badge.textContent = '★ For your goal';
+        tile.appendChild(badge);
+      }
       const nameEl = document.createElement('span');
       nameEl.className = 'conv-gift-pick-name';
-      nameEl.textContent = label;
+      nameEl.textContent = e.label;
       tile.appendChild(nameEl);
       const metaEl = document.createElement('span');
       metaEl.className = 'conv-gift-pick-meta';
-      const group = (SORT_GROUPS[def.sortGroup] || {}).label || def.category || 'Item';
-      metaEl.textContent = (stack.qty > 1 ? `×${stack.qty} · ` : '') + group;
+      metaEl.textContent = giftPickerMeta(e);
       tile.appendChild(metaEl);
-      tile.addEventListener('click', () => finish({ defId: stack.defId }));
+      tile.addEventListener('click', () => finish({ defId: e.defId, from: e.from, index: e.index, label: e.label }));
       grid.appendChild(tile);
     }
     body.appendChild(grid);
@@ -8630,13 +9113,89 @@ function openConvGiftPicker() {
   });
 }
 
+// D6 — the picker's rows, in order: goal matches first, then the bag, then
+// the kitchen. `opts.onlyCategory` narrows to one goal category (the
+// cold-shoulder hand-over takes gifts only). Pure over gs.
+function giftPickerEntries(gs, npcId, opts = {}) {
+  const goal = giftGoalFor(gs, npcId);
+  const rank = { bag: 1, fridge: 2, pantry: 3 };
+  return giftSources(gs)
+    .filter(e => !opts.onlyCategory || giftMatchesGoal(opts.onlyCategory, e.category))
+    .map(e => ({ ...e, forGoal: !!goal && giftMatchesGoal(goal.category, e.category) }))
+    .sort((a, b) => (b.forGoal - a.forGoal) || ((rank[a.where] || 9) - (rank[b.where] || 9)));
+}
+
+// "1 serving (3 left) · In the fridge", "×2 · Snacks · In your bag".
+function giftPickerMeta(e) {
+  const where = e.where === 'bag' ? 'In your bag' : `In the ${e.where}`;
+  if (e.isPlate) return `1 serving${e.servingsLeft > 1 ? ` (${e.servingsLeft} left)` : ''} · ${where}`;
+  const def = stackDef(e.stack);
+  const group = (SORT_GROUPS[def.sortGroup] || {}).label || def.category || 'Item';
+  return `${e.qty > 1 ? `×${e.qty} · ` : ''}${group} · ${where}`;
+}
+
+// --- Conversation overhaul D6: gifts and goals ---------------------------
+// The first active quest for this person — the same one checkQuestCompletion
+// reads (it finds by npcId), so the talk-step check below can never disagree
+// with the function it guards.
+function chainQuestFor(gs, npcId) {
+  return (gs?.world?.quests?.active || []).find(q => q.npcId === npcId) || null;
+}
+function chainTalkStepWaiting(gs, npcId) {
+  const q = chainQuestFor(gs, npcId);
+  const step = q && q.type === 'chain' && q.steps && q.steps[q.currentStep];
+  return !!step && step.type === 'talk' && !step.done;
+}
+
+// A "★" beat in the conversation when a goal moves, so the player sees the
+// gift or the chat counted without reading the main log. `quest` is the
+// record captured BEFORE the progress call (it is mutated in place).
+function convGoalBeat(quest) {
+  if (!quest) return;
+  const done = !(currentGameState?.world?.quests?.active || []).includes(quest);
+  if (done) { convAddBeat(`★ Goal complete: ${quest.title}`); return; }
+  const next = quest.steps && quest.steps[quest.currentStep];
+  if (next) convAddBeat(`★ ${quest.title} — next: ${next.desc}`);
+}
+
+// After a gift lands (asks.js giveGiftUnit moved it — `moved` says what):
+// advance the goal step it satisfies, and ratchet a cold shoulder down the
+// way the old scene chip did (Intimacy & Voyeurism Phase 16's reparation —
+// a gift-category item, or the thing their goal asked for). Returns the
+// repair result or null.
+function convGiftFollowThrough(npcId, moved) {
+  const gs = currentGameState;
+  if (!gs || !moved || !moved.ok) return null;
+  const goal = giftGoalFor(gs, npcId);
+  let goalMet = false;
+  if (goal && giftMatchesGoal(goal.category, moved.category)) {
+    const q = (gs.world.quests?.active || []).find(x => x.type === 'chain' && x.npcId === npcId
+      && x.steps?.[x.currentStep]?.type === 'give_item');
+    // checkChainQuestProgress compares categories strictly; the step's own
+    // category is passed because giftMatchesGoal already decided the match
+    // (a drink satisfies "snacks or drinks").
+    checkChainQuestProgress('give_item', npcId, goal.category);
+    convGoalBeat(q);
+    goalMet = true;
+  }
+  const npc = gs.npcs?.[npcId];
+  const day = gs.meta.clock.day;
+  const cs = npc ? coldShoulderState(npc, day) : { active: false };
+  if (!cs.active || !(moved.category === 'gift' || goalMet)) return null;
+  const res = noteColdShoulderRepair(npc, 'gift', day);
+  if (res.repaired) gs.npcs[npcId] = applyRelDelta(gs.npcs[npcId], COLD_SHOULDER.repairRelDeltas, day);
+  return res;
+}
+
 // Asks plan Phase 9 — give an inventory item as a gift. The picker chose
 // the def; the send runs as a normal ASK turn through doConvSend (decision
 // first, writer effects stripped, deterministic match → MOVE_ITEM /
 // REL_DELTA / MEMORY_FACT through the ask pipeline), reusing the exact
 // pipeline instead of a parallel path.
-function doConvGiveGift(defId) {
-  return doConvSend(null, defId);
+function doConvGiveGift(pick) {
+  // D6 — a pick ({ defId, from, index, label }); a bare defId still works
+  // and means "from the bag", the only source there used to be.
+  return doConvSend(null, pick);
 }
 
 // aspirations-and-creative-careers Phase 11 (D33) — the $Feature picker:
@@ -8829,6 +9388,8 @@ async function doConvSharePhoto(photoId) {
     kind: 'shared', from: 'player', tag: 'Shared Photo', caption: photo.caption,
     day: gs?.meta?.clock?.day,
     tick: getTickIndex(gs?.meta?.clock?.minutes),
+    minutes: gs?.meta?.clock?.minutes,
+    anchor: convImageAnchor(gs.npcs[myNpcId]), // re-pointed at the share's own line below (D1)
     photoId: photo.id,
     prompt: photo.prompt,
     seed: photo.seed,
@@ -8836,23 +9397,44 @@ async function doConvSharePhoto(photoId) {
   };
   convPushImage(record);
   const img = convAddImageBubble('player', getPlaceholder(), `📷 ${photo.caption}`, 'Shared Photo', record);
-  getPhotoImage(photo).then(result => { if (result.url && img) img.src = result.url; });
+  getPhotoImage(photo).then(result => { if (result.url && img) img.src = result.url; }).catch(() => {});
+  if (currentGameState?.player?.conversation?.npcId === myNpcId) currentGameState.player.conversation.spoken = true;
   const removeTyping = convShowTyping();
   convSetStatus('Thinking…');
   try {
+    // Conversation overhaul E11: the same per-turn presence check doConvSend
+    // makes — someone who walked out can't react to your photo.
+    if (!conversationPartnerPresent(currentGameState, myNpcId)) {
+      removeTyping();
+      endDepartureConversation(myNpcId, 'gone');
+      return;
+    }
     // Same real-time conversation clock as doConvSend — see its comment.
     await advanceAndResolve(0);
+    currentSceneState = reconcileScenePresence(currentSceneState, currentGameState);
     const context = assembleContext(currentGameState, currentSceneState);
+    context.conversationNpcId = myNpcId;
     const result = await callLLM(context, text);
     removeTyping();
+    if (!conversationPartnerPresent(currentGameState, myNpcId)) {
+      endDepartureConversation(myNpcId, 'gone');
+      return;
+    }
     if (result.valid && result.proposal) {
       const applied = await applyProposal(result.proposal, context, currentGameState, text);
+      // D1: the share is now a line in their memory — hang the picture on it,
+      // so reopening shows the photo exactly where it was shown.
+      const shareLine = convImageAnchor(currentGameState.npcs[myNpcId] && {
+        memory: { recent: (currentGameState.npcs[myNpcId].memory?.recent || []).filter(e => e.text === text) },
+      });
+      if (shareLine) record.anchor = shareLine;
       convRenderProposal(applied);
       if (applied.logEntries.length > 0) {
         addLogEntry('narration', `[Talking to ${currentGameState.npcs[myNpcId]?.bible?.name || 'them'}] ${applied.logEntries.filter(e => e.type === 'dialogue').map(e => `${e.speaker}: "${e.text}"`).join(' ')}`);
       }
       await compactMemoryIfNeeded([...applied.updatedNpcIds, ...(applied.effectNpcIds || [])]);
       currentSceneState = advanceEngagement(currentSceneState, resolveSpeakerIds(result.proposal.dialogue, context.activeNpcs));
+      if (currentGameState.npcs?.[myNpcId]) maybeShowConversationScene(myNpcId);
     } else {
       convAddBeat(`They seem distracted and don't respond.`);
     }
@@ -10786,7 +11368,8 @@ function attachEventHandlers() {
   const convInput = document.getElementById('conv-input');
   if (convInput) {
     convInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey && convInput.value.trim()) {
+      // A composed ask (D4) sends with an empty message — the chips ARE the ask.
+      if (e.key === 'Enter' && !e.shiftKey && (convInput.value.trim() || convComposer)) {
         e.preventDefault();
         handleAction('conv.send');
       }
@@ -10806,7 +11389,7 @@ function attachEventHandlers() {
     if (e.key !== 'Escape') return;
     const convOverlay = document.getElementById('conversation-overlay');
     if (!convOverlay || !convOverlay.hasAttribute('data-open')) return;
-    if (askMenuIsOpen()) return;
+    if (askMenuIsOpen() || convComposer) return;
     pauseConversationOverlay();
   });
   const convOverlayEl = document.getElementById('conversation-overlay');
@@ -10844,7 +11427,13 @@ function attachEventHandlers() {
     convInput.addEventListener('input', updateAskHint);
   }
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && askMenuIsOpen()) closeAskMenu();
+    if (e.key !== 'Escape') return;
+    if (askMenuIsOpen()) closeAskMenu();
+    // D4 — the next Escape cancels a half-composed ask before it pauses the talk.
+    else if (convComposer && document.getElementById('conversation-overlay')?.hasAttribute('data-open')) {
+      closeConvComposer();
+      document.getElementById('conv-input')?.focus();
+    }
   });
 
   // Drawer toggles (mobile) — the two drawers slide in from opposite

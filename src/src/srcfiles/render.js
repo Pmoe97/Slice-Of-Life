@@ -4218,12 +4218,14 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
       ? quest.steps[quest.currentStep].itemCategory
       : (coldShoulderActive(npc) ? 'gift' : null);
     if (wantCategory || quest) {
-      const hasItem = (gs.player.inventory || []).some(stack => {
-        const def = ITEM_DEFS[stack.defId];
-        return def && (!wantCategory || def.category === wantCategory);
-      });
+      // Conversation overhaul D6: the bag AND ready food in the fridge/pantry
+      // (giftSources — a cooked meal lands in the fridge, which is exactly
+      // where the Care Package's "Give the meal" step's meal is), and the
+      // chip says what it is for instead of "Give Item".
+      const hasItem = giftSources(gs).some(e => giftMatchesGoal(wantCategory, e.category));
       if (hasItem) {
-        socialChips.push({ label: `Give Item to ${npc.bible.name || 'Someone'}`, action: 'give-item', npcId });
+        const noun = { meal: 'a Meal', food: 'Snacks', gift: 'a Gift' }[wantCategory] || 'Something';
+        socialChips.push({ label: `🎁 Give ${noun} to ${npc.bible.name || 'Someone'}`, action: 'give-item', npcId });
       }
     }
     // Phase 16: the apology reparation chip — only while the NPC is cold-

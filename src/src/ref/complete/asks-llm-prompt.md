@@ -23,7 +23,7 @@ the in-character response.]
 - The request: {askLabel} ({askId})
 - The player's words: "{flavorText}"
 - Your character's decision: {ACCEPTED | DECLINED}
-- Why, in one plain line: {reasonPhrase}
+- Why, in one plain line ("they" here means {npcName}): {reasonPhrase}
 - Your attitude toward the player right now: {stance}
 {ladderLine}
 - Everything that happens *because* of this decision (money, schedules,
@@ -54,7 +54,7 @@ Rules:
 | `{askLabel}` / `{askId}` | the ask leaf's `label` / `id` |
 | `{flavorText}` | the player's message after the `$AskId` prefix; empty → "—" |
 | `{ACCEPTED \| DECLINED}` | the deterministic decision (D1) |
-| `{reasonPhrase}` | from the decision: `accept` → "they genuinely want to" ; `cool` → "the relationship isn't there" ; `busy` → "their schedule genuinely won't allow it" (retained vocabulary — no leaf currently returns it; the two-stage scheduled flow (D18) resolves schedule conflicts at the calendar modal, so a scheduled ask is never declined for `busy`) ; ladder declines → "they've already been asked the same thing today and it's wearing thin" (2nd) / "they've had enough — this is the same ask again, and the patience is gone" (3+). The willingness-gated leaves (intimacy, Phase 7 ask_intimacy; photos, Phase 8 ask_photo) map the gate to richer codes: `below` → "they're not in the mood for that right now" (intimacy) / `below_photo` → "they're not comfortable sharing that right now" (photos) ; floor refusals → `floor_stranger` "they barely know you", `floor_hostile` "there's too much bad blood between you right now", `floor_cold_shoulder` "they've gone cold on you", `floor_actively_refusing` "they've already said no, and they meant it", `floor_asleep` "they're fast asleep". The gift leaf (Phase 9) is always accepted — its reason names the MATCH, not a verdict: `gift_interest` "it's exactly the kind of thing they love", `gift_want` "it speaks directly to something they've been wanting", `gift_wound` "it reaches something that's hurt them", `gift_miss` "it's not quite their thing, but they appreciate the gesture". The repayment leaf (Phase 10) is always accepted too — `repay` → "they're settling what they owe" (the debt being settled is the ask's own content; the writer never re-decides it) |
+| `{reasonPhrase}` | from the decision: `accept` → "they genuinely want to" ; `cool` → "the relationship isn't there" ; `busy` → "their schedule genuinely won't allow it" (retained vocabulary — no leaf currently returns it; the two-stage scheduled flow (D18) resolves schedule conflicts at the calendar modal, so a scheduled ask is never declined for `busy`) ; ladder declines → "they've already been asked the same thing today and it's wearing thin" (2nd) / "they've had enough — this is the same ask again, and the patience is gone" (3+). The willingness-gated leaves (intimacy, Phase 7 ask_intimacy; photos, Phase 8 ask_photo) map the gate to richer codes: `below` → "they're not in the mood for that right now" (intimacy) / `below_photo` → "they're not comfortable sharing that right now" (photos) ; floor refusals → `floor_stranger` "they barely know the player", `floor_hostile` "there's too much bad blood between them and the player right now", `floor_cold_shoulder` "they've gone cold on the player", `floor_actively_refusing` "they've already said no, and they meant it", `floor_asleep` "they're fast asleep". The gift leaf (Phase 9) is always accepted — its reason names the MATCH, not a verdict: `gift_interest` "it's exactly the kind of thing they love", `gift_want` "it speaks directly to something they've been wanting", `gift_wound` "it reaches something that's hurt them", `gift_miss` "it's not quite their thing, but they appreciate the gesture". The repayment leaf (Phase 10) is always accepted too — `repay` → "they're settling what they owe" (the debt being settled is the ask's own content; the writer never re-decides it). Conversation overhaul D10 (2026-09-27) added three that used to fall through to "it's not the right time": `give_money` "the player is giving them money", `return` "the player is returning something they borrowed", and `collect` (Collect a Debt, split off `repay`) "the player is asking them to pay back what they owe, and they're settling it". **Convention (D9):** in a reason phrase "they" is ALWAYS the NPC and the other party is "the player" — the directive labels the line so — while every `{leafNote}` speaks TO the NPC as "you" |
 | `{stance}` | accept → `measured` (early phase) or `warm`; gifts (always accepted) → `measured` early, `warm` when the gift landed (interest/want/wound match), `polite` on a miss (gracious, never gushing — the numbers already decided zero). Decline, 1st → `distant` (early phase) or `polite`. Decline, 2nd consecutive → `guarded` ("little resistance"). Decline, 3+ consecutive → `exasperated`. The gate floor refusals (intimacy/photos) override the phase base: `floor_hostile`/`floor_cold_shoulder` → `stern`, `floor_stranger` → `distant`, `floor_asleep`/`floor_actively_refusing` → `polite` (quiet, not angry). Ladder stances are decline-only (D7/D16) — an accepted repeat keeps its normal phase-based stance |
 | `{ladderLine}` | present only when the repeat ladder (D7) is active: `- Note: this is the {n}th time they have asked the same kind of thing today. The player is pushing their luck and it shows in your attitude.` |
 | `{leafNote}` | optional per-leaf behaviour line supplied by the ask leaf (e.g. ask_info's "answer from your bible block — it is authoritative about who you are"). Omitted when the leaf defines none. The ACCEPTED and DECLINED rule lines are mutually exclusive too — only the one matching the decision is compiled. |
@@ -69,6 +69,22 @@ normal phase-based stance and reason and resets the streak (D16).
 | 1st | the leaf's base — `distant` (early phase) or `polite`; gate floors override with `stern`/`distant`/`polite` | the leaf's own reason phrase |
 | 2nd consecutive | `guarded` — "little resistance": still civil, but noticeably less enthusiastic; a brief deflection | "they've already been asked the same thing today and it's wearing thin" |
 | 3+ consecutive | `exasperated` — the words should make the player *feel* the relationship delta | "they've had enough — this is the same ask again, and the patience is gone" |
+
+## The texting variant (conversation overhaul D7, 2026-09-27)
+
+An ask sent from Messages compiles the same block with `channel: 'im'`
+(`resolveAsk` passes the IM context's channel; `buildImPrompt` appends the
+block last, as `buildScenePrompt` does). Two lines change and nothing else:
+
+- the header reads `[ASK CONTEXT — the player sent this request by text. You
+  are NOT deciding the outcome of this request; it has already been decided.
+  You are only writing the in-character reply text.]`
+- the length line reads `- 1-3 short texts in your own texting style. No
+  *actions* and no narration — this is a text message.`
+
+Every rule that matters — decided first, no renegotiation, no mechanics,
+effects stripped — is identical. The scheduling-confirm variant below is
+used unchanged for a plan made by text.
 
 ## The scheduling-confirm variant
 

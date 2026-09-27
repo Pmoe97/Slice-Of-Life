@@ -611,10 +611,14 @@ function recallSceneExchanges(npc, nowDay) {
   for (const e of inChannel) {
     const day = e.day || 0, tick = e.tick || 0;
     if (day !== lastDay || tick !== lastTick) {
-      rows.push({ kind: 'time', label: recallTimeLabel(day, tick, nowDay) });
+      rows.push({ kind: 'time', label: recallTimeLabel(day, tick, nowDay), day, tick });
       lastDay = day; lastTick = tick;
     }
-    rows.push(recallRow(e));
+    // Conversation overhaul D1: every row also carries where it came from
+    // (day, tick-in-minutes, the entry's own text), so the pane can slot a
+    // chat image back in right after the line it followed. Additive — the
+    // renderer reads kind/from/text exactly as before.
+    rows.push({ ...recallRow(e), day, tick, rawText: e.text });
   }
   return rows;
 }

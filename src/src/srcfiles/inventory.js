@@ -378,6 +378,148 @@ function giftableStacks(gs) {
   });
 }
 
+// --- Conversation overhaul D6: one giving pipeline ------------------------
+// User report (2026-09-27): "Gift giving at present feels non-intuitive. I am
+// trying to work on goals, like giving a meal or care package to a roommate
+// and it doesn't seem to make sense how to do that." A cooked meal lands in
+// the FRIDGE (buildCookEffects), but both ways of giving only read the bag —
+// so the Care Package goal ("Cook a meal → Give the meal") couldn't see the
+// meal it had just asked for. And a plate is one stack holding the whole
+// batch, so handing it over gave away every serving.
+//
+// giftSources is the one list both the conversation picker and the scene
+// chip read: the bag (not borrowed things — those go back through Give It
+// Back), plus READY food in the flat's fridge and pantry — plates with
+// servings left, meals, snacks, drinks — never raw ingredients, never
+// something frozen or rotten, never someone else's labelled food. Pure.
+const GIFT_READY_FOOD = new Set(['meal', 'food', 'snack', 'drink']);
+const GIFT_KITCHEN_CONTAINERS = new Set(['fridge', 'pantry']);
+// A goal step's itemCategory → the item categories that satisfy it. The
+// Bonding Night step reads "Buy snacks or drinks … Share with {name}", so
+// its 'food' step takes a drink or a snack too (it used to take neither).
+const GIFT_GOAL_CATEGORIES = { meal: ['meal'], food: ['food', 'snack', 'drink'], gift: ['gift'] };
+
+function giftCategoryOf(stack) {
+  const def = stackDef(stack);
+  return def && def.category || null;
+}
+
+function giftStackReady(stack, containerDef, day) {
+  if (!(stack && stack.qty > 0)) return false;
+  const fresh = typeof freshnessOf === 'function' ? freshnessOf(stack, containerDef, day) : null;
+  if (fresh && (fresh.key === 'rotten' || fresh.frozenState === 'frozen' || fresh.frozenState === 'thawing')) return false;
+  if (stack.meta && stack.meta.plate) return stackServingsLeft(stack) > 0;
+  const def = stackDef(stack);
+  return !!def && GIFT_READY_FOOD.has(def.category) && !!def.consumable;
+}
+
+function giftSources(gs) {
+  const out = [];
+  const day = typeof gameDaysNow === 'function' ? gameDaysNow(gs && gs.meta && gs.meta.clock) : null;
+  const entry = (stack, from, where, index, containerDef) => {
+    const plate = !!(stack.meta && stack.meta.plate);
+    return {
+      from, where, index,
+      defId: stack.defId,
+      label: typeof stackLabel === 'function' ? stackLabel(stack) : (stackDef(stack).label || 'Something'),
+      category: giftCategoryOf(stack),
+      isPlate: plate,
+      servingsLeft: plate ? stackServingsLeft(stack) : null,
+      qty: stack.qty,
+      stack,
+      containerDef,
+    };
+  };
+  const inv = (gs && gs.player && gs.player.inventory) || [];
+  inv.forEach((s, index) => {
+    if (!(s && s.qty > 0)) return;
+    const def = stackDef(s);
+    if ((s.meta && s.meta.keyItem) || (def && def.keyItem)) return;
+    if (s.meta && s.meta.borrowed) return;
+    const fresh = typeof freshnessOf === 'function' ? freshnessOf(s, null, day) : null;
+    if (fresh && fresh.key === 'rotten') return;
+    out.push(entry(s, 'player', 'bag', index, null));
+  });
+  for (const bucket of Object.values((gs && gs.objects) || {})) {
+    for (const obj of Object.values(bucket || {})) {
+      if (!obj || !GIFT_KITCHEN_CONTAINERS.has(obj.defId)) continue;
+      const cdef = (typeof OBJECT_DEFS !== 'undefined' && OBJECT_DEFS[obj.defId]) || null;
+      (obj.contents || []).forEach((s, index) => {
+        if (s && s.ownerId && s.ownerId !== 'player') return; // someone else's
+        if (!giftStackReady(s, cdef, day)) return;
+        out.push(entry(s, obj.id, obj.defId, index, cdef));
+      });
+    }
+  }
+  return out;
+}
+
+// The active goal this person has waiting on a gift: the chain step
+// `give_item` currently open for them. { category, title, desc } or null.
+function giftGoalFor(gs, npcId) {
+  const q = ((gs && gs.world && gs.world.quests && gs.world.quests.active) || []).find(x =>
+    x && x.type === 'chain' && x.npcId === npcId
+    && x.steps && x.steps[x.currentStep] && x.steps[x.currentStep].type === 'give_item'
+    && !x.steps[x.currentStep].done);
+  if (!q) return null;
+  const step = q.steps[q.currentStep];
+  return { category: step.itemCategory || null, title: q.title, desc: step.desc };
+}
+
+function giftMatchesGoal(goalCategory, itemCategory) {
+  if (!goalCategory) return true; // a step with no category takes anything
+  return (GIFT_GOAL_CATEGORIES[goalCategory] || [goalCategory]).includes(itemCategory);
+}
+
+// Re-find a picked gift in LIVE state: the picker's index first (when it
+// still holds the same thing), else the same def + label in the same place.
+// A pick is { defId, from, index, label }. Returns the giftSources entry or
+// null (it was eaten, moved or rotted since the picker drew it). Pure.
+function findGiftSource(gs, pick) {
+  if (!pick || !pick.defId) return null;
+  const from = pick.from || 'player';
+  const list = giftSources(gs).filter(e => e.from === from && e.defId === pick.defId);
+  return list.find(e => e.index === pick.index && (!pick.label || e.label === pick.label))
+    || list.find(e => !pick.label || e.label === pick.label)
+    || null;
+}
+
+// The write: ONE unit of the picked thing leaves where it is and lands in
+// npcId's things — for a plate, ONE serving (the rest of the batch stays in
+// the fridge for everyone), for anything else one of the stack. The moved
+// unit keeps its age (retimeStack against the new place, the MOVE_ITEM
+// rule). NPCs eat from their own things first-class (the hunger drive's
+// source list), so a saved plate gets eaten when they're hungry. Returns
+// { ok, defId, label, category, isPlate, where }.
+function giveGiftUnit(gs, pick, npcId) {
+  const src = findGiftSource(gs, pick);
+  if (!src || !gs || !gs.npcs || !gs.npcs[npcId]) return { ok: false };
+  const day = typeof gameDaysNow === 'function' ? gameDaysNow(gs.meta && gs.meta.clock) : null;
+  const list = [...(locationStackListMutable(src.from, gs) || [])];
+  const stack = list[src.index];
+  if (!stack) return { ok: false };
+  const toDef = containerDefForRef(npcId, gs);
+  const movedMeta = retimeStack(stack, src.containerDef, toDef, day).meta;
+  if (src.isPlate) {
+    const plate = stack.meta.plate;
+    const left = Math.max(0, (plate.servings && plate.servings.left) || 0) - 1;
+    if (left > 0) list[src.index] = { ...stack, meta: { ...stack.meta, plate: { ...plate, servings: { ...plate.servings, left } } } };
+    else list.splice(src.index, 1);
+    writeLocationStackList(src.from, gs, list);
+    const given = { ...movedMeta, plate: { ...plate, servings: { left: 1, total: 1 } } };
+    const npc = gs.npcs[npcId];
+    npc.inventory = addStack(npc.inventory || [], stack.defId, 1, null, given, day);
+  } else {
+    if (stack.qty > 1) list[src.index] = { ...stack, qty: stack.qty - 1 };
+    else list.splice(src.index, 1);
+    writeLocationStackList(src.from, gs, list);
+    const npc = gs.npcs[npcId];
+    const { borrowed, keyItem, ...keep } = movedMeta || {};
+    npc.inventory = addStack(npc.inventory || [], stack.defId, 1, null, keep, day);
+  }
+  return { ok: true, defId: stack.defId, label: src.label, category: src.category, isPlate: src.isPlate, where: src.where };
+}
+
 // --- Borrow/Return (actions-and-activities-overhaul-plan.md Phase 4, D8) ---
 // What the player can borrow from a given NPC: the same not-a-key-item rule
 // giftableStacks uses, read off THEIR belongings instead of the player's own

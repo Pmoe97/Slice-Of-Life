@@ -53,7 +53,7 @@ function bodies(src, name) {
 }
 const UI = fs.readFileSync(path.join(SRC, 'ui.js'), 'utf8');
 const LIFT = ['maybeShowConversationScene', 'convShowGeneratingImage', 'convAddImageBubble',
-  'convPushImage', 'convRenderImages', 'convAddBeat', 'convScrollToBottom'];
+  'convPushImage', 'convRenderImages', 'convPastImageEl', 'convImageAnchor', 'convAddBeat', 'convScrollToBottom'];
 const lifted = Object.fromEntries(LIFT.map((n) => [n, bodies(UI, n)]));
 
 console.log('\n0. The lifted functions');
@@ -71,6 +71,12 @@ api(`
       getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
       hasAttribute(k) { return attrs.has(k); },
       appendChild(c) { c.parentNode = this; this.children.push(c); return c; },
+      insertBefore(c, ref) {
+        const i = this.children.indexOf(ref);
+        c.parentNode = this;
+        if (i < 0) this.children.push(c); else this.children.splice(i, 0, c);
+        return c;
+      },
       remove() {
         if (!this.parentNode) return;
         const sib = this.parentNode.children;
@@ -161,8 +167,9 @@ async function main() {
       && /^blob:test\//.test(rowsA[0].img || ''),
     JSON.stringify(rowsA));
   const recA = J(`__g.npcs[${JSON.stringify(a)}].flags._convImages || null`);
+  // Conversation overhaul D2: the key is `<npcId>_<panel>_<prompt hash>` now.
   check('the panel is persisted on the NPC under their real id (so reopening repaints it)',
-    Array.isArray(recA) && recA.length === 1 && recA[0].kind === 'scene' && recA[0].cacheKey === `${a}_1`,
+    Array.isArray(recA) && recA.length === 1 && recA[0].kind === 'scene' && String(recA[0].cacheKey).startsWith(`${a}_1_`),
     JSON.stringify(recA && recA.map((r) => r.cacheKey)));
   const cacheKeys = await api(`root.kv.images.keys()`);
   check('its pixels are cached under the NPC\'s own key, not convscene_undefined_1',
@@ -209,6 +216,73 @@ async function main() {
   check('the generating bubble clears and the "didn\'t render" beat appears instead',
     failRows.length === 1 && failRows[0].cls === 'conv-beat' && /didn't render/.test(failRows[0].text),
     JSON.stringify(failRows));
+
+  // ------------------------------------------------------------------ 7
+  // Conversation overhaul D2 (2026-09-27): "The scene visualizer does not
+  // read the conversation AT ALL." Before the director, the only thing that
+  // varied between panels was a canned beat picked by panel index.
+  console.log('\n7. The scene director reads the conversation');
+  api(`
+    function __ex(speaker, text, type) { return { speaker, text, type, day: 3, tick: 1170, channel: 'scene', sceneId: 1 }; }
+    __instr = [];
+    __reply = 'Mira sets her mug down hard and turns toward Sam, one hand raised mid-protest, while Sam grins from the arm of the sofa. Close two-shot.';
+    root.generateText = async ({ instruction }) => { __instr.push(instruction); return __reply; };
+    __g.player.name = 'Sam';
+    __ga = __g.npcs[${JSON.stringify(a)}];
+    __ga.memory = { ...__ga.memory, recent: [
+      __ex('player', 'I ate your leftover curry', 'player_input'),
+      __ex(__ga.bible.name, 'You did WHAT?', 'dialogue'),
+      __ex(__ga.bible.name, 'secretly relieved it was not the cake', 'internal'),
+    ] };
+    __ga.flags._convImages = [];
+    __log.children.length = 0; __gens.length = 0;
+    convState = { npcId: ${JSON.stringify(a)}, sending: false, sceneVisCount: 0, sceneVisLastMood: null };
+  `);
+  await api(`maybeShowConversationScene(${JSON.stringify(a)})`);
+  const instr = J('__instr[0] || ""');
+  check('the director was asked, once', J('__instr.length') === 1);
+  check('it was shown what was just said (both sides of the exchange)',
+    instr.includes('Sam: I ate your leftover curry') && instr.includes('You did WHAT?'), instr.slice(-400));
+  check('...but not the NPC\'s private thoughts — nobody can see a thought', !instr.includes('secretly relieved'));
+  check('it is told never to describe appearance (the identity clauses carry that)', /Do not describe hair, eyes, body type or outfit/.test(instr));
+  const genPrompt = J('__gens[__gens.length - 1].prompt');
+  check('the generated prompt carries the drafted moment',
+    genPrompt.includes('sets her mug down hard'), genPrompt);
+  check('...and still both identity clauses, so faces stay stable',
+    genPrompt.includes(J(`__ga.bible.name`)) && genPrompt.includes('Sam'), genPrompt.slice(0, 200));
+  const recD = J(`__ga.flags._convImages[0]`);
+  check('the panel\'s record keeps the moment, for the next panel to move on from', recD && /mug down hard/.test(recD.moment || ''));
+
+  console.log('\n8. Consecutive panels follow the talk, not the panel counter');
+  api(`
+    __ga.memory = { ...__ga.memory, recent: [...__ga.memory.recent,
+      __ex('player', 'I will buy you a new one, I promise', 'player_input'),
+      __ex(__ga.bible.name, 'Fine. But you are cooking tonight.', 'dialogue')] };
+    __reply = 'Mira folds her arms but a smile is breaking through as Sam holds up both palms in surrender by the kitchen doorway.';
+  `);
+  await api(`maybeShowConversationScene(${JSON.stringify(a)})`);
+  const instr2 = J('__instr[1] || ""');
+  check('the second draft is told what the previous panel showed', instr2.includes('sets her mug down hard') && /clearly different/.test(instr2));
+  check('...and reads the newer lines', instr2.includes('you are cooking tonight'));
+  const p2 = J('__gens[__gens.length - 1].prompt');
+  check('the two panels are different prompts', p2 !== genPrompt && p2.includes('palms in surrender'));
+  const keys = J(`__ga.flags._convImages.map((r) => r.cacheKey)`);
+  check('each panel has its own cache key', keys.length === 2 && keys[0] !== keys[1], JSON.stringify(keys));
+
+  console.log('\n9. The director degrades, never blocks');
+  api(`__reply = '{o} "[ok]" ' + 'x'.repeat(900);`);
+  api(`__cleaned = cleanSceneMoment('Frame: "She laughs {o} at [him], leaning back."');`);
+  check('template syntax, quotes and preambles are stripped from a draft', J('__cleaned') === 'She laughs o at him, leaning back.', J('__cleaned'));
+  check('a runaway reply is bounded', J(`cleanSceneMoment('word '.repeat(300)).length`) <= 421);
+  check('an empty reply is no moment at all', J(`cleanSceneMoment('   ')`) === null);
+  api(`root.generateText = async () => { throw new Error('model down'); }; __log.children.length = 0;`);
+  await api(`maybeShowConversationScene(${JSON.stringify(a)})`);
+  const fb = J('__gens[__gens.length - 1].prompt');
+  check('a failed director falls back to the template and the panel still arrives',
+    / talking with /.test(fb) && J('__rows()').some((r) => r.tag === '🎨 Scene'), fb.slice(0, 160));
+  api(`root.generateText = undefined;`);
+  const noModel = await api(`draftConversationScene(__g, ${JSON.stringify(a)})`);
+  check('no text model at all → the draft resolves null (template path)', noModel === null);
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

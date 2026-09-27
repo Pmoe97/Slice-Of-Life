@@ -1957,27 +1957,155 @@ const CONV_SCENE_BEATS = [
 // every NPC shared the key `convscene_undefined_<n>`, and ui.js's
 // "still the same conversation?" check could never match (see
 // maybeShowConversationScene).
-function buildConversationScenePrompt(gameState, npcId, panelIndex) {
+//
+// Conversation overhaul D2 (2026-09-27, user report: "The scene visualizer
+// does not read the conversation AT ALL … virtually the same image prompt
+// being sent over and over"). It didn't: the only thing that changed between
+// panels was which of the ten canned beats above the panel index landed on.
+// `moment` (optional) is the scene director's drafted frame — what the two of
+// them are doing RIGHT NOW, read from the conversation (draftConversationScene
+// below). The identity clauses stay exactly as they were, so faces don't
+// drift; only the moment is new. No moment = the old template, unchanged in
+// spirit (a failed or unavailable text model must never cost the panel).
+function buildConversationScenePrompt(gameState, npcId, panelIndex, moment) {
   const npc = gameState.npcs[npcId];
   const roomId = gameState.player.location;
   const npcClause = buildVisualCharacterClause(npc, { gameState, npcId });
   const playerClause = buildVisualCharacterClause(gameState.player, { gameState, isPlayer: true });
   const room = ROOMS[roomId]?.name || roomId;
+  const framing = sceneOrientation() === 'landscape' ? 'wide composition, both figures visible.' : 'tall vertical composition, both figures visible.';
+  if (moment) {
+    const light = phaseLighting(getPhase(gameState.meta?.clock?.minutes ?? 720));
+    return `${npcClause}, and ${playerClause}. ${moment} In the ${String(room).toLowerCase()}, ${light}, two people, ${framing}`;
+  }
   const mood = moodLabel(npc.mood);
   const beat = CONV_SCENE_BEATS[Math.abs(panelIndex || 0) % CONV_SCENE_BEATS.length];
   return `${npcClause}, talking with ${playerClause}, in the ${String(room).toLowerCase()}, `
-    + `${mood} mood, ${beat}, expressive body language, two people, `
-    + (sceneOrientation() === 'landscape' ? 'wide composition, both figures visible.' : 'tall vertical composition, both figures visible.');
+    + `${mood} mood, ${beat}, expressive body language, two people, ` + framing;
 }
 
-async function generateConversationSceneImage(gameState, npcId, panelIndex) {
-  const prompt = buildConversationScenePrompt(gameState, npcId, panelIndex);
-  const key = `${npcId}_${panelIndex || 0}`;
+// D2 — the director's view of the talk: the last few spoken turns as a
+// screenplay, oldest first. Thoughts are left out (nobody can SEE a thought);
+// the player is "the player" by their own name when they have one.
+const CONV_SCENE_DIRECTOR = {
+  transcriptLines: 10,   // how much of the conversation the director reads
+  maxMomentChars: 420,   // a runaway reply is cut, not trusted
+  minMomentChars: 12,
+};
+function conversationSceneTranscript(gameState, npcId) {
+  const npc = gameState?.npcs?.[npcId];
+  const recent = (npc?.memory?.recent || []).filter(e => (e.channel || 'scene') === 'scene' && e.text);
+  const playerName = gameState?.player?.name || 'The player';
+  return recent.slice(-CONV_SCENE_DIRECTOR.transcriptLines).map(e => {
+    const type = e.type || (e.speaker === 'player' ? 'player_input' : 'dialogue');
+    if (type === 'player_input') return `${playerName}: ${e.text}`;
+    if (type === 'dialogue') return `${e.speaker}: ${e.text}`;
+    if (type === 'action') return `(${cleanActionText(e.text)})`;
+    if (type === 'internal') return null;
+    return `(${e.text})`;
+  }).filter(Boolean);
+}
+
+// The model's reply, made safe to splice into an image prompt: one line, no
+// quotes or preamble, no Perchance template syntax ({ } [ ] — see
+// imagePromptSafe), bounded. Null when nothing usable is left.
+function cleanSceneMoment(text) {
+  let s = String(text || '').replace(/\s+/g, ' ').trim();
+  s = s.replace(/^(frame|image prompt|prompt|scene|description|moment)\s*:\s*/i, '');
+  s = s.replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim();
+  s = s.replace(/[{}\[\]]/g, '').replace(/\s{2,}/g, ' ').trim();
+  if (s.length > CONV_SCENE_DIRECTOR.maxMomentChars) {
+    const cut = s.slice(0, CONV_SCENE_DIRECTOR.maxMomentChars);
+    const stop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf(', '));
+    s = (stop > 80 ? cut.slice(0, stop + 1) : cut).trim();
+  }
+  if (s.length < CONV_SCENE_DIRECTOR.minMomentChars) return null;
+  if (!/[.!?]$/.test(s)) s += '.';
+  return s;
+}
+
+// D2 — the scene director. One text-model pass that reads the conversation
+// and writes the frame to draw: poses, expressions, gestures, props, where
+// they are relative to each other, the camera. Never appearance (the identity
+// clauses carry that) and never dialogue. The previous panel's moment rides
+// along so consecutive panels change as the talk moves. Returns null on any
+// failure — the caller falls back to the template.
+async function draftConversationScene(gameState, npcId, opts = {}) {
+  if (typeof root === 'undefined' || !root?.generateText) return null;
+  const npc = gameState?.npcs?.[npcId];
+  if (!npc) return null;
+  const lines = conversationSceneTranscript(gameState, npcId);
+  if (lines.length === 0) return null; // nothing said yet — nothing to direct
+  const npcName = npc.bible?.name || 'They';
+  const playerName = gameState.player?.name || 'the player';
+  const roomId = gameState.player.location;
+  const room = String(ROOMS[roomId]?.name || roomId || 'room').toLowerCase();
+  const light = phaseLighting(getPhase(gameState.meta?.clock?.minutes ?? 720));
+  const activity = npc.activity ? String(npc.activity).replace(/_/g, ' ') : null;
+  const clothing = typeof clothingLabel === 'function' ? clothingLabel(npc) : null;
+  const mood = typeof moodLabel === 'function' ? moodLabel(npc.mood) : null;
+  const mature = typeof intimateAllowed === 'function'
+    ? intimateAllowed(gameState)
+    : ((gameState.meta?.contentConfig?.contentFlags?.mature) !== false);
+  const instruction = [
+    `You are the scene director for an illustrated slice-of-life story. Describe the ONE frame to illustrate right now, in the middle of a face-to-face conversation between ${npcName} and ${playerName}.`,
+    '',
+    'Write one or two sentences describing only: what each of them is physically doing, their poses and body language, their facial expressions, where they are relative to each other and to the furniture, anything in their hands, and the camera framing.',
+    'Make it specific to what was JUST said — someone looking at the picture should be able to tell what this moment of the conversation is about. Not a generic "two people chatting".',
+    `Refer to them by name (${npcName}, ${playerName}). Do not describe hair, eyes, body type or outfit — that is added separately. No dialogue, no quotation marks, no captions, no brackets.`,
+    opts.previousMoment
+      ? `The previous illustration of this conversation showed: ${opts.previousMoment} Choose a clearly different pose, angle or action that shows how the conversation has moved on.`
+      : '',
+    mature
+      ? 'This is a mature story: if the conversation has turned physical or intimate, depict it plainly.'
+      : 'Keep the frame non-explicit.',
+    '',
+    `Setting: the ${room}, ${light}.${activity ? ` ${npcName} was ${activity} before this.` : ''}${clothing ? ` ${npcName} is ${clothing}.` : ''}${mood ? ` ${npcName}'s mood: ${mood}.` : ''}`,
+    '',
+    'The conversation so far (oldest first; lines in parentheses are actions):',
+    ...lines,
+    '',
+    'Return ONLY the frame description.',
+  ].filter(l => l !== null).join('\n');
+  let raw;
+  try {
+    raw = await root.generateText({ instruction });
+  } catch (e) {
+    console.warn('Scene director draft failed:', e?.message || e);
+    return null;
+  }
+  return cleanSceneMoment(raw);
+}
+
+// The last panel's drafted moment for this NPC (D2's "move on from the last
+// frame"), or null.
+function lastConversationSceneMoment(npc) {
+  const list = npc?.flags?._convImages || [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i]?.kind === 'scene' && list[i].moment) return list[i].moment;
+  }
+  return null;
+}
+
+async function generateConversationSceneImage(gameState, npcId, panelIndex, opts = {}) {
+  let moment = null;
+  try {
+    moment = await draftConversationScene(gameState, npcId, {
+      previousMoment: opts.previousMoment ?? lastConversationSceneMoment(gameState?.npcs?.[npcId]),
+    });
+  } catch (e) {
+    moment = null;
+  }
+  const prompt = buildConversationScenePrompt(gameState, npcId, panelIndex, moment);
+  // D2: the key folds a hash of the prompt. Panel N of an older save (the
+  // counter rewinds on load) asked about something else is a different
+  // picture — before this, it silently served whatever panel N was last time.
+  const key = `${npcId}_${panelIndex || 0}_${hashStr(prompt).toString(36)}`;
   const stylePart = imageStyleToken();
   const cacheKey = `convscene_${key}${stylePart ? '_' + stylePart : ''}`;
   const seed = hashStr(cacheKey);
   const cached = await getCachedImage(cacheKey);
-  if (cached) return { url: createObjectUrl(cacheKey, cached), prompt, key, seed, cached: true };
+  if (cached) return { url: createObjectUrl(cacheKey, cached), prompt, key, seed, moment, cached: true };
   try {
     const result = await generateImageTracked(applyImageStyle(prompt), {
       resolution: IMAGE_CACHE.resolutions.scene[sceneOrientation()],
@@ -1985,11 +2113,11 @@ async function generateConversationSceneImage(gameState, npcId, panelIndex) {
       negativePrompt: IMAGE_NEGATIVE.scene,
     });
     const blob = await canvasToBlob(result.canvas);
-    if (!blob) return { url: null, prompt, key, seed, error: 'empty frame' };
+    if (!blob) return { url: null, prompt, key, seed, moment, error: 'empty frame' };
     await setCachedImage(cacheKey, blob);
-    return { url: createObjectUrl(cacheKey, blob), prompt, key, seed, cached: false };
+    return { url: createObjectUrl(cacheKey, blob), prompt, key, seed, moment, cached: false };
   } catch (e) {
-    return { url: null, prompt, key, seed, error: e.message };
+    return { url: null, prompt, key, seed, moment, error: e.message };
   }
 }
 

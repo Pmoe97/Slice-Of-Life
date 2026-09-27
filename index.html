@@ -6965,6 +6965,26 @@ body {
 .im-typing .dot:nth-child(2) { animation-delay: 0.2s; }
 .im-typing .dot:nth-child(3) { animation-delay: 0.4s; }
 @keyframes im-typing-bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-4px); opacity: 1; } }
+/* Conversation overhaul D7 — Messages gets the phone's Interact: a + beside
+   the field opens a sheet of the asks a phone can carry (same rows and tones
+   as the conversation's menu), a leaf opens the shared composer
+   (.ask-composer) above the field, and the thread shows what an ask did —
+   its header tag, money as a transfer card, a photo they sent. */
+.im-plus-btn { flex-shrink: 0; width: 32px; font-size: var(--fs-md); font-weight: 700; line-height: 1; }
+.im-plus-btn[aria-expanded="true"] { background: var(--color-accent-dim); }
+.im-ask-sheet { flex-shrink: 0; display: flex; flex-direction: column; max-height: 45%; margin-bottom: 6px; background: var(--color-surface); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); overflow: hidden; }
+.im-ask-head { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); border-bottom: 1px solid var(--color-border); }
+.im-ask-title { flex: 1; min-width: 0; font-size: var(--fs-sm); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.im-ask-body { overflow-y: auto; padding: var(--space-1); display: flex; flex-direction: column; gap: 2px; }
+.im-composer { margin-bottom: 6px; border: 1px solid var(--color-border); border-left: 3px solid var(--ask-tone); border-radius: var(--radius-md); padding: var(--space-2); max-height: 50%; }
+.im-msg-tag { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; opacity: 0.75; margin-bottom: 2px; }
+.im-msg-transfer { min-width: 150px; }
+.im-transfer { display: flex; flex-direction: column; gap: 1px; padding: 6px 10px; margin: 2px 0 4px; border-radius: 8px; background: rgba(0, 0, 0, 0.18); border-left: 3px solid var(--color-positive); }
+.im-transfer[data-mode="loan"] { border-left-color: var(--color-warning); }
+.im-transfer-amount { font-size: var(--fs-md); font-weight: 700; }
+.im-transfer-what { font-size: var(--fs-xs); opacity: 0.8; }
+.im-msg-bubble[data-from="npc"] .im-transfer { background: var(--color-surface); }
+.im-typing-icon { font-size: 1.1em; line-height: 1; margin-right: 2px; }
 
 /* In-person conversation overlay. A focused chat-like interface layered
    over the scene viewer while talking to an NPC. Distinct from the IM app:
@@ -7012,6 +7032,11 @@ body {
 .conv-gift-pick:hover { background: var(--color-surface); }
 .conv-gift-pick-name { font-size: var(--fs-sm); color: var(--color-text); }
 .conv-gift-pick-meta { font-size: var(--fs-xs); color: var(--color-text-dim); }
+/* Conversation overhaul D6 — what satisfies this person's open goal step is
+   pinned first and marked, and the goal itself is named above the grid. */
+.conv-gift-pick.is-goal { border-color: var(--color-positive); box-shadow: inset 3px 0 0 var(--color-positive); }
+.conv-gift-pick-badge { font-size: var(--fs-xs); font-weight: 700; color: var(--color-positive); letter-spacing: 0.03em; }
+.conv-gift-goal-note { margin: 0 0 var(--space-2); font-size: var(--fs-sm); color: var(--color-text-dim); }
 /* Scene reader Phase 5 (D14) — the recalled half. Everything above the
    separator carries [data-past]: dimmed, and the player bubble drops its
    accent fill for the neutral surface treatment, so "past" reads structurally
@@ -7054,6 +7079,40 @@ body {
 .conv-ask-help { display: block; font-size: var(--fs-xs); color: var(--color-text-faint); margin-top: 1px; }
 .conv-ask-hint { padding: var(--space-1) var(--space-4); font-size: var(--fs-xs); color: var(--color-text-dim); border-top: 1px solid var(--color-border); text-align: left; }
 .conv-ask-hint[hidden] { display: none !important; }
+/* Conversation overhaul D3/D4/D5 — the Interact menu's colour edges and the
+   composer. Each category carries a theme tone (asks.js ASK_CATEGORIES
+   `tone`), set as --ask-tone on its row and on the composer, so money, plans
+   and affection read apart at a glance. Chips are real buttons: aria-checked
+   (one-of) / aria-pressed (toggles) are the selected state, and the same
+   rules serve the phone's Messages sheet. */
+.conv-ask-cat, .conv-ask-row { border-left: 3px solid transparent; }
+.conv-ask-cat:not(.is-disabled), .conv-ask-row:not(:disabled) { border-left-color: var(--ask-tone, transparent); }
+.ask-composer { --ask-tone: var(--color-accent); flex-shrink: 0; display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2) var(--space-4); border-top: 1px solid var(--color-border); border-left: 3px solid var(--ask-tone); background: var(--color-surface); background: color-mix(in srgb, var(--ask-tone) 8%, var(--color-surface)); max-height: 40vh; overflow-y: auto; }
+.ask-composer[hidden] { display: none !important; }
+.ask-composer-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.ask-composer-pill { flex-shrink: 0; font-size: var(--fs-xs); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ask-tone); border: 1px solid var(--ask-tone); border-radius: 999px; padding: 2px var(--space-2); }
+.ask-composer-status { flex: 1; min-width: 0; font-size: var(--fs-xs); color: var(--color-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask-composer-status.is-blocked { color: var(--color-warning); }
+.ask-composer-cancel { flex-shrink: 0; background: none; border: none; border-radius: var(--radius-sm); padding: 2px 8px; color: var(--color-text-dim); font-size: var(--fs-sm); cursor: pointer; }
+.ask-composer-cancel:hover, .ask-composer-cancel:focus-visible { color: var(--color-text); background: var(--color-surface-alt); }
+.ask-arg { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
+.ask-arg-label { min-width: 5em; font-size: var(--fs-xs); color: var(--color-text-dim); }
+.ask-chips { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.ask-chip { --chip-tone: var(--ask-tone); display: inline-flex; align-items: center; gap: 4px; min-height: 32px; padding: 4px 12px; border: 1px solid var(--color-border-strong); border-radius: 999px; background: var(--color-surface-alt); color: var(--color-text); font-family: var(--font-sans); font-size: var(--fs-sm); cursor: pointer; }
+.ask-chip:hover { border-color: var(--chip-tone); }
+.ask-chip:focus-visible, .ask-chip-custom:focus-within { outline: 2px solid var(--chip-tone); outline-offset: 1px; }
+.ask-chip[aria-checked="true"], .ask-chip[aria-pressed="true"], .ask-chip-custom.is-on { background: var(--chip-tone); border-color: var(--chip-tone); color: var(--color-bg); font-weight: 600; }
+.ask-chip-sub { font-size: var(--fs-xs); font-weight: 400; opacity: 0.75; }
+.ask-chip-custom { cursor: text; padding-right: 6px; }
+.ask-chip-custom input { width: 4.5em; padding: 0; border: none; background: transparent; color: inherit; font: inherit; outline: none; -moz-appearance: textfield; }
+.ask-chip-custom input::-webkit-outer-spin-button, .ask-chip-custom input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.ask-arg-hint { width: 100%; padding-left: calc(5em + var(--space-2)); font-size: var(--fs-xs); color: var(--color-text-faint); }
+@media (max-width: 600px) {
+  .ask-composer { padding: var(--space-2) var(--space-3); }
+  .ask-arg-label { width: 100%; min-width: 0; }
+  .ask-arg-hint { padding-left: 0; }
+  .ask-chip { min-height: 38px; }
+}
 @media (max-width: 600px) {
   .conv-box { width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0; border: none; }
   .conv-header { padding: var(--space-2) var(--space-3); }
@@ -8092,8 +8151,15 @@ body {
       </div>
     </div>
     <div class="conv-log" id="conv-log"></div>
+    <!-- Conversation overhaul D4/D5 — the Interact composer. Picking a leaf
+         from the + menu opens this strip: the ask's tinted label, its
+         argument chips (amount / gift-or-loan / what / who else — real
+         buttons, Tab + arrow keys + touch), and the input below becomes the
+         optional message. Built by ui.js renderAskComposer (shared with the
+         phone's Messages). -->
+    <div class="ask-composer" id="conv-composer" hidden></div>
     <div class="conv-input-row">
-      <button class="btn btn-secondary conv-attach-btn" id="conv-attach-btn" title="Requests — pick a specific ask" aria-label="Open the request menu">+</button>
+      <button class="btn btn-secondary conv-attach-btn" id="conv-attach-btn" title="Interact — plans, gifts, money, photos, affection, apologies" aria-label="Open the Interact menu">+</button>
       <input type="text" id="conv-input" placeholder="Say or do something..." autocomplete="off">
       <button class="btn" id="conv-send-btn">Say</button>
       <!-- Asks & attachments plan Phase 2 — the Request tree. A popover
@@ -8107,7 +8173,7 @@ body {
       <div class="conv-ask-menu" id="conv-ask-menu" hidden>
         <div class="conv-ask-head">
           <button class="btn btn-secondary tiny" id="conv-ask-back-btn" hidden aria-label="Back">←</button>
-          <div class="conv-ask-title" id="conv-ask-title">Asks</div>
+          <div class="conv-ask-title" id="conv-ask-title">Interact</div>
           <button class="btn btn-secondary tiny" id="conv-ask-close-btn" aria-label="Close">✕</button>
         </div>
         <div class="conv-ask-body" id="conv-ask-body"></div>
@@ -8419,7 +8485,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=204"></script>
+<script src="src/src/srcfiles/config.js?v=205"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -8465,7 +8531,7 @@ body {
 <!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
      player-facing release history. Pure data, no dependencies, grouped with
      the other defs.* files for the same reason defs.dreams.js is. -->
-<script src="src/src/srcfiles/defs.patchnotes.js?v=24"></script>
+<script src="src/src/srcfiles/defs.patchnotes.js?v=25"></script>
 <!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
      WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
      ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
@@ -8502,14 +8568,14 @@ body {
 <!-- Inventory overhaul Phase 1: pure inventory query/sort/describe helpers
      (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
      time) and before render.js/ui.js, which call it at runtime. -->
-<script src="src/src/srcfiles/inventory.js?v=24"></script>
+<script src="src/src/srcfiles/inventory.js?v=25"></script>
 <script src="src/src/srcfiles/effects.js?v=48"></script>
 <!-- Food-overhaul Phase 5: the pure cooking engine (cooking.js) — after
      effects.js (uses clamp) and items.js (makePlate/freshnessOf); its
      functions are called at runtime by defs.actions.js and render.js. -->
 <script src="src/src/srcfiles/cooking.js?v=4"></script>
 <script src="src/src/srcfiles/taste.js?v=1"></script>
-<script src="src/src/srcfiles/drives.js?v=51"></script>
+<script src="src/src/srcfiles/drives.js?v=52"></script>
 <!-- NPC utility scoring (npc-cognition-plan.md). Loads after drives.js: it
      reuses driveGateValue / isOnCooldown / DRIVE_COOLDOWN_KEY from it. -->
 <script src="src/src/srcfiles/cognition.js?v=34"></script>
@@ -8522,7 +8588,7 @@ body {
 <script src="src/src/srcfiles/skills.js?v=20"></script>
 <script src="src/src/srcfiles/stealth.js?v=24"></script>
 <script src="src/src/srcfiles/time.js?v=32"></script>
-<script src="src/src/srcfiles/computer.js?v=79"></script>
+<script src="src/src/srcfiles/computer.js?v=80"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -8539,7 +8605,7 @@ body {
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
 <script src="src/src/srcfiles/phone.js?v=22"></script>
-<script src="src/src/srcfiles/npc.js?v=65"></script>
+<script src="src/src/srcfiles/npc.js?v=66"></script>
 <!-- Aspirations & Creative Careers Phase 3 (D9/D56): the Notice & Opinion
      layer (notice.js) — after npc.js (addMemoryFact, MEMORY_IMPORTANCE,
      EMOTIONAL_WEIGHTS' reader) and signals.js (emitTransient,
@@ -8595,7 +8661,7 @@ body {
      and called by sim.js at runtime only. -->
 <script src="src/src/srcfiles/rumination.js?v=15"></script>
 <script src="src/src/srcfiles/prompt.js?v=20"></script>
-<script src="src/src/srcfiles/llm.js?v=56"></script>
+<script src="src/src/srcfiles/llm.js?v=57"></script>
 <!-- CONCEPT — the character-concept engine (description -> validated draft).
      AI-Assisted Character Generation Phase 2. Sits after llm.js (whose prompt
      conventions it follows) and before the UI layer that calls it. Reads
@@ -8608,7 +8674,7 @@ body {
      ui.js; x5.js itself is pure and calls no model. -->
 <script src="src/src/srcfiles/x5.js?v=17"></script>
 <script src="src/src/srcfiles/interruption.js?v=24"></script>
-<script src="src/src/srcfiles/image.js?v=44"></script>
+<script src="src/src/srcfiles/image.js?v=45"></script>
 <!-- Avatars & Sprite Studio Phase 1: the permanent override store (kv.sprites)
      and resolveSprite, the ONE function allowed to read a sprite blob. After
      image.js because the resolver falls through to cutoutKey / getCachedImage
@@ -8714,7 +8780,7 @@ body {
      ui.js reach it at runtime only. Registered in dev/verify/loadgame.js's ORDER
      in the same change. -->
 <script src="src/src/srcfiles/projects.js?v=3"></script>
-<script src="src/src/srcfiles/render.js?v=106"></script>
+<script src="src/src/srcfiles/render.js?v=107"></script>
 <!-- Night Scene Phase 3b: the Living Tableau's PAINTER. After render.js
      (shares its rules: idempotent, no state mutation, no rolls) and after
      actionwindow.js, whose awShow/awHide it calls to claim the overlay. NOT
@@ -8722,7 +8788,7 @@ body {
      loader deliberately stops before the render layer, exactly as
      render.spritestudio.js does. -->
 <script src="src/src/srcfiles/render.nightscene.js?v=1"></script>
-<script src="src/src/srcfiles/render.computer.js?v=78"></script>
+<script src="src/src/srcfiles/render.computer.js?v=79"></script>
 <!-- Avatars & Sprite Studio Phase 4: the studio's verbs and its screens.
      render.spritestudio.js extends COMPUTER_RENDERERS, so it must load AFTER
      render.computer.js declares it; spritestudio.js holds the actions and is
@@ -8815,9 +8881,9 @@ body {
      Registered in BOTH this list and loadgame.js's ORDER, same commit. -->
 <script src="src/src/srcfiles/platform.js?v=6"></script>
 <script src="src/src/srcfiles/aspirations.js?v=2"></script>
-<script src="src/src/srcfiles/asks.js?v=21"></script>
-<script src="src/src/srcfiles/ui.js?v=184"></script>
-<script src="src/src/srcfiles/ui.computer.js?v=68"></script>
+<script src="src/src/srcfiles/asks.js?v=22"></script>
+<script src="src/src/srcfiles/ui.js?v=185"></script>
+<script src="src/src/srcfiles/ui.computer.js?v=69"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
      site header with fake address bar + internal back/forward, footer, 404,

@@ -4679,14 +4679,33 @@ function renderMessages(body, gs, app, screen) {
       row.className = 'im-thread-row' + (im.viewingNpcId === npcId ? ' active' : '');
       row.setAttribute('data-action', 'im.open-thread');
       row.setAttribute('data-row-id', npcId);
-      row.innerHTML = `
-        ${avatarChipHtml(contactNpc, { className: 'im-avatar', size: 'header', name: contactNpc.bible?.name || npcId })}
-        <div class="im-thread-info">
-          <div class="im-thread-name">${contactNpc.bible?.name || 'Unknown'}${contactNpc.residency?.status === 'prospective' ? ' <span class="im-thread-tag">applicant</span>' : ''}</div>
-          <div class="im-thread-preview dim tiny">${lastMsg ? truncateText(lastMsg.text, 34) : 'Say hi'}</div>
-        </div>
-        ${unread ? `<div class="im-unread-badge">${unread}</div>` : ''}
-      `;
+      // Conversation overhaul D8 (E7): names and previews are model- and
+      // player-written text, so they go in as textContent — this row used to
+      // be one innerHTML template, which rendered any markup in a message as
+      // markup. The avatar chip escapes its own attributes (avatar.js).
+      row.innerHTML = avatarChipHtml(contactNpc, { className: 'im-avatar', size: 'header', name: contactNpc.bible?.name || npcId });
+      const info = document.createElement('div');
+      info.className = 'im-thread-info';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'im-thread-name';
+      nameEl.textContent = contactNpc.bible?.name || 'Unknown';
+      if (contactNpc.residency?.status === 'prospective') {
+        const tag = document.createElement('span');
+        tag.className = 'im-thread-tag';
+        tag.textContent = 'applicant';
+        nameEl.append(' ', tag);
+      }
+      const preview = document.createElement('div');
+      preview.className = 'im-thread-preview dim tiny';
+      preview.textContent = lastMsg ? imPreviewText(lastMsg, 34) : 'Say hi';
+      info.append(nameEl, preview);
+      row.appendChild(info);
+      if (unread) {
+        const badge = document.createElement('div');
+        badge.className = 'im-unread-badge';
+        badge.textContent = String(unread);
+        row.appendChild(badge);
+      }
       sidebar.appendChild(row);
     }
     layout.appendChild(sidebar);
@@ -4699,22 +4718,27 @@ function renderMessages(body, gs, app, screen) {
       pane.innerHTML = '<p class="dim">Select a conversation.</p>';
     } else {
       const thread = im.threads[im.viewingNpcId] || { msgs: [] };
+    const npcId = im.viewingNpcId;
     const header = document.createElement('div');
     header.className = 'im-chat-header';
+    // E7: the name is text, not markup.
     header.innerHTML = `
       ${device === 'phone' ? '<button class="btn tiny im-back-btn" data-action="im.close-thread" aria-label="Back to contacts">‹</button>' : ''}
-      ${avatarChipHtml(npc, { className: 'im-avatar', size: 'header', name: npc.bible?.name || im.viewingNpcId })}
-      <div class="im-chat-name">${npc.bible?.name || 'Unknown'}</div>
+      ${avatarChipHtml(npc, { className: 'im-avatar', size: 'header', name: npc.bible?.name || npcId })}
     `;
+    const chatName = document.createElement('div');
+    chatName.className = 'im-chat-name';
+    chatName.textContent = npc.bible?.name || 'Unknown';
+    header.appendChild(chatName);
     // Invitations (external-world plan Phase 2): inviting someone over is a
     // messaging-app action — you need their number first, which is exactly
     // what being in this list means. Residents already live here, and Del
     // comes when there's a job, so neither is invitable.
-    if (npc.residency?.status !== 'resident' && im.viewingNpcId !== CONTRACTOR_ID) {
+    if (npc.residency?.status !== 'resident' && npcId !== CONTRACTOR_ID) {
       const invite = document.createElement('button');
       invite.className = 'btn tiny im-invite-btn';
       invite.setAttribute('data-action', 'im.invite');
-      invite.setAttribute('data-row-id', im.viewingNpcId);
+      invite.setAttribute('data-row-id', npcId);
       invite.textContent = 'Invite Over';
       header.appendChild(invite);
     } else if (npc.residency?.status === 'resident') {
@@ -4723,7 +4747,7 @@ function renderMessages(body, gs, app, screen) {
       const inviteDinner = document.createElement('button');
       inviteDinner.className = 'btn tiny im-invite-btn';
       inviteDinner.setAttribute('data-action', 'im.invite-dinner');
-      inviteDinner.setAttribute('data-row-id', im.viewingNpcId);
+      inviteDinner.setAttribute('data-row-id', npcId);
       inviteDinner.textContent = 'Invite to Dinner';
       header.appendChild(inviteDinner);
     }
@@ -4740,34 +4764,7 @@ function renderMessages(body, gs, app, screen) {
         log.appendChild(divider);
         lastDay = m.day;
       }
-      const bubble = document.createElement('div');
-      bubble.className = 'im-msg-bubble';
-      bubble.setAttribute('data-from', m.from);
-      const timeStr = formatTime(m.tick * 30);
-      bubble.innerHTML = m.from === 'system'
-        ? `<div class="im-msg-text dim">${m.text}</div>`
-        : `<div class="im-msg-text">${m.text}</div><div class="im-msg-time">${timeStr}</div>`;
-      // BrineOS Phase 8.5: a shared photo attaches a thumbnail to its
-      // bubble. The record can be gone (roll eviction past CAMERA.rollCap
-      // outlives the message referencing it) — degrade to a text note
-      // rather than a broken image or a crash.
-      if (m.photoId) {
-        const photo = gs.world.phone?.camera?.roll?.find(p => p.id === m.photoId);
-        if (photo) {
-          const thumb = document.createElement('img');
-          thumb.className = 'im-msg-photo';
-          thumb.alt = photo.caption;
-          thumb.src = getPlaceholder();
-          bubble.insertBefore(thumb, bubble.firstChild);
-          getPhotoImage(photo).then(result => { if (result.url) thumb.src = result.url; });
-        } else {
-          const gone = document.createElement('div');
-          gone.className = 'im-msg-text dim';
-          gone.textContent = '[photo no longer available]';
-          bubble.insertBefore(gone, bubble.firstChild);
-        }
-      }
-      log.appendChild(bubble);
+      log.appendChild(renderImBubble(gs, m));
     }
     // Bug report (2026-08-26): the "is typing…" dots are derived from
     // UI.COMPUTER's IM_PENDING_REPLY set (same cross-file guard pattern as
@@ -4775,22 +4772,41 @@ function renderMessages(body, gs, app, screen) {
     // what lets them survive a rebuild. Switching to another contact and
     // back while a reply is still in flight re-renders this thread from
     // the set, so the indicator reappears exactly as it would have if the
-    // DOM had never been torn down.
-    if (typeof IM_PENDING_REPLY !== 'undefined' && IM_PENDING_REPLY.has(im.viewingNpcId)) {
+    // DOM had never been torn down. D7: a photo on its way shows the same
+    // way, with a picture icon.
+    const pendingImage = typeof IM_PENDING_IMAGE !== 'undefined' && IM_PENDING_IMAGE.has(npcId);
+    if ((typeof IM_PENDING_REPLY !== 'undefined' && IM_PENDING_REPLY.has(npcId)) || pendingImage) {
       const indicator = document.createElement('div');
       indicator.className = 'im-typing';
-      indicator.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+      indicator.innerHTML = `${pendingImage ? '<span class="im-typing-icon">🖼</span>' : ''}<span class="dot"></span><span class="dot"></span><span class="dot"></span>`;
       log.appendChild(indicator);
     }
     pane.appendChild(log);
 
     const inputRow = document.createElement('div');
     inputRow.className = 'im-input-row';
+    // Conversation overhaul D7 — the phone's Interact: a + beside the field.
+    const plus = document.createElement('button');
+    plus.className = 'btn tiny im-plus-btn';
+    plus.setAttribute('data-action', 'im.ask-sheet');
+    plus.setAttribute('aria-label', 'Interact — plans, money, photos');
+    plus.title = 'Interact — plans, money, photos';
+    plus.textContent = '+';
+    const sheetOpen = typeof IM_ASK_SHEET !== 'undefined' && IM_ASK_SHEET && IM_ASK_SHEET.npcId === npcId;
+    if (sheetOpen) plus.setAttribute('aria-expanded', 'true');
+    const composing = typeof IM_COMPOSER !== 'undefined' && IM_COMPOSER && IM_COMPOSER.npcId === npcId
+      && typeof ASK_TYPES !== 'undefined' && ASK_TYPES[IM_COMPOSER.askId];
     const input = document.createElement('input');
     input.type = 'text';
     input.id = 'cs-chat-input';
-    input.placeholder = `Text ${npc.bible?.name || 'them'}...`;
+    input.placeholder = composing ? 'Add a message (optional)' : `Text ${npc.bible?.name || 'them'}...`;
     input.className = 'im-input';
+    // D7 — a re-render rebuilds this input (opening the sheet, a reply
+    // landing); the half-typed text lives in IM_DRAFTS so it survives.
+    if (typeof IM_DRAFTS !== 'undefined') {
+      input.value = IM_DRAFTS[npcId] || '';
+      input.addEventListener('input', () => { IM_DRAFTS[npcId] = input.value; });
+    }
     // Enter sends (Shift+Enter inserts a newline-free newline — there's
     // no newline in a single-line input, so Enter is always send). The
     // guard inside doImSend handles the case where the user mashes Enter
@@ -4801,16 +4817,29 @@ function renderMessages(body, gs, app, screen) {
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        handleAction('im.send', null, { rowId: im.viewingNpcId, device });
+        handleAction('im.send', null, { rowId: npcId, device });
       }
     });
     const sendBtn = document.createElement('button');
     sendBtn.className = 'btn tiny im-send-btn';
     sendBtn.setAttribute('data-action', 'im.send');
-    sendBtn.setAttribute('data-row-id', im.viewingNpcId);
+    sendBtn.setAttribute('data-row-id', npcId);
     sendBtn.textContent = 'Send';
+    inputRow.appendChild(plus);
     inputRow.appendChild(input);
     inputRow.appendChild(sendBtn);
+    if (sheetOpen) pane.appendChild(renderImAskSheet(gs, npc, npcId));
+    if (composing && typeof renderAskComposer === 'function') {
+      const host = document.createElement('div');
+      host.className = 'ask-composer im-composer';
+      pane.appendChild(host);
+      renderAskComposer(host, ASK_TYPES[IM_COMPOSER.askId], IM_COMPOSER, {
+        gs, npc, npcId,
+        onChange: (ready) => { sendBtn.disabled = !ready.ok; },
+        onCancel: () => handleAction('im.ask-cancel', null, { device }),
+        onSubmit: () => handleAction('im.send', null, { rowId: npcId, device }),
+      });
+    }
     pane.appendChild(inputRow);
 
     // Auto-scroll to the bottom of the message log after render so the
@@ -4822,8 +4851,167 @@ function renderMessages(body, gs, app, screen) {
   body.appendChild(layout);
 }
 
+// --- Conversation overhaul D7/D8: one Messages bubble --------------------
+// Every string in here is someone's words — the player's, or a model's — so
+// all of it goes in as textContent (E7: this used to be an innerHTML
+// template, so a message containing markup rendered as markup). A message
+// can carry an ask's `tag` header ("Give Money · $20 · Gift"), a `transfer`
+// (money that actually moved), a camera-roll `photoId`, or an `image` — a
+// photo they sent, stored with the chat-image record contract (image.js
+// getChatImageUrl / rerollChatImage), so it re-paints and rerolls.
+function renderImBubble(gs, m) {
+  const bubble = document.createElement('div');
+  bubble.className = 'im-msg-bubble' + (m.transfer ? ' im-msg-transfer' : '') + ((m.image || m.photoId) ? ' im-msg-has-photo' : '');
+  bubble.setAttribute('data-from', m.from);
+  if (m.from === 'system') {
+    const t = document.createElement('div');
+    t.className = 'im-msg-text dim';
+    t.textContent = m.text || '';
+    bubble.appendChild(t);
+    return bubble;
+  }
+  if (m.tag) {
+    const tag = document.createElement('div');
+    tag.className = 'im-msg-tag';
+    tag.textContent = m.tag;
+    bubble.appendChild(tag);
+  }
+  if (m.transfer) {
+    const card = document.createElement('div');
+    card.className = 'im-transfer';
+    card.setAttribute('data-dir', m.transfer.dir);
+    card.setAttribute('data-mode', m.transfer.mode || '');
+    const amt = document.createElement('span');
+    amt.className = 'im-transfer-amount';
+    amt.textContent = `${m.transfer.dir === 'in' ? '+' : '−'}$${m.transfer.amount}`;
+    const what = document.createElement('span');
+    what.className = 'im-transfer-what';
+    const mode = { gift: 'gift', loan: 'loan', repay: 'paid back' }[m.transfer.mode] || '';
+    what.textContent = `${m.transfer.dir === 'in' ? 'Received' : 'Sent'}${mode ? ` · ${mode}` : ''}`;
+    card.append(amt, what);
+    bubble.appendChild(card);
+  }
+  if (m.image) {
+    const img = document.createElement('img');
+    img.className = 'im-msg-photo';
+    img.alt = m.image.caption || '';
+    img.src = getPlaceholder();
+    bubble.appendChild(img);
+    if (typeof setImageMeta === 'function') {
+      setImageMeta(img, {
+        label: m.image.tag || 'Photo',
+        prompt: m.image.prompt,
+        seed: m.image.seed,
+        negativePrompt: m.image.negativePrompt || null,
+        reroll: (fields) => rerollChatImage(m.image, img, fields),
+      });
+    }
+    Promise.resolve(getChatImageUrl(m.image)).then(r => { if (r && r.url && img.isConnected) img.src = r.url; }).catch(() => {});
+  }
+  // BrineOS Phase 8.5: a shared photo attaches a thumbnail to its
+  // bubble. The record can be gone (roll eviction past CAMERA.rollCap
+  // outlives the message referencing it) — degrade to a text note
+  // rather than a broken image or a crash.
+  if (m.photoId) {
+    const photo = gs.world.phone?.camera?.roll?.find(p => p.id === m.photoId);
+    if (photo) {
+      const thumb = document.createElement('img');
+      thumb.className = 'im-msg-photo';
+      thumb.alt = photo.caption;
+      thumb.src = getPlaceholder();
+      bubble.appendChild(thumb);
+      getPhotoImage(photo).then(result => { if (result.url && thumb.isConnected) thumb.src = result.url; }).catch(() => {});
+    } else {
+      const gone = document.createElement('div');
+      gone.className = 'im-msg-text dim';
+      gone.textContent = '[photo no longer available]';
+      bubble.appendChild(gone);
+    }
+  }
+  if (m.text) {
+    const t = document.createElement('div');
+    t.className = 'im-msg-text';
+    t.textContent = m.text;
+    bubble.appendChild(t);
+  }
+  const time = document.createElement('div');
+  time.className = 'im-msg-time';
+  time.textContent = formatTime((m.tick || 0) * 30);
+  bubble.appendChild(time);
+  return bubble;
+}
+
+// D7 — the + sheet: askRemoteCategories (the leaves a phone can carry), one
+// drill-down deep, rows greyed when `available()` says no right now — the
+// in-person menu's rules, over the IM context.
+function renderImAskSheet(gs, npc, npcId) {
+  const sheet = document.createElement('div');
+  sheet.className = 'im-ask-sheet';
+  const cats = typeof askRemoteCategories === 'function' ? askRemoteCategories() : [];
+  const cat = IM_ASK_SHEET.catId ? cats.find(c => c.id === IM_ASK_SHEET.catId) || null : null;
+  const head = document.createElement('div');
+  head.className = 'im-ask-head';
+  if (cat) {
+    const back = document.createElement('button');
+    back.className = 'btn tiny btn-secondary';
+    back.setAttribute('data-action', 'im.ask-back');
+    back.setAttribute('aria-label', 'Back');
+    back.textContent = '←';
+    head.appendChild(back);
+  }
+  const title = document.createElement('div');
+  title.className = 'im-ask-title';
+  title.textContent = cat ? `Interact ▸ ${cat.label}` : 'Interact';
+  head.appendChild(title);
+  const close = document.createElement('button');
+  close.className = 'btn tiny btn-secondary';
+  close.setAttribute('data-action', 'im.ask-close');
+  close.setAttribute('aria-label', 'Close');
+  close.textContent = '✕';
+  head.appendChild(close);
+  sheet.appendChild(head);
+  const body = document.createElement('div');
+  body.className = 'im-ask-body';
+  const ctx = typeof imAskContext === 'function' ? imAskContext(npcId) : {};
+  const live = (leaf) => !leaf.available || (leaf.share ? leaf.available(gs) : leaf.available(gs, npc, ctx));
+  for (const item of cat ? cat.children : cats) {
+    const row = document.createElement('button');
+    row.className = item.children ? 'conv-ask-cat' : 'conv-ask-row';
+    row.style.setProperty('--ask-tone', `var(--color-${(item.children ? item.tone : cat && cat.tone) || 'accent'})`);
+    row.setAttribute('data-action', item.children ? 'im.ask-cat' : 'im.ask-leaf');
+    row.setAttribute('data-row-id', item.id);
+    if (item.children) {
+      row.textContent = item.label;
+      if (!item.children.some(live)) { row.disabled = true; row.classList.add('is-disabled'); }
+    } else {
+      const label = document.createElement('span');
+      label.className = 'conv-ask-label';
+      label.textContent = item.label;
+      row.appendChild(label);
+      if (item.help && !/^</.test(item.help)) {
+        const help = document.createElement('span');
+        help.className = 'conv-ask-help';
+        help.textContent = item.help;
+        row.appendChild(help);
+      }
+      if (!live(item)) { row.disabled = true; row.classList.add('is-disabled'); }
+    }
+    body.appendChild(row);
+  }
+  sheet.appendChild(body);
+  return sheet;
+}
+
 function truncateText(str, n) {
   return str.length > n ? `${str.slice(0, n - 1)}…` : str;
+}
+
+// Conversation overhaul D7 — a thread's last message as a one-line preview:
+// a photo or a transfer has no text of its own.
+function imPreviewText(m, n) {
+  if (m.transfer) return `💸 $${m.transfer.amount} ${m.transfer.dir === 'in' ? 'received' : 'sent'}`;
+  if (m.image || m.photoId) return m.text && !/^\[shared a photo/.test(m.text) ? truncateText(m.text, n) : '📷 Photo';
+  return truncateText(String(m.text || ''), n);
 }
 
 // --- Helper: deterministic color from a string hash, for thumbnails ---

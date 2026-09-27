@@ -1889,6 +1889,17 @@ function ensureImThread(gameState, npcId) {
   return im.threads[npcId];
 }
 
+// Conversation overhaul D8 (E8) — the one way a message joins a thread: it
+// is appended and the thread is trimmed to IM_PROMPT.threadCap, oldest
+// first. Returns the message as stored.
+function pushImMessage(gameState, npcId, msg) {
+  const thread = ensureImThread(gameState, npcId);
+  thread.msgs.push(msg);
+  const cap = (typeof IM_PROMPT !== 'undefined' && IM_PROMPT.threadCap) || 400;
+  if (thread.msgs.length > cap) thread.msgs.splice(0, thread.msgs.length - cap);
+  return msg;
+}
+
 // Sends a player message and resolves the reply through the exact same
 // LLM proposal contract doTalk/doPlayerAction use (NPC's validateProposal/
 // applyProposal) — a text reply can move relPlayer or land a memory fact
@@ -1902,14 +1913,17 @@ function ensureImThread(gameState, npcId) {
 // (async, runs the LLM and appends the NPC reply) so the UI can paint the
 // player's message, show a "typing…" indicator, and then resolve the reply
 // without locking anything. doImSend calls both halves.
-function appendPlayerImMessage(gameState, npcId, text) {
+//
+// `fields` (conversation overhaul D7, optional) ride on the stored message:
+// an ask's `tag` ("Give Money · $20 · Gift") and `askId`, a `transfer`.
+function appendPlayerImMessage(gameState, npcId, text, fields) {
   const npc = gameState.npcs[npcId];
   if (!npc) return { ok: false, reason: 'No such contact.' };
   const thread = ensureImThread(gameState, npcId);
   const tick = getTickIndex(gameState.meta.clock.minutes);
-  thread.msgs.push({ from: 'player', text, day: gameState.meta.clock.day, tick });
+  const msg = pushImMessage(gameState, npcId, { from: 'player', text, day: gameState.meta.clock.day, tick, ...(fields || {}) });
   thread.unread = 0;
-  return { ok: true };
+  return { ok: true, msg };
 }
 
 // BrineOS Phase 8.5: share a photo into an IM thread. Reuses
@@ -1926,39 +1940,66 @@ function sharePhotoToImThread(gameState, npcId, photoId) {
   const text = `[shared a photo: ${photo.caption}]`;
   const result = appendPlayerImMessage(gameState, npcId, text);
   if (!result.ok) return result;
-  const thread = ensureImThread(gameState, npcId);
-  thread.msgs[thread.msgs.length - 1].photoId = photoId;
+  result.msg.photoId = photoId;
   return { ok: true, text };
 }
 
-async function resolveImReply(gameState, npcId, text) {
+// Conversation overhaul D7 — `opts` (all optional):
+//   askTurn        a resolveAsk() result: its directive rides the IM prompt,
+//                  and the ask-turn invariants hold exactly as in person —
+//                  the outcome was decided BEFORE this call, the writer's
+//                  effects and mood deltas are stripped (it phrases, never
+//                  writes), and a failed phrasing falls back to the ask's
+//                  template line so the decided ask still lands in the
+//                  thread and in memory.
+//   askDirective   a directive without an ask turn (the scheduling confirm
+//                  pass); `fallbackLine` is its template line.
+//   recordPlayer   false → the player's text is not recorded again (a second
+//                  pass answering the same message).
+//   context        a prebuilt assembleImContext result.
+async function resolveImReply(gameState, npcId, text, opts = {}) {
   const npc = gameState.npcs[npcId];
   if (!npc) return { ok: false, reason: 'No such contact.' };
-  const thread = ensureImThread(gameState, npcId);
   const tick = getTickIndex(gameState.meta.clock.minutes);
+  const day = gameState.meta.clock.day;
+  const askTurn = opts.askTurn || null;
+  const directive = opts.askDirective || (askTurn && askTurn.directive) || null;
 
-  const context = assembleImContext(gameState, npcId);
-  const result = await callImLLM(context, text);
+  const context = opts.context || assembleImContext(gameState, npcId);
+  const result = await callImLLM(directive ? { ...context, askDirective: directive } : context, text);
+  const playerText = opts.recordPlayer === false ? null : text;
   // Birthdays (birthdays-and-occasions-plan.md D6): texting happy birthday
   // counts exactly like saying it — checked AFTER applyProposal (which
   // replaces npcs[npcId]), and on both paths, since the text was delivered
   // whether or not a reply came back.
   const noteBirthday = () => {
+    if (playerText == null) return false;
     const wish = typeof noteBirthdayWish === 'function' ? noteBirthdayWish(gameState, npcId, text, 'text') : null;
-    if (wish) thread.msgs.push({ from: 'system', text: wish.beat, day: gameState.meta.clock.day, tick });
+    if (wish) pushImMessage(gameState, npcId, { from: 'system', text: wish.beat, day, tick });
     return !!wish;
   };
+  let applied = null;
   if (result.valid && result.proposal) {
-    const applied = await applyProposal(result.proposal, context, gameState, text);
+    if (directive) {
+      if (result.proposal.effects) result.proposal.effects = [];
+      delete result.proposal.moodDeltas;
+    }
+    applied = await applyProposal(result.proposal, context, gameState, playerText);
+  } else if (askTurn || opts.fallbackLine) {
+    const npcName = (context.activeNpcs && context.activeNpcs[0] && context.activeNpcs[0].name) || npc.bible.name || 'they';
+    const line = opts.fallbackLine || buildAskFallbackLine(askTurn, npcName);
+    applied = await applyProposal({ dialogue: [{ speaker: npcName, text: line }] }, context, gameState, playerText);
+  }
+  if (applied) {
     for (const entry of applied.logEntries) {
-      if (entry.type === 'dialogue') thread.msgs.push({ from: 'npc', text: entry.text, day: gameState.meta.clock.day, tick });
+      if (entry.type === 'dialogue') pushImMessage(gameState, npcId, { from: 'npc', text: entry.text, day, tick });
     }
     const ids = applied.updatedNpcIds || [];
     if (noteBirthday() && !ids.includes(npcId)) ids.push(npcId);
-    return { ok: true, updatedNpcIds: ids };
+    return { ok: true, updatedNpcIds: ids, replied: true };
   }
-  thread.msgs.push({ from: 'system', text: `${npc.bible.name} hasn't replied yet.`, day: gameState.meta.clock.day, tick });
-  return { ok: true, updatedNpcIds: noteBirthday() ? [npcId] : [] };
+  pushImMessage(gameState, npcId, { from: 'system', text: `${npc.bible.name} hasn't replied yet.`, day, tick });
+  return { ok: true, updatedNpcIds: noteBirthday() ? [npcId] : [], replied: false };
 }
 
 // --- Stream app ---

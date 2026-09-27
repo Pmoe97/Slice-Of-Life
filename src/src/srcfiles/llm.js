@@ -382,22 +382,30 @@ CRITICAL RULES:
 }
 
 // --- The ask-directive block (asks plan Phase 1) ---
-// Compiled from src/src/ref/wip/asks-llm-prompt.md — that file is the source of
+// Compiled from src/src/ref/complete/asks-llm-prompt.md — that file is the source of
 // truth for this wording; keep the two in sync whenever one changes. The
 // writer receives the semantic reason/stance words, never the numbers behind
 // the decision (placeholder fill rules in the prompt doc). The `---`-fenced
 // block is the whole injected section.
-function buildAskDirective({ askLabel, askId, flavorText, accept, reasonPhrase, stance, ladderLine, npcName, leafNote }) {
+// Conversation overhaul D7: `channel: 'im'` words the same block for a TEXT
+// — "sent over text", and texts instead of an *action* — with every rule
+// that matters (decided first, no renegotiation, no mechanics) unchanged.
+function buildAskDirective({ askLabel, askId, flavorText, accept, reasonPhrase, stance, ladderLine, npcName, leafNote, channel }) {
+  const im = channel === 'im';
   const lines = [
     '',
     '---',
     '',
-    '[ASK CONTEXT — the player used the Request menu. You are NOT deciding the outcome of this request; it has already been decided. You are only writing the in-character response.]',
+    im
+      ? '[ASK CONTEXT — the player sent this request by text. You are NOT deciding the outcome of this request; it has already been decided. You are only writing the in-character reply text.]'
+      : '[ASK CONTEXT — the player used the Request menu. You are NOT deciding the outcome of this request; it has already been decided. You are only writing the in-character response.]',
     '',
     `- The request: ${askLabel} (${askId})`,
     `- The player's words: "${flavorText || '—'}"`,
     `- Your character's decision: ${accept ? 'ACCEPTED' : 'DECLINED'}`,
-    `- Why, in one plain line: ${reasonPhrase}`,
+    // Conversation overhaul D9: the reason phrases speak ABOUT the character
+    // ("they" = ${npcName}), while everything else here speaks TO them ("you").
+    `- Why, in one plain line ("they" here means ${npcName}): ${reasonPhrase}`,
     `- Your attitude toward the player right now: ${stance}`,
   ];
   if (ladderLine) lines.push(ladderLine);
@@ -413,7 +421,9 @@ function buildAskDirective({ askLabel, askId, flavorText, accept, reasonPhrase, 
   );
   if (leafNote) lines.push(leafNote);
   lines.push(
-    '- 1-3 short sentences. One optional brief action in *asterisks*.',
+    im
+      ? '- 1-3 short texts in your own texting style. No *actions* and no narration — this is a text message.'
+      : '- 1-3 short sentences. One optional brief action in *asterisks*.',
     "- Emit no effects, no state changes, no summary of the game's mechanics.",
     '',
     '---',
@@ -425,7 +435,7 @@ function buildAskDirective({ askLabel, askId, flavorText, accept, reasonPhrase, 
 // The SECOND LLM pass of a schedule:true ask: after the calendar modal
 // confirmed a window and the commitment already exists, this tells the
 // writer to phrase the sign-off ("see you then!"). Compiled verbatim from
-// src/src/ref/wip/asks-llm-prompt.md's scheduling-confirm variant — that file
+// src/src/ref/complete/asks-llm-prompt.md's scheduling-confirm variant — that file
 // is the source of truth; keep the two in sync. Shares the `---`-fenced
 // shape of the ask-directive block so the scene-prompt prefix before it
 // stays as cache-friendly as the first pass.
@@ -458,9 +468,24 @@ function buildImPrompt(context, message) {
   // of the conversation was the five-entry shared memory.recent buffer — so
   // a long text exchange was invisible to the model writing the next line.
   const thread = context.imThread || [];
+  // Conversation overhaul D7: a texted ask's tag, a photo and a transfer
+  // have little or no text of their own — say what they were, so the next
+  // reply knows money changed hands or a photo was sent ("You" is the
+  // character, "Them" the player, as in the header below).
+  const imLine = (m) => {
+    const bits = [];
+    if (m.tag && m.from === 'player') bits.push(`[${m.tag}]`);
+    if (m.transfer) {
+      const what = m.transfer.mode === 'loan' ? ' as a loan' : m.transfer.mode === 'repay' ? ' paying back a debt' : '';
+      bits.push(m.from === 'player' ? `[sent you $${m.transfer.amount}${what}]` : `[sent them $${m.transfer.amount}${what}]`);
+    }
+    if (m.image) bits.push(`[sent a photo: ${m.image.caption || 'a photo'}]`);
+    if (m.text) bits.push(m.text);
+    return bits.join(' ');
+  };
   const transcript = thread
     .filter(m => m.from === 'player' || m.from === 'npc')
-    .map(m => `${m.from === 'player' ? 'Them' : 'You'}: ${m.text}`)
+    .map(m => `${m.from === 'player' ? 'Them' : 'You'}: ${imLine(m)}`)
     .join('\n');
 
   let prompt = `You are the narrator for a slice-of-life apartment simulation, writing ${npc.name}'s side of a text-message conversation with the player. This is texting, not a scene — no narration, no scene-setting, just their reply.
@@ -490,6 +515,11 @@ CRITICAL RULES:
 - topic is optional — a short label for what this exchange was about.
 - advocateFor is optional and RARE — only a natural, earned suggestion from this NPC, never forced.
 - 1-3 short messages max, not a paragraph. No narration field — dialogue only.`;
+
+  // Conversation overhaul D7: an ask sent by text carries the same decided-
+  // first directive a spoken one does (buildAskDirective, channel 'im'), or
+  // the scheduling sign-off's. Appended last, as buildScenePrompt does.
+  if (context.askDirective) prompt += `\n${context.askDirective}\n`;
 
   return prompt;
 }
