@@ -397,12 +397,16 @@ await check('buildCookEffects: seasonings TRANSFORM, fats CONSUME, and the plate
     const destroy = lines.filter(l => l.startsWith('DESTROY_ITEM '));
     const before = stackQty(pantry.contents, 'salt') + stackQty(pantry.contents, 'oil');
     applyLines(h, lines);
-    const landed = plateStack(h, fridge.id);
+    // 2026-09-28 (user): the whole batch lands in the BAG, none of it eaten
+    // (it used to land in the fridge minus one auto-eaten serving).
+    const landed = plateStack(h, null);
     return transform.length === 1 && /TRANSFORM_ITEM salt 1 /.test(transform[0])
       && consume.length === 1 && /CONSUME_ITEM oil 1 /.test(consume[0])
       && step.length === 1 && destroy.length === 3
+      && !lines.some(l => l.startsWith('EAT_ITEM '))
       && stackQty(pantry.contents, 'salt') + stackQty(pantry.contents, 'oil') === before - 2
-      && !!landed && landed.meta.plate.recipeKey === 'stirfry' && stackServingsLeft(landed) === 2;
+      && !!landed && landed.meta.plate.recipeKey === 'stirfry' && stackServingsLeft(landed) === landed.meta.plate.servings.total
+      && !(fridge.contents || []).some(s => s?.meta?.plate);
   })()`));
 
 await check('the bare {recipe} shape still works (phase-3/4 regression): DESTROY lines, plate, dish footprint',
@@ -414,10 +418,10 @@ await check('the bare {recipe} shape still works (phase-3/4 regression): DESTROY
     const lines = buildCookEffects(cookCtx(h), { recipe: RECIPES.pasta });
     const dishLines = lines.filter(l => l.startsWith('ADD_DISHES '));
     applyLines(h, lines);
-    const stack = plateStack(h, objIn(h, 'fridge').id);
+    const stack = plateStack(h, null); // the bag (2026-09-28 — was the fridge, minus an auto-eaten serving)
     return dishLines.length === 4 && sink.dishUnits === 7 && stove.state.burner === 'crusty'
       && !!stack && stack.meta.plate.recipeKey === 'pasta' && stack.meta.plate.grade === stack.meta.plate.grade
-      && stackServingsLeft(stack) === 2;
+      && stackServingsLeft(stack) === stack.meta.plate.servings.total;
   })()`));
 
 console.log('\n7. buildPlate — the engine stamps execution onto the snapshot');

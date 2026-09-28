@@ -362,7 +362,8 @@ await check('autoCookPlate is deterministic per (state, seed)',
     return JSON.stringify(autoCookPlate(h, RECIPES.stirfry, 99)) === JSON.stringify(autoCookPlate(h, RECIPES.stirfry, 99));
   })()`));
 
-await check('the full auto path via buildCookEffects: ingredients eaten, plate in the fridge, proof recorded',
+// 2026-09-28 (user): the whole batch lands in the BAG, nothing eaten at the stove.
+await check('the full auto path via buildCookEffects: ingredients used, the whole batch in the bag, proof recorded',
   api(`(() => {
     const h = stockRecipe(house('p6-full', 1), RECIPES.stirfry);
     const seed = 7;
@@ -374,8 +375,8 @@ await check('the full auto path via buildCookEffects: ingredients eaten, plate i
     const unlockLine = lines.filter(l => l.startsWith('AUTO_COOK_UNLOCK '));
     if (unlockLine.length !== 1) return 'no unlock line despite a floored plate: ' + lines.join(' | ');
     applyLines(h, lines);
-    const landed = plateStack(h, objIn(h, 'fridge').id);
-    return !!landed && landed.meta.plate.recipeKey === 'stirfry' && stackServingsLeft(landed) === 2
+    const landed = plateStack(h, null);
+    return !!landed && landed.meta.plate.recipeKey === 'stirfry' && stackServingsLeft(landed) === landed.meta.plate.servings.total
       && h.world.autoCookCleared.stirfry === plate.grade
       && stackQty(objIn(h, 'pantry').contents, 'oil') === 2 && stackQty(objIn(h, 'pantry').contents, 'salt') === 1;
   })()`));

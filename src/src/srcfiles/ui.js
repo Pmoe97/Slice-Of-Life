@@ -4329,8 +4329,9 @@ async function doToggleHouseRule() {
 // goal "doesn't seem to make sense"): this used to hand over the FIRST
 // matching item in the bag without asking which, and never said a word —
 // while the conversation's Give a Gift moved items but never counted for a
-// goal, and neither could see the cooked meal sitting in the fridge. Now
-// there is one flow: the chip opens (or resumes) the conversation straight
+// goal, and neither could see the cooked meal (it used to land in the
+// fridge; since 2026-09-28 cooking puts it in your bag). Now there is one
+// flow: the chip opens (or resumes) the conversation straight
 // into the gift picker, where the goal's item is pinned first, and the gift
 // runs as an ordinary ask turn — their reply, the one-serving hand-over,
 // the goal step. Someone who won't talk to you (a cold shoulder, or a talk
@@ -4369,9 +4370,7 @@ async function doGiveItem(npcId) {
     return;
   }
   const itemLabel = moved.label || 'something';
-  addLogEntry('narration', moved.where === 'bag'
-    ? `You give ${itemLabel} to ${name}.`
-    : `You leave ${moved.isPlate ? `a plate of ${itemLabel}` : itemLabel} out for ${name}.`);
+  addLogEntry('narration', `You give ${moved.isPlate ? `a plate of ${itemLabel}` : itemLabel} to ${name}.`);
   const goalMet = !!goal && giftMatchesGoal(goal.category, moved.category);
   if (goalMet) checkChainQuestProgress('give_item', npcId, goal.category);
   let npcOut = currentGameState.npcs[npcId];
@@ -8431,8 +8430,8 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
   let text = forcedText;
   let composed = null; // conversation overhaul D4 — { askId, values, flavor }
   // Conversation overhaul D6: the gift argument is a pick { defId, from,
-  // index, label } — the bag or the fridge/pantry. A bare defId (every
-  // caller before D6) is a bag pick.
+  // index, label } — a specific stack in the bag. A bare defId (every
+  // caller before D6) finds the first stack of that def.
   const giftPick = giftDefId && typeof giftDefId === 'object' ? giftDefId
     : giftDefId ? { defId: giftDefId, from: 'player' } : null;
   if (giftPick) giftDefId = giftPick.defId;
@@ -8442,11 +8441,7 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
     giftPick.index = src.index;
     giftPick.label = src.label;
     const name = currentGameState?.npcs?.[convState?.npcId]?.bible?.name || 'them';
-    const inKitchen = ['kitchen', 'dining'].includes(currentGameState?.player?.location);
-    const thing = src.isPlate ? `a plate of ${src.label}` : `the ${src.label}`;
-    text = src.where === 'bag' ? `You hand ${name} the ${src.label}.`
-      : inKitchen ? `You get ${thing} out of the ${src.where} and hand it to ${name}.`
-      : `You tell ${name} you saved them ${thing} — it's in the ${src.where}.`;
+    text = `You hand ${name} ${src.isPlate ? `a plate of ${src.label}` : `the ${src.label}`}.`;
     if (input) input.value = '';
   } else if (borrowDefId) {
     const npc = currentGameState?.npcs?.[convState?.npcId];
@@ -9049,11 +9044,11 @@ function openConvPhotoPicker() {
 // pick { defId, from, index, label } or null on cancel; doConvGiveGift owns
 // the send.
 //
-// Conversation overhaul D6: the tiles are giftSources — the bag AND ready
-// food in the fridge/pantry — each saying where it is, and anything that
-// satisfies this person's open goal step is pinned first with a "For your
-// goal" badge (the Care Package's cooked meal, sitting in the fridge, is
-// the first thing on the list). `opts.npcId` defaults to the conversation.
+// Conversation overhaul D6: the tiles are giftSources (your bag), and
+// anything that satisfies this person's open goal step is pinned first with
+// a "For your goal" badge (the Care Package's cooked meal, in your bag since
+// cooking puts it there, is the first thing on the list). `opts.npcId`
+// defaults to the conversation.
 function openConvGiftPicker(opts = {}) {
   return new Promise((resolve) => {
     const overlay = document.getElementById('modal-overlay');
@@ -9113,25 +9108,23 @@ function openConvGiftPicker(opts = {}) {
   });
 }
 
-// D6 — the picker's rows, in order: goal matches first, then the bag, then
-// the kitchen. `opts.onlyCategory` narrows to one goal category (the
-// cold-shoulder hand-over takes gifts only). Pure over gs.
+// D6 — the picker's rows, in order: goal matches first, then the rest of
+// the bag in bag order. `opts.onlyCategory` narrows to one goal category
+// (the cold-shoulder hand-over takes gifts only). Pure over gs.
 function giftPickerEntries(gs, npcId, opts = {}) {
   const goal = giftGoalFor(gs, npcId);
-  const rank = { bag: 1, fridge: 2, pantry: 3 };
   return giftSources(gs)
     .filter(e => !opts.onlyCategory || giftMatchesGoal(opts.onlyCategory, e.category))
     .map(e => ({ ...e, forGoal: !!goal && giftMatchesGoal(goal.category, e.category) }))
-    .sort((a, b) => (b.forGoal - a.forGoal) || ((rank[a.where] || 9) - (rank[b.where] || 9)));
+    .sort((a, b) => (b.forGoal - a.forGoal) || (a.index - b.index));
 }
 
-// "1 serving (3 left) · In the fridge", "×2 · Snacks · In your bag".
+// "1 serving (3 left)", "×2 · Snacks".
 function giftPickerMeta(e) {
-  const where = e.where === 'bag' ? 'In your bag' : `In the ${e.where}`;
-  if (e.isPlate) return `1 serving${e.servingsLeft > 1 ? ` (${e.servingsLeft} left)` : ''} · ${where}`;
+  if (e.isPlate) return `1 serving${e.servingsLeft > 1 ? ` (${e.servingsLeft} left)` : ''}`;
   const def = stackDef(e.stack);
   const group = (SORT_GROUPS[def.sortGroup] || {}).label || def.category || 'Item';
-  return `${e.qty > 1 ? `×${e.qty} · ` : ''}${group} · ${where}`;
+  return `${e.qty > 1 ? `×${e.qty} · ` : ''}${group}`;
 }
 
 // --- Conversation overhaul D6: gifts and goals ---------------------------

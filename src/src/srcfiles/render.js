@@ -2662,10 +2662,10 @@ function openCookScreen(recipe, gs, ctx) {
 
       // Grade reveal + quality bar. The grade shown is the PLATE's final
       // grade — buildPlate's ingredient×execution blend — because that is
-      // the dish that actually lands in the fridge (revealing the raw
+      // the dish that actually lands in your bag (revealing the raw
       // execution quality alone would mislead: a good ingredient story
       // still makes a D plate out of a botched cook). Built with the same
-      // inputs Serve uses, so what's revealed is what's eaten.
+      // inputs Plate it uses, so what's revealed is what lands in your bag.
       const platePreview = buildPlate(gs, recipe, recipe.ingredients, recipe.method, recipe.cookware, { plan, outcome, seed });
       const qualityPct = Math.round(platePreview.quality * 100);
       const grade = platePreview.grade;
@@ -2759,7 +2759,7 @@ function openCookScreen(recipe, gs, ctx) {
       const serveBtn = document.createElement('button');
       serveBtn.type = 'button';
       serveBtn.className = 'btn';
-      serveBtn.textContent = 'Serve it';
+      serveBtn.textContent = 'Plate it'; // the batch goes into your bag — nothing is eaten
       serveBtn.addEventListener('click', () => {
         const finalOutcome = resolveCookPlan(plan, gs);
         const plate = buildPlate(gs, recipe, recipe.ingredients, recipe.method, recipe.cookware, { plan, outcome: finalOutcome, seed });
@@ -4218,10 +4218,9 @@ function buildActionGroups(gs, sceneState, phase, energyDepleted) {
       ? quest.steps[quest.currentStep].itemCategory
       : (coldShoulderActive(npc) ? 'gift' : null);
     if (wantCategory || quest) {
-      // Conversation overhaul D6: the bag AND ready food in the fridge/pantry
-      // (giftSources — a cooked meal lands in the fridge, which is exactly
-      // where the Care Package's "Give the meal" step's meal is), and the
-      // chip says what it is for instead of "Give Item".
+      // Conversation overhaul D6: giftSources (the bag, where a cooked meal
+      // lands — the Care Package's "Give the meal" step's meal), and the chip
+      // says what it is for instead of "Give Item".
       const hasItem = giftSources(gs).some(e => giftMatchesGoal(wantCategory, e.category));
       if (hasItem) {
         const noun = { meal: 'a Meal', food: 'Snacks', gift: 'a Gift' }[wantCategory] || 'Something';

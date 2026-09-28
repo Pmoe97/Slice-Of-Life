@@ -1289,24 +1289,47 @@ function collectAmountFor(gs, npcId, flavor, extra) {
   return want > 0 ? Math.max(0, Math.min(want, owed)) : 0;
 }
 
-// ask_chore — the Phase 6 chore leaf (D12): \"do X now\". Decide by AFFECTION
+// ask_chore — the Phase 6 chore leaf (D12): "do X now". Decide by AFFECTION
 // with an energy term (a tired NPC is less likely to take on a task right
-// now); accepted → NPC_ACTIVITY so the sim actually shows them doing it
-// (the label lands on npc.activity, which both the room card and the scene
-// prompt read) + a MEMORY_FACT; declined → deflect. \"Schedule\" in the
-// plan's decide formula is the presence gate itself — they are standing in
-// front of you mid-conversation, so \"now\" is possible by definition; a
-// deeper schedule probe would be a second gate with no lever.
+// now); the verdict is unchanged.
+//
+// 2026-09-28 (user): what it DOES changed. It used to set their activity
+// LABEL to the flavor text ("take the bins out") and write a memory — the
+// bin stayed full, the dishes stayed dirty. Now the ask picks a REAL chore —
+// the composer's chips offer only chores that need doing (drives.js
+// npcChoreOptions: the dishes, the trash, the laundry, a dirty toilet, a
+// messy common room, by the same checks the player's own chore buttons use)
+// — and a yes queues it on them (queueNpcChore). At their next free moment
+// they go and do it for real (drives.js tryPendingChore): once you've
+// finished talking in person, or right away / when they get home if you
+// asked by text (it's `remote` now) — after their shift or their sleep if
+// that's where their schedule has them. Typed `$RequestChore take the bins out`
+// still works through the chore words (npcChoreFromText). The chore never
+// enters the verdict (D1) — only whether there is one to ask about.
 const ASK_CHORE = {
   id: 'RequestChore',
   category: 'chores',
   label: 'Chore Request',
-  help: '<optional: what needs doing — e.g. take the bins out>',
+  help: 'pick what needs doing',
   template: '$RequestChore <Optional>',
   defaultFlavor: 'Could you help me out with something?',
-  available: () => true, // present + awake (they're in the conversation) → now is possible
+  remote: true,
+  args: [{
+    id: 'chore', kind: 'choice', label: 'Chore',
+    options: (gs) => npcChoreOptions(gs).map(o => ({ id: o.id, label: o.label })),
+    initial: (gs) => (npcChoreOptions(gs)[0] || {}).id || null,
+  }],
+  available: (gs) => npcChoreOptions(gs).length > 0, // nothing needs doing → nothing to ask
   decide(gs, npc, npcId, flavor, ctx, seedCtx) {
     if (!this.available(gs, npc, ctx)) return { accept: false, reason: 'unavailable' };
+    // A chip is honoured while it still needs doing, else only the words
+    // (never a chore you didn't pick); typed with no chip, the words, else
+    // the chip's own default — the first chore that needs doing.
+    const picked = seedCtx && seedCtx.chore;
+    const choreId = picked
+      ? (npcChoreNeeded(gs, picked) ? picked : npcChoreFromText(gs, flavor))
+      : (npcChoreFromText(gs, flavor) || (npcChoreOptions(gs)[0] || {}).id || null);
+    if (!choreId) return { accept: false, reason: 'unavailable' };
     const rel = npc.relPlayer || {};
     const energy = npc.needs && typeof npc.needs.energy === 'number' ? npc.needs.energy : 50;
     const score = (rel.affection || 0) - (rel.tension || 0) * ASK_TUNING.tensionPenaltyWeight
@@ -1315,23 +1338,42 @@ const ASK_CHORE = {
     const rng = askSeed(gs, npcId, this.category, seedCtx.day, seedCtx.count);
     const noise = (rng() - 0.5) * 2 * ASK_TUNING.acceptNoiseRange;
     const accept = score + noise >= ASK_TUNING.acceptThreshold;
-    return { accept, reason: accept ? 'accept' : 'cool' };
+    // How you asked, and so when it happens — for the writer's note and the
+    // queued request (never the verdict). Their schedule says when they're
+    // next free: a work shift (even one worked from home), the commute or
+    // sleep all hold the chore until after.
+    const via = ctx && ctx.channel === 'im' ? 'text' : 'talk';
+    const home = !!(npc.location && ROOMS[npc.location]);
+    const clock = gs.meta && gs.meta.clock;
+    const busy = !!clock && COMMITMENT_TUNING.busyBlocks.includes(resolveScheduleActivity(npc, clock).block);
+    return {
+      accept, reason: accept ? 'accept' : 'cool',
+      choreId, choreLabel: npcChoreLabel(choreId), choreVia: via,
+      choreWhen: via === 'text' && !home ? 'home' : busy ? 'later' : via === 'text' ? 'now' : 'after',
+    };
   },
-  // D12 — accepted: the NPC's activity becomes the task (the flavor, briefed
-  // to the same cap NPC_ACTIVITY itself enforces) + memory; declined: memory.
-  effects(gs, npc, npcId, decision, data) {
-    const task = flavorBrief(data && data.flavor, EFFECT_LIMITS.npcActivityMaxLength) || 'help out';
-    return [
-      decision.accept ? `NPC_ACTIVITY ${npcId} ${task}` : null,
-      decision.accept
-        ? `MEMORY_FACT ${npcId} The player asked them to ${task} and they're doing it now.`
-        : `MEMORY_FACT ${npcId} The player asked them to ${task} and they declined.`,
-    ].filter(Boolean);
+  // D12 — accepted/declined both remembered, naming the chore.
+  effects(gs, npc, npcId, decision) {
+    if (!decision.choreId) return [];
+    const task = String(decision.choreLabel || 'help out').toLowerCase();
+    return [decision.accept
+      ? `MEMORY_FACT ${npcId} The player asked them to ${task} and they agreed to.`
+      : `MEMORY_FACT ${npcId} The player asked them to ${task} and they declined.`];
+  },
+  // The request itself — the tick does the chore (drives.js tryPendingChore).
+  postEffects(gs, npc, npcId, decision) {
+    if (decision.accept && decision.choreId) queueNpcChore(gs, npcId, decision.choreId, decision.choreVia);
   },
   leafNote(decision) {
-    return decision.accept
-      ? "- You agreed to do what they asked. Say so in character and get on with it — be the kind of person who actually follows through."
-      : "- You don't feel like doing that right now. Decline in character, matching your stance, without being harsh.";
+    if (!decision.accept) {
+      return "- You don't feel like doing that right now. Decline in character, matching your stance, without being harsh.";
+    }
+    const task = String(decision.choreLabel || 'help out').toLowerCase();
+    const when = decision.choreWhen === 'now' ? "you'll get on it now"
+      : decision.choreWhen === 'home' ? "you'll do it when you get home"
+      : decision.choreWhen === 'later' ? "you'll do it once you're free"
+      : "you'll do it as soon as you two are done talking";
+    return `- They asked you to ${task} and you agreed — ${when}. Say so in character, and mean it; don't describe doing it.`;
   },
 };
 
@@ -1780,8 +1822,8 @@ const ASK_GIFT = {
   gift: true,
   // D5 — presence is true by definition mid-conversation; the real gate is
   // "is there something to give". decide() re-checks it (belt and braces).
-  // Conversation overhaul D6: the source list is giftSources — the bag AND
-  // ready food in the fridge/pantry (a cooked meal lands in the fridge).
+  // Conversation overhaul D6: the source list is giftSources (the bag —
+  // where a cooked meal now lands).
   available: (gs, npc, ctx) => {
     const roomId = (npc && npc.location) || (ctx && ctx.scene && ctx.scene.roomId) || null;
     const present = !roomId || getPresentNpcIds((gs && gs.npcs) || {}, roomId).some(id => gs.npcs[id] === npc);
@@ -1806,11 +1848,10 @@ const ASK_GIFT = {
     // read (the mark is written by postEffects); the field only appears when
     // true, so every non-birthday decision keeps its exact old shape.
     const birthday = typeof birthdayGiftBonusApplies === 'function' && birthdayGiftBonusApplies(gs, npcId);
-    // D6 — where it came from and what it is ride along ONLY when they say
-    // something (a plate, food, the fridge), so an ordinary present from the
-    // bag keeps its exact decision shape (verify-birthdays pins it).
+    // D6 — what it is rides along ONLY when it says something (a plate, food),
+    // so an ordinary present keeps its exact decision shape (verify-birthdays
+    // pins it). Always from the bag (the user's call, 2026-09-28).
     const food = GIFT_READY_FOOD.has(def.category);
-    const handed = src.where === 'bag' || ['kitchen', 'dining'].includes(gs && gs.player && gs.player.location);
     return {
       accept: true,
       reason,
@@ -1819,7 +1860,6 @@ const ASK_GIFT = {
       ...(birthday ? { birthday: true } : {}),
       ...(food ? { giftFood: true } : {}),
       ...(src.isPlate ? { giftPlate: true } : {}),
-      ...(src.where !== 'bag' ? { giftWhere: src.where, giftHanded: handed } : {}),
     };
   },
   // D12 — the gift is remembered on every actual outcome (the memory IS the
@@ -1841,13 +1881,11 @@ const ASK_GIFT = {
     // still earns it — the occasion is what was remembered).
     const bdayLines = (decision.birthday && typeof birthdayGiftEffectLines === 'function') ? birthdayGiftEffectLines(gs, npcId) : [];
     // D6: the move itself is postEffects' giveGiftUnit (one serving of a
-    // plate, from the bag OR the fridge) — MOVE_ITEM could only take the
-    // first stack of a def out of the bag, and moved a plate's whole batch.
+    // plate, the exact stack picked) — MOVE_ITEM could only take the first
+    // stack of a def, and moved a plate's whole batch.
     const given = decision.giftLabel || label;
     const giftLine = decision.giftPlate
-      ? `MEMORY_FACT ${npcId} The player saved ${who} a plate of ${given}${decision.giftMatch ? ', and it really landed' : ' — a kind thought'}.`
-      : (decision.giftFood && decision.giftWhere)
-        ? `MEMORY_FACT ${npcId} The player set aside the ${given} for ${who} — a kind thought.`
+      ? `MEMORY_FACT ${npcId} The player gave ${who} a plate of ${given}${decision.giftMatch ? ', and it really landed' : ' — a kind thought'}.`
       : decision.giftMatch
         ? `MEMORY_FACT ${npcId} The player gave ${who} the ${given}, and it really landed.`
         : `MEMORY_FACT ${npcId} The player gave ${who} the ${given}; they accepted it politely.`;
@@ -1892,11 +1930,8 @@ const ASK_GIFT = {
     }
     // D6 — food is looked-after, not judged as a present.
     if (decision.giftFood) {
-      const saved = decision.giftWhere && !decision.giftHanded;
       const what = decision.giftPlate ? `a plate of their cooking (${label})` : label;
-      return saved
-        ? `- They saved you ${what} — it's waiting for you in the ${decision.giftWhere}. React in character, however this person takes being looked after; no need to eat it right now.`
-        : `- They brought you ${what}. React in character, however this person takes being looked after — you don't have to eat it this second.`;
+      return `- They brought you ${what}. React in character, however this person takes being looked after — you don't have to eat it this second.`;
     }
     return `- They gave you: ${label}. It is not quite your thing, but they made the gesture — accept it graciously, without gushing or pretending it is exactly what you wanted.`;
   },

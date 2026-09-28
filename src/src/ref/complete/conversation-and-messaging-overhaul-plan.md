@@ -1,8 +1,10 @@
 # Conversation & Messaging Overhaul
 
-Status: **All six phases built and verified (0.14.3). Stays in `wip/` until the user answers the four (confirm) calls below.** Opened 2026-09-27 from the user's bug/QoL
+Status: **Complete.** All six phases built and verified (0.14.3); the user
+answered the four (confirm) calls on 2026-09-28 and the follow-up they asked
+for shipped as 0.14.4 (Phase 7). Opened 2026-09-27 from the user's bug/QoL
 list ("We need to fix conversing in this game").
-Last updated 2026-09-27.
+Last updated 2026-09-28.
 
 ## Companions
 
@@ -27,7 +29,7 @@ something lands; they must never disagree.
 
 ## Handoff — read this first
 
-**Resume at:** nothing to build. Open: the user's answers to the (confirm) calls (see *Open questions for the user*), then move this plan to `complete/`.
+**Resume at:** nothing — the plan is complete. The user's answers are recorded under *Open questions for the user*; Phase 7 is the follow-up they asked for.
 
 **Last session's notes:** Plan written from a survey of `ui.js`
 (conversation overlay, ask menu, gift/borrow pickers), `asks.js`,
@@ -175,7 +177,7 @@ reply as a question.
   template. `{ } [ ]` are stripped (Perchance template trap).
 
 ### The request menu
-- **D3 — Renamed "Interact" (confirm), opens at the top level.** The `+`
+- **D3 — Renamed "Interact" (confirmed by the user), opens at the top level.** The `+`
   menu holds requests, gifts, money, photos, affection, apologies — "Asks"
   no longer describes it. It opens on the category list every time
   (reverses actions-and-activities D6, at the user's request).
@@ -189,8 +191,7 @@ reply as a question.
   `extra` exactly like `giftDefId` — never into `decide()`. Flavor parsing
   stays only as the fallback for typed `$` input.
   - Give Money: amount (preset chips + custom, capped by wallet) and
-    **Gift / Loan** (confirm the two colours: gift = warm/positive, loan =
-    amber).
+    **Gift / Loan** (gift = green, loan = amber — confirmed by the user).
   - Loan Request: amount (chips capped by the relationship-phase cap, which
     the composer shows).
   - Repay a Loan / Collect a Debt: amount, defaulting to everything owed.
@@ -198,12 +199,12 @@ reply as a question.
     roommates to include (toggles). Throw a Party: roommates to include.
 
 ### Gifts
-- **D6 — One giving pipeline, and it can reach the fridge (confirm).**
-  - The gift picker lists the bag **and** ready-to-eat food in the
-    apartment's fridge/pantry (home-cooked plates, meals, snacks — never raw
-    ingredients), labelled by where it is. From outside the kitchen the
-    gesture is "I saved you a plate — it's in the fridge"; in the kitchen or
-    dining room it's handed over.
+- **D6 — One giving pipeline, bag only (the user's call, 2026-09-28).**
+  - *As built in 0.14.3* the picker also reached ready food in the flat's
+    fridge/pantry ("I saved you a plate"). The user chose **bag only**, and
+    asked for cooking to put the whole batch in the bag instead of the
+    fridge (Phase 7), so the meal a goal needs is in the bag anyway. The
+    fridge reach, its "where" labels and the saved-a-plate wording are gone.
   - A home-cooked plate gives **one serving** (split into their things; they
     eat it when hungry), never the whole batch.
   - Items that satisfy an active goal step for this person are pinned to the
@@ -219,7 +220,8 @@ reply as a question.
   text field opens a sheet of the asks a phone can carry — a leaf opts in
   with `remote: true`: Ask About Them, Hang Out, Meal Invitation, Invite,
   Throw a Party, all four money leaves, Photo Request, Share a Photo, Post a
-  Photo of Us, Apologize, Ask for Space, the subscription talk. Same
+  Photo of Us, Apologize, Ask for Space, the subscription talk — and, since
+  0.14.4, **Chore Request** (Phase 7). Same
   registry, same `decide()`, same composer and argument chips. Over text:
   a photo request that's accepted comes back as a generated photo *in the
   thread* (persisted, rerollable, same record contract as chat images);
@@ -302,24 +304,75 @@ serving + goal hook), `ui.js` (picker, chip → conversation).
 **Verification:** `verify-im-asks.js`; live on the phone in the harness.
 
 ### Phase 6 — Close-out
-Full suite, patch notes (0.14.2 entry), ARCHITECTURE/README rows.
+Full suite, patch notes (0.14.3 entry), ARCHITECTURE/README rows.
+
+### Phase 7 — The user's follow-up (0.14.4, 2026-09-28)
+The user's answers to the four questions below, plus two asks of their own:
+
+- **Cooking goes to the bag, nothing is eaten.** `buildCookEffects`
+  (defs.actions.js) writes the whole batch as one `cooked_meal` stack into
+  the player's bag (`COOK_STEP cooked_meal 1 player {plate…}`); the fridge
+  lookup and the auto-`EAT_ITEM` are gone. `cookNarration` is just
+  `You now have <meal>. (Grade <g>).` The cook screen's button reads
+  "Plate it".
+- **Gifts are bag only (D6).** `giftSources` (inventory.js) lists the bag
+  (no key items, nothing borrowed, nothing rotten, no empty plates);
+  `giveGiftUnit` retimes the given unit with `retimeStack`. A plate still
+  gives one serving.
+- **Chore Request really happens.** Before, a yes changed the roommate's
+  activity label and wrote a memory — the dishes stayed in the sink. Now:
+  - The leaf has a **chore** choice argument built from `npcChoreOptions`
+    (drives.js): only chores that need doing, by the *same*
+    `ACTION_REQUIREMENT_CHECKERS` gates as the player's own chore buttons
+    (dishes, trash, laundry — needs working machines, a dirty toilet, a
+    messy common room). None needing doing → the ask isn't offered. Typed
+    `$RequestChore take the bins out` still maps through `npcChoreFromText`.
+    The chore never enters the verdict (D1).
+  - A yes queues it (`queueNpcChore` → `npc.flags._choreRequest`).
+    `tryPendingChore`, called from `evaluateDrives` right after the
+    held-commitment block, does it at the roommate's next free tick —
+    home, awake, not in a conversation with you: the world change through
+    `applyEffects` (plus the laundry/tidy runners), the action's utility
+    meters, and a `chore_request` commitment holding the activity for the
+    action's real time cost (`openCommitment` now honours a drive choice's
+    `durationMinutes`). Already done by someone else → dropped quietly.
+    Unfulfilled after 36 h → expires.
+  - **By text** (`remote: true`): home and free → now; out → when they get
+    home; home but their schedule has them busy (a work shift, heading out,
+    asleep — `COMMITMENT_TUNING.busyBlocks`) → once they're free. The
+    writer's note says which, so the reply promises the right thing. When
+    it's done, a `✓ <Name> did the dishes.` system line lands in the thread
+    and counts as unread.
+- **Verification:** `verify-chores.js` (34), `verify-gift-flow.js`,
+  `verify-ask-composer.js`, `verify-im-asks.js`, the food harnesses
+  (`verify-food-phase3/5/6.js`, `verify-acc-p8.js`, `verify-aa-p9.js`)
+  updated for the bag. Live in `dev-harness.html` with a stubbed model: the
+  real cook screen (recipe → prep → "Start cooking" → "Plate it") left a
+  3/3 plate in the bag and "You now have Pasta. (Grade C)."; a chore asked
+  in person was done the first tick after the talk; texted chores were done
+  now / after the shift, each with its ✓ line; a gift listed only the bag
+  plate and left the fridge plate alone.
 
 ## Open questions for the user
 
-Decided on the user's behalf and built; each is easy to change:
+Decided on the user's behalf and built; **all four answered 2026-09-28**
+(answers in bold after each):
 
 1. **D3 — the name "Interact".** Replaces "Asks"/"Requests" on the + menu
    (conversation and Messages). Alternatives: "Actions", "Do…", "More".
+   **"Interact is great."** Kept.
 2. **D5 — Gift = green, Loan = amber.** The Give Money switch's colours
-   (and the transfer card's edge in Messages).
+   (and the transfer card's edge in Messages). **"Good."** Kept.
 3. **D6 — the gift list reaches the flat's fridge and pantry.** Anything
    ready to eat that isn't labelled as someone else's can be given, one
    serving at a time; from outside the kitchen it's "I saved you a plate".
    The alternative is bag-only plus a "take it out of the fridge" step.
+   **Bag only** — and cooked meals now go to the bag (Phase 7).
 4. **D7 — what texting can do.** Everything but the physical asks (hugs and
    the rest of Affection, handing over an item, borrowing/returning,
    follow-me/tour, chores). Chores by text ("can you do the dishes?") is the
-   obvious candidate to add.
+   obvious candidate to add. **Add it, and fix the underlying issue** —
+   an agreed chore never actually got done. Both in Phase 7.
 
 ## Close-out notes (2026-09-27)
 
@@ -336,8 +389,8 @@ Decided on the user's behalf and built; each is easy to change:
   live order; the director runs once per panel, sees the newest line, and
   its moment is in the stored panel prompt.
 - Not done, deliberately (future work, not in scope): NPCs *initiating*
-  asks over text; chores by text (question 4); a real model's phrasing of
-  the texting directive (every check here used a stubbed model).
+  asks over text; a real model's phrasing of the texting directive (every
+  check here used a stubbed model). Chores by text shipped in Phase 7.
 
 ## Status
 
@@ -349,3 +402,4 @@ Decided on the user's behalf and built; each is easy to change:
 | 4 — Gifts | built + verified (`verify-gift-flow.js` 51; live in the harness) |
 | 5 — Messages | built + verified (`verify-im-asks.js` 54; live on phone + computer) |
 | 6 — Close-out | done — full suite 6,781+ pass / the same 12 known failures as the baseline (verify-c2 ×9, verify-i4 ×2, verify-p4 ×1, all in the triage doc); `GAME_VERSION` 0.14.3 + patch notes; ARCHITECTURE/README/verify README rows; `asks-llm-prompt.md` synced |
+| 7 — Follow-up (cooking to bag, bag-only gifts, chores that happen, chores by text) | built + verified (`verify-chores.js` 34; live in the harness); `GAME_VERSION` 0.14.4 + patch notes |

@@ -13262,7 +13262,7 @@ const DRIVE_COOLDOWN_KEY = '_driveCooldowns';
 // header). The two triggers can coincide; when they don't, a plan-completion
 // bump still needs a real reason a save-version check would care about, or
 // at minimum a patch notes entry — this string IS the app's version list.
-const GAME_VERSION = '0.14.3';
+const GAME_VERSION = '0.14.4';
 
 const SAVE_TUNING = {
   manualBaseSlots: 12,       // manual_0..manual_11; grow on demand above this

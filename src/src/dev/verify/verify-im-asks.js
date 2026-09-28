@@ -268,6 +268,16 @@ check('an accepted photo request lands IN the thread as their photo', photo.from
 check('…with the chat-image record contract (id, prompt, seed) so it re-paints and rerolls',
   photo.image && photo.image.id && photo.image.prompt && typeof photo.image.seed === 'number');
 check('…and the next prompt knows a photo was sent', J(`(() => { const id = __ids(currentGameState)[0]; return buildImPrompt(assembleImContext(currentGameState, id), 'nice'); })()`).includes('You: [sent a photo: '));
+const chore = await A(`(async () => {
+  currentGameState = __mk(); const id = __ids(currentGameState)[0];
+  const sink = Object.values(currentGameState.objects.room_kitchen).find(o => o.defId === 'sink_kitchen');
+  sink.dishes = { plate: 3 }; sink.dishUnits = 3;
+  await doImAskSend(id, 'phone', { askId: 'RequestChore', values: { chore: 'dishes' }, flavor: '' });
+  const msgs = currentGameState.world.computer.apps.im.threads[id].msgs;
+  return { req: currentGameState.npcs[id].flags._choreRequest, tag: msgs.find(m => m.from === 'player').tag };
+})()`);
+check('a chore asked by text is queued as a TEXT request (so they text back when it\'s done)',
+  chore.req && chore.req.choreId === 'dishes' && chore.req.via === 'text' && chore.tag === 'Chore Request · Do the dishes', JSON.stringify(chore));
 const composed = await A(`(async () => {
   currentGameState = __mk(); const id = __ids(currentGameState)[0];
   IM_COMPOSER = { npcId: id, askId: 'GiveMoney', values: { amount: 999, mode: 'gift' } };

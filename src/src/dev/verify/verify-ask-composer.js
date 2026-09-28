@@ -94,8 +94,8 @@ check('every amount argument has a ceiling (max) — the composer never offers w
   argLeaves.every(l => l.args.filter(a => a.kind === 'amount').every(a => a.hasMax)));
 check('every choice/multi argument has options',
   argLeaves.every(l => l.args.filter(a => a.kind !== 'amount').every(a => a.hasOpts)));
-check('argument ids are the ones resolveAsk\'s readers look for (amount, mode, kind, guests)',
-  argLeaves.every(l => l.args.every(a => ['amount', 'mode', 'kind', 'guests'].includes(a.id))));
+check('argument ids are the ones resolveAsk\'s readers look for (amount, mode, kind, guests, chore)',
+  argLeaves.every(l => l.args.every(a => ['amount', 'mode', 'kind', 'guests', 'chore'].includes(a.id))));
 api(`__g = __mk(); __id = __ids(__g)[0]; __n = __g.npcs[__id];`);
 const presets = J(`ASK_TYPES.GiveMoney.args[0].presets(__g, __n, __id)`);
 check('Give Money offers everyday amounts, not the top of the wallet', presets.join(',') === '5,10,20,50,100', presets.join(','));
@@ -275,14 +275,17 @@ check('the directive tells the writer who "they" means in the reason line',
 // ------------------------------------------------------------------ 6
 console.log('\n6. D7: what a phone can carry');
 const remote = J(`askRemoteCategories().flatMap(c => c.children.map(l => l.id))`);
-const PHYSICAL = ['RequestHug', 'RequestKissCheek', 'RequestKissLips', 'RequestCuddle', 'RequestIntimacy', 'RequestGift', 'BorrowItem', 'ReturnItem', 'RequestFollow', 'RequestTour', 'RequestChore'];
-const physicalIds = J(`Object.values(ASK_TYPES).filter(l => ['affection', 'gifts', 'follow', 'chores'].includes(l.category)).map(l => l.id)`);
+// 2026-09-28 (user): chores joined the texting set once an agreed chore
+// actually got done (verify-chores.js) — "can you take the bins out?" is a
+// normal text. Everything else here still needs you in the room.
+const physicalIds = J(`Object.values(ASK_TYPES).filter(l => ['affection', 'gifts', 'follow'].includes(l.category)).map(l => l.id)`);
 check('the plan\'s texting set is offered: plans, invites, all four money leaves, photos, apology, space, ask about them',
   ['RequestInfo', 'RequestHangout', 'RequestMeal', 'Invite', 'HouseParty', 'RequestLoan', 'RequestRepay', 'GiveMoney', 'CollectMoney',
     'RequestPhoto', 'SharePhoto', 'Feature', 'Apologize', 'AskForSpace', 'SubscriptionTalk'].every(id => remote.includes(id)),
   remote.join(','));
-check('nothing physical is offered over text (hugs, gifts in hand, borrowing, follow-me, chores)',
-  physicalIds.length >= 8 && physicalIds.every(id => !remote.includes(id)), physicalIds.filter(id => remote.includes(id)).join(','));
+check('nothing physical is offered over text (hugs, gifts in hand, borrowing, follow-me)',
+  physicalIds.length >= 7 && physicalIds.every(id => !remote.includes(id)), physicalIds.filter(id => remote.includes(id)).join(','));
+check('a chore request is offered by text', remote.includes('RequestChore'));
 check('every remote leaf resolves through the same registry as in person',
   remote.every(id => J(`!!(ASK_TYPES['${id}'] || ASK_SHARE_TYPES['${id}'])`)));
 

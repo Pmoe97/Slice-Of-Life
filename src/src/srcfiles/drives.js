@@ -182,6 +182,20 @@ function evaluateDrives(npc, npcId, npcs, resolved, gameState, rng, currentTick,
     releaseCommitment(gameState, npcId);
   }
 
+  // A chore they agreed to do (the Chore Request ask) comes before choosing
+  // anything of their own: free, home, awake and not mid-conversation with
+  // you, they go and do it — see tryPendingChore.
+  const chore = tryPendingChore(gameState, npcId, updatedNpc, resolved, currentTick);
+  if (chore) {
+    if (chore.clearFlags) updatedNpc = { ...updatedNpc, flags: { ...(updatedNpc.flags || {}), _choreRequest: undefined } };
+    if (chore.done) {
+      events.push(...chore.events);
+      activityOverride = chore.activity;
+      if (chore.roomId && chore.roomId !== location) locationOverride = chore.roomId;
+      return result();
+    }
+  }
+
   // --- 3. Choose one thing -----------------------------------------------
   const choice = choosePursuit(candidates);
   if (!choice) return result();
@@ -1852,6 +1866,190 @@ function isRoomAdjacent(roomA, roomB) {
   if (roomA === roomB) return true;
   const adj = ROOM_ADJACENCY[roomA] || [];
   return adj.includes(roomB);
+}
+
+// --- Chores a roommate agreed to do (2026-09-28) ---------------------------
+// The Chore Request ask used to change only the LABEL of what a roommate was
+// shown doing ("take the bins out") and write a memory — the bin stayed
+// full, the dishes stayed dirty. Now an agreed chore is real: the ask picks
+// one of these (only ones that actually need doing, by the SAME requirement
+// checkers the player's own chore buttons use — ACTION_REQUIREMENT_CHECKERS
+// — so the ask and the buttons can never disagree), queues it on the NPC
+// (flags._choreRequest), and at their next free decision — once you've
+// finished talking, or when they get home if you asked by text, or once a
+// work shift or sleep is over — they walk
+// to it and do it: the world change lands when they start (the way every
+// roommate chore already works — clean_common's cleanRoomObjects,
+// do_laundry's runHamperIntoWasher) and a commitment holds them there for
+// the chore's time.
+//
+// A chore id is `kind` or `kind:roomId` (toilets and tidying pick a room).
+const NPC_CHORE_KINDS = {
+  dishes: {
+    actionId: 'self.dishes', label: () => 'Do the dishes', activity: 'doing the dishes',
+    done: '{name} did the dishes.', words: ['dish', 'washing up', 'wash up', 'sink'],
+    rooms: (gs) => npcChoreRoomsWith(gs, 'sink_kitchen'),
+    lines: (gs) => dirtyDishScope(gs, 'kitchen').objs
+      .filter(o => dishUnitsOf(o) > 0).map(o => `CLEAN_DISHES ${o.id} ${dishUnitsOf(o)}`),
+  },
+  trash: {
+    actionId: 'trash.take_out', label: () => 'Take out the trash', activity: 'taking out the trash',
+    done: '{name} took out the trash.', words: ['trash', 'bin', 'garbage', 'rubbish'],
+    rooms: (gs) => npcChoreRoomsWith(gs, 'trash_kitchen'),
+    lines: (gs, roomId) => {
+      const bin = npcChoreObjectIn(gs, roomId, 'trash_kitchen');
+      return bin ? [`SET_OBJECT_STATE ${bin.id} fill empty`, `SET_OBJECT_STATE ${bin.id} rotten_food none`] : [];
+    },
+  },
+  toilet: {
+    actionId: 'toilet.clean', activity: 'cleaning the bathroom',
+    label: (roomId, several) => several ? `Clean the toilet (${ROOMS[roomId]?.name || roomId})` : 'Clean the toilet',
+    done: '{name} cleaned the toilet.', words: ['toilet', 'bathroom', 'loo'],
+    rooms: (gs) => npcChoreRoomsWith(gs, 'toilet').filter(r => ROOMS[r]?.type === 'common'),
+    lines: (gs, roomId) => {
+      const toilet = npcChoreObjectIn(gs, roomId, 'toilet');
+      return toilet ? [`SET_OBJECT_STATE ${toilet.id} clean clean`] : [];
+    },
+  },
+  laundry: {
+    actionId: 'self.laundry', label: () => 'Do the laundry', activity: 'doing laundry',
+    done: '{name} started a load of laundry.', words: ['laundry', 'washing machine', 'clothes'],
+    rooms: (gs) => npcChoreRoomsWith(gs, 'washer'),
+    lines: () => [],
+    run: (gs) => runHamperIntoWasher(gs, gameDaysNow(gs.meta.clock)),
+  },
+  tidy: {
+    actionId: 'self.clean', activity: 'tidying up',
+    label: (roomId) => `Tidy up ${roomPhrase(roomId)}`,
+    done: '{name} tidied up {room}.', words: ['tidy', 'clean up', 'clean the', 'mess', 'sweep', 'vacuum'],
+    rooms: () => COMMON_ROOMS,
+    lines: (gs, roomId) => {
+      const dirt = roomDirtOf(gs, roomId);
+      return dirt > 0 ? [`ADD_ROOM_DIRT ${roomId} -${Math.round(dirt * 1000) / 1000}`] : [];
+    },
+    run: (gs, roomId) => cleanRoomObjects(gs, roomId),
+  },
+};
+const NPC_CHORE_ORDER = ['dishes', 'trash', 'laundry', 'toilet', 'tidy'];
+const NPC_CHORE_SCORE = 1.0; // held like a promise: only an urgent need or a loud surprise breaks it
+
+function npcChoreRoomsWith(gs, defId) {
+  return Object.entries((gs && gs.objects) || {})
+    .filter(([, bucket]) => Object.values(bucket || {}).some(o => o && o.defId === defId))
+    .map(([key]) => key.replace(/^room_/, ''));
+}
+function npcChoreObjectIn(gs, roomId, defId) {
+  return Object.values((gs && gs.objects && gs.objects[`room_${roomId}`]) || {}).find(o => o && o.defId === defId) || null;
+}
+function npcChoreParse(choreId) {
+  const [kind, roomId] = String(choreId || '').split(':');
+  return NPC_CHORE_KINDS[kind] ? { kind, def: NPC_CHORE_KINDS[kind], roomId: roomId || null } : null;
+}
+// Does this chore need doing right now? The action's own `requires` list,
+// checked in the chore's room — the player's buttons' exact gates. Pure.
+function npcChoreNeeded(gs, choreId) {
+  const p = npcChoreParse(choreId);
+  if (!p) return false;
+  const roomId = p.roomId || p.def.rooms(gs)[0];
+  if (!roomId || !ROOMS[roomId]) return false;
+  const def = ACTION_DEFS[p.def.actionId];
+  if (!def) return false;
+  const ctx = { gameState: gs, roomId, roomObjects: (gs.objects && gs.objects[`room_${roomId}`]) || {}, actorId: null };
+  return checkRequirements(def, ctx).ok;
+}
+// The chores that need doing right now, as { id, label } — the ask's chips.
+function npcChoreOptions(gs) {
+  const out = [];
+  for (const kind of NPC_CHORE_ORDER) {
+    const def = NPC_CHORE_KINDS[kind];
+    const rooms = def.rooms(gs);
+    const perRoom = kind === 'toilet' || kind === 'tidy';
+    const live = rooms.filter(r => npcChoreNeeded(gs, perRoom ? `${kind}:${r}` : kind));
+    if (!live.length) continue;
+    if (perRoom) for (const r of live) out.push({ id: `${kind}:${r}`, label: def.label(r, live.length > 1) });
+    else out.push({ id: kind, label: def.label() });
+  }
+  return out;
+}
+// Typed `$RequestChore take the bins out` — a needed chore whose words
+// appear in the text (for a per-room chore, the one whose room is named, else
+// the first); null when nothing matches. Pure.
+function npcChoreFromText(gs, text) {
+  const t = String(text || '').toLowerCase();
+  if (!t) return null;
+  const options = npcChoreOptions(gs);
+  for (const kind of NPC_CHORE_ORDER) {
+    if (!NPC_CHORE_KINDS[kind].words.some(w => t.includes(w))) continue;
+    const ofKind = options.filter(o => npcChoreParse(o.id).kind === kind);
+    if (!ofKind.length) continue;
+    const named = ofKind.find(o => {
+      const r = npcChoreParse(o.id).roomId;
+      return r && t.includes(String(ROOMS[r]?.name || '').toLowerCase());
+    });
+    return (named || ofKind[0]).id;
+  }
+  return null;
+}
+function npcChoreLabel(choreId) {
+  const p = npcChoreParse(choreId);
+  return p ? (p.roomId ? p.def.label(p.roomId, false) : p.def.label()) : 'help out';
+}
+
+// The ask's write: remember what they agreed to, and how you asked.
+function queueNpcChore(gs, npcId, choreId, via) {
+  const npc = gs && gs.npcs && gs.npcs[npcId];
+  if (!npc || !npcChoreParse(choreId)) return false;
+  npc.flags = { ...(npc.flags || {}), _choreRequest: { choreId, via: via || 'talk', askedAbs: clockToAbsolute(gs.meta.clock) } };
+  return true;
+}
+
+// Called from evaluateDrives for a roommate who is free to decide. Returns
+// null (nothing to do yet) or { activity, roomId, events, clearFlags } —
+// the request is cleared once it's done, or once it no longer needs doing
+// (someone else got there first), or after a day and a half unmet.
+function tryPendingChore(gameState, npcId, npc, resolved, currentTick) {
+  const req = npc && npc.flags && npc.flags._choreRequest;
+  if (!req) return null;
+  const nowAbs = clockToAbsolute(gameState.meta.clock);
+  const stale = nowAbs - (req.askedAbs || 0) > 36 * 60;
+  const p = npcChoreParse(req.choreId);
+  if (!p || stale) return { clearFlags: true, events: [] };
+  // Not yet: asleep, not home, or still in a conversation with you.
+  const location = resolved && resolved.location;
+  if (!location || !ROOMS[location] || resolved.block === 'sleep') return null;
+  if (String(npc.activity || '').toLowerCase() === 'sleeping') return null;
+  const talking = gameState.player?.flags?._inConversation && gameState.player?.conversation?.npcId === npcId;
+  if (talking) return null;
+  if (!npcChoreNeeded(gameState, req.choreId)) return { clearFlags: true, events: [], alreadyDone: true, req };
+  const roomId = p.roomId || p.def.rooms(gameState)[0];
+  // The world change, through the trusted effect path (no player mood or
+  // XP — those lines belong to the player's own verbs).
+  const lines = p.def.lines(gameState, roomId);
+  if (lines.length) {
+    const roomObjects = (gameState.objects && gameState.objects[`room_${roomId}`]) || {};
+    applyEffects(parseEffectDSL(lines.join('\n')), buildEffectContext(gameState, [npcId], [npcId], roomObjects, []));
+  }
+  if (p.def.run) p.def.run(gameState, roomId);
+  const action = ACTION_DEFS[p.def.actionId];
+  for (const [key, amt] of (action && action.meters) || []) recordUtilityUsage(gameState, key, amt);
+  const minutes = Math.max(CLOCK.tickMinutes, resolveTimeCost(action, gameState, null, npcId) || CLOCK.tickMinutes);
+  openCommitment(gameState, npcId, {
+    driveId: 'chore_request', kind: 'drive', roomId, startRoom: location,
+    activity: p.def.activity, score: NPC_CHORE_SCORE, durationMinutes: minutes,
+  });
+  const name = npc.bible?.name || 'Your roommate';
+  const doneText = p.def.done.replace('{name}', name).replace('{room}', roomPhrase(roomId));
+  const events = [{
+    day: gameState.meta.clock.day, tick: currentTick, roomId, npcId, type: 'chore_request',
+    moodDelta: 0, data: { room: ROOMS[roomId]?.name || 'room' }, template: p.def.done, seenByPlayer: false,
+  }];
+  // Asked by text: they tell you it's done, in the thread you asked in.
+  if (req.via === 'text' && typeof pushImMessage === 'function') {
+    const thread = ensureImThread(gameState, npcId);
+    pushImMessage(gameState, npcId, { from: 'system', text: `✓ ${doneText}`, day: gameState.meta.clock.day, tick: currentTick });
+    thread.unread = (thread.unread || 0) + 1;
+  }
+  return { activity: p.def.activity, roomId, events, clearFlags: true, done: true, doneText };
 }
 
 // Process queued IM messages — adds them to the computer IM threads

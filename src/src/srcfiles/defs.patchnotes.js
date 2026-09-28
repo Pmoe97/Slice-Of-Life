@@ -36,6 +36,20 @@ const PATCHNOTES_KIND_LABELS = {
 
 const PATCH_NOTES = [
   {
+    version: '0.14.4',
+    date: '2026-09-28',
+    title: 'Home Cooking & Chores',
+    summary: "Meals you cook are now yours to carry, and a roommate who agrees to "
+      + "do a chore actually goes and does it — including when you ask by text.",
+    changes: [
+      { kind: 'changed', text: "Cooking no longer eats a serving the moment you finish, and the meal no longer goes into the fridge. The whole batch goes into your bag, and the message just tells you what you made, like \"You now have Pasta. (Grade B).\" Eat it when you want, put it in the fridge yourself, or give a plate to someone." },
+      { kind: 'changed', text: "Give a Gift lists only what's in your bag again. With cooked meals landing in your bag, the meal for a Care Package goal is right there at the top with its \"For your goal\" badge; anything left in the fridge or pantry stays where it is until you pick it up." },
+      { kind: 'fixed', text: "Asking a roommate to do a chore didn't do anything. They said yes, their status changed for a moment, and the dishes stayed in the sink. Now they really do it: the sink gets emptied, the trash taken out, the laundry run, the toilet or a messy room cleaned. In person, they get to it once you've finished talking." },
+      { kind: 'changed', text: "Chore Request now shows buttons for the chores that actually need doing right now (the dishes, the trash, the laundry, a dirty bathroom, a messy room) instead of guessing from what you typed. If nothing needs doing, it isn't offered." },
+      { kind: 'added', text: "You can ask for a chore by text. If they're home and free, they get on it right away; if they're out, they do it when they get home; if they're at work or asleep, they do it once they're free. When it's done, a ✓ line shows up in your conversation with them saying so." },
+    ],
+  },
+  {
     version: '0.14.3',
     date: '2026-09-27',
     title: 'Talking & Texting',
