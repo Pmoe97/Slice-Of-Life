@@ -2936,7 +2936,9 @@ function createHobbyAction(objDef, label, verbs, opts) {
   // The closure captures objDef so buildEffects/narration know which hobby
   // this is — executeAction only hands prepare/buildEffects the ctx and the
   // prepared result, not the def (see ACTIONS' two-step contract).
-  const prepare = (ctx) => ({ key: objDef, affection: presentResidentAffection(ctx) });
+  // Books (0.14.5): a bookshelf's Read picks a real book (books.js's bookPlanPlayerRead).
+  const prepare = (ctx) => ({ key: objDef, affection: presentResidentAffection(ctx),
+    ...(objDef === 'hobby_bookshelf' && typeof bookPlanPlayerRead === 'function' ? { book: bookPlanPlayerRead(ctx.gameState) } : {}) });
   const def = {
     id, label, verbs,
     source: { kind: 'object', objDef },
@@ -2974,6 +2976,7 @@ function buildHobbyEffects(ctx, prepared) {
   // record player's standing music signal comes from its own state, so the
   // hobby spins it up (on, audible). The sound submenu verbs control it
   // from there.
+  if (key === 'hobby_bookshelf' && prepared?.book) lines.push(`BOOK_READ ${prepared.book.bookId} ${BOOK_TUNING.playerChapters}`);
   if (key === 'hobby_record_player') {
     const rec = findObjectInRoom(ctx, 'hobby_record_player');
     if (rec) {
@@ -3014,6 +3017,7 @@ const HOBBY_WINDOW_PHRASE = {
 
 function hobbyNarration(ctx, prepared) {
   const key = prepared?.key;
+  if (key === 'hobby_bookshelf' && prepared?.book && typeof bookReadNarration === 'function') return bookReadNarration(ctx.gameState, prepared.book);
   const line = HOBBY_NARRATION[key];
   if (line) return line;
   return 'You lose yourself in the hobby for a while. Good for the head.';

@@ -4813,6 +4813,63 @@ const TV_TUNING = {
   },
 };
 
+// --- Books (books.js, 0.14.5) ---
+// What people are actually reading. read_book used to be "curled up with a book": now there is a
+// book, a place in it, a last page, and somebody to talk to about it. The catalog is content and
+// lives here with its numbers; the reader is books.js. Nothing here decides WHETHER anyone reads
+// (the read_book drive and the schedule tables do) — only WHAT, and how it goes.
+const BOOK_TUNING = {
+  // Residents read with this activity (the read_book drive's activityOverride and the schedule
+  // tables' 'reading'); 'reading in bed' is the wind-down one.
+  activities: ['reading', 'reading in bed'],
+  // A chapter takes this long; a resident's place moves as they sit with it.
+  minutesPerChapter: 25,
+  // The player's Read at a bookshelf (hobby_bookshelf, 25 minutes) turns this many chapters.
+  playerChapters: 2,
+  // Taste: affinity = jitter + interest matches + temperament lean (same shape as tv.js).
+  jitter: 0.35, interestWeight: 0.45, interestCap: 0.9, temperWeight: 1,
+  // Finishing one.
+  finish: { mood: 0.05, factImportance: 0.4, postChance: 0.5,
+    post: ['Just finished {title}. I need to sit here for a minute.', 'Finished {title} on the sofa. No notes. Many notes.', '{title}: done. Ask me anything, please.'],
+    line: '{name} turned the last page of {title} and just sat there for a while.' },
+  // A resident who has finished something they loved recommends it to you, at most one at a time,
+  // and lends it: it is "on loan" until you finish it or lendDays pass.
+  lend: { minAffection: 0.15, lendDays: 21, chance: 0.5, affection: 0.02, mood: 0.03,
+    offerLine: '{name} presses {title} into your hands. "You have to read this. Bring it back when you\'re done."',
+    returnLine: 'You give {title} back to {name}. They ask what you thought, and mean it.',
+    lateLine: '{name} quietly gets {title} back from your shelf. You forgot you had it.' },
+  // Two people who have both finished the same book get to talk about it: the flat (a pair of
+  // residents) once, and you (a prompt line, and a small warmth the first time it comes up).
+  club: { bond: 0.03, factImportance: 0.35, cooldownDays: 5,
+    line: '{a} and {b} spent the evening arguing happily about {title}.',
+    fact: 'Talked about {title} with {other} all evening.' },
+  activeDays: 14,
+};
+
+const BOOK_CATALOG = {
+  the_lighthouse_keepers: { id: 'the_lighthouse_keepers', title: 'The Lighthouse Keepers', author: 'Ines Halloran', genre: 'literary fiction', chapters: 24, interests: ['reading', 'writing', 'art'], temper: { openness: 0.3 } },
+  salt_and_ember: { id: 'salt_and_ember', title: 'Salt and Ember', author: 'R. J. Okafor', genre: 'fantasy', chapters: 32, interests: ['gaming', 'fantasy', 'art'], temper: { openness: 0.3 } },
+  the_quiet_ledger: { id: 'the_quiet_ledger', title: 'The Quiet Ledger', author: 'Maren Voss', genre: 'crime', chapters: 22, interests: ['crime', 'mystery', 'film'], temper: { conscientiousness: 0.25 } },
+  forty_days_north: { id: 'forty_days_north', title: 'Forty Days North', author: 'Tobias Reyes', genre: 'adventure', chapters: 26, interests: ['hiking', 'travel', 'nature'], temper: { assertiveness: 0.2 } },
+  a_small_and_stubborn_heart: { id: 'a_small_and_stubborn_heart', title: 'A Small and Stubborn Heart', author: 'Priya Nandakumar', genre: 'romance', chapters: 20, interests: ['romance', 'dancing', 'music'], temper: { warmth: 0.3 } },
+  the_long_orbit: { id: 'the_long_orbit', title: 'The Long Orbit', author: 'Idris Calloway', genre: 'science fiction', chapters: 30, interests: ['science', 'tech', 'gaming'], temper: { openness: 0.25 } },
+  bread_and_other_miracles: { id: 'bread_and_other_miracles', title: 'Bread and Other Miracles', author: 'Colette Moreau', genre: 'memoir', chapters: 18, interests: ['cooking', 'baking', 'food'], temper: { warmth: 0.25 } },
+  what_the_river_kept: { id: 'what_the_river_kept', title: 'What the River Kept', author: 'Dana Whitcomb', genre: 'mystery', chapters: 28, interests: ['mystery', 'crime', 'nature'], temper: { selfAwareness: 0.2 } },
+  eleven_rules_for_leaving: { id: 'eleven_rules_for_leaving', title: 'Eleven Rules for Leaving', author: 'Sam Achterberg', genre: 'comedy', chapters: 16, interests: ['comedy', 'film', 'travel'], temper: { warmth: 0.2 } },
+  the_cartographers_daughter: { id: 'the_cartographers_daughter', title: "The Cartographer's Daughter", author: 'Leona Fairweather', genre: 'historical fiction', chapters: 34, interests: ['history', 'travel', 'art'], temper: { conscientiousness: 0.25 } },
+  small_wonders_of_the_suburbs: { id: 'small_wonders_of_the_suburbs', title: 'Small Wonders of the Suburbs', author: 'Wren Tavish', genre: 'comedy', chapters: 21, interests: ['comedy', 'fantasy', 'film'], temper: { volatility: 0.2 } },
+  how_to_be_good_at_being_alone: { id: 'how_to_be_good_at_being_alone', title: 'How to Be Good at Being Alone', author: 'Noor Abdelrahman', genre: 'essays', chapters: 15, interests: ['psychology', 'writing', 'reading'], temper: { selfAwareness: 0.3 } },
+  the_house_on_marrow_lane: { id: 'the_house_on_marrow_lane', title: 'The House on Marrow Lane', author: 'Gideon Pryce', genre: 'horror', chapters: 27, interests: ['horror', 'film', 'mystery'], temper: { volatility: 0.25 } },
+  ninety_seconds_of_silence: { id: 'ninety_seconds_of_silence', title: 'Ninety Seconds of Silence', author: 'Amara Lindqvist', genre: 'thriller', chapters: 25, interests: ['crime', 'film', 'tech'], temper: { assertiveness: 0.25 } },
+  the_gardeners_almanac: { id: 'the_gardeners_almanac', title: "The Gardener's Almanac", author: 'Hollis Brandt', genre: 'nonfiction', chapters: 19, interests: ['gardening', 'nature', 'cooking'], temper: { conscientiousness: 0.3 } },
+  every_kind_of_weather: { id: 'every_kind_of_weather', title: 'Every Kind of Weather', author: 'Saoirse Duffy', genre: 'poetry', chapters: 12, interests: ['poetry', 'writing', 'music'], temper: { openness: 0.35 } },
+  the_last_good_bar_in_town: { id: 'the_last_good_bar_in_town', title: 'The Last Good Bar in Town', author: 'Marcus Delacroix', genre: 'literary fiction', chapters: 23, interests: ['music', 'reading', 'film'], temper: { volatility: 0.15 } },
+  a_field_guide_to_strangers: { id: 'a_field_guide_to_strangers', title: 'A Field Guide to Strangers', author: 'Yuki Hanamura', genre: 'short stories', chapters: 17, interests: ['writing', 'psychology', 'art'], temper: { openness: 0.3 } },
+  the_machine_that_learned_to_knit: { id: 'the_machine_that_learned_to_knit', title: 'The Machine That Learned to Knit', author: 'Bea Oyelaran', genre: 'science fiction', chapters: 20, interests: ['tech', 'science', 'crafts'], temper: { warmth: 0.2 } },
+  winter_at_the_boarding_house: { id: 'winter_at_the_boarding_house', title: 'Winter at the Boarding House', author: 'Alma Kettering', genre: 'cozy mystery', chapters: 22, interests: ['mystery', 'baking', 'history'], temper: { warmth: 0.25 } },
+};
+const BOOK_IDS = Object.keys(BOOK_CATALOG);
+
 // --- Side Projects (projects.js, 0.14.2) ---
 // The numbers behind the roommates' own projects: how often one is on the go,
 // how fast it moves, how easily it stalls, and what finishing it pays. The
@@ -6649,6 +6706,7 @@ const EVENT_IMPORTANCE = {
   birthday_card:       'social',
   occasion_feast:      'social',
   watch_party:         'social',
+  book_finished:       'social',
   birthday_cake:       'social',
   // Side Projects (projects.js, 0.14.2): starting one, a milestone, or giving
   // up is a real beat — ticker- and Chatter-worthy ("got through the bridge
@@ -6766,6 +6824,7 @@ const EVENT_EMOTION = {
   birthday_card:       'warmth',
   occasion_feast:      'warmth',
   watch_party:         'warmth',
+  book_finished:       'warmth',
   birthday_cake:       'warmth',
   note_read:           'domestic',
   note_reply:          'domestic',

@@ -708,6 +708,11 @@ function buildNpcBlockV2(npc, query, channel, day, gameState) {
     const tvLine = tvPromptLine(gameState, npc.id);
     if (tvLine) block += `${tvLine}\n`;
   }
+  // Books (books.js, 0.14.5): what they're reading, where, what they finished, what they lent.
+  if (gameState && typeof bookPromptLine === 'function') {
+    const bookLine = bookPromptLine(gameState, npc.id);
+    if (bookLine) block += `${bookLine}\n`;
+  }
   // Side Projects (projects.js, 0.14.2): what they're making or learning, how
   // far along, how they feel about it, whether the player asked, and what they
   // finished or gave up on before — so "how's the guitar going?" has an

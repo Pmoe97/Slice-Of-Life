@@ -456,6 +456,13 @@ async function processDayRollover(day) {
       addLogEntry('narration', line);
     }
   }
+  // Books (0.14.5): a roommate lends you one they loved, a late one goes home, two people who
+  // finished the same book talk it over.
+  if (typeof processBooksForDay === 'function') {
+    for (const line of processBooksForDay(currentGameState, day).lines) {
+      addLogEntry('narration', line);
+    }
+  }
   // What's On (D11/D13/D14): watch-party and movie-night payoffs, Chatter about a
   // show's big night, tonight's invitations.
   if (typeof processTvForDay === 'function') {

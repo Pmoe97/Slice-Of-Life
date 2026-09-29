@@ -256,6 +256,8 @@ const ORDER = [
   // too — real position. Pure domain logic plus the work_on_project resolver
   // drives.js calls and the daily pass sim.js calls; only runtime calls out.
   'projects.js',
+  // books.js (Books, 0.14.5) sits right after tv.js/projects.js in index.html too.
+  'books.js',
   // money.js (actions-and-activities-overhaul-plan.md Phase 4, D9) — the
   // bidirectional ledger. Pure reads plus a mutating adjustMoneyLedger, no
   // load-time dependencies; sits directly before asks.js here exactly as it

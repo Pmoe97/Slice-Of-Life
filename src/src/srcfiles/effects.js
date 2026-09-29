@@ -1385,6 +1385,15 @@ const EFFECT_DEFS = {
       tvApplyPlayerWatch(ctx.gameState, p.showId, Number(p.n), String(p.rerun) === '1', who, ACTION_TUNING.tvMinutes);
     },
   },
+  // Books (books.js, 0.14.5): the player's Read at a bookshelf. Trusted-only — the verb picks the
+  // book in prepare (bookPlanPlayerRead) and this turns the pages.
+  BOOK_READ: {
+    paramShape: ['bookId', 'chapters'], llm: false, implemented: true,
+    validate: (p) => (typeof bookDef === 'function' && !!bookDef(p.bookId)) || 'Nothing to read.',
+    apply: (p, ctx) => {
+      if (typeof bookApplyPlayerRead === 'function') bookApplyPlayerRead(ctx.gameState, p.bookId, Number(p.chapters));
+    },
+  },
   // Side Projects (projects.js, 0.14.2): the player asked a roommate about
   // their project. Trusted-only — the self.encourage_project verb picks who in
   // prepare; the narrator never gets to hand out encouragement. The applier

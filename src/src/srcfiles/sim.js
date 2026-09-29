@@ -3024,6 +3024,13 @@ function resolveTick(gameState, minutesThisTick = CLOCK.tickMinutes) {
     for (const evt of tv.events) newEvents.push(evt);
   }
 
+  // Books (books.js, 0.14.5): whoever is reading moves through their book, and their read_book
+  // event names it. Same shape as the TV pass: own hashes, never decides whether anyone reads.
+  if (typeof resolveBooksTick === 'function') {
+    const bk = resolveBooksTick(gameState, npcUpdates, activeNpcIds, minutesThisTick, newEvents);
+    for (const evt of bk.events) newEvents.push(evt);
+  }
+
   // Side Projects (projects.js, 0.14.2): once a day per resident — seed anyone
   // new, let an idle project lose a little heart (or a determined one win it
   // back), give up on one that has gathered dust long enough, and start the

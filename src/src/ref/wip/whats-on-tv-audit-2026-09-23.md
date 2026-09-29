@@ -155,3 +155,7 @@ unchanged).
   "watching Murder, Actually"; the real Watch TV outcome window showed the
   join line and beat; the Streamly cards and an episode line; a spoiler
   surfaced in the log through `surfaceRoomEvidence`. No script errors.
+
+## Follow-ups built 2026-09-29 (0.14.5)
+
+Built without asking (the user answered "D — Build All"): **F1 appointment TV** (`tvPartiesForDay`: a follower who is level proposes a watch party for a premiere/finale as a living-room `hangout` marked `watchParty`; sim binds the activity and writes the attendance ledger; `tvResolvePartiesForDay` pays it out), **F3 the picker** (`openTvPicker`, `tvWatchOptions`, `tvPlanPlayerWatch(gs, withIds, pick)`), **F4 Chatter** (`tvChatterForDay`: big-night posts, and a resident ahead of you posts a spoiler — a blurter's counts as told, others tag it), **F5 movie nights** (`tvFilmNightsForDay`: horror night on Halloween, the cozy movie at Midwinter; the screen shows a film, no episode plays), **F7 the drive gate** (`TV_TUNING.gatedDrives`, `tvScreenActivity`; measured with verify-c1/c2/c3/w6/p4 — baseline unchanged), **F8 the Streamly panel** (`tvStreamPanel`), and **F6 books** (books.js, `verify-books.js` 18: catalog of 20, per-resident taste and place, the read_book event names the book, finishing, lending, a pair who finished the same book, the player's Read through `BOOK_READ`, the [Reading] prompt line). `verify-tv.js` is now 112. F2 (the fridge) is built with House Notes F2/F4 when that pass lands; F9 (two lengths for an episode) is still untouched.

@@ -126,6 +126,9 @@ const SAVE_KEYS = [
     // the finished work on display around the flat. Additive-default
     // precedent — WORLD_KEY_FALLBACKS.
     'projects',
+    // Books (books.js, 0.14.5): what everyone is reading and has finished, what is on
+    // loan to you. Additive-default precedent — WORLD_KEY_FALLBACKS.
+    'books',
   ] },
   { folder: 'npcs', all: true },
   { folder: 'objects', all: true },
@@ -266,6 +269,9 @@ const WORLD_KEY_FALLBACKS = {
   // older save reads as; the pass seeds each resident the first time it sees
   // them (projects.js's projSeedPerson), most of them already partway in.
   projects: () => ({ people: {}, displayed: [] }),
+  // Books (0.14.5): nobody has read anything yet is what an older save reads as; books.js's
+  // ensureBooks fills the sub-shape lazily.
+  books: () => ({ progress: {}, current: {}, finished: {}, lent: [], readDay: {}, clubDay: {}, offered: {} }),
 };
 
 // World keys whose on-disk value needs more than a bare "absent → default"
