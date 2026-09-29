@@ -4921,7 +4921,8 @@ const GAMES_TUNING = {
     agreeAffection: 1, agreeTension: 0.6, agreeNoise: 0.2,
   },
   lines: {
-    agreed: { chore: '{name} agrees: loser does a chore.', iou: '{name} agrees: loser owes ${amount}.' },
+    // What the stake did, told with the result (the match's own line; the settling itself is gameApplyMatch's).
+    settle: { choreWon: '{name} owes you a chore, and will get to it.', choreLost: 'You owe {name} a chore, and you settle it on the spot.', iouWon: '{name} owes you ${amount}.', iouLost: 'You owe {name} ${amount}.' },
     refused: { chore: '{name} shakes their head. "Bragging rights only."', iou: '{name} laughs. "Not for money. Not with you."' },
     choreDone: { player: 'You pay up: {chore}.', npc: '{name} pays up: {chore}.' },
     choreNone: 'There is no chore to settle, so it stays bragging rights.',

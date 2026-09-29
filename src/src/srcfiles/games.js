@@ -172,8 +172,9 @@ function gameMatchNarration(gs, plan) {
   const pool = side[plan.grade === 'close' ? 'close' : plan.grade === 'blowout' ? 'blowout' : 'close'];
   const parts = [gamePick(d.intro, plan.seed, plan.gameId, 'intro').replace('{name}', plan.name)];
   parts.push(gameFill(gamePick(pool, plan.seed, plan.gameId, 'res'), vars));
-  if (plan.stakeId === 'chore') parts.push(gameFill(GAMES_TUNING.lines.agreed.chore, vars));
-  else if (plan.stakeId === 'iou') parts.push(gameFill(GAMES_TUNING.lines.agreed.iou, { ...vars, amount: plan.amount }));
+  const S = GAMES_TUNING.lines.settle;
+  if (plan.stakeId === 'chore') parts.push(gameFill(plan.playerWon ? S.choreWon : S.choreLost, vars));
+  else if (plan.stakeId === 'iou') parts.push(gameFill(plan.playerWon ? S.iouWon : S.iouLost, { ...vars, amount: plan.amount }));
   return parts.join(' ');
 }
 
