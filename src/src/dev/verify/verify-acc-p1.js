@@ -75,7 +75,7 @@ const reg = J(`({
   bogusValid: validateSkillId('bagpipes'),
   llmTierAccepts: validateEffects(parseEffectDSL('ADD_SKILL_XP music 6'), { gameState: __mk(1, 1) }, 'llm'),
 })`);
-check('SKILL_IDS is exactly the nine prior ids plus music, in order', JSON.stringify(reg.skillIds) === JSON.stringify(['cooking', 'cleaning', 'stealth', 'tech', 'fitness', 'social', 'art', 'writing', 'focus', 'music']), JSON.stringify(reg.skillIds));
+check('SKILL_IDS is the nine prior ids plus music, in order (Game Room, 0.14.5, appended games after)', JSON.stringify(reg.skillIds.slice(0, 10)) === JSON.stringify(['cooking', 'cleaning', 'stealth', 'tech', 'fitness', 'social', 'art', 'writing', 'focus', 'music']), JSON.stringify(reg.skillIds));
 check("EFFECTS' validateSkillId accepts 'music' (the same gate ADD_SKILL_XP runs through) and still rejects an unknown id", reg.musicValid === true && reg.bogusValid !== true, JSON.stringify([reg.musicValid, reg.bogusValid]));
 check('an LLM-tier ADD_SKILL_XP music line passes validateEffects — music is a real skill to every producer, not only the trusted path', reg.llmTierAccepts && reg.llmTierAccepts.valid && reg.llmTierAccepts.valid.length === 1 && (reg.llmTierAccepts.rejected || []).length === 0, JSON.stringify(reg.llmTierAccepts));
 check('SKILL_CURVES is exactly {timeReduction, craftQuality, cleanEfficiency, stealthSuccess, socialEdge} — no cooking-specific name, no pay curve', JSON.stringify(reg.curves.slice().sort()) === JSON.stringify(['cleanEfficiency', 'craftQuality', 'socialEdge', 'stealthSuccess', 'timeReduction']), JSON.stringify(reg.curves));

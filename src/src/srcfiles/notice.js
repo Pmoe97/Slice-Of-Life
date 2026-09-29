@@ -107,6 +107,7 @@ const SKILL_CRAFT_NOUNS = {
   writing:  { noun: 'writing',          category: 'writing' },
   focus:    { noun: 'concentration',    category: 'other' },
   music:    { noun: 'guitar playing',   category: 'music' },
+  games:    { noun: 'game skills',      category: 'other' },
 };
 
 // Valence bands (D13's "keyed by subject kind and valence band"). The line

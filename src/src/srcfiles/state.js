@@ -129,6 +129,9 @@ const SAVE_KEYS = [
     // Books (books.js, 0.14.5): what everyone is reading and has finished, what is on
     // loan to you. Additive-default precedent — WORLD_KEY_FALLBACKS.
     'books',
+    // Game Room (games.js, 0.14.5): the match history, the rivalries, the follow-up window and
+    // the IOUs staked. Additive-default precedent — WORLD_KEY_FALLBACKS.
+    'games',
   ] },
   { folder: 'npcs', all: true },
   { folder: 'objects', all: true },
@@ -272,6 +275,8 @@ const WORLD_KEY_FALLBACKS = {
   // Books (0.14.5): nobody has read anything yet is what an older save reads as; books.js's
   // ensureBooks fills the sub-shape lazily.
   books: () => ({ progress: {}, current: {}, finished: {}, lent: [], readDay: {}, clubDay: {}, offered: {} }),
+  // Game Room (0.14.5): nobody has played anything yet is what an older save reads as.
+  games: () => ({ history: [], rivals: {}, pending: null, iou: [], count: 0 }),
 };
 
 // World keys whose on-disk value needs more than a bare "absent → default"

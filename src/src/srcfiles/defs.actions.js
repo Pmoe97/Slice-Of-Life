@@ -2003,7 +2003,101 @@ for (const v of TRADITION_VERBS) {
   };
 }
 
+// --- Game Room (games.js, 0.14.5; game-room-overhaul-plan.md Phase 1) ---
+// "Challenge" starts a real match against a roommate who is here: pick the game (what the room has),
+// pick what is riding on it (bragging rights, a chore, a capped IOU — they must agree), and the
+// result is decided once, in prepare, so the effect and the line cannot disagree. The old flat
+// Play Games stays as "just messing around" (D7). Good game / gloat / rematch are the player's
+// choice after (D2), open for an hour after a match with that person still here.
+function gameMatchEffects(ctx, prepared) {
+  const plan = prepared && prepared.game;
+  if (!plan) return [];
+  const T = GAMES_TUNING;
+  const mood = plan.playerWon ? T.winMood : T.loseMood;
+  return [
+    `ADJUST_NEED player mood ${mood >= 0 ? '+' : ''}${mood}`,
+    'ADJUST_NEED player energy -2',
+    `GAME_MATCH ${plan.gameId} ${plan.npcId} ${plan.stakeId} ${plan.playerWon ? 'p' : 'n'} ${plan.grade} ${plan.amount || 0}`,
+  ];
+}
+
+function prepareGameChallenge(ctx) {
+  const gs = ctx.gameState;
+  const withIds = sharedActivityParticipants(ctx);
+  const games = typeof gameOptions === 'function' ? gameOptions(gs, ctx.roomId) : [];
+  if (!withIds.length || !games.length) return { cancelled: true };
+  const finish = (gameId, npcId, stakeId, amount) => {
+    const plan = gamePlanMatch(gs, gameId, npcId, stakeId, amount);
+    return plan ? { game: plan, minutes: plan.minutes } : { cancelled: true };
+  };
+  if (typeof openChoicePicker !== 'function') return finish(games[0], withIds[0], 'brag', 0);
+  return (async () => {
+    let npcId = withIds[0];
+    if (withIds.length > 1) {
+      npcId = await openChoicePicker('Play against…', withIds.map(id => ({ id, label: gs.npcs[id]?.bible?.name || id })));
+      if (!npcId) return { cancelled: true };
+    }
+    let gameId = games[0];
+    if (games.length > 1) {
+      gameId = await openChoicePicker('What are you playing?', games.map(id => ({ id, label: GAME_DEFS[id].label, note: `about ${GAME_DEFS[id].minutes} minutes` })));
+      if (!gameId) return { cancelled: true };
+    }
+    const stakes = gameStakeOptions(gs, npcId);
+    const pick = await openChoicePicker('What is riding on it?', stakes.map(r => ({ id: r.id, label: r.label, note: r.note, disabled: !r.ok })));
+    if (!pick) return { cancelled: true };
+    const row = stakes.find(r => r.id === pick) || stakes[0];
+    return finish(gameId, npcId, row.stakeId, row.amount);
+  })();
+}
+
+function prepareGameRematch(ctx) {
+  const p = typeof gamePendingNow === 'function' ? gamePendingNow(ctx.gameState) : null;
+  if (!p) return { cancelled: true };
+  const plan = gamePlanMatch(ctx.gameState, p.gameId, p.npcId, 'brag', 0);
+  return plan ? { game: plan, minutes: plan.minutes, rematch: true } : { cancelled: true };
+}
+
+ACTION_DEFS['game.challenge'] = {
+  id: 'game.challenge', label: 'Challenge…', verbs: ['challenge', 'play a match', 'play pool with', 'play darts with', 'play a game with'],
+  source: { kind: 'room', roomIds: ['game_room'] },
+  group: 'game_room', chipPriority: 33,
+  requires: ['facilityFunctional:game_room_setup', 'residentsPresent', 'gamesHere'],
+  timeCost: { base: 30, fromPrepared: true },
+  prepare: prepareGameChallenge,
+  buildEffects: gameMatchEffects,
+  narration: { mode: 'dynamic', build: (ctx, prepared) => (typeof gameMatchNarration === 'function' && gameMatchNarration(ctx.gameState, prepared && prepared.game)) || 'You play a match.' },
+};
+ACTION_DEFS['game.rematch'] = {
+  id: 'game.rematch', label: 'Rematch', verbs: ['rematch', 'play again', 'another game'],
+  source: { kind: 'room', roomIds: ['game_room'] },
+  group: 'game_room', chipPriority: 32,
+  requires: ['facilityFunctional:game_room_setup', 'gameFollowUp:rematch'],
+  timeCost: { base: 30, fromPrepared: true },
+  prepare: prepareGameRematch,
+  buildEffects: gameMatchEffects,
+  narration: { mode: 'dynamic', build: (ctx, prepared) => (typeof gameMatchNarration === 'function' && gameMatchNarration(ctx.gameState, prepared && prepared.game)) || 'You play again.' },
+};
+for (const [id, label, verbs] of [['gracious', 'Good Game', ['good game', 'shake hands']], ['gloat', 'Gloat', ['gloat', 'rub it in']]]) {
+  ACTION_DEFS['game.' + id] = {
+    id: 'game.' + id, label, verbs,
+    source: { kind: 'room', roomIds: ['game_room'] },
+    group: 'game_room', chipPriority: 31,
+    requires: ['gameFollowUp:' + id],
+    timeCost: { base: 2 },
+    prepare: (ctx) => ({ line: typeof gameFollowUpLine === 'function' ? gameFollowUpLine(ctx.gameState, id) : null }),
+    buildEffects: () => ['GAME_FOLLOWUP ' + id],
+    narration: { mode: 'dynamic', build: (ctx, prepared) => (prepared && prepared.line) || 'You say something about the game.' },
+  };
+}
+
 const ACTION_REQUIREMENT_CHECKERS = {
+  // Game Room (games.js): something to play here, and the follow-up window.
+  gamesHere: (ctx) => (typeof gameOptions === 'function' && gameOptions(ctx.gameState, ctx.roomId).length > 0) || 'Nothing to play here.',
+  gameFollowUp: (ctx, kind) => {
+    if (typeof gameFollowUpOpen !== 'function') return 'Nothing to say.';
+    const r = gameFollowUpOpen(ctx.gameState, kind);
+    return r.ok ? true : r.reason;
+  },
   needAbove: (ctx, need, min) => (ctx.gameState.player[need] ?? 100) >= Number(min) || `Not enough ${need}.`,
   needBelow: (ctx, need, max) => (ctx.gameState.player[need] ?? 0) <= Number(max) || `${need} is too high right now.`,
   moneyAtLeast: (ctx, amt) => ctx.gameState.player.money >= Number(amt) || `Can't afford it (need $${amt}).`,

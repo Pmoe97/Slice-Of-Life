@@ -2374,6 +2374,48 @@ function openRecipePicker(recipes) {
   });
 }
 
+// A generic one-modal picker (Game Room, 0.14.5): rows { id, label, note?, disabled? }. Resolves to
+// the chosen id, or null when cancelled. Disabled rows are shown (with their note) and cannot be picked.
+function openChoicePicker(title, rows) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const titleEl = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !titleEl || !body || !actions) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (v) => { overlay.removeAttribute('data-open'); resolve(v); };
+    titleEl.textContent = title;
+    body.innerHTML = '';
+    const list = document.createElement('div');
+    list.className = 'recipe-pick-list';
+    for (const r of rows) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-block recipe-pick-btn';
+      if (r.disabled) btn.disabled = true;
+      const name = document.createElement('span');
+      name.className = 'recipe-pick-name';
+      name.textContent = r.label;
+      const note = document.createElement('span');
+      note.className = 'recipe-pick-ings';
+      note.textContent = r.note || '';
+      btn.append(name, note);
+      btn.addEventListener('click', () => finish(r.id));
+      list.appendChild(btn);
+    }
+    body.appendChild(list);
+    actions.innerHTML = '';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    actions.appendChild(cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+
 // What's On D12: the "What's on?" picker for Watch TV. Resolves to a show id, '' when
 // you'd rather the room pick (the old behavior), or null when you cancel.
 function openTvPicker(options) {

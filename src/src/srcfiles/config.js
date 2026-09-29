@@ -4857,6 +4857,89 @@ const TV_TUNING = {
   },
 };
 
+// --- Game Room (games.js, 0.14.5; game-room-overhaul-plan.md Phase 1) ---
+// A match is a first-class record and games.js is the one spine that starts it, resolves it and
+// applies what follows (mood, the rivalry, a memory, the stake). Each game only produces a result;
+// Phase 1's is an abstract resolver, so "challenge Mira to pool" works end to end before any
+// minigame exists. Nothing here is an income stream: stakes are bragging rights, a chore, or a
+// capped IOU through the money ledger.
+const GAME_DEFS = {
+  pool: {
+    id: 'pool', label: 'Pool', anchors: ['pool_table'], minutes: 35, skillTag: 'gaming',
+    intro: ['You rack the balls and {name} chalks a cue, looking far too calm.', '{name} breaks. The balls scatter and the room goes very quiet.'],
+    win: { close: ['You sink the black with {name} one shot behind you.', 'It comes down to the last ball, and you get it.'], blowout: ['You clear the table before {name} gets a second turn.', 'It is not close. {name} keeps looking at the table as if it cheated.'] },
+    lose: { close: ['{name} sinks the black with one ball to spare. You will be thinking about that shot for a week.', 'It comes down to the last ball, and it goes {name}\'s way.'], blowout: ['{name} runs the table. You barely touch a ball.', 'It is not close. {name} is being visibly nice about it.'] },
+  },
+  darts: {
+    id: 'darts', label: 'Darts', anchors: ['dartboard'], minutes: 25, skillTag: 'gaming',
+    intro: ['You take turns at the oche, trading insults and arrows.', '{name} steps up first and throws like they mean it.'],
+    win: { close: ['You hit the double you needed with your last dart. {name} throws their arm up in disbelief.', 'You finish it on the very last throw.'], blowout: ['You are done before {name} has got started.', 'Three darts, all in the treble. {name} stares at the board.'] },
+    lose: { close: ['{name} finishes on the last dart, just ahead of you.', 'You miss the double twice. {name} does not miss it.'], blowout: ['{name} is in a different league tonight.', 'Every dart of {name}\'s goes exactly where it was aimed.'] },
+  },
+  console: {
+    id: 'console', label: 'Console game', anchors: ['game_console'], minutes: 40, skillTag: 'gaming',
+    intro: ['{name} takes the second controller. It gets loud almost immediately.', 'You pick a game you are both nearly good at and settle in.'],
+    win: { close: ['You win by a nose, on the very last lap.', 'A last-second win. {name} demands a rematch on principle.'], blowout: ['You win by a mile. {name} blames the controller.', 'It is a massacre, and you enjoy every second.'] },
+    lose: { close: ['You lose by a nose on the very last lap.', '{name} wins with one second to spare and does a small, smug dance.'], blowout: ['{name} beats you by a mile and says "good game" in a way that stings.', 'It is a massacre, and it is yours.'] },
+  },
+  boardgame: {
+    id: 'boardgame', label: 'Board game', anchors: [], item: 'board_game', minutes: 45, skillTag: 'gaming',
+    intro: ['You unfold the board and argue about the rules for ten minutes, which is half the fun.', '{name} reads the rules aloud in a dramatic voice.'],
+    win: { close: ['You take it on the last turn, by a single point.', 'A last-turn win. {name} checks the rules to see if that was legal.'], blowout: ['You take the board and every property on it.', 'It is not close. {name} starts a new game to save face.'] },
+    lose: { close: ['{name} takes it on the last turn, by a single point.', 'You lose by one point and will be checking the rules later.'], blowout: ['{name} takes the board and every property on it.', 'It is not close. You start a new game to save face.'] },
+  },
+};
+const GAME_IDS = Object.keys(GAME_DEFS);
+
+const GAMES_TUNING = {
+  // The verb's room and the facility that gates it (the same one the old flat Play Games needs).
+  room: 'game_room',
+  facility: 'game_room_setup',
+  // Skill, 0..1. The player's is the 'games' skill (level 0..10) on a base; a roommate's is a base
+  // plus what their gaming interest says (interests[].skill, 0..100) plus a stable per-game aptitude.
+  playerBase: 0.3, playerPerLevel: 0.045,
+  npcBase: 0.35, npcInterest: 0.3, aptitude: 0.15,
+  // P(player wins) = logistic((yours - theirs) * slope), kept off the rails.
+  slope: 6, minWin: 0.08, maxWin: 0.92,
+  // How a result is graded: below `close` is a nail-biter, above `blowout` is a walkover.
+  close: 0.4, blowout: 0.82,
+  // What a match pays. Mood is per player at the end; the rivalry lands on the relationship.
+  winMood: 0.06, loseMood: -0.03, soreExtra: -0.05,          // a volatile loser stings more
+  closeAffection: 0.02, closeRespect: 0.02,
+  blowoutTension: 0.03, soreTension: 0.03,                    // a blowout against a sore loser
+  soreVolatility: 0.2,
+  playerXp: { win: 4, lose: 2 },
+  memoryImportance: 0.4,
+  historyKeep: 40,
+  // How long after a match the follow-up verbs (good game / gloat / rematch) stay open.
+  followUpMinutes: 60,
+  // Stakes (D3). Bragging is always on. A chore or an IOU needs the other person to agree: their
+  // fondness for you, a little less for a bad temper, and a seeded wobble.
+  stakes: {
+    chore: { label: 'Loser does a chore', minAgree: 0.05 },
+    iou: { label: 'Loser owes ${amount}', amounts: [5, 10, 20], minAgree: 0.15, sessionCap: 20, weekCap: 60 },
+    agreeAffection: 1, agreeTension: 0.6, agreeNoise: 0.2,
+  },
+  lines: {
+    agreed: { chore: '{name} agrees: loser does a chore.', iou: '{name} agrees: loser owes ${amount}.' },
+    refused: { chore: '{name} shakes their head. "Bragging rights only."', iou: '{name} laughs. "Not for money. Not with you."' },
+    choreDone: { player: 'You pay up: {chore}.', npc: '{name} pays up: {chore}.' },
+    choreNone: 'There is no chore to settle, so it stays bragging rights.',
+    iouWon: '{name} owes you ${amount}. You have it on the ledger.',
+    iouLost: 'You owe {name} ${amount}. It is on the ledger.',
+    followUp: {
+      gracious: ['"Good game," you say, and mean it.', 'You shake hands. It was a good one.'],
+      graciousReply: { warm: ['{name} grins. "You were better than I gave you credit for."', '{name} laughs. "Same time tomorrow?"'], cool: ['{name} nods. "Yeah. Good game."', '{name} manages a small smile.'], sore: ['{name} takes the handshake, still stinging a little.', '{name} mutters something that is nearly "good game".'] },
+      gloat: ['You do a small victory lap around the room.', '"Rematch whenever you are ready to lose again," you say.'],
+      gloatReply: { warm: ['{name} throws a cushion at you, laughing.', '{name} groans, then laughs. "Enjoy it."'], cool: ['{name} raises an eyebrow and says nothing.', '{name} lets it go, though you can tell they did not enjoy it.'], sore: ['{name} goes stiff. "That was a bit much."', '{name}\'s smile does not reach their eyes.'] },
+      rematch: ['"Best of one more?" you say.', 'You set the game up again.'],
+    },
+    follow: { graciousAffection: 0.02, graciousTension: -0.02, gloatWarmAffection: 0.01, gloatCoolTension: 0.02, gloatSoreTension: 0.04, gloatSoreAffection: -0.02 },
+    prompt: { beat: '{name} has beaten the player {n} time{s} at {game} and would like a rematch.', lost: 'The player has beaten {name} {n} time{s} at {game}; {name} is still thinking about it.', level: 'Games of {game} between {name} and the player are dead level.' },
+    event: '{name} and you played {game}.',
+  },
+};
+
 // --- Books (books.js, 0.14.5) ---
 // What people are actually reading. read_book used to be "curled up with a book": now there is a
 // book, a place in it, a last page, and somebody to talk to about it. The catalog is content and
@@ -6751,6 +6834,7 @@ const EVENT_IMPORTANCE = {
   occasion_feast:      'social',
   watch_party:         'social',
   book_finished:       'social',
+  game_match:          'social',
   birthday_cake:       'social',
   // Side Projects (projects.js, 0.14.2): starting one, a milestone, or giving
   // up is a real beat — ticker- and Chatter-worthy ("got through the bridge
@@ -6869,6 +6953,7 @@ const EVENT_EMOTION = {
   occasion_feast:      'warmth',
   watch_party:         'warmth',
   book_finished:       'warmth',
+  game_match:          'warmth',
   birthday_cake:       'warmth',
   note_read:           'domestic',
   note_reply:          'domestic',
@@ -8852,7 +8937,7 @@ const CAST_CONSTRAINTS = {
 // ADD_SKILL_XP has something real to check rather than a landmine.
 // 'music' (Aspirations & Creative Careers Phase 1, D5) is the one skill
 // that plan adds; its first award site is hobby.guitar (defs.actions.js). ---
-const SKILL_IDS = ['cooking', 'cleaning', 'stealth', 'tech', 'fitness', 'social', 'art', 'writing', 'focus', 'music'];
+const SKILL_IDS = ['cooking', 'cleaning', 'stealth', 'tech', 'fitness', 'social', 'art', 'writing', 'focus', 'music', 'games'];
 
 // --- Flag key patterns. ADD_FLAG/CLEAR_FLAG validate against these rather
 // than a fixed enum, since flag keys are often parameterized (e.g.

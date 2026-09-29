@@ -1,7 +1,7 @@
 # Game Room Overhaul — a room people actually play in
 
-Status: **planned — design complete 2026-09-22 (the user answered Q1–Q3 the
-same day); not started.** The user asked for it directly ("Game room needs to
+Status: **Phase 1 built 2026-09-29 (`games.js`, `verify-games.js` 25); design complete 2026-09-22 (the user answered Q1–Q3 the
+same day); Phases 2–12 not started.** The user asked for it directly ("Game room needs to
 come to life! … This is a massive area for improvement and expansion."). Last updated
 2026-09-22.
 
@@ -20,8 +20,7 @@ Companions:
 
 ## Handoff — read this first
 
-**Resume at:** Phase 1 (the match spine) — can start any time nothing else is
-mid-flight; reads none of the date systems.
+**Resume at:** Phase 2 (darts) — Phase 1 (the match spine) is built; every game just has to produce a result and call `gameApplyMatch` (games.js). A minigame replaces the abstract `gamePlanMatch` result: build the plan the same way (`{ gameId, npcId, stakeId, amount, playerWon, grade }`) and hand it to the `GAME_MATCH` effect.
 
 **Survey (2026-09-22):**
 - Today the Game Room is one flat verb: `self.play_games` (defs.actions.js)
@@ -171,7 +170,8 @@ land in the relationship engine this game is built on.
 
 | Phase | Status |
 |---|---|
-| 1–12 | Not started |
+| 1 | **Done** (2026-09-29) — the match spine: `games.js` (`GAME_DEFS`/`GAMES_TUNING`, `world.games`), the `games` skill, an abstract seeded resolver for pool/darts/console/board game, stakes (bragging, a real chore both ways, a capped IOU through `money.js`; agreement by fondness/temper), consequences (mood, rivalry on the relationship, memory, XP), the follow-up verbs (Good Game / Gloat / Rematch), the Challenge verb + `openChoicePicker`, the [Games] prompt line |
+| 2–12 | Not started |
 
 ## Open questions
 

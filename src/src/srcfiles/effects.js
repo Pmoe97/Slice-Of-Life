@@ -1385,6 +1385,21 @@ const EFFECT_DEFS = {
       tvApplyPlayerWatch(ctx.gameState, p.showId, Number(p.n), String(p.rerun) === '1', who, ACTION_TUNING.tvMinutes);
     },
   },
+  // Game Room (games.js, 0.14.5): a match the verb decided in prepare, and the follow-up after it.
+  // Trusted-only: the narrator never awards a win.
+  GAME_MATCH: {
+    paramShape: ['gameId', 'npcId', 'stakeId', 'winner', 'grade', 'amount'], llm: false, implemented: true,
+    validate: (p, ctx) => (typeof gameDef === 'function' && !!gameDef(p.gameId) && !!ctx.gameState.npcs?.[p.npcId]) || 'Nobody to play.',
+    apply: (p, ctx) => {
+      if (typeof gameApplyMatch !== 'function') return;
+      gameApplyMatch(ctx.gameState, { gameId: p.gameId, npcId: p.npcId, stakeId: p.stakeId, amount: Number(p.amount) || 0, playerWon: p.winner === 'p', grade: p.grade });
+    },
+  },
+  GAME_FOLLOWUP: {
+    paramShape: ['kind'], llm: false, implemented: true,
+    validate: (p) => ['gracious', 'gloat', 'rematch'].includes(p.kind) || 'Nothing to say.',
+    apply: (p, ctx) => { if (typeof gameApplyFollowUp === 'function') gameApplyFollowUp(ctx.gameState, p.kind); },
+  },
   // Books (books.js, 0.14.5): the player's Read at a bookshelf. Trusted-only — the verb picks the
   // book in prepare (bookPlanPlayerRead) and this turns the pages.
   BOOK_READ: {

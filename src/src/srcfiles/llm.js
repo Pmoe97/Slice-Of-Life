@@ -708,6 +708,11 @@ function buildNpcBlockV2(npc, query, channel, day, gameState) {
     const tvLine = tvPromptLine(gameState, npc.id);
     if (tvLine) block += `${tvLine}\n`;
   }
+  // Game Room (games.js, 0.14.5): who has been beating whom, and at what.
+  if (gameState && typeof gamesPromptLine === 'function') {
+    const gamesLine = gamesPromptLine(gameState, npc.id);
+    if (gamesLine) block += `${gamesLine}\n`;
+  }
   // House Notes F4 (0.14.5): the notes on the fridge (theirs, and in the kitchen a couple of others).
   if (gameState && typeof houseNotesPromptLine === 'function') {
     const noteLine = houseNotesPromptLine(gameState, npc.id);

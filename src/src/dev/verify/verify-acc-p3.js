@@ -320,7 +320,7 @@ for (const f of srcFiles) {
     (passesGs ? withGs : withoutGs).push(`${f}: ${isStealth ? 'stealth' : 'craft'}`);
   }
 }
-check('every stealth award site passes NO gameState (unwitnessed by design) and every craft site (effects/classes/puzzles) passes one', withoutGs.every(s => /stealth/.test(s)) && withGs.length === 3 && withGs.every(s => /craft/.test(s)), JSON.stringify({ withGs, withoutGs }));
+check('every stealth award site passes NO gameState (unwitnessed by design) and every craft site (effects/classes/puzzles) passes one', withoutGs.every(s => /stealth/.test(s)) && withGs.length === 4 /* effects, classes, puzzles + games.js (Game Room, 0.14.5) */ && withGs.every(s => /craft/.test(s)), JSON.stringify({ withGs, withoutGs }));
 
 console.log(`\n${'='.repeat(46)}\n  ${pass} passed, ${fail} failed\n${'='.repeat(46)}`);
 process.exit(fail > 0 ? 1 : 0);
