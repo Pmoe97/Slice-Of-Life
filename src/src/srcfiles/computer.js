@@ -1524,6 +1524,37 @@ function getVisibleStubs(gameState) {
   return stubs;
 }
 
+// The Browse tab's "★ Saved" view (roomlist-applicant-reachability-audit
+// Finding 2). Saved applicants used to be a filter over TODAY's stubs, so the
+// shortlist ("come back to them later") emptied at the next day's rotation
+// even though classifieds.favorites still held them. Saved mode is its own
+// source: every favorited NPC who is still a prospective applicant (stub-
+// promoted or Studio-built), as full-NPC records, with the same gender / income /
+// age / sort filters read off npc.bible instead of the stub. Pure.
+function getSavedApplicantNpcs(gameState) {
+  const classifieds = gameState.world.computer.apps.classifieds;
+  const f = classifieds.filters || {};
+  const seen = new Set();
+  let npcs = [];
+  for (const id of classifieds.favorites || []) {
+    const npc = gameState.npcs?.[id];
+    if (!npc || seen.has(id) || npc.residency?.status !== 'prospective') continue;
+    seen.add(id);
+    npcs.push({ id, npc });
+  }
+  if (f.gender && f.gender.length > 0) npcs = npcs.filter(x => f.gender.includes(x.npc.bible.gender));
+  if (f.incomeBand && f.incomeBand.length > 0) npcs = npcs.filter(x => f.incomeBand.includes(x.npc.bible.occupation?.incomeBand));
+  if (f.ageRange && f.ageRange.length === 2) npcs = npcs.filter(x => x.npc.bible.age >= f.ageRange[0] && x.npc.bible.age <= f.ageRange[1]);
+  const sortBy = f.sortBy || 'recent';
+  if (sortBy === 'age') npcs.sort((a, b) => a.npc.bible.age - b.npc.bible.age);
+  else if (sortBy === 'name') npcs.sort((a, b) => String(a.npc.bible.name).localeCompare(String(b.npc.bible.name)));
+  else if (sortBy === 'income') {
+    const order = { high: 0, mid: 1, low: 2 };
+    npcs.sort((a, b) => (order[a.npc.bible.occupation?.incomeBand] ?? 9) - (order[b.npc.bible.occupation?.incomeBand] ?? 9));
+  }
+  return npcs;
+}
+
 // Turn a stub record into a full NPC. Extracted from promoteStubToNpc so the
 // external-world plan's friend stubs (Phase 6) grow into real characters
 // through the exact same path a RoomList applicant does — one stub shape, one

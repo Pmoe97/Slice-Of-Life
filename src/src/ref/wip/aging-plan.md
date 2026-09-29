@@ -1,7 +1,9 @@
 # Aging — everyone gets older, slowly
 
-Status: **planned — design complete 2026-09-22; not started.** Builds with
-Birthdays P2–P3 (roadmap build order). Last updated 2026-09-22.
+Status: **built and verified — all five phases (2026-09-29, shipped as 0.14.5).**
+One live check outstanding, the same external gate as the cutout plan: a real
+image model has never repainted a portrait after a step (see Handoff). Last
+updated 2026-09-29.
 
 Companions:
 - `SEASONS-AND-OCCASIONS-ROADMAP.md` — R9 (the user: "a slow process, not an
@@ -17,7 +19,8 @@ Companions:
 
 ## Handoff — read this first
 
-**Resume at:** Phase 1. **Survey (2026-09-22):** `bible.age` is stated in
+**Nothing to resume** — see "Built 2026-09-29" below; what remains is the one
+live image check and the follow-ups. **Survey (2026-09-22):** `bible.age` is stated in
 every image subject description (`image.js` ~L350, "a 28-year-old …") and
 in the prompt's `[Identity]` line (`llm.js` `buildNpcBlockV2`), but image
 **cache keys are identity-anchored, not description-anchored**:
@@ -27,6 +30,56 @@ physical descriptor does NOT refresh a cached portrait — it would sit stale
 until LRU eviction and then regenerate *different* at a random moment. That
 is exactly the "instant, drastic change" R9 forbids, arriving by accident.
 A4 is the fix. **Blockers:** none.
+
+### Built 2026-09-29 (all five phases, one session — `aging.js`, `verify-aging.js` 48)
+
+- **P1 — the number (A1, A6).** `processAgingForDay` (aging.js) runs FIRST in
+  `processBirthdaysForDay`: on each person's birthday, once per birthday year
+  (a per-record `agedYear` guard — a reload never ages anyone twice), `bible.age`
+  and the player's `appearance.age` go up by one. NPCs of every status age (a
+  contact, a visitor, a former roommate — the birthday is derived for all).
+  Day 1 ages nobody. No retroactive aging: an old save's NPC whose birthday
+  already passed this year simply ages at the next one. The player's morning
+  line says "You're 40 now."; 21 and every tenth birthday are milestones — a
+  prompt note for `milestoneDays` (3) after (theirs, and yours for a roommate
+  who knows it), and importance already reads the new age.
+- **P2 — the profile and the drift (A2, A3, A5).** `agingProfile`: onset ages
+  per step, derived from `bible.genSeed` (player: seed + name), `AGING_TUNING`
+  (config.js) owns the ladders — hair (a few grey strands → greying at the
+  temples → salt-and-pepper → grey, always from the ORIGINAL colour, kept in
+  `bible.agingBase`), lines (faint laugh lines → laugh lines → crow's feet,
+  replacing only what aging itself put there), weathered skin (80% of people),
+  a slight stoop (35%). Steps that would change nothing (already grey/dyed
+  hair, a feature already at that rung, a missing field) are consumed silently
+  and never spend a birthday. `agingNextStep` gives at most ONE step per
+  birthday, the earliest-onset due step, ladders climbed in order; the rest
+  queue. Measured over 200 people: a 25-year-old over ten birthdays takes 0–2
+  steps (≥ 90%), a 50-year-old mostly 3–5, nobody two in one birthday.
+  Applied steps land in `bible.physical` and `bible.agingLog`.
+- **P3 — portraits (A4).** `appearanceEpochToken` folds into `composeCharKey`,
+  `cutoutIdentityToken` and `playerIdentityToken` (image.js) ONLY when epoch > 0;
+  `verify-aging.js` pins the epoch-0 keys byte-identical to the old formulas,
+  including the player's no-seed fallback hash (the bookkeeping is left out of
+  it, with the age held at the age they started at, so a step-less birthday never
+  repaints them). Peek keys stay identity-anchored (they don't carry the look).
+- **P4 — the player and species (A7–A9).** The player ages with a Settings
+  toggle "Your appearance ages" (`playerAging`, default on; it turns the LOOK
+  off, never the number) and a mirror line when a step lands. `speciesPace`
+  (config.js, beside `RACES`): visible age = age × pace (elf 0.2, vampire
+  0.05 …); the number still moves by one each birthday. `bible.agingProfile`
+  ({ disabled } | { disable: [ids], onsets: {id: age} }) pins or disables steps.
+- **P5 — close-out.** Patch-noted in 0.14.5; loader + index.html registered;
+  `verify-occasions` loader-order regex widened for the new file between.
+
+**Waiting on the user (design calls, not confirmed):** (1) "the number" under
+A9 — I read "pace multiplier on BOTH the number and the ladder" as: the number
+always moves by one and only the visible ladder is slowed; say if you meant the
+elf's number should move slower too. (2) The step means and the 0.12 per-person
+jitter are mine (config `AGING_TUNING`). (3) NPC steps are silent (no "you
+notice…" beat) so it stays gradual — the player only sees it in prompts/portraits.
+
+**Not live-verified:** a real image model repainting a portrait after a step
+(no backend in any dev environment) — everything else is measured in node.
 
 ## The thesis
 
@@ -92,7 +145,7 @@ into a stranger.
 
 | Phase | Status |
 |---|---|
-| 1–5 | Not started |
+| 1–5 | **Built and verified** (2026-09-29) — `verify-aging.js` 48; real-image repaint unverified |
 
 ## Resolved questions (user, 2026-09-22)
 

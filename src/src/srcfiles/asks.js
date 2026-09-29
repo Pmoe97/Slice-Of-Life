@@ -1858,6 +1858,7 @@ const ASK_GIFT = {
       giftMatch: match,          // rides for effects()/leafNote()
       giftLabel: src.label,      // rides for leafNote() — a def/plate label, never player text
       ...(birthday ? { birthday: true } : {}),
+      ...(birthday && typeof isBirthdayCake === 'function' && isBirthdayCake(defId, src.stack && src.stack.meta && src.stack.meta.plate) ? { giftCake: true } : {}),
       ...(food ? { giftFood: true } : {}),
       ...(src.isPlate ? { giftPlate: true } : {}),
     };
@@ -1879,7 +1880,7 @@ const ASK_GIFT = {
     // birthdays-and-occasions-plan.md D8: on their birthday the memory says
     // so, and the birthday bonus rides on top of the match delta (a miss
     // still earns it — the occasion is what was remembered).
-    const bdayLines = (decision.birthday && typeof birthdayGiftEffectLines === 'function') ? birthdayGiftEffectLines(gs, npcId) : [];
+    const bdayLines = (decision.birthday && typeof birthdayGiftEffectLines === 'function') ? birthdayGiftEffectLines(gs, npcId, decision.giftCake) : [];
     // D6: the move itself is postEffects' giveGiftUnit (one serving of a
     // plate, the exact stack picked) — MOVE_ITEM could only take the first
     // stack of a def, and moved a plate's whole batch.
@@ -1914,6 +1915,9 @@ const ASK_GIFT = {
   // The label is a def label (data, never player input), so it interpolates.
   leafNote(decision) {
     const label = decision.giftLabel || 'the gift';
+    if (decision.birthday && decision.giftCake) {
+      return `- It's your birthday, and they brought you a birthday cake (${label}). It's the classic gesture and it lands — let them feel it worked.`;
+    }
     if (decision.birthday) {
       return `- It's your birthday, and they gave you a present: ${label}. ${decision.giftMatch
         ? 'It is genuinely your kind of thing, and they remembered the day — let both land.'

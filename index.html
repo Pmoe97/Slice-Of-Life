@@ -8504,23 +8504,23 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=208"></script>
+<script src="src/src/srcfiles/config.js?v=209"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
      STATE (which consults autosaveIntervalMs at runtime only) for tidy load
      order. -->
-<script src="src/src/srcfiles/defs.settings.js?v=10"></script>
-<script src="src/src/srcfiles/settings.js?v=8"></script>
+<script src="src/src/srcfiles/defs.settings.js?v=11"></script>
+<script src="src/src/srcfiles/settings.js?v=9"></script>
 <script src="src/src/srcfiles/icons.js?v=36"></script>
 <!-- FIELDS — shared form-control builders (comboControl / customChipInput).
      AI-Assisted Character Generation Phase 1: must load before menu.js,
      render.computer.js and studio.js, all of which build controls with it.
      Registered in dev/verify/loadgame.js's ORDER in the same commit. -->
 <script src="src/src/srcfiles/fields.js?v=1"></script>
-<script src="src/src/srcfiles/defs.world.js?v=54"></script>
+<script src="src/src/srcfiles/defs.world.js?v=55"></script>
 <script src="src/src/srcfiles/defs.actions.js?v=65"></script>
-<script src="src/src/srcfiles/defs.computer.js?v=50"></script>
+<script src="src/src/srcfiles/defs.computer.js?v=51"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
      at runtime; IMAGE's titleGallery consumes genTitlePrompt. -->
@@ -8550,7 +8550,7 @@ body {
 <!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
      player-facing release history. Pure data, no dependencies, grouped with
      the other defs.* files for the same reason defs.dreams.js is. -->
-<script src="src/src/srcfiles/defs.patchnotes.js?v=27"></script>
+<script src="src/src/srcfiles/defs.patchnotes.js?v=28"></script>
 <!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
      WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
      ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
@@ -8607,7 +8607,7 @@ body {
 <script src="src/src/srcfiles/skills.js?v=20"></script>
 <script src="src/src/srcfiles/stealth.js?v=24"></script>
 <script src="src/src/srcfiles/time.js?v=33"></script>
-<script src="src/src/srcfiles/computer.js?v=80"></script>
+<script src="src/src/srcfiles/computer.js?v=81"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -8693,7 +8693,7 @@ body {
      ui.js; x5.js itself is pure and calls no model. -->
 <script src="src/src/srcfiles/x5.js?v=17"></script>
 <script src="src/src/srcfiles/interruption.js?v=24"></script>
-<script src="src/src/srcfiles/image.js?v=45"></script>
+<script src="src/src/srcfiles/image.js?v=46"></script>
 <!-- Avatars & Sprite Studio Phase 1: the permanent override store (kv.sprites)
      and resolveSprite, the ONE function allowed to read a sprite blob. After
      image.js because the resolver falls through to cutoutKey / getCachedImage
@@ -8765,7 +8765,11 @@ body {
      life-event module; only runtime calls out (npc.js/sim.js/drives.js), so
      no load-time dependency. Registered in dev/verify/loadgame.js's ORDER in
      the same change (the rumination.js scar). -->
-<script src="src/src/srcfiles/birthdays.js?v=3"></script>
+<script src="src/src/srcfiles/birthdays.js?v=4"></script>
+<!-- aging.js (aging-plan.md): the birthday's number + one visible step, the epoch
+     tokens image.js folds into its keys. Runtime calls only; registered in
+     dev/verify/loadgame.js's ORDER. -->
+<script src="src/src/srcfiles/aging.js?v=1"></script>
 <!-- Occasions (occasions-and-holidays-plan.md Phase 1): the ONE calendar
      reader — the year's holidays, festivity, the prompt date line, the
      Calendar rows and year-grid model. Pure domain logic beside its sibling
@@ -8807,7 +8811,7 @@ body {
      loader deliberately stops before the render layer, exactly as
      render.spritestudio.js does. -->
 <script src="src/src/srcfiles/render.nightscene.js?v=1"></script>
-<script src="src/src/srcfiles/render.computer.js?v=80"></script>
+<script src="src/src/srcfiles/render.computer.js?v=81"></script>
 <!-- Avatars & Sprite Studio Phase 4: the studio's verbs and its screens.
      render.spritestudio.js extends COMPUTER_RENDERERS, so it must load AFTER
      render.computer.js declares it; spritestudio.js holds the actions and is
@@ -8900,7 +8904,7 @@ body {
      Registered in BOTH this list and loadgame.js's ORDER, same commit. -->
 <script src="src/src/srcfiles/platform.js?v=6"></script>
 <script src="src/src/srcfiles/aspirations.js?v=2"></script>
-<script src="src/src/srcfiles/asks.js?v=23"></script>
+<script src="src/src/srcfiles/asks.js?v=24"></script>
 <script src="src/src/srcfiles/ui.js?v=188"></script>
 <script src="src/src/srcfiles/ui.computer.js?v=69"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the

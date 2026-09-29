@@ -1,8 +1,7 @@
 # Bug-fix audit — 2026-08-30 (settings, knock cost, chat images, peek framing, shower towel)
 
-**Status: Open — all five fixes implemented and verified live on 2026-08-30.**
-User's final confirmation outstanding; move to `complete/` once the five
-behaviours are confirmed good in play. No paired prompt (this was a bug
+**Status: COMPLETE — all five fixes implemented and verified live on 2026-08-30;
+the user confirmed them good on 2026-09-29 and this moved to `complete/`.** No paired prompt (this was a bug
 audit, not a phased overhaul).
 
 Covers five player-reported issues from one feedback session:

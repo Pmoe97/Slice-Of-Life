@@ -222,6 +222,11 @@ const ORDER = [
   // Calendar readers) with only runtime calls into npc.js/sim.js/drives.js,
   // so it loads cleanly here and is directly testable.
   'birthdays.js',
+  // aging.js (aging-plan.md, 2026-09-29) sits directly after birthdays.js in
+  // index.html too — real position. Pure domain logic (the number, the derived
+  // ladder, the epoch tokens image.js folds into its keys) with runtime-only
+  // calls out. Registered in BOTH lists in the same commit (rule 6).
+  'aging.js',
   // occasions.js (occasions-and-holidays-plan.md Phase 1) sits directly after
   // birthdays.js in index.html too — real position. Pure domain logic (the
   // holiday roster readers, festivity, prompt lines, the Calendar's row and

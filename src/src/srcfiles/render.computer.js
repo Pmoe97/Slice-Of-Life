@@ -3028,6 +3028,21 @@ function renderRoomListPost(body, gs, app, screen) {
   body.appendChild(studioRow);
 }
 
+// One full-NPC applicant card (the Applicants list and Browse's Saved view).
+function buildApplicantNpcCard(npcId, npc, isFav) {
+  const card = document.createElement('div');
+  card.className = 'rl-card';
+  card.setAttribute('data-action', 'classifieds.view-applicant');
+  card.setAttribute('data-row-id', npcId);
+  card.innerHTML = `
+    ${avatarChipHtml(npc, { className: 'rl-card-avatar', size: 'card' })}
+    <div class="rl-card-name">${npc.bible.name}${isFav ? ' <span class="rl-card-star">★</span>' : ''}</div>
+    <div class="dim tiny">${npc.bible.occupation.title}</div>
+    <div class="dim tiny" style="margin-top:2px;">${npc.bible.age} · ${(npc.bible.gender || '').replace('_', ' ')} · ${npc.bible.occupation.incomeBand} income</div>
+  `;
+  return card;
+}
+
 function renderRoomListApplicants(body, gs, app, screen) {
   const c = gs.world.computer.apps.classifieds;
   if (c.applicants.length === 0) { body.innerHTML = '<p class="dim tiny">No applicants yet — use the Studio to create one, or browse the listings.</p>'; return; }
@@ -3036,18 +3051,7 @@ function renderRoomListApplicants(body, gs, app, screen) {
   for (const npcId of c.applicants) {
     const npc = gs.npcs[npcId];
     if (!npc) continue;
-    const isFav = (c.favorites || []).includes(npcId);
-    const card = document.createElement('div');
-    card.className = 'rl-card';
-    card.setAttribute('data-action', 'classifieds.view-applicant');
-    card.setAttribute('data-row-id', npcId);
-    card.innerHTML = `
-      ${avatarChipHtml(npc, { className: 'rl-card-avatar', size: 'card' })}
-      <div class="rl-card-name">${npc.bible.name}${isFav ? ' <span class="rl-card-star">★</span>' : ''}</div>
-      <div class="dim tiny">${npc.bible.occupation.title}</div>
-      <div class="dim tiny" style="margin-top:2px;">${npc.bible.age} · ${(npc.bible.gender || '').replace('_', ' ')} · ${npc.bible.occupation.incomeBand} income</div>
-    `;
-    grid.appendChild(card);
+    grid.appendChild(buildApplicantNpcCard(npcId, npc, (c.favorites || []).includes(npcId)));
   }
   body.appendChild(grid);
 }
@@ -3112,8 +3116,11 @@ function renderRoomListOffers(body, gs, app, screen) {
 // fetch job (Phase 3). ---
 function renderRoomListBrowse(body, gs, app, screen) {
   const classifieds = gs.world.computer.apps.classifieds;
-  const stubs = getVisibleStubs(gs);
   const f = classifieds.filters || { gender: [], incomeBand: [], ageRange: [18, 60], sortBy: 'recent' };
+  // "★ Saved" is its own source (applicant audit Finding 2), not a filter over today's stubs.
+  const savedMode = !!f.favoritesOnly;
+  const stubs = savedMode ? [] : getVisibleStubs(gs);
+  const savedNpcs = savedMode ? getSavedApplicantNpcs(gs) : [];
 
   // Header with day + count + queue badge
   const hero = document.createElement('div');
@@ -3157,7 +3164,9 @@ function renderRoomListBrowse(body, gs, app, screen) {
 
   const countLine = document.createElement('div');
   countLine.className = 'dim tiny';
-  countLine.textContent = `${stubs.length} of ${classifieds.stubs[classifieds.activeDay]?.length || 0} applicants${f.gender.length || f.incomeBand.length ? ' matching filters' : ''}. New listings every day.`;
+  countLine.textContent = savedMode
+    ? `${savedNpcs.length} saved applicant${savedNpcs.length === 1 ? '' : 's'}${f.gender.length || f.incomeBand.length ? ' matching filters' : ''}. Saved applicants stay here after the day's listings change.`
+    : `${stubs.length} of ${classifieds.stubs[classifieds.activeDay]?.length || 0} applicants${f.gender.length || f.incomeBand.length ? ' matching filters' : ''}. New listings every day.`;
   hero.appendChild(countLine);
   body.appendChild(hero);
 
@@ -3246,7 +3255,8 @@ function renderRoomListBrowse(body, gs, app, screen) {
 
   // Phase 7: Favorites filter toggle
   const favCount = (classifieds.favorites || []).length;
-  if (favCount > 0) {
+  // (Also shown while Saved mode is on, so it can always be switched off.)
+  if (favCount > 0 || f.favoritesOnly) {
     const favBtn = document.createElement('button');
     const favActive = !!f.favoritesOnly;
     favBtn.className = 'btn tiny rl-filter-btn' + (favActive ? ' active' : '');
@@ -3261,6 +3271,21 @@ function renderRoomListBrowse(body, gs, app, screen) {
   body.appendChild(filterBar);
 
   // Grid
+  if (savedMode) {
+    if (savedNpcs.length === 0) {
+      const emptySaved = document.createElement('p');
+      emptySaved.className = 'dim tiny';
+      emptySaved.style.padding = 'var(--space-3)';
+      emptySaved.textContent = 'No saved applicants match your filters.';
+      body.appendChild(emptySaved);
+      return;
+    }
+    const savedGrid = document.createElement('div');
+    savedGrid.className = 'rl-grid';
+    for (const { id, npc } of savedNpcs) savedGrid.appendChild(buildApplicantNpcCard(id, npc, true));
+    body.appendChild(savedGrid);
+    return;
+  }
   if (stubs.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'dim tiny';

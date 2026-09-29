@@ -1716,6 +1716,16 @@ const RECIPES = {
     servings: 4, method: 'simmer', cookware: 'pot', betterHot: true,
     leaves: ['SET_OBJECT_STATE {stove} burner crusty'],
   },
+  // Birthdays (birthdays.js, 2026-09-29): the cake you can BAKE for someone.
+  // Six servings, baked, best fresh. Giving a plate of it (or the ordered
+  // `birthday_cake` item) on their birthday earns a small extra bonus
+  // (BIRTHDAY_TUNING.cakeBonus) on top of an ordinary birthday present.
+  birthday_cake: {
+    id: 'birthday_cake', label: 'Birthday Cake',
+    ingredients: [{ defId: 'flour', qty: 1 }, { defId: 'sugar', qty: 1 }, { defId: 'eggs', qty: 2 }, { defId: 'butter', qty: 1 }],
+    servings: 6, method: 'bake', cookware: 'oven', betterHot: false,
+    leaves: [],
+  },
   loaded_potato: {
     id: 'loaded_potato', label: 'Loaded Baked Potato',
     ingredients: [{ defId: 'potatoes', qty: 1 }, { defId: 'cheese', qty: 1 }, { defId: 'butter', qty: 1 }],

@@ -130,9 +130,26 @@ function nightFrameShape() {
 // thing it should key — the player's own pixels, not a room's.
 function playerIdentityToken(player) {
   if (!player) return 'nobody';
-  if (player.portrait?.seed) return `p${player.portrait.seed}`;
-  const src = player.appearance ? JSON.stringify(player.appearance) : String(player.name || '');
-  return `ph${hashStr(src).toString(36)}`;
+  // Aging (aging-plan.md A4): a landed visible step is a new identity for the
+  // cutout cache; epoch 0 leaves the token exactly as it was.
+  const epoch = typeof appearanceEpochToken === 'function' ? appearanceEpochToken(player, true) : '';
+  if (player.portrait?.seed) return `p${player.portrait.seed}${epoch}`;
+  // A player with no portrait seed is keyed on their appearance. Once they have
+  // aged, the bookkeeping (agedYear, the log, the moving age) is left out of the
+  // hash — with the age held at the age they started at — so a birthday with no
+  // visible step does not repaint them; a step changes the physical fields and
+  // the epoch, which do. An unaged player hashes exactly as before.
+  let a = player.appearance;
+  if (a && a.agedYear) {
+    // Copy, drop the bookkeeping, and put the age BACK where it was (key order
+    // is part of the string being hashed).
+    const startAge = a.agingBase && a.agingBase.startAge !== undefined ? a.agingBase.startAge : a.age;
+    a = { ...a };
+    for (const k of ['agedYear', 'agingLog', 'agingSkipped', 'agingBase', 'appearanceEpoch']) delete a[k];
+    a.age = startAge;
+  }
+  const src = a ? JSON.stringify(a) : String(player.name || '');
+  return `ph${hashStr(src).toString(36)}${epoch}`;
 }
 
 // What is on the table in this room right now, or '' for "nothing worth
@@ -165,7 +182,11 @@ function sceneDetailSignature(roomObjects) {
 
 function composeCharKey(npc, expression, pose) {
   const stylePart = imageStyleToken();
-  const base = `char_${IMAGE_PROMPT_VERSION}_${npc.bible.genSeed}_${expression || 'neutral'}_${pose || 'standing'}`;
+  // Aging (aging-plan.md A4): the appearance epoch folds in ONLY once a visible
+  // step has landed (> 0), so every existing key — and the whole cache — is
+  // byte-identical until then. Same genSeed: the same person, a little older.
+  const epoch = typeof appearanceEpochToken === 'function' ? appearanceEpochToken(npc, false) : '';
+  const base = `char_${IMAGE_PROMPT_VERSION}_${npc.bible.genSeed}_${expression || 'neutral'}_${pose || 'standing'}${epoch ? '_' + epoch : ''}`;
   return stylePart ? `${base}_${stylePart}` : base;
 }
 
@@ -836,9 +857,10 @@ async function getCharacterImage(npc, expression, pose) {
 // agreed on who they were.
 function cutoutIdentityToken(who, isPlayer) {
   if (isPlayer) return playerIdentityToken(who);
+  const epoch = typeof appearanceEpochToken === 'function' ? appearanceEpochToken(who, false) : '';
   return who?.bible?.genSeed != null
-    ? `n${who.bible.genSeed}`
-    : `ni${hashStr(String(who?.id || who?.name || '')).toString(36)}`;
+    ? `n${who.bible.genSeed}${epoch}`
+    : `ni${hashStr(String(who?.id || who?.name || '')).toString(36)}${epoch}`;
 }
 
 // outfit = c<clothingState>_o<outerwear>_t<top>_b<bottom> — an outfit change

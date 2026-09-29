@@ -557,5 +557,88 @@ check('resolveTick placed the accepted guests in the party room', e2e.placed.a =
 check('...and the sim.js party pass wrote the attendance ledger: the honoree, and the player who was in the room', e2e.attended.includes(e2e.a) && e2e.attended.includes('player'), JSON.stringify(e2e.attended));
 check('the next rollover pays it out (line, partied mark, host affection up) — end to end', e2e.lines.some(l => /party/.test(l)) && e2e.partied === true && e2e.resolved === true && e2e.affD > 0, JSON.stringify({ lines: e2e.lines, partied: e2e.partied, affD: e2e.affD }));
 
+// ---------------------------------------------------------------- 10
+console.log('\n10. A2 — a different kind of present (an OFFER by text, gated like every intimacy act) and A5 — the birthday cake');
+const favorSetup = String.raw`
+  __favor = (over) => {
+    const g = __mk(101, 3); const [a, b] = __ids(g);
+    g.player.birthday = 33; __at(g, 33);
+    const t = g.npcs[a].bible.temperament || (g.npcs[a].bible.temperament = {});
+    Object.assign(t, { openness: 0.9, assertiveness: 0.9 });
+    __rel(g, a, { affection: 0.85, desire: 0.6, tension: 0, trust: 0.6 });
+    g.npcs[a].mood = 0.5;
+    __rel(g, b, { affection: 0.4 });
+    BIRTHDAY_TUNING.player.favor.chance = 1;
+    if (over) over(g, a, b);
+    return { g, a, b };
+  };
+`;
+api(favorSetup);
+const fav = J(String.raw`(() => {
+  const out = {};
+  const F = BIRTHDAY_TUNING.player.favor;
+  { const { g, a, b } = __favor();
+    const inv0 = __invCount(g); const desire0 = g.npcs[a].relPlayer.desire;
+    out.willing = isWilling(g, g.npcs[a], 'player', F.act, { npcId: a });
+    const res = processBirthdaysForDay(g, 33);
+    const texts = __threadMsgs(g, a).map(m => m.text);
+    out.ok = { a, favor: g.player.birthdays.self.favor, gift: g.player.birthdays.self.gift, texts, lines: res.lines,
+      greetedIsFavorPool: F.lines.default.includes(texts[texts.length - 1]) || Object.values(F.lines).some(p => p.includes(texts[texts.length - 1])),
+      desireD: g.npcs[a].relPlayer.desire - desire0, prompt: birthdayPromptLine(g, a), inv: __invCount(g) - inv0 };
+  }
+  { const { g, a } = __favor(); BIRTHDAY_TUNING.player.favor.chance = 0;
+    processBirthdaysForDay(g, 33); out.noChance = { favor: g.player.birthdays.self.favor || null }; BIRTHDAY_TUNING.player.favor.chance = 1; }
+  { const { g, a } = __favor((g, a) => { g.npcs[a].bible.temperament.openness = -0.8; g.npcs[a].bible.temperament.assertiveness = 0.2; });
+    processBirthdaysForDay(g, 33); out.prude = { dev: npcDeviancy(g.npcs[a]), favor: g.player.birthdays.self.favor || null }; }
+  { const { g, a } = __favor((g, a) => { __rel(g, a, { desire: 0.0 }); });
+    processBirthdaysForDay(g, 33); out.noDesire = { favor: g.player.birthdays.self.favor || null }; }
+  { const { g, a } = __favor((g, a) => { __rel(g, a, { affection: 0.45 }); });
+    processBirthdaysForDay(g, 33); out.notFondEnough = { favor: g.player.birthdays.self.favor || null }; }
+  { const { g, a } = __favor((g, a) => { g.npcs[a].relPlayer.desire = -0.6; });
+    processBirthdaysForDay(g, 33); out.unwilling = { favor: g.player.birthdays.self.favor || null }; }
+  { const { g, a } = __favor();
+    globalThis.isSfwMode = () => true;
+    processBirthdaysForDay(g, 33); out.sfw = { favor: g.player.birthdays.self.favor || null, lines: g.player.birthdays.self.gift };
+    delete globalThis.isSfwMode; }
+  { const { g, a, b } = __favor();
+    processBirthdaysForDay(g, 33);
+    out.instead = { giftFrom: g.player.birthdays.self.gift && g.player.birthdays.self.gift.from, a, b, favorFrom: g.player.birthdays.self.favor && g.player.birthdays.self.favor.from }; }
+  return out;
+})()`);
+check('the qualifying NPC (fond, drawn to you, open, willing by the intimacy gate) makes the offer', fav.willing === true && fav.ok.favor && fav.ok.favor.from === fav.ok.a, JSON.stringify({ willing: fav.willing, favor: fav.ok.favor }));
+check('...as a TEXT in their voice from the favor pool, plus a log line pointing you at your messages', fav.ok.greetedIsFavorPool && fav.ok.lines.some(l => /different kind of present/.test(l)), JSON.stringify({ t: fav.ok.texts, l: fav.ok.lines }));
+check('...it warms things a little (desire nudge) — and it is an offer: no act, no state beyond that', near(fav.ok.desireD, J('BIRTHDAY_TUNING.player.favor.desireNudge')), fav.ok.desireD);
+check('...and the offer stands IN PLACE of an object: that NPC left no physical present (someone else may)', !fav.ok.gift || fav.ok.gift.from !== fav.ok.a);
+check('the prompt line tells the writer to play it flirtatious but never assume anything happens', /private present/.test(fav.ok.prompt) && /never assume/.test(fav.ok.prompt), fav.ok.prompt);
+check('"sometimes": a chance of 0 means never', fav.noChance.favor === null);
+check('a prude (openness x assertiveness below the deviancy bar) never offers', fav.prude.dev < 0.4 && fav.prude.favor === null, JSON.stringify(fav.prude));
+check('no desire toward you → no offer; not fond enough → no offer', fav.noDesire.favor === null && fav.notFondEnough.favor === null);
+check('someone the willingness gate would refuse never offers (negative desire crushes it)', fav.unwilling.favor === null);
+check('SFW mode: never — the offer is skipped entirely', fav.sfw.favor === null);
+
+const cake = J(String.raw`(() => {
+  const setup = (bday) => {
+    const g = __mk(102, 2); const [a] = __ids(g);
+    g.npcs[a].location = 'living_room'; g.player.location = 'living_room';
+    g.npcs[a].bible.interests = []; g.npcs[a].bible.want = ''; g.npcs[a].bible.wound = '';
+    __setBday(g, a, bday); __at(g, 60); __rel(g, a, { affection: 0.1 });
+    g.player.inventory = [...(g.player.inventory || []), { defId: 'birthday_cake', qty: 1 }, { defId: 'chocolate_box', qty: 1 },
+      { defId: 'cooked_meal', qty: 1, meta: { plate: { recipeKey: 'birthday_cake', label: 'Birthday Cake', kcalPerServing: 400, servings: { total: 6, left: 6 }, quality: 0.6, grade: 'B', components: [], method: 'bake', cookware: 'oven', preparedAbs: 0, wasReheated: false } } }];
+    return { g, a };
+  };
+  const one = (defId, bday) => { const s = setup(bday); const before = s.g.npcs[s.a].relPlayer.affection; const t = resolveAsk(s.g, s.a, 'RequestGift', 'Here.', {}, { giftDefId: defId }); t.applyEffects(); return { d: t.decision, delta: s.g.npcs[s.a].relPlayer.affection - before, note: JSON.stringify(t.directive || {}) }; };
+  return { cakeItem: one('birthday_cake', 60), plate: one('cooked_meal', 60), choc: one('chocolate_box', 60), cakeOff: one('birthday_cake', 99),
+    recipe: (() => { const r = RECIPES.birthday_cake; return r && { ok: r.ingredients.every(i => !!ITEM_DEFS[i.defId]), servings: r.servings, method: r.method, cookware: r.cookware }; })(),
+    ordered: RESTAURANT_DEFS_LIST.filter(r => r.menu.some(m => m.itemId === 'birthday_cake')).map(r => r.id),
+    lines: { cake: birthdayGiftEffectLines(setup(60).g, setup(60).a, true), plain: birthdayGiftEffectLines(setup(60).g, setup(60).a, false) },
+    B: BIRTHDAY_TUNING };
+})()`);
+check('a cake is flagged on the decision only on a birthday (giftCake), and a plain present is not', cake.cakeItem.d.giftCake === true && cake.plate.d.giftCake === true && !cake.choc.d.giftCake && !cake.cakeOff.d.giftCake, JSON.stringify({ c: cake.cakeItem.d, p: cake.plate.d, ch: cake.choc.d }));
+check('a birthday cake earns exactly cakeBonus more than an ordinary birthday present (both the ordered item and a home-baked plate)', near(cake.cakeItem.delta - cake.choc.delta, cake.B.player.cakeBonus) && near(cake.plate.delta - cake.choc.delta, cake.B.player.cakeBonus), JSON.stringify({ cake: cake.cakeItem.delta, plate: cake.plate.delta, choc: cake.choc.delta }));
+check('...the writer is told the cake is the classic gesture', /birthday cake/.test(cake.cakeItem.note));
+check('off their birthday it is just a gift (no birthday bonus)', cake.cakeOff.d.birthday !== true);
+check('you can BAKE one: a real recipe (valid ingredients, six servings, baked, in the oven)', !!cake.recipe && cake.recipe.ok && cake.recipe.servings === 6 && cake.recipe.method === 'bake' && cake.recipe.cookware === 'oven', JSON.stringify(cake.recipe));
+check('you can ORDER one: the café and the upscale kitchen list it', cake.ordered.includes('sunrise_cafe') && cake.ordered.includes('emerald_kitchen'), JSON.stringify(cake.ordered));
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

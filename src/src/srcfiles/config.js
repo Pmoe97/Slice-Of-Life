@@ -10144,6 +10144,35 @@ const BIRTHDAY_TUNING = {
     toldFact: "The player mentioned that their birthday is the {date}.",
     giftLine: '🎁 {name} left {item} for you — "happy birthday."',
     greetedFact: 'It was the player\'s birthday and {name} made sure they knew it mattered.',
+    // A different kind of present (the user, 2026-09-29): a fond housemate who is
+    // also drawn to you, open enough, and — by the SAME willingness read every
+    // intimacy act uses — willing, may offer themselves instead of an object,
+    // sometimes. It is an OFFER by text, never an act: nothing happens until the
+    // player takes it up through the ordinary verbs, and the willingness gate
+    // still governs those (design invariant 1). Skipped entirely in SFW mode.
+    favor: {
+      affection: 0.6,          // at least this fond
+      desire: 0.15,            // relPlayer.desire toward you at least this
+      deviancy: 0.4,           // npcDeviancy (openness x assertiveness)
+      act: 'quickie',          // the willingness bar it is read against
+      chance: 0.5,             // "sometimes": a seeded coin toss per (person, day)
+      desireNudge: 0.05,       // the offer itself warms things a little
+      moodNudge: 0.04,
+      line: '💝 {name} has a different kind of present in mind — check your messages.',
+      promptLine: "[Birthday]: {name} has hinted by text at a private present for later — flirtatious and playful about it. Whether anything comes of it follows from how the moment goes; never assume it.",
+      lines: {
+        terse: ['Your present is me. Tonight.', 'No wrapping paper. My room, later.'],
+        'emoji-heavy': ['your present isn\'t something you can unwrap in public 😏🎁 find me tonight', 'happy birthday 😘 i\'m your present. later. 🔥'],
+        'all-lowercase': ['so i didn\'t get you anything you can hold. come find me tonight and i\'ll make it up to you', 'happy birthday. your present is later, and it\'s me'],
+        'properly-punctuated': ['Happy birthday. I did not buy you anything. I thought I might give you something more personal later tonight, if you\'d like.', 'Happy birthday. Your present is private. Find me this evening.'],
+        'stream-of-consciousness': ['ok so happy birthday and i wanted to get you something and then i thought what do you actually want and the answer might be me so. later? tonight? just saying', 'i have a present for you and it doesn\'t fit in a bag, come find me later'],
+        'meme-laden': ['happy birthday. present: me. no returns. find me tonight', 'birthday DLC unlocked: me. ask nicely'],
+        default: ['Happy birthday. Your present isn\'t something I could wrap — come find me tonight.', 'Happy birthday. I have something private in mind for later, if you want it.'],
+      },
+    },
+    // Birthday cake gifts (the user, 2026-09-29): you can bake or order one, and it
+    // lands better than an ordinary present on the day.
+    cakeBonus: 0.04,
     // Text greetings, by the SENDER's texting style (same keys as tipOffLines).
     greetLines: {
       terse: ['Happy birthday.', 'Birthday. Hope it\'s a good one.'],
@@ -10265,6 +10294,77 @@ const BIRTHDAY_TUNING = {
   },
 };
 
+// --- Aging (aging-plan.md, 2026-09-29) ---
+// Everyone gets older, slowly. The NUMBER moves on the birthday (once per birthday
+// year); the LOOK follows on a short, per-person ladder — at most ONE visible
+// step per birthday (A3), so a save that spans years drifts, never jumps (R9).
+// The ladder's onset ages are derived per person from their seed (R5), never
+// stored. Steps land in the bible's physical fields (authoritative) with a
+// bible.agingLog, and each applied step bumps bible.appearanceEpoch, which folds
+// into the image identity tokens only when > 0 (A4: epoch 0 keys are
+// byte-identical to before, so the existing cache is untouched).
+// AGING (aging.js) is the only reader.
+const AGING_TUNING = {
+  seedSalt: 33071,
+  paceJitter: 0.12,          // per-person: every onset age scales by 1 +/- this (one greys early, one late)
+  minGapYears: 3,            // consecutive steps of one ladder are at least this many (visible) years apart
+  // Long-lived species: the VISIBLE age is age x pace, so their steps come far slower
+  // (A9). Their birthday still comes every year and the number still moves by one.
+  // human = 1 (the default for anything unlisted). A lore table beside RACES.
+  speciesPace: { human: 1, elf: 0.2, dwarf: 0.5, orc: 0.7, tiefling: 0.8, vampire: 0.05, fae: 0.15, catfolk: 0.9, wolffolk: 0.9, dragonborn: 0.6 },
+  // The ladders. `mean`/`spread`: the step's onset visible-age is mean +/- spread (seeded).
+  // `chance`: the share of people who ever take a rare step. `{base}`: the original
+  // hair colour, remembered in bible.agingBase so a step never chains text on text.
+  ladders: {
+    hair: {
+      field: 'hair.color',
+      // Already grey, white, bleached or dyed a colour: nothing here to grey.
+      skipIf: ['grey', 'gray', 'salt-and-pepper', 'white', 'silver', 'bleached', 'platinum blonde', 'dyed blue', 'dyed pink', 'dyed purple'],
+      steps: [
+        { id: 'grey1', mean: 36, spread: 8, text: '{base} with a few grey strands' },
+        { id: 'grey2', mean: 48, spread: 8, text: '{base}, greying at the temples' },
+        { id: 'grey3', mean: 60, spread: 8, text: 'salt-and-pepper' },
+        { id: 'grey4', mean: 72, spread: 8, text: 'grey' },
+      ],
+    },
+    lines: {
+      field: 'features',      // physical.distinguishingFeatures: the previous line step is REPLACED
+      steps: [
+        { id: 'lines1', mean: 33, spread: 7, text: 'faint laugh lines' },
+        { id: 'lines2', mean: 46, spread: 8, text: 'laugh lines' },
+        { id: 'lines3', mean: 60, spread: 8, text: "crow's feet" },
+      ],
+    },
+    skin: {
+      field: 'skin.texture',
+      skipIf: ['weathered', 'rough', 'leathery'],
+      steps: [{ id: 'skin1', mean: 64, spread: 8, chance: 0.8, text: 'weathered' }],
+    },
+    posture: {
+      field: 'body.posture',
+      steps: [{ id: 'post1', mean: 72, spread: 8, chance: 0.35, text: 'stooping slightly' }],
+    },
+  },
+  // The player's own line when a step lands on them (the mirror beat, A5).
+  mirrorLines: {
+    grey1: 'You catch a few grey strands in the bathroom mirror.',
+    grey2: 'The grey at your temples is hard to ignore now.',
+    grey3: 'Your hair has gone salt-and-pepper. When did that happen?',
+    grey4: 'Your hair is grey now, all of it.',
+    lines1: 'There are faint laugh lines by your eyes that you don\'t remember.',
+    lines2: 'Your laugh lines have settled in for good.',
+    lines3: 'There are crow\'s feet at the corners of your eyes now.',
+    skin1: 'Your skin has a weathered look these days.',
+    post1: 'You catch yourself stooping a little.',
+    default: 'You look a little older in the mirror this year.',
+  },
+  ageLine: "You're {age} now.",          // rides the player's birthday line
+  milestoneEvery: 10,        // 30, 40, 50 ... (and 21) are milestones (A6)
+  milestoneAges: [21],
+  milestoneDays: 3,          // the prompt mentions it for this many days after the birthday
+  milestonePrompt: "[Birthday]: {name} turned {age} — a milestone birthday. It may be on their mind; they might mention it if it comes up.",
+  milestonePromptPlayer: "[Birthday]: The player turned {age} — a milestone birthday. {name} knows and might bring it up.",
+};
 // --- Occasions (occasions-and-holidays-plan.md Phase 1, D1–D9) ---
 // The year's holidays. SEASONS-AND-OCCASIONS-ROADMAP.md R1 binds every row:
 // NO RELIGION, anywhere — each is a non-religious cultural festival with

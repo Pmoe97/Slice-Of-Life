@@ -187,7 +187,12 @@ const APP_DEFS = {
       browse: { label: 'Browse', renderer: 'roomlist-browse' },
       queue: { label: 'Inbox', renderer: 'roomlist-queue', hideFromNav: false },
       studio: { label: 'Studio', renderer: 'roomlist-studio' },
-      applicants: { label: 'Applicants', renderer: 'roomlist-applicants', hideFromNav: true },
+      // Finding 3 of the applicant audit: a Studio-built applicant is never a
+      // stub (so never on Browse) and never in the fetch queue (so never in the
+      // Inbox), so this list is the ONLY place that shows them with an Accept
+      // route. It was hideFromNav, reachable only from a Studio profile's own
+      // "Back to Applicants" button.
+      applicants: { label: 'Applicants', renderer: 'roomlist-applicants' },
       // Move-in offers (external-world plan Phase 8): external NPCs a
       // resident (or the player) vouched for in conversation, routed into
       // the same assign flow a Classifieds applicant uses. Nav-visible so
@@ -1035,6 +1040,8 @@ const RESTAURANT_DEFS = {
       { itemId: 'dish_orange_juice_pitcher', price: 5 },
       { itemId: 'dish_croissant', price: 5 },
       { itemId: 'dish_bagel_cc', price: 7 },
+      // Birthdays (2026-09-29): a whole birthday cake, ordered from the café.
+      { itemId: 'birthday_cake', price: 28 },
     ],
   },
   corner_deli: {
@@ -1194,6 +1201,7 @@ const RESTAURANT_DEFS = {
       { itemId: 'dish_butter_potatoes', price: 10 },
       { itemId: 'dish_creme_brulee', price: 9 },
       { itemId: 'dish_chocolate_torte', price: 10 },
+      { itemId: 'birthday_cake', price: 44 },
       { itemId: 'dish_house_red', price: 14 },
       { itemId: 'dish_espresso', price: 6 },
     ],

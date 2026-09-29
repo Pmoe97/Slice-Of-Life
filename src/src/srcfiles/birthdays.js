@@ -299,9 +299,19 @@ function birthdayGiftBonusApplies(gs, npcId) {
   return !(mark && mark.gifted);
 }
 
-function birthdayGiftEffectLines(gs, npcId) {
+function birthdayGiftEffectLines(gs, npcId, isCake) {
   if (!birthdayGiftBonusApplies(gs, npcId)) return [];
-  return [`REL_DELTA ${npcId} affection +${BIRTHDAY_TUNING.giftBonus.affection.toFixed(2)}`];
+  const lines = [`REL_DELTA ${npcId} affection +${BIRTHDAY_TUNING.giftBonus.affection.toFixed(2)}`];
+  // A birthday cake (baked or ordered) lands a little better than any other
+  // present. Its own line: EFFECT_LIMITS.relDeltaCap clamps each REL_DELTA, so
+  // one summed line would swallow the bonus.
+  if (isCake && BIRTHDAY_TUNING.player.cakeBonus) lines.push(`REL_DELTA ${npcId} affection +${BIRTHDAY_TUNING.player.cakeBonus.toFixed(2)}`);
+  return lines;
+}
+
+// Is this def / plate a birthday cake? (the ordered item, or a plate cooked from the recipe)
+function isBirthdayCake(defId, plate) {
+  return defId === 'birthday_cake' || !!(plate && plate.recipeKey === 'birthday_cake');
 }
 
 function noteBirthdayGift(gs, npcId) {
@@ -330,8 +340,10 @@ function birthdayPromptLine(gs, npcId) {
   // can have both lines on the same day.
   const own = typeof playerBirthdayPromptLine === 'function' ? playerBirthdayPromptLine(gs, npcId) : null;
   const theirs = birthdayOwnPromptLine(gs, npcId, npc, day);
-  if (theirs && own) return `${theirs}\n${own}`;
-  return theirs || own || null;
+  // Milestone birthdays (aging-plan.md A6) stay in the prompt for a few days after.
+  const milestones = typeof agingMilestonePromptLines === 'function' ? agingMilestonePromptLines(gs, npcId) : [];
+  const all = [theirs, own, ...milestones].filter(Boolean);
+  return all.length ? all.join('\n') : null;
 }
 
 function birthdayOwnPromptLine(gs, npcId, npc, day) {
@@ -484,11 +496,33 @@ function playerBirthdayPromptLine(gs, npcId) {
   if (until === 0) {
     const self = gs.player.birthdays?.self;
     const greeted = self && self.year === getYear(day) ? self.greeted?.[npcId] : null;
+    const offered = self && self.year === getYear(day) && self.favor && self.favor.from === npcId;
+    if (offered) return `[Birthday]: TODAY is the player's birthday and ${name} knows. They already texted this morning.\n${fillBirthdayText(P.favor.promptLine, { name })}`;
     if (greeted === 'text') return `[Birthday]: TODAY is the player's birthday and ${name} knows. They already texted them a happy birthday this morning.`;
     return `[Birthday]: TODAY is the player's birthday and ${name} knows. They haven't said a word yet — expect them to wish the player a happy birthday warmly, in their own way, unprompted.`;
   }
   if (until <= P.promptSoonDays) return `[Birthday]: the player's birthday is ${until === 1 ? 'tomorrow' : `in ${until} days`} and ${name} knows.`;
   return null;
+}
+
+// A different kind of present (config: player.favor): who, if anyone, offers
+// themselves this birthday. Read through the SAME willingness call every
+// intimacy act uses, so an NPC who would refuse an act never offers it. The
+// fondest qualifying knower wins; null in SFW mode or when nobody qualifies.
+function pickBirthdayFavor(gs, day, knowerIds) {
+  const F = BIRTHDAY_TUNING.player.favor;
+  if (typeof isSfwMode === 'function' && isSfwMode()) return null;
+  if (typeof isWilling !== 'function' || typeof npcDeviancy !== 'function') return null;
+  const cands = knowerIds
+    .map(id => ({ id, npc: gs.npcs[id] }))
+    .filter(({ id, npc }) => npc
+      && (npc.relPlayer?.affection || 0) >= F.affection
+      && (npc.relPlayer?.desire || 0) >= F.desire
+      && npcDeviancy(npc) >= F.deviancy
+      && birthdayHash01(`${id}|favor|${day}`) < F.chance
+      && isWilling(gs, npc, 'player', F.act, { npcId: id }))
+    .sort((a, b) => ((b.npc.relPlayer.affection) - (a.npc.relPlayer.affection)) || a.id.localeCompare(b.id));
+  return cands.length ? cands[0].id : null;
 }
 
 // The closest housemate (fond enough) leaves a present in the player's bag —
@@ -523,7 +557,7 @@ function playerBirthdayGift(gs, day, knowerIds) {
 // Everyone who knows it greets them — a text at midnight when fond enough
 // (or by the toss of a coin below that), otherwise in person on the day (the
 // [Birthday] prompt line) — and the closest leaves a present.
-function processPlayerBirthday(gs, day, residentIds, out) {
+function processPlayerBirthday(gs, day, residentIds, out, aging) {
   if (!isPlayerBirthdayOn(gs, day)) return;
   const P = BIRTHDAY_TUNING.player;
   const rec = ensurePlayerBirthdays(gs.player);
@@ -534,18 +568,32 @@ function processPlayerBirthday(gs, day, residentIds, out) {
   self.announced = true;
   pushMoodImpulse(gs.player, P.dayOfMood, day);
   const knowers = residentIds.filter(id => residentKnowsPlayerBirthday(gs, id));
-  out.lines.push(P.dayOfLine + (knowers.length ? '' : P.dayOfQuietLine));
+  // "You're 31 now." rides the morning line; a step that landed on you gets its mirror beat.
+  const ageBit = aging && aging.playerAge && typeof AGING_TUNING !== 'undefined' ? ' ' + AGING_TUNING.ageLine.replace('{age}', String(aging.playerAge)) : '';
+  out.lines.push(P.dayOfLine + ageBit + (knowers.length ? '' : P.dayOfQuietLine));
+  for (const mirror of (aging && aging.playerLines) || []) out.lines.push(mirror);
+  // A different kind of present, sometimes, in place of an object (P.favor).
+  const favorId = pickBirthdayFavor(gs, day, knowers);
   let greets = 0;
   for (const id of knowers) {
     const npc = gs.npcs[id];
-    const byText = (npc.relPlayer?.affection || 0) >= P.textAffection || birthdayHash01(`${id}|pb|${day}`) < 0.5;
+    const byText = id === favorId || (npc.relPlayer?.affection || 0) >= P.textAffection || birthdayHash01(`${id}|pb|${day}`) < 0.5;
     self.greeted[id] = byText ? 'text' : 'spoken';
     if (!byText) continue;
     greets++;
-    out.texts.push({ npcId: id, text: pickBirthdayLine(P.greetLines, npc, day, `${id}>player`), aboutId: 'player' });
+    const pools = id === favorId ? P.favor.lines : P.greetLines;
+    out.texts.push({ npcId: id, text: pickBirthdayLine(pools, npc, day, `${id}>player`), aboutId: 'player' });
+  }
+  if (favorId) {
+    const F = P.favor;
+    self.favor = { from: favorId };
+    let fnpc = applyRelDelta(gs.npcs[favorId], { desire: F.desireNudge }, undefined);
+    gs.npcs[favorId] = nudgeNpcMood(fnpc, F.moodNudge);
+    out.lines.push(fillBirthdayText(F.line, { name: birthdayNpcName(gs.npcs[favorId]) }));
   }
   if (greets) pushMoodImpulse(gs.player, Math.min(P.greetMoodCap, greets * P.greetMood), day);
-  const gift = playerBirthdayGift(gs, day, knowers);
+  // Their offer stands in for an object — the physical present comes from someone else.
+  const gift = playerBirthdayGift(gs, day, knowers.filter(id => id !== favorId));
   if (gift) {
     self.gift = { from: gift.id, defId: gift.defId };
     out.lines.push(fillBirthdayText(P.giftLine, { name: birthdayNpcName(gs.npcs[gift.id]), item: `the ${gift.label.toLowerCase()}` }));
@@ -772,6 +820,12 @@ function processBirthdaysForDay(gs, day) {
   const rec = ensurePlayerBirthdays(gs.player);
   const ids = birthdayResidentIds(gs);
 
+  // 00. Aging (aging-plan.md A1): the number — and at most one visible step —
+  // moves for everyone whose birthday it is, FIRST, so everything below (the
+  // day-of line, importance, the prompt) reads the new age.
+  const aging = typeof processAgingForDay === 'function' ? processAgingForDay(gs, day) : { lines: [], playerAge: null, playerLines: [] };
+  out.lines.push(...aging.lines);
+
   // 0. Phase 5 — yesterday's birthday parties resolve FIRST: a party thrown
   // for someone is remembering them, so the sting below must see its mark.
   if (day > 1) resolveBirthdayParties(gs, day, out);
@@ -817,7 +871,7 @@ function processBirthdaysForDay(gs, day) {
   }
 
   // 2b. Phase 2 — your own birthday.
-  processPlayerBirthday(gs, day, ids, out);
+  processPlayerBirthday(gs, day, ids, out, aging);
 
   // 3. D4 — the heads-up, headsUpDays out. A housemate tips you off; failing
   // one, the birthday roommate may mention it themselves; failing that,

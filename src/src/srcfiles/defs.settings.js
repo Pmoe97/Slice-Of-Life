@@ -14,6 +14,7 @@ const SETTINGS_DEFAULTS = {
   autosave: true,                 // migrated from kv.menu 'options'.autosave
   autosaveInterval: '30s',        // '30s'|'1m'|'5m'|'10m'  (D6)
   sfwMode: false,                 // contentFlags.mature=false when true (D5)
+  playerAging: true,              // the player's APPEARANCE drifts with age (aging-plan.md A8); the number always moves
   textSize: 'medium',             // 'small'|'medium'|'large' (D7)
   genderDist: {                   // cast identity taxonomy, sums to 100 (D14)
     female: 40, male: 40, futanari: 8, trans_male: 6, trans_female: 6,
@@ -642,6 +643,14 @@ const SETTINGS_TABS = [
             field: 'sfwMode',
             label: 'SFW guidance mode',
             desc: 'Guides generated content and prompts to stay non-explicit: the mature flag turns off, the LLM is told to fade to black, and mature-gated sites hide. Off by default.',
+            action: 'settings.toggle',
+          },
+          {
+            id: 'player-aging',
+            kind: 'toggle',
+            field: 'playerAging',
+            label: 'Your appearance ages',
+            desc: 'On your birthdays your look can change, very slowly: a few grey strands, laugh lines. Roommates always age. Turn this off to keep your character looking just as you made them. Your age still goes up.',
             action: 'settings.toggle',
           },
           {

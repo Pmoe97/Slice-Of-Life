@@ -134,6 +134,7 @@ function normalizeSettings(s) {
   if (typeof out.autosave !== 'boolean') out.autosave = SETTINGS_DEFAULTS.autosave;
   if (!AUTOSAVE_INTERVALS.some((i) => i.id === out.autosaveInterval)) out.autosaveInterval = SETTINGS_DEFAULTS.autosaveInterval;
   if (typeof out.sfwMode !== 'boolean') out.sfwMode = SETTINGS_DEFAULTS.sfwMode;
+  if (typeof out.playerAging !== 'boolean') out.playerAging = SETTINGS_DEFAULTS.playerAging;
   if (!TEXT_SIZES.some((t) => t.id === out.textSize)) out.textSize = SETTINGS_DEFAULTS.textSize;
   if (typeof out.imageStyle !== 'string' || !out.imageStyle) out.imageStyle = SETTINGS_DEFAULTS.imageStyle;
   // D9 (Phase 7): a stored style id must be one the funnel can resolve —
@@ -320,6 +321,12 @@ function autosaveIntervalMs() {
 // intimateAllowed character-image gate, activeContentFlags site gating).
 function isSfwMode() {
   return settingsCache.sfwMode === true;
+}
+
+// Aging (aging-plan.md A8): does the PLAYER's appearance drift with their age?
+// On by default; the number always moves regardless.
+function isPlayerAgingOn() {
+  return settingsCache.playerAging !== false;
 }
 
 // D7: text-size scale factor (font-size only, never layout metrics).

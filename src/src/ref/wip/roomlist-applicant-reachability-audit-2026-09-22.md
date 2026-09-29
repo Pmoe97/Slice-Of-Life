@@ -82,7 +82,15 @@ those are always live stubs).
 
 ---
 
-## Finding 2 — the Browse "★ Saved" filter empties after one day (OPEN)
+## Finding 2 — the Browse "★ Saved" filter empties after one day (FIXED 2026-09-29)
+
+**Fixed (the user said "do both").** Saved mode is its own source now:
+`getSavedApplicantNpcs` (computer.js) lists every favorited NPC still
+`prospective` — stub-promoted or Studio-built — as full-NPC cards
+(`buildApplicantNpcCard`, render.computer.js), with the gender / income / age /
+sort filters read off `npc.bible`; the toggle stays visible while Saved is on so
+it can always be switched off. `verify-roomlist-saved.js` (17). The original
+finding follows.
 
 **Measured, not live-clicked** (a node probe against the real engine): request
 an applicant, ★ Save them, turn on the Saved filter → they show. Roll one day →
@@ -107,7 +115,11 @@ Inbox, which now always works.
 
 ---
 
-## Finding 3 — Studio-built applicants have no way back (OPEN, code reading only)
+## Finding 3 — Studio-built applicants have no way back (FIXED 2026-09-29)
+
+**Fixed:** the Applicants screen is no longer `hideFromNav` (the first candidate
+fix), and Saved mode above also lists a favorited Studio applicant. Confirmed by
+the same harness. The original finding follows.
 
 **Not live-verified — confirm before fixing.** An applicant built in the
 Character Studio (`buildStudioNpc`) is pushed to `classifieds.applicants` and

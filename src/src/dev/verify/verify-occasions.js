@@ -75,7 +75,7 @@ check('...occasions.js right after birthdays.js; render.calendar.js after render
   && indexHtml.indexOf('srcfiles/render.computer.js') < indexHtml.indexOf('srcfiles/render.calendar.js'));
 const loaderSrc = fs.readFileSync(path.join(__dirname, 'loadgame.js'), 'utf8');
 check("loadgame.js ORDER registers occasions.js after birthdays.js (and not the render-layer painter)",
-  /'birthdays\.js',[\s\S]{0,600}?'occasions\.js'/.test(loaderSrc) && !/'render\.calendar\.js'/.test(loaderSrc));
+  /'birthdays\.js',[\s\S]{0,1400}?'occasions\.js'/.test(loaderSrc) && !/'render\.calendar\.js'/.test(loaderSrc));
 
 // ---------------------------------------------------------------- 1
 console.log('\n1. Roster integrity');

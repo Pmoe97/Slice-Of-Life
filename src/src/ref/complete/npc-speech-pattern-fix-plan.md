@@ -1,8 +1,7 @@
 # NPC speech-pattern fix — 2026-08-30 (tics sandwich, verbatim loops, canned entry greetings)
 
-**Status: Open — all five fixes implemented and verified live on 2026-08-30.**
-User's final confirmation outstanding (needs a real in-game conversation on a
-save); move to `complete/` once the behaviour is confirmed good in play. This
+**Status: COMPLETE — all five fixes implemented and verified live on 2026-08-30;
+the user confirmed them good on 2026-09-29 and this moved to `complete/`.** This
 was a bug fix, not a phased overhaul, so there is no paired session prompt.
 
 Covers the six player-reported symptoms from one feedback session, all around
