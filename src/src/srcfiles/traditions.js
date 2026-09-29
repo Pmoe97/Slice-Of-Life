@@ -966,6 +966,12 @@ function tradVerbOpen(gs, id, roomId) {
   const on = (occId) => occasionsOnDay(day).some(o => o.id === occId);
   if (roomId && row.rooms && !row.rooms.includes(roomId)) return { ok: false, reason: 'Wrong room for that.' };
   if (T.rituals[id]) return ritualWindow(gs, id, roomId);
+  // Power outages (seasons plan W10): the candles verb is open while the power is out.
+  if (id === 'light_candles') {
+    if (typeof outageActive !== 'function' || !outageActive(gs)) return { ok: false, reason: 'The power is on.' };
+    if (outageCandlesLit(gs)) return { ok: false, reason: OUTAGE_TUNING.candles.done };
+    return { ok: true };
+  }
   if (id === 'play_prank') {
     if (!on('fools_day')) return { ok: false, reason: 'Not today.' };
     const targets = playerPrankTargets(gs).filter(x => !t.done[`playerprank|fools_day|${getYear(day)}|${x}`]);
@@ -1031,6 +1037,10 @@ function tradVerbPrepare(gs, id, roomId) {
     return { verbId: id, companions, line: companion ? tradFill(H.shared, { name: companion }) : H.line };
   }
   if (id === 'coins_in_jar') return { verbId: id, line: T.playful.giving.jar.line };
+  if (id === 'light_candles') {
+    const C = OUTAGE_TUNING.candles;
+    return { verbId: id, line: companion ? tradFill(C.shared, { name: companion }) : C.line };
+  }
   return { cancelled: true };
 }
 
@@ -1080,6 +1090,12 @@ function applyTradVerb(gs, id, roomId, arg) {
   if (id === 'carve_pumpkin') {
     t.ritual[`${id}|${day}`] = true;
     mood(T.playful.halloween.pumpkin.mood);
+    for (const cid of tradRitualCompanions(gs, roomId)) tradMood(gs, cid, T.participantMood);
+    return {};
+  }
+  if (id === 'light_candles') {
+    applyOutageCandles(gs);
+    mood(OUTAGE_TUNING.candles.mood);
     for (const cid of tradRitualCompanions(gs, roomId)) tradMood(gs, cid, T.participantMood);
     return {};
   }

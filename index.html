@@ -8504,7 +8504,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=210"></script>
+<script src="src/src/srcfiles/config.js?v=211"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -8519,7 +8519,7 @@ body {
      Registered in dev/verify/loadgame.js's ORDER in the same commit. -->
 <script src="src/src/srcfiles/fields.js?v=1"></script>
 <script src="src/src/srcfiles/defs.world.js?v=56"></script>
-<script src="src/src/srcfiles/defs.actions.js?v=66"></script>
+<script src="src/src/srcfiles/defs.actions.js?v=67"></script>
 <script src="src/src/srcfiles/defs.computer.js?v=51"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
@@ -8550,7 +8550,7 @@ body {
 <!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
      player-facing release history. Pure data, no dependencies, grouped with
      the other defs.* files for the same reason defs.dreams.js is. -->
-<script src="src/src/srcfiles/defs.patchnotes.js?v=29"></script>
+<script src="src/src/srcfiles/defs.patchnotes.js?v=30"></script>
 <!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
      WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
      ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
@@ -8560,7 +8560,7 @@ body {
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/src/srcfiles/orbital.js?v=12"></script>
 <script src="src/src/srcfiles/state.js?v=77"></script>
-<script src="src/src/srcfiles/sim.js?v=114"></script>
+<script src="src/src/srcfiles/sim.js?v=115"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
@@ -8582,7 +8582,7 @@ body {
      calls composeMeanwhileTicker. Registered in dev/verify/loadgame.js's
      ORDER in the same commit (invariant 6). -->
 <script src="src/src/srcfiles/meanwhile.js?v=1"></script>
-<script src="src/src/srcfiles/scene.js?v=20"></script>
+<script src="src/src/srcfiles/scene.js?v=21"></script>
 <script src="src/src/srcfiles/items.js?v=33"></script>
 <!-- Inventory overhaul Phase 1: pure inventory query/sort/describe helpers
      (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
@@ -8597,7 +8597,7 @@ body {
 <script src="src/src/srcfiles/drives.js?v=53"></script>
 <!-- NPC utility scoring (npc-cognition-plan.md). Loads after drives.js: it
      reuses driveGateValue / isOnCooldown / DRIVE_COOLDOWN_KEY from it. -->
-<script src="src/src/srcfiles/cognition.js?v=35"></script>
+<script src="src/src/srcfiles/cognition.js?v=36"></script>
 <!-- NPC initiative (npc-initiative-plan.md Phase 3). Loads after cognition.js:
      scoreCandidates calls scoreOvertures, and evaluateDrives calls the writers
      here for the tick it wins. -->
@@ -8607,7 +8607,7 @@ body {
 <script src="src/src/srcfiles/skills.js?v=20"></script>
 <script src="src/src/srcfiles/stealth.js?v=24"></script>
 <script src="src/src/srcfiles/time.js?v=33"></script>
-<script src="src/src/srcfiles/computer.js?v=81"></script>
+<script src="src/src/srcfiles/computer.js?v=82"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -8646,7 +8646,7 @@ body {
      that calls ambientTempC/npcComfortBandC/temperatureClothingBiasWeight
      at runtime (npc.js's npcOutfitForContext, sim.js's resolveTick,
      computer.js's accrueHvacForDay — all below it, called at runtime only). -->
-<script src="src/src/srcfiles/temperature.js?v=2"></script>
+<script src="src/src/srcfiles/temperature.js?v=3"></script>
 <!-- Actions & Activities Overhaul Phase 9 (D17/D49): the ambient per-room
      dirt layer's write path + pure signal-intensity helper (dirt.js) — after
      world.js (refreshRoomCleanliness) and effects.js (clamp), both above it;
@@ -8680,7 +8680,7 @@ body {
      and called by sim.js at runtime only. -->
 <script src="src/src/srcfiles/rumination.js?v=15"></script>
 <script src="src/src/srcfiles/prompt.js?v=20"></script>
-<script src="src/src/srcfiles/llm.js?v=58"></script>
+<script src="src/src/srcfiles/llm.js?v=59"></script>
 <!-- CONCEPT — the character-concept engine (description -> validated draft).
      AI-Assisted Character Generation Phase 2. Sits after llm.js (whose prompt
      conventions it follows) and before the UI layer that calls it. Reads
@@ -8778,12 +8778,12 @@ body {
 <script src="src/src/srcfiles/occasions.js?v=7"></script>
 <!-- traditions.js (occasions-and-holidays-plan.md P4-P8): what people DO on the
      calendar's days. Runtime calls only; registered in dev/verify/loadgame.js. -->
-<script src="src/src/srcfiles/traditions.js?v=1"></script>
+<script src="src/src/srcfiles/traditions.js?v=2"></script>
 <!-- Seasons & weather (seasons-and-weather-plan.md Phase 1): daily weather,
      the outdoor temperature curve, daylight and the sky line. Pure and
      derived; runtime calls only (temperature.js/llm.js/render.js typeof-guard
      it). Registered in dev/verify/loadgame.js's ORDER in the same change. -->
-<script src="src/src/srcfiles/seasons.js?v=10"></script>
+<script src="src/src/srcfiles/seasons.js?v=11"></script>
 <!-- House notes (0.14.2): the roommates' half of the fridge — they read your
      notes, scribble replies, and leave their own for real, stored reasons.
      Pure domain logic; sim.js (resolveTick), defs.actions.js, render.js and
@@ -8806,7 +8806,7 @@ body {
      ui.js reach it at runtime only. Registered in dev/verify/loadgame.js's ORDER
      in the same change. -->
 <script src="src/src/srcfiles/projects.js?v=3"></script>
-<script src="src/src/srcfiles/render.js?v=108"></script>
+<script src="src/src/srcfiles/render.js?v=109"></script>
 <!-- Night Scene Phase 3b: the Living Tableau's PAINTER. After render.js
      (shares its rules: idempotent, no state mutation, no rolls) and after
      actionwindow.js, whose awShow/awHide it calls to claim the overlay. NOT
@@ -8908,8 +8908,8 @@ body {
 <script src="src/src/srcfiles/platform.js?v=6"></script>
 <script src="src/src/srcfiles/aspirations.js?v=2"></script>
 <script src="src/src/srcfiles/asks.js?v=25"></script>
-<script src="src/src/srcfiles/ui.js?v=189"></script>
-<script src="src/src/srcfiles/ui.computer.js?v=69"></script>
+<script src="src/src/srcfiles/ui.js?v=190"></script>
+<script src="src/src/srcfiles/ui.computer.js?v=70"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
      site header with fake address bar + internal back/forward, footer, 404,

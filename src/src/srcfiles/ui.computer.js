@@ -9,7 +9,9 @@ async function doComputerOpen() {
   // Phase 3: power cutoff means the computer is dead. The player can still
   // walk away and do other things, but the monitor won't turn on.
   if (isCutoffActive(currentGameState, 'power')) {
-    addLogEntry('system', 'The computer won\'t turn on — power is shut off. Pay the electric bill.');
+    addLogEntry('system', typeof outageActive === 'function' && outageActive(currentGameState)
+      ? 'The computer won\'t turn on — the power is out.'
+      : 'The computer won\'t turn on — power is shut off. Pay the electric bill.');
     return;
   }
   showLoading();

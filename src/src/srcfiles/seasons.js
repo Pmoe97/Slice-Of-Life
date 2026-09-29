@@ -607,4 +607,235 @@ function processWeatherForDay(gs, day) {
   return out;
 }
 
+// --- Power outages (Phase 8, W10) --------------------------------------------------------------
+// The plan for a day is DERIVED (R6): a hash of (seed, day) rolled against that
+// day's condition, then thinned by a cooldown so they stay occasional. An outage
+// may run past midnight, so "is the power out now" looks at yesterday's plan too.
+// Only the responses are stored: world.occasions.outages = { seen: { planId:
+// { started, ended } }, candles: { planId: true } }.
+
+function outageRaw(gs, day) {
+  const O = OUTAGE_TUNING;
+  const cond = weatherConditionOn(gs, day);
+  const rng = mulberry32((hashStr(`${weatherSeedOf(gs)}|${O.seedSalt}|${day}`)) >>> 0);
+  const hit = rng() < (O.chance[cond] ?? 0);
+  const win = O.startWindow[cond] || O.startWindow.default;
+  const dur = O.duration[cond] || O.duration.default;
+  const startMin = Math.round(win[0] + rng() * (win[1] - win[0]));
+  const durMin = Math.round(dur[0] + rng() * (dur[1] - dur[0]));
+  return { hit, cond, startMin, durMin };
+}
+
+// { id, day, cause, cond, startAbs, endAbs, minutes } | null.
+function outagePlanFor(gs, day) {
+  if (!gs || !(day >= 1)) return null;
+  const raw = outageRaw(gs, day);
+  if (!raw.hit) return null;
+  for (let d = Math.max(1, day - OUTAGE_TUNING.cooldownDays); d < day; d++) if (outageRaw(gs, d).hit) return null;
+  const startAbs = day * 1440 + raw.startMin;
+  return { id: `outage_${day}`, day, cond: raw.cond, cause: OUTAGE_TUNING.causeWords[raw.cond] || OUTAGE_TUNING.causeWords.default,
+    startAbs, endAbs: startAbs + raw.durMin, minutes: raw.durMin };
+}
+
+// The outage under way at an absolute game-minute, or null.
+function outageAt(gs, abs) {
+  const day = Math.floor(abs / 1440);
+  for (const d of [day, day - 1]) {
+    const p = outagePlanFor(gs, d);
+    if (p && abs >= p.startAbs && abs < p.endAbs) return p;
+  }
+  return null;
+}
+
+function outageActive(gs) {
+  const clock = gs?.meta?.clock;
+  return !!clock && !!outageAt(gs, clockToAbsolute(clock));
+}
+
+// { plan, elapsedMin, remainingMin } while it lasts, else null.
+function outageState(gs) {
+  const clock = gs?.meta?.clock;
+  if (!clock) return null;
+  const now = clockToAbsolute(clock);
+  const plan = outageAt(gs, now);
+  return plan ? { plan, elapsedMin: now - plan.startAbs, remainingMin: plan.endAbs - now } : null;
+}
+
+function ensureOutageState(gs) {
+  const occ = typeof ensureWorldOccasions === 'function' ? ensureWorldOccasions(gs) : (gs.world.occasions || (gs.world.occasions = {}));
+  if (!occ.outages || typeof occ.outages !== 'object') occ.outages = {};
+  if (!occ.outages.seen || typeof occ.outages.seen !== 'object') occ.outages.seen = {};
+  if (!occ.outages.candles || typeof occ.outages.candles !== 'object') occ.outages.candles = {};
+  return occ.outages;
+}
+
+// The flat's temperature while the HVAC is dead: it eases from where the
+// thermostat had it toward the weather (temperature.js's ambientTempC calls this).
+function outageDriftC(gs, outdoorC, ambientAtStartC) {
+  const st = outageState(gs);
+  if (!st) return ambientAtStartC;
+  return outdoorC + (ambientAtStartC - outdoorC) * Math.exp(-st.elapsedMin / OUTAGE_TUNING.driftTauMin);
+}
+
+// A shut fridge holds its cold for holdHours; past that the food in it ages at
+// the warm rate. Shifts each perishable, unfrozen stack's age anchor earlier by the
+// extra days it would have aged (hours/24 x (fridge preservation - 1)). The freezer
+// is left alone (a closed freezer outlasts the outages this table makes). Returns
+// how many stacks aged.
+function outageSpoilFridge(gs, hours) {
+  const over = Math.max(0, hours - OUTAGE_TUNING.holdHours);
+  if (over <= 0) return 0;
+  let aged = 0;
+  for (const obj of Object.values(gs.objects?.room_kitchen || {})) {
+    if (!obj || obj.defId !== 'fridge' || !Array.isArray(obj.contents)) continue;
+    const mult = typeof preservationFor === 'function' ? preservationFor(OBJECT_DEFS[obj.defId]) : 1;
+    const shift = (over / 24) * Math.max(0, mult - 1);
+    if (shift <= 0) continue;
+    obj.contents = obj.contents.map(stack => {
+      const def = ITEM_DEFS[stack?.defId];
+      if (!def || !def.perishable || stack.meta?.frozen) return stack;
+      const meta = { ...(stack.meta || {}) };
+      const key = meta.cohort != null ? 'cohort' : (meta.acquiredDay != null ? 'acquiredDay' : null);
+      if (!key) return stack;
+      meta[key] = meta[key] - shift;
+      aged++;
+      return { ...stack, meta };
+    });
+  }
+  return aged;
+}
+
+// The evening the house had: who was up and at home when the power came back,
+// what they did about it, how it moved them. Bounded: a dip per hour of dark
+// against a lift for company, and a bond among whoever shared it.
+function outageHuddle(gs, plan, opts) {
+  const O = OUTAGE_TUNING;
+  const hours = plan.minutes / 60;
+  const ids = Object.keys(gs.npcs || {}).filter(id => gs.npcs[id]?.residency?.status === 'resident').sort();
+  const awake = ids.filter(id => gs.npcs[id].location && !['sleeping', 'napping'].includes(String(gs.npcs[id].activity || '').toLowerCase()));
+  const dip = O.moodPerHourDark * hours;
+  for (const id of ids) {
+    const npc = gs.npcs[id];
+    const vol = Number(npc.bible?.temperament?.volatility) || 0;
+    const together = awake.includes(id) && awake.length >= 2;
+    const d = dip + (vol > O.touchy ? O.volatileExtra * hours : 0) + (together ? O.huddleMood : 0);
+    gs.npcs[id] = { ...npc, mood: Math.max(-1, Math.min(1, (npc.mood || 0) + d)) };
+  }
+  let line = null;
+  if (awake.length >= 2) {
+    const pool = O.huddles[plan.cond] || O.huddles.default;
+    const names = awake.map(id => gs.npcs[id].bible?.name || 'A roommate');
+    const list = names.length <= 1 ? names.join('') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+    line = pool[hashStr(`${plan.id}|huddle`) % pool.length].replace('{names}', list);
+    let web = gs.world.castWeb || {};
+    for (let i = 0; i < awake.length; i++) for (let j = i + 1; j < awake.length; j++) {
+      web = applyNpcToNpcDelta(web, awake[i], awake[j], { affection: O.huddleBond });
+      web = applyNpcToNpcDelta(web, awake[j], awake[i], { affection: O.huddleBond });
+    }
+    gs.world.castWeb = web;
+    for (const id of awake) {
+      gs.npcs[id] = addMemoryFact(gs.npcs[id], { text: O.huddleFact.replace('{names}', list), day: plan.day, importance: 0.35, category: 'relationship' });
+    }
+  }
+  return line;
+}
+
+// The activity the schedule's tables picked, or its candle-friendly swap while the power is
+// out (sim.js's resolveRoomForActivity calls this).
+function outageActivity(gs, activity) {
+  if (!gs || !activity || !outageActive(gs)) return activity;
+  const S = OUTAGE_TUNING.swapPower;
+  return new RegExp(S.pattern, 'i').test(String(activity)) ? S.to : activity;
+}
+
+// Residents mid-way through something that needs the mains (a show, a game, the wash, a
+// shoot) stop when the power dies: their held drive is dropped and they wait it out.
+function outagePutDown(gs) {
+  const O = OUTAGE_TUNING;
+  const re = new RegExp(O.powerActivity, 'i');
+  for (const id of Object.keys(gs.npcs || {})) {
+    const npc = gs.npcs[id];
+    if (npc?.residency?.status !== 'resident' || !npc.location) continue;
+    if (!re.test(String(npc.activity || ''))) continue;
+    gs.npcs[id] = { ...npc, commitment: null, activity: O.idleActivity };
+  }
+}
+
+// The watch for outages, run beside the sky watch (ui.js's narrateSkyChanges) after
+// every clock advance: fires each outage's start and end exactly once (a stored
+// `seen` mark), narrates them unless the span is stale, and does the end's work
+// (the fridge, the mood, the huddle) even across a long wait. Mutating.
+// opts: { slept, stale }. Returns the lines to log, oldest first.
+function outageWatch(gs, fromAbs, toAbs, opts = {}) {
+  const lines = [];
+  if (!gs || !(toAbs > fromAbs)) return lines;
+  const O = OUTAGE_TUNING;
+  const st = ensureOutageState(gs);
+  const plans = [];
+  for (let d = Math.max(1, Math.floor(fromAbs / 1440) - 1); d <= Math.floor(toAbs / 1440); d++) {
+    const p = outagePlanFor(gs, d);
+    if (p) plans.push(p);
+  }
+  for (const p of plans) {
+    const rec = st.seen[p.id] || (st.seen[p.id] = { started: false, ended: false });
+    if (!rec.started && p.startAbs <= toAbs) {
+      rec.started = true;
+      // Anyone in the middle of something electric puts it down, however stale the span.
+      outagePutDown(gs);
+      if (p.startAbs > fromAbs && !opts.stale) {
+        lines.push(opts.slept && p.endAbs > toAbs ? O.lines.slept : (O.lines.start[p.cond] || O.lines.start.default));
+        opts.onStart && opts.onStart(p);
+      }
+    }
+    if (rec.started && !rec.ended && p.endAbs <= toAbs) {
+      rec.ended = true;
+      const aged = outageSpoilFridge(gs, p.minutes / 60);
+      const huddle = outageHuddle(gs, p);
+      if (!opts.stale) {
+        if (huddle) lines.push('🕯️ ' + huddle);
+        lines.push(opts.slept ? O.lines.endSlept : O.lines.end);
+        if (aged > 0) lines.push(O.lines.fridgeSpoil);
+      }
+    }
+  }
+  // Old marks are hygiene: keep the last few.
+  const keys = Object.keys(st.seen);
+  if (keys.length > 12) for (const k of keys.slice(0, keys.length - 12)) delete st.seen[k];
+  return lines;
+}
+
+// Have the candles been lit for the outage under way?
+function outageCandlesLit(gs) {
+  const st = outageState(gs);
+  return !!(st && ensureOutageState(gs).candles[st.plan.id]);
+}
+
+function applyOutageCandles(gs) {
+  const st = outageState(gs);
+  if (!st) return false;
+  ensureOutageState(gs).candles[st.plan.id] = true;
+  return true;
+}
+
+// The prompt line while the power is out, or null.
+function outagePromptLine(gs) {
+  const st = outageState(gs);
+  if (!st) return null;
+  const O = OUTAGE_TUNING;
+  const h = st.elapsedMin < 60 ? 'less than an hour' : `${Math.round(st.elapsedMin / 60)} hour${Math.round(st.elapsedMin / 60) === 1 ? '' : 's'}`;
+  let cold = '';
+  if (typeof ambientTempC === 'function' && typeof tempFeelWord === 'function') {
+    const feel = tempFeelWord(ambientTempC(gs));
+    if (['freezing', 'cold', 'chilly', 'hot'].includes(feel)) cold = O.promptCold.replace('{feel}', feel);
+  }
+  return O.prompt.replace('{cause}', st.plan.cause).replace('{hours}', h).replace('{cold}', cold);
+}
+
+// The scene reader's line while it lasts.
+function outageSceneLine(gs) {
+  if (!outageActive(gs)) return null;
+  const O = OUTAGE_TUNING;
+  return O.scene.replace('{light}', outageCandlesLit(gs) ? O.sceneLight.candles : O.sceneLight.dark);
+}
+
 // ===== /SECTION: SEASONS =====

@@ -285,6 +285,19 @@ function narrateSkyChanges() {
   for (const line of skyWatchLines(currentGameState, from, now, { slept, roomId: currentGameState.player?.location })) {
     addLogEntry('narration', line);
   }
+  // Power outages (seasons plan W10): the start and end of a grid outage, once
+  // each. A computer left running dies with the power.
+  if (typeof outageWatch === 'function') {
+    const stale = now - from > WEATHER_TUNING.watch.staleMin;
+    const lines = outageWatch(currentGameState, from, now, { slept, stale, onStart: () => {
+      if (currentGameState.world?.computer?.power === 'on') {
+        currentGameState.world.computer.power = 'off';
+        addLogEntry('system', OUTAGE_TUNING.lines.computerDies);
+        if (typeof doComputerClose === 'function') doComputerClose();
+      }
+    } });
+    for (const line of lines) addLogEntry('narration', line);
+  }
   // Phase 5 (W8): the year's first snow lifts everyone a little, the moment
   // it starts (the same staleness guard as the lines above).
   if (typeof firstSnowBetween === 'function' && now - from <= WEATHER_TUNING.watch.staleMin

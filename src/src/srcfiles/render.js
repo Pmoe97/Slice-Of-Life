@@ -139,7 +139,8 @@ function paintHeaderClock(gs) {
     // Seasons & weather Phase 1: the sky rides the clock as one emoji (night
     // aware), the full sky line on hover.
     const w = typeof weatherNow === 'function' ? weatherNow(gs) : null;
-    hdrTime.textContent = formatTime(meta.clock.minutes) + (w && w.emoji ? ` ${w.emoji}` : '');
+    const dark = typeof outageActive === 'function' && outageActive(gs) ? ` ${OUTAGE_TUNING.headerEmoji}` : '';
+    hdrTime.textContent = formatTime(meta.clock.minutes) + (w && w.emoji ? ` ${w.emoji}` : '') + dark;
     hdrTime.title = typeof skyLine === 'function' ? skyLine(gs) : '';
   }
 }

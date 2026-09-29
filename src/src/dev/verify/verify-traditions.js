@@ -107,7 +107,7 @@ const reg = J(`(() => {
     perNightBeats: T.beats.fried_sweets.nights && T.beats.card_games.nights,
   };
 })()`);
-check('TRADITION_VERBS rows (rituals + the playful verbs) each generate an occasion.<id> action: flat "occasion" group, a window checker, a prepare', reg.generated && reg.checker && reg.verbs.length === 11, JSON.stringify(reg.verbs));
+check('TRADITION_VERBS rows (rituals + the playful verbs) each generate an occasion.<id> action: flat "occasion" group, a window checker, a prepare', reg.generated && reg.checker && reg.verbs.length === 12, JSON.stringify(reg.verbs));
 check('the one trusted effect OCCASION_RITUAL is registered (llm:false)', reg.effect);
 check('the three new items are real edibles (leftovers, chocolate egg, candy)', reg.items.every(Boolean));
 check('the feast world event is classified (importance and emotion); the trick-or-treat knock has its line', reg.events && reg.knock);

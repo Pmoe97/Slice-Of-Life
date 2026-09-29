@@ -38,7 +38,10 @@ function ambientTempC(gameState) {
     ? outdoorTempC(gameState)
     : THERMOSTAT_TUNING.seasonOutdoorC[getSeasonIndex(day)];
   const targetC = gameState?.world?.thermostat?.targetC ?? THERMOSTAT_TUNING.defaultC;
-  return outdoor + (targetC - outdoor) * THERMOSTAT_TUNING.hvacEfficiency;
+  const normal = outdoor + (targetC - outdoor) * THERMOSTAT_TUNING.hvacEfficiency;
+  // Power outages (seasons plan W10): with the HVAC dead the flat eases from where
+  // the thermostat had it toward the weather. typeof-guarded (seasons.js loads later).
+  return typeof outageDriftC === 'function' ? outageDriftC(gameState, outdoor, normal) : normal;
 }
 
 // The HVAC billing multiplier — REPLACES the old flat UTILITY_THERMOSTAT=1.0

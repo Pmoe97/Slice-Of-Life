@@ -1,7 +1,7 @@
 # Seasons & Weather — feeling the year turn
 
-Status: **Phases 1–7 built and verified (2026-09-23); Phase 8 (power
-outages, W10) added by the user and planned; one live check outstanding:**
+Status: **All eight phases built and verified — Phase 8 (power outages, W10) built
+2026-09-29 (`seasons.js`, `verify-outages.js` 43); one live check outstanding:**
 W9's window views have never been rendered by a real image model (no
 backend in any dev environment — the character-cutout plan's same external
 gate). Everything else is verified by harness and live in the dev harness.
@@ -26,9 +26,9 @@ Companions:
 
 ## Handoff — read this first
 
-**Resume at:** Phase 8 (power outages, W10) — design first; see W10. Also
-worth doing: a W11 feel pass on the seasonal numbers (see W11). **One live
-check outstanding:** with
+**Resume at:** nothing is unbuilt. Worth doing: a W11 feel pass on the seasonal numbers
+(see W11). Phase 8's design and what it changed are in "Phase 8 — built" just below.
+**One live check outstanding:** with
 the real image backend attached (Perchance itself, or `connect-vastai.ps1`
 + `local-ai.config.js` for the dev harness), visit a windowed room across a
 few seasons and conditions and judge the plates: does "Through the window:
@@ -37,6 +37,51 @@ glass, a dark window at night), does the balcony's "Open to the sky: …"
 read, and is the extra plate count per room (≤16 looks, generated lazily)
 acceptable in practice. If a phrase produces bad art, it's one string in
 `WEATHER_TUNING.views`; then move this plan to `complete/`.
+
+### Phase 8 — power outages (W10), built 2026-09-29
+
+The user's frame: "a REALLY fun occasional event, … a great mechanical and atmospheric
+addition." Design (all in `seasons.js` beside the weather it depends on, R11; numbers in
+`OUTAGE_TUNING`, config.js):
+
+- **When — derived, never stored (R6).** `outagePlanFor(gs, day)`: a hash of (seed, day) rolled against
+  that day's weather condition (storm 0.30, cold snap 0.18, snow 0.16, heat 0.12, everything else a
+  rare grid fault), thinned by a 10-day cooldown. Measured over 40 seeds × 10 years: **2.75 a year
+  on average (1.5–3.8)**, median 3h15, 90th percentile 7.5h; 80% caused by a storm, snow, a cold
+  snap or a heatwave. Each has a start window and a duration range by cause; a snowbound night can
+  run past midnight (`outageAt` consults yesterday's plan).
+- **What goes dark — through the existing seam.** `isCutoffActive` (computer.js) now also answers true for
+  `power` and `internet` while an outage lasts, so every appliance verb (`powerNotCutoff`), the computer, the
+  online apps and phone charging follow with no per-verb work; phone service, gas and water do not
+  (the phone runs on its battery, the stove is gas). The messages say "the power is out", not "the bill is
+  unpaid". A computer left running dies with it.
+- **The flat.** With the HVAC dead `ambientTempC` eases from where the thermostat had it toward the weather
+  (time constant 4h), so a cold snap's outage gets cold and the roommates' comfort bands notice.
+- **The fridge.** A shut fridge holds ~4 hours; past that each perishable, unfrozen stack's age anchor moves
+  earlier by (hours over the hold / 24) × (fridge preservation − 1) days — the exact extra aging it would have
+  had at room temperature. The freezer is left alone. Bounded: no bill moves.
+- **The roommates.** Nothing that needs the mains starts (`OUTAGE_TUNING.powerDrives` in `isDriveCandidate`: TV,
+  the laundry, the sauna — content sessions run on a phone camera and stay allowed); anyone mid-way through one puts it down; the schedule's own
+  activity tables swap electric/wifi activities for "reading" (`outageActivity`).
+- **The story — the fun part.** When it ends, whoever is up and at home spent the evening together: a huddle line
+  by the cause (candles and the thunder; blankets and a thermos; the balcony with ice water; cards by lamplight),
+  each person's mood takes a small per-hour dip for the dark (a jumpy person's a bit more) and gets the
+  company's lift back, the people who shared it bond and remember it. You get the **Light Candles** verb (one
+  per outage, a flat chip, shared with a roommate if there's one there) and the scene reader/prompt say the
+  power is out ("dim and strangely quiet" → "candles throw a warm, wavering light"); the header shows 🔌.
+- **How it's told.** `outageWatch` runs beside the sky watch after every clock advance (ui.js's
+  `narrateSkyChanges`): each outage's start and end exactly once (a stored `seen` mark under
+  `world.occasions.outages`), silent when the span is stale but the end's work still done, and a slept
+  variant ("you wake in the dark", "you only notice when the hum returns").
+- **Verified.** `verify-outages.js` **43/43**: the plan (deterministic, weather-driven, occasional, cooldown, windows,
+  cross-midnight); the seam; the drift; the watch; the fridge arithmetic; the huddle numbers; candles, prompt and
+  scene; the roommates; two years of half-hour steps with no exceptions and identical bills. **Live** in
+  `dev-harness.html`: a storm outage fired through the real advance loop ("⚡ A crack of thunder, and the lights go
+  out…"), the header read `19:31 ⛈️ 🔌`, the computer refused ("the power is out"), and the prompt/scene lines read
+  correctly. The live pass caught one real gap — a roommate was still "watching TV" in the dark — which is what the
+  drive gate, the put-down and the activity swap are.
+- **Not built:** window views/plates for the dark (the image backend gate again), a wardrobe/"cold" reaction beyond
+  the existing comfort band, and any player-facing fuse-box verb (a grid outage isn't your fuse).
 
 **Where it all lives:** `seasons.js` (the one weather module, R11) —
 the chain (`weatherConditionOn`/`weatherTurnMin`/`weatherConditionAt`; read
@@ -441,7 +486,7 @@ windowViewToken(gs, roomId), windowViewPhrase(token, roomId)  // P6
 | 5 | **Done** (2026-09-23) — dressed for the weather going out (coat / no jacket, `skipSlots`), first-warm-day and first-snow lifts, a floored dark-weeks dip for the sensitive; `verify-weather.js` 96 |
 | 6 | **Built** (2026-09-23) — window view token in plate keys/prompts for rooms that see outside (≤16 looks), layout unmoved; `verify-weather.js` 102. **Pixels unverified** — needs the real image backend |
 | 7 | **Done** (2026-09-23) — close-out: Handoff rewritten, docs/memory, ARCHITECTURE note |
-| 8 | **Planned** — power outages (W10), added by the user after close-out |
+| 8 | **Done** (2026-09-29) — power outages (W10): derived, weather-driven plans (~2.75 a year), the power/internet cutoff seam, the drifting flat, the fridge, roommates who put the TV down and huddle by candlelight, the Light Candles verb, the watch narration; `verify-outages.js` 43, live-verified |
 
 ## Open questions (parked)
 

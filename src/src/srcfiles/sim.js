@@ -1646,6 +1646,8 @@ function resolveRoomForActivity(block, npcId, npcs, rng, clock, gameState) {
   // Pick the activity string first so we can route by it
   const acts = ACTIVITY_TABLES[block] || ACTIVITY_TABLES.leisure;
   let activity = acts[Math.floor(rng() * acts.length)];
+  // Power outages (seasons plan W10): nothing electric while the grid is down.
+  if (typeof outageActivity === 'function') activity = outageActivity(gameState, activity);
 
   // Seasons & weather Phase 3: the balcony is weighted by how inviting it is
   // outside (roomWeatherWeight, seasons.js; 1 for every other room, and when

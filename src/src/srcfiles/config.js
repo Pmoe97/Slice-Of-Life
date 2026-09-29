@@ -10859,6 +10859,89 @@ const OCCASION_DECOR = {
     playerUp: 'You string paper lanterns along the balcony rail for the moon.' },
 };
 
+// --- Power outages (seasons-and-weather-plan.md Phase 8, W10) ---
+// The user, 2026-09-23: "a REALLY fun occasional event, that would be a great
+// mechanical and atmospheric addition." A grid outage is WEATHER-driven (a
+// storm, a heatwave's overloaded grid, snow and ice on the lines), occasional
+// (three or four a year), and DERIVED — the plan for a day is a pure function of
+// (seed, day, that day's weather), so a reload replays the same outage (R6).
+// Nothing about the plan is stored; only the responses are (which outages have
+// been narrated and processed, whether the player lit candles).
+//
+// WHAT IT DOES: the computer and the internet are down and nothing plugged in
+// works (the existing power/internet CUTOFF seam — isCutoffActive — so every
+// appliance verb and app gate follows for free); the phone runs on its battery but
+// cannot charge; the thermostat stops helping, so the flat drifts toward the
+// weather (temperature.js's ambientTempC) and the roommates feel it; a shut fridge
+// keeps its cold for ~holdHours, and food in it past that spoils faster; the dark
+// costs a little mood — and the evening becomes a story: the house huddles by
+// candlelight, plays cards by lamp, sits out on the balcony in the heat, and a
+// shared night like that bonds people. What it costs is bounded: no bill moves, a
+// stocked fridge loses a stretch of shelf life, moods dip a few hundredths.
+const OUTAGE_TUNING = {
+  seedSalt: 'outage_v1',
+  cooldownDays: 10,            // no plan if any of the previous cooldownDays days rolled one
+  // Per-day chance by that day's weather condition. Measured: about 3 a year.
+  chance: { storm: 0.30, heat: 0.12, snow: 0.16, cold_snap: 0.18, rain: 0.008, fog: 0.002, cloudy: 0.002, clear: 0.002 },
+  // Start window (minute of day) and duration (minutes), by condition; anything
+  // else uses `default`. A snowbound night can run to morning.
+  startWindow: { storm: [900, 1320], heat: [780, 1140], snow: [960, 1380], cold_snap: [960, 1380], default: [600, 1200] },
+  duration: { storm: [90, 240], heat: [180, 420], snow: [240, 600], cold_snap: [240, 600], default: [45, 180] },
+  causeWords: { storm: 'a storm', heat: 'the heatwave', snow: 'the snow', cold_snap: 'the cold snap', default: 'a fault on the grid' },
+  // Drives that need the mains: nobody starts one while the grid is down, and anyone
+  // in the middle of one when it goes puts it down (the activity matcher below).
+  powerDrives: ['watch_tv', 'do_laundry', 'sauna'],   // (content sessions run on a phone camera and a battery)
+  powerActivity: 'watching (TV|a show|a movie|the game)|video game|playing games|laundry|filming|recording|sauna|editing|streaming',
+  idleActivity: 'waiting out the power cut',
+  // The schedule's own activity tables pick strings too: while the grid is down an
+  // electric one becomes a candle-friendly one, and one that needs the wifi becomes a call.
+  swapPower: { pattern: 'watching a show|watching TV|playing games|video game|on a video call|browsing laptop', to: 'reading' },
+  holdHours: 4,                // a shut fridge stays cold about this long
+  driftTauMin: 240,            // the flat drifts toward the weather with this time constant
+  moodPerHourDark: -0.012,     // everyone's small dip per hour in the dark (offset by company/candles)
+  volatileExtra: -0.015,       // ...and a jumpier person's extra dip (temperament volatility above touchy)
+  touchy: 0.35,
+  huddleMood: 0.03,            // the shared evening's lift, on top
+  huddleBond: 0.03,            // cast web, both ways
+  candles: {
+    label: 'Light Candles', verbs: ['light candles', 'light some candles', 'light a candle for the power cut'],
+    minutes: 5, mood: 0.05,
+    rooms: ['living_room', 'dining', 'kitchen', 'study', 'balcony', 'bedroom_player'],
+    line: 'You find the candle stubs and light them one by one. The room softens into gold and long shadows.',
+    shared: 'You and {name} light candles around the room and the dark turns cosy.',
+    done: 'The candles are already lit.',
+  },
+  lines: {
+    start: {
+      storm:     '⚡ A crack of thunder, and the lights go out — the storm has knocked the power out. Everything electric is dead.',
+      heat:      '🥵 The fans wind down and the lights die — the heatwave has overloaded the grid. The power is out.',
+      snow:      '❄️ The lights flicker and go out — snow and ice have brought the lines down. The power is out.',
+      cold_snap: '🥶 The lights flicker and go out — the cold snap has taken out the grid. The power is out.',
+      default:   '🔌 The lights go out with a clunk — a fault on the grid. The power is out.',
+    },
+    slept: 'You wake in the dark. The clock is dead, the hum is gone: the power went out while you slept.',
+    end: '💡 The power comes back on — a hum, a flicker, the fridge shuddering awake. The computer beeps like nothing happened.',
+    endSlept: '💡 Somewhere in the night the power comes back; you only notice when the hum returns.',
+    computerDies: 'The screen flickers and dies.',
+    fridgeSpoil: '🥛 The fridge sat warm for hours — some of what was in it has turned sooner than it should.',
+  },
+  // How the evening was spent, by cause (pick by hash); {names} took part.
+  huddles: {
+    storm: ['{names} huddled in the living room by candlelight and listened to the storm.', '{names} played cards by lamplight while the thunder rolled.'],
+    heat: ['{names} sat out on the balcony with ice water, waiting for a breeze.', '{names} spread out on the cool floor and told each other stories.'],
+    snow: ['{names} piled blankets on the sofa and shared a candle and a thermos.', '{names} played cards by candlelight, wrapped up to the ears.'],
+    cold_snap: ['{names} piled blankets on the sofa and shared a candle and a thermos.', '{names} huddled together in the living room, breath showing.'],
+    default: ['{names} lit candles and swapped stories in the dark.', '{names} played cards by lamplight until the power came back.'],
+  },
+  huddleFact: 'The power went out and they spent the dark with {names}.',
+  // The prompt/scene lines while it lasts.
+  prompt: '[Power]: The power is OUT (caused by {cause}) — no lights, no computer, no wifi, nothing plugged in works; the phone runs on its battery. It has been dark for about {hours}.{cold}',
+  promptCold: ' The flat is getting {feel}.',
+  scene: 'The power is out — {light}',
+  sceneLight: { candles: 'candles throw a warm, wavering light and long shadows.', dark: 'the apartment is dim and strangely quiet, lit only by what comes through the windows.' },
+  headerEmoji: '🔌',
+};
+
 // --- Traditions (occasions-and-holidays-plan.md Phases 4–8, D17–D22) ---
 // What people DO on the calendar's days. A tradition is a named hook on an
 // OCCASION_DEFS row (D17); each id is built by exactly one engine in
@@ -11141,6 +11224,8 @@ const TRADITION_VERBS = [
   { id: 'dye_eggs', ...pickVerbFields(TRADITION_TUNING.playful.eggs.dye), rooms: ['kitchen', 'dining'] },
   { id: 'carve_pumpkin', ...pickVerbFields(TRADITION_TUNING.playful.halloween.pumpkin) },
   { id: 'coins_in_jar', ...pickVerbFields(TRADITION_TUNING.playful.giving.jar) },
+  // Power outages (seasons plan W10): candles are the one verb an outage adds.
+  { id: 'light_candles', ...pickVerbFields(OUTAGE_TUNING.candles) },
 ];
 function pickVerbFields(v) { return { label: v.label, verbs: v.verbs, rooms: v.rooms, minutes: v.minutes }; }
 

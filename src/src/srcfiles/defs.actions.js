@@ -2287,8 +2287,8 @@ const ACTION_REQUIREMENT_CHECKERS = {
   // These are wired into ACTION_DEFS entries' `requires` below.
   waterNotCutoff: (ctx) => !isCutoffActive(ctx.gameState, 'water') || 'Water is shut off — the bill is unpaid.',
   gasNotCutoff: (ctx) => !isCutoffActive(ctx.gameState, 'gas') || 'Gas is shut off — the bill is unpaid.',
-  powerNotCutoff: (ctx) => !isCutoffActive(ctx.gameState, 'power') || 'Power is shut off — the bill is unpaid.',
-  internetNotCutoff: (ctx) => !isCutoffActive(ctx.gameState, 'internet') || 'Internet is down — the bill is unpaid.',
+  powerNotCutoff: (ctx) => !isCutoffActive(ctx.gameState, 'power') || (typeof outageActive === 'function' && outageActive(ctx.gameState) ? 'The power is out.' : 'Power is shut off — the bill is unpaid.'),
+  internetNotCutoff: (ctx) => !isCutoffActive(ctx.gameState, 'internet') || (typeof outageActive === 'function' && outageActive(ctx.gameState) ? 'The internet is down with the power.' : 'Internet is down — the bill is unpaid.'),
   // BrineOS phone (Phase 2): presence is read from buckets (decision B).
   // phoneCarried gates drop; phoneUnplugged/phonePlugged gate plug/unplug
   // and keep the chips honest (the object's own state, not a guess).

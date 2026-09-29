@@ -2203,6 +2203,11 @@ function processBillsForDay(gameState, day) {
 // checkers, the gig/stream/browser handlers, and the bill dashboard.
 function isCutoffActive(gameState, cutoffId) {
   if (!cutoffId) return false;
+  // Power outages (seasons-and-weather-plan.md W10): a grid outage cuts the power
+  // and — the modem being on the wall — the internet, exactly like an unpaid bill
+  // would, for as long as it lasts. Every appliance verb, app gate and phone charge
+  // that already reads this follows for free. typeof-guarded (seasons.js loads later).
+  if ((cutoffId === 'power' || cutoffId === 'internet') && typeof outageActive === 'function' && outageActive(gameState)) return true;
   for (const def of Object.values(BILL_DEFS)) {
     if (def.cutoff !== cutoffId) continue;
     const bill = gameState.world.bills?.[def.id];

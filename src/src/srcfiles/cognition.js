@@ -229,6 +229,8 @@ function isDriveCandidate(driveId, drive, npc, gameState, ctx) {
   // lives in overture.js's scorer; the drive half is this filter — one read
   // (coldShoulderSuppressesOvertures), both gates, so they cannot drift.
   if (coldShoulderSuppressesOvertures(npc) && COLD_SHOULDER.suppressedDrives.includes(driveId)) return false;
+  // Power outages (seasons plan W10): nothing that needs the mains starts while the grid is down.
+  if (OUTAGE_TUNING.powerDrives.includes(driveId) && typeof outageActive === 'function' && outageActive(gameState)) return false;
   const decayFacilities = MAINTENANCE.npcDecayActions[driveId];
   if (decayFacilities && decayFacilities.some(fid => !isFacilityFunctional(gameState, fid))) return false;
   if (!checkHardGates(drive, npc, ctx.perceived)) return false;

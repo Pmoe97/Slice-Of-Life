@@ -441,7 +441,10 @@ function composeScene(gameState, sceneState) {
   // seasons-and-weather-plan Phase 2 (W4): the weather as it reaches this
   // room — rain on the glass, snow past the window, a storm heard through
   // the walls. Text only; guarded the same way (scene.js loads first).
-  const weather = (typeof weatherRoomCue === 'function') ? (weatherRoomCue(gameState, roomId)?.text || null) : null;
+  const weatherCue = (typeof weatherRoomCue === 'function') ? (weatherRoomCue(gameState, roomId)?.text || null) : null;
+  // Power outages (seasons plan W10): the dark and the candlelight ride the same line.
+  const outageLine = (typeof outageSceneLine === 'function') ? outageSceneLine(gameState) : null;
+  const weather = [weatherCue, outageLine].filter(Boolean).join(' ') || null;
 
   const log = gameState.meta.sessionLog || [];
   const beats = log

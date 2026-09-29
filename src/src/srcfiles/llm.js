@@ -243,6 +243,8 @@ function sceneDateLine(gameState, withRoom) {
   // feels, and the light. Scene AND IM prompt (the weather is the same across
   // town, so a texting roommate knows it too).
   if (typeof skyLine === 'function') line += `\n- ${skyLine(gameState)}`;
+  // Power outages (seasons plan W10): while the power is out, say so.
+  if (typeof outagePromptLine === 'function') { const pl = outagePromptLine(gameState); if (pl) line += `\n- ${pl}`; }
   // Occasions Phase 3: the room you're standing in, if it's decorated — the
   // scene prompt only (withRoom); someone texting isn't standing in it.
   const decor = withRoom && typeof decorSceneLine === 'function' ? decorSceneLine(gameState, gameState.player?.location) : null;
