@@ -4700,9 +4700,14 @@ const TV_TUNING = {
   room: 'living_room',
   viewingActivity: 'watching TV',
   // The screen only plays with this facility working — the same one the
-  // player's Watch TV requires. (The watch_tv drive itself has no facility
-  // gate, so a roommate may still sit in front of a broken set; nothing's on.)
+  // player's Watch TV requires. (D16: the watch_tv drive is gated on it too — see gatedDrives.)
   facility: 'living_room_entertainment',
+  // D16 (0.14.5): with that setup broken nobody starts the watch_tv drive, and the schedule's own
+  // 'watching TV' / 'watching a show' become this instead — no more sitting before a dead screen.
+  // A drive the maintenance table (MAINTENANCE.npcDecayActions) doesn't gate: seek_company's
+  // decay mapping is untouched, this is a separate, narrower gate.
+  gatedDrives: ['watch_tv'],
+  brokenSwap: { pattern: 'watching TV|watching a show', to: 'scrolling social media' },
   // Taste: affinity(show) = jitter + interest matches + temperament lean +
   // profession. followCount shows at most, each above followMin; everyone
   // follows at least their single favorite, whatever it scores.
@@ -4740,6 +4745,71 @@ const TV_TUNING = {
     perMinute: 0.004,
     base: 0.45, volatility: 0.3, assertiveness: 0.2, conscientiousness: 0.3, warmth: 0.2,
     blurtAt: 0.4,
+  },
+  // D13 Chatter (0.14.5): the flat posts about the big nights of a show (a premiere, a finale)
+  // the day they air, and one resident who is ahead of you on something you're watching may post
+  // about it: a blurter (the same temperament test as the in-person spoiler) puts it plainly, and
+  // it counts as told; the rest tag it. Deterministic per day, no state beyond the spoil mark.
+  chatter: {
+    perShow: 2,
+    spoilerChance: 0.35,
+    positions: ['premiere', 'finale'],
+    lines: {
+      premiere: [
+        '{show} is back tonight. Do not talk to me.',
+        'New season of {show}. I have snacks and no plans.',
+        '{show}, {ep}, tonight. Clear the sofa.',
+      ],
+      finale: [
+        '{show} finale tonight. I am not okay and it has not even started.',
+        'The end of {show} is tonight. Nobody speak to me until it is over.',
+        '{show}, {ep}. I have been dreading this for weeks.',
+      ],
+    },
+    // A poster who tags it; a blurter who does not.
+    tagged: ['SPOILERS for {show}, {ep}: {beat}', 'spoiler tag on, because I am a good person: {show}, {ep}. {beat}'],
+    blurted: ['{show}, {ep}: {beat} I cannot believe it.', 'OK so in {show}, {ep}, {beat} Someone talk to me.'],
+  },
+  // D11 watch parties (0.14.5): a follower who is level on a show proposes one for its premiere
+  // or finale night, as a real hangout in the living room (commitments.js), and whoever comes
+  // watches it together. Occasional: one every few days at most.
+  party: {
+    positions: ['premiere', 'finale'],
+    startMinute: 1140,           // 19:00
+    minutes: 90,
+    cooldownDays: 4,
+    attendMood: 0.06,
+    attendBond: 0.03,
+    playerAffection: 0.03,
+    playerMood: 0.08,
+    factImportance: 0.45,
+    inviteLine: '{name} is having a watch party for {label}, {ep}, tonight at 7:00 PM. Living room.',
+    line: 'You and {names} watched {label}, {ep}, together. Nobody got up during the credits.',
+    lineNoYou: '{names} watched {label}, {ep}, together in the living room.',
+    fact: 'Watched {label}, {ep}, with {names}.',
+    post: ['That was {label}. I need a moment.', 'Watch party for {label} was exactly what it needed to be.'],
+  },
+  // D14 movie nights (0.14.5): the occasions that name one host it. Same machinery as a watch
+  // party; what plays is a film, not an episode (world.tv is untouched — the screen just shows it).
+  films: {
+    horror_night: {
+      occasion: 'halloween', startMinute: 1350, minutes: 90, hostAffinity: 0.45, label: 'horror movie night',
+      titles: ['The Thing in the Attic', 'Do Not Answer the Door', 'Nine Nights at Hollow Pines', 'The Last Light in the Cellar'],
+      inviteLine: '{name} is putting on a horror film tonight, {title}, at 10:30 PM. Living room. Lights off.',
+      line: 'You and {names} watched {title} with the lights off. Somebody screamed at exactly the wrong moment, and nobody will say who.',
+      lineNoYou: '{names} watched {title} with the lights off, and there was screaming.',
+      fact: 'Watched {title} with the lights off with {names}.',
+      bond: 0.04, mood: 0.07,
+    },
+    cozy_movie: {
+      occasion: 'midwinter', startMinute: 1260, minutes: 100, hostAffinity: 0.45, label: 'the cozy movie',
+      titles: ['A Very Warm Chorus', 'Snowed In at the Inn', 'The Long Way Home for Winter', 'Cocoa for Two'],
+      inviteLine: '{name} is putting on a winter film tonight, {title}, at 9:00 PM. Blankets are provided.',
+      line: 'You and {names} watched {title} under a pile of blankets. It was exactly as predictable as you wanted it to be.',
+      lineNoYou: '{names} watched {title} under a pile of blankets.',
+      fact: 'Watched {title} under blankets with {names}.',
+      bond: 0.03, mood: 0.08,
+    },
   },
 };
 
@@ -6578,6 +6648,7 @@ const EVENT_IMPORTANCE = {
   // Birthdays Phase 4 (birthdays.js): a card left on a roommate's door / a cake in the fridge.
   birthday_card:       'social',
   occasion_feast:      'social',
+  watch_party:         'social',
   birthday_cake:       'social',
   // Side Projects (projects.js, 0.14.2): starting one, a milestone, or giving
   // up is a real beat — ticker- and Chatter-worthy ("got through the bridge
@@ -6694,6 +6765,7 @@ const EVENT_EMOTION = {
   note_left_warm:      'warmth',
   birthday_card:       'warmth',
   occasion_feast:      'warmth',
+  watch_party:         'warmth',
   birthday_cake:       'warmth',
   note_read:           'domestic',
   note_reply:          'domestic',

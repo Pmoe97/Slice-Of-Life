@@ -231,6 +231,8 @@ function isDriveCandidate(driveId, drive, npc, gameState, ctx) {
   if (coldShoulderSuppressesOvertures(npc) && COLD_SHOULDER.suppressedDrives.includes(driveId)) return false;
   // Power outages (seasons plan W10): nothing that needs the mains starts while the grid is down.
   if (OUTAGE_TUNING.powerDrives.includes(driveId) && typeof outageActive === 'function' && outageActive(gameState)) return false;
+  // What's On D16: the TV drive needs a working Living Room Setup.
+  if (typeof TV_TUNING !== 'undefined' && TV_TUNING.gatedDrives.includes(driveId) && typeof tvScreenWorks === 'function' && !tvScreenWorks(gameState)) return false;
   const decayFacilities = MAINTENANCE.npcDecayActions[driveId];
   if (decayFacilities && decayFacilities.some(fid => !isFacilityFunctional(gameState, fid))) return false;
   if (!checkHardGates(drive, npc, ctx.perceived)) return false;

@@ -2863,10 +2863,23 @@ function buildWatchTvEffects(ctx, prepared) {
 // the shared delta and the mood impulse read, so the three can't disagree
 // about who was on the sofa. prepareSocialAction's affection still feeds the
 // mood impulse unchanged.
+// D12: with more than one show out you get a "What's on?" picker (RENDER's openTvPicker) —
+// somebody's already got something on, your next episode, or the room picking for you.
+// Headless (the harness, no picker loaded) the room picks, as it always did.
+// Synchronous unless the picker opens (executeAction awaits either).
 function prepareWatchTv(ctx) {
   const withIds = sharedActivityParticipants(ctx);
-  const tv = typeof tvPlanPlayerWatch === 'function' ? tvPlanPlayerWatch(ctx.gameState, withIds) : null;
-  return { ...prepareSocialAction(ctx), tv };
+  const plan = (pick) => {
+    const tv = typeof tvPlanPlayerWatch === 'function' ? tvPlanPlayerWatch(ctx.gameState, withIds, pick) : null;
+    return { ...prepareSocialAction(ctx), tv };
+  };
+  if (typeof tvWatchOptions === 'function' && typeof openTvPicker === 'function') {
+    const options = tvWatchOptions(ctx.gameState, withIds);
+    if (options.length > 1) {
+      return openTvPicker(options).then(choice => (choice === undefined || choice === null) ? { cancelled: true } : plan(choice === '' ? null : choice));
+    }
+  }
+  return plan(null);
 }
 
 function watchTvShowNarration(ctx, prepared) {

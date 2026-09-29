@@ -456,6 +456,13 @@ async function processDayRollover(day) {
       addLogEntry('narration', line);
     }
   }
+  // What's On (D11/D13/D14): watch-party and movie-night payoffs, Chatter about a
+  // show's big night, tonight's invitations.
+  if (typeof processTvForDay === 'function') {
+    for (const line of processTvForDay(currentGameState, day).lines) {
+      addLogEntry('narration', line);
+    }
+  }
   // Escorts (external-world plan Phase 7): retire yesterday's bookings and
   // narrate tonight's advance bookings, the same announce-ahead pattern as
   // friends. The visit itself is already scheduled (bookEscort); this is

@@ -180,6 +180,12 @@ function tvScreenWorks(gs) {
   return typeof isFacilityFunctional !== 'function' || isFacilityFunctional(gs, TV_TUNING.facility);
 }
 
+// The schedule's 'watching TV' when the screen is dead (sim.js's resolveRoomForActivity). Pure.
+function tvScreenActivity(gs, activity) {
+  if (!activity || tvScreenWorks(gs)) return activity;
+  return new RegExp(TV_TUNING.brokenSwap.pattern, 'i').test(String(activity)) ? TV_TUNING.brokenSwap.to : activity;
+}
+
 function tvRuntime(showId) {
   return tvShowDef(showId)?.tv?.runtime || 45;
 }
@@ -404,7 +410,10 @@ function resolveTvTick(gs, npcUpdates, activeNpcIds, minutesThisTick, tickEvents
   // on the same facility): whoever sits there is just sitting there, and the
   // shows wait until it's repaired. Seeding and spoilers above and below
   // don't need the screen.
-  const viewing = new Set(tvScreenWorks(gs) ? viewers : []);
+  // A movie night puts a film on instead of an episode: nobody is "watching a show", the screen
+  // is shown (tvRoomLine) and the payoff is the party's (tvResolvePartiesForDay).
+  const film = tvFilmNow(gs);
+  const viewing = new Set(tvScreenWorks(gs) && !film ? viewers : []);
 
   // 1. Still on the sofa: seen now.
   for (const id of viewers) if (tv.sittings[id]) tv.sittings[id].lastAbs = now;
@@ -417,6 +426,15 @@ function resolveTvTick(gs, npcUpdates, activeNpcIds, minutesThisTick, tickEvents
 
   // 3. Whoever got up has left the sofa.
   for (const id of Object.keys(tv.sittings)) if (!viewing.has(id)) delete tv.sittings[id];
+
+  // 3b. A watch party (D11): its episode goes on when the party starts, once.
+  const party = tvPartyNow(gs);
+  if (party && !party.watchParty.film && !party.watchParty.started && viewing.size) {
+    const wp = party.watchParty;
+    wp.started = true;
+    tv.nowPlaying = { showId: wp.showId, n: wp.n, byId: party.host && party.host !== 'player' ? party.host : [...viewing][0],
+      startAbs: now, untilAbs: now + tvRuntime(wp.showId), rerun: false, chain: 1, credited: [], party: true };
+  }
 
   // 4. New viewers: join what's on, or put something on.
   for (const id of viewers) {
@@ -617,7 +635,7 @@ function tvNearSpoilerLine(def, pick) {
 // you and someone here are at the same point in; the one you've been
 // watching; something they're into; whatever the whole house is talking
 // about; and, failing all of that, an old sitcom. Pure.
-function tvPlanPlayerWatch(gs, withIds) {
+function tvPlanPlayerWatch(gs, withIds, pickShowId) {
   const day = gs?.meta?.clock?.day ?? 1;
   const ids = tvShowIds();
   if (!ids.length) return null;
@@ -629,7 +647,14 @@ function tvPlanPlayerWatch(gs, withIds) {
   const np = tv?.nowPlaying && tv.nowPlaying.untilAbs > now
     && Object.keys(tv.sittings || {}).some(id => tv.sittings[id]?.showId) ? tv.nowPlaying : null;
   let choice = null;
-  if (np && tvShowDef(np.showId)) {
+  // D12: you chose what's on from the picker — your next episode of it, or, caught up, the latest again.
+  // (Picking what's already on is just joining it.)
+  if (pickShowId && tvShowDef(pickShowId) && tvReleasedCount(tvShowDef(pickShowId), day) >= 1 && !(np && np.showId === pickShowId)) {
+    const released = tvReleasedCount(tvShowDef(pickShowId), day);
+    const p = tvProgress(gs, 'player', pickShowId);
+    const fresh = p < released;
+    choice = { mode: 'pick', showId: pickShowId, n: fresh ? p + 1 : Math.max(1, Math.min(p, released)), rerun: !fresh };
+  } else if (np && tvShowDef(np.showId)) {
     choice = { mode: 'join', showId: np.showId, n: np.n, rerun: !!np.rerun, byId: np.byId };
   }
   const open = (id, viewer) => tvProgress(gs, viewer, id) < tvReleasedCount(tvShowDef(id), day);
@@ -705,6 +730,35 @@ function tvPlanPlayerWatch(gs, withIds) {
   };
 }
 
+// D12: what the Watch TV picker offers — every show that's out, what's on now first, then the
+// ones with something new for you (most recently watched first), then the rest. Each row says
+// where you are and who follows it. Pure: [{ showId, label, note, tag }].
+function tvWatchOptions(gs, withIds) {
+  const day = gs?.meta?.clock?.day ?? 1;
+  const tv = tvRead(gs);
+  const now = gs?.meta?.clock ? clockToAbsolute(gs.meta.clock) : 0;
+  const np = tv?.nowPlaying && tv.nowPlaying.untilAbs > now
+    && Object.keys(tv.sittings || {}).some(id => tv.sittings[id]?.showId) ? tv.nowPlaying : null;
+  const rows = [];
+  for (const id of tvShowIds()) {
+    const def = tvShowDef(id);
+    const released = tvReleasedCount(def, day);
+    if (released < 1) continue;
+    const p = tvProgress(gs, 'player', id);
+    const bits = [];
+    let rank = 3;
+    if (np && np.showId === id) { bits.push('on now'); rank = 0; }
+    if (p >= released) bits.push(p >= 1 ? 'caught up, rewatch' : '');
+    else if (p >= 1) { bits.push(`you're on ${tvEpisodeLabel(def, p)} · ${released - p} new`); rank = Math.min(rank, 1); }
+    else { bits.push('not started'); rank = Math.min(rank, 2); }
+    const fans = Object.keys(gs?.npcs || {}).filter(n => gs.npcs[n]?.residency?.status === 'resident' && tvNpcShows(gs, n).includes(id));
+    if (fans.length) bits.push(`${tvNames(gs, fans)} ${fans.length > 1 ? 'follow' : 'follows'} it`);
+    rows.push({ showId: id, label: def.label, note: bits.filter(Boolean).join(' · '), rank, last: tv?.lastWatched?.player?.[id] ?? -Infinity });
+  }
+  rows.sort((a, b) => (a.rank - b.rank) || (b.last - a.last) || (a.showId < b.showId ? -1 : 1));
+  return rows;
+}
+
 // The TV_WATCH effect's writer (effects.js). Everyone who saw a new episode
 // has seen it; the screen is yours for the half hour, and whoever sits down
 // in it joins you.
@@ -773,6 +827,10 @@ function tvWatchNarration(gs, plan) {
     const who = fans.length === 1 ? `${gs?.npcs?.[fans[0]]?.bible?.name || 'Your roommate'} won't stop talking about ${show}`
       : `Everybody in the flat keeps talking about ${show}`;
     open = pr === 'fresh' && plan.n === 1 ? `${who}, so you finally start it.` : `${who}, so you put on the next one: ${plan.ep}.`;
+  } else if (plan.mode === 'pick') {
+    open = plan.rerun ? `You go back to ${show} and put on ${plan.ep} again.`
+      : plan.n === 1 ? `You start ${show} from the top: ${plan.ep}.` : `You put on ${show}: ${plan.ep}.`;
+    if (co.length) open += ` ${names} ${co.length > 1 ? 'settle' : 'settles'} in to watch with you.`;
   } else if (plan.mode === 'discover') {
     open = `You flick through the channels and land on the very first ${show}.`;
   } else {
@@ -862,6 +920,28 @@ function tvStreamWatch(gs, showId) {
   return { ok: true, show: def, episode: n, line: parts.join(' ') };
 }
 
+// The Streamly "Now Playing" panel (D17): the show you last watched on the computer, where
+// you are in its season, and what's newer. The old panel read a field nothing wrote, so it
+// never showed. Null when you haven't watched anything yet. Pure.
+function tvStreamPanel(gs) {
+  const hist = gs?.world?.computer?.apps?.stream?.watchHistory || [];
+  for (let i = hist.length - 1; i >= 0; i--) {
+    const def = tvShowDef(hist[i]?.showId);
+    if (!def) continue;
+    const day = gs?.meta?.clock?.day ?? 1;
+    const released = tvReleasedCount(def, day);
+    const p = tvProgress(gs, 'player', def.id);
+    if (p < 1) continue;
+    const pos = tvSeasonEpisode(def, p);
+    const E = def.tv.seasonEpisodes;
+    const behind = Math.max(0, released - p);
+    return { showId: def.id, label: def.label, genre: def.genre, episode: tvEpisodeLabel(def, p),
+      pct: Math.round(pos.episode / E * 100),
+      info: released < 1 ? '' : behind > 0 ? `${behind} new episode${behind > 1 ? 's' : ''} waiting` : 'caught up' };
+  }
+  return null;
+}
+
 // The Streamly card's second line: where the show is, where you are, and who
 // in the flat watches it. Pure.
 function tvStreamCardMeta(gs, showId) {
@@ -891,12 +971,200 @@ function tvStreamCardMeta(gs, showId) {
   return bits.join(' · ');
 }
 
+// --- Watch parties, movie nights, Chatter (What's On D11/D13/D14, 0.14.5) --------
+
+// The live watch-party commitment (a hangout in the living room marked `watchParty`), or null.
+function tvPartyNow(gs) {
+  const clock = gs?.meta?.clock;
+  if (!clock) return null;
+  const now = clockToAbsolute(clock);
+  return (gs.world?.commitments || []).find(c => c && c.watchParty && c.status === 'scheduled' && now >= c.startAbs && now < c.endAbs) || null;
+}
+
+// The film on right now: { title, kind, commitment } or null.
+function tvFilmNow(gs) {
+  const c = tvPartyNow(gs);
+  return c && c.watchParty.film ? { title: c.watchParty.film.title, kind: c.watchParty.film.kind, commitment: c } : null;
+}
+
+// What someone at a live watch party is doing: sitting in front of the TV (or null, if it can't be on).
+function tvPartyActivity(gs, npcId) {
+  if (typeof activeCommitmentFor !== 'function') return null;
+  const c = activeCommitmentFor(npcId, gs);
+  if (!c || !c.watchParty || !tvScreenWorks(gs)) return null;
+  return TV_TUNING.viewingActivity;
+}
+
+// sim.js's per-tick attendance ledger: whoever is physically there and awake, and the player if
+// they're in the room.
+function tvNotePartyPresence(gs, c, npcId) {
+  if (!c || !c.watchParty) return;
+  const a = Array.isArray(c.attended) ? c.attended : (c.attended = []);
+  if (npcId && !a.includes(npcId)) a.push(npcId);
+  if (gs?.player?.location === c.roomId && !a.includes('player')) a.push('player');
+}
+
+function tvPostLocal(gs, authorId, text, day) {
+  const feed = gs.world?.computer?.apps?.social_feed;
+  if (!feed || !Array.isArray(feed.posts) || typeof feed.nextPostId !== 'number') return false;
+  feed.posts.push({ id: 'post_' + (feed.nextPostId++), author: authorId, text, likes: [], comments: [], day, eventRef: null, visibility: 'public', media: null });
+  return true;
+}
+
+function tvFillText(t, vars) {
+  return String(t).replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined ? vars[k] : m));
+}
+
+function tvResidentIds(gs) {
+  return Object.keys(gs?.npcs || {}).filter(id => gs.npcs[id]?.residency?.status === 'resident').sort();
+}
+
+function tvFreeOn(gs, id, day) {
+  const plan = typeof holidayWorkPlan === 'function' ? holidayWorkPlan(gs.npcs[id], day) : null;
+  return !(plan && plan.works);
+}
+
+// Shows with a premiere or finale (per `positions`) released today: [{ def, n, position }].
+function tvBigNights(gs, day, positions) {
+  const out = [];
+  for (const id of tvShowIds()) {
+    const def = tvShowDef(id);
+    const rel = tvReleasedCount(def, day);
+    if (rel < 1 || rel === tvReleasedCount(def, day - 1)) continue;
+    const position = tvPosition(def, tvSeasonEpisode(def, rel).episode);
+    if (positions.includes(position)) out.push({ def, n: rel, position });
+  }
+  return out;
+}
+
+// D13: Chatter about a show's big night, and a spoiler on your feed.
+function tvChatterForDay(gs, day) {
+  const C = TV_TUNING.chatter;
+  for (const bn of tvBigNights(gs, day, C.positions)) {
+    const pool = C.lines[bn.position === 'premiere' ? 'premiere' : 'finale'];
+    const posters = tvResidentIds(gs).filter(id => tvNpcShows(gs, id).includes(bn.def.id))
+      .sort((a, b) => (tvHash(a, bn.def.id, day, 'cp') % 1000) - (tvHash(b, bn.def.id, day, 'cp') % 1000)).slice(0, C.perShow);
+    for (const id of posters) {
+      tvPostLocal(gs, id, tvFillText(pool[tvHash(id, bn.def.id, day, 'cl') % pool.length], { show: bn.def.label, ep: tvEpisodeLabel(bn.def, bn.n) }), day);
+    }
+  }
+  // One resident who is ahead of you on something you're watching, at most one post a day.
+  const tv = ensureTv(gs);
+  for (const id of tvResidentIds(gs)) {
+    const s = tvSpoilableShow(gs, id, day);
+    if (!s || tvHash(id, s.showId, day, 'spoilpost') % 1000 >= C.spoilerChance * 1000) continue;
+    const def = tvShowDef(s.showId);
+    const blurts = tvBlurt(gs.npcs[id]) >= TV_TUNING.spoiler.blurtAt;
+    const pool = blurts ? C.blurted : C.tagged;
+    const text = tvFillText(pool[tvHash(id, s.showId, day, 'sl') % pool.length], { show: def.label, ep: tvEpisodeLabel(def, s.q), beat: tvBeatTold(tvEpisodeBeat(s.showId, s.q)) });
+    if (!tvPostLocal(gs, id, text, day)) break;
+    if (blurts) { tv.spoiled[s.showId] = s.q; tv.spoiledBy[s.showId] = id; }
+    break;
+  }
+}
+
+// One party or film night: the hangout commitment, marked. Returns the record or null.
+function tvBookParty(gs, day, host, startMinute, minutes, watchParty) {
+  if (typeof createCommitment !== 'function') return null;
+  const startAbs = day * 1440 + startMinute;
+  const invited = tvResidentIds(gs).filter(id => id !== host);
+  const made = createCommitment(gs, { kind: 'hangout', startAbs, endAbs: startAbs + minutes, roomId: TV_TUNING.room, invitedIds: invited, proposerId: host, host });
+  if (!made || !made.record) return null;
+  made.record.watchParty = watchParty;
+  return made.record;
+}
+
+// D11: a watch party for a premiere or finale.
+function tvPartiesForDay(gs, day, out) {
+  const P = TV_TUNING.party;
+  const tv = ensureTv(gs);
+  if (!tvScreenWorks(gs) || (typeof tv.partyDay === 'number' && day - tv.partyDay < P.cooldownDays)) return;
+  for (const bn of tvBigNights(gs, day, P.positions)) {
+    const hosts = tvResidentIds(gs).filter(id => tvFollowedShows(gs.npcs[id], id).includes(bn.def.id)
+      && tvProgress(gs, id, bn.def.id) === bn.n - 1 && tvFreeOn(gs, id, day))
+      .sort((a, b) => (tvAffinity(gs.npcs[b], b, bn.def.id) - tvAffinity(gs.npcs[a], a, bn.def.id)) || (a < b ? -1 : 1));
+    if (!hosts.length) continue;
+    const host = hosts[0];
+    const ep = tvEpisodeLabel(bn.def, bn.n);
+    const rec = tvBookParty(gs, day, host, P.startMinute, P.minutes, { showId: bn.def.id, n: bn.n, label: bn.def.label, ep, film: null });
+    if (!rec) continue;
+    tv.partyDay = day;
+    out.lines.push(tvFillText(P.inviteLine, { name: gs.npcs[host].bible?.name || 'Your roommate', label: bn.def.label, ep }));
+    return;
+  }
+}
+
+// D14: horror night and the cozy movie, on the occasion each belongs to.
+function tvFilmNightsForDay(gs, day, out) {
+  if (!tvScreenWorks(gs) || typeof occasionsOnDay !== 'function') return;
+  const on = occasionsOnDay(day);
+  const aff = (id, occ) => (typeof npcOccasionAffinity === 'function' ? npcOccasionAffinity(gs.npcs[id], occ) : 1);
+  for (const [kind, F] of Object.entries(TV_TUNING.films)) {
+    if (!on.some(o => o.id === F.occasion && o.night === 1)) continue;
+    const hosts = tvResidentIds(gs).filter(id => tvFreeOn(gs, id, day) && aff(id, F.occasion) >= F.hostAffinity)
+      .sort((a, b) => (aff(b, F.occasion) - aff(a, F.occasion)) || (a < b ? -1 : 1));
+    if (!hosts.length) continue;
+    const host = hosts[0];
+    const title = F.titles[tvHash(kind, getYear(day), 'film') % F.titles.length];
+    const rec = tvBookParty(gs, day, host, F.startMinute, F.minutes, { film: { id: kind, kind, title, label: F.label }, showId: null, n: 0, label: F.label, ep: '' });
+    if (rec) out.lines.push(tvFillText(F.inviteLine, { name: gs.npcs[host].bible?.name || 'Your roommate', title }));
+  }
+}
+
+// The rollover after: the payoff, from the ledger sim.js wrote.
+function tvResolvePartiesForDay(gs, day, out) {
+  const P = TV_TUNING.party;
+  for (const c of gs.world?.commitments || []) {
+    if (!c || !c.watchParty || c.watchParty.resolved || typeof commitmentDay !== 'function' || commitmentDay(c) !== day - 1) continue;
+    c.watchParty.resolved = true;
+    const wp = c.watchParty;
+    const attended = (Array.isArray(c.attended) ? c.attended : []).filter(id => id !== 'player' && gs.npcs[id]);
+    const playerCame = Array.isArray(c.attended) && c.attended.includes('player');
+    if (!attended.length) continue;
+    const F = wp.film ? TV_TUNING.films[wp.film.kind] : null;
+    const names = tvNames(gs, attended);
+    const vars = { names, label: wp.label, ep: wp.ep, title: wp.film ? wp.film.title : '' };
+    for (const id of attended) {
+      const npc = gs.npcs[id];
+      let next = { ...npc, mood: Math.max(-1, Math.min(1, (npc.mood || 0) + (F ? F.mood : P.attendMood))) };
+      next = addMemoryFact(next, { text: tvFillText(F ? F.fact : P.fact, { ...vars, names: tvNames(gs, attended.filter(x => x !== id)) || 'everyone' }), day: day - 1, importance: P.factImportance, category: 'relationship' });
+      if (playerCame) next = applyRelDelta(next, { affection: P.playerAffection }, undefined);
+      gs.npcs[id] = next;
+    }
+    let web = gs.world.castWeb || {};
+    const bond = F ? F.bond : P.attendBond;
+    for (let i = 0; i < attended.length; i++) for (let j = i + 1; j < attended.length; j++) {
+      web = applyNpcToNpcDelta(web, attended[i], attended[j], { affection: bond });
+      web = applyNpcToNpcDelta(web, attended[j], attended[i], { affection: bond });
+    }
+    gs.world.castWeb = web;
+    if (playerCame && gs.player && typeof pushMoodImpulse === 'function') pushMoodImpulse(gs.player, P.playerMood, day - 1);
+    out.lines.push(tvFillText(playerCame ? (F ? F.line : P.line) : (F ? F.lineNoYou : P.lineNoYou), vars));
+    if (!wp.film && tvHash(c.id, 'partypost') % 100 < 60) tvPostLocal(gs, attended[0], tvFillText(P.post[tvHash(c.id, 'p') % P.post.length], vars), day - 1);
+    (gs.world.events || (gs.world.events = [])).push({ day: day - 1, tick: 47, roomId: c.roomId, npcId: attended[0], type: 'watch_party', moodDelta: 0,
+      importance: MEMORY_IMPORTANCE.social, data: { label: wp.film ? wp.film.title : wp.label }, template: '{name} watched ' + (wp.film ? wp.film.title : wp.label) + ' with the flat.', seenByPlayer: false });
+  }
+}
+
+// The rollover hook (ui.js's processDayRollover): { lines }.
+function processTvForDay(gs, day) {
+  const out = { lines: [] };
+  if (!tvShowIds().length || !gs?.world) return out;
+  tvResolvePartiesForDay(gs, day, out);
+  tvChatterForDay(gs, day);
+  tvPartiesForDay(gs, day, out);
+  tvFilmNightsForDay(gs, day, out);
+  return out;
+}
+
 // --- What the room shows ---------------------------------------------------------
 
 // "watching Murder, Actually" for a roommate on the sofa with it on;
 // the activity unchanged otherwise. Pure.
 function tvActivityLabel(gs, npcId, activity) {
   if (activity !== TV_TUNING.viewingActivity) return activity;
+  const film = tvFilmNow(gs);
+  if (film && gs?.npcs?.[npcId]?.location === TV_TUNING.room) return `watching ${film.title}`;
   const s = tvRead(gs)?.sittings?.[npcId];
   const def = s?.showId ? tvShowDef(s.showId) : null;
   return def ? `watching ${def.label}` : activity;
@@ -905,6 +1173,8 @@ function tvActivityLabel(gs, npcId, activity) {
 // "The TV is on: Murder, Actually, S2 E4." in the living room, or null. Pure.
 function tvRoomLine(gs, roomId) {
   if (roomId !== TV_TUNING.room) return null;
+  const film = tvFilmNow(gs);
+  if (film && tvScreenWorks(gs)) return `The TV is on: ${film.title}, and the room is dim.`;
   const tv = tvRead(gs);
   const np = tv?.nowPlaying;
   const def = np ? tvShowDef(np.showId) : null;

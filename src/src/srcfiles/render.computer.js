@@ -449,22 +449,18 @@ function buildProfileCard(label) {
 function renderStreamly(body, gs, app, screen) {
   const stream = gs.world.computer.apps.stream;
   const shows = STREAM_DEFS_LIST;
-  const watching = stream?.watchingShowId;
-
-  // Now-watching panel
-  if (watching && STREAM_DEFS[watching]) {
-    const show = STREAM_DEFS[watching];
-    const progress = stream?.watchProgress || 0;
-    const pct = Math.min(100, Math.round(progress / show.episodeTicks * 100));
-
+  // Now-watching panel (What's On D17): the show you last watched, your place in its
+  // season. (The first version of this panel read a field nothing ever wrote.)
+  const panel = typeof tvStreamPanel === 'function' ? tvStreamPanel(gs) : null;
+  if (panel) {
     const player = document.createElement('div');
     player.className = 'str-player';
     player.innerHTML = `
-      <div class="str-player-header">Now Playing</div>
-      <div class="str-player-title">${show.label}</div>
-      <div class="str-player-genre">${show.genre}</div>
-      <div class="str-progress-bar"><div class="str-progress-fill" style="width: ${pct}%;"></div></div>
-      <div class="str-player-info">${progress}/${show.episodeTicks} ticks watched</div>
+      <div class="str-player-header">Continue Watching</div>
+      <div class="str-player-title">${panel.label}</div>
+      <div class="str-player-genre">${panel.genre} · ${panel.episode}</div>
+      <div class="str-progress-bar"><div class="str-progress-fill" style="width: ${panel.pct}%;"></div></div>
+      <div class="str-player-info">${panel.info}</div>
     `;
     body.appendChild(player);
   }

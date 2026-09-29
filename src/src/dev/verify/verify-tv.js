@@ -504,6 +504,178 @@ check('caught up: you rewatch the latest (the mood never goes away), and the cou
 check('overtaking a roommate warns you: they have not seen this one yet', stream.r3.includes(stream.name) && /(hasn't|haven't) seen this one yet\. Careful\.$/.test(stream.r3), stream.r3);
 check('the Streamly card says where the season is and who watches', /S\d+ · \d+ of \d+ out/.test(stream.meta) && stream.meta.includes(stream.name), stream.meta);
 
+// ---------------------------------------------------------------- 8b
+console.log('\n8b. D16 the dead screen, D17 the Now Playing panel');
+const d16 = J(String.raw`(() => {
+  const g = __mk(); const [A] = __ids(g);
+  const cand = () => isDriveCandidate('watch_tv', DRIVE_DEFS.watch_tv, g.npcs[A], g, { npcId: A, nowAbs: __now(g), perceived: {}, isVisitor: false });
+  const works = cand();
+  const seen = new Set(); for (let k = 0; k < 300; k++) seen.add(resolveRoomForActivity('midday', A, g.npcs, mulberry32(k * 31 + 7), g.meta.clock, g).activity);
+  g.world.upgrades.living_room_entertainment = { tier: 'broken', condition: 0 };
+  const dead = cand();
+  const seenDead = new Set(); for (let k = 0; k < 300; k++) seenDead.add(resolveRoomForActivity('midday', A, g.npcs, mulberry32(k * 31 + 7), g.meta.clock, g).activity);
+  const evDead = new Set(); for (let k = 0; k < 300; k++) evDead.add(resolveRoomForActivity('evening', A, g.npcs, mulberry32(k * 31 + 9), g.meta.clock, g).activity);
+  return { works, dead, seen: [...seen], seenDead: [...seenDead], evDead: [...evDead], keep: tvScreenActivity(g, 'reading'), other: MAINTENANCE.npcDecayActions.seek_company };
+})()`);
+check('the TV drive is a candidate with a working Living Room Setup and not with a broken one', d16.works === true && d16.dead === false, JSON.stringify({ w: d16.works, d: d16.dead }));
+check('the schedule tables: TV / a show appear with the setup working, are swapped for something else when it is broken, and other activities are untouched', d16.seen.includes('watching TV') && !d16.seenDead.includes('watching TV') && !d16.evDead.includes('watching a show') && d16.seenDead.includes('reading') && d16.keep === 'reading', JSON.stringify({ seen: d16.seen, dead: d16.seenDead }));
+check('the maintenance table itself is untouched (seek_company still maps to the setup)', d16.other.includes('living_room_entertainment'));
+
+const d17 = J(String.raw`(() => {
+  const g = __mk();
+  g.world.computer = g.world.computer || { apps: {} };
+  g.world.computer.apps = g.world.computer.apps || {};
+  g.world.computer.apps.stream = { subscriptions: [], watchHistory: [], resumePoints: {} };
+  const none = tvStreamPanel(g);
+  watchEpisode(g, 'wilderness'); watchEpisode(g, 'wilderness');
+  const p1 = tvStreamPanel(g);
+  watchEpisode(g, 'murder_actually');
+  const p2 = tvStreamPanel(g);
+  return { none, p1, p2 };
+})()`);
+check('Streamly\'s Now Playing panel: nothing before you have watched anything', d17.none === null);
+check('after watching it names the show, your place and how far through the season, and switches to the newest show', d17.p1 && d17.p1.showId === 'wilderness' && /S1 E2/.test(d17.p1.episode) && d17.p1.pct > 0 && d17.p2.showId === 'murder_actually', JSON.stringify({ p1: d17.p1, p2: d17.p2 }));
+check('renderStreamly reads the panel from tv.js, not the never-written watchingShowId', !/watchingShowId/.test(srcOf('render.computer.js')) && /tvStreamPanel\(gs\)/.test(srcOf('render.computer.js')));
+
+// ---------------------------------------------------------------- 8c
+console.log('\n8c. D12 the What\'s On picker');
+const d12 = J(String.raw`(() => {
+  const g = __mk(); const [A, B] = __ids(g);
+  const opts = tvWatchOptions(g, []);
+  const all = tvShowIds().filter(id => tvReleasedCount(tvShowDef(id), g.meta.clock.day) >= 1);
+  const day = g.meta.clock.day;
+  // a show you're one behind on sorts up; a show on now sorts first
+  ensureTv(g).progress.player = { murder_actually: tvReleasedCount(tvShowDef('murder_actually'), day) - 1 };
+  ensureTv(g).lastWatched.player = { murder_actually: day };
+  const o2 = tvWatchOptions(g, []);
+  __sofa(g, A);
+  const tv = ensureTv(g);
+  tv.sittings[A] = { showId: 'wilderness', startAbs: __now(g), untilAbs: __now(g) + 30 };
+  tv.nowPlaying = { showId: 'wilderness', n: 2, byId: A, startAbs: __now(g), untilAbs: __now(g) + 30, rerun: false, chain: 0, credited: [] };
+  const o3 = tvWatchOptions(g, [A]);
+  const picked = tvPlanPlayerWatch(g, [], 'the_great_debate');
+  const rewatch = (() => { const h = __mk(); const d = h.meta.clock.day; const q = ensureTv(h); q.progress.player = { wilderness: tvReleasedCount(tvShowDef('wilderness'), d) }; return tvPlanPlayerWatch(h, [], 'wilderness'); })();
+  const joined = tvPlanPlayerWatch(g, [A], 'wilderness');
+  const bad = tvPlanPlayerWatch(g, [], 'no_such_show');
+  const none = tvPlanPlayerWatch(g, [], null);
+  const line = tvWatchNarration(g, picked);
+  return { n: opts.length, all: all.length, first2: o2[0].showId, o3first: o3[0].showId, o3note: o3[0].note, picked: picked && { mode: picked.mode, showId: picked.showId, n: picked.n, rerun: picked.rerun },
+    rewatch: rewatch && { mode: rewatch.mode, rerun: rewatch.rerun }, joinedMode: joined && joined.mode, badMode: bad && bad.mode, noneMode: none && none.mode, line };
+})()`);
+check('the picker lists every show that is out, none twice', d12.n === d12.all && d12.n > 1, JSON.stringify({ n: d12.n, all: d12.all }));
+check('a show you are behind on rises to the top; a show on now beats it and says so', d12.first2 === 'murder_actually' && d12.o3first === 'wilderness' && /on now/.test(d12.o3note), JSON.stringify({ f: d12.first2, o3: d12.o3first, note: d12.o3note }));
+check('picking a show plays your next episode of it; caught up plays the latest again as a rewatch', d12.picked.mode === 'pick' && d12.picked.showId === 'the_great_debate' && d12.picked.n >= 1 && d12.rewatch.mode === 'pick' && d12.rewatch.rerun === true, JSON.stringify({ p: d12.picked, r: d12.rewatch }));
+check('picking what somebody already has on is just joining it; an unknown pick or none falls back to the room\'s choice', d12.joinedMode === 'join' && d12.badMode !== 'pick' && d12.noneMode !== 'pick', JSON.stringify({ j: d12.joinedMode, b: d12.badMode, n: d12.noneMode }));
+check('the line says what you put on', /The Great Debate/.test(d12.line) && /you|You/.test(d12.line), d12.line);
+const fakeDom = srcOf('render.js');
+check('the picker is in render.js and prepareWatchTv awaits it only when it is loaded (headless: the room picks)', /function openTvPicker\(/.test(fakeDom) && /typeof openTvPicker === 'function'/.test(srcOf('defs.actions.js')));
+
+// ---------------------------------------------------------------- 8d
+console.log('\n8d. D11 watch parties, D13 Chatter, D14 movie nights');
+api(`
+  __feed = (g) => { g.world.computer = g.world.computer || { apps: {} }; g.world.computer.apps = g.world.computer.apps || {}; g.world.computer.apps.social_feed = { posts: [], nextPostId: 1 }; return g.world.computer.apps.social_feed; };
+  __bigDay = (g, id, positions) => { for (let d = 3; d < 400; d++) { const b = tvBigNights(g, d, positions || ['premiere', 'finale']).find(x => x.def.id === id); if (b) return { day: d, n: b.n, position: b.position }; } return null; };
+  __setDay = (g, d, minutes) => { g.meta.clock.day = d; g.meta.clock.minutes = minutes === undefined ? 300 : minutes; };
+  __partyFixture = () => {
+    const g = __mk(); const ids = __ids(g); const A = ids[0];
+    const show = tvFollowedShows(g.npcs[A], A)[0];
+    const big = __bigDay(g, show);
+    __setDay(g, big.day);
+    __feed(g);
+    __follow(g, A, show);
+    return { g, A, ids, show, big };
+  };
+`);
+const party = J(`(() => {
+  const { g, A, ids, show, big } = __partyFixture();
+  const out = processTvForDay(g, big.day);
+  const c = (g.world.commitments || []).find(x => x.watchParty);
+  const again = processTvForDay(g, big.day);
+  const invited = c ? c.invitedIds.length : 0;
+  // the party begins
+  __setDay(g, big.day, c.startAbs % 1440 + 5);
+  for (const id of ids) { g.npcs[id].location = 'living_room'; g.npcs[id].activity = tvPartyActivity(g, id) || 'x'; }
+  g.player.location = 'living_room';
+  const actA = g.npcs[A].activity;
+  __tick(g, 30);
+  const np = ensureTv(g).nowPlaying;
+  const started = c.watchParty.started === true;
+  for (const id of ids) tvNotePartyPresence(g, c, id);
+  const moodBefore = g.npcs[A].mood;
+  // the next rollover pays it out
+  const r = processTvForDay(g, big.day + 1);
+  const ev = (g.world.events || []).find(e => e.type === 'watch_party');
+  return { hasC: !!c, kind: c && c.kind, room: c && c.roomId, host: c && c.host, A, invited, lines: out.lines, again: again.lines.length, dup: (g.world.commitments || []).filter(x => x.watchParty).length,
+    partyDay: ensureTv(g).partyDay, day: big.day, actA, np: np && { showId: np.showId, n: np.n, party: np.party }, started, n: big.n, show,
+    resolved: c.watchParty.resolved, payLines: r.lines, moodUp: g.npcs[A].mood > moodBefore, ev: !!ev, attended: c.attended };
+})()`);
+check('a follower who is level on a premiere/finale proposes a watch party: a living-room hangout marked watchParty, everyone else invited', party.hasC && party.kind === 'hangout' && party.room === 'living_room' && party.host === party.A && party.invited >= 1 && party.lines.length === 1 && /watch party/.test(party.lines[0]), JSON.stringify({ c: party.hasC, k: party.kind, h: party.host, l: party.lines }));
+check('the invitation is not repeated the same day, and there is a cooldown between parties', party.again === 0 && party.dup === 1 && party.partyDay === party.day);
+check('while it is live, the people it holds are watching TV and its episode goes on (once)', party.actA === 'watching TV' && party.np && party.np.showId === party.show && party.np.n === party.n && party.np.party === true && party.started, JSON.stringify({ a: party.actA, np: party.np }));
+check('the next rollover pays it out: who came is in the ledger, they are in a better mood, the line and the event land', party.resolved === true && party.attended.includes('player') && party.moodUp && party.ev && party.payLines.length === 1 && /watched/.test(party.payLines[0]), JSON.stringify({ r: party.resolved, att: party.attended, l: party.payLines }));
+
+const chat = J(`(() => {
+  const { g, A, ids, show, big } = __partyFixture();
+  const feed = g.world.computer.apps.social_feed;
+  tvChatterForDay(g, big.day);
+  const bigPosts = feed.posts.length;
+  const showLabel = tvShowDef(show).label;
+  const mention = feed.posts.some(p => p.text.includes(showLabel) || /tonight|finale|dread|snacks|Clear/i.test(p.text));
+  // a spoiler: B is ahead of you on something you are watching
+  const h = __mk(); const [B] = __ids(h); __feed(h);
+  const sh = tvShowIds()[0];
+  const day = h.meta.clock.day;
+  const t = ensureTv(h); t.seeded[B] = 1; t.progress[B] = {}; t.progress.player = {}; t.lastWatched.player = {};
+  let post = null;
+  for (let d = day; d < day + 200 && !post; d++) {
+    h.meta.clock.day = d;
+    const rel = tvReleasedCount(tvShowDef(sh), d);
+    t.lastWatched.player[sh] = d; t.progress.player[sh] = Math.max(1, rel - 2); t.progress[B][sh] = rel; t.spoiled = {};
+    h.world.computer.apps.social_feed.posts.length = 0;
+    tvChatterForDay(h, d);
+    post = h.world.computer.apps.social_feed.posts.find(p => p.author === B && /(SPOILER|spoiler|cannot believe|talk to me)/.test(p.text));
+  }
+  return { bigPosts, mention, post: post && post.text, blurts: tvBlurt(h.npcs[B]) >= TV_TUNING.spoiler.blurtAt, spoiled: t.spoiled[sh] || 0, tagged: !!post && /^(SPOILERS|spoiler tag)/.test(post.text) };
+})()`);
+check('D13: followers post about the premiere or finale of a show the day it airs', chat.bigPosts >= 1 && chat.mention, JSON.stringify({ n: chat.bigPosts }));
+check('D13: a resident who is ahead of you on something you are watching sometimes posts about it; a blurter\'s post is plain and counts as told', chat.post && chat.blurts && !chat.tagged && chat.spoiled > 0, JSON.stringify({ post: chat.post, spoiled: chat.spoiled, blurts: chat.blurts }));
+
+const film = J(`(() => {
+  const g = __mk(); const ids = __ids(g); const A = ids[0];
+  TV_TUNING.films.horror_night.hostAffinity = -9; TV_TUNING.films.cozy_movie.hostAffinity = -9;
+  let hd = null, cd = null;
+  for (let d = 3; d < 400 && (!hd || !cd); d++) { const on = occasionsOnDay(d); if (!hd && on.some(o => o.id === 'halloween' && o.night === 1)) hd = d; if (!cd && on.some(o => o.id === 'midwinter' && o.night === 1)) cd = d; }
+  __setDay(g, hd); __feed(g);
+  const out = processTvForDay(g, hd);
+  const c = (g.world.commitments || []).find(x => x.watchParty && x.watchParty.film);
+  __setDay(g, hd, c.startAbs % 1440 + 5);
+  for (const id of ids) { g.npcs[id].location = 'living_room'; g.npcs[id].activity = tvPartyActivity(g, id) || 'x'; }
+  g.player.location = 'living_room';
+  __tick(g, 30);
+  const np = ensureTv(g).nowPlaying;
+  const label = tvActivityLabel(g, A, 'watching TV');
+  const room = tvRoomLine(g, 'living_room');
+  for (const id of ids) tvNotePartyPresence(g, c, id);
+  const p = processTvForDay(g, hd + 1);
+  const g2 = __mk(); __setDay(g2, cd); __feed(g2);
+  const out2 = processTvForDay(g2, cd);
+  const c2 = (g2.world.commitments || []).find(x => x.watchParty && x.watchParty.film);
+  const g3 = __mk(); g3.world.upgrades.living_room_entertainment = { tier: 'broken', condition: 0 }; __setDay(g3, hd);
+  const out3 = processTvForDay(g3, hd);
+  return { out: out.lines, kind: c && c.watchParty.film.kind, title: c && c.watchParty.film.title, np, label, room, pay: p.lines, cozy: out2.lines, cozyKind: c2 && c2.watchParty.film.kind, broken: out3.lines.length };
+})()`);
+check('D14: Halloween puts on a horror film in the living room, Midwinter a cozy one, each with a named film and an invitation', film.kind === 'horror_night' && /horror film/.test(film.out[0]) && film.title && film.cozyKind === 'cozy_movie' && /winter film/.test(film.cozy[0]), JSON.stringify({ o: film.out, c: film.cozy }));
+check('while a film is on, the screen shows it (room line, "watching <film>") and no episode is put on', film.np === null && film.label === 'watching ' + film.title && film.room.includes(film.title), JSON.stringify({ np: film.np, label: film.label, room: film.room }));
+check('the next rollover pays the film night out with its own line; a broken Living Room Setup means no film night at all', film.pay.length === 1 && film.pay[0].includes(film.title) && film.broken === 0, JSON.stringify({ pay: film.pay, broken: film.broken }));
+
+{
+  const ui = srcOf('ui.js'), sim = srcOf('sim.js'), cfg = srcOf('config.js');
+  check('wired in: the rollover calls processTvForDay, sim binds the party activity and writes the ledger, watch_party is a registered event', /processTvForDay\(currentGameState, day\)/.test(ui) && /tvPartyActivity\(gameState, id\)/.test(sim) && /tvNotePartyPresence\(gameState, wp, id\)/.test(sim) && /watch_party:\s+'social'/.test(cfg) && /watch_party:\s+'warmth'/.test(cfg));
+  const vocab = /\b(church|christ|god|pray|prayer|holy|sacred|bless|angel|saint|bible|easter|hymn|worship|faith|religio)/i;
+  const T = api('JSON.stringify([TV_TUNING.chatter, TV_TUNING.party, TV_TUNING.films])');
+  check('R1: no religion in a single authored line of the new tables', !vocab.test(T), (T.match(vocab) || [''])[0]);
+}
+
 // ---------------------------------------------------------------- 9
 console.log('\n9. The conversation prompt');
 const prompt = J(`(() => {

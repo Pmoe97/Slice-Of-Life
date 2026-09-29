@@ -274,6 +274,7 @@ check('llm.js adds the line beside skyLine; scene.js joins it to the weather cue
 console.log('\n7b. The roommates — nothing electric starts, what was running stops, the schedule picks candle-friendly things');
 const npcs = J(String.raw`(() => {
   const g = __mk(88, 3);
+  g.world.upgrades.living_room_entertainment = { tier: 'functional', condition: 100 }; // the TV drive needs a working setup (What's On D16)
   const p = __find(g, 2);
   const id = __ids(g)[0];
   const nowAbs = () => clockToAbsolute(g.meta.clock);

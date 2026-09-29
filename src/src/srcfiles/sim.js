@@ -1648,6 +1648,8 @@ function resolveRoomForActivity(block, npcId, npcs, rng, clock, gameState) {
   let activity = acts[Math.floor(rng() * acts.length)];
   // Power outages (seasons plan W10): nothing electric while the grid is down.
   if (typeof outageActivity === 'function') activity = outageActivity(gameState, activity);
+  // What's On D16: nobody settles in front of a broken screen.
+  if (typeof tvScreenActivity === 'function') activity = tvScreenActivity(gameState, activity);
 
   // Seasons & weather Phase 3: the balcony is weighted by how inviting it is
   // outside (roomWeatherWeight, seasons.js; 1 for every other room, and when
@@ -2045,7 +2047,7 @@ function resolveTick(gameState, minutesThisTick = CLOCK.tickMinutes) {
       // the kind's, so "exactly as a meal does" is one code path rather than
       // two that agree today.
       location = scheduleResult.commitmentRoomId || npc.residency.room;
-      activity = COMMITMENT_KINDS[scheduleResult.commitmentKind]?.boundActivity || activity;
+      activity = (typeof tvPartyActivity === 'function' && tvPartyActivity(gameState, id)) || COMMITMENT_KINDS[scheduleResult.commitmentKind]?.boundActivity || activity;
       transit = null;
       npc.walk = null;
     } else if (block === 'sleep') {
@@ -2385,6 +2387,11 @@ function resolveTick(gameState, minutesThisTick = CLOCK.tickMinutes) {
       for (const mc of activeMealCommitmentsInRoom(gameState, location)) {
         if (mc.occasion) noteGatheringPresence(gameState, mc, id);
       }
+    }
+    // What's On D11/D14: a watch party or movie night (a living-room hangout marked `watchParty`).
+    if (block !== 'sleep' && location && typeof tvPartyNow === 'function') {
+      const wp = tvPartyNow(gameState);
+      if (wp && wp.roomId === location) tvNotePartyPresence(gameState, wp, id);
     }
 
     // Evidence discovery (STEALTH, P6): a resident who ends up back in

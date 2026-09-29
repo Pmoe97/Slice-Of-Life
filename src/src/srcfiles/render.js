@@ -2374,6 +2374,52 @@ function openRecipePicker(recipes) {
   });
 }
 
+// What's On D12: the "What's on?" picker for Watch TV. Resolves to a show id, '' when
+// you'd rather the room pick (the old behavior), or null when you cancel.
+function openTvPicker(options) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions) { resolve(''); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const finish = (v) => { overlay.removeAttribute('data-open'); resolve(v); };
+    title.textContent = "What's on?";
+    body.innerHTML = '';
+    const list = document.createElement('div');
+    list.className = 'recipe-pick-list';
+    for (const o of options) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-block recipe-pick-btn';
+      const name = document.createElement('span');
+      name.className = 'recipe-pick-name';
+      name.textContent = o.label;
+      const note = document.createElement('span');
+      note.className = 'recipe-pick-ings';
+      note.textContent = o.note || '';
+      btn.append(name, note);
+      btn.addEventListener('click', () => finish(o.showId));
+      list.appendChild(btn);
+    }
+    body.appendChild(list);
+    actions.innerHTML = '';
+    const anything = document.createElement('button');
+    anything.type = 'button';
+    anything.className = 'btn';
+    anything.textContent = 'Whatever is on';
+    anything.addEventListener('click', () => finish(''));
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    actions.append(anything, cancel);
+    overlay.setAttribute('data-open', '');
+  });
+}
+
 // --- Cook screen (food-overhaul Phase 5, D8/D14/D15/D16) ---
 // The heart of self.cook: the interactive manual loop, in one modal with
 // two stages.
