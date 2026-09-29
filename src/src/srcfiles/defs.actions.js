@@ -2026,8 +2026,8 @@ function prepareGameChallenge(ctx) {
   const withIds = sharedActivityParticipants(ctx);
   const games = typeof gameOptions === 'function' ? gameOptions(gs, ctx.roomId) : [];
   if (!withIds.length || !games.length) return { cancelled: true };
-  const finish = (gameId, npcId, stakeId, amount) => {
-    const plan = gamePlanMatch(gs, gameId, npcId, stakeId, amount);
+  const finish = (gameId, npcId, stakeId, amount, played, mode) => {
+    const plan = gamePlanMatch(gs, gameId, npcId, stakeId, amount, played, mode);
     return plan ? { game: plan, minutes: plan.minutes } : { cancelled: true };
   };
   if (typeof openChoicePicker !== 'function') return finish(games[0], withIds[0], 'brag', 0);
@@ -2046,6 +2046,20 @@ function prepareGameChallenge(ctx) {
     const pick = await openChoicePicker('What is riding on it?', stakes.map(r => ({ id: r.id, label: r.label, note: r.note, disabled: !r.ok })));
     if (!pick) return { cancelled: true };
     const row = stakes.find(r => r.id === pick) || stakes[0];
+    // A game with a real minigame (darts): pick the mode, play it, and the result is what you played.
+    const gdef = GAME_DEFS[gameId];
+    if (gdef.minigame && typeof openMinigame === 'function') {
+      let mode = gdef.modes ? gdef.modes[0].id : undefined;
+      if (gdef.modes && gdef.modes.length > 1) {
+        mode = await openChoicePicker('Which game?', gdef.modes.map(m => ({ id: m.id, label: m.label, note: m.note })));
+        if (!mode) return { cancelled: true };
+      }
+      const npc = gs.npcs[npcId];
+      const played = await openMinigame(gdef.minigame, { mode, npcName: npc?.bible?.name || 'them', skillP: gameSkillOf(gs, 'player', gameId), skillN: gameSkillOf(gs, npcId, gameId),
+        seed: hashStr(`${gs.meta?.seed}|${gs.meta.clock.day}|${gs.meta.clock.minutes}|${npcId}|${gameId}`) });
+      if (!played) return { cancelled: true };
+      return finish(gameId, npcId, row.stakeId, row.amount, played, mode);
+    }
     return finish(gameId, npcId, row.stakeId, row.amount);
   })();
 }

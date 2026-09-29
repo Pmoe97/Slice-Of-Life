@@ -144,7 +144,7 @@ function gameStakeOptions(gs, npcId) {
 // --- Planning a match -------------------------------------------------------------------------
 // Decided once in prepare, so the effect and the line cannot disagree. Pure: the same save, day and
 // count always play the same match.
-function gamePlanMatch(gs, gameId, npcId, stakeId, amount) {
+function gamePlanMatch(gs, gameId, npcId, stakeId, amount, played, mode) {
   const d = gameDef(gameId);
   const npc = gs?.npcs?.[npcId];
   if (!d || !npc) return null;
@@ -153,14 +153,24 @@ function gamePlanMatch(gs, gameId, npcId, stakeId, amount) {
   const clock = gs.meta.clock;
   const rng = seededRng(gs.meta?.seed, `match_${clock.day}_${clock.minutes}_${gameId}_${npcId}_${g?.count || 0}`);
   const pWin = gameWinChance(gs, npcId, gameId);
-  const playerWon = rng() < pWin;
+  let playerWon = rng() < pWin;
   // The margin: how far the roll landed from a coin flip, told as how close it was.
   const r2 = rng();
-  const grade = r2 < T.close ? 'close' : r2 > T.blowout ? 'blowout' : 'normal';
+  let grade = r2 < T.close ? 'close' : r2 > T.blowout ? 'blowout' : 'normal';
+  let summary = null, minutes = d.minutes;
+  // A played game (a minigame the player just finished) or a modelled one (darts, headless: both
+  // sides throw like their skill) decides the result instead of the abstract roll.
+  if (!played && gameId === 'darts' && typeof dartsSimulate === 'function') {
+    const m = mode || '301';
+    const st = dartsSimulate(seededRng(gs.meta?.seed, `darts_${clock.day}_${clock.minutes}_${npcId}_${g?.count || 0}`), m, gameSkillOf(gs, 'player', gameId), gameSkillOf(gs, npcId, gameId));
+    played = dartsResult(st, gameNpcName(gs, npcId));
+    played.minutes = DARTS_TUNING.modes[m].minutes;
+  }
+  if (played) { playerWon = !!played.playerWon; grade = played.grade || 'normal'; summary = played.summary || null; if (played.minutes) minutes = played.minutes; }
   const stake = stakeId === 'chore' && gameStakeAgrees(gs, npcId, 'chore').ok ? 'chore'
     : stakeId === 'iou' && gameStakeAgrees(gs, npcId, 'iou', amount).ok ? 'iou' : 'brag';
   return { gameId, npcId, stakeId: stake, amount: stake === 'iou' ? amount : 0, playerWon, grade, pWin,
-    minutes: d.minutes, name: gameNpcName(gs, npcId), label: d.label, seed: `${clock.day}_${clock.minutes}_${g?.count || 0}` };
+    minutes, summary, played: !!played, name: gameNpcName(gs, npcId), label: d.label, seed: `${clock.day}_${clock.minutes}_${g?.count || 0}` };
 }
 
 // The line for a planned match. Pure.
@@ -171,7 +181,7 @@ function gameMatchNarration(gs, plan) {
   const side = plan.playerWon ? d.win : d.lose;
   const pool = side[plan.grade === 'close' ? 'close' : plan.grade === 'blowout' ? 'blowout' : 'close'];
   const parts = [gamePick(d.intro, plan.seed, plan.gameId, 'intro').replace('{name}', plan.name)];
-  parts.push(gameFill(gamePick(pool, plan.seed, plan.gameId, 'res'), vars));
+  parts.push(plan.summary ? plan.summary : gameFill(gamePick(pool, plan.seed, plan.gameId, 'res'), vars));
   const S = GAMES_TUNING.lines.settle;
   if (plan.stakeId === 'chore') parts.push(gameFill(plan.playerWon ? S.choreWon : S.choreLost, vars));
   else if (plan.stakeId === 'iou') parts.push(gameFill(plan.playerWon ? S.iouWon : S.iouLost, { ...vars, amount: plan.amount }));

@@ -1,7 +1,7 @@
 # Game Room Overhaul — a room people actually play in
 
-Status: **Phase 1 built 2026-09-29 (`games.js`, `verify-games.js` 25); design complete 2026-09-22 (the user answered Q1–Q3 the
-same day); Phases 2–12 not started.** The user asked for it directly ("Game room needs to
+Status: **Phases 1–2 built 2026-09-29 (`games.js` `verify-games.js` 25; `darts.js` + `render.games.js` `verify-darts.js` 25); design complete 2026-09-22 (the user answered Q1–Q3 the
+same day); Phases 3–12 not started.** The user asked for it directly ("Game room needs to
 come to life! … This is a massive area for improvement and expansion."). Last updated
 2026-09-22.
 
@@ -20,7 +20,7 @@ Companions:
 
 ## Handoff — read this first
 
-**Resume at:** Phase 2 (darts) — Phase 1 (the match spine) is built; every game just has to produce a result and call `gameApplyMatch` (games.js). A minigame replaces the abstract `gamePlanMatch` result: build the plan the same way (`{ gameId, npcId, stakeId, amount, playerWon, grade }`) and hand it to the `GAME_MATCH` effect.
+**Resume at:** Phase 3 (the card engine) — Phases 1 (the match spine) and 2 (darts) are built; every game just has to produce a result and call `gameApplyMatch` (games.js). A minigame replaces the abstract `gamePlanMatch` result: build the plan the same way (`{ gameId, npcId, stakeId, amount, playerWon, grade }`) and hand it to the `GAME_MATCH` effect.
 
 **Survey (2026-09-22):**
 - Today the Game Room is one flat verb: `self.play_games` (defs.actions.js)
@@ -171,7 +171,8 @@ land in the relationship engine this game is built on.
 | Phase | Status |
 |---|---|
 | 1 | **Done** (2026-09-29) — the match spine: `games.js` (`GAME_DEFS`/`GAMES_TUNING`, `world.games`), the `games` skill, an abstract seeded resolver for pool/darts/console/board game, stakes (bragging, a real chore both ways, a capped IOU through `money.js`; agreement by fondness/temper), consequences (mood, rivalry on the relationship, memory, XP), the follow-up verbs (Good Game / Gloat / Rematch), the Challenge verb + `openChoicePicker`, the [Games] prompt line |
-| 2–12 | Not started |
+| 2 | **Done** (2026-09-29) — darts (D9): `darts.js` (the pure half: board geometry and scoring, a thrower's spread by skill, the 301 / Around the Clock state machine, the crosshair, a whole-match simulator, grading) and `render.games.js` (the modal: a canvas board, a two-axis sweeping crosshair, tap or Space to throw, the roommate's turn animated, Let it play out, Forfeit). `openMinigame(kind, opts)` is the entry point every later minigame uses: it resolves `{ playerWon, grade, summary, minutes }`, which becomes the plan. Headless, darts is modelled by the same throwers (deterministic). Live-verified in `dev-harness.html`. |
+| 3–12 | Not started |
 
 ## Open questions
 

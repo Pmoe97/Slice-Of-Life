@@ -3731,6 +3731,11 @@ body {
 
 /* Recipe picker (overhaul Phase 2) — the "What do you want to cook?"
    choice inside the shared modal. */
+/* Game Room minigames (render.games.js): the darts board in the shared modal. */
+.games-dart-board { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
+.games-dart-score { font-weight: 700; font-size: var(--fs-md, 1rem); text-align: center; }
+.games-dart-canvas { max-width: 100%; border-radius: 50%; cursor: crosshair; user-select: none; -webkit-user-select: none; }
+.games-dart-status { min-height: 2.6em; font-size: var(--fs-sm, 0.9rem); color: var(--color-text-dim); text-align: center; }
 .recipe-pick-list { display: flex; flex-direction: column; gap: var(--space-2); }
 .recipe-pick-btn {
   display: flex;
@@ -8504,7 +8509,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=215"></script>
+<script src="src/src/srcfiles/config.js?v=216"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -8519,7 +8524,7 @@ body {
      Registered in dev/verify/loadgame.js's ORDER in the same commit. -->
 <script src="src/src/srcfiles/fields.js?v=1"></script>
 <script src="src/src/srcfiles/defs.world.js?v=56"></script>
-<script src="src/src/srcfiles/defs.actions.js?v=70"></script>
+<script src="src/src/srcfiles/defs.actions.js?v=71"></script>
 <script src="src/src/srcfiles/defs.computer.js?v=51"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
@@ -8550,7 +8555,7 @@ body {
 <!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
      player-facing release history. Pure data, no dependencies, grouped with
      the other defs.* files for the same reason defs.dreams.js is. -->
-<script src="src/src/srcfiles/defs.patchnotes.js?v=33"></script>
+<script src="src/src/srcfiles/defs.patchnotes.js?v=34"></script>
 <!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
      WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
      ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
@@ -8807,7 +8812,8 @@ body {
      in the same change. -->
 <script src="src/src/srcfiles/projects.js?v=3"></script>
 <script src="src/src/srcfiles/books.js?v=1"></script>
-<script src="src/src/srcfiles/games.js?v=1"></script>
+<script src="src/src/srcfiles/games.js?v=2"></script>
+<script src="src/src/srcfiles/darts.js?v=1"></script>
 <script src="src/src/srcfiles/render.js?v=111"></script>
 <!-- Night Scene Phase 3b: the Living Tableau's PAINTER. After render.js
      (shares its rules: idempotent, no state mutation, no rolls) and after
@@ -8815,6 +8821,7 @@ body {
      in dev/verify/loadgame.js's ORDER — it is pure view code, and that
      loader deliberately stops before the render layer, exactly as
      render.spritestudio.js does. -->
+<script src="src/src/srcfiles/render.games.js?v=1"></script>
 <script src="src/src/srcfiles/render.nightscene.js?v=1"></script>
 <script src="src/src/srcfiles/render.computer.js?v=82"></script>
 <!-- Avatars & Sprite Studio Phase 4: the studio's verbs and its screens.

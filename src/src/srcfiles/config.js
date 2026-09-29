@@ -4872,6 +4872,9 @@ const GAME_DEFS = {
   },
   darts: {
     id: 'darts', label: 'Darts', anchors: ['dartboard'], minutes: 25, skillTag: 'gaming',
+    // Phase 2: a real timing game (darts.js + render.games.js). Two games on the one board.
+    minigame: 'darts',
+    modes: [{ id: '301', label: '301', note: 'count down to exactly zero' }, { id: 'clock', label: 'Around the Clock', note: '1 to 20, then the bull' }],
     intro: ['You take turns at the oche, trading insults and arrows.', '{name} steps up first and throws like they mean it.'],
     win: { close: ['You hit the double you needed with your last dart. {name} throws their arm up in disbelief.', 'You finish it on the very last throw.'], blowout: ['You are done before {name} has got started.', 'Three darts, all in the treble. {name} stares at the board.'] },
     lose: { close: ['{name} finishes on the last dart, just ahead of you.', 'You miss the double twice. {name} does not miss it.'], blowout: ['{name} is in a different league tonight.', 'Every dart of {name}\'s goes exactly where it was aimed.'] },

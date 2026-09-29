@@ -103,10 +103,10 @@ const plan = J(`(() => {
   const line = gameMatchNarration(g, p1);
   // over many seeds: the mix
   let wins = 0, close = 0, blow = 0, n = 300;
-  for (let i = 0; i < n; i++) { g.meta.clock.minutes = 600 + i; const p = gamePlanMatch(g, 'darts', A, 'brag', 0); if (p.playerWon) wins++; if (p.grade === 'close') close++; if (p.grade === 'blowout') blow++; }
+  for (let i = 0; i < n; i++) { g.meta.clock.minutes = 600 + i; const p = gamePlanMatch(g, 'pool', A, 'brag', 0); if (p.playerWon) wins++; if (p.grade === 'close') close++; if (p.grade === 'blowout') blow++; }
   const stake = gamePlanMatch(g, 'pool', A, 'iou', 10);
   const cold = (() => { const h = __mk(); const B = __ids(h)[1]; h.npcs[B].relPlayer = { ...h.npcs[B].relPlayer, affection: -0.5, tension: 0.6 }; return gamePlanMatch(h, 'pool', B, 'iou', 10); })();
-  return { same, line, pWin: gameWinChance(g, A, 'darts'), winRate: wins / n, close: close / n, blow: blow / n, stakeId: stake.stakeId, amt: stake.amount, coldStake: cold.stakeId, hasName: /Mira/.test(line) && !/[{}]/.test(line), minutes: p1.minutes };
+  return { same, line, pWin: gameWinChance(g, A, 'pool'), winRate: wins / n, close: close / n, blow: blow / n, stakeId: stake.stakeId, amt: stake.amount, coldStake: cold.stakeId, hasName: /Mira/.test(line) && !/[{}]/.test(line), minutes: p1.minutes };
 })()`);
 check('the same save, day and count plays the same match, and the line names the opponent with no placeholder left', plan.same && plan.hasName && plan.minutes === 35, plan.line);
 check('over many matches the win rate tracks the chance, and there are close ones and walkovers', Math.abs(plan.winRate - plan.pWin) < 0.1 && plan.close > 0.25 && plan.blow > 0.05, JSON.stringify(plan));
@@ -236,7 +236,7 @@ const pr = J(`(() => {
 check('no line before a match; then who has been beating whom, and when it is level', pr.none === null && /beaten the player 1 time at pool/.test(pr.lost) && /dead level/.test(pr.level) && /player has beaten Mira 2 times/.test(pr.ahead), JSON.stringify(pr));
 {
   const llm = srcOf('llm.js'), html = fs.readFileSync(path.join(SRC, '..', '..', '..', 'index.html'), 'utf8'), g = srcOf('games.js'), render = srcOf('render.js');
-  check('wired in: the prompt reads it, index.html loads it, the picker exists; games.js never touches the shared rng', /gamesPromptLine\(gameState, npc\.id\)/.test(llm) && /srcfiles\/games\.js\?v=\d+/.test(html) && /function openChoicePicker\(/.test(render) && !/\brng\(\)/.test(g.replace(/const rng = seededRng[\s\S]*?const grade/, '')) && !/Math\.random/.test(g));
+  check('wired in: the prompt reads it, index.html loads it, the picker exists; games.js never touches the shared rng', /gamesPromptLine\(gameState, npc\.id\)/.test(llm) && /srcfiles\/games\.js\?v=\d+/.test(html) && /function openChoicePicker\(/.test(render) && (g.match(/\brng\(\)/g) || []).length === 2 && g.indexOf('rng()') > g.indexOf('function gamePlanMatch(') && g.indexOf('rng()') < g.indexOf('function gameMatchNarration(') && !/Math\.random/.test(g));
   const vocab = /\b(church|christ|god|pray|prayer|holy|sacred|bless|angel|saint|bible|easter|hymn|worship|faith|religio)/i;
   const T = api('JSON.stringify([GAME_DEFS, GAMES_TUNING])');
   check('R1: no religion in the games tables', !vocab.test(T), (T.match(vocab) || [''])[0]);
