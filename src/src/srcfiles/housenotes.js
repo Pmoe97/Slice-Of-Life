@@ -394,6 +394,10 @@ function houseNoteMotives(gs, npcId, day) {
   // bake in progress in this kitchen today. typeof-guarded: projects.js loads
   // after this file.
   if (typeof projectNoteMotives === 'function') out.push(...projectNoteMotives(gs, npcId, day));
+  // F2 (0.14.5): the calendar (a birthday, a holiday, decorations to come down) and a show they
+  // are waiting on you for. typeof-guarded: traditions.js and tv.js load around this file.
+  if (typeof occasionNoteMotives === 'function') out.push(...occasionNoteMotives(gs, npcId, day));
+  if (typeof tvNoteMotives === 'function') out.push(...tvNoteMotives(gs, npcId, day));
   return out;
 }
 
@@ -514,6 +518,33 @@ function resolveHouseNotesTick(gs, npcUpdates, activeNpcIds, minutesThisTick) {
 // on a note of yours — who has seen it. Three attribution cases written out
 // rather than composed from a fragment ("A note, in Hana:" is what a
 // `${name}` slot produces, and it is wrong).
+// F4 (0.14.5): the notes on the fridge, for the conversation prompt (llm.js's buildNpcBlockV2). Their own
+// note if it is still up (and whether you have read it), plus — when you are standing in the kitchen —
+// up to two others, so "did you see my note?" and "who left that?" have an answer. Pure.
+function houseNotesPromptLine(gs, npcId) {
+  const npc = gs?.npcs?.[npcId];
+  if (!npc || npc.residency?.status !== 'resident') return null;
+  const room = HOUSE_NOTE_TUNING.npcWriteRoom;
+  const notes = notesInRoom(gs, room).filter(n => n.meta && n.meta.text);
+  const mine = notes.filter(n => n.meta.authorId === npcId);
+  const inKitchen = gs?.player?.location === room;
+  const others = inKitchen ? notes.filter(n => n.meta.authorId !== npcId).slice(-2) : [];
+  if (!mine.length && !others.length) return null;
+  const name = npc.bible?.name || 'They';
+  const clip = (t) => { const s = String(t).replace(/\s+/g, ' ').trim(); return s.length > 90 ? s.slice(0, 87) + '...' : s; };
+  const parts = [];
+  for (const n of mine.slice(-2)) {
+    const seen = noteSeenCount(n, 'player') > 0;
+    const to = n.meta.addressedTo === 'player' ? ' for the player' : '';
+    parts.push(`${name}'s note${to} is still on the fridge ("${clip(n.meta.text)}"); the player ${seen ? 'has read it' : 'has not read it yet'}.`);
+  }
+  for (const n of others) {
+    const who = n.meta.authorId === 'player' ? 'the player' : (gs.npcs?.[n.meta.authorId]?.bible?.name || 'someone');
+    parts.push(`A note from ${who} is up too: "${clip(n.meta.text)}".`);
+  }
+  return `[Fridge]: ${parts.join(' ')}`;
+}
+
 function noteReadingText(gs, note) {
   const m = note?.meta || {};
   const authorId = m.authorId;

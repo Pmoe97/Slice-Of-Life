@@ -971,6 +971,23 @@ function tvStreamCardMeta(gs, showId) {
   return bits.join(' · ');
 }
 
+// House Notes F2 (0.14.5): "DON'T watch {show} without me" — a roommate you've been watching a show
+// with, level with you on it, with a new episode out. Grounded in world.tv.together. Pure.
+function tvNoteMotives(gs, npcId, day) {
+  const npc = gs?.npcs?.[npcId];
+  const together = tvRead(gs)?.together?.[npcId];
+  if (!npc || npc.residency?.status !== 'resident' || !together) return [];
+  if ((npc.relPlayer?.affection || 0) < (HOUSE_NOTE_TUNING.warmMinAffection || 0)) return [];
+  for (const showId of Object.keys(together).sort()) {
+    const def = tvShowDef(showId);
+    if (!def || typeof together[showId] !== 'number' || day - together[showId] > TV_TUNING.activeDays) continue;
+    const p = tvProgress(gs, 'player', showId);
+    if (p < 1 || tvProgress(gs, npcId, showId) !== p || p >= tvReleasedCount(def, day)) continue;
+    return [{ motive: 'watch_wait', vars: { show: def.label, ep: tvEpisodeLabel(def, p + 1) }, addressedTo: 'player' }];
+  }
+  return [];
+}
+
 // --- Watch parties, movie nights, Chatter (What's On D11/D13/D14, 0.14.5) --------
 
 // The live watch-party commitment (a hangout in the living room marked `watchParty`), or null.

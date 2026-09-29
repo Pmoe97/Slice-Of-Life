@@ -4515,6 +4515,44 @@ const NOTE_TEMPLATES = {
     'meme-laden': ['the kitchen is a bakery now. no refunds', 'me vs {work}: round who even knows'],
     default: ['Baking experiment in progress. The oven is spoken for.', "If the kitchen smells amazing, that's my baking. You're welcome."],
   },
+  // House Notes F2 (0.14.5): the fridge as the house's noticeboard for the calendar. {who} is a
+  // housemate's name and {when} "today"/"tomorrow"/"on Thursday"-style words; {label} an occasion.
+  birthday_soon: {
+    terse: ["{who}'s birthday {when}. Card's in the drawer. Sign it.", "{who}'s birthday {when}. Don't forget."],
+    'emoji-heavy': ["🎂 {who}'s birthday is {when} 🎉 card's in the drawer, sign it 🖊️", "{who}'s birthday {when}!! 🎈 do NOT forget 🙏"],
+    'all-lowercase': ["{who}'s birthday is {when}. card's in the drawer, please sign it", "reminder that it's {who}'s birthday {when}. sign the card"],
+    'properly-punctuated': ["A reminder that {who}'s birthday is {when}. There is a card in the drawer; please sign it.", "It is {who}'s birthday {when}. Please remember to sign the card."],
+    'stream-of-consciousness': ["ok so {who}'s birthday is {when} and i have bought a card and if you all sign it i will love you forever", "{who}'s birthday {when}, card in the drawer, i cannot be the only one who remembers, sign it"],
+    'meme-laden': ["{who}'s birthday {when}. sign the card or face the consequences", "{who} is aging {when}. card in the drawer. participation is mandatory"],
+    default: ["It's {who}'s birthday {when}. There's a card in the drawer, sign it.", "Reminder: {who}'s birthday {when}. Card in the drawer."],
+  },
+  holiday_soon: {
+    terse: ['{label} {when}. Who is cooking?', '{label} {when}. Plans?'],
+    'emoji-heavy': ['{label} {when}!! 🎉 who is cooking?? 🍳', '{label} is {when} 🥳 we need a plan 📝'],
+    'all-lowercase': ["{label} is {when}. we should decide who's cooking", 'so {label} is {when}. anyone got plans? i can cook if someone does dishes'],
+    'properly-punctuated': ['{label} is {when}. Could we decide who is cooking, and what?', 'A note to say that {label} is {when}. Shall we plan something?'],
+    'stream-of-consciousness': ['{label} is {when} and i have Thoughts about food and nobody has said anything so here we are', "{label} {when}. i'm not panicking. i'd like a plan. panicking a little"],
+    'meme-laden': ['{label} {when}. the flat needs a plan and a snack budget', '{label} incoming {when}. whoever wants dinner, sign below'],
+    default: ["{label} is {when}. Let's work out who's cooking.", '{label} {when} - anyone got plans?'],
+  },
+  decor_down: {
+    terse: ['{label} decorations come down this weekend.', 'Decorations coming down. {label} is over.'],
+    'emoji-heavy': ['{label} is over 😭 decorations come down this weekend 📦', 'taking the {label} decorations down soon 🥲 help?'],
+    'all-lowercase': ["the {label} decorations are coming down this weekend. help if you're around", '{label} is over. decorations come down soon, sorry'],
+    'properly-punctuated': ['The {label} decorations will come down this weekend. Help would be appreciated.', 'Now that {label} is over, the decorations will be taken down soon.'],
+    'stream-of-consciousness': ["the {label} decorations have been up long enough that i've stopped seeing them, which means it's time, this weekend", '{label} is over and the decorations know it. taking them down this weekend, join me'],
+    'meme-laden': ['{label} decorations: retirement party this weekend', 'the {label} decorations have entered their final form: a box'],
+    default: ['The {label} decorations come down this weekend.', '{label} is over. Decorations come down soon.'],
+  },
+  watch_wait: {
+    terse: ["Don't watch {show} without me.", "{show}: wait for me."],
+    'emoji-heavy': ["DON'T watch {show} without me 🙅📺", "{show} tonight?? 📺 wait for me 🍿"],
+    'all-lowercase': ["don't watch {show} without me. i mean it", "there's a new {show} and i'm waiting for you. don't cheat"],
+    'properly-punctuated': ["Please do not watch {show} without me. There is a new episode, and I am waiting.", 'A new episode of {show} is out. Kindly wait for me.'],
+    'stream-of-consciousness': ["there's a new {show} and i know you and i know you'll watch it alone so i'm writing this down: wait for me", "do not watch {show} without me i will find out i always find out"],
+    'meme-laden': ["{show}: new episode. betrayal will not be tolerated", "the pact: we watch {show} together. sign here"],
+    default: ["Don't watch {show} without me - there's a new one.", 'New {show} is out. Wait for me.'],
+  },
 };
 
 // Replies scrawled on the bottom of someone else's note, keyed by what kind
@@ -4625,6 +4663,12 @@ const HOUSE_NOTE_TUNING = {
     // finish gets congratulated rather than apologised to.
     project_done:   { about: 'some good news', proud: true, replyKind: 'news' },
     project_baking: { about: 'the oven',       proud: true, replyKind: 'plain' },
+    // House Notes F2 (0.14.5): the calendar and the TV, on the fridge. The first three are for the
+    // whole flat (a friendly, proud-rate note); watch_wait is yours (addressed, warm).
+    birthday_soon: { about: "{who}'s birthday", proud: true, replyKind: 'plain' },
+    holiday_soon:  { about: '{label}',          proud: true, replyKind: 'plain' },
+    decor_down:    { about: 'the decorations',  proud: true, replyKind: 'plain' },
+    watch_wait:    { about: '{show}',           warm: true, replyKind: 'plain' },
   },
   // How recently the thing a note is about must have happened (days back
   // from today, inclusive) — a noise complaint from last night, a repair

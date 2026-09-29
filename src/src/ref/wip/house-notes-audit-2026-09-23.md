@@ -130,3 +130,7 @@ c2 fire list).
   roommates reading and replying through real `advanceAndResolveMinutes`,
   the note re-drawing the eye). Not yet checked: that a roommate actually
   brings a note up in conversation with a live model.
+
+## Follow-ups built 2026-09-29 (0.14.5)
+
+**F2 (occasions tie-ins)** and **F4 (notes in the conversation prompt)** are built (the user answered "E — all keep"). F2: four new motives read off state other systems keep — `birthday_soon` (a housemate's birthday in a day or two, `occasionNoteMotives` in traditions.js via `daysUntilBirthday`), `holiday_soon` (a major holiday tomorrow or the day after), `decor_down` (decorations up for an occasion that is over, `decorToTakeDown`), and `watch_wait` ("don't watch {show} without me", `tvNoteMotives` in tv.js, grounded in `world.tv.together` — the TV audit's F2). The first three are for the whole flat at the proud-note rate; `watch_wait` is a warm note addressed to you. Each has all seven voices in `NOTE_TEMPLATES`. F4: `houseNotesPromptLine` (housenotes.js) adds a `[Fridge]` line to the NPC prompt: their own note if it is still up and whether you have read it, plus — when you stand in the kitchen — up to two others. `verify-house-notes-f2.js` 13/0; `verify-house-notes.js` still 90/0. Still open: F1, F3, F5, F6, F7.

@@ -8504,7 +8504,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=213"></script>
+<script src="src/src/srcfiles/config.js?v=214"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -8550,7 +8550,7 @@ body {
 <!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
      player-facing release history. Pure data, no dependencies, grouped with
      the other defs.* files for the same reason defs.dreams.js is. -->
-<script src="src/src/srcfiles/defs.patchnotes.js?v=31"></script>
+<script src="src/src/srcfiles/defs.patchnotes.js?v=32"></script>
 <!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
      WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
      ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
@@ -8680,7 +8680,7 @@ body {
      and called by sim.js at runtime only. -->
 <script src="src/src/srcfiles/rumination.js?v=15"></script>
 <script src="src/src/srcfiles/prompt.js?v=20"></script>
-<script src="src/src/srcfiles/llm.js?v=60"></script>
+<script src="src/src/srcfiles/llm.js?v=61"></script>
 <!-- CONCEPT — the character-concept engine (description -> validated draft).
      AI-Assisted Character Generation Phase 2. Sits after llm.js (whose prompt
      conventions it follows) and before the UI layer that calls it. Reads
@@ -8778,7 +8778,7 @@ body {
 <script src="src/src/srcfiles/occasions.js?v=7"></script>
 <!-- traditions.js (occasions-and-holidays-plan.md P4-P8): what people DO on the
      calendar's days. Runtime calls only; registered in dev/verify/loadgame.js. -->
-<script src="src/src/srcfiles/traditions.js?v=2"></script>
+<script src="src/src/srcfiles/traditions.js?v=3"></script>
 <!-- Seasons & weather (seasons-and-weather-plan.md Phase 1): daily weather,
      the outdoor temperature curve, daylight and the sky line. Pure and
      derived; runtime calls only (temperature.js/llm.js/render.js typeof-guard
@@ -8789,14 +8789,14 @@ body {
      Pure domain logic; sim.js (resolveTick), defs.actions.js, render.js and
      ui.js reach it at runtime only. Registered in dev/verify/loadgame.js's
      ORDER in the same change (the rumination.js scar). -->
-<script src="src/src/srcfiles/housenotes.js?v=4"></script>
+<script src="src/src/srcfiles/housenotes.js?v=5"></script>
 <!-- What's On (0.14.2): the house TV has shows on it — seasons that air, episodes
      with something in them, roommates who follow shows by taste, one living-room
      screen everyone shares, and spoilers. Pure domain logic; sim.js (resolveTick),
      defs.actions.js, effects.js, computer.js, llm.js, render.js and ui.js reach it
      at runtime only. Registered in dev/verify/loadgame.js's ORDER in the same
      change. -->
-<script src="src/src/srcfiles/tv.js?v=2"></script>
+<script src="src/src/srcfiles/tv.js?v=3"></script>
 <!-- Side Projects (0.14.2): each roommate has something of their own on the go —
      a song on guitar, a painting, a novel, a scarf — drawn from their interests.
      You hear them get better, they finish (skill for real, work on the walls)

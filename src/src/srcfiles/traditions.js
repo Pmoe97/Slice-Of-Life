@@ -913,6 +913,41 @@ function saleDayMultiplier(gs) {
   return on ? TRADITION_TUNING.sale.multiplier : 1;
 }
 
+// --- House Notes F2 (0.14.5): the fridge as the house's calendar -------------------------------
+
+function tradWhenWords(n) {
+  return n <= 0 ? 'today' : n === 1 ? 'tomorrow' : `in ${n} days`;
+}
+
+// Notes this resident has a reason to leave about what is coming: a housemate's birthday in a day or two
+// (the card's in the drawer), a major holiday in a day or two (who's cooking), the decorations for an
+// occasion that is over (they come down this weekend). Reads state other systems keep. Pure.
+function occasionNoteMotives(gs, npcId, day) {
+  const npc = gs?.npcs?.[npcId];
+  if (!npc || npc.residency?.status !== 'resident') return [];
+  const out = [];
+  if (typeof daysUntilBirthday === 'function') {
+    for (const id of tradResidents(gs)) {
+      if (id === npcId) continue;
+      const n = daysUntilBirthday(gs.npcs[id], day);
+      if (n >= 1 && n <= 2) { out.push({ motive: 'birthday_soon', vars: { who: tradName(gs, id), when: tradWhenWords(n) } }); break; }
+    }
+  }
+  if (typeof occasionsOnDay === 'function') {
+    for (const ahead of [1, 2]) {
+      const o = occasionsOnDay(day + ahead).find(x => x.night === 1 && x.def.closure === 'major');
+      if (o && !occasionsOnDay(day).some(x => x.id === o.id)) { out.push({ motive: 'holiday_soon', vars: { label: o.def.label, when: tradWhenWords(ahead) } }); break; }
+    }
+  }
+  if (typeof decorationsUpIn === 'function' && typeof decorToTakeDown === 'function') {
+    for (const { occasionId } of decorationsUpIn(gs, null, day)) {
+      const room = OCCASION_DECOR[occasionId]?.room;
+      if (room && decorToTakeDown(gs, day, room) === occasionId) { out.push({ motive: 'decor_down', vars: { label: OCCASION_DEFS[occasionId].label } }); break; }
+    }
+  }
+  return out;
+}
+
 // --- Prompt lines --------------------------------------------------------------------------------
 
 // Extra [Occasion]-adjacent lines for one NPC: their costume, the lanterns in the
