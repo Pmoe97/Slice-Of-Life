@@ -693,7 +693,10 @@ function openCommitment(gameState, npcId, choice) {
     durationMinutes = choice.durationMinutes ?? resolved.durationMinutes;
     anchor = resolved.anchor;
   } else {
-    durationMinutes = DRIVE_DEFS[choice.driveId]?.utility?.holdMinutes || CLOCK.tickMinutes;
+    // An explicit durationMinutes wins (a chore the player asked for is held
+    // for its own action's time — drives.js tryPendingChore); every drive
+    // candidate passes none and keeps its def's holdMinutes, as before.
+    durationMinutes = choice.durationMinutes ?? (DRIVE_DEFS[choice.driveId]?.utility?.holdMinutes || CLOCK.tickMinutes);
     anchor = { roomId: choice.roomId ?? null, objId: null, point: null };
   }
   // Phase 4 (physical layer, D8/D9/C4): a commitment with a resolvable

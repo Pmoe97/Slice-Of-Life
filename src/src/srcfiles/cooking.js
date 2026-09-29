@@ -460,9 +460,3 @@ function cookFlawLines(outcome) {
   return (outcome?.flaws || []).map(f => COOK_TUNING[f]?.line || f);
 }
 
-// A lowercase narration fragment for the action's log line.
-function cookFlawTail(flaw) {
-  const line = COOK_TUNING[flaw]?.line;
-  if (!line) return 'it came out a little rough';
-  return line.charAt(0).toLowerCase() + line.slice(1);
-}

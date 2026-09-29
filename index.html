@@ -8485,7 +8485,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=205"></script>
+<script src="src/src/srcfiles/config.js?v=206"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -8500,7 +8500,7 @@ body {
      Registered in dev/verify/loadgame.js's ORDER in the same commit. -->
 <script src="src/src/srcfiles/fields.js?v=1"></script>
 <script src="src/src/srcfiles/defs.world.js?v=53"></script>
-<script src="src/src/srcfiles/defs.actions.js?v=64"></script>
+<script src="src/src/srcfiles/defs.actions.js?v=65"></script>
 <script src="src/src/srcfiles/defs.computer.js?v=50"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
@@ -8531,7 +8531,7 @@ body {
 <!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
      player-facing release history. Pure data, no dependencies, grouped with
      the other defs.* files for the same reason defs.dreams.js is. -->
-<script src="src/src/srcfiles/defs.patchnotes.js?v=25"></script>
+<script src="src/src/srcfiles/defs.patchnotes.js?v=26"></script>
 <!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
      WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
      ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
@@ -8568,17 +8568,17 @@ body {
 <!-- Inventory overhaul Phase 1: pure inventory query/sort/describe helpers
      (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
      time) and before render.js/ui.js, which call it at runtime. -->
-<script src="src/src/srcfiles/inventory.js?v=25"></script>
+<script src="src/src/srcfiles/inventory.js?v=26"></script>
 <script src="src/src/srcfiles/effects.js?v=48"></script>
 <!-- Food-overhaul Phase 5: the pure cooking engine (cooking.js) — after
      effects.js (uses clamp) and items.js (makePlate/freshnessOf); its
      functions are called at runtime by defs.actions.js and render.js. -->
-<script src="src/src/srcfiles/cooking.js?v=4"></script>
+<script src="src/src/srcfiles/cooking.js?v=5"></script>
 <script src="src/src/srcfiles/taste.js?v=1"></script>
-<script src="src/src/srcfiles/drives.js?v=52"></script>
+<script src="src/src/srcfiles/drives.js?v=53"></script>
 <!-- NPC utility scoring (npc-cognition-plan.md). Loads after drives.js: it
      reuses driveGateValue / isOnCooldown / DRIVE_COOLDOWN_KEY from it. -->
-<script src="src/src/srcfiles/cognition.js?v=34"></script>
+<script src="src/src/srcfiles/cognition.js?v=35"></script>
 <!-- NPC initiative (npc-initiative-plan.md Phase 3). Loads after cognition.js:
      scoreCandidates calls scoreOvertures, and evaluateDrives calls the writers
      here for the tick it wins. -->
@@ -8780,7 +8780,7 @@ body {
      ui.js reach it at runtime only. Registered in dev/verify/loadgame.js's ORDER
      in the same change. -->
 <script src="src/src/srcfiles/projects.js?v=3"></script>
-<script src="src/src/srcfiles/render.js?v=107"></script>
+<script src="src/src/srcfiles/render.js?v=108"></script>
 <!-- Night Scene Phase 3b: the Living Tableau's PAINTER. After render.js
      (shares its rules: idempotent, no state mutation, no rolls) and after
      actionwindow.js, whose awShow/awHide it calls to claim the overlay. NOT
@@ -8881,8 +8881,8 @@ body {
      Registered in BOTH this list and loadgame.js's ORDER, same commit. -->
 <script src="src/src/srcfiles/platform.js?v=6"></script>
 <script src="src/src/srcfiles/aspirations.js?v=2"></script>
-<script src="src/src/srcfiles/asks.js?v=22"></script>
-<script src="src/src/srcfiles/ui.js?v=185"></script>
+<script src="src/src/srcfiles/asks.js?v=23"></script>
+<script src="src/src/srcfiles/ui.js?v=186"></script>
 <script src="src/src/srcfiles/ui.computer.js?v=69"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),

@@ -166,12 +166,12 @@ const cook = J(`(() => {
   return { dirtLine, before, after };
 })()`);
 check("buildCookEffects emits a real ADD_ROOM_DIRT line for the player's actual room", cook.dirtLine === `ADD_ROOM_DIRT kitchen ${J('DIRT_TUNING.cookingDirtPerCook')}`, JSON.stringify(cook));
-// buildCookEffects' OWN returned lines also include `EAT_ITEM cooked_meal 1
-// <into>` (self.cook auto-eats what it just made) — and since section 5
-// proved applyEatItem is a real dirt source too, applying the FULL real line
-// set correctly bumps kitchen dirt by cooking AND eating, not cooking alone.
-// That double bump is the correct emergent behavior, not a test artifact.
-check('applying the real returned lines raises kitchen dirt by cooking + the auto-eat that follows it', Math.abs(cook.after - cook.before - J('DIRT_TUNING.cookingDirtPerCook') - J('DIRT_TUNING.eatingDirtPerAct')) < 1e-9, JSON.stringify(cook));
+// 2026-09-28 (user): cooking no longer auto-eats a serving — the whole batch
+// goes into the bag and eating is its own verb. So applying the real returned
+// lines raises kitchen dirt by cooking ALONE; the eating bump (section 5's
+// applyEatItem) now lands when the player actually eats. (This check used to
+// expect cooking + the auto-eat; the behaviour changed on purpose.)
+check('applying the real returned lines raises kitchen dirt by cooking alone (nothing is eaten at the stove)', Math.abs(cook.after - cook.before - J('DIRT_TUNING.cookingDirtPerCook')) < 1e-9, JSON.stringify(cook));
 
 // ---------------------------------------------------------------- 7
 console.log('7. self.clean — prepare/buildEffects/narration + roomHasDirt gate + the all_purpose_cleaner consumption path');

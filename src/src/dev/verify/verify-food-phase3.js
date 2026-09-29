@@ -131,7 +131,9 @@ async function main() {
 
 console.log('\n1. Cook-from-storage (D20)');
 
-await check('a pantry-only pasta cooks with an empty bag; the plate lands in the fridge, one serving auto-eaten',
+// 2026-09-28 (user): the whole batch goes into the BAG and nothing is eaten
+// at the stove (it used to land in the fridge with one serving auto-eaten).
+await check('a pantry-only pasta cooks with an empty bag; the whole batch lands in the bag, nothing eaten',
   api(`(() => {
     const h = house('p3-d20', 1);
     const pantry = objIn(h, 'pantry');
@@ -145,13 +147,14 @@ await check('a pantry-only pasta cooks with an empty bag; the plate lands in the
     if (!pasta) return 'pasta not available from pantry-only stock';
     const lines = buildCookEffects(ctx, { recipe: pasta });
     applyLines(h, lines);
-    const stack = plateStack(h, fridge.id);
+    const stack = plateStack(h, null);
     const plate = stack?.meta?.plate;
     const pantryLeft = stackQty(pantry.contents, 'pasta_dry') + stackQty(pantry.contents, 'tomato_sauce');
     return !!plate && plate.recipeKey === 'pasta'
-      && plate.servings.total === 3 && plate.servings.left === 2
+      && plate.servings.total === 3 && plate.servings.left === 3
       && plate.wasReheated === false
-      && stackServingsLeft(stack) === 2
+      && stackServingsLeft(stack) === 3
+      && !(fridge.contents || []).some(s => s?.meta?.plate)
       && pantryLeft === 2
       && stackQty(h.player.inventory, 'pasta_dry') === 0;
   })()`));

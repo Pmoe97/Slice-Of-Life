@@ -2586,10 +2586,14 @@ function expandCookLeaveLine(line, ctx) {
 
 // Produces the recipe's full batch as a PLATE INSTANCE (COOKING's
 // buildPlate — the engine's snapshot: quality/grade/kcal/flaws derived once
-// and never re-derived), spawns it into the fridge (bag fallback for the
-// pre-fridge early game), then auto-eats one serving immediately (matching
-// the old self.cook's "click once, hunger restored" feel — the rest is
-// leftovers). Fats/seasonings drawn by the plan are consumed on the side
+// and never re-derived) and puts the WHOLE batch in the player's bag.
+// Nothing is eaten: cooking makes food, eating is its own verb. (User,
+// 2026-09-28: "When you cook a meal I do not want you to consume a serving
+// right away, and I want it to go into your inventory." It used to land in
+// the fridge with one serving auto-eaten.) The bag is where the player's
+// gift list, Set the Table, eating and DoorDrop orders all find it first;
+// putting it in the fridge to keep longer is the player's call.
+// Fats/seasonings drawn by the plan are consumed on the side
 // (fats via CONSUME_ITEM, seasonings via TRANSFORM_ITEM — both trusted
 // pipeline verbs). Re-derives the LIVE gameState after prepare()'s modal
 // await (a heartbeat/checkpoint can have replaced currentGameState while
@@ -2611,13 +2615,9 @@ function buildCookEffects(ctx, prepared) {
     const verb = r.kind === 'fat' ? 'CONSUME_ITEM' : 'TRANSFORM_ITEM';
     lines.push(...reagentConsumeLines(verb, reagentId, r.qtyPerUse, sources));
   }
-  // The batch lives where it keeps best and where the leftovers stay
-  // reachable: the fridge. No fridge yet (early game) → the player's bag.
-  const fridge = findObjectByDefIdLive(gs, 'fridge');
-  const into = fridge ? fridge.id : 'player';
+  // The whole batch, into the bag — see the header above.
   const metaJson = JSON.stringify({ plate, cohort: now, acquiredDay: now });
-  lines.push(`COOK_STEP cooked_meal 1 ${into} ${metaJson}`);
-  lines.push(`EAT_ITEM cooked_meal 1 ${into}`);
+  lines.push(`COOK_STEP cooked_meal 1 player ${metaJson}`);
   // Food-overhaul Phase 6 (D14): a plate that clears the CURRENT auto-cook
   // threshold records its mastery proof — instant cook for this recipe
   // unlocks forever (world.autoCookCleared, via the AUTO_COOK_UNLOCK verb).
@@ -2666,22 +2666,15 @@ function reagentConsumeLines(verb, reagentId, qty, sources) {
   return lines;
 }
 
+// What cooking says: what you now have, and its grade — nothing more (user,
+// 2026-09-28: "not overly explain, just like 'You now have [meal name].
+// (Grade [grade])'"). The name is the plate's own label, the one the bag
+// shows. The same line for an interactive cook and an auto-cook.
 function cookNarration(ctx, prepared) {
   if (!prepared?.recipe) return 'You rummage through the kitchen but come up empty-handed.';
-  const recipe = prepared.recipe;
-  const leftover = (recipe.servings || 1) > 1;
-  let tail = 'It smells good.';
+  const name = prepared.plate?.label || prepared.recipe.label || 'a meal';
   const grade = prepared.plate?.grade;
-  const flawLines = (prepared.plate?.flaws || []).map(f => cookFlawTail(f));
-  if (grade) {
-    tail = `It comes out ${grade}${flawLines.length ? ` — ${flawLines[0]}.` : '.'}`;
-  }
-  // Food-overhaul Phase 6 (D14): the auto-cook path has its own voice — it
-  // is NOT a fresh cook, it's a recipe you've proven you know, on autopilot.
-  if (prepared.auto) {
-    return `You put together ${recipe.label.toLowerCase()} on autopilot — you've made it enough times that it barely needs you${flawLines.length ? ` (${flawLines[0]})` : '.'}`;
-  }
-  return `You cook ${recipe.label.toLowerCase()}. ${tail}` + (leftover ? " There's enough for leftovers." : '');
+  return `You now have ${name}.${grade ? ` (Grade ${grade}).` : ''}`;
 }
 
 // --- self.reheat's runtime logic (food-overhaul Phase 3, D26/D27/D29) ---
