@@ -1,7 +1,9 @@
 # Occasions & Holidays — a calendar worth living through
 
-Status: **in progress — Phases 1–3 of 9 built and verified (2026-09-22/23); Phase 4 next.**
-Last updated 2026-09-22.
+Status: **Phases 1–8 built and verified; Phase 9 (close-out audit) written below (2026-09-29).**
+Phases 4–8 were built in one session (`traditions.js`, `verify-traditions.js` 72). Two
+traditions ride the TV plan's follow-ups and are noted there: `horror_night`, `cozy_movie`.
+Last updated 2026-09-29.
 
 Companions:
 - `SEASONS-AND-OCCASIONS-ROADMAP.md` (same folder) — the umbrella. **R1–R12
@@ -28,7 +30,105 @@ table near the bottom, as the very last thing you do each session.
 
 ## Handoff — read this first
 
-**Resume at:** Phase 4 (gifts, cards & envelopes). Phases 1–3 are done.
+**Nothing to resume** except the two TV-riding traditions (see "Phases 4–8, 2026-09-29" →
+"Not built here"). Phases 1–8 are done; the close-out audit is the section after this one.
+
+### Phases 4–8 (2026-09-29 — one session, `traditions.js`)
+
+**The shape.** One new module, `traditions.js` (index.html right after `occasions.js`; loader
+ORDER too), and one new tuning table, `TRADITION_TUNING` (config.js, every number and every
+authored line; R1-guarded by `verify-traditions.js`). `processTraditionsForDay` runs from
+`processOccasionsForDay` (once per day crossed, live state only). Each tradition id named on an
+`OCCASION_DEFS` row is built by exactly one engine (D17) — `verify-traditions.js` §0 asserts every
+id on every row is handled. The one stored state is `world.occasions.trad` (the once-per-year
+ledger, the lantern count, the hidden eggs, the giving jar, the day's costumes): a *response*, per
+the roadmap's invariant 2 — everything else is derived (R5) and deterministic (R6, a hash of person
+× occasion × year).
+
+- **P4 — gifts (D18).** Midwinter / Valentine's / Spring Festival / New Year's Day / Lantern Nights:
+  the fondest festive free residents (`givers` each) leave you a present in your bag (an item, or a
+  cash "luck envelope"); Valentine's adds signed cards as real notes in your room and ONE unsigned
+  card from a fond, drawn-to-you resident (the secret admirer). The occasion bonus on presents YOU
+  give (`occasionGiftBonusApplies` → `ASK_GIFT`, once per person per occasion — per NIGHT for Lantern
+  Nights), riding the same decision/effects/postEffects seam the birthday bonus uses; the decision
+  gains `occasionGift` only when true, so every other decision keeps its old shape. I deliberately
+  did NOT touch the `gift_to_player` drive (the idle-pastime table is fragile — c1/c2/c3/w6/p4);
+  the same "a fond person gives you something on a gift day" is delivered deterministically at the
+  rollover instead.
+- **P5 — feasts (D19).** The most festive free resident (affinity ≥ 0.55) hosts: a real `meal`
+  commitment (dining table) or `party` commitment (balcony, living room) at the feast's hour, marked
+  `occasion`, everyone invited and you told. sim.js's meal pass (new) and the existing party pass
+  write the attendance ledger `commitment.attended`; `resolveFeasts` pays out at the next rollover
+  (attendee mood and bond, warmth toward you if you came, a memory, the gratitude round, leftovers
+  as a real fridge item, a host's post; a fond host is a little hurt if you skipped a major one).
+  **Known limitation, not new:** the ledger records who the SCHEDULE seated; the first tick of any
+  commitment can still be won by an unrelated drive (the confirmed commitment/drive race, memory
+  `commitment-schedule-drive-race-bug`) — it isn't fixed here (needs a design call) but a 90–150 minute window
+  makes it a one-tick wobble.
+- **P6 — night rituals (D20).** Your verbs, one generated ACTION_DEFS entry per `TRADITION_VERBS`
+  row (a flat chip in the `occasion` group, open only in its window — the occasion, the room, the hours;
+  one trusted effect `OCCASION_RITUAL`): Light the Lantern, Watch the Harvest Moon, Light a
+  Remembrance Candle (your grandfather), Watch the Fireworks, Join the Countdown. The house's half:
+  the countdown fires at the rollover onto New Year's Day with whoever is in the living room or on
+  the balcony (couples kiss; you're in it if you're there, else you hear it through the wall; nobody
+  there → nothing); last night's fireworks and moon-viewing by the festive ones; a festive roommate
+  lights each night's lantern if you don't (`world.occasions.trad.lanterns`), the count reaching the
+  scene line and the prompt. Fireworks are a beat, not a sound signal (no new SIGNAL_DEFS entry).
+- **P7 — playful days (D21).** Fools' Day pranks (playful/chaotic/dramatic residents, a target each,
+  temperament decides if it lands; your Play a Prank verb on whoever is in the room); Color Day
+  (the house's powder fight lowers cast tension, your Start a Powder Fight, forgiveness of real
+  grudges); the Spring Festival egg hunt (a festive roommate hides eggs in four rooms at the
+  rollover; Search for Eggs finds one per room as a real `chocolate_egg`; Dye Eggs on the Eve);
+  Halloween (festive roommates are in costume for the day — a stored flag the prompt reads, NOT a
+  wardrobe outfit type: deviation from the plan's wording, cheaper and the prompt/scene text is the
+  whole payoff; candy bought for the door as a real item; ONE `trick_or_treat` door event at 18:30
+  for three hours that Answer/Ignore the Door verbs resolve — candy out, or a trick; unanswered → a
+  festive housemate covers, else the doorstep gets the trick; Carve a Pumpkin); Giving Week (a couple
+  of warm residents do a kindness each day — a treat, a chore, coins — the jar pays out at the
+  Sharing Feast; Put Coins in the Jar spends your real money).
+- **P8 — the world talking (D22).** Anniversaries (the day you got the keys, each year; a
+  roommate's move-in day via `residency.since`; a couple's via `lastTransitionDay`); holiday Chatter
+  posts by festive residents; a holiday card in the mailbox on a few days (`MAIL_KIND_LABELS.card`);
+  **Sale Day** = a bounded 15% off in `itemPriceNow`, the one price function Nile and QuickCart share;
+  the prompt lines (costume, lanterns, the keys anniversary). Holiday residue for the Dream Engine
+  rides the `occasion_feast` world events (unseen events already feed dreams).
+- **The smaller traditions** (a line, a lift, a bond among whoever took part, a memory, sometimes a
+  post) are one data row each in `TRADITION_TUNING.beats` — brunch, resolutions, the fresh-start clean,
+  date night and the singles' night (by relationship status), sweets, forgiveness (only where a real
+  cast-web grudge exists), chocolate rabbits, no chores, calls to parents/family (a hard history
+  makes it a harder day), flower crowns, the pool, mooncakes, pumpkins, candles/stories/favourite dish
+  (roommates with a loss), the game, fried sweets, cards, cookies, stockings, carols, hot drinks, new
+  clothes, Sale Day bags. Lantern Nights' fried sweets and card games happen on two nights each, not
+  six (no nightly spam).
+- **Verified.** `verify-traditions.js` **72/72**: registration; the R1 vocabulary guard over 322
+  authored strings; every engine; the feast through the REAL `resolveTick` (the ledger) and the
+  payoff through the rollover; the verbs through the real `checkRequirements → prepare →
+  buildEffects → the DSL` pipeline; the door verbs; two full years of rollovers with no exceptions.
+  Two neighbouring harnesses were adjusted on purpose, not weakened: `verify-occasions-work.js`
+  now stubs `processTraditionsForDay` for its Phase-2 mood-isolation check (the engine adds its own
+  moods that morning), and the two loader-order regexes (`verify-occasions`, `verify-weather`) got
+  a wider window. Full sweep 7059 passed / 15 failed → after those fixes the 13 baseline
+  failures only.
+- **Live-verified** in `dev-harness.html` (throwaway Sandbox, three roommates): Midwinter Eve's
+  cookies/stockings/carols in the real log; Midwinter: two presents in the bag, the dinner
+  invitation, a mail card, hot drinks; the dinner recorded its ledger (all three + you) and the
+  next morning's "The Midwinter dinner was a hit", a leftovers stack in the fridge, holiday posts on
+  Chatter; the Light the Lantern chip appeared as a flat chip on Lantern Nights, clicked for real,
+  lit night 2's lantern, and closed.
+- **Not built here.** `horror_night` and `cozy_movie` (the TV plan's F5: they ride `nowPlaying`, done with the
+  TV follow-ups). Costumes as a wardrobe outfit type. Offscreen holiday events as their own
+  `OFFSCREEN_EVENTS` pool (the beat lines cover the same ground). The contractor's crew observing
+  holidays (Q2 — parked, no).
+
+**Waiting on the user** (calls this session made — every one a number or a line in `TRADITION_TUNING`):
+1. Gift day cadence: two givers on Midwinter/Valentine's, one on Spring Festival, two envelopes ($5–$20) on New
+   Year's Day, one small gift a night on Lantern Nights. Too generous? (Presents are free to them.)
+2. The gift bonus sizes: +0.05 (Midwinter, Valentine's), +0.04, +0.03, +0.02 affection.
+3. A feast is proposed only when someone is BOTH festive (≥ 0.55 for the occasion) and free; a major holiday
+   with no such person says nobody has the energy. Fine?
+4. Sale Day: 15% off both shops for the day.
+5. Costumes are a day-long flag (not an outfit); trick-or-treaters come at 18:30 for three hours and a
+   festive housemate covers if you don't answer.
 
 **Phase 3 notes (2026-09-23 — decorations, built and verified):**
 - Built: `OCCASION_DECOR` (config.js — nine sets: Midwinter, Halloween,
@@ -413,12 +513,12 @@ needed) — e.g. `{ decor: { roomId: occId }, lanterns: { lit: n } }`.
 | 1 | **Done** (2026-09-22) | Calendar spine — roster, readers, festivity, narration, prompt date line, Calendar Holidays + Year, HUD badge; `verify-occasions.js` 60, live-verified |
 | 2 | **Done** (2026-09-22) | Holiday work model (R4) — policy per job, roster/volunteer/ask-off/call-out/self, schedule via `scheduleDayTypeFor`, who's-working line, mood, prompt reason; `verify-occasions-work.js` 34, calibrated |
 | 3 | **Done** (2026-09-23) | Decorations — nine sets, the player's Decorate/Take Down chips, festive roommates decorating, lagged takedowns, scene + prompt surfaces, `world.occasions` persisted; `verify-occasions-decor.js` 34, live-verified incl. save/reload |
-| 4 | Not started | Gifts, cards, envelopes |
-| 5 | Not started | Feasts |
-| 6 | Not started | Night rituals |
-| 7 | Not started | Playful days |
-| 8 | Not started | Anniversaries & the world talking |
-| 9 | Not started | Close-out |
+| 4 | **Done** (2026-09-29) | Gifts, cards, envelopes — occasion bonus on your presents; `verify-traditions.js` 72 |
+| 5 | **Done** (2026-09-29) | Feasts — a hosted meal/party commitment, the attendance ledger, the next-morning payoff, leftovers |
+| 6 | **Done** (2026-09-29) | Night rituals — five verbs, the countdown at the rollover, lanterns, fireworks, the moon |
+| 7 | **Done** (2026-09-29) | Playful days — pranks, powder fight, egg hunt, Halloween (door event), Giving Week and its jar |
+| 8 | **Done** (2026-09-29) | Anniversaries, holiday posts and mail, Sale Day, prompt lines |
+| 9 | **Done** (2026-09-29) | Close-out audit (below) |
 
 ## Dependency order
 
@@ -440,6 +540,18 @@ P6's fireworks/moon-viewing read seasons-and-weather P1 if present.
 - **Q4 — Does the player get holiday gig-board effects** (fewer gigs on
   majors, holiday-rate gigs)? D16 says flavor only; the economy invariants
   would need a check before anything more.
+
+### Phase 9 — the close-out audit (2026-09-29)
+
+Every D-number checked against the code (grep + `verify-traditions.js`):
+- **D17** — a tradition is a named hook, one engine each: §0 of the harness asserts every id on every row is handled. ✓
+- **D18** — gift days generalize the birthday bonus: `occasionGiftBonusApplies`/`noteOccasionGift` through ASK_GIFT, once per person per occasion. ✓ (The `gift_to_player` *drive* is deliberately untouched — see P4.)
+- **D19** — feasts are household commitments the most festive free resident proposes: ✓ (a `meal`/`party` commitment marked `occasion`; "bound to `set_meal`" is the existing meal commitment machinery, not the player's cook verb).
+- **D20** — night rituals are timed beats: ✓ the countdown at the rollover with residents in the room; fireworks are a beat plus your verb (no signal); lanterns are a stored per-night state.
+- **D21** — playful days are events with consequences: ✓ pranks by temperament, trick-or-treaters as a `doorEvent` kind, Color Day lowering tension. **Deviation:** costumes are a day flag, not a wardrobe outfit type.
+- **D22** — personal days are occasions: ✓ the keys, move-in and couple anniversaries.
+- **R1** — the guard greps all 322 authored tradition strings for faith vocabulary (and the 153 holiday strings from P1 still pass). ✓ **R2** — participation is festivity for THAT occasion, never identity. ✓ **R6** — every roll is a hash of (person, occasion, year); the harness reruns a house twice and compares. ✓ **R10** — everything happens in the flat; the door and balcony are the outside. ✓
+- Patch Notes: the 0.14.5 entry carries the player-facing lines.
 
 ## Design invariants
 

@@ -233,6 +233,11 @@ const ORDER = [
   // year-grid models) with only runtime calls out; render.calendar.js, its
   // painter, is render layer and deliberately not listed here.
   'occasions.js',
+  // traditions.js (occasions plan P4–P8) sits directly after occasions.js in
+  // index.html too — real position. Pure domain logic (the gift / feast / ritual
+  // / playful / anniversary engines) calling occasions.js, birthdays.js,
+  // commitments.js and mail.js at runtime only. Registered in BOTH lists.
+  'traditions.js',
   // seasons.js (seasons-and-weather-plan.md Phase 1) sits right after
   // occasions.js in index.html too — real position. Pure and derived
   // (weather chain, temperature curve, daylight, sky line); temperature.js

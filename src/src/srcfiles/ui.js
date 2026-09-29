@@ -8783,6 +8783,7 @@ async function doConvSend(forcedText, giftDefId, borrowDefId, returnDefId, featu
       if (typeof noteBirthdayWish === 'function') {
         const bdayBeats = [];
         if (askTurn && askTurn.decision.birthdayBeat) bdayBeats.push(askTurn.decision.birthdayBeat);
+        if (askTurn && askTurn.decision.occasionBeat) bdayBeats.push(askTurn.decision.occasionBeat);
         if (!forcedText && !structuredDefId) {
           const wish = noteBirthdayWish(currentGameState, myNpcId, text, 'spoken');
           if (wish) bdayBeats.push(wish.beat);

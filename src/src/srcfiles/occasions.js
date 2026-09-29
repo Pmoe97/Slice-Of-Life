@@ -464,9 +464,12 @@ function processDecorForDay(gs, day, ids) {
 // for the scene reader (composeScene) and the prompt's CURRENT SCENE, or null.
 function decorSceneLine(gs, roomId, day) {
   const up = decorationsUpIn(gs, roomId, day || gs?.meta?.clock?.day);
-  if (!up.length) return null;
+  // Traditions (P6): the lanterns in the window read here too.
+  const extra = typeof tradSceneLine === 'function' ? tradSceneLine(gs, roomId, day) : null;
+  if (!up.length) return extra;
   const roomName = (ROOMS[roomId]?.name || 'room').toLowerCase();
-  return up.map(u => `The ${roomName} is decorated for ${OCCASION_DEFS[u.occasionId]?.label || 'the holidays'} — ${u.decor.phrase}.`).join(' ');
+  const base = up.map(u => `The ${roomName} is decorated for ${OCCASION_DEFS[u.occasionId]?.label || 'the holidays'} — ${u.decor.phrase}.`).join(' ');
+  return extra ? `${base} ${extra}` : base;
 }
 
 // THE HOME block's per-room annotation ("decorated for Midwinter: …"), or ''.
@@ -641,6 +644,11 @@ function processOccasionsForDay(gs, day) {
   if (gs && gs.npcs) {
     const ids = Object.keys(gs.npcs).filter(id => gs.npcs[id]?.residency?.status === 'resident').sort();
     for (const l of processDecorForDay(gs, day, ids)) out.lines.push(l);
+  }
+  // Phases 4–8: what people DO — gifts, feasts, night rituals, playful days,
+  // anniversaries (traditions.js). Live state only.
+  if (gs && gs.npcs && typeof processTraditionsForDay === 'function') {
+    for (const l of processTraditionsForDay(gs, day).lines) out.lines.push(l);
   }
   for (const o of occasionsOnDay(day + 1)) {
     if (o.night !== 1) continue;

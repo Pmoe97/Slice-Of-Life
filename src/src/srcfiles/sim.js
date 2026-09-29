@@ -2375,6 +2375,16 @@ function resolveTick(gameState, minutesThisTick = CLOCK.tickMinutes) {
       }
     }
 
+    // Traditions (occasions plan P5): a feast held at the dining table (a 'meal'
+    // commitment marked with its occasion) records who is actually there; the
+    // payoff at the next rollover reads it. (Party feasts ride the party pass's
+    // own ledger above.)
+    if (block !== 'sleep' && location && typeof noteGatheringPresence === 'function') {
+      for (const mc of activeMealCommitmentsInRoom(gameState, location)) {
+        if (mc.occasion) noteGatheringPresence(gameState, mc, id);
+      }
+    }
+
     // Evidence discovery (STEALTH, P6): a resident who ends up back in
     // their own room has a chance to notice undiscovered evidence left by
     // an earlier sneak or a housekeeper's boundary-crossing visit. Decides

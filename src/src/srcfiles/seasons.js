@@ -451,7 +451,11 @@ function seasonalPriceDelta(defId, gs) {
 function itemPriceNow(def, gs) {
   if (!def || def.price == null) return def?.price;
   const d = seasonalPriceDelta(def.id, gs);
-  return d ? Math.max(1, def.price + d) : def.price;
+  const p = d ? Math.max(1, def.price + d) : def.price;
+  // Sale Day (traditions.js, occasions plan P8): Nile and QuickCart both read
+  // this, so one multiplier discounts both, bounded (TRADITION_TUNING.sale).
+  const sale = typeof saleDayMultiplier === 'function' ? saleDayMultiplier(gs) : 1;
+  return sale < 1 ? Math.max(1, Math.round(p * sale)) : p;
 }
 
 // 'in season' / 'out of season' for a card, or null.

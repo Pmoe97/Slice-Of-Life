@@ -2,8 +2,8 @@
 
 Status: **in progress.** Design session 2026-09-22 (with the user, over
 AskUserQuestion; the user's answers are recorded as R-decisions below).
-Built: Birthdays P1–P6; Occasions P1 (the calendar), P2 (the holiday work
-model), P3 (decorations); Seasons P1 (weather, temperature curve, daylight),
+Built: Birthdays P1–P6; Aging (all 5 phases); Occasions P1 (the calendar), P2 (the holiday work
+model), P3 (decorations), P4–P8 (traditions.js: gifts, feasts, rituals, playful days, the world talking); Seasons P1 (weather, temperature curve, daylight),
 P2 (ambience: fronts at a time of day, the weather in a room, the sky
 watch), P3 (weather shapes where people go and what the balcony is like), P4
 (seasonal produce prices and cravings), P5 (dressed for the weather going out;

@@ -6577,6 +6577,7 @@ const EVENT_IMPORTANCE = {
   note_left_warm:      'social',
   // Birthdays Phase 4 (birthdays.js): a card left on a roommate's door / a cake in the fridge.
   birthday_card:       'social',
+  occasion_feast:      'social',
   birthday_cake:       'social',
   // Side Projects (projects.js, 0.14.2): starting one, a milestone, or giving
   // up is a real beat — ticker- and Chatter-worthy ("got through the bridge
@@ -6692,6 +6693,7 @@ const EVENT_EMOTION = {
   note_left:           'domestic',
   note_left_warm:      'warmth',
   birthday_card:       'warmth',
+  occasion_feast:      'warmth',
   birthday_cake:       'warmth',
   note_read:           'domestic',
   note_reply:          'domestic',
@@ -10857,6 +10859,291 @@ const OCCASION_DECOR = {
     playerUp: 'You string paper lanterns along the balcony rail for the moon.' },
 };
 
+// --- Traditions (occasions-and-holidays-plan.md Phases 4–8, D17–D22) ---
+// What people DO on the calendar's days. A tradition is a named hook on an
+// OCCASION_DEFS row (D17); each id is built by exactly one engine in
+// traditions.js and rides a system that already exists:
+//   gifts      (P4, D18)  presents, cards, envelopes — items into your bag, an
+//                         occasion bonus on the presents YOU give, once each
+//   feasts     (P5, D19)  a household meal/party the most festive free resident
+//                         hosts; attendance is recorded, payout at the next rollover
+//   rituals    (P6, D20)  timed night beats: your verbs (light a lantern, watch
+//                         the moon, the countdown) and what the house does
+//   playful    (P7, D21)  pranks, costumes, trick-or-treaters, powder fights, eggs
+//   beats      (P4–P8)    the smaller traditions, data-driven: a line, a lift, a
+//                         bond among whoever took part, a memory, sometimes a post
+//   world      (P8, D22)  anniversaries, Chatter posts, holiday mail, Sale Day
+// R1 binds every authored line here: no religion, ever. R2: who takes part is
+// their FESTIVITY for that occasion (occasions.js), never identity.
+const TRADITION_TUNING = {
+  seedSalt: 41903,
+  takePartAffinity: 0.5,     // npcOccasionAffinity at least this to take part unprompted
+  fondToGive: 0.35,          // relPlayer.affection at least this to give YOU a present / envelope
+  keepYears: 2,              // the once-per-year ledger keeps this many years
+  participantMood: 0.03,
+  participantBond: 0.02,     // cast-web affection, both ways, among people who did something together
+
+  // --- P4: gifts, cards & envelopes (D18) --------------------------------------
+  // `givers`: how many fond, festive, free residents give YOU something (fondest
+  // first). `items`: what they pick from when they own nothing giftable. `bonus`:
+  // added to a present YOU give that day (ASK_GIFT), once per person per occasion.
+  gifts: {
+    midwinter:       { givers: 2, items: ['chocolate_box', 'flowers', 'comfort_latte', 'comfort_tea'], bonus: 0.05,
+                       line: '🎁 {name} left {item} for you under the tree — "Happy Midwinter."' },
+    valentines_day:  { givers: 2, items: ['chocolate_box', 'flowers'], bonus: 0.05, card: true, admirer: true,
+                       line: '💝 {name} left {item} for you — a Valentine\'s Day gesture.' },
+    spring_festival: { givers: 1, items: ['flowers'], bonus: 0.04,
+                       line: '🌷 {name} left {item} for you — flowers for Spring Festival.' },
+    new_years_day:   { givers: 2, envelope: [5, 20], bonus: 0.03,
+                       line: '✉️ {name} slipped a small envelope into your hand for luck — ${amount}.' },
+    lantern_nights:  { givers: 1, items: ['comfort_chocolate', 'comfort_tea'], perNight: true, bonus: 0.02,
+                       line: '🏮 {name} left {item} on the sill for tonight\'s lantern.' },
+  },
+  // A Valentine's card: an addressed note in your room. Signed by a fond housemate,
+  // or unsigned by the one who's sweet on you (the secret admirer).
+  cards: {
+    signed: ['Happy Valentine\'s Day. — {name}', 'Thinking of you today. — {name}', 'To one of my favourite people. Happy Valentine\'s Day! — {name}'],
+    admirer: ['You have no idea how often I think about you. Happy Valentine\'s Day. — a secret admirer', 'Someone in this apartment is very fond of you. That\'s all I\'m saying. — guess who'],
+    admirerMinDesire: 0.3, admirerMinAffection: 0.4,
+    room: 'bedroom_player',
+    memoryAdmirer: 'They left the player an unsigned Valentine\'s card — and hoped it would be guessed.',
+  },
+  giftMemory: 'It was {occasion}, and the player gave them {item}.',
+
+  // --- P5: feasts (D19) ---------------------------------------------------------
+  // `kind`: 'meal' (the dining table) or 'party' (a gathering in `room`). `hour` /
+  // `minutes`: when it starts (minute-of-day) and how long it runs.
+  feasts: {
+    new_years_day:   { kind: 'meal',  room: 'dining',      hour: 600,  minutes: 90,  label: 'a New Year brunch', dish: 'a slow brunch' },
+    spring_festival: { kind: 'meal',  room: 'dining',      hour: 630,  minutes: 90,  label: 'a Spring Festival brunch', dish: 'a long spring brunch with chocolate rabbits' },
+    rest_day:        { kind: 'party', room: 'balcony',     hour: 1020, minutes: 150, label: 'a balcony barbecue', dish: 'a barbecue' },
+    midsummer:       { kind: 'party', room: 'balcony',     hour: 1050, minutes: 180, label: 'a Midsummer barbecue', dish: 'a Midsummer barbecue' },
+    sharing_feast:   { kind: 'meal',  room: 'dining',      hour: 1080, minutes: 120, label: 'the Sharing Feast', dish: 'a table of shared sweets and food', leftovers: true },
+    thanksgiving:    { kind: 'meal',  room: 'dining',      hour: 1050, minutes: 150, label: 'Thanksgiving dinner', dish: 'the big shared feast — everyone brought something', leftovers: true, gratitude: true },
+    midwinter:       { kind: 'meal',  room: 'dining',      hour: 1080, minutes: 150, label: 'the Midwinter dinner', dish: 'the big Midwinter dinner', leftovers: true },
+    new_years_eve:   { kind: 'party', room: 'living_room', hour: 1260, minutes: 180, label: 'the New Year\'s party', dish: 'a party' },
+    halloween:       { kind: 'party', room: 'living_room', hour: 1200, minutes: 150, label: 'the costume party', dish: 'a costume party' },
+  },
+  feast: {
+    hostAffinity: 0.55,        // the host's feeling for the occasion
+    hostMinFestivity: 0.45,
+    attendMood: 0.06,          // each attendee
+    attendBond: 0.03,          // cast web, both ways, between attendees
+    playerAffection: 0.03,     // each attendee toward you, if you came
+    playerMood: 0.05,
+    skipMood: -0.03,           // the host, if you never showed (a major occasion, and they're fond)
+    skipMinAffection: 0.35,
+    leftoversMinAttendees: 2,
+    leftoverItem: 'holiday_leftovers',
+    factImportance: 0.5,
+    inviteLine: '🍽️ {name} is putting on {label} at {time} — everyone\'s invited, and that includes you.',
+    noHostMajor: 'Nobody in the house has the energy for a big {occasion} this year.',
+    line: '🍽️ {label} was a hit: {names} sat down together.',
+    lineJustYou: '🍽️ {label} — it was mostly just you and {name}, and it was lovely.',
+    lineNoYou: '🍽️ {label} went ahead without you. {names} ate together.',
+    lineNobody: '',
+    gratitudeLine: 'Round the table they went, one thing each they were grateful for — {name} started, and got a little choked up.',
+    fact: '{host} put on {label} and {names} came.',
+    factSkipped: 'The player never came to {label}.',
+    post: ['{label} — full, happy, and a little sleepy 🍽️', 'best {label} we\'ve had in this apartment', 'leftovers for DAYS after {label}'],
+  },
+
+  // --- P6: night rituals (D20) --------------------------------------------------
+  // A ritual is one verb of yours, open inside its window (the occasion, the
+  // room, the hours). `moodPer`: your lift; `withBond`: the bond with whoever
+  // shares it (present, awake residents).
+  rituals: {
+    light_lantern: {
+      label: 'Light the Lantern', verbs: ['light the lantern', 'light a lantern', 'light tonight\'s lantern'],
+      occasion: 'lantern_nights', rooms: ['living_room', 'dining', 'balcony'], from: 1020, to: 1440, minutes: 5, mood: 0.04,
+      shared: 'You and {name} light tonight\'s lantern together.',
+      line: 'You light tonight\'s lantern and set it in the window. {glow}',
+      done: 'Tonight\'s lantern is already lit.',
+    },
+    watch_moon: {
+      label: 'Watch the Harvest Moon', verbs: ['watch the moon', 'watch the harvest moon', 'look at the moon'],
+      occasion: 'harvest_moon', rooms: ['balcony'], from: 1080, to: 1410, minutes: 30, mood: 0.08,
+      shared: 'You and {name} watch the harvest moon rise over the rooftops.',
+      line: 'The harvest moon comes up huge and orange over the rooftops. You stay until your tea goes cold.',
+    },
+    light_candle: {
+      label: 'Light a Remembrance Candle', verbs: ['light a candle', 'light a remembrance candle', 'remember your grandfather'],
+      occasion: 'remembrance_night', rooms: ['living_room', 'study', 'bedroom_player', 'dining'], from: 1020, to: 1440, minutes: 10, mood: 0.03,
+      shared: 'You and {name} light candles for the people who aren\'t here, and share a few stories.',
+      line: 'You light a candle for your grandfather and set his photo beside it. The apartment he left you feels a little more like his tonight.',
+    },
+    watch_fireworks: {
+      label: 'Watch the Fireworks', verbs: ['watch the fireworks', 'watch fireworks from the balcony'],
+      occasions: ['midsummer', 'new_years_eve'], rooms: ['balcony'], from: 1290, to: 1440, minutes: 20, mood: 0.07,
+      shared: 'You and {name} lean on the balcony rail and watch the fireworks bloom over the city.',
+      line: 'From the balcony you watch the fireworks bloom over the city, one after another, until the smoke drifts.',
+    },
+    join_countdown: {
+      label: 'Join the Countdown', verbs: ['join the countdown', 'count down to midnight', 'wait for midnight'],
+      occasion: 'new_years_eve', rooms: ['living_room', 'balcony'], from: 1410, to: 1440, minutes: 15, mood: 0.06,
+      shared: 'You and {name} wait for midnight together, glasses ready.',
+      line: 'You gather in the last quarter hour of the year, watching the clock crawl toward midnight.',
+    },
+  },
+  // The countdown itself fires at the rollover onto New Year's Day, with whoever
+  // is in the living room or on the balcony at that moment (D20).
+  countdown: {
+    rooms: ['living_room', 'balcony'],
+    playerIn: 'You\'re there for it: ten, nine, eight… midnight, noisemakers, and a year that has just started.',
+    playerAway: 'Through the wall you hear a muffled countdown, then a cheer, and it\'s the new year.',
+    line: '🎆 At midnight {names} counted down — noisemakers, cheering, the year turning over.',
+    kiss: '💋 {a} and {b} kissed as the clock struck twelve.',
+    mood: 0.06, bond: 0.03, playerMood: 0.06,
+    fact: 'They counted down to the new year together with {names}.',
+  },
+  // Fireworks the house sees on the balcony (rollover, whoever was out there).
+  fireworks: { line: '🎇 {names} watched the fireworks from the balcony.', mood: 0.05, bond: 0.02 },
+
+  // --- P7: playful days (D21) ----------------------------------------------------
+  playful: {
+    // Fools' Day: pranksters (playful / chaotic / dramatic, or just festive) each
+    // pick a target. The target's temperament decides how it lands.
+    pranks: {
+      traits: ['playful', 'chaotic', 'restless', 'dramatic', 'expressive'],
+      minAffinity: 0.5, max: 2, playerChance: 0.4,
+      kinds: ['salt in the sugar bowl', 'a rubber spider in the cereal box', 'a fake note saying the water is being shut off', 'the TV remote hidden in the freezer', 'every cabinet door taped shut', 'a "wet floor" sign on a perfectly dry floor'],
+      landsLine: '🃏 {prankster} pulled {prank} on {target} — and it landed.',
+      backfireLine: '🃏 {prankster} tried {prank} on {target}, who was not amused.',
+      playerLands: '🃏 {prankster} got you: {prank}. You laughed despite yourself.',
+      playerBackfire: '🃏 {prankster} pulled {prank} on you, and you were not in the mood.',
+      moodLands: 0.04, moodBackfire: -0.05, tensionBackfire: 0.03, affectionLands: 0.02,
+      // volatility above this = it doesn't land
+      touchy: 0.35,
+      player: { label: 'Play a Prank', verbs: ['play a prank', 'prank someone', 'pull a prank'], minutes: 8, rooms: ['living_room', 'kitchen', 'dining', 'entry', 'hallway_a'],
+        landsLine: 'You pull {prank} on {target}. After a beat of confusion they burst out laughing.',
+        backfireLine: 'You pull {prank} on {target}. They stare at you, then at the mess, and don\'t laugh.' },
+    },
+    // Color Day: a powder fight (your verb) plus the house's own, and forgiveness.
+    color: {
+      player: { label: 'Start a Powder Fight', verbs: ['start a powder fight', 'throw colored powder', 'start a color fight'], minutes: 25, rooms: ['balcony', 'living_room'], mood: 0.08,
+        line: 'You throw the first fistful of colored powder and it turns into a glorious mess.',
+        shared: 'You and {name} chase each other around in a cloud of pink and blue powder.' },
+      tension: -0.05, dirt: 0.06, mood: 0.05, forgive: 0.3,
+      line: '🎨 {names} had a colored-powder fight — and everybody is a different colour now.',
+      forgiveLine: '🎨 {a} and {b} let an old grudge go in the middle of the powder fight.',
+    },
+    // The Spring Festival egg hunt: eggs hidden around the flat, found one room at a time.
+    eggs: {
+      hide: { rooms: ['living_room', 'kitchen', 'dining', 'study', 'balcony', 'hallway_a', 'bathroom_a'], count: 4 },
+      hunt: { label: 'Search for Eggs', verbs: ['search for eggs', 'hunt for eggs', 'look for eggs'], minutes: 12, mood: 0.05, item: 'chocolate_egg',
+        found: 'You look around and spot one: a bright egg tucked behind {where}. It\'s chocolate.',
+        none: 'You search the {room} carefully, but there\'s nothing here — someone hid them elsewhere.' },
+      dye: { label: 'Dye Eggs', verbs: ['dye eggs', 'dye some eggs', 'colour eggs'], minutes: 25, mood: 0.05, item: 'chocolate_egg', qty: 2,
+        line: 'You spend an hour dyeing eggs — your hands end up every colour.', shared: 'You and {name} dye eggs together and argue about the colours.' },
+      hideLine: '🥚 {name} spent the night hiding eggs around the apartment.',
+      allFound: 'That\'s every egg — the whole house has been picked clean.',
+    },
+    // Halloween: costumes (a flag that lasts the day), pumpkins, trick-or-treaters.
+    halloween: {
+      costumes: ['a witch', 'a vampire', 'a skeleton', 'a ghost', 'a pirate', 'a cat', 'a scarecrow', 'a mad scientist', 'a wizard', 'a zombie'],
+      costumeLine: '🎃 {names} are in costume today.',
+      pumpkin: { label: 'Carve a Pumpkin', verbs: ['carve a pumpkin', 'carve pumpkins', 'carve a jack-o-lantern'], minutes: 30, rooms: ['kitchen', 'dining', 'balcony'], mood: 0.06,
+        line: 'You carve a wonky, grinning jack-o-lantern and set it by the window.', shared: 'You and {name} carve pumpkins, competing over whose is scarier.' },
+      candyItem: 'halloween_candy',
+      candyGiver: '🍬 {name} bought a big bag of candy for the door tonight.',
+      ring: { startMinute: 1110, windowMinutes: 180 },   // 18:30, rings for three hours
+      knock: 'A gaggle of tiny monsters is on the doorstep, buckets out: "Trick or treat!"',
+      admitGive: 'You hand out candy to a gaggle of tiny monsters, who shriek with delight and thunder down the stairs.',
+      admitNone: 'You have no candy. "Trick it is!" — they rattle the letterbox and giggle away.',
+      refused: 'You don\'t answer. A disappointed chorus fades down the stairs, and something crinkles under the door.',
+      coveredLine: 'Somebody else handled the trick-or-treaters — the candy is gone and the doorstep is quiet.',
+      trickDirt: 0.05, giveMood: 0.06, noneMood: -0.02, refuseMood: -0.03,
+    },
+    // Giving Week: small kindnesses and the coin jar, paid out at the Sharing Feast.
+    giving: {
+      doers: 2, kinds: ['treat', 'chore', 'jar'], jarCoins: [1, 3],
+      treatItems: ['comfort_chocolate', 'comfort_tea', 'granola_bar'],
+      treatLine: '🤲 {name} left a treat in the fridge for {target}.',
+      treatPlayerLine: '🤲 {name} left a treat for you.',
+      choreLine: '🤲 {name} did {target}\'s share of the chores without being asked.',
+      chorePlayerLine: '🤲 {name} quietly did some of your chores.',
+      jarLine: '🤲 {name} dropped some coins in the giving jar.',
+      dirt: -0.08, bond: 0.03, mood: 0.04,
+      jar: { label: 'Put Coins in the Jar', verbs: ['put coins in the jar', 'drop coins in the jar', 'give to the jar'], minutes: 2, coins: 2, mood: 0.03,
+        rooms: ['living_room', 'kitchen', 'dining'], line: 'You drop a couple of dollars into the giving jar. It clinks.' },
+      payoutLine: '🤲 The giving jar held ${total} — it goes to a good cause today.',
+    },
+  },
+
+  // --- Smaller traditions, data-driven (P4–P8) --------------------------------------
+  // `who`: festive | all | couples | singles | loss | warm. `max`: at most this many
+  // take part. `mood`/`bond` apply to whoever did; `player`: a line when YOU are
+  // among them (in the room). `memory`: what they remember. `post`: sometimes on Chatter.
+  beats: {
+    brunch:           { who: 'festive', max: 3, line: '🥞 {names} made a slow, lazy brunch of it.', mood: 0.04, bond: 0.02, memory: 'Had a slow brunch with {names}.' },
+    resolutions:      { who: 'festive', max: 3, line: '📝 {names} said their resolutions out loud — some sincerely, some for a laugh.', mood: 0.03, bond: 0.02, memory: 'Said resolutions out loud with {names}.', post: ['resolution #1: actually do the dishes the same day 😅', 'new year, same me, slightly better plan'] },
+    fresh_start_clean:{ who: 'warm',    max: 2, line: '🧹 {names} gave the flat a fresh-start clean.', mood: 0.02, dirt: -0.1 },
+    date_night:       { who: 'couples', max: 2, line: '💞 {names} went for a proper date night.', mood: 0.06, bond: 0.03, memory: 'Had a proper Valentine\'s date night.' },
+    singles_night:    { who: 'singles', max: 3, line: '🍿 {names} held a singles\' commiseration night, with too much ice cream.', mood: 0.05, bond: 0.03, memory: 'Commiserated on Valentine\'s with {names}.' },
+    sweets:           { who: 'festive', max: 3, line: '🍬 {names} shared sweets around the flat.', mood: 0.03, bond: 0.02 },
+    forgive:          { who: 'all',     max: 2, line: '🕊️ {names} let an old grudge go.', mood: 0.04, tensionToForgive: 0.25 },
+    chocolate:        { who: 'festive', max: 2, line: '🐰 {names} passed chocolate rabbits around.', mood: 0.03, bond: 0.02 },
+    no_chores:        { who: 'all',     max: 4, line: '🛋️ Nobody did a single chore today, by long tradition.', mood: 0.03, playerMood: 0.03 },
+    call_parents:     { who: 'all',     max: 4, callKind: 'parents' },
+    call_family:      { who: 'all',     max: 3, callKind: 'family' },
+    flower_crowns:    { who: 'festive', max: 3, line: '🌼 {names} wove flower crowns and wore them all day.', mood: 0.05, bond: 0.03 },
+    pool_party:       { who: 'festive', max: 3, line: '🏊 {names} spent the afternoon at the pool.', mood: 0.04, bond: 0.02 },
+    mooncakes:        { who: 'festive', max: 3, line: '🥮 {names} cut a mooncake into slivers and shared it.', mood: 0.03, bond: 0.02 },
+    pumpkins:         { who: 'festive', max: 3, line: '🎃 {names} carved pumpkins for the windowsill.', mood: 0.04, bond: 0.02 },
+    candles:          { who: 'loss',    max: 3, line: '🕯️ {names} lit candles for people who are gone.', mood: 0.02, bond: 0.02, memory: 'Lit a candle for someone gone, with {names} nearby.' },
+    favorite_dish:    { who: 'festive', max: 2, line: '🍲 {names} cooked the favourite dish of someone they miss.', mood: 0.03, bond: 0.02 },
+    stories:          { who: 'all',     max: 3, line: '📖 {names} swapped stories about the people they\'ve lost, laughing and tearing up in turn.', mood: 0.03, bond: 0.04, memory: 'Swapped stories about the people we\'ve lost with {names}.' },
+    sports_tv:        { who: 'festive', max: 3, line: '🏈 {names} watched the game and argued about it.', mood: 0.03, bond: 0.02 },
+    fried_sweets:     { who: 'festive', max: 2, nights: [2, 5], line: '🍩 {names} fried a batch of sweets for Lantern Nights.', mood: 0.04, bond: 0.02 },
+    card_games:       { who: 'festive', max: 3, nights: [3, 6], line: '🃏 {names} played cards by lantern-light.', mood: 0.04, bond: 0.03 },
+    cookies:          { who: 'festive', max: 3, line: '🍪 {names} baked cookies and ate half the dough.', mood: 0.04, bond: 0.02, item: 'comfort_chocolate' },
+    stockings:        { who: 'festive', max: 3, line: '🧦 {names} hung stockings on the mantel.', mood: 0.03 },
+    carols:           { who: 'festive', max: 3, line: '🎶 {names} sang carols, badly and happily.', mood: 0.04, bond: 0.03 },
+    hot_drinks:       { who: 'all',     max: 4, line: '☕ {names} made hot drinks and cupped them in both hands.', mood: 0.03, bond: 0.02 },
+    new_clothes:      { who: 'festive', max: 3, line: '👗 {names} put on something new for the Sharing Feast.', mood: 0.03 },
+    sales:            { who: 'all', max: 3, line: '🛍️ {names} came home with bags from the Sale Day crowds.', mood: 0.04, saleDay: true },
+  },
+  // Parents' Day / a family call: the outcome is theirs — a bad history makes it a harder day.
+  calls: {
+    hardPattern: 'estrang|abus|no contact|cut off|neglect|absent|left them|didn\'t speak|orphan|passed away|died|lost their',
+    good: '📞 {name} called {who} and talked for a long while.',
+    hard: '📞 {name} looked at {who}\'s number for a long time and didn\'t call.',
+    goodMood: 0.05, hardMood: -0.05, memoryGood: 'Called {who} today and it went well.', memoryHard: 'Couldn\'t bring themself to call {who}.',
+    parents: { who: 'their parents' }, family: { who: 'family' },
+    grandfather: 'You think about your grandfather today, and the apartment he left you.',
+    playerMood: 0.02,
+  },
+
+  // --- P8: personal anniversaries & the world talking (D22) ------------------------------
+  anniversaries: {
+    keys: { line: '🗝️ It has been {years} year{s} since you got the keys to this place.', mood: 0.05, prompt: 'The player has lived here {years} year{s} today — the anniversary of getting the keys.' },
+    moveIn: { line: '🏠 {name} has lived here {years} year{s} today.', mood: 0.04, memory: 'Marked {years} year{s} living in this apartment.' },
+    couple: { line: '💞 {a} and {b} marked {years} year{s} together.', mood: 0.06, bond: 0.02 },
+    promptDays: 3,
+  },
+  chatterPosts: {
+    perOccasion: 2, minAffinity: 0.55,
+    generic: ['happy {label} everyone 🎉', '{label} in this apartment is a whole personality', 'it\'s {label} and I\'m not being normal about it'],
+  },
+  mail: { cardFrom: ['Del Connors', 'an old friend'], kind: 'card', occasions: ['midwinter', 'new_years_day', 'valentines_day', 'spring_festival', 'thanksgiving'] },
+  sale: { multiplier: 0.85, label: 'Sale Day', vendors: ['nile', 'quickcart'] },
+  offscreen: { chance: 0.5 },
+};
+
+
+// Every verb of yours the traditions add (defs.actions.js generates one
+// ACTION_DEFS entry per row; traditions.js's tradVerbOpen/Prepare/apply run them).
+const TRADITION_VERBS = [
+  ...Object.entries(TRADITION_TUNING.rituals).map(([id, r]) => ({ id, label: r.label, verbs: r.verbs, rooms: r.rooms, minutes: r.minutes })),
+  { id: 'play_prank', ...pickVerbFields(TRADITION_TUNING.playful.pranks.player) },
+  { id: 'powder_fight', ...pickVerbFields(TRADITION_TUNING.playful.color.player) },
+  { id: 'hunt_eggs', ...pickVerbFields(TRADITION_TUNING.playful.eggs.hunt), rooms: TRADITION_TUNING.playful.eggs.hide.rooms },
+  { id: 'dye_eggs', ...pickVerbFields(TRADITION_TUNING.playful.eggs.dye), rooms: ['kitchen', 'dining'] },
+  { id: 'carve_pumpkin', ...pickVerbFields(TRADITION_TUNING.playful.halloween.pumpkin) },
+  { id: 'coins_in_jar', ...pickVerbFields(TRADITION_TUNING.playful.giving.jar) },
+];
+function pickVerbFields(v) { return { label: v.label, verbs: v.verbs, rooms: v.rooms, minutes: v.minutes }; }
+
 const OCCASION_TUNING = {
   // D4/D9 — the lead-in: a major occasion (and any row with an eve line) is
   // "coming up" in the prompt inside this many days.
@@ -13591,6 +13878,7 @@ const SOLICITOR_ADMIT_TEMPLATES = [
 const DOOR_KNOCK_LINES = {
   delivery: 'There\'s a knock at the door — sounds like a delivery.',
   solicitor: 'The doorbell rings.',
+  trick_or_treat: TRADITION_TUNING.playful.halloween.knock,
 };
 
 // ===== /SECTION: CONFIG =====

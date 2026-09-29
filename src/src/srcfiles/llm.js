@@ -689,6 +689,11 @@ function buildNpcBlockV2(npc, query, channel, day, gameState) {
   // Occasions (occasions-and-holidays-plan.md D4): today's holiday, or one
   // coming up within the lead-in, and how this person feels about it
   // (festivity, D6/D7). Same typeof guard — llm.js loads before occasions.js.
+  // Traditions (occasions plan P6/P7/P8): a costume, the lanterns in the window, the
+  // anniversary of the keys. Same typeof guard — llm.js loads before traditions.js.
+  if (gameState && typeof tradPromptLines === 'function') {
+    for (const l of tradPromptLines(gameState, npc.id)) block += `${l}\n`;
+  }
   if (gameState && typeof occasionPromptLine === 'function') {
     const occLine = occasionPromptLine(gameState, npc.id);
     if (occLine) block += `${occLine}\n`;

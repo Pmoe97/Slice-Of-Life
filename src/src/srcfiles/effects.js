@@ -1417,6 +1417,16 @@ const EFFECT_DEFS = {
       if (typeof projectApplyJam === 'function') projectApplyJam(ctx.gameState, p.npcId);
     },
   },
+  // Traditions (traditions.js): every verb of yours a holiday adds runs through
+  // this one trusted effect (light the lantern, watch the moon, the prank, the
+  // egg hunt, the coins in the jar…). traditions.js owns the window and the write.
+  OCCASION_RITUAL: {
+    paramShape: ['verbId', 'roomId', '...arg'], llm: false, implemented: true,
+    validate: (p, ctx) => (typeof tradVerbOpen === 'function' && tradVerbOpen(ctx.gameState, p.verbId, p.roomId).ok) || 'Nothing to do right now.',
+    apply: (p, ctx) => {
+      if (typeof applyTradVerb === 'function') applyTradVerb(ctx.gameState, p.verbId, p.roomId, p.arg === '-' ? undefined : p.arg);
+    },
+  },
   TAKE_DOWN_DECOR: {
     paramShape: ['occasionId', 'who'], llm: false, implemented: true,
     validate: (p) => (typeof OCCASION_DECOR === 'object' && !!OCCASION_DECOR[p.occasionId]) || 'No such decorations.',

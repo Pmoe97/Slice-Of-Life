@@ -186,7 +186,10 @@ const roll = J(`(() => {
   g.npcs[a] = { ...g.npcs[a], mood: 0, bible: { ...__person('Teacher', { festivity: 0.9 }).bible, name: 'Mira' } };
   g.npcs[b] = { ...g.npcs[b], mood: 0, bible: { ...__person('Nurse', { festivity: 0.15, traits: ['materialistic', 'ambitious'], conscientiousness: 0.4, seed: 7919 }).bible, name: 'Jonah' } };
   const jonahPlan = holidayWorkPlan(g.npcs[b], __MIDWINTER);
+  // Phase 2 in isolation: the traditions engine (P4–P8) adds its own moods on the same morning.
+  const savedTrad = globalThis.processTraditionsForDay; globalThis.processTraditionsForDay = undefined;
   const out = processOccasionsForDay(g, __MIDWINTER);
+  globalThis.processTraditionsForDay = savedTrad;
   const moods = { mira: g.npcs[a].mood, jonah: g.npcs[b].mood };
   const prompt = { mira: occasionPromptLine(g, a), jonah: occasionPromptLine(g, b) };
   const gV = __mk(12, 2, __d(0, 14));

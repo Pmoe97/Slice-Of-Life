@@ -1980,6 +1980,29 @@ function objectHasResettableDirt(obj) {
   });
 }
 
+// Traditions (traditions.js): one generated verb per TRADITION_VERBS row (config.js) —
+// light the lantern, watch the moon, the prank, the egg hunt, the coins in the
+// jar. Each is a flat chip in the 'occasion' group, open only inside its window;
+// prepare decides what will happen and say ONCE, and the one trusted effect
+// OCCASION_RITUAL writes it.
+function buildTradVerbEffects(id, ctx, prepared) {
+  const lines = [`OCCASION_RITUAL ${id} ${ctx.roomId} ${prepared.arg || '-'}`];
+  if (id === 'coins_in_jar') lines.push(`SPEND_MONEY ${TRADITION_TUNING.playful.giving.jar.coins} the giving jar`);
+  return lines;
+}
+for (const v of TRADITION_VERBS) {
+  ACTION_DEFS['occasion.' + v.id] = {
+    id: 'occasion.' + v.id, label: v.label, verbs: v.verbs,
+    source: { kind: 'room', roomIds: v.rooms },
+    group: 'occasion', chipPriority: 26,
+    requires: ['tradVerbOpen:' + v.id],
+    timeCost: { base: v.minutes },
+    prepare: (ctx) => (typeof tradVerbPrepare === 'function' ? tradVerbPrepare(ctx.gameState, v.id, ctx.roomId) : { cancelled: true }),
+    buildEffects: (ctx, prepared) => (prepared && !prepared.cancelled ? buildTradVerbEffects(v.id, ctx, prepared) : []),
+    narration: { mode: 'dynamic', build: (ctx, prepared) => (prepared && prepared.line) || 'You take part.' },
+  };
+}
+
 const ACTION_REQUIREMENT_CHECKERS = {
   needAbove: (ctx, need, min) => (ctx.gameState.player[need] ?? 100) >= Number(min) || `Not enough ${need}.`,
   needBelow: (ctx, need, max) => (ctx.gameState.player[need] ?? 0) <= Number(max) || `${need} is too high right now.`,
@@ -1997,6 +2020,12 @@ const ACTION_REQUIREMENT_CHECKERS = {
   // their windows (occasions.js owns the dates and the record).
   decorWindowOpen: (ctx) => (typeof occasionToDecorate === 'function'
     && !!occasionToDecorate(ctx.gameState, ctx.gameState.meta.clock.day, ctx.roomId)) || 'Nothing to decorate for.',
+  // Traditions: the generated verbs' window (traditions.js owns it).
+  tradVerbOpen: (ctx, id) => {
+    if (typeof tradVerbOpen !== 'function') return 'Nothing to do.';
+    const r = tradVerbOpen(ctx.gameState, id, ctx.roomId);
+    return r.ok ? true : r.reason;
+  },
   decorTakeDownable: (ctx) => (typeof decorToTakeDown === 'function'
     && !!decorToTakeDown(ctx.gameState, ctx.gameState.meta.clock.day, ctx.roomId)) || 'No decorations to take down.',
   roomIs: (ctx, ...roomIds) => roomIds.includes(ctx.gameState.player.location) || 'Wrong room for that.',
@@ -4216,7 +4245,7 @@ function buildGetMailEffects(ctx, prepared) {
   if (!prepared?.entries?.length) return [];
   return ['CLAIM_MAIL player'];
 }
-const MAIL_KIND_LABELS = { bill: 'a bill', flyer: 'a flyer', letter: 'a letter' };
+const MAIL_KIND_LABELS = { bill: 'a bill', flyer: 'a flyer', letter: 'a letter', card: 'a card' };
 function getMailNarration(ctx, prepared) {
   const entries = prepared?.entries || [];
   if (entries.length === 0) return 'Nothing in the mailbox.';
@@ -4243,6 +4272,8 @@ function buildAnswerDoorEffects(ctx, prepared) {
     lines.push(`SPAWN_ITEM ${prepared.delivery.defId} ${prepared.delivery.qty || 1} player`);
   } else if (prepared.evt.kind === 'solicitor') {
     lines.push(`MOOD_DELTA player ${MAIL_TUNING.solicitorAdmitMoodDelta}`);
+  } else if (prepared.evt.kind === 'trick_or_treat' && typeof tradDoorEffects === 'function') {
+    lines.push(...tradDoorEffects(ctx.gameState, 'admit'));
   }
   return lines;
 }
@@ -4251,6 +4282,8 @@ function buildRefuseDoorEffects(ctx, prepared) {
   const lines = [`RESOLVE_DOOR_EVENT refuse`];
   if (prepared.evt.kind === 'delivery' && prepared.delivery && prepared.doormatId) {
     lines.push(`SPAWN_ITEM ${prepared.delivery.defId} ${prepared.delivery.qty || 1} ${prepared.doormatId}`);
+  } else if (prepared.evt.kind === 'trick_or_treat' && typeof tradDoorEffects === 'function') {
+    lines.push(...tradDoorEffects(ctx.gameState, 'refuse'));
   }
   return lines;
 }
@@ -4266,6 +4299,7 @@ function answerDoorNarration(ctx, prepared) {
   if (evt.kind === 'solicitor') {
     return `${evt.label} is at the door. ${SOLICITOR_ADMIT_TEMPLATES[Math.floor(orbitalRandom() * SOLICITOR_ADMIT_TEMPLATES.length)]}`;
   }
+  if (evt.kind === 'trick_or_treat' && typeof tradDoorNarration === 'function') return tradDoorNarration(ctx.gameState, 'admit');
   return 'You open the door.';
 }
 function refuseDoorNarration(ctx, prepared) {
@@ -4274,6 +4308,7 @@ function refuseDoorNarration(ctx, prepared) {
   if (evt.kind === 'delivery') {
     return "You don't answer. From outside: \"No worries, I'll leave it.\" Footsteps recede — it's on the doormat now.";
   }
+  if (evt.kind === 'trick_or_treat' && typeof tradDoorNarration === 'function') return tradDoorNarration(ctx.gameState, 'refuse');
   return "You don't answer. After a moment, whoever it was gives up and leaves.";
 }
 

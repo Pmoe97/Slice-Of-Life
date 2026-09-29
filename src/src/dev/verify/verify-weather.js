@@ -86,7 +86,7 @@ check('index.html loads seasons.js once, right after occasions.js',
   (indexHtml.match(/<script src="src\/src\/srcfiles\/seasons\.js\?v=\d+"><\/script>/g) || []).length === 1
   && indexHtml.indexOf('srcfiles/occasions.js') < indexHtml.indexOf('srcfiles/seasons.js')
   && indexHtml.indexOf('srcfiles/seasons.js') < indexHtml.indexOf('srcfiles/render.js?'));
-check('loadgame.js ORDER registers seasons.js after occasions.js', /'occasions\.js',[\s\S]{0,500}?'seasons\.js'/.test(fs.readFileSync(path.join(__dirname, 'loadgame.js'), 'utf8')));
+check('loadgame.js ORDER registers seasons.js after occasions.js', /'occasions\.js',[\s\S]{0,1500}?'seasons\.js'/.test(fs.readFileSync(path.join(__dirname, 'loadgame.js'), 'utf8')));
 
 // ---------------------------------------------------------------- 1
 console.log('\n1. W2 — the season means are pinned (plan invariant 1)');

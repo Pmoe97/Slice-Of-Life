@@ -1858,6 +1858,7 @@ const ASK_GIFT = {
       giftMatch: match,          // rides for effects()/leafNote()
       giftLabel: src.label,      // rides for leafNote() — a def/plate label, never player text
       ...(birthday ? { birthday: true } : {}),
+      ...(typeof occasionGiftBonusApplies === 'function' && occasionGiftBonusApplies(gs, npcId) ? { occasionGift: occasionGiftBonusApplies(gs, npcId).occasionId } : {}),
       ...(birthday && typeof isBirthdayCake === 'function' && isBirthdayCake(defId, src.stack && src.stack.meta && src.stack.meta.plate) ? { giftCake: true } : {}),
       ...(food ? { giftFood: true } : {}),
       ...(src.isPlate ? { giftPlate: true } : {}),
@@ -1897,6 +1898,9 @@ const ASK_GIFT = {
     ];
     if (delta > 0) lines.push(`REL_DELTA ${npcId} ${G.relAxis} +${delta.toFixed(2)}`);
     lines.push(...bdayLines);
+    // Occasions D18: a present on a gift day (Midwinter, Valentine's, Spring Festival,
+    // New Year's, Lantern Nights) earns a small bonus, once per person per occasion.
+    if (decision.occasionGift && typeof occasionGiftEffectLines === 'function') lines.push(...occasionGiftEffectLines(gs, npcId));
     return lines;
   },
   // birthdays-and-occasions-plan.md D8: the birthday mark (once per birthday)
@@ -1906,6 +1910,11 @@ const ASK_GIFT = {
     // D6 — the hand-over (one unit; one serving of a plate).
     const moved = giveGiftUnit(gs, giftPickOf(data), npcId);
     if (moved.ok) decision.giftMoved = moved;
+    // The occasion gift mark (written after the effects read it, like the birthday one).
+    if (decision.occasionGift && typeof noteOccasionGift === 'function') {
+      const occ = noteOccasionGift(gs, npcId, decision.giftLabel);
+      if (occ) decision.occasionBeat = occ.beat;
+    }
     if (!decision.birthday || typeof noteBirthdayGift !== 'function') return;
     const note = noteBirthdayGift(gs, npcId);
     if (note) decision.birthdayBeat = note.beat;
@@ -1915,6 +1924,9 @@ const ASK_GIFT = {
   // The label is a def label (data, never player input), so it interpolates.
   leafNote(decision) {
     const label = decision.giftLabel || 'the gift';
+    if (decision.occasionGift && !decision.birthday) {
+      return `- It's a day for giving presents, and they gave you: ${label}. It's a lovely, well-timed gesture — let it land.`;
+    }
     if (decision.birthday && decision.giftCake) {
       return `- It's your birthday, and they brought you a birthday cake (${label}). It's the classic gesture and it lands — let them feel it worked.`;
     }

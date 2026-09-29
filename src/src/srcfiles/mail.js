@@ -175,6 +175,7 @@ function sweepDoorEvent(gameState) {
       if (delivery && delivery.status === 'ordered') return fallbackDeliveryToDoormat(gameState, delivery);
       return null;
     }
+    if (evt.kind === 'trick_or_treat' && typeof trickOrTreatExpired === 'function') return trickOrTreatExpired(gameState);
     return 'Nobody answered — whoever it was gave up and left.';
   }
   if (!evt.announced && nowAbs >= evt.createdAbs) {

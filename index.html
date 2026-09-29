@@ -8504,7 +8504,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=209"></script>
+<script src="src/src/srcfiles/config.js?v=210"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -8518,8 +8518,8 @@ body {
      render.computer.js and studio.js, all of which build controls with it.
      Registered in dev/verify/loadgame.js's ORDER in the same commit. -->
 <script src="src/src/srcfiles/fields.js?v=1"></script>
-<script src="src/src/srcfiles/defs.world.js?v=55"></script>
-<script src="src/src/srcfiles/defs.actions.js?v=65"></script>
+<script src="src/src/srcfiles/defs.world.js?v=56"></script>
+<script src="src/src/srcfiles/defs.actions.js?v=66"></script>
 <script src="src/src/srcfiles/defs.computer.js?v=51"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
@@ -8550,7 +8550,7 @@ body {
 <!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
      player-facing release history. Pure data, no dependencies, grouped with
      the other defs.* files for the same reason defs.dreams.js is. -->
-<script src="src/src/srcfiles/defs.patchnotes.js?v=28"></script>
+<script src="src/src/srcfiles/defs.patchnotes.js?v=29"></script>
 <!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
      WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
      ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
@@ -8560,7 +8560,7 @@ body {
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/src/srcfiles/orbital.js?v=12"></script>
 <script src="src/src/srcfiles/state.js?v=77"></script>
-<script src="src/src/srcfiles/sim.js?v=113"></script>
+<script src="src/src/srcfiles/sim.js?v=114"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
@@ -8588,7 +8588,7 @@ body {
      (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
      time) and before render.js/ui.js, which call it at runtime. -->
 <script src="src/src/srcfiles/inventory.js?v=26"></script>
-<script src="src/src/srcfiles/effects.js?v=48"></script>
+<script src="src/src/srcfiles/effects.js?v=49"></script>
 <!-- Food-overhaul Phase 5: the pure cooking engine (cooking.js) — after
      effects.js (uses clamp) and items.js (makePlate/freshnessOf); its
      functions are called at runtime by defs.actions.js and render.js. -->
@@ -8680,7 +8680,7 @@ body {
      and called by sim.js at runtime only. -->
 <script src="src/src/srcfiles/rumination.js?v=15"></script>
 <script src="src/src/srcfiles/prompt.js?v=20"></script>
-<script src="src/src/srcfiles/llm.js?v=57"></script>
+<script src="src/src/srcfiles/llm.js?v=58"></script>
 <!-- CONCEPT — the character-concept engine (description -> validated draft).
      AI-Assisted Character Generation Phase 2. Sits after llm.js (whose prompt
      conventions it follows) and before the UI layer that calls it. Reads
@@ -8775,12 +8775,15 @@ body {
      Calendar rows and year-grid model. Pure domain logic beside its sibling
      birthdays.js; runtime calls only. Registered in dev/verify/loadgame.js's
      ORDER in the same change (the rumination.js scar). -->
-<script src="src/src/srcfiles/occasions.js?v=6"></script>
+<script src="src/src/srcfiles/occasions.js?v=7"></script>
+<!-- traditions.js (occasions-and-holidays-plan.md P4-P8): what people DO on the
+     calendar's days. Runtime calls only; registered in dev/verify/loadgame.js. -->
+<script src="src/src/srcfiles/traditions.js?v=1"></script>
 <!-- Seasons & weather (seasons-and-weather-plan.md Phase 1): daily weather,
      the outdoor temperature curve, daylight and the sky line. Pure and
      derived; runtime calls only (temperature.js/llm.js/render.js typeof-guard
      it). Registered in dev/verify/loadgame.js's ORDER in the same change. -->
-<script src="src/src/srcfiles/seasons.js?v=9"></script>
+<script src="src/src/srcfiles/seasons.js?v=10"></script>
 <!-- House notes (0.14.2): the roommates' half of the fridge — they read your
      notes, scribble replies, and leave their own for real, stored reasons.
      Pure domain logic; sim.js (resolveTick), defs.actions.js, render.js and
@@ -8869,7 +8872,7 @@ body {
      clockToAbsolute from time.js, ITEM_DEFS from config.js — all already
      loaded above it). Sits directly after money.js: both are world-ledger
      modules with no UI dependency, and neither is asks.js's own caller. -->
-<script src="src/src/srcfiles/mail.js?v=1"></script>
+<script src="src/src/srcfiles/mail.js?v=2"></script>
 <!-- actions-and-activities-overhaul-plan.md Phase 14 (D23): DailyGrid, the
      seeded daily crossword (puzzles.js) — pure reads plus mutating
      fillPuzzleCell/revealHintForWord/generatePuzzleForDay, no load-time
@@ -8904,8 +8907,8 @@ body {
      Registered in BOTH this list and loadgame.js's ORDER, same commit. -->
 <script src="src/src/srcfiles/platform.js?v=6"></script>
 <script src="src/src/srcfiles/aspirations.js?v=2"></script>
-<script src="src/src/srcfiles/asks.js?v=24"></script>
-<script src="src/src/srcfiles/ui.js?v=188"></script>
+<script src="src/src/srcfiles/asks.js?v=25"></script>
+<script src="src/src/srcfiles/ui.js?v=189"></script>
 <script src="src/src/srcfiles/ui.computer.js?v=69"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
