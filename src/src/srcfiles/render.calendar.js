@@ -15,6 +15,7 @@ const CALENDAR_DOW_HEADER = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 function calendarCellTitle(cell, seasonLabel) {
   const bits = [`${cell.dom}${ordinalSuffix(cell.dom)} of ${seasonLabel}`];
   for (const o of cell.occasions) bits.push(`${o.emoji} ${o.label}`);
+  if (cell.selfBirthday) bits.push('🎂 Your birthday');
   for (const name of cell.birthdays) bits.push(`🎂 ${name}'s birthday`);
   for (const e of cell.events || []) bits.push(`${e.emoji} ${e.label}`);
   return bits.join(' · ');
@@ -54,7 +55,8 @@ function buildYearGrid(model, opts = {}) {
     }
     for (const cell of season.cells) {
       const el = document.createElement(opts.selectable ? 'button' : 'div');
-      const marks = [...cell.occasions.map(o => o.emoji), ...cell.birthdays.map(() => '🎂'), ...(cell.events || []).map(e => e.emoji)];
+      const marks = [...cell.occasions.map(o => o.emoji), ...(cell.selfBirthday ? ['🎂'] : []), ...cell.birthdays.map(() => '🎂'), ...(cell.events || []).map(e => e.emoji)];
+      if (opts.selectable) el.type = 'button';
       el.className = 'cal-cell'
         + (cell.isToday ? ' cal-today' : '')
         + (cell.isPast && !opts.selectable ? ' cal-past' : '')
@@ -76,6 +78,37 @@ function buildYearGrid(model, opts = {}) {
   }
   wrap.appendChild(grid);
   if (opts.showDetail !== false) wrap.appendChild(detail);
+  return wrap;
+}
+
+// The character-creation birthday picker (birthdays-and-occasions-plan.md
+// Phase 2, D13): the SAME year grid, selectable, over a model with no player
+// and no "today" (nothing has started yet). Holidays are shown, so a pick can
+// be made knowing a birthday might share a day with one. onPick(doy) gets the
+// day-of-year 1..140 and the picker keeps its own highlight; the caller owns
+// the value. `current` may be null (unpicked — the game rolls it).
+function buildBirthdayPicker(current, onPick, opts) {
+  const wrap = document.createElement('div');
+  // `compact` (the old-save modal): tighter cells so the Save button stays on screen.
+  wrap.className = 'bday-picker' + (opts && opts.compact ? ' bday-compact' : '');
+  const hint = document.createElement('p');
+  hint.className = 'ps-field-hint';
+  hint.textContent = 'Pick the day on the calendar. Holidays are marked, so you can see what shares your day.';
+  wrap.appendChild(hint);
+  const mount = document.createElement('div');
+  wrap.appendChild(mount);
+  const paint = (doy) => {
+    mount.innerHTML = '';
+    if (typeof yearGridModel !== 'function') { mount.textContent = 'The calendar is unavailable.'; return; }
+    const model = yearGridModel(null, { noToday: true, birthdays: false, events: false });
+    mount.appendChild(buildYearGrid(model, {
+      selectable: true,
+      selectedDoy: doy,
+      showDetail: !(opts && opts.compact),
+      onPick: (d) => { paint(d); if (typeof onPick === 'function') onPick(d); },
+    }));
+  };
+  paint(Number.isInteger(current) ? current : null);
   return wrap;
 }
 

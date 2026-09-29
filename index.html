@@ -4394,6 +4394,25 @@ body {
   cursor: pointer;
 }
 .ps-add:hover { border-color: #7b6cf6; color: #c9c0e6; }
+/* Birthday picker (birthdays-and-occasions-plan.md Phase 2) — the shared year grid inside the studio. */
+.ps-birthday-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.ps-birthday-value { font-size: 13px; color: #c9c0e6; min-width: 9em; }
+.ps-btn.ps-mini-btn { padding: 4px 12px; font-size: 12px; }
+.ps-birthday .cal-year { margin-top: var(--space-2); }
+.ps-birthday .cal-seasons { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.ps-birthday .cal-season { background: #191527; border-color: #2e2745; }
+.ps-birthday .cal-cell { background: #100c1c; color: #c9c0e6; }
+.ps-birthday .cal-cell.cal-marked { background: #1d1730; }
+.ps-birthday .cal-cell.cal-selected { background: #3d3480; border-color: #7b6cf6; }
+.ps-birthday .cal-cell:hover { border-color: #4a4070; }
+/* ...and inside the old-save modal (compact: the Save button must stay on screen). */
+.bday-compact .cal-seasons { gap: 6px; margin-top: 4px; }
+.bday-compact .cal-season { padding: 4px 6px; }
+.bday-compact .cal-season-title { margin-bottom: 2px; font-size: 12px; }
+.bday-compact .cal-cell { min-height: 20px; padding: 1px 0; }
+.bday-compact .cal-cell .cal-dom { font-size: 10px; }
+.bday-compact .cal-cell .cal-marks { font-size: 9px; }
+.bday-compact .ps-field-hint { display: none; }
 .ps-portrait-layout {
   display: grid;
   grid-template-columns: minmax(0, 240px) minmax(0, 1fr);
@@ -8485,7 +8504,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=206"></script>
+<script src="src/src/srcfiles/config.js?v=208"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -8499,7 +8518,7 @@ body {
      render.computer.js and studio.js, all of which build controls with it.
      Registered in dev/verify/loadgame.js's ORDER in the same commit. -->
 <script src="src/src/srcfiles/fields.js?v=1"></script>
-<script src="src/src/srcfiles/defs.world.js?v=53"></script>
+<script src="src/src/srcfiles/defs.world.js?v=54"></script>
 <script src="src/src/srcfiles/defs.actions.js?v=65"></script>
 <script src="src/src/srcfiles/defs.computer.js?v=50"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
@@ -8531,7 +8550,7 @@ body {
 <!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
      player-facing release history. Pure data, no dependencies, grouped with
      the other defs.* files for the same reason defs.dreams.js is. -->
-<script src="src/src/srcfiles/defs.patchnotes.js?v=26"></script>
+<script src="src/src/srcfiles/defs.patchnotes.js?v=27"></script>
 <!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
      WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
      ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
@@ -8541,7 +8560,7 @@ body {
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/src/srcfiles/orbital.js?v=12"></script>
 <script src="src/src/srcfiles/state.js?v=77"></script>
-<script src="src/src/srcfiles/sim.js?v=112"></script>
+<script src="src/src/srcfiles/sim.js?v=113"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
@@ -8587,7 +8606,7 @@ body {
 <script src="src/src/srcfiles/intent.js?v=18"></script>
 <script src="src/src/srcfiles/skills.js?v=20"></script>
 <script src="src/src/srcfiles/stealth.js?v=24"></script>
-<script src="src/src/srcfiles/time.js?v=32"></script>
+<script src="src/src/srcfiles/time.js?v=33"></script>
 <script src="src/src/srcfiles/computer.js?v=80"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
@@ -8746,13 +8765,13 @@ body {
      life-event module; only runtime calls out (npc.js/sim.js/drives.js), so
      no load-time dependency. Registered in dev/verify/loadgame.js's ORDER in
      the same change (the rumination.js scar). -->
-<script src="src/src/srcfiles/birthdays.js?v=1"></script>
+<script src="src/src/srcfiles/birthdays.js?v=3"></script>
 <!-- Occasions (occasions-and-holidays-plan.md Phase 1): the ONE calendar
      reader — the year's holidays, festivity, the prompt date line, the
      Calendar rows and year-grid model. Pure domain logic beside its sibling
      birthdays.js; runtime calls only. Registered in dev/verify/loadgame.js's
      ORDER in the same change (the rumination.js scar). -->
-<script src="src/src/srcfiles/occasions.js?v=5"></script>
+<script src="src/src/srcfiles/occasions.js?v=6"></script>
 <!-- Seasons & weather (seasons-and-weather-plan.md Phase 1): daily weather,
      the outdoor temperature curve, daylight and the sky line. Pure and
      derived; runtime calls only (temperature.js/llm.js/render.js typeof-guard
@@ -8788,7 +8807,7 @@ body {
      loader deliberately stops before the render layer, exactly as
      render.spritestudio.js does. -->
 <script src="src/src/srcfiles/render.nightscene.js?v=1"></script>
-<script src="src/src/srcfiles/render.computer.js?v=79"></script>
+<script src="src/src/srcfiles/render.computer.js?v=80"></script>
 <!-- Avatars & Sprite Studio Phase 4: the studio's verbs and its screens.
      render.spritestudio.js extends COMPUTER_RENDERERS, so it must load AFTER
      render.computer.js declares it; spritestudio.js holds the actions and is
@@ -8800,7 +8819,7 @@ body {
      so it loads after render.computer.js. Pure view code — NOT in
      dev/verify/loadgame.js's ORDER (the loader stops before the render
      layer). -->
-<script src="src/src/srcfiles/render.calendar.js?v=2"></script>
+<script src="src/src/srcfiles/render.calendar.js?v=4"></script>
 <script src="src/src/srcfiles/render.desktop.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
@@ -8882,7 +8901,7 @@ body {
 <script src="src/src/srcfiles/platform.js?v=6"></script>
 <script src="src/src/srcfiles/aspirations.js?v=2"></script>
 <script src="src/src/srcfiles/asks.js?v=23"></script>
-<script src="src/src/srcfiles/ui.js?v=186"></script>
+<script src="src/src/srcfiles/ui.js?v=188"></script>
 <script src="src/src/srcfiles/ui.computer.js?v=69"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
@@ -8899,7 +8918,7 @@ body {
      invokes boot() — anything loading after that runs once boot has already
      started, which is a race nobody should have to reason about. Calls into
      SIM/IMAGE/STATE at runtime only, so it needs nothing at load time. -->
-<script src="src/src/srcfiles/studio.js?v=22"></script>
+<script src="src/src/srcfiles/studio.js?v=23"></script>
 
 <!-- Menu overhaul Phase 10: the main-menu component — after ui.js (calls
      resumeFromRecord/openSaveMenu/startAutosave and the data-action chain

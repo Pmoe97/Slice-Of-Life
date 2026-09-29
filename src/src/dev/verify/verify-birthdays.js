@@ -175,6 +175,7 @@ const wish = J(`(() => {
   __rel(g, id, { affection: 0.2, trust: 0.1, tension: 0 });
   g.npcs[id].mood = 0;
   const factsBefore = g.npcs[id].memory.facts.length;
+  const scale = birthdayImportanceScale(g.npcs[id]);
   const impulsesBefore = (g.player.moodEvents || []).length;
   const miss = noteBirthdayWish(g, id, 'nice weather today', 'spoken');
   const first = noteBirthdayWish(g, id, 'Happy birthday!!', 'spoken');
@@ -186,13 +187,13 @@ const wish = J(`(() => {
   // Another roommate, same day, by text: the text beat.
   const other = __ids(g)[1]; __setBday(g, other, 12);
   const byText = noteBirthdayWish(g, other, 'hbd 🎉', 'text');
-  return { miss, first, after, facts, second, afterSecond, impulses,
+  return { miss, first, after, facts, second, afterSecond, impulses, scale,
     mark: g.player.birthdays.marks[id], everWished: g.player.birthdays.everWished, byText, W: BIRTHDAY_TUNING.wish };
 })()`);
 const near = (a, b) => Math.abs(a - b) < 1e-9;
 check('a line that doesn\'t mention it is not a wish', wish.miss === null);
 check('"Happy birthday!!" is the wish, with the spoken beat', !!wish.first && wish.first.kind === 'wished' && /lights up/.test(wish.first.beat), JSON.stringify(wish.first));
-check('the wish moves affection/trust/mood by exactly BIRTHDAY_TUNING.wish', near(wish.after.affection, 0.2 + wish.W.affection) && near(wish.after.trust, 0.1 + wish.W.trust) && near(wish.after.mood, wish.W.mood), JSON.stringify(wish.after));
+check('the wish moves affection/mood by BIRTHDAY_TUNING.wish x their importance scale (Phase 3), trust unscaled', near(wish.after.affection, 0.2 + wish.W.affection * wish.scale) && near(wish.after.trust, 0.1 + wish.W.trust) && near(wish.after.mood, wish.W.mood * wish.scale), JSON.stringify(wish.after));
 check('the wish writes one relationship memory, not pinned (importance < significant)', wish.facts.length === 1 && wish.facts[0].category === 'relationship' && /remembered/.test(wish.facts[0].text) && wish.facts[0].pinned === false, JSON.stringify(wish.facts));
 check('the player gets one small mood impulse for it', wish.impulses === 1);
 check('a second wish the same day is silent and pays nothing', wish.second === null && JSON.stringify(wish.after) === JSON.stringify(wish.afterSecond));
@@ -292,6 +293,7 @@ const day = J(`(() => {
     mark: f.g.player.birthdays.marks[f.a],
     nextR: nextR.lines, affR, affRAfter: r.g.npcs[r.a].relPlayer.affection,
     nextN: nextN.lines, nextU: nextU.lines, dayOfNoHint: dayOfNoHint.lines,
+    scale: birthdayImportanceScale(f.g.npcs[f.a]),
     T: { dayOfMood: BIRTHDAY_TUNING.dayOfMood, forgot: BIRTHDAY_TUNING.forgot },
   };
 })()`);
@@ -299,7 +301,7 @@ check('the morning of: one narration line naming them, with the first-time hint'
 check('...their mood lifts by dayOfMood, and the player now knows', near(day.moodOnDay, day.T.dayOfMood) && day.knownOnDay === true);
 check('once the player has ever remembered a birthday, the hint drops off', day.dayOfNoHint.length === 1 && !/Say happy birthday/.test(day.dayOfNoHint[0]), JSON.stringify(day.dayOfNoHint));
 check('forgot a fond roommate\'s birthday: the next morning says so', day.next.length === 1 && day.next[0].includes(day.name) && /without a word/.test(day.next[0]), JSON.stringify(day.next));
-check('...affection -0.05, tension +0.04, mood -0.10 (from the day-of lift), exactly', near(day.relAfter.affection, 0.5 + day.T.forgot.affection) && near(day.relAfter.tension, day.T.forgot.tension) && near(day.moodAfter, day.T.dayOfMood + day.T.forgot.mood), JSON.stringify({ rel: day.relAfter, mood: day.moodAfter }));
+check('...affection/tension/mood by BIRTHDAY_TUNING.forgot x their importance scale (Phase 3), exactly', near(day.relAfter.affection, 0.5 + day.T.forgot.affection * day.scale) && near(day.relAfter.tension, day.T.forgot.tension * day.scale) && near(day.moodAfter, day.T.dayOfMood + day.T.forgot.mood * day.scale), JSON.stringify({ rel: day.relAfter, mood: day.moodAfter, scale: day.scale }));
 check('...a midnight sting is not an interaction (lastInteractionDay untouched)', day.relAfter.lastInteractionDay === 44, day.relAfter.lastInteractionDay);
 check('...one relationship memory, dated the birthday, importance below pinned', day.forgotFacts.length === 1 && day.forgotFacts[0].category === 'relationship' && day.forgotFacts[0].day === 50 && day.forgotFacts[0].pinned === false, JSON.stringify(day.forgotFacts));
 check('...the mark says forgot + resolved, and the rerun never stings twice', day.mark.forgot === true && day.mark.resolved === true && day.rerun.length === 0 && JSON.stringify(day.relAfter) === JSON.stringify(day.relAfterRerun));
@@ -391,11 +393,13 @@ const rows = J(`(() => {
   const oldPass = processBirthdaysForDay(old, 12);
   return { r1, r2, r3, labels: r2.map(birthdayRowLabel), unknownListed: r1.some(r => r.id === c), oldRows, oldPass, oldRec: old.player.birthdays, b };
 })()`);
-check('only known birthdays are listed (the unknown one isn\'t)', rows.r1.length === 2 && !rows.unknownListed);
-check('soonest first — today\'s birthday on top', rows.r1[0].id === rows.b && rows.r1[0].daysUntil === 0 && rows.r1[1].daysUntil === 18, JSON.stringify(rows.r1));
-check('the label says today!, and once remembered, says so', /today!/.test(rows.labels[0]) && /you remembered/.test(rows.labels[0]) && /in 18 days/.test(rows.labels[1]), JSON.stringify(rows.labels));
-check('a former resident drops off the list', rows.r3.length === 1 && rows.r3[0].id === rows.b);
-check('an old save with no player.birthdays reads as empty and the pass lazily creates it', rows.oldRows.length === 0 && Array.isArray(rows.oldPass.lines) && rows.oldRec && typeof rows.oldRec.known === 'object' && typeof rows.oldRec.marks === 'object');
+const others = (r) => r.filter(x => !x.self);
+check('only known birthdays are listed (the unknown one isn\'t), plus your own', others(rows.r1).length === 2 && !rows.unknownListed && rows.r1.filter(x => x.self).length === 1);
+check('soonest first — today\'s birthday on top', others(rows.r1)[0].id === rows.b && others(rows.r1)[0].daysUntil === 0 && others(rows.r1)[1].daysUntil === 18 && rows.r1.every((r, i, a) => !i || a[i - 1].daysUntil <= r.daysUntil), JSON.stringify(rows.r1));
+const lab = rows.r2.map((r, i) => ({ r, label: rows.labels[i] })).filter(x => !x.r.self).map(x => x.label);
+check('the label says today!, and once remembered, says so', /today!/.test(lab[0]) && /you remembered/.test(lab[0]) && /in 18 days/.test(lab[1]), JSON.stringify(lab));
+check('a former resident drops off the list', others(rows.r3).length === 1 && others(rows.r3)[0].id === rows.b);
+check('an old save with no player.birthdays reads as empty (bar your own) and the pass lazily creates it', others(rows.oldRows).length === 0 && Array.isArray(rows.oldPass.lines) && rows.oldRec && typeof rows.oldRec.known === 'object' && typeof rows.oldRec.marks === 'object');
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

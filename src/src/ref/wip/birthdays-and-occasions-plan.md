@@ -1,11 +1,13 @@
 # Birthdays — personal dates on the calendar
 
-Status: **in progress — Phase 1 of 6 built and verified (2026-09-22).**
-Phase 1 (roommate birthdays) shipped in a find-and-improve session; the user
+Status: **COMPLETE — all six phases built and verified.** Phase 1
+(roommate birthdays) shipped 2026-09-22 in a find-and-improve session; the user
 then answered every open question the same day (D13–D16 below), and the
-holiday half of the old "Occasions" scope moved to its own plan. The file
-keeps its original name because a dozen source comments cite it.
-Last updated 2026-09-22.
+holiday half of the old "Occasions" scope moved to its own plan. Phases 2–6
+(the player's own birthday, importance & gossip, the house celebrating, birthday
+parties, contacts) were built 2026-09-29 in one session — see the Handoff. The
+file keeps its original name because a dozen source comments cite it.
+Last updated 2026-09-29.
 
 Companions:
 - `src/src/ref/complete/seasonal-calendar-and-sandbox-plan.md` (built the
@@ -32,23 +34,158 @@ Companions:
   holidays (old Q3) and aging (old Q2) now live there; festivity (occasions
   D6) is one input to birthday importance (D14 here).
 
-This is a living document, worked one phase per session. **Read the Handoff
-section immediately below before anything else** — it is the single source
-of truth for where the last session left off. Update it, and the Status
-table near the bottom, as the very last thing you do each session. There is
-no paired handoff prompt yet — Phase 1 was built inside a find-and-improve
-session; write one from `patterns/HANDOFF-PROMPT-ARCHITECTURE.md` before
-Phase 2 if this continues as a plan.
+This is a living document. **Read the Handoff section immediately below
+before anything else** — it is the single source of truth for where the last
+session left off. The plan is complete; what remains is the "Waiting on the
+user" list in the Handoff (design calls the session made and the user has not
+confirmed) and the follow-ups it names.
 
 ---
 
 ## Handoff — read this first
 
-**Resume at:** Phase 2 (the player's birthday picker) — unblocked: the user
-answered Q1–Q5 on 2026-09-22 (D13–D16). Build order across plans is in the
-roadmap (Occasions P1–P2 first).
+**Nothing to resume** — all six phases are built. The next work in this area is
+`aging-plan.md` (the number moves on the birthday — its Phase 1 rides
+`processBirthdaysForDay`) and Occasions P4; both are separate plans.
 
-**Last session's notes (2026-09-22, Phase 1 — find-and-improve session):**
+### Phases 2–6 session (2026-09-29)
+
+Built in one session at the user's request ("complete the remainder of this
+plan"). Everything is in `birthdays.js` (one module, ~1,000 lines now) plus
+its hook sites; `BIRTHDAY_TUNING` (config.js) owns every number and every
+authored line (new blocks `player`, `importance`, `celebrate`, `party`,
+`contacts`).
+
+- **Phase 2 — the player's birthday (D13, D17–D18).** `player.birthday`
+  (day-of-year 1..140) is picked in creation on a new studio field kind,
+  `birthday` (studio.js `buildStudioBirthday`), which opens the SHARED year
+  grid as a picker (`buildBirthdayPicker`, render.calendar.js — the Calendar's
+  Year tab's own `buildYearGrid` with `selectable`, over
+  `yearGridModel(null, { noToday: true, birthdays: false, events: false })`, so
+  holidays show and nothing is "today"). Blank = rolled by
+  `rollPlayerBirthday(seed)` at world-build (sim.js `buildGameState`); Roll
+  Everything fills a blank one, never overwrites a picked one; Sandbox re-open
+  keeps it (`studioDraftFromPlayerRecord`). A save from before Phase 2 has no
+  stored birthday: `playerBirthdayDayOfYear` DERIVES a stable one (seed + name,
+  D1's precedent) and a one-time modal (`openPlayerBirthdayPrompt`, ui.js,
+  triggered from `startClockLoop` — the funnel every load path goes through)
+  asks with that day pre-selected; closing it any way keeps the derived day
+  (`promptShown`). On the day (`processPlayerBirthday`): a narration line, a
+  mood lift, a text at midnight from each resident who KNOWS it (fond ≥ 0.30, or
+  told) and is fond ≥ 0.5 (below that, a coin toss between text and "say it in
+  person" — the `[Birthday]` prompt line makes them say it), and the closest
+  resident fond ≥ 0.35 leaves a present in your bag (the `gift_to_player`
+  `MOVE_ITEM` path via `giftableStack`; owning nothing giftable, they "picked
+  something up" — chocolates or flowers). Telling someone ("my birthday is…",
+  `toldPattern`) is a beat (`noteBirthdayTold`) that makes them know it; it is
+  NOT read as learning theirs. The Year tab marks your day; the Birthdays tab
+  always lists you.
+- **Phase 3 — importance & gossip (D14, D19).** `npcBirthdayImportance` (0..1,
+  derived, never stored, `bible.birthdayImportance` overrides): base + festivity
+  (occasions.js `npcFestivity`) + warmth + traits (dramatic/expressive/needy/
+  insecure up; stoic/understated/independent down) + a milestone age. The
+  multiplier `birthdayImportanceScale` spans 0.6..1.5 and scales the forget
+  sting and the wish's affection/mood (trust unscaled). `birthdayGossip`: a hurt
+  roommate at importance ≥ 0.6 tells their 1 (2 at ≥ 0.8) closest housemates
+  (cast affection ≥ 0.3) — a real `told_by:<id>` fact through
+  `receiveTransmittedFact` — and the log line says "It seems to have got around
+  the house."
+- **Phase 4 — the house celebrates (D20).** `celebrateBirthday`, built at the
+  rollover so it is there in the morning: each housemate fond of the birthday
+  roommate (cast affection ≥ 0.3) does ONE thing chosen by a hash of
+  (celebrant, honoree, year) — a card (a real `note`, addressed to them, on their
+  bedroom — or on the fridge when they have no bedroom, which a fresh Sandbox
+  roommate doesn't), a cake (the new `birthday_cake` item: six servings, fridge
+  class, three days — ONE per birthday, the fondest baker's), or a Chatter post
+  (liked by the honoree). Cards and cakes emit `birthday_card` / `birthday_cake`
+  world events (classified in `EVENT_IMPORTANCE`/`EVENT_EMOTION`), cast-web
+  bump each way, a small mood lift for the honoree, one narration line for the
+  player. Those who did nothing are noticed only by an honoree whose importance
+  ≥ 0.5 (a small cast drop and a memory, at most two).
+- **Phase 5 — a birthday party (D21).** A `party` commitment on a resident's
+  birthday that the resident ACCEPTED is theirs (`birthdayPartyHonoree`).
+  sim.js's per-tick party pass calls `noteBirthdayPartyPresence` — the
+  attendance ledger `commitment.attended` (the player counts when in the room).
+  The next rollover (`resolveBirthdayParties`, run BEFORE the forget sting so a
+  party thrown counts as remembering) pays out: the honoree's mood and, toward a
+  player-hosted party, affection (or a sting if the player threw it and never
+  came), a memory of who came, guests warmer toward them, accepted no-shows
+  cooler. A party that never reached its guest of honor pays nothing (and the
+  ordinary sting then applies). The `[Birthday]` prompt line carries the party.
+- **Phase 6 — beyond residents (D22).** A contact (`isBirthdayContact`: a
+  non-resident, non-former, non-prospective NPC with `contactKnown` — a partner,
+  Del, anyone whose number you have) gets a birthday: on the day they text you
+  a line if fond ≥ 0.25 (Del always, in his own voice), it teaches you the date,
+  your wish counts (at half a roommate's), the prompt line reaches them, and the
+  Year tab, the Birthdays tab and the Codex page (`renderCodexDetail`, both copies)
+  show it. No sting, no tip-off, no celebration — those assume a shared house.
+- **Hook sites touched:** `sim.js` (`player.birthday`; the party pass),
+  `studio.js`, `render.calendar.js`, `occasions.js` (`yearGridModel`: `noToday`,
+  `selfBirthday`, contacts), `ui.js` (the old-save modal + two `data-action`s),
+  `time.js` (`startClockLoop` → prompt), `render.computer.js` (Codex birthday, both
+  copies), `defs.world.js` (`birthday_cake`), `config.js`, `index.html` (CSS +
+  `?v=`), `defs.patchnotes.js` (0.14.5).
+- **Verified:** `verify-birthdays.js` **68/68** (updated: the wish and sting are
+  now scaled by importance; the Calendar always lists you), new
+  `verify-birthdays-p2.js` **88/88** (registration; the roll/pick/store/derive
+  path incl. `SIM_generateHouse` with a draft; the day itself; the year-grid
+  model and the REAL `render.calendar.js` picker over a fake DOM; importance
+  spread/traits/scale; gossip; celebration incl. one cake and the no-bedroom
+  fallback; every party case incl. an end-to-end real `resolveTick` → attendance
+  → rollover; contacts incl. Del; old-save record shapes). Full sweep: **6908
+  passed / 13 failed / 0 errored** — the 12 known failures (see
+  `verify-suite-regression-triage-2026-09-20.md`) plus one that is not this
+  work: `verify-im-asks.js` "no runtime writer pushes onto a thread directly"
+  fails on a CRLF checkout because its regex strips `pushImMessage` with
+  `\n}\n` (computer.js:1897 is that function's own `push`, so the code is
+  right; the test is line-ending-sensitive).
+- **Live-verified** in `dev-harness.html` (throwaway Sandbox, not the user's
+  save): the studio's Birthday field opens the grid, a pick lands in the draft
+  (13th of Summer = 48), Roll it clears, Roll Everything fills a blank and keeps
+  a picked one; the old-save modal (compact grid so Save stays on screen) —
+  pick → Save stores it, log line, prompt does not return; a real rollover
+  across midnight onto the player's birthday logged "🎂 It's your birthday.",
+  Mira left the chips, Mira's text arrived, Jonah was marked "spoken"; a real
+  rollover onto Mira's birthday logged "🎂 It's Mira's birthday today." and "🎈
+  The house has been busy for Mira: Jonah left a card." with the card on the
+  fridge. That live pass found one real bug (a Sandbox roommate has no
+  `residency.room`, so the card had nowhere to go) — fixed, with a test.
+- **Not live-verified:** the party path (verified end to end in node, through the
+  real `resolveTick`, but not played), a cake/post in the browser, the Codex
+  line, and the studio inside the real New Game flow (the studio was opened
+  directly; the confirm → options → cutscene handoff carries the draft
+  unchanged and `buildPlayerDraftForNewGame` is unit-tested).
+
+**Waiting on the user** (design calls this session made and the user has NOT
+confirmed — every one is a number or a wording in `BIRTHDAY_TUNING`, cheap to
+change):
+1. **Who knows your birthday, and how they greet you** — a resident knows it at
+   affection ≥ 0.30 or when told; ≥ 0.5 → a midnight text, below that a coin
+   toss between a text and saying it in person. Right?
+2. **The birthday present** — the closest resident at ≥ 0.35 gives something
+   they own, else chocolates or flowers. Should a present cost the giver
+   anything, or be rarer?
+3. **The old-save prompt** — asked once, dismissing it keeps the derived day. Do
+   you also want a way to CHANGE your birthday later (there isn't one)?
+4. **Importance** — the formula and the 0.6..1.5 span. And gossip: importance ≥ 0.6
+   tells one close housemate, ≥ 0.8 tells two. Big enough? too big?
+5. **The celebration** — built at midnight so it's there in the morning; card /
+   cake / post by a hash; one cake per birthday. Should the cake be something the
+   player can also bake for them? (It isn't — nothing in the player's verbs
+   makes a birthday cake.)
+6. **Parties** — the honoree must have ACCEPTED the party to be its guest of
+   honor. A party the player throws for someone who declines is just a party.
+7. **Contacts** — texts only when fond ≥ 0.25 (Del always); your wish pays at half.
+8. **The version** — this bumped `GAME_VERSION` to 0.14.5 with a "Birthdays" patch
+   note (the last two sessions each bumped one). Revert to 0.14.4 if you'd
+   rather fold it into that entry.
+
+**Follow-ups (to-dos, not questions):** aging (`aging-plan.md`) moves the number on
+the birthday — its Phase 1 hooks `processBirthdaysForDay`; a resident's own
+party (NPC-hosted, for their own birthday) works through the accepted-guest rule
+but no NPC currently proposes one; the cake has no "everyone gathers" beat.
+
+**Phase 1 session notes (2026-09-22, find-and-improve session):**
 - Why this area: a survey for missing *content* (not bugs) found the
   seasonal calendar has four 35-day seasons and not one personal date on
   it — `grep -i "birthday\|holiday\|festival"` over `srcfiles/` hit only
@@ -232,6 +369,20 @@ lines, the Calendar app, the daily rollover.
 - **D16 — Holidays** (old Q3) → `occasions-and-holidays-plan.md`; the Game
   Room (old Q5) → `game-room-overhaul-plan.md`.
 
+### Decisions the 2026-09-29 session made (D17–D22 — unconfirmed, see "Waiting on the user")
+- **D17 — the player's birthday is a day-of-year 1..140 on `player.birthday`.**
+  Blank rolls from the seed (`rollPlayerBirthday`); an old save derives one
+  (`playerBirthdayDayOfYear`) and asks once. Never a stored default for old saves.
+- **D18 — who knows it:** fond ≥ 0.30 or told; texts at ≥ 0.5 (a coin toss below);
+  the closest fond ≥ 0.35 leaves a present.
+- **D19 — importance is derived (R5)** and scales the sting and the wish 0.6..1.5;
+  gossip is a real `told_by` transmission, 1–2 close housemates.
+- **D20 — the house celebrates at the rollover, one thing each, one cake.**
+- **D21 — a party on a birthday is the honoree's iff they accepted;** attendance
+  is a ledger written by the per-tick party pass; payoff at the next rollover,
+  before the sting.
+- **D22 — contacts get the day, the text (if fond) and the wish, never the sting.**
+
 ## Data model
 
 ```js
@@ -265,7 +416,7 @@ npcBirthdayDayOfYear(npc) → 1..140
   full sweep delta = exactly its assertions; live: tip-off → Calendar →
   day-of → text wish → no sting / forget → sting.
 
-### Phase 2 — The player's own birthday (D13)
+### Phase 2 — The player's own birthday (D13) ✅ (2026-09-29)
 - **Goal:** the player picks their birthday from a full-year grid in
   creation (and Sandbox); it shows on the Calendar; on the day, residents who
   know it (fond enough, or told) text or say happy birthday, the closest
@@ -276,25 +427,25 @@ npcBirthdayDayOfYear(npc) → 1..140
   beside Age), a year-grid renderer shared with the Calendar (occasions P1),
   `birthdays.js` (player pass), `config.js` (lines), `menu.js`/sandbox.
 
-### Phase 3 — Birthday importance & gossip (D14)
+### Phase 3 — Birthday importance & gossip (D14) ✅ (2026-09-29)
 - **Goal:** importance scales the sting and the payoff; a forgotten
   high-importance roommate seeds the fact into close housemates' memory as
   secondhand gossip, so it comes up in *their* conversations.
 - **Verification:** measured spread (a stoic barely cares, a dramatic one
   tells two people); the gossip fact lands with provenance `told`.
 
-### Phase 4 — The house celebrates
+### Phase 4 — The house celebrates ✅ (2026-09-29)
 - **Goal:** on the day, each resident fond of the birthday roommate does
   something small and perceivable — a card on their door, a cake in the
   fridge (a real edible item), a Chatter post — as world events the meanwhile
   ticker / `surfaceRoomEvidence` already surface, with a cast-web bump. A
   roommate who wasn't fond, and did nothing, is noticed too.
 
-### Phase 5 — A birthday party
+### Phase 5 — A birthday party ✅ (2026-09-29)
 - **Goal:** `$HouseParty` booked for a roommate's birthday becomes *their*
   party — a bigger payoff for the guest of honor, attendance remembered.
 
-### Phase 6 — Beyond residents
+### Phase 6 — Beyond residents ✅ (2026-09-29)
 - **Goal:** contacts, partners, and Del get birthdays surfaced (a text on the
   day); the Codex/profile shows a known birthday.
 
@@ -303,11 +454,11 @@ npcBirthdayDayOfYear(npc) → 1..140
 | Phase | Status | Summary |
 |---|---|---|
 | 1 | **Done** (2026-09-22) | Roommate birthdays — derive, learn, tip-off, day-of, wish, gift bonus, forget sting, Calendar tab; 68 checks, live-verified |
-| 2 | Not started | The player's own birthday (picker in creation) |
-| 3 | Not started | Birthday importance & gossip |
-| 4 | Not started | The house celebrates |
-| 5 | Not started | Birthday parties |
-| 6 | Not started | Beyond residents |
+| 2 | **Done** (2026-09-29) | The player's own birthday — picker on the year grid in creation/Sandbox, old-save one-time prompt, day-of greetings + a present; `verify-birthdays-p2.js` |
+| 3 | **Done** (2026-09-29) | Importance (0.6–1.5 scale on sting and wish) & gossip (a real told_by transmission) |
+| 4 | **Done** (2026-09-29) | The house celebrates — a card, a cake (`birthday_cake`, one per birthday) or a Chatter post; cast bump; the cold are noticed |
+| 5 | **Done** (2026-09-29) | Birthday parties — the attendance ledger and the next-morning payoff |
+| 6 | **Done** (2026-09-29) | Contacts — a text on the day (Del included), your wish counts, Calendar/Codex show it |
 
 ## Dependency order
 
@@ -336,3 +487,9 @@ see D13–D16. None open.
    is a second source of truth that old saves won't have.
 4. **Once per birthday.** Every reward is gated on the year's mark; a new
    reward must be too.
+5. **The party resolves before the sting.** `resolveBirthdayParties` runs first
+   in `processBirthdaysForDay` so `mark.partied` is set when the sting reads the
+   mark — reorder it and a thrown party stings.
+6. **A rollover write to `npcs[id]` reads the CURRENT record.** The day-of pass,
+   the celebration and the gossip each replace `gs.npcs[id]` (immutably); a pass
+   that keeps a stale `const npc` across another pass's write loses the write.

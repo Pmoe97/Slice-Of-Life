@@ -2,7 +2,7 @@
 
 Status: **in progress.** Design session 2026-09-22 (with the user, over
 AskUserQuestion; the user's answers are recorded as R-decisions below).
-Built: Birthdays P1; Occasions P1 (the calendar), P2 (the holiday work
+Built: Birthdays P1–P6; Occasions P1 (the calendar), P2 (the holiday work
 model), P3 (decorations); Seasons P1 (weather, temperature curve, daylight),
 P2 (ambience: fronts at a time of day, the weather in a room, the sky
 watch), P3 (weather shapes where people go and what the balcony is like), P4
@@ -21,7 +21,7 @@ carries its own phases, Handoff and Status table.
 |---|---|---|
 | [`occasions-and-holidays-plan.md`](occasions-and-holidays-plan.md) | The holiday calendar (a fixed, non-religious roster of 20 occasions across the four seasons), the per-NPC **holiday work model** (who gets the day off, who takes the premium shift), festivity, and the traditions and rituals as real verbs, events and NPC behavior | **P1–P3 done (2026-09-22/23)**; P4 next |
 | [`seasons-and-weather-plan.md`](seasons-and-weather-plan.md) | Making the seasons *felt*: daily weather, a smooth yearly temperature curve, daylight, seasonal ambience in scenes and prompts, seasonal food/activities/wardrobe, seasonal window views | **Code-complete, all 7 phases (2026-09-23)**; one live check outstanding (window views need the real image backend) |
-| [`birthdays-and-occasions-plan.md`](birthdays-and-occasions-plan.md) | Birthdays: Phase 1 (roommates) done; the player's own birthday picked from a full-year calendar in creation (R7), birthday importance + gossip (R8), the house celebrating, parties | Phase 1 done |
+| [`birthdays-and-occasions-plan.md`](birthdays-and-occasions-plan.md) | Birthdays: roommates; the player's own birthday picked from a full-year calendar in creation (R7); birthday importance + gossip (R8); the house celebrating; parties; contacts | **All 6 phases done (P1 2026-09-22, P2–P6 2026-09-29)**; eight design calls await the user |
 | [`aging-plan.md`](aging-plan.md) | Everyone ages: the number moves on the birthday, appearance drifts slowly and one step at a time, portraits refresh only when a visible descriptor actually changes (R9) | Planned |
 | [`game-room-overhaul-plan.md`](game-room-overhaul-plan.md) | Not a date system, designed in the same session: the Game Room comes to life — darts, pool, a card table (poker/blackjack ported from AcesAndLace), a multi-game arcade cabinet of original games, tabletop games; stakes and rivalries (R12) | Planned |
 

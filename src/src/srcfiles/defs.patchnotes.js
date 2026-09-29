@@ -36,6 +36,20 @@ const PATCHNOTES_KIND_LABELS = {
 
 const PATCH_NOTES = [
   {
+    version: '0.14.5',
+    date: '2026-09-29',
+    title: 'Birthdays',
+    summary: "Your own birthday, a bigger deal for the people who care about theirs, and a house that actually celebrates. Roommate birthdays had been in since 0.14.2; this finishes the job.",
+    changes: [
+      { kind: 'added', text: "You pick your birthday when you make your character, from a calendar of the whole year (holidays are marked, so you can see what shares your day). Leave it blank and one is rolled for you. It's in Sandbox too. A save from before this asks you once — 'When's your birthday?' — with a day already picked for you." },
+      { kind: 'added', text: "On your birthday the roommates who know it (they're fond enough of you, or you told them — just say 'my birthday is…') text you or say happy birthday, the one closest to you leaves a present in your bag, and you get a lift. Nobody knows? It's a quiet day, and you could always mention it. Your birthday is marked on the Calendar's Year view and always listed in its Birthdays tab." },
+      { kind: 'changed', text: "A birthday matters more to some people than others. Someone festive, warm or dramatic is hurt more when you forget theirs, and gladder when you remember. A quiet, stoic roommate hardly cares. And someone who cares a lot and got forgotten will tell the housemates they're close to, so it can come up in conversation. It never gets huge — it's a small swing either way." },
+      { kind: 'added', text: "The house celebrates. The morning of a roommate's birthday, everyone fond of them does something small: a card on their door, a shoutout on Chatter, and one of them puts a cake in the fridge — a real cake, six slices, that anyone can eat. The birthday roommate notices who did nothing." },
+      { kind: 'added', text: "A house party booked on a roommate's birthday is their party. If they come and you do too, they're delighted and thankful; if you threw it and never showed, they remember that. It's remembered who came, and who said they would and didn't." },
+      { kind: 'added', text: "People outside the house have birthdays too. Someone whose number you have — a partner, or Del — will text you on the day if they're fond of you, and saying happy birthday back counts (a little less than a roommate). A birthday you know now also shows on their Codex page." },
+    ],
+  },
+  {
     version: '0.14.4',
     date: '2026-09-28',
     title: 'Home Cooking & Chores',

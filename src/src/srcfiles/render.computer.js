@@ -5802,6 +5802,10 @@ function renderCodexDetail(body, gs, app, screenDef) {
   name.textContent = npc.bible?.name || npcId;
   const statusBits = [phase];
   if (relationship) statusBits.push(`${relationship.status} with ${relationship.partnerName}`);
+  // Birthdays Phase 6: a birthday you know shows on their page.
+  if (typeof knowsBirthday === 'function' && typeof npcBirthdayDayOfYear === 'function' && knowsBirthday(gs, npcId)) {
+    statusBits.push(`🎂 ${formatBirthday(npcBirthdayDayOfYear(npc))}`);
+  }
   const status = document.createElement('div');
   status.className = 'codex-head-status dim tiny';
   status.textContent = statusBits.join(' · ');
@@ -6834,6 +6838,10 @@ function renderCodexDetail(body, gs, app, screenDef) {
   name.textContent = npc.bible?.name || npcId;
   const statusBits = [phase];
   if (relationship) statusBits.push(`${relationship.status} with ${relationship.partnerName}`);
+  // Birthdays Phase 6: a birthday you know shows on their page.
+  if (typeof knowsBirthday === 'function' && typeof npcBirthdayDayOfYear === 'function' && knowsBirthday(gs, npcId)) {
+    statusBits.push(`🎂 ${formatBirthday(npcBirthdayDayOfYear(npc))}`);
+  }
   const status = document.createElement('div');
   status.className = 'codex-head-status dim tiny';
   status.textContent = statusBits.join(' · ');

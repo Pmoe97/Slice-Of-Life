@@ -497,6 +497,11 @@ function startClockLoop() {
   // Seasons & weather Phase 2: the same for the sky watch (ui.js) — a fresh
   // session starts watching from now.
   if (typeof resetSkyWatch === 'function') resetSkyWatch(currentGameState);
+  // Birthdays Phase 2: every load path funnels through here, so this is where a
+  // save from before the player had a birthday asks for one (once). New games
+  // store one at creation and never ask. Deferred a beat so the load's own
+  // overlays have cleared. UI loads after TIME — runtime call, typeof-guarded.
+  if (typeof maybePromptPlayerBirthday === 'function') setTimeout(maybePromptPlayerBirthday, 600);
   const gen = ++clockGeneration;
   clockRafId = requestAnimationFrame(() => clockFrame(gen));
 }

@@ -6575,6 +6575,9 @@ const EVENT_IMPORTANCE = {
   // they stay off the ticker and the feed.
   note_left:           'social',
   note_left_warm:      'social',
+  // Birthdays Phase 4 (birthdays.js): a card left on a roommate's door / a cake in the fridge.
+  birthday_card:       'social',
+  birthday_cake:       'social',
   // Side Projects (projects.js, 0.14.2): starting one, a milestone, or giving
   // up is a real beat — ticker- and Chatter-worthy ("got through the bridge
   // without stopping"); finishing is what they'll remember. An ordinary
@@ -6688,6 +6691,8 @@ const EVENT_EMOTION = {
   // domestic thing there is; a leftovers or thank-you note is warmth.
   note_left:           'domestic',
   note_left_warm:      'warmth',
+  birthday_card:       'warmth',
+  birthday_cake:       'warmth',
   note_read:           'domestic',
   note_reply:          'domestic',
 };
@@ -10115,6 +10120,149 @@ const BIRTHDAY_TUNING = {
   wishFact: "The player remembered {name}'s birthday and said so.",
   giftFact: 'The player gave {name} the {item} for their birthday.',
   forgotFact: "The player said nothing on {name}'s birthday — not a word, all day.",
+
+  // --- Phase 2: the player's own birthday (D13) ---
+  // The player picks it in creation (the year-grid picker, studio.js); a save
+  // from before Phase 2 gets a derived one and a one-time prompt to set it.
+  // On the day, residents who KNOW it — fond enough of you, or told — text or
+  // say it, the closest leaves a present, and your own mood lifts.
+  player: {
+    seedSalt: 66431,          // the derived birthday (old saves, and a blank "Roll it" draft)
+    knownAffection: 0.30,     // a resident this fond of you knows it without being told
+    dayOfMood: 0.10,          // the morning itself lifts your mood
+    greetMood: 0.03,          // each text greeting adds a little, up to greetMoodCap
+    greetMoodCap: 0.09,
+    textAffection: 0.50,      // at least this fond: they text at midnight. Less: they say it in person.
+    giftAffection: 0.35,      // the closest housemate leaves a present when at least this fond ("fond" bar, NPC_GIFT_TUNING)
+    giftFallback: ['chocolate_box', 'flowers'],   // when they own nothing giftable, they picked something up
+    promptSoonDays: 3,        // a resident who knows mentions it inside this window
+    // Telling someone counts ("my birthday is…", "I'm turning 30"). Matched case-insensitively.
+    toldPattern: "\\bmy (birth\\s*day|b-?day)\\b|\\bi'?m turning\\b|\\bi was born (on|in)\\b",
+    dayOfLine: "🎂 It's your birthday.",
+    dayOfQuietLine: ' Nobody here knows — you could always mention it.',
+    toldBeat: '🎂 {name} now knows your birthday is the {date}.',
+    toldFact: "The player mentioned that their birthday is the {date}.",
+    giftLine: '🎁 {name} left {item} for you — "happy birthday."',
+    greetedFact: 'It was the player\'s birthday and {name} made sure they knew it mattered.',
+    // Text greetings, by the SENDER's texting style (same keys as tipOffLines).
+    greetLines: {
+      terse: ['Happy birthday.', 'Birthday. Hope it\'s a good one.'],
+      'emoji-heavy': ['HAPPY BIRTHDAY!!! 🎂🎉🥳', 'happy birthday!! 🎈🎁 you deserve a good one 💛'],
+      'all-lowercase': ['happy birthday. hope it\'s a good one', 'hey, happy birthday :)'],
+      'properly-punctuated': ['Happy birthday! I hope you have a lovely day.', 'Many happy returns of the day — I hope it\'s a good one.'],
+      'stream-of-consciousness': ['happy birthday!!! ok so i wasn\'t sure if you\'d want a fuss but i couldn\'t not say something so. happy birthday', 'it\'s your birthday and i keep thinking about it so i just have to say happy birthday!'],
+      'meme-laden': ['happy birthday to the main character', 'birthday arc unlocked. happy birthday 🎂'],
+      default: ['Happy birthday!', 'Happy birthday — hope it\'s a good one.'],
+    },
+  },
+
+  // --- Phase 3: birthday importance & gossip (D14) ---
+  // A derived 0..1 per character — never stored (R5). Festivity is one input;
+  // it scales the forget sting and the joy of being remembered, and a person
+  // who cares a lot and is forgotten tells people ("It doesn't need to be a
+  // HUGE deal" — the multiplier only spans lo..hi around 1).
+  importance: {
+    base: 0.35,
+    festivity: 0.30,          // × occasions.js's npcFestivity (0..1)
+    temperament: { warmth: 0.10 },
+    traits: {
+      dramatic: 0.15, expressive: 0.10, needy: 0.12, insecure: 0.08, clingy: 0.06, warm: 0.05,
+      stoic: -0.15, understated: -0.12, independent: -0.10, cold: -0.06,
+    },
+    milestoneBonus: 0.12,     // a round age (every 10th) or 21
+    milestoneAges: [21],
+    scaleLo: 0.6,             // multiplier on the sting and the wish's payoff = lo + (hi − lo) × importance
+    scaleHi: 1.5,
+    // Gossip: a hurt, high-importance roommate tells close housemates.
+    gossipMin: 0.6,           // importance needed to bring it up at all
+    gossipCloseAffection: 0.30,   // cast affection toward the listener
+    gossipTellers: { base: 1, high: 2, highAt: 0.8 },
+    gossipFact: "{name}'s birthday went by and the player never said a word about it — {name} was hurt.",
+    gossipFactImportance: 0.5,
+    gossipLine: ' It seems to have got around the house.',
+  },
+
+  // --- Phase 4: the house celebrates (D-P4) ---
+  // On the day (built at the rollover, so it is there in the morning): every
+  // housemate fond of the birthday roommate does something small and
+  // perceivable — a card on their door, a cake in the fridge, a Chatter post.
+  celebrate: {
+    fondAffection: 0.30,      // cast affection toward the birthday roommate
+    bump: { toHonoree: 0.03, fromHonoree: 0.02 },   // cast-web affection, celebrant→honoree / honoree→celebrant
+    cakeChance: 0.34,         // the share of celebrants who bake, but only ONE cake per birthday
+    postChance: 0.33,         // ...and post (the rest leave a card)
+    honoreeMood: 0.03,        // each thing done lifts them a little (capped, below)
+    honoreeMoodCap: 0.09,
+    // The ones who did nothing are noticed — only by someone whose birthday matters to them.
+    snubMinImportance: 0.5,
+    snubCastAffection: -0.02,
+    snubFactImportance: 0.4,
+    cakeItem: 'birthday_cake',
+    cardLines: {
+      terse: ['Happy birthday, {name}. — {from}', '{name}. Birthday. Enjoy it. — {from}'],
+      'emoji-heavy': ['HAPPY BIRTHDAY {name}!!! 🎂🎉🎈 — {from}', '🎂 {name} 🎂 it\'s YOUR day!! love, {from} 💛'],
+      'all-lowercase': ['happy birthday {name}. — {from}', 'hey {name}, happy birthday :) {from}'],
+      'properly-punctuated': ['Happy birthday, {name}! I hope today is wonderful. — {from}', 'Dear {name}, happy birthday. Warmest wishes, {from}'],
+      'stream-of-consciousness': ['happy birthday {name}!!! i made this card in a rush so ignore the handwriting. — {from}', '{name} it\'s your birthday and i just wanted you to open the door to something nice. {from}'],
+      'meme-laden': ['happy birthday {name}. you are legally required to have a good time. — {from}', '{name}\'s birthday: achievement unlocked. — {from}'],
+      default: ['Happy birthday, {name}! — {from}', 'Happy birthday {name}. Hope it\'s a good one. — {from}'],
+    },
+    postLines: [
+      'happy birthday to {name} 🎂 the best thing about this apartment',
+      'it\'s {name}\'s birthday today!! be nice to them or else',
+      'shoutout to {name} on their birthday 🎉',
+    ],
+    cardEventTemplate: '{name} slipped a birthday card onto {honoree}\'s door.',
+    cardFridgeEventTemplate: '{name} stuck a birthday card on the fridge for {honoree}.',
+    cakeEventTemplate: '{name} put a birthday cake in the fridge for {honoree}.',
+    postEventTemplate: '{name} posted a birthday shoutout for {honoree}.',
+    snubFact: "It was {name}'s birthday and {snubber} didn't do a thing about it.",
+    cardFrom: 'the card',
+    // Narration for the player, once, on the morning.
+    houseLine: '🎈 The house has been busy for {name}: {what}.',
+    houseNothing: '',
+  },
+
+  // --- Phase 5: a birthday party (D-P5) ---
+  // A $HouseParty booked on a roommate's birthday and accepted by them is
+  // THEIR party. Attendance is recorded per tick (sim.js's party pass) and
+  // resolved at the next rollover.
+  party: {
+    honoreeMood: 0.15,        // the guest of honor, if the party happened
+    hostAffection: 0.08,      // ...and toward the player who threw it (attended or not, but see below)
+    hostAbsentAffection: -0.06,   // the player booked it and never showed
+    guestAffection: 0.03,     // each attending guest → honoree, cast web
+    absentAffection: -0.03,   // an accepted guest who never showed → honoree (scaled by importance)
+    attendedFact: "{host} threw {name} a birthday party and {guests} came.",
+    hostedFact: 'The player threw {name} a birthday party.',
+    skippedFact: "The player threw {name} a birthday party and didn't even come.",
+    noShowFact: '{name} said they\'d come to {honoree}\'s birthday party and never showed.',
+    factImportance: 0.7,
+    line: '🎉 {name}\'s birthday party was a hit.',
+    lineNoGuests: '🎉 {name}\'s birthday party — it was mostly just the two of you, and they loved it.',
+    lineSkipped: '🎉 {name}\'s birthday party went ahead without you.',
+    promptLine: 'There is a party in their honor tonight — it is theirs, and they are looking forward to it.',
+  },
+
+  // --- Phase 6: beyond residents (D-P6) ---
+  // A contact (someone whose number you have) or a partner gets a birthday
+  // too: on the day they text you a line, and your wish counts. Residents-only
+  // stays true of the sting, the tip-off and the house's celebration.
+  contacts: {
+    textAffection: 0.25,      // at least this fond of you to mention it themselves
+    lines: {
+      terse: ['Birthday today. FYI.', 'It\'s my birthday. Just so you know.'],
+      'emoji-heavy': ['it\'s my birthday!! 🎂🎈 no pressure 🙃', '🎉 birthday today 🎉'],
+      'all-lowercase': ['it\'s my birthday today. no big deal', 'so it\'s my birthday. thought i\'d mention it'],
+      'properly-punctuated': ['It\'s my birthday today — I thought I\'d let you know.', 'Just so you know, today is my birthday.'],
+      'stream-of-consciousness': ['it\'s my birthday today and i\'m not making a big deal about it but i am also telling you so. so.', 'birthday today! i\'m fine, i\'m fine, just thought you should know'],
+      'meme-laden': ['birthday szn. today. no notes', 'me, casually announcing it\'s my birthday'],
+      default: ['It\'s my birthday today, by the way.', 'Today\'s my birthday. Thought I\'d say.'],
+    },
+    // Del, the contractor, in his own voice (bible: practical, paternal, patient).
+    contractorLines: ['Birthday today, as it happens. Nothing to fuss about — just thought you should know it\'s a good day to call about the plumbing.', 'Turns out it\'s my birthday. Don\'t go making a fuss.'],
+    wishMoodScale: 0.5,       // a contact's wish pays out at half a roommate's (they are not in your house)
+  },
 };
 
 // --- Occasions (occasions-and-holidays-plan.md Phase 1, D1–D9) ---
@@ -13262,7 +13410,7 @@ const DRIVE_COOLDOWN_KEY = '_driveCooldowns';
 // header). The two triggers can coincide; when they don't, a plan-completion
 // bump still needs a real reason a save-version check would care about, or
 // at minimum a patch notes entry — this string IS the app's version list.
-const GAME_VERSION = '0.14.4';
+const GAME_VERSION = '0.14.5';
 
 const SAVE_TUNING = {
   manualBaseSlots: 12,       // manual_0..manual_11; grow on demand above this

@@ -3850,6 +3850,52 @@ function openWriteNoteModal(replyToId) {
   setTimeout(() => document.getElementById('note-text')?.focus(), 50);
 }
 
+// --- The player's birthday prompt (birthdays-and-occasions-plan.md Phase 2) ---
+// A NEW game stores a birthday from creation. A save from before Phase 2 has
+// none, so it is asked ONCE — on the shared modal, over the same year grid the
+// creation picker uses — with the derived day pre-selected. Closing the modal
+// any way at all counts as keeping that day (promptShown is set on open), so
+// nobody is nagged; the derived day is stable, so nothing drifts.
+let playerBirthdayPick = null;
+
+function maybePromptPlayerBirthday() {
+  const gs = currentGameState;
+  if (!gs || typeof playerBirthdayNeedsPrompt !== 'function' || !playerBirthdayNeedsPrompt(gs)) return;
+  openPlayerBirthdayPrompt();
+}
+
+function openPlayerBirthdayPrompt() {
+  const gs = currentGameState;
+  const overlay = document.getElementById('modal-overlay');
+  const title = document.getElementById('modal-title');
+  const body = document.getElementById('modal-body');
+  const actions = document.getElementById('modal-actions');
+  if (!gs || !overlay || !title || !body || !actions || typeof buildBirthdayPicker !== 'function') return;
+  ensurePlayerBirthdays(gs.player).promptShown = true;
+  playerBirthdayPick = playerBirthdayDayOfYear(gs);
+  title.textContent = "When's your birthday?";
+  body.innerHTML = '<p style="margin:0 0 8px;opacity:0.8">Your roommates find out over time — or you can tell them. Pick the day, or keep the one picked for you.</p>';
+  body.appendChild(buildBirthdayPicker(playerBirthdayPick, (d) => { playerBirthdayPick = d; }, { compact: true }));
+  actions.innerHTML = '<button class="btn" data-action="save-player-birthday">Save</button>'
+    + '<button class="btn btn-secondary" data-action="skip-player-birthday">Keep ' + escapeHtml(formatBirthday(playerBirthdayPick)) + '</button>';
+  overlay.setAttribute('data-open', '');
+}
+
+function doSavePlayerBirthday() {
+  const gs = currentGameState;
+  closeModal();
+  if (!gs || !setPlayerBirthday(gs, playerBirthdayPick)) return;
+  addLogEntry('system', 'Your birthday is the ' + formatBirthday(gs.player.birthday) + ". (It's on your Calendar.)");
+}
+
+function doSkipPlayerBirthday() {
+  const gs = currentGameState;
+  closeModal();
+  if (!gs) return;
+  setPlayerBirthday(gs, playerBirthdayDayOfYear(gs));
+  addLogEntry('system', 'Your birthday is the ' + formatBirthday(gs.player.birthday) + ". (It's on your Calendar.)");
+}
+
 async function doWriteNote(replyToId) {
   const text = document.getElementById('note-text')?.value || '';
   const addressedTo = document.getElementById('note-for')?.value || null;
@@ -6178,6 +6224,14 @@ async function handleAction(action, npcId, extra) {
       break;
     case 'confirm-write-note':
       await doWriteNote(extra?.objId);
+      break;
+    // Birthdays Phase 2 (D13): the one-time "when's your birthday?" prompt an
+    // older save gets (see openPlayerBirthdayPrompt).
+    case 'save-player-birthday':
+      doSavePlayerBirthday();
+      break;
+    case 'skip-player-birthday':
+      doSkipPlayerBirthday();
       break;
     // aspirations-and-creative-careers Phase 5 (D21): the manuscript chips.
     case 'write-manuscript-start':

@@ -2347,6 +2347,9 @@ function resolveTick(gameState, minutesThisTick = CLOCK.tickMinutes) {
     if (block !== 'sleep' && location && ROOMS[location]) {
       const liveParty = activePartyCommitmentInRoom(gameState, location);
       if (liveParty) {
+        // Birthdays Phase 5: the attendance ledger — who was physically at the
+        // party (the guest of honor's payoff reads it at the next rollover).
+        if (typeof noteBirthdayPartyPresence === 'function') noteBirthdayPartyPresence(gameState, liveParty, id);
         bumpRoomDirt(gameState, location, PARTY_TUNING.dirtPerMinutePerGuest * minutesThisTick);
         emitTransient(gameState, { id: 'party_noise', roomId: location, intensity: SIGNALS_EMIT.partyNoise, sourceId: id });
         moodDelta += PARTY_TUNING.attendeeMoodPerMinute * minutesThisTick;
@@ -5467,6 +5470,12 @@ function buildGameState(seed, cast, clock, droppedConstraints, economyCfg) {
     // player's rather than authored on its own.
     name: playerName.name,
     surname: playerName.surname,
+    // Birthdays Phase 2 (D13): a day-of-year 1..CALENDAR.daysPerYear. The one
+    // the player picked in creation (or Sandbox), else rolled from the seed
+    // so a blank "Roll it" draft still has one. A save from before this field
+    // has none — birthdays.js derives one and prompts to set it (once).
+    birthday: (typeof normalizePlayerBirthday === 'function' && normalizePlayerBirthday(cast.playerDraft && cast.playerDraft.birthday))
+      || (typeof rollPlayerBirthday === 'function' ? rollPlayerBirthday(seed) : undefined),
     // Intimacy & Voyeurism Phase 5 (D11): what the player is wearing right
     // now — the OUTFIT shape ({ slot: itemId }, missing slot = nothing worn
     // there) persisted on the player, and the clothing STATE MACHINE value

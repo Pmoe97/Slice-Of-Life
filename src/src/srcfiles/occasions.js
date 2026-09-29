@@ -245,10 +245,19 @@ function yearGridModel(gs, opts) {
   const bdayByDoy = {};
   for (const id of Object.keys(known)) {
     const npc = gs.npcs?.[id];
-    if (!npc || npc.residency?.status !== 'resident' || typeof npcBirthdayDayOfYear !== 'function') continue;
+    if (!npc || typeof npcBirthdayDayOfYear !== 'function') continue;
+    // Residents, and (birthdays P6) contacts whose number you have.
+    const listed = typeof isBirthdayPerson === 'function' ? isBirthdayPerson(npc) : npc.residency?.status === 'resident';
+    if (!listed) continue;
     const doy = npcBirthdayDayOfYear(npc);
     (bdayByDoy[doy] = bdayByDoy[doy] || []).push(npc.bible?.name || 'Roommate');
   }
+  // Your own birthday (birthdays P2). The creation picker asks for the model
+  // with { noToday: true, birthdays: false } — no player yet, and nothing to
+  // mark as "today" while choosing.
+  const noToday = !!(opts && opts.noToday);
+  let selfDoy = null;
+  if (!(opts && opts.birthdays === false) && gs?.player && typeof playerBirthdayDayOfYear === 'function') selfDoy = playerBirthdayDayOfYear(gs);
   // Side Projects (projects.js): a roommate's booked show — the open mic,
   // the screening — on its day.
   const eventsByDay = {};
@@ -263,10 +272,11 @@ function yearGridModel(gs, opts) {
       cells.push({
         doy, dom, day,
         weekday: getWeekday(day),
-        isToday: day === today,
-        isPast: day < today,
+        isToday: !noToday && day === today,
+        isPast: !noToday && day < today,
         occasions: occasionsOnDay(day).map(o => ({ id: o.id, emoji: o.def.emoji || '🎉', label: occasionTodayLabel(o) })),
         birthdays: bdayByDoy[doy] || [],
+        selfBirthday: selfDoy === doy,
         events: eventsByDay[day] || [],
       });
     }

@@ -25,6 +25,7 @@
 let studioSubject = null;   // { draft, kind: 'player'|'npc', title, confirmLabel, cancelLabel, portraitUrl, busy, onConfirm, onCancel }
 let playerStudioTab = 'identity';
 let studioFullBodyLink = false;
+let studioBirthdayOpen = false;   // the year-grid picker's disclosure state (not persisted)
 
 function blankStudioDraft(kind) {
   // An NPC subject has no surname (the cast never used one - "Mira", not
@@ -67,6 +68,12 @@ const PLAYER_STUDIO_TABS = [
       { path: 'gender',  label: 'Gender',     kind: 'select', schemaPath: 'bible.gender',
         pool: () => Object.keys(CHAR_GEN.genderWeights),
         hint: 'Sets your default anatomy on the Intimate tab. Change either freely afterward.' },
+    ] },
+    // Birthdays plan Phase 2 (D13): a calendar day, not a typed number — the
+    // picker is the shared year grid (render.calendar.js). Absent = rolled.
+    { label: 'Your birthday', fields: [
+      { path: 'birthday', label: 'Birthday', kind: 'birthday',
+        hint: 'Roommates find out over time — or tell them. Leave it and one is rolled for you.' },
     ] },
   ] },
 
@@ -286,6 +293,7 @@ function applyStudioBuildLink(build) {
 function openStudio(subject) {
   studioSubject = subject;
   studioFullBodyLink = false;
+  studioBirthdayOpen = false;
   playerStudioTab = studioTabs()[0]?.id || 'identity';
   const el = document.getElementById('player-studio');
   if (!el) return;
@@ -415,7 +423,9 @@ function buildStudioSection(section) {
   for (const field of section.fields) {
     // Row groups and toggle grids span the full width; plain fields sit in
     // the two-column grid.
-    if (field.kind === 'rows' || field.kind === 'toggles') {
+    if (field.kind === 'birthday') {
+      wrap.appendChild(buildStudioBirthday(field));
+    } else if (field.kind === 'rows' || field.kind === 'toggles') {
       wrap.appendChild(field.kind === 'rows' ? buildStudioRows(field) : buildStudioToggles(field));
     } else {
       grid.appendChild(buildStudioField(field));
@@ -443,6 +453,69 @@ function studioFieldIsFreeText(field) {
   const r = resolveNpcFieldSpec(field.schemaPath);
   if (!r || r.error || !r.spec) return false;
   return !Array.isArray(r.spec.enum);
+}
+
+// The birthday field (birthdays-and-occasions-plan.md Phase 2, D13): the value
+// as words, a button that opens the year-grid picker, and Roll it to clear.
+// The draft holds one integer, the day-of-year 1..CALENDAR.daysPerYear, or
+// nothing (which the game rolls — same "blank means roll" promise as the rest
+// of the form). Repaints only its own block, so the rest of the tab (and any
+// focus in it) is untouched.
+function buildStudioBirthday(field) {
+  const wrap = document.createElement('div');
+  wrap.className = 'ps-field ps-birthday';
+  const label = document.createElement('label');
+  label.className = 'ps-label';
+  label.textContent = field.label;
+  wrap.appendChild(label);
+  const body = document.createElement('div');
+  wrap.appendChild(body);
+  if (field.hint) {
+    const hint = document.createElement('div');
+    hint.className = 'ps-field-hint';
+    hint.textContent = field.hint;
+    wrap.appendChild(hint);
+  }
+  const paint = () => {
+    body.innerHTML = '';
+    const doy = studioGet(field.path);
+    const row = document.createElement('div');
+    row.className = 'ps-birthday-row';
+    const value = document.createElement('span');
+    value.className = 'ps-birthday-value';
+    value.textContent = Number.isInteger(doy) && typeof formatBirthday === 'function' ? '🎂 ' + formatBirthday(doy) : 'Roll it';
+    row.appendChild(value);
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'ps-btn ps-mini-btn';
+    toggle.setAttribute('data-studio-birthday', 'toggle');
+    toggle.textContent = studioBirthdayOpen ? 'Close calendar' : (Number.isInteger(doy) ? 'Change' : 'Pick on the calendar');
+    toggle.addEventListener('click', () => { studioBirthdayOpen = !studioBirthdayOpen; paint(); });
+    row.appendChild(toggle);
+    if (Number.isInteger(doy)) {
+      const roll = document.createElement('button');
+      roll.type = 'button';
+      roll.className = 'ps-btn ps-mini-btn';
+      roll.setAttribute('data-studio-birthday', 'clear');
+      roll.textContent = 'Roll it';
+      roll.addEventListener('click', () => { studioSet(field.path, ''); paint(); });
+      row.appendChild(roll);
+    }
+    body.appendChild(row);
+    if (studioBirthdayOpen && typeof buildBirthdayPicker === 'function') {
+      body.appendChild(buildBirthdayPicker(Number.isInteger(doy) ? doy : null, (d) => {
+        studioSet(field.path, d);
+        // Repaint the summary row only — the picker already moved its own highlight.
+        const v = body.querySelector('.ps-birthday-value');
+        if (v && typeof formatBirthday === 'function') v.textContent = '🎂 ' + formatBirthday(d);
+        const t = body.querySelector('[data-studio-birthday="toggle"]');
+        if (t) t.textContent = 'Close calendar';
+        if (!body.querySelector('[data-studio-birthday="clear"]')) paint();
+      }));
+    }
+  };
+  paint();
+  return wrap;
 }
 
 function buildStudioField(field) {
@@ -945,6 +1018,9 @@ function doStudioRollAll() {
   }
   d.age = rolled.age;
   d.gender = rolled.gender;
+  // Birthdays Phase 2: a blank birthday is rolled from the same seed (an
+  // authored one is kept — Roll Everything fills blanks, it never overwrites).
+  if (studioSubject?.kind === 'player' && !Number.isInteger(d.birthday) && typeof rollPlayerBirthday === 'function') d.birthday = rollPlayerBirthday(seed);
   if (featuresState.none) rolled.physical.distinguishingFeatures = [FEATURES_NONE];
   else if (featuresState.custom) rolled.physical.distinguishingFeatures = [FEATURES_CUSTOM, ...rolled.physical.distinguishingFeatures];
   rolled.physical.distinguishingFeaturesCustom = featuresState.customText;
@@ -1010,6 +1086,8 @@ function buildPlayerDraftForNewGame() {
     surname: (d.surname || '').trim(),
     age: Number.isFinite(d.age) ? d.age : undefined,
     gender: d.gender || undefined,
+    // Birthdays Phase 2 (D13): the picked day-of-year, or undefined (rolled at world-build).
+    birthday: Number.isInteger(d.birthday) ? d.birthday : undefined,
     physical: flattenStudioFeatures(physical),
     portrait: { ...d.portrait },
   };
@@ -1193,6 +1271,7 @@ function studioDraftFromPlayerRecord(prev) {
     surname: prev.surname || '',
     age: prev.age ?? null,
     gender: prev.gender || '',
+    birthday: Number.isInteger(prev.birthday) ? prev.birthday : undefined,
     physical: JSON.parse(JSON.stringify(prev.physical || {})),
     portrait: {
       prompt: prev.portrait?.prompt || '', seed: prev.portrait?.seed || 0, promptDirty: !!prev.portrait?.promptDirty,
