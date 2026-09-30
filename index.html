@@ -8552,7 +8552,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=221"></script>
+<script src="src/src/srcfiles/config.js?v=222"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -8598,7 +8598,7 @@ body {
 <!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
      player-facing release history. Pure data, no dependencies, grouped with
      the other defs.* files for the same reason defs.dreams.js is. -->
-<script src="src/src/srcfiles/defs.patchnotes.js?v=39"></script>
+<script src="src/src/srcfiles/defs.patchnotes.js?v=40"></script>
 <!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
      WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
      ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
@@ -8607,8 +8607,8 @@ body {
 <!-- ORBITAL: the S4714 orbital PRNG behind seededRng/orbitalRandom.
      Needs CONFIG's S4714_ORBIT and SIM's hashStr, both at runtime only. -->
 <script src="src/src/srcfiles/orbital.js?v=12"></script>
-<script src="src/src/srcfiles/state.js?v=80"></script>
-<script src="src/src/srcfiles/sim.js?v=117"></script>
+<script src="src/src/srcfiles/state.js?v=81"></script>
+<script src="src/src/srcfiles/sim.js?v=118"></script>
 <!-- Inventory overhaul Phase 7: meal commitments (commitments.js) — after
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
@@ -8844,7 +8844,7 @@ body {
      defs.actions.js, effects.js, computer.js, llm.js, render.js and ui.js reach it
      at runtime only. Registered in dev/verify/loadgame.js's ORDER in the same
      change. -->
-<script src="src/src/srcfiles/tv.js?v=3"></script>
+<script src="src/src/srcfiles/tv.js?v=4"></script>
 <!-- Side Projects (0.14.2): each roommate has something of their own on the go —
      a song on guitar, a painting, a novel, a scarf — drawn from their interests.
      You hear them get better, they finish (skill for real, work on the walls)
@@ -8855,7 +8855,7 @@ body {
      in the same change. -->
 <script src="src/src/srcfiles/projects.js?v=3"></script>
 <script src="src/src/srcfiles/books.js?v=1"></script>
-<script src="src/src/srcfiles/games.js?v=7"></script>
+<script src="src/src/srcfiles/games.js?v=8"></script>
 <script src="src/src/srcfiles/darts.js?v=1"></script>
 <script src="src/src/srcfiles/cardgames.js?v=1"></script>
 <script src="src/src/srcfiles/poker.js?v=1"></script>
@@ -8863,6 +8863,7 @@ body {
 <script src="src/src/srcfiles/pool.js?v=1"></script>
 <script src="src/src/srcfiles/arcade.js?v=1"></script>
 <script src="src/src/srcfiles/tabletop.js?v=1"></script>
+<script src="src/src/srcfiles/gamenight.js?v=1"></script>
 <script src="src/src/srcfiles/render.js?v=111"></script>
 <!-- Night Scene Phase 3b: the Living Tableau's PAINTER. After render.js
      (shares its rules: idempotent, no state mutation, no rolls) and after
@@ -8966,7 +8967,7 @@ body {
 <script src="src/src/srcfiles/platform.js?v=6"></script>
 <script src="src/src/srcfiles/aspirations.js?v=2"></script>
 <script src="src/src/srcfiles/asks.js?v=25"></script>
-<script src="src/src/srcfiles/ui.js?v=193"></script>
+<script src="src/src/srcfiles/ui.js?v=194"></script>
 <script src="src/src/srcfiles/ui.computer.js?v=70"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),

@@ -539,6 +539,13 @@ function gameApplyFollowUp(gs, kind) {
 // --- The conversation prompt ------------------------------------------------------------------
 
 function gamesPromptLine(gs, npcId) {
+  const base = gamesPromptLineOwn(gs, npcId);
+  const pair = typeof gnPairPromptLine === 'function' ? gnPairPromptLine(gs, npcId) : null;
+  if (!pair) return base;
+  return base ? `${base} ${pair.replace('[Games]: ', '')}` : pair;
+}
+
+function gamesPromptLineOwn(gs, npcId) {
   const g = gamesRead(gs);
   const r = g?.rivals?.[npcId];
   const held = typeof arcadeTable === 'function' ? ARCADE_IDS.filter(id => arcadeHolder(gs, id) && arcadeHolder(gs, id).who === npcId) : [];

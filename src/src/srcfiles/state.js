@@ -276,7 +276,7 @@ const WORLD_KEY_FALLBACKS = {
   // ensureBooks fills the sub-shape lazily.
   books: () => ({ progress: {}, current: {}, finished: {}, lent: [], readDay: {}, clubDay: {}, offered: {} }),
   // Game Room (0.14.5): nobody has played anything yet is what an older save reads as.
-  games: () => ({ history: [], rivals: {}, pending: null, iou: [], count: 0, arcade: { table: {} } }),
+  games: () => ({ history: [], rivals: {}, pending: null, iou: [], count: 0, arcade: { table: {} }, pairs: {} }),
 };
 
 // World keys whose on-disk value needs more than a bare "absent → default"

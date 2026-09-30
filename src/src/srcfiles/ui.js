@@ -456,6 +456,12 @@ async function processDayRollover(day) {
       addLogEntry('narration', line);
     }
   }
+  // Game Room (Phases 10-11): last night's game night pays out, the roommates play each other, tonight's is booked.
+  if (typeof processGameNightDay === 'function') {
+    for (const line of processGameNightDay(currentGameState, day).lines) {
+      addLogEntry('narration', line);
+    }
+  }
   // Game Room (D5): once a week the roommates have a go on the arcade cabinet; one who passes your best says so.
   if (typeof processArcadeForDay === 'function') {
     for (const line of processArcadeForDay(currentGameState, day).lines) {

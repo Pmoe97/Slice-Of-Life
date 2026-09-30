@@ -2047,7 +2047,7 @@ function resolveTick(gameState, minutesThisTick = CLOCK.tickMinutes) {
       // the kind's, so "exactly as a meal does" is one code path rather than
       // two that agree today.
       location = scheduleResult.commitmentRoomId || npc.residency.room;
-      activity = (typeof tvPartyActivity === 'function' && tvPartyActivity(gameState, id)) || COMMITMENT_KINDS[scheduleResult.commitmentKind]?.boundActivity || activity;
+      activity = (typeof tvPartyActivity === 'function' && tvPartyActivity(gameState, id)) || (typeof gameNightActivity === 'function' && gameNightActivity(gameState, id)) || COMMITMENT_KINDS[scheduleResult.commitmentKind]?.boundActivity || activity;
       transit = null;
       npc.walk = null;
     } else if (block === 'sleep') {
@@ -2387,6 +2387,11 @@ function resolveTick(gameState, minutesThisTick = CLOCK.tickMinutes) {
       for (const mc of activeMealCommitmentsInRoom(gameState, location)) {
         if (mc.occasion) noteGatheringPresence(gameState, mc, id);
       }
+    }
+    // Game Room Phases 10-11: a game night (a game-room hangout marked `gameNight`) keeps its own ledger.
+    if (block !== 'sleep' && location && typeof gameNightNow === 'function') {
+      const gnc = gameNightNow(gameState);
+      if (gnc && gnc.roomId === location) gameNightNotePresence(gameState, gnc, id);
     }
     // What's On D11/D14: a watch party or movie night (a living-room hangout marked `watchParty`).
     if (block !== 'sleep' && location && typeof tvPartyNow === 'function') {

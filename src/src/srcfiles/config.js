@@ -4845,6 +4845,17 @@ const TV_TUNING = {
       fact: 'Watched {title} with the lights off with {names}.',
       bond: 0.04, mood: 0.07,
     },
+    // D15: Thanksgiving's "the game's on" — a TV night for the big game (a film night that is not dim).
+    big_game: {
+      occasion: 'thanksgiving', startMinute: 1050, minutes: 150, hostAffinity: 0.4, label: 'the big game',
+      titles: ['Rovers vs. Titans', 'the Harvest Bowl', 'Northside vs. Eastside', 'the Thanksgiving Classic'],
+      inviteLine: '{name} has the big game on tonight, {title}, at 5:30 PM. Living room. Snacks are being organised.',
+      roomLine: 'The TV is on: {title}, and the flat is very loud about it.',
+      line: 'You and {names} watched {title} together, shouting at the referees. It was glorious.',
+      lineNoYou: '{names} watched {title} together, shouting at the referees.',
+      fact: 'Watched {title} with {names}, shouting at the referees.',
+      bond: 0.03, mood: 0.07,
+    },
     cozy_movie: {
       occasion: 'midwinter', startMinute: 1260, minutes: 100, hostAffinity: 0.45, label: 'the cozy movie',
       titles: ['A Very Warm Chorus', 'Snowed In at the Inn', 'The Long Way Home for Winter', 'Cocoa for Two'],
@@ -4865,7 +4876,7 @@ const TV_TUNING = {
 // capped IOU through the money ledger.
 const GAME_DEFS = {
   pool: {
-    id: 'pool', label: 'Pool', anchors: ['pool_table'], minutes: 35, skillTag: 'gaming',
+    id: 'pool', label: 'Pool', phrase: 'pool', anchors: ['pool_table'], minutes: 35, skillTag: 'gaming',
     // Phase 6: a real 8-ball table (pool.js + render.games.js).
     minigame: 'pool',
     intro: ['You rack the balls and {name} chalks a cue, looking far too calm.', '{name} breaks. The balls scatter and the room goes very quiet.'],
@@ -4873,7 +4884,7 @@ const GAME_DEFS = {
     lose: { close: ['{name} sinks the black with one ball to spare. You will be thinking about that shot for a week.', 'It comes down to the last ball, and it goes {name}\'s way.'], blowout: ['{name} runs the table. You barely touch a ball.', 'It is not close. {name} is being visibly nice about it.'] },
   },
   darts: {
-    id: 'darts', label: 'Darts', anchors: ['dartboard'], minutes: 25, skillTag: 'gaming',
+    id: 'darts', label: 'Darts', phrase: 'darts', anchors: ['dartboard'], minutes: 25, skillTag: 'gaming',
     // Phase 2: a real timing game (darts.js + render.games.js). Two games on the one board.
     minigame: 'darts',
     modes: [{ id: '301', label: '301', note: 'count down to exactly zero' }, { id: 'clock', label: 'Around the Clock', note: '1 to 20, then the bull' }],
@@ -4882,7 +4893,7 @@ const GAME_DEFS = {
     lose: { close: ['{name} finishes on the last dart, just ahead of you.', 'You miss the double twice. {name} does not miss it.'], blowout: ['{name} is in a different league tonight.', 'Every dart of {name}\'s goes exactly where it was aimed.'] },
   },
   console: {
-    id: 'console', label: 'Console game', anchors: ['game_console'], minutes: 40, skillTag: 'gaming',
+    id: 'console', label: 'Console game', phrase: 'the console', anchors: ['game_console'], minutes: 40, skillTag: 'gaming',
     intro: ['{name} takes the second controller. It gets loud almost immediately.', 'You pick a game you are both nearly good at and settle in.'],
     win: { close: ['You win by a nose, on the very last lap.', 'A last-second win. {name} demands a rematch on principle.'], blowout: ['You win by a mile. {name} blames the controller.', 'It is a massacre, and you enjoy every second.'] },
     lose: { close: ['You lose by a nose on the very last lap.', '{name} wins with one second to spare and does a small, smug dance.'], blowout: ['{name} beats you by a mile and says "good game" in a way that stings.', 'It is a massacre, and it is yours.'] },
@@ -6873,6 +6884,8 @@ const EVENT_IMPORTANCE = {
   birthday_card:       'social',
   occasion_feast:      'social',
   watch_party:         'social',
+  roommate_game:       'social',
+  game_night:          'social',
   book_finished:       'social',
   game_match:          'social',
   birthday_cake:       'social',
@@ -6992,6 +7005,8 @@ const EVENT_EMOTION = {
   birthday_card:       'warmth',
   occasion_feast:      'warmth',
   watch_party:         'warmth',
+  roommate_game:       'warmth',
+  game_night:          'warmth',
   book_finished:       'warmth',
   game_match:          'warmth',
   birthday_cake:       'warmth',

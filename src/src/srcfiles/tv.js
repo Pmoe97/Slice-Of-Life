@@ -1191,7 +1191,7 @@ function tvActivityLabel(gs, npcId, activity) {
 function tvRoomLine(gs, roomId) {
   if (roomId !== TV_TUNING.room) return null;
   const film = tvFilmNow(gs);
-  if (film && tvScreenWorks(gs)) return `The TV is on: ${film.title}, and the room is dim.`;
+  if (film && tvScreenWorks(gs)) { const tpl = TV_TUNING.films[film.kind]?.roomLine; return tpl ? tvFillText(tpl, { title: film.title }) : `The TV is on: ${film.title}, and the room is dim.`; }
   const tv = tvRead(gs);
   const np = tv?.nowPlaying;
   const def = np ? tvShowDef(np.showId) : null;
