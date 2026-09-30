@@ -2027,7 +2027,7 @@ function gameMatchEffects(ctx, prepared) {
   return [
     `ADJUST_NEED player mood ${mood >= 0 ? '+' : ''}${mood}`,
     'ADJUST_NEED player energy -2',
-    `GAME_MATCH ${plan.gameId} ${plan.npcId} ${plan.stakeId} ${plan.playerWon ? 'p' : 'n'} ${plan.grade} ${plan.amount || 0}`,
+    `GAME_MATCH ${plan.gameId} ${plan.npcId} ${plan.stakeId} ${plan.draw ? 'd' : plan.playerWon ? 'p' : 'n'} ${plan.grade} ${plan.amount || 0}`,
   ];
 }
 
@@ -2061,13 +2061,30 @@ function prepareGameChallenge(ctx) {
       npcId = await openChoicePicker('Play against…', withIds.map(id => ({ id, label: gs.npcs[id]?.bible?.name || id })));
       if (!npcId) return { cancelled: true };
     }
-    const stakes = gdef.multi ? gameSessionStakeOptions(gs, tableIds()) : gameStakeOptions(gs, npcId);
+    const stakes = gdef.multi ? gameSessionStakeOptions(gs, tableIds(), gameId) : gameStakeOptions(gs, npcId);
     const pick = await openChoicePicker('What is riding on it?', stakes.map(r => ({ id: r.id, label: r.label, note: r.note, disabled: !r.ok })));
     if (!pick) return { cancelled: true };
     const row = stakes.find(r => r.id === pick) || stakes[0];
     // The table game: the night is played on the poker screen, and what it returns is the result.
     if (gdef.multi) {
       if (!gdef.minigame || typeof openMinigame !== 'function') return finishNight(gameId, row.stakeId, row.amount);
+      if (gdef.minigame === 'party') {
+        // Who Is It?: the questions and the roommates' answers are decided here (deterministic), the screen asks you.
+        const ids = tableIds();
+        const seedKey = hashStr(`${gs.meta?.seed}|${gs.meta.clock.day}|${gs.meta.clock.minutes}|party|${ids.join(',')}`);
+        const rng = mulberry32(seedKey >>> 0);
+        const questions = partyBuild(gs, ids, rng);
+        if (!questions.length) return { cancelled: true };
+        const npcAnswers = {};
+        for (const q of questions) { npcAnswers[q.n] = {}; for (const id of ids) { const a = partyNpcAnswer(gs, q, id, rng); if (a) npcAnswers[q.n][id] = a; } }
+        const names = { player: 'You' }; for (const id of ids) names[id] = gs.npcs[id]?.bible?.name || id;
+        const night = await openMinigame('party', { ids, names, questions, npcAnswers });
+        if (!night) return { cancelled: true };
+        const scores = partyScore(questions, night.answers, ['player', ...ids]);
+        const result = partyNightResult(gs, scores, ids, questions);
+        result.iou = [];
+        return finishNight(gameId, 'brag', 0, result);
+      }
       const seats = tableIds().map(id => ({ id, name: gs.npcs[id]?.bible?.name || id, style: typeof pokerStyleFor === 'function' ? pokerStyleFor(gs.npcs[id]) : null }));
       const played = await openMinigame(gdef.minigame, { seats, stakeId: row.stakeId, amount: row.amount, stakeLabel: row.label,
         seed: hashStr(`${gs.meta?.seed}|${gs.meta.clock.day}|${gs.meta.clock.minutes}|${gameId}|${seats.map(s => s.id).join(',')}`) });
@@ -2082,7 +2099,7 @@ function prepareGameChallenge(ctx) {
         if (!mode) return { cancelled: true };
       }
       const npc = gs.npcs[npcId];
-      const played = await openMinigame(gdef.minigame, { mode, npcName: npc?.bible?.name || 'them', skillP: gameSkillOf(gs, 'player', gameId), skillN: gameSkillOf(gs, npcId, gameId), stakeId: row.stakeId, amount: row.amount,
+      const played = await openMinigame(gdef.minigame, { mode, npcName: npc?.bible?.name || 'them', skillP: gameSkillOf(gs, 'player', gameId), skillN: gameSkillOf(gs, npcId, gameId), riskN: typeof tabletopRisk === 'function' ? tabletopRisk(npc) : 0, stakeId: row.stakeId, amount: row.amount,
         seed: hashStr(`${gs.meta?.seed}|${gs.meta.clock.day}|${gs.meta.clock.minutes}|${npcId}|${gameId}`) });
       if (!played) return { cancelled: true };
       return finish(gameId, npcId, row.stakeId, row.amount, played, mode);

@@ -4902,8 +4902,19 @@ const GAME_DEFS = {
     win: { close: ['You come out a few chips ahead of the dealer.', 'You edge it on the last hand.'], blowout: ['You bust the dealer\'s bank.', 'It is not close: the dealer keeps asking to change the deck.'] },
     lose: { close: ['The dealer edges you out by a few chips.', 'You finish a hand or two short.'], blowout: ['The dealer cleans you out.', 'You watch your chips slide across the table, one hand at a time.'] },
   },
+  // Phase 9: the party game, "Who Is It?": needs no gear, only company (two or more roommates at the table).
+  // Questions come from what is true of them; it is not for money.
+  party: {
+    id: 'party', label: 'Party game night', anchors: [], free: true, minPresent: 2, minutes: 25, skillTag: 'gaming', minigame: 'party', multi: true, noMoney: true,
+    intro: ['{name} pile onto the sofa with a bowl of snacks and a round of "Who Is It?".', 'Somebody starts reading out questions about everyone at the table, and nobody is safe.'],
+    win: { close: ['You edge it: you know this house better than you thought.', 'You win by a single answer, and you will not let anyone forget it.'], blowout: ['You run away with it. You have been paying attention.', 'It is not close: you know these people better than they know each other.'] },
+    lose: { close: ['You lose by a whisker: somebody knows this house a little better.', 'One answer short. You knew it, you just did not say it.'], blowout: ['You are humbled: you barely know these people.', 'It turns out you have been living with strangers.'] },
+  },
   boardgame: {
-    id: 'boardgame', label: 'Board game', anchors: [], item: 'board_game', minutes: 45, skillTag: 'gaming',
+    id: 'boardgame', label: 'Board game', anchors: [], item: 'board_game', minutes: 20, skillTag: 'gaming',
+    // Phase 9: two quick games in the box (tabletop.js + render.games.js).
+    minigame: 'tabletop',
+    modes: [{ id: 'four', label: 'Drop Four', note: 'four in a row, on a grid' }, { id: 'pig', label: 'Push Your Luck', note: 'roll for more, or hold and bank it' }],
     intro: ['You unfold the board and argue about the rules for ten minutes, which is half the fun.', '{name} reads the rules aloud in a dramatic voice.'],
     win: { close: ['You take it on the last turn, by a single point.', 'A last-turn win. {name} checks the rules to see if that was legal.'], blowout: ['You take the board and every property on it.', 'It is not close. {name} starts a new game to save face.'] },
     lose: { close: ['{name} takes it on the last turn, by a single point.', 'You lose by one point and will be checking the rules later.'], blowout: ['{name} takes the board and every property on it.', 'It is not close. You start a new game to save face.'] },

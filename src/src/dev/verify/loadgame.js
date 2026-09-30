@@ -272,6 +272,8 @@ const ORDER = [
   'pool.js',
   // arcade.js (Game Room Phases 7-8): the four arcade games' pure state machines and the score table, right after pool.js.
   'arcade.js',
+  // tabletop.js (Game Room Phase 9): Drop Four, Push Your Luck and the party game, right after arcade.js.
+  'tabletop.js',
   // money.js (actions-and-activities-overhaul-plan.md Phase 4, D9) — the
   // bidirectional ledger. Pure reads plus a mutating adjustMoneyLedger, no
   // load-time dependencies; sits directly before asks.js here exactly as it

@@ -3741,6 +3741,19 @@ body {
 .games-pool-spin { width: 52px; height: 52px; cursor: pointer; border-radius: 50%; }
 .games-arcade { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); min-width: 0; }
 .games-arcade-canvas { max-width: 100%; height: auto; border-radius: 8px; user-select: none; -webkit-user-select: none; cursor: pointer; }
+.games-c4 { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
+.games-c4-grid { display: grid; gap: 4px; padding: 8px; border-radius: 10px; background: #1d3a8a; width: min(100%, 340px); }
+.games-c4-cell { aspect-ratio: 1; border-radius: 50%; border: none; background: #0b1440; padding: 0; cursor: pointer; }
+.games-c4-cell.p { background: #e5c229; }
+.games-c4-cell.n { background: #c0392b; }
+.games-c4-cell.games-c4-win { outline: 3px solid #fff; }
+.games-c4-cell:disabled { cursor: default; }
+.games-pig { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
+.games-pig-board { font-weight: 700; text-align: center; }
+.games-pig-die { font-size: 4rem; line-height: 1; min-height: 4rem; }
+.games-party { display: flex; flex-direction: column; gap: var(--space-2); }
+.games-party-q { font-weight: 700; text-align: center; padding: var(--space-2); }
+.games-party-right { outline: 2px solid #1e8449; }
 .games-poker { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .games-poker-stake { font-size: var(--fs-sm, 0.9rem); color: var(--color-text-dim); text-align: center; }
 .games-poker-opps { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: center; }
@@ -8539,7 +8552,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=220"></script>
+<script src="src/src/srcfiles/config.js?v=221"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -8554,7 +8567,7 @@ body {
      Registered in dev/verify/loadgame.js's ORDER in the same commit. -->
 <script src="src/src/srcfiles/fields.js?v=1"></script>
 <script src="src/src/srcfiles/defs.world.js?v=57"></script>
-<script src="src/src/srcfiles/defs.actions.js?v=74"></script>
+<script src="src/src/srcfiles/defs.actions.js?v=75"></script>
 <script src="src/src/srcfiles/defs.computer.js?v=51"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
@@ -8585,7 +8598,7 @@ body {
 <!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
      player-facing release history. Pure data, no dependencies, grouped with
      the other defs.* files for the same reason defs.dreams.js is. -->
-<script src="src/src/srcfiles/defs.patchnotes.js?v=38"></script>
+<script src="src/src/srcfiles/defs.patchnotes.js?v=39"></script>
 <!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
      WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
      ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
@@ -8623,7 +8636,7 @@ body {
      (inventory.js) — after items.js (reads ITEM_DEFS/SORT_GROUPS at call
      time) and before render.js/ui.js, which call it at runtime. -->
 <script src="src/src/srcfiles/inventory.js?v=26"></script>
-<script src="src/src/srcfiles/effects.js?v=53"></script>
+<script src="src/src/srcfiles/effects.js?v=54"></script>
 <!-- Food-overhaul Phase 5: the pure cooking engine (cooking.js) — after
      effects.js (uses clamp) and items.js (makePlate/freshnessOf); its
      functions are called at runtime by defs.actions.js and render.js. -->
@@ -8842,13 +8855,14 @@ body {
      in the same change. -->
 <script src="src/src/srcfiles/projects.js?v=3"></script>
 <script src="src/src/srcfiles/books.js?v=1"></script>
-<script src="src/src/srcfiles/games.js?v=6"></script>
+<script src="src/src/srcfiles/games.js?v=7"></script>
 <script src="src/src/srcfiles/darts.js?v=1"></script>
 <script src="src/src/srcfiles/cardgames.js?v=1"></script>
 <script src="src/src/srcfiles/poker.js?v=1"></script>
 <script src="src/src/srcfiles/blackjack.js?v=1"></script>
 <script src="src/src/srcfiles/pool.js?v=1"></script>
 <script src="src/src/srcfiles/arcade.js?v=1"></script>
+<script src="src/src/srcfiles/tabletop.js?v=1"></script>
 <script src="src/src/srcfiles/render.js?v=111"></script>
 <!-- Night Scene Phase 3b: the Living Tableau's PAINTER. After render.js
      (shares its rules: idempotent, no state mutation, no rolls) and after
@@ -8856,7 +8870,7 @@ body {
      in dev/verify/loadgame.js's ORDER — it is pure view code, and that
      loader deliberately stops before the render layer, exactly as
      render.spritestudio.js does. -->
-<script src="src/src/srcfiles/render.games.js?v=5"></script>
+<script src="src/src/srcfiles/render.games.js?v=6"></script>
 <script src="src/src/srcfiles/render.nightscene.js?v=1"></script>
 <script src="src/src/srcfiles/render.computer.js?v=82"></script>
 <!-- Avatars & Sprite Studio Phase 4: the studio's verbs and its screens.

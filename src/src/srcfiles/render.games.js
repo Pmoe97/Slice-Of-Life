@@ -11,6 +11,8 @@ function openMinigame(kind, opts) {
   if (kind === 'blackjack') return openBlackjackGame(opts);
   if (kind === 'pool') return openPoolGame(opts);
   if (kind === 'arcade') return openArcadeGame(opts);
+  if (kind === 'tabletop') return openTabletopGame(opts);
+  if (kind === 'party') return openPartyGame(opts);
   return Promise.resolve(null);
 }
 
@@ -1028,6 +1030,320 @@ function openArcadeGame(opts) {
       resolve({ gameId: opts.gameId, score: st.score, minutes: Math.max(4, Math.round(ARCADE_TUNING.minutes / 2)), reason: 'quit' });
     };
     raf = requestAnimationFrame(frame);
+  });
+}
+
+// The board game in your bag (Phase 9, D13): Drop Four or Push Your Luck against a roommate. The rules
+// live in tabletop.js; this is the screen. opts: { mode: 'four'|'pig', npcName, skillP, skillN, riskN,
+// seed }. Resolves { playerWon, draw, grade, summary, minutes }.
+function openTabletopGame(opts) {
+  return opts.mode === 'pig' ? openPigGame(opts) : openDropFourGame(opts);
+}
+
+function openDropFourGame(opts) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions || typeof c4New !== 'function') { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const C = TABLETOP.c4;
+    const npcName = opts.npcName || 'Them';
+    const rng = mulberry32((opts.seed >>> 0) || 1);
+    const first = rng() < 0.5 ? 'p' : 'n';
+    const st = c4New(first);
+    let busy = false, finished = false, timer = 0;
+    let status = first === 'p' ? 'You go first. Tap a column.' : `${npcName} goes first.`;
+
+    title.textContent = 'Drop Four';
+    body.innerHTML = '';
+    const wrap = document.createElement('div'); wrap.className = 'games-c4';
+    const grid = document.createElement('div'); grid.className = 'games-c4-grid';
+    grid.style.gridTemplateColumns = `repeat(${C.cols}, 1fr)`;
+    const cells = [];
+    for (let r = 0; r < C.rows; r++) for (let c = 0; c < C.cols; c++) {
+      const cell = document.createElement('button');
+      cell.type = 'button'; cell.className = 'games-c4-cell';
+      cell.addEventListener('click', () => playerDrop(c));
+      grid.appendChild(cell); cells.push(cell);
+    }
+    const statusEl = document.createElement('div'); statusEl.className = 'games-poker-status';
+    wrap.append(grid, statusEl);
+    body.appendChild(wrap);
+    actions.innerHTML = '';
+    const outBtn = document.createElement('button'); outBtn.type = 'button'; outBtn.className = 'btn btn-secondary'; outBtn.textContent = 'Let it play out';
+    const leaveBtn = document.createElement('button'); leaveBtn.type = 'button'; leaveBtn.className = 'btn btn-secondary'; leaveBtn.textContent = 'Forfeit';
+    actions.append(outBtn, leaveBtn);
+    overlay.setAttribute('data-open', '');
+
+    function render() {
+      for (let r = 0; r < C.rows; r++) for (let c = 0; c < C.cols; c++) {
+        const v = st.b[r][c];
+        const el = cells[r * C.cols + c];
+        el.className = `games-c4-cell${v === 1 ? ' p' : v === 2 ? ' n' : ''}${st.line && st.line.some(([lr, lc]) => lr === r && lc === c) ? ' games-c4-win' : ''}`;
+        el.disabled = finished || busy || st.turn !== 1 || v !== 0 && false;
+      }
+      statusEl.textContent = status;
+      outBtn.disabled = busy || finished;
+      outBtn.style.display = finished ? 'none' : '';
+      leaveBtn.textContent = finished ? 'Done' : 'Forfeit';
+    }
+
+    function end() {
+      finished = true; busy = true;
+      const res = c4Result(st, npcName);
+      status = res.summary;
+      render();
+      leaveBtn.onclick = () => { clearTimeout(timer); overlay.removeAttribute('data-open'); resolve(res); };
+    }
+
+    function npcMove() {
+      if (finished) return;
+      busy = true; status = `${npcName} is thinking…`; render();
+      timer = setTimeout(() => {
+        const col = c4Ai(st, opts.skillN, rng);
+        c4Drop(st, col);
+        if (st.winner) { end(); return; }
+        busy = false; status = 'Your move.'; render();
+      }, 650);
+    }
+
+    function playerDrop(col) {
+      if (busy || finished || st.turn !== 1) return;
+      if (c4Drop(st, col) < 0) return;
+      if (st.winner) { end(); return; }
+      status = ''; render();
+      npcMove();
+    }
+
+    outBtn.addEventListener('click', () => {
+      if (busy || finished) return;
+      clearTimeout(timer);
+      let g = 0;
+      while (!st.winner && g++ < 60) c4Drop(st, c4Ai(st, st.turn === 1 ? opts.skillP : opts.skillN, rng));
+      end();
+    });
+    leaveBtn.onclick = () => {
+      if (finished) return;
+      clearTimeout(timer);
+      overlay.removeAttribute('data-open');
+      resolve({ playerWon: false, draw: false, grade: 'normal', summary: `You concede the game to ${npcName}.`, minutes: Math.round(C.minutes / 2) });
+    };
+    render();
+    if (first === 'n') npcMove();
+  });
+}
+
+function openPigGame(opts) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions || typeof pigNew !== 'function') { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const P = TABLETOP.pig;
+    const npcName = opts.npcName || 'Them';
+    const rng = mulberry32((opts.seed >>> 0) || 1);
+    const first = rng() < 0.5 ? 'p' : 'n';
+    const st = pigNew(first);
+    let busy = false, finished = false, timer = 0, die = null;
+    let status = first === 'p' ? 'You go first. Roll, or hold when you have enough.' : `${npcName} goes first.`;
+
+    title.textContent = 'Push Your Luck';
+    body.innerHTML = '';
+    const wrap = document.createElement('div'); wrap.className = 'games-pig';
+    const board = document.createElement('div'); board.className = 'games-pig-board';
+    const dieEl = document.createElement('div'); dieEl.className = 'games-pig-die';
+    const statusEl = document.createElement('div'); statusEl.className = 'games-poker-status';
+    wrap.append(board, dieEl, statusEl);
+    body.appendChild(wrap);
+    actions.innerHTML = '';
+    const mk = (label, cls) => { const b = document.createElement('button'); b.type = 'button'; b.className = cls || 'btn'; b.textContent = label; return b; };
+    const rollBtn = mk('Roll'), holdBtn = mk('Hold'), outBtn = mk('Let it play out', 'btn btn-secondary'), leaveBtn = mk('Forfeit', 'btn btn-secondary');
+    actions.append(rollBtn, holdBtn, outBtn, leaveBtn);
+    overlay.setAttribute('data-open', '');
+    const FACES = ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+
+    function render() {
+      board.textContent = `You ${st.scores.p}  ·  ${npcName} ${st.scores.n}  ·  first to ${P.target}${st.total ? `  ·  this turn: ${st.total}` : ''}`;
+      dieEl.textContent = die ? FACES[die] : '';
+      statusEl.textContent = status;
+      const mine = st.turn === 'p' && !busy && !finished;
+      rollBtn.style.display = mine ? '' : 'none';
+      holdBtn.style.display = mine ? '' : 'none';
+      holdBtn.disabled = st.total === 0;
+      outBtn.disabled = busy || finished;
+      outBtn.style.display = finished ? 'none' : '';
+      leaveBtn.textContent = finished ? 'Done' : 'Forfeit';
+    }
+
+    function end() {
+      finished = true; busy = true;
+      const res = pigResult(st, npcName);
+      status = res.summary;
+      render();
+      leaveBtn.onclick = () => { clearTimeout(timer); overlay.removeAttribute('data-open'); resolve(res); };
+    }
+
+    function afterRoll(who, d) {
+      die = d;
+      if (st.over) { end(); return; }
+      if (d === 1) status = `${who === 'p' ? 'You roll' : npcName + ' rolls'} a 1: ${who === 'p' ? 'that turn is lost' : 'their turn is lost'}.`;
+      else status = `${who === 'p' ? 'You roll' : npcName + ' rolls'} a ${d}.`;
+    }
+
+    function npcTurn() {
+      if (finished) return;
+      busy = true; render();
+      const step = () => {
+        if (finished) return;
+        if (st.turn !== 'n') { busy = false; status += ' Your turn.'; render(); return; }
+        if (st.total > 0 && pigShouldHold(st, 'n', opts.skillN, opts.riskN || 0, rng)) {
+          const banked = st.total;
+          pigHold(st); die = null;
+          if (st.over) { end(); return; }
+          status = `${npcName} holds and banks ${banked}.`;
+        } else {
+          const d = pigRoll(st, rng);
+          afterRoll('n', d);
+        }
+        render();
+        if (finished) return;
+        timer = setTimeout(step, 800);
+      };
+      timer = setTimeout(step, 600);
+    }
+
+    rollBtn.addEventListener('click', () => {
+      if (st.turn !== 'p' || busy || finished) return;
+      const d = pigRoll(st, rng);
+      afterRoll('p', d);
+      render();
+      if (!finished && st.turn === 'n') npcTurn();
+    });
+    holdBtn.addEventListener('click', () => {
+      if (st.turn !== 'p' || busy || finished || st.total === 0) return;
+      const banked = st.total;
+      pigHold(st); die = null;
+      if (st.over) { end(); return; }
+      status = `You hold and bank ${banked}.`;
+      render();
+      npcTurn();
+    });
+    outBtn.addEventListener('click', () => {
+      if (busy || finished) return;
+      clearTimeout(timer);
+      let g = 0;
+      while (!st.over && g++ < 4000) {
+        const who = st.turn;
+        if (st.total > 0 && pigShouldHold(st, who, who === 'p' ? opts.skillP : opts.skillN, who === 'p' ? 0 : (opts.riskN || 0), rng)) pigHold(st); else pigRoll(st, rng);
+      }
+      end();
+    });
+    leaveBtn.onclick = () => {
+      if (finished) return;
+      clearTimeout(timer);
+      overlay.removeAttribute('data-open');
+      resolve({ playerWon: false, draw: false, grade: 'normal', summary: `You concede the game to ${npcName}.`, minutes: Math.round(P.minutes / 2) });
+    };
+    render();
+    if (first === 'n') npcTurn();
+  });
+}
+
+// Party game night (Phase 9, D13): "Who Is It?". The questions and the roommates' answers were decided by
+// the verb (games' prepare), so this only asks you and reveals. opts: { ids, names, questions,
+// npcAnswers }. Resolves { answers } (everyone's answers, yours included).
+function openPartyGame(opts) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions || !opts.questions || !opts.questions.length) { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+    const all = ['player', ...opts.ids];
+    const answers = {};
+    let qi = 0, revealed = false;
+
+    title.textContent = 'Who Is It?';
+    body.innerHTML = '';
+    const wrap = document.createElement('div'); wrap.className = 'games-party';
+    body.appendChild(wrap);
+    actions.innerHTML = '';
+    const nextBtn = document.createElement('button'); nextBtn.type = 'button'; nextBtn.className = 'btn'; nextBtn.textContent = 'Next';
+    const outBtn = document.createElement('button'); outBtn.type = 'button'; outBtn.className = 'btn btn-secondary'; outBtn.textContent = 'Let it play out';
+    actions.append(nextBtn, outBtn);
+    overlay.setAttribute('data-open', '');
+
+    const tally = () => partyScore(opts.questions.slice(0, qi + (revealed ? 1 : 0)), answers, all);
+
+    function render(done) {
+      wrap.innerHTML = '';
+      const sc = tally();
+      const bar = document.createElement('div'); bar.className = 'games-poker-stake';
+      bar.textContent = all.map(id => `${opts.names[id]} ${sc[id] || 0}`).join('  ·  ');
+      wrap.appendChild(bar);
+      if (done) {
+        const order = all.slice().sort((a, b) => (sc[b] || 0) - (sc[a] || 0));
+        const msg = document.createElement('div'); msg.className = 'games-party-q';
+        const topScore = sc[order[0]] || 0, leaders = order.filter(id => (sc[id] || 0) === topScore);
+        msg.textContent = leaders.length > 1 ? `A dead heat: ${leaders.map(id => opts.names[id]).join(', ')} on ${topScore}.` : order[0] === 'player' ? 'You know this house best!' : `${opts.names[order[0]]} knows this house best.`;
+        wrap.appendChild(msg);
+        nextBtn.textContent = 'Done'; nextBtn.disabled = false; outBtn.style.display = 'none';
+        return;
+      }
+      const q = opts.questions[qi];
+      const qEl = document.createElement('div'); qEl.className = 'games-party-q';
+      qEl.textContent = `${qi + 1}/${opts.questions.length}  ${q.text}`;
+      wrap.appendChild(qEl);
+      const list = document.createElement('div'); list.className = 'recipe-pick-list';
+      for (const id of q.options) {
+        const b = document.createElement('button'); b.type = 'button'; b.className = 'btn btn-block recipe-pick-btn';
+        const nm = document.createElement('span'); nm.className = 'recipe-pick-name'; nm.textContent = opts.names[id];
+        const note = document.createElement('span'); note.className = 'recipe-pick-ings';
+        if (revealed) {
+          const who = all.filter(a => (answers[q.n] || {})[a] === id).map(a => opts.names[a]);
+          note.textContent = `${id === q.answer ? '✓ It was them. ' : ''}${who.length ? 'Picked by ' + who.join(', ') : ''}`;
+          if (id === q.answer) b.classList.add('games-party-right');
+        }
+        b.append(nm, note);
+        b.disabled = revealed;
+        b.addEventListener('click', () => {
+          if (revealed) return;
+          answers[q.n] = { ...(opts.npcAnswers[q.n] || {}), player: id };
+          revealed = true;
+          nextBtn.disabled = false; nextBtn.textContent = qi + 1 >= opts.questions.length ? 'Finish' : 'Next';
+          render();
+        });
+        list.appendChild(b);
+      }
+      wrap.appendChild(list);
+      nextBtn.disabled = !revealed;
+    }
+
+    nextBtn.addEventListener('click', () => {
+      if (nextBtn.textContent === 'Done') { overlay.removeAttribute('data-open'); resolve({ answers }); return; }
+      if (!revealed) return;
+      revealed = false;
+      qi += 1;
+      if (qi >= opts.questions.length) { render(true); return; }
+      render();
+    });
+    outBtn.addEventListener('click', () => {
+      // Let it play out: the rest are guessed for you, as you would (familiarity, not luck alone).
+      const r = mulberry32(((opts.questions.length * 7919 + 13) >>> 0));
+      for (let k = revealed ? qi + 1 : qi; k < opts.questions.length; k++) {
+        const q = opts.questions[k];
+        const wrong = q.options.filter(o => o !== q.answer);
+        answers[q.n] = { ...(opts.npcAnswers[q.n] || {}), player: r() < 0.45 ? q.answer : wrong[Math.floor(r() * wrong.length)] };
+      }
+      qi = opts.questions.length; revealed = false;
+      overlay.removeAttribute('data-open'); resolve({ answers });
+    });
+    render();
   });
 }
 // ===== /SECTION: RENDER.GAMES =====

@@ -60,6 +60,7 @@ function gameOptions(gs, roomId) {
     const d = GAME_DEFS[id];
     if (d.anchors.length && d.anchors.some(a => objs.some(o => o && o.defId === a))) return true;
     if (d.item && bag.some(s => s && s.defId === d.item && (s.qty || 1) > 0)) return true;
+    if (d.free && Object.values(gs?.npcs || {}).filter(n => n?.residency?.status === 'resident' && n.location === roomId && !npcIsAsleep(n)).length >= (d.minPresent || 1)) return true;
     return false;
   });
 }
@@ -166,6 +167,17 @@ function gamePlanMatch(gs, gameId, npcId, stakeId, amount, played, mode) {
     played = dartsResult(st, gameNpcName(gs, npcId));
     played.minutes = DARTS_TUNING.modes[m].minutes;
   }
+  // The board game in your bag, headless: Drop Four (a search) or Push Your Luck (a hold rule), both sides
+  // playing like themselves.
+  if (!played && gameId === 'boardgame' && typeof c4Simulate === 'function') {
+    const m = mode || 'four';
+    const rr = seededRng(gs.meta?.seed, `board_${m}_${clock.day}_${clock.minutes}_${npcId}_${g?.count || 0}`);
+    const first = rr() < 0.5 ? 'p' : 'n';
+    const sp = gameSkillOf(gs, 'player', gameId), sn = gameSkillOf(gs, npcId, gameId);
+    played = m === 'pig'
+      ? pigResult(pigSimulate(rr, sp, sn, 0, tabletopRisk(npc), first), gameNpcName(gs, npcId))
+      : c4Result(c4Simulate(rr, sp, sn, first), gameNpcName(gs, npcId));
+  }
   // Pool, headless: a whole 8-ball game played out by the physics, both sides shooting like their skill.
   if (!played && gameId === 'pool' && typeof poolSimulate === 'function') {
     const pst = poolNew(seededRng(gs.meta?.seed, `poolrack_${clock.day}_${clock.minutes}_${npcId}_${g?.count || 0}`));
@@ -180,11 +192,12 @@ function gamePlanMatch(gs, gameId, npcId, stakeId, amount, played, mode) {
     played.iouAmount = bjIouAmount(bst, amount);
   }
   if (played) { playerWon = !!played.playerWon; grade = played.grade || 'normal'; summary = played.summary || null; if (played.minutes) minutes = played.minutes; }
+  const draw = !!(played && played.draw);
   const stake = stakeId === 'chore' && gameStakeAgrees(gs, npcId, 'chore').ok ? 'chore'
     : stakeId === 'iou' && gameStakeAgrees(gs, npcId, 'iou', amount).ok ? 'iou' : 'brag';
   // A game that scales the IOU by how far the chips moved reports its own amount (blackjack).
   const iouAmount = stake === 'iou' ? (played && played.iouAmount != null ? played.iouAmount : amount) : 0;
-  return { gameId, npcId, stakeId: stake === 'iou' && !(iouAmount > 0) ? 'brag' : stake, amount: iouAmount, playerWon, grade, pWin,
+  return { gameId, npcId, draw, stakeId: draw ? 'brag' : (stake === 'iou' && !(iouAmount > 0) ? 'brag' : stake), amount: draw ? 0 : iouAmount, playerWon, grade, pWin,
     minutes, summary, played: !!played, name: gameNpcName(gs, npcId), label: d.label, seed: `${clock.day}_${clock.minutes}_${g?.count || 0}` };
 }
 
@@ -237,6 +250,15 @@ function gameApplyMatch(gs, plan, opts) {
   const day = gs.meta.clock.day;
   const abs = clockToAbsolute(gs.meta.clock);
   g.count += 1;
+  if (plan.draw) {
+    // A draw: nobody wins, nobody is sore; a little respect for a close game, a memory, and the record.
+    g.history.push({ id: `match_${day}_${g.count}`, gameId: plan.gameId, players: ['player', plan.npcId], stake: 'brag', amount: 0, winner: 'draw', grade: 'close', day });
+    if (g.history.length > T.historyKeep) g.history.splice(0, g.history.length - T.historyKeep);
+    if (!o.skipXp && typeof awardSkillXp === 'function') awardSkillXp(gs.player, 'games', T.playerXp.lose, day, gs);
+    gs.npcs[plan.npcId] = addMemoryFact(applyRelDelta(npc, { affection: T.closeAffection, respect: T.closeRespect }, day), { text: `Drew with the player at ${d.label.toLowerCase()}.`, day, importance: T.memoryImportance, category: 'relationship' });
+    if (!o.skipPending) g.pending = { npcId: plan.npcId, gameId: plan.gameId, playerWon: false, grade: 'close', abs };
+    return { rec: g.history[g.history.length - 1], lines: [] };
+  }
   const sore = gameSoreness(npc);
   const npcSore = plan.playerWon && (npc.bible?.temperament?.volatility || 0) >= T.soreVolatility;
   // The record.
@@ -287,9 +309,11 @@ function gameApplyMatch(gs, plan, opts) {
 // written once, by GAME_SESSION.
 
 // The most a stake can be for a whole table: it has to be agreeable to everyone in the game. Pure.
-function gameSessionStakeOptions(gs, npcIds) {
+function gameSessionStakeOptions(gs, npcIds, gameId) {
   const per = npcIds.map(id => gameStakeOptions(gs, id));
+  const noMoney = !!(gameId && gameDef(gameId)?.noMoney);
   return per[0].map((row, k) => {
+    if (noMoney && row.stakeId === 'iou') return { ...row, ok: false, note: 'not for money' };
     const bad = per.map(rows => rows[k]).find(r => !r.ok);
     return bad ? { ...row, ok: false, note: bad.note } : row;
   });
@@ -310,8 +334,13 @@ function gamePlanSession(gs, gameId, npcIds, stakeId, amount, played) {
   const clock = gs.meta.clock;
   const seedKey = `${clock.day}_${clock.minutes}_${g?.count || 0}`;
   const stake = stakeId === 'chore' && ids.every(id => gameStakeAgrees(gs, id, 'chore').ok) ? 'chore'
-    : stakeId === 'iou' && ids.every(id => gameStakeAgrees(gs, id, 'iou', amount).ok) ? 'iou' : 'brag';
+    : stakeId === 'iou' && !d.noMoney && ids.every(id => gameStakeAgrees(gs, id, 'iou', amount).ok) ? 'iou' : 'brag';
   const amt = stake === 'iou' ? amount : 0;
+  if (!played && gameId === 'party' && typeof partySimulate === 'function') {
+    const night = partySimulate(gs, ids, seededRng(gs.meta?.seed, `party_${seedKey}`));
+    played = partyNightResult(gs, night.scores, ids, night.questions);
+    played.iou = [];
+  }
   if (!played && gameId === 'poker' && typeof pokerNew === 'function') {
     const styles = { player: { ...POKER_STYLE.base, tilt: 0 } };
     for (const id of ids) styles[id] = pokerStyleFor(gs.npcs[id]);

@@ -54,7 +54,7 @@ const reg = J(`(() => ({
   band: EVENT_IMPORTANCE.game_match === 'social' && EVENT_EMOTION.game_match === 'warmth',
   effects: ['GAME_MATCH', 'GAME_FOLLOWUP'].every(k => typeof effectDefFor === 'function' ? !!effectDefFor(k) : true),
 }))()`.replace('SKILL_NOTICE_ROWS_SAFE()', '1'));
-check('six games, each with intros and the four result lines; the old Play Games survives (D7)', reg.games === 6 && reg.defs && reg.old, JSON.stringify(reg));
+check('seven games, each with intros and the four result lines; the old Play Games survives (D7)', reg.games === 7 && reg.defs && reg.old, JSON.stringify(reg));
 check('games is a skill; the verbs, the save key, its default and the event bands are registered', reg.skill && reg.verbs && reg.save && reg.fallback && reg.band, JSON.stringify(reg));
 
 console.log('\n1. What a room has, and skill');

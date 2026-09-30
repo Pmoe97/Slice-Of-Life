@@ -1392,7 +1392,7 @@ const EFFECT_DEFS = {
     validate: (p, ctx) => (typeof gameDef === 'function' && !!gameDef(p.gameId) && !!ctx.gameState.npcs?.[p.npcId]) || 'Nobody to play.',
     apply: (p, ctx) => {
       if (typeof gameApplyMatch !== 'function') return;
-      gameApplyMatch(ctx.gameState, { gameId: p.gameId, npcId: p.npcId, stakeId: p.stakeId, amount: Number(p.amount) || 0, playerWon: p.winner === 'p', grade: p.grade });
+      gameApplyMatch(ctx.gameState, { gameId: p.gameId, npcId: p.npcId, stakeId: p.stakeId, amount: Number(p.amount) || 0, playerWon: p.winner === 'p', draw: p.winner === 'd', grade: p.grade });
     },
   },
   // A night at the card table (poker, Phase 4): the whole table's result in one write. results is
