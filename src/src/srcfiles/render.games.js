@@ -10,6 +10,7 @@ function openMinigame(kind, opts) {
   if (kind === 'poker') return openPokerGame(opts);
   if (kind === 'blackjack') return openBlackjackGame(opts);
   if (kind === 'pool') return openPoolGame(opts);
+  if (kind === 'arcade') return openArcadeGame(opts);
   return Promise.resolve(null);
 }
 
@@ -845,6 +846,187 @@ function openPoolGame(opts) {
     });
     drawSpin();
     pointAtNearest();
+    raf = requestAnimationFrame(frame);
+  });
+}
+
+// The arcade cabinet (Phases 7–8, D14): one runner for all four games. The rules live in arcade.js as a
+// pure fixed-step state machine; this feeds it input at 60 Hz (whatever the frame rate) and draws it.
+// opts: { gameId, seed, best (your best score on it), holder ({ name, score } or null) }. Resolves
+// { gameId, score, minutes, reason }.
+function openArcadeGame(opts) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions || typeof arcadeNew !== 'function') { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+
+    const G = ARCADE_GAMES[opts.gameId];
+    const rng = mulberry32((opts.seed >>> 0) || 1);
+    const st = arcadeNew(opts.gameId, rng);
+    const W = Math.max(260, Math.min(400, (window.innerWidth || 380) - 64));
+    const H = Math.round(W * 0.68);
+    let started = false, finished = false, raf = 0;
+    let acc = 0, last = 0;
+    let pending = {};            // input for the next step (a tap is consumed once)
+    let flash = 0;
+
+    title.textContent = G.label;
+    body.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'games-arcade';
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H; canvas.className = 'games-arcade-canvas';
+    canvas.style.touchAction = 'none';
+    const status = document.createElement('div');
+    status.className = 'games-poker-status';
+    status.textContent = `${G.blurb} ${G.controls}. Tap to start.`;
+    wrap.append(canvas, status);
+    body.appendChild(wrap);
+    actions.innerHTML = '';
+    const quitBtn = document.createElement('button');
+    quitBtn.type = 'button'; quitBtn.className = 'btn btn-secondary'; quitBtn.textContent = 'Quit';
+    actions.appendChild(quitBtn);
+    overlay.setAttribute('data-open', '');
+    const ctx = canvas.getContext('2d');
+
+    const neon = (hue, a) => `hsla(${hue}, 95%, 60%, ${a ?? 1})`;
+
+    function drawRunner() {
+      const s = st, R = RUNNER, scale = W / R.viewTiles, ground = H * 0.78;
+      const sx = (tile) => (tile - s.x) * scale;
+      ctx.strokeStyle = neon(190, 0.8); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, ground); ctx.lineTo(W, ground); ctx.stroke();
+      ctx.strokeStyle = neon(190, 0.15);
+      for (let k = 0; k < 14; k++) { const gx = (((k * 1.2 - s.x * 0.6) % 16.8) + 16.8) % 16.8 * scale * 0.7; ctx.beginPath(); ctx.moveTo(gx, ground); ctx.lineTo(gx - 20, H); ctx.stroke(); }
+      for (const o of s.obstacles) {
+        const x = sx(o.x), w = o.w * scale, h = R.obsH * scale;
+        ctx.fillStyle = neon(350, 0.9); ctx.fillRect(x, ground - h, w, h);
+        ctx.fillStyle = '#111'; ctx.font = `${Math.round(h * 0.5)}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('$', x + w / 2, ground - h / 2);
+      }
+      for (const c of s.coins) { ctx.beginPath(); ctx.arc(sx(c.x), ground - c.y * scale, scale * 0.16, 0, Math.PI * 2); ctx.fillStyle = neon(50); ctx.fill(); }
+      const px = sx(s.x + R.playerX), py = ground - s.y * scale;
+      if (!(s.invuln > 0 && Math.floor(s.t * 12) % 2 === 0)) { ctx.fillStyle = neon(140); ctx.fillRect(px - R.playerW * scale / 2, py - scale * 1.0, R.playerW * scale, scale * 1.0); }
+      ctx.fillStyle = '#fff'; ctx.font = '14px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.fillText(`${'♥'.repeat(Math.max(0, s.lives))}${'♡'.repeat(Math.max(0, R.lives - s.lives))}   ${s.score}`, 8, 6);
+    }
+
+    function drawShift() {
+      const s = st, T = SHIFT, laneH = (H - 30) / T.lanes, barX = W * 0.08, endX = W * 0.96;
+      const lx = (f) => barX + f * (endX - barX);
+      for (let n = 0; n < T.lanes; n++) {
+        const y0 = 26 + n * laneH, L = s.lanes[n];
+        ctx.fillStyle = neon(30, 0.16); ctx.fillRect(barX, y0 + 3, endX - barX, laneH - 6);
+        ctx.fillStyle = neon(30, 0.9); ctx.fillRect(barX - 8, y0 + 3, 8, laneH - 6);
+        for (const c of L.customers) { ctx.beginPath(); ctx.arc(lx(c.x), y0 + laneH / 2, laneH * 0.32, 0, Math.PI * 2); ctx.fillStyle = neon(300, 0.95); ctx.fill(); }
+        for (const d of L.drinks) { ctx.fillStyle = neon(50); ctx.fillRect(lx(d) - 5, y0 + laneH / 2 - 5, 10, 10); }
+        for (const e of L.empties) { ctx.strokeStyle = neon(160); ctx.lineWidth = 2; ctx.strokeRect(lx(e.x) - 5, y0 + laneH / 2 - 5, 10, 10); }
+        ctx.fillStyle = '#fff'; ctx.font = '11px sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(String(n + 1), barX - 12, y0 + laneH / 2);
+      }
+      ctx.fillStyle = '#fff'; ctx.font = '14px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.fillText(`${'♥'.repeat(Math.max(0, s.lives))}${'♡'.repeat(Math.max(0, T.lives - s.lives))}   ${s.score}${s.combo > 1 ? `   x${s.combo}` : ''}`, 8, 6);
+    }
+
+    function drawStack() {
+      const s = st, slabH = H / 11;
+      const top = s.slabs.length;
+      const base = Math.max(0, top - 8);          // scroll so the tower's top stays in view
+      const yOf = (k) => H - (k - base + 1) * slabH;
+      for (let k = base; k < top; k++) {
+        const sl = s.slabs[k];
+        ctx.fillStyle = neon((k * 23) % 360, 0.9); ctx.fillRect((sl.x - sl.w / 2) * W, yOf(k), sl.w * W, slabH - 2);
+      }
+      const c = s.cur;
+      ctx.fillStyle = neon((top * 23) % 360, 0.95); ctx.fillRect((c.x - c.w / 2) * W, yOf(top), c.w * W, slabH - 2);
+      if (s.lastDrop && s.lastDrop.perfect) { ctx.fillStyle = '#fff'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('Perfect!', W / 2, yOf(top) - 8); }
+      ctx.fillStyle = '#fff'; ctx.font = '14px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.fillText(`Floor ${s.floors}   ${s.score}`, 8, 6);
+    }
+
+    function drawSerpent() {
+      const s = st, cw = W / SERPENT.w, ch = H / SERPENT.h;
+      ctx.strokeStyle = neon(200, 0.10); ctx.lineWidth = 1;
+      for (let x = 0; x <= SERPENT.w; x++) { ctx.beginPath(); ctx.moveTo(x * cw, 0); ctx.lineTo(x * cw, H); ctx.stroke(); }
+      for (let y = 0; y <= SERPENT.h; y++) { ctx.beginPath(); ctx.moveTo(0, y * ch); ctx.lineTo(W, y * ch); ctx.stroke(); }
+      for (const w of s.walls) { ctx.fillStyle = neon(350, 0.25 + 0.6 * (w.life / SERPENT.wallLife)); ctx.fillRect(w.x * cw + 1, w.y * ch + 1, cw - 2, ch - 2); }
+      if (s.food) { ctx.beginPath(); ctx.arc((s.food.x + 0.5) * cw, (s.food.y + 0.5) * ch, Math.min(cw, ch) * 0.3, 0, Math.PI * 2); ctx.fillStyle = neon(50); ctx.fill(); }
+      s.body.forEach((b, i) => { ctx.fillStyle = i === 0 ? neon(140) : neon(150, 0.85 - 0.5 * (i / s.body.length)); ctx.fillRect(b.x * cw + 1, b.y * ch + 1, cw - 2, ch - 2); });
+      ctx.fillStyle = '#fff'; ctx.font = '14px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.fillText(String(s.score), 8, 6);
+    }
+
+    function draw() {
+      ctx.fillStyle = '#0b0b1a'; ctx.fillRect(0, 0, W, H);
+      if (opts.gameId === 'rent_runner') drawRunner();
+      else if (opts.gameId === 'night_shift') drawShift();
+      else if (opts.gameId === 'stack_up') drawStack();
+      else drawSerpent();
+      if (!started) { ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, W, H); ctx.fillStyle = '#fff'; ctx.font = '16px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('Tap to start', W / 2, H / 2); }
+    }
+
+    function finish() {
+      if (finished) return;
+      finished = true;
+      const reasonText = st.reason ? ` (${st.reason})` : '';
+      status.textContent = `Score ${st.score}${reasonText}.${opts.best > 0 ? (st.score > opts.best ? ' A new personal best!' : ` Your best is ${opts.best}.`) : ''}`;
+      quitBtn.textContent = 'Done';
+      quitBtn.onclick = () => { cancelAnimationFrame(raf); overlay.removeAttribute('data-open'); resolve({ gameId: opts.gameId, score: st.score, minutes: ARCADE_TUNING.minutes, reason: st.reason }); };
+    }
+
+    function frame(ts) {
+      if (!last) last = ts;
+      const elapsed = Math.min(0.1, (ts - last) / 1000);
+      last = ts;
+      if (started && !st.over) {
+        acc += elapsed;
+        let guard = 0;
+        while (acc >= ARCADE_TUNING.dt && !st.over && guard++ < 12) {
+          arcadeStep(st, ARCADE_TUNING.dt, pending, rng);
+          pending = {};
+          acc -= ARCADE_TUNING.dt;
+        }
+        if (st.over) finish();
+      }
+      draw();
+      raf = requestAnimationFrame(frame);
+    }
+
+    function start() { if (!started) { started = true; status.textContent = G.controls; last = 0; } }
+
+    const dirFromKey = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', w: 'up', s: 'down', a: 'left', d: 'right', W: 'up', S: 'down', A: 'left', D: 'right' };
+    function onKey(e) {
+      if (!overlay.hasAttribute('data-open')) { document.removeEventListener('keydown', onKey); return; }
+      if (finished) return;
+      if (opts.gameId === 'neon_serpent' && dirFromKey[e.key]) { e.preventDefault(); start(); pending = { dir: dirFromKey[e.key] }; return; }
+      if (opts.gameId === 'night_shift' && /^[1-4]$/.test(e.key)) { e.preventDefault(); start(); pending = { lane: Number(e.key) - 1 }; return; }
+      if (e.code === 'Space' && (opts.gameId === 'rent_runner' || opts.gameId === 'stack_up')) { e.preventDefault(); start(); pending = { press: true }; }
+    }
+    document.addEventListener('keydown', onKey);
+    let downAt = null;
+    canvas.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      if (finished) return;
+      if (!started) { start(); if (opts.gameId !== 'neon_serpent' && opts.gameId !== 'night_shift') pending = { press: true }; return; }
+      const r = canvas.getBoundingClientRect();
+      const px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
+      if (opts.gameId === 'night_shift') { pending = { lane: Math.max(0, Math.min(SHIFT.lanes - 1, Math.floor((py * H - 26) / ((H - 30) / SHIFT.lanes)))) }; return; }
+      if (opts.gameId === 'neon_serpent') { downAt = { x: e.clientX, y: e.clientY }; return; }
+      pending = { press: true };
+    });
+    canvas.addEventListener('pointerup', (e) => {
+      if (opts.gameId !== 'neon_serpent' || !downAt || finished) return;
+      const dx = e.clientX - downAt.x, dy = e.clientY - downAt.y;
+      downAt = null;
+      if (Math.hypot(dx, dy) < 12) return;
+      pending = { dir: Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up') };
+    });
+    quitBtn.onclick = () => {
+      if (finished) return;
+      cancelAnimationFrame(raf);
+      overlay.removeAttribute('data-open');
+      resolve({ gameId: opts.gameId, score: st.score, minutes: Math.max(4, Math.round(ARCADE_TUNING.minutes / 2)), reason: 'quit' });
+    };
     raf = requestAnimationFrame(frame);
   });
 }

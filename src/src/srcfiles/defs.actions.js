@@ -2098,6 +2098,43 @@ function prepareGameRematch(ctx) {
   return plan ? { game: plan, minutes: plan.minutes, rematch: true } : { cancelled: true };
 }
 
+// The arcade cabinet (Phases 7–8): solo, unlocked by the Entertainment Hub tier. Pick a game, play it on
+// the screen (headless it is modelled from your games skill), and the score goes on the board.
+function prepareGameArcade(ctx) {
+  const gs = ctx.gameState;
+  if (typeof arcadeRows !== 'function') return { cancelled: true };
+  const rows = arcadeRows(gs);
+  if (typeof openChoicePicker !== 'function' || typeof openMinigame !== 'function') {
+    const plan = gamePlanArcade(gs, rows[0].id, null);
+    return plan ? { game: plan, minutes: plan.minutes } : { cancelled: true };
+  }
+  return (async () => {
+    const id = await openChoicePicker('Which machine?', rows.map(r => ({ id: r.id, label: r.label, note: r.note })));
+    if (!id) return { cancelled: true };
+    const row = rows.find(r => r.id === id);
+    const played = await openMinigame('arcade', { gameId: id, best: row.best, holder: row.holder,
+      seed: hashStr(`${gs.meta?.seed}|${gs.meta.clock.day}|${gs.meta.clock.minutes}|arcade|${id}`) });
+    if (!played) return { cancelled: true };
+    const plan = gamePlanArcade(gs, id, played);
+    return plan ? { game: plan, minutes: plan.minutes } : { cancelled: true };
+  })();
+}
+
+ACTION_DEFS['game.arcade'] = {
+  id: 'game.arcade', label: 'Arcade', verbs: ['play the arcade', 'arcade', 'play arcade', 'use the arcade cabinet'],
+  source: { kind: 'room', roomIds: ['game_room'] },
+  group: 'game_room', chipPriority: 34,
+  requires: ['facilityFunctional:game_room_setup', 'arcadeUnlocked'],
+  timeCost: { base: 12, fromPrepared: true },
+  prepare: prepareGameArcade,
+  buildEffects: (ctx, prepared) => {
+    const plan = prepared && prepared.game;
+    if (!plan) return [];
+    return [`ADJUST_NEED player mood +${ARCADE_TUNING.mood + (plan.preview.newBest ? ARCADE_TUNING.newBestMood : 0)}`, 'ADJUST_NEED player energy -1', `GAME_ARCADE ${plan.gameId} ${plan.score}`];
+  },
+  narration: { mode: 'dynamic', build: (ctx, prepared) => (typeof gameArcadeNarration === 'function' && gameArcadeNarration(ctx.gameState, prepared && prepared.game)) || 'You play the arcade for a while.' },
+};
+
 ACTION_DEFS['game.challenge'] = {
   id: 'game.challenge', label: 'Challenge…', verbs: ['challenge', 'play a match', 'play pool with', 'play darts with', 'play a game with'],
   source: { kind: 'room', roomIds: ['game_room'] },
@@ -2132,6 +2169,8 @@ for (const [id, label, verbs] of [['gracious', 'Good Game', ['good game', 'shake
 }
 
 const ACTION_REQUIREMENT_CHECKERS = {
+  // Game Room: the arcade cabinet needs the Entertainment Hub tier.
+  arcadeUnlocked: (ctx) => (typeof arcadeUnlocked === 'function' && arcadeUnlocked(ctx.gameState)) || 'The cabinet is only in the Entertainment Hub.',
   // Game Room (games.js): something to play here, and the follow-up window.
   gamesHere: (ctx) => (typeof gameOptions === 'function' && gameOptions(ctx.gameState, ctx.roomId).length > 0) || 'Nothing to play here.',
   gameFollowUp: (ctx, kind) => {

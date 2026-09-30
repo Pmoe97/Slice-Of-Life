@@ -456,6 +456,12 @@ async function processDayRollover(day) {
       addLogEntry('narration', line);
     }
   }
+  // Game Room (D5): once a week the roommates have a go on the arcade cabinet; one who passes your best says so.
+  if (typeof processArcadeForDay === 'function') {
+    for (const line of processArcadeForDay(currentGameState, day).lines) {
+      addLogEntry('narration', line);
+    }
+  }
   // Books (0.14.5): a roommate lends you one they loved, a late one goes home, two people who
   // finished the same book talk it over.
   if (typeof processBooksForDay === 'function') {

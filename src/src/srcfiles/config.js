@@ -4956,6 +4956,14 @@ const GAMES_TUNING = {
       rematch: ['"Best of one more?" you say.', 'You set the game up again.'],
     },
     follow: { graciousAffection: 0.02, graciousTension: -0.02, gloatWarmAffection: 0.01, gloatCoolTension: 0.02, gloatSoreTension: 0.04, gloatSoreAffection: -0.02 },
+    // The arcade cabinet: what a go says. {game}, {score}, {prev}, {name}, {top}.
+    arcade: {
+      play: ['You feed the cabinet a coin and put up {score} on {game}.', 'You lose twenty minutes to {game} and finish on {score}.', '{game}: {score}. Your thumbs ache.'],
+      first: ["That is the first score of yours on the board.", "Your name goes up on the board for the first time."],
+      newBest: ['A new personal best (your old one was {prev}).'],
+      overtake: ["That is past {name}'s {top}. You are top of the board, and you check they have noticed."],
+      behind: ['{name} still holds the top spot with {top}.'],
+    },
     prompt: { beat: '{name} has beaten the player {n} time{s} at {game} and would like a rematch.', lost: 'The player has beaten {name} {n} time{s} at {game}; {name} is still thinking about it.', level: 'Games of {game} between {name} and the player are dead level.' },
     event: '{name} and you played {game}.',
   },

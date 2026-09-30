@@ -382,6 +382,79 @@ function gameApplySession(gs, plan) {
   return { lines };
 }
 
+// --- The arcade cabinet (Phases 7–8, D14/D5) -----------------------------------------------------
+// The Entertainment Hub tier unlocks it. A go is solo: a score on one of arcade.js's four games,
+// entered on the board (games.js owns what a go does — mood, practice, the score table — arcade.js
+// only knows the games). Roommates are on the same board, their scores derived (arcade.js).
+
+function arcadeUnlocked(gs) {
+  return gs?.world?.upgrades?.game_room_setup?.tier === 'upgraded';
+}
+
+function arcadeWho(gs, who) { return who === 'player' ? 'you' : gameNpcName(gs, who); }
+
+// The picker rows: each game, your best and who holds the top spot. Pure.
+function arcadeRows(gs) {
+  return ARCADE_IDS.map(id => {
+    const mine = arcadeBest(gs, id, 'player');
+    const top = arcadeHolder(gs, id);
+    const bits = [];
+    if (mine > 0) bits.push(`your best ${mine}`);
+    if (top && top.score > 0) bits.push(`top ${top.score} (${arcadeWho(gs, top.who)})`);
+    return { id, label: ARCADE_GAMES[id].label, note: bits.join(' · ') || ARCADE_GAMES[id].controls, holder: top, best: mine };
+  });
+}
+
+// What a score would do to the board, without doing it. Pure.
+function arcadePreview(gs, gameId, score) {
+  const table = arcadeTable(gs, gameId);
+  const prevBest = arcadeBest(gs, gameId, 'player');
+  const others = table.filter(e => e.who !== 'player');
+  const better = others.filter(e => e.score > score).length;
+  const beats = others.filter(e => e.score < score && e.score >= 0);
+  const top = table[0];
+  return { newBest: score > prevBest, prevBest, rank: better + 1, onBoard: better < ARCADE_TUNING.keep, topWho: top ? top.who : null, topScore: top ? top.score : 0, overtakes: score > (top ? top.score : 0) && !!top && top.who !== 'player' ? top.who : null };
+}
+
+// The plan for a go: what you scored (played on the screen, or modelled headless by your games skill),
+// and how long it took. Pure.
+function gamePlanArcade(gs, gameId, played) {
+  if (!ARCADE_GAMES[gameId]) return null;
+  const clock = gs.meta.clock;
+  const g = gamesRead(gs);
+  let score, minutes = ARCADE_TUNING.minutes, reason = null;
+  if (played) { score = Math.max(0, Math.round(played.score || 0)); minutes = played.minutes || minutes; reason = played.reason || null; }
+  else {
+    const skill = Math.min(0.9, gameSkillOf(gs, 'player', 'console'));
+    const st = arcadeModelPlay(gameId, skill, seededRng(gs.meta?.seed, `arcadego_${clock.day}_${clock.minutes}_${gameId}_${g?.count || 0}`));
+    score = st.score; reason = st.reason;
+  }
+  return { arcade: true, gameId, score, minutes, reason, label: ARCADE_GAMES[gameId].label, preview: arcadePreview(gs, gameId, score) };
+}
+
+function gameArcadeNarration(gs, plan) {
+  if (!plan) return null;
+  const L = GAMES_TUNING.lines.arcade;
+  const vars = { game: plan.label, score: plan.score };
+  const pv = plan.preview;
+  const parts = [gameFill(gamePick(L.play, plan.gameId, plan.score, 'p'), vars)];
+  const one = (list, ...salt) => gamePick(list, plan.gameId, plan.score, ...salt);
+  if (pv.overtakes) parts.push(gameFill(one(L.overtake, 'o'), { ...vars, name: gameNpcName(gs, pv.overtakes), top: pv.topScore }));
+  else if (pv.newBest && pv.prevBest > 0) parts.push(gameFill(one(L.newBest, 'n'), { ...vars, prev: pv.prevBest }));
+  else if (pv.newBest) parts.push(gameFill(one(L.first, 'f'), vars));
+  else if (pv.topWho && pv.topWho !== 'player') parts.push(gameFill(one(L.behind, 'b'), { ...vars, name: gameNpcName(gs, pv.topWho), top: pv.topScore }));
+  return parts.join(' ');
+}
+
+// Mutates: the GAME_ARCADE effect. Puts the score on the board and pays a little practice.
+function gameApplyArcade(gs, gameId, score) {
+  if (!ARCADE_GAMES[gameId] || typeof arcadeRecord !== 'function') return null;
+  const day = gs.meta.clock.day;
+  const rec = arcadeRecord(gs, gameId, 'player', Math.max(0, Math.round(score)), day);
+  if (typeof awardSkillXp === 'function') awardSkillXp(gs.player, 'games', ARCADE_TUNING.xp + (rec.newBest ? ARCADE_TUNING.newBestXp : 0), day, gs);
+  return rec;
+}
+
 // --- The follow-up (D2's choice after): good game, gloat, rematch -----------------------------
 
 function gamePendingNow(gs) {
@@ -439,7 +512,9 @@ function gameApplyFollowUp(gs, kind) {
 function gamesPromptLine(gs, npcId) {
   const g = gamesRead(gs);
   const r = g?.rivals?.[npcId];
-  if (!r) return null;
+  const held = typeof arcadeTable === 'function' ? ARCADE_IDS.filter(id => arcadeHolder(gs, id) && arcadeHolder(gs, id).who === npcId) : [];
+  if (!r && !held.length) return null;
+  if (!r) return `[Arcade]: ${gameNpcName(gs, npcId)} holds the high score on ${held.map(id => `${ARCADE_GAMES[id].label} (${arcadeHolder(gs, id).score})`).join(' and ')}, and is not shy about it.`;
   const name = gameNpcName(gs, npcId);
   const L = GAMES_TUNING.lines.prompt;
   let best = null;

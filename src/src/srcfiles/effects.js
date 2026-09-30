@@ -1410,6 +1410,12 @@ const EFFECT_DEFS = {
         net: Number(p.net) || 0, results, iou, grade: (results.find(r => r.npcId === rival) || {}).grade || 'normal' });
     },
   },
+  // The arcade cabinet (Phases 7–8): a score the verb decided (or the screen returned), put on the board.
+  GAME_ARCADE: {
+    paramShape: ['gameId', 'score'], llm: false, implemented: true,
+    validate: (p) => (typeof ARCADE_GAMES === 'object' && !!ARCADE_GAMES[p.gameId]) || 'No such game.',
+    apply: (p, ctx) => { if (typeof gameApplyArcade === 'function') gameApplyArcade(ctx.gameState, p.gameId, Number(p.score) || 0); },
+  },
   GAME_FOLLOWUP: {
     paramShape: ['kind'], llm: false, implemented: true,
     validate: (p) => ['gracious', 'gloat', 'rematch'].includes(p.kind) || 'Nothing to say.',
