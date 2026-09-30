@@ -1,5 +1,5 @@
 // ===== SECTION: DEFS.DREAMS =====
-// Dream Engine Phase 2 (src/src/ref/complete/dream-engine-plan.md). Pure data: every
+// Dream Engine Phase 2 (ref/complete/dream-engine-plan.md). Pure data: every
 // hotswappable part of a dream lives here and nowhere else.
 //
 // The thesis in one line (D1): **the LLM never decides structure.** Form,

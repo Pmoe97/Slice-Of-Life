@@ -2571,7 +2571,7 @@ function getPlaceholder() {
 
 // ===== MENU TITLE GALLERY (Phase 10) =====
 // The boot-menu slideshow — the reference games' component
-// (src/src/ref/structural/perchance-menu-conventions.md §3.4–3.8) adapted onto this game's
+// (ref/structural/perchance-menu-conventions.md §3.4–3.8) adapted onto this game's
 // image pipeline. Two absolutely-positioned <img> layers crossfade on an
 // 8 s cycle; a `generating` boolean keeps exactly one generation in flight;
 // the auto-cycle tick that finds no next image calls the generator WITHOUT

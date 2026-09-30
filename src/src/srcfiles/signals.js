@@ -1,5 +1,5 @@
 // ===== SECTION: SIGNALS =====
-// The perception substrate (src/src/ref/wip/perception-and-signals-plan.md).
+// The perception substrate (ref/wip/perception-and-signals-plan.md).
 //
 // A thing that happens or persists in a room emits a SIGNAL on a sense
 // channel. The signal propagates outward along ROOM_ADJACENCY, attenuating per

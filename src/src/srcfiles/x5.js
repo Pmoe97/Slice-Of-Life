@@ -1,6 +1,6 @@
 // ===== SECTION: X5 =====
 // Plan X-5 — conversation consequences
-// (src/src/ref/complete/plan-x5-conversation-consequences.md), Phase 1: "the wire",
+// (ref/complete/plan-x5-conversation-consequences.md), Phase 1: "the wire",
 // plus Phase 2's pure half (the D10 label bucketer, the proposal context both
 // passes ingest through, and the D5 strip that stops the writer grading
 // itself even when it volunteers).

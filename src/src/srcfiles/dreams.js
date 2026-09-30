@@ -1,5 +1,5 @@
 // ===== SECTION: DREAMS =====
-// Dream Engine (src/src/ref/complete/dream-engine-plan.md). Occasionally, sleeping or
+// Dream Engine (ref/complete/dream-engine-plan.md). Occasionally, sleeping or
 // napping greets the player with a 1-3 panel illustrated dream compiled
 // deterministically from their own save: who they snooped on, who they slept
 // with, what an NPC did in a room they never entered.

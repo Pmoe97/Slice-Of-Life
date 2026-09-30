@@ -17,9 +17,9 @@ const CONTENT_CONFIG = {
 
 // --- Layout / rooms (The Mirrored H — 17 rooms) ---
 // Bedrooms in the corners, two hallways (north/south) each with their own
-// bathroom, common spaces bridging them. See src/src/ref/complete/apartment-expansion-plan.md
+// bathroom, common spaces bridging them. See ref/complete/apartment-expansion-plan.md
 // for the full layout and adjacency graph.
-// Floor plan + movement overhaul (src/src/ref/wip/floorplan-and-movement-plan.md).
+// Floor plan + movement overhaul (ref/wip/floorplan-and-movement-plan.md).
 // The hand-drawn plan is authoritative; the geometry below and in
 // ROOM_LAYOUT/ROOM_THRESHOLDS came out of dev/mapper.html. Open that tool
 // before editing any adjacency by hand — it is what proves every declared
@@ -441,12 +441,12 @@ const CONVERSATION = {
 // deliberately NOT an even split. The player holds the lease: they owe the
 // whole rent, and each roommate offsets at most a capped fraction of the
 // total. So the numbers push toward the social sim rather than away from
-// it — see src/src/ref/complete/economy-and-rent-plan.md for the full design.
+// it — see ref/complete/economy-and-rent-plan.md for the full design.
 //
 // That cap is not fixed: it scales with how good the apartment is. Nobody
 // pays penthouse rates for a wreck, and a fully restored place with every
 // amenity working can command real money. This is what makes the upgrade
-// system an investment rather than a drain (src/src/ref/complete/apartment-upgrades-plan.md).
+// system an investment rather than a drain (ref/complete/apartment-upgrades-plan.md).
 //
 // The arc, at $1900/week with the entry freelance rate (~$28-48/block after
 // the 2026-08-17 audit's entry-pay bump, and energy capping a day at
@@ -642,7 +642,7 @@ const INVESTING = {
 // fallback when no meter data exists; `computeBillAmount` computes
 // `base + Σ(meter × rate)` from `world.utilities` when meters are
 // present. Rent is one entry here, keeping its asymmetric lease-split
-// via `split:'lease'` — see src/src/ref/complete/economy-and-rent-plan.md. The grace
+// via `split:'lease'` — see ref/complete/economy-and-rent-plan.md. The grace
 // period is how many days a bill can stay unpaid past its due day
 // before the cutoff fires; the reconnection fee is what restoring
 // service costs, so letting something lapse is a real setback rather
@@ -713,7 +713,7 @@ const AUTOPAY = {
 // Quarterly estimated taxes — the highest-value mechanic in the economy
 // plan. A large lumpy obligation every 70 days — end of Summer and end of
 // Winter (D3 of the calendar plan) — that forces saving. See
-// src/src/ref/complete/economy-and-rent-plan.md §Quarterly estimated taxes.
+// ref/complete/economy-and-rent-plan.md §Quarterly estimated taxes.
 //
 // The blended rate is one number (self-employment 15.3% + effective
 // federal), not a bracket table — precision here is false precision.
@@ -781,7 +781,7 @@ const BILL_CUTOFF_EFFECTS = {
 // bill is `base + Σ(counter × rate)`. Both player and NPC actions meter —
 // if only the player's actions counted, the bill couldn't tell the story
 // of a roommate who takes 40-minute showers or leaves the heat cranked.
-// See src/src/ref/complete/economy-and-rent-plan.md §Utilities.
+// See ref/complete/economy-and-rent-plan.md §Utilities.
 //
 // Each meter entry: `bill` = which BILL_DEFS bill it feeds, `rate` = $/unit,
 // `unit` = a display label for the itemised breakdown. Meters reset to
@@ -892,7 +892,7 @@ const UTILITY_BASE = {
 // `room`, a `tier` (its current condition), a progression of `tiers` with
 // costs, and a `qualityWeight` — its contribution to apartment quality
 // (getApartmentQuality). A room is only its name once its defining
-// facility reaches at least 'functional'. See src/src/ref/complete/apartment-upgrades-plan.md.
+// facility reaches at least 'functional'. See ref/complete/apartment-upgrades-plan.md.
 //
 // tier values: 'absent' → 'broken' → 'functional' → 'upgraded'
 // (some facilities skip 'absent' — a stove exists, it's just broken)
@@ -904,7 +904,7 @@ const UTILITY_BASE = {
 // `durationDays` is how long that advance takes as a contracted
 // renovation job (0 on starting tiers, which are never booked to).
 // `residentCapacity` (bedroom facilities only) is reserved for the future
-// room-sharing plan — see src/src/ref/complete/renovation-occupancy-overhaul-plan.md.
+// room-sharing plan — see ref/complete/renovation-occupancy-overhaul-plan.md.
 //
 // `gatesActions`: action ids that require this facility to be at least
 // 'functional'. Checked by the 'facilityFunctional' requirement checker.
@@ -1087,7 +1087,7 @@ const RAW_FOOD = {
   energyPenalty: 5,    // per serving eaten raw
 };
 
-// --- Renovation jobs (src/src/ref/complete/renovation-occupancy-overhaul-plan.md) ---
+// --- Renovation jobs (ref/complete/renovation-occupancy-overhaul-plan.md) ---
 // Tier purchases are timed, contracted jobs rather than instant clicks.
 // v1 allows at most one active job at a time (locked decision #6); the
 // array is shaped to hold more so a future system can raise the cap
@@ -1140,7 +1140,7 @@ const RENOVATION_PROGRESS_TEMPLATES = {
   ],
 };
 
-// --- Contractor Friend (src/src/ref/complete/contractor-tutorial-overhaul-plan.md) ---
+// --- Contractor Friend (ref/complete/contractor-tutorial-overhaul-plan.md) ---
 // The permanent, simulation-light contractor who performs every renovation
 // job and texts the player. NEVER a resident: `createNpcFromBible(..., 'visitor')`
 // gives them contributesRent=false and no room, and resolveTick skips
@@ -1248,10 +1248,10 @@ const CONTRACTOR_INITIAL_FACTS = [
   { text: "The grandfather would've laughed at today's lumber prices.", day: 0, importance: 0.4, category: 'apartment' },
 ];
 
-// --- Contractor tutorial (src/src/ref/complete/contractor-tutorial-overhaul-plan.md, Phase 3) ---
+// --- Contractor tutorial (ref/complete/contractor-tutorial-overhaul-plan.md, Phase 3) ---
 // The first job on an auxiliary bedroom is free — the one-time guided
 // tutorial that doubles as the opening's "you inherited this" framing
-// (src/src/ref/complete/game-opening-plan.md). Only the three NON-player bedrooms qualify:
+// (ref/complete/game-opening-plan.md). Only the three NON-player bedrooms qualify:
 // the player's own room starts functional (locked decision #3) and its
 // Upgrade is a paid luxury. The single tutorialRenoUsed flag is consumed on
 // the booking in bookRenovationJob — this is a flag, not a state machine.
@@ -1316,7 +1316,7 @@ const CONTRACTOR_TUTORIAL_MILESTONES = {
 // fires only after a few real repairs.
 const CONTRACTOR_QUALITY_MILESTONE_THRESHOLD = 0.25;
 
-// --- Visit spine (src/src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 1) ---
+// --- Visit spine (ref/complete/external-world-npcs-overhaul-plan.md, Phase 1) ---
 // world.visits[] is the single source of truth for "who is onsite and why",
 // written by every source (renovation jobs today; maid contracts, food
 // orders, roommates' friends, player invitations in later phases) and read
@@ -1754,7 +1754,7 @@ const AFFECTION_TUNING = {
   undisturbedPlayerMoodFactor: 0.4,
 };
 
-// Weekend rush (src/src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 4). Del's
+// Weekend rush (ref/complete/external-world-npcs-overhaul-plan.md, Phase 4). Del's
 // crew works weekdays only, so a job's durationDays are WORKING days and a
 // booking made late in the week stretches across the weekend. Paying the
 // rush premium keeps them working through it, turning durationDays back
@@ -1762,7 +1762,7 @@ const AFFECTION_TUNING = {
 // the whole economy is built on.
 const RENOVATION_RUSH_MULTIPLIER = 1.6;
 
-// --- The maid (src/src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 3) ---
+// --- The maid (ref/complete/external-world-npcs-overhaul-plan.md, Phase 3) ---
 // The contract is alarm-shaped: a per-day grid where each selected weekday
 // carries its own start/end time, bounded to the same 09:00-16:30 daytime
 // window everyone works (locked decision 11). Priced per onsite HOUR and
@@ -1790,7 +1790,7 @@ const MAID_TUNING = {
   cookingMealItems: ['meal_pasta', 'meal_soup', 'meal_stirfry', 'meal_salad'],
 };
 
-// --- Food delivery (src/src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 5) ---
+// --- Food delivery (ref/complete/external-world-npcs-overhaul-plan.md, Phase 5) ---
 // A DoorDash-alike: the restaurant's prepMinutes plus travel is how long the
 // food takes, and a real driver brings it. Everything here is per-ORDER
 // tuning; per-restaurant numbers (prep time, delivery fee, hours, menu
@@ -1850,7 +1850,7 @@ const GROCERY_TUNING = {
   shopperWindowMinutes: 30,
 };
 
-// --- Friends of roommates (src/src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 6) ---
+// --- Friends of roommates (ref/complete/external-world-npcs-overhaul-plan.md, Phase 6) ---
 // Every resident carries a small deterministic circle of friends, stubbed at
 // new-game and promoted to full bibles only when a visit is actually planned.
 // How often someone hosts is a personality fact, not a global rate: warmth and
@@ -1905,7 +1905,7 @@ const ESCORT_TUNING = {
   tomorrowStartTickMax: 44,    // 22:00
 };
 
-// --- Move-in advocacy (src/src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 8) ---
+// --- Move-in advocacy (ref/complete/external-world-npcs-overhaul-plan.md, Phase 8) ---
 // External NPCs become residents when a resident (or the player) vouches for
 // them in conversation and the player then runs the existing offer flow.
 // "Strong relationship" is the gate on BOTH sides, per locked decision 15:
@@ -2380,7 +2380,7 @@ const ROOM_FACILITIES = {
 };
 
 // The starting tier for each facility in a new game. The apartment starts
-// in disrepair — see src/src/ref/complete/game-opening-plan.md. The player's own bedroom
+// in disrepair — see ref/complete/game-opening-plan.md. The player's own bedroom
 // starts 'functional' (habitable day one, not upgraded) while every other
 // bedroom and most facilities start 'broken' — the first objective is
 // making one auxiliary bedroom habitable so a roommate can move in.
@@ -3661,7 +3661,7 @@ const CLOCK = {
 // mean something: waking early is a real cost (you come up short of 100),
 // and "very drained + went to bed late" lands you short precisely because
 // you needed the long night and didn't get it. See
-// src/src/ref/sleep-and-alarm-plan.md.
+// ref/sleep-and-alarm-plan.md.
 const SLEEP = {
   minHours: 6,             // slept when energy is at max
   maxHours: 8,             // slept when energy is at zero
@@ -3840,7 +3840,7 @@ const CAMERA = {
 };
 
 // --- Tracker (BrineOS Phase 4) ---
-// The phone's obligation tracker (see src/src/ref/BrineOS-The-Phone-plan.md §Phase
+// The phone's obligation tracker (see ref/BrineOS-The-Phone-plan.md §Phase
 // 4): one pure derived pass turns game state into a flat list of entries.
 // Nothing about an obligation is ever stored — world.phone.dismissed /
 // .snoozed hold only the player's intent, keyed by the deterministic entry
@@ -7596,7 +7596,7 @@ const SPRITE_QUEUE = {
 
 // --- Title-gallery slideshow (menu overhaul Phase 10) ---
 // Adopts the reference games' two-layer crossfade + lazy 3-image buffer
-// (src/src/ref/structural/perchance-menu-conventions.md §3.4–3.8) onto this game's image
+// (ref/structural/perchance-menu-conventions.md §3.4–3.8) onto this game's image
 // pipeline, with three deliberate fixes: bounded retries with exponential
 // backoff (never the reference games' uncapped 500ms retry loop), caching
 // through the shared LRU instead of multi-MB data-URLs in kv, and a hard
@@ -7919,7 +7919,7 @@ const CHARACTER_SCHEMA = {
         // SIM's incomeRentShare — a roommate pays what their incomeBand ×
         // incomeSource says, not a flat 0.15. A negotiated value (the future
         // agreement system) is written here explicitly and overrides the derivation.
-        // See src/src/ref/complete/economy-and-rent-plan.md.
+        // See ref/complete/economy-and-rent-plan.md.
         rentShare:     { type: 'number', range: [0, 1], default: null, nullable: true },
       }
     },
@@ -8018,7 +8018,7 @@ const CHARACTER_SCHEMA = {
   }
 };
 
-// --- Contacts (src/src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 2) ---
+// --- Contacts (ref/complete/external-world-npcs-overhaul-plan.md, Phase 2) ---
 // Asking for someone's number is a social beat, not a threshold check.
 // Willingness is personality-weighted (locked decision 7): a warm, open
 // person shares early; a guarded one needs real rapport first. The rapport

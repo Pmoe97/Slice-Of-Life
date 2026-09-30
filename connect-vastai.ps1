@@ -4,7 +4,7 @@
 #
 # What it does: opens the SSH tunnel local-ai-shim.js needs (18188 -> ComfyUI,
 # 3000 -> llama-server, both loopback-only on the remote box; see
-# src/src/dev/LOCAL-AI-SETUP.md for why a tunnel instead of the public
+# dev/LOCAL-AI-SETUP.md for why a tunnel instead of the public
 # ip:port), starts the local http server if it isn't already running, and
 # opens dev-harness.html in your browser.
 #

@@ -3,7 +3,7 @@
 // draft out.
 //
 // AI-Assisted Character Generation plan, Phase 2. See
-// src/src/ref/wip/ai-character-generation-plan.md for the design record.
+// ref/wip/ai-character-generation-plan.md for the design record.
 //
 // THE ONE STRUCTURAL RULE (plan design invariant 2): this file never
 // constructs a character. It produces a DRAFT — the same shape the manual

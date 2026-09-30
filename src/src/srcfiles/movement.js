@@ -1,6 +1,6 @@
 // ===== SECTION: MOVEMENT =====
 // The physical layer of the continuous behavior engine
-// (src/src/ref/wip/continuous-behavior-engine-plan.md, Phase 4 — C4).
+// (ref/wip/continuous-behavior-engine-plan.md, Phase 4 — C4).
 //
 // The commitment model made decisions absolute-minute and anchored; this is
 // the position half of that promise. When an NPC commits to an anchored

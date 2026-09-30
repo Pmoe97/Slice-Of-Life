@@ -1,6 +1,6 @@
 // ===== SECTION: OVERTURE =====
 // NPC initiative — the acts an NPC directs at a PERSON
-// (src/src/ref/complete/npc-initiative-plan.md, Phases 3 and 4).
+// (ref/complete/npc-initiative-plan.md, Phases 3 and 4).
 //
 // FOUR CHANNELS (D8), and they are four rows of OVERTURE_DEFS rather than four
 // code paths: approach (Phase 3), text, propose and knock (Phase 4). The

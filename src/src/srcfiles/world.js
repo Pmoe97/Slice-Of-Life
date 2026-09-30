@@ -468,7 +468,7 @@ function objectDefIdExistsAnywhere(defId, gameState, skipBucket) {
 
 // --- Phone (BrineOS Phase 2/3) ---
 // The phone's durable world state. Decision B of
-// src/src/ref/BrineOS-The-Phone-plan.md says presence is DERIVED from the object's
+// ref/BrineOS-The-Phone-plan.md says presence is DERIVED from the object's
 // bucket — never stored on world.phone (two sources of truth desync).
 // world.phone holds only the shell's nav state + settings (Phase 3): power
 // (screen on/off), the app stack, and the one DND boolean (plan 3.7). The

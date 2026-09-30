@@ -384,7 +384,7 @@ CRITICAL RULES:
 }
 
 // --- The ask-directive block (asks plan Phase 1) ---
-// Compiled from src/src/ref/complete/asks-llm-prompt.md — that file is the source of
+// Compiled from ref/complete/asks-llm-prompt.md — that file is the source of
 // truth for this wording; keep the two in sync whenever one changes. The
 // writer receives the semantic reason/stance words, never the numbers behind
 // the decision (placeholder fill rules in the prompt doc). The `---`-fenced
@@ -437,7 +437,7 @@ function buildAskDirective({ askLabel, askId, flavorText, accept, reasonPhrase, 
 // The SECOND LLM pass of a schedule:true ask: after the calendar modal
 // confirmed a window and the commitment already exists, this tells the
 // writer to phrase the sign-off ("see you then!"). Compiled verbatim from
-// src/src/ref/complete/asks-llm-prompt.md's scheduling-confirm variant — that file
+// ref/complete/asks-llm-prompt.md's scheduling-confirm variant — that file
 // is the source of truth; keep the two in sync. Shares the `---`-fenced
 // shape of the ask-directive block so the scene-prompt prefix before it
 // stays as cache-friendly as the first pass.
@@ -1276,7 +1276,7 @@ async function callChronicler(gameState, npcId, win) {
 }
 
 // ===== Dream Engine Phase 5 — the Dreamweaver =====
-// (src/src/ref/complete/dream-engine-plan.md)
+// (ref/complete/dream-engine-plan.md)
 //
 // The one model call in the whole dream pipeline, and the most tightly fenced
 // call in the codebase. compileDream (dreams.js) has already decided the form,

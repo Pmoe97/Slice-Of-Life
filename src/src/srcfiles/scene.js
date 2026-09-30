@@ -1,5 +1,5 @@
 // ===== SECTION: SCENE =====
-// The scene model (src/src/ref/wip/scene-reader-ui-plan.md, Phase 1).
+// The scene model (ref/wip/scene-reader-ui-plan.md, Phase 1).
 //
 // The main content area is a SCENE — where you are, who is there, what you can
 // sense, and what has happened since you walked in — not a flat log of

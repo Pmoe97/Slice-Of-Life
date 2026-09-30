@@ -6,7 +6,7 @@
 //   - LocalAI.generateImage(prompt, opts) -> talks to a ComfyUI instance
 // against whatever vast.ai box local-ai.config.js points at. See
 // local-ai.config.example.js for the settings this reads, and
-// src/src/dev/LOCAL-AI-SETUP.md for the end-to-end setup.
+// dev/LOCAL-AI-SETUP.md for the end-to-end setup.
 //
 // Both functions match the shape src/src/srcfiles/llm.js and image.js
 // already call on `root` — see those files' `root.generateText(...)` /

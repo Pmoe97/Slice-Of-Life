@@ -1,5 +1,5 @@
 // ===== SECTION: COGNITION =====
-// NPC utility scoring (src/src/ref/complete/npc-cognition-plan.md, Phase 1).
+// NPC utility scoring (ref/complete/npc-cognition-plan.md, Phase 1).
 //
 // Twelve independent per-drive coin flips produce inaction almost always: an
 // NPC with something it could do does nothing 82.6% of the time (the plan's

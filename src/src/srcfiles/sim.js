@@ -871,7 +871,7 @@ function dedupeCastNames(npcs, extraUsedName) {
   }
 }
 
-// --- Visits (src/src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 1) ---
+// --- Visits (ref/complete/external-world-npcs-overhaul-plan.md, Phase 1) ---
 // world.visits[] is the single source of truth for "who is onsite and why".
 // A visit is the presence window of an external NPC: their location and
 // activity are purpose-driven, they don't decay needs, and outside their
@@ -4191,7 +4191,7 @@ function computeRent(npcs, gameState) {
 //
 // The exposure asymmetry is real, measurable and kept — it lives entirely in
 // the signal layer, where it belongs. See D7 in
-// src/src/ref/wip/floorplan-and-movement-plan.md.
+// ref/wip/floorplan-and-movement-plan.md.
 
 // How much of the rent any one roommate can be asked to carry, given the
 // state of the apartment. Nobody pays penthouse rates for a wreck.
@@ -4207,7 +4207,7 @@ function roommateShareCeiling(quality) {
 // A wreck (everything broken) is 0; a fully restored apartment is 1.
 // This is what makes the upgrade system pay back: it raises the rent
 // ceiling via roommateShareCeiling, so investing in the building is an
-// investment in income. See src/src/ref/complete/apartment-upgrades-plan.md.
+// investment in income. See ref/complete/apartment-upgrades-plan.md.
 //
 // Falls back to 1 (full quality) when world.upgrades is absent (a save
 // from before Phase 4) so old saves stay playable — the clean-break
@@ -5590,7 +5590,7 @@ function buildGameState(seed, cast, clock, droppedConstraints, economyCfg) {
     // Phase 8: burnout tracking. consecutiveWorkDays counts days where
     // the player worked above the burnout threshold; burnoutLevel is the
     // accumulated penalty (0-1) that scales mood loss and work pay down.
-    // Recovery happens on rest days. See src/src/ref/sleep-and-alarm-plan.md.
+    // Recovery happens on rest days. See ref/sleep-and-alarm-plan.md.
     burnout: { consecutiveWorkDays: 0, burnoutLevel: 0, lastWorkDay: 0 },
     // Nothing is owed until the first due date actually passes — see
     // UI's processRentForDay, which charges rent every ECONOMY.payPeriodDays
@@ -5648,9 +5648,9 @@ function buildGameState(seed, cast, clock, droppedConstraints, economyCfg) {
       doorEvent: null,
       // Renovation overhaul: active/completed contracted jobs, one entry
       // per job booked through bookRenovationJob (see
-      // src/src/ref/complete/renovation-occupancy-overhaul-plan.md).
+      // ref/complete/renovation-occupancy-overhaul-plan.md).
       renovationJobs: [],
-      // Visit spine (src/src/ref/complete/external-world-npcs-overhaul-plan.md, Phase 1):
+      // Visit spine (ref/complete/external-world-npcs-overhaul-plan.md, Phase 1):
       // the single queue of "who is onsite and why" — every external-NPC
       // presence window (contractor jobs today; maid contracts, food
       // orders, roommates' friends, player invitations in later phases)
@@ -5715,7 +5715,7 @@ function buildGameState(seed, cast, clock, droppedConstraints, economyCfg) {
       signals: [],
       // Contractor tutorial (contractor doc Phase 3): one-shot tutorial /
       // milestone flags (tutorialRenoUsed, tutorial_<milestoneId>) — see
-      // src/src/ref/complete/contractor-tutorial-overhaul-plan.md.
+      // ref/complete/contractor-tutorial-overhaul-plan.md.
       flags: {},
       // Dream Engine Phase 1: the dream queue / diary / motif-history
       // subtree (dreams.js). Stamped here so a brand-new game starts with
@@ -5751,7 +5751,7 @@ function buildGameState(seed, cast, clock, droppedConstraints, economyCfg) {
       bills: initBillState(openingGraceDays, openingBillDelay),
       // Phase 4 upgrades: one entry per FACILITY_DEFS. `tier` is the
       // facility's current condition ('broken'/'functional'/'upgraded').
-      // The apartment starts in disrepair — see src/src/ref/complete/game-opening-plan.md.
+      // The apartment starts in disrepair — see ref/complete/game-opening-plan.md.
       // Initialized by initUpgradesState below.
       upgrades: initUpgradesState(),
       // Phase 5 utility metering: one entry per UTILITY_METER key. Each
@@ -5765,7 +5765,7 @@ function buildGameState(seed, cast, clock, droppedConstraints, economyCfg) {
     droppedConstraints,
   };
 
-  // Contractor Friend (src/src/ref/complete/contractor-tutorial-overhaul-plan.md, Phase 1):
+  // Contractor Friend (ref/complete/contractor-tutorial-overhaul-plan.md, Phase 1):
   // a permanent, simulation-light NPC added at new-game setup so EVERY start
   // path (solo + cast) gets them. 'visitor' status + the resolveTick skip
   // keep them out of the sim entirely — never a room, never present,
