@@ -4866,6 +4866,8 @@ const TV_TUNING = {
 const GAME_DEFS = {
   pool: {
     id: 'pool', label: 'Pool', anchors: ['pool_table'], minutes: 35, skillTag: 'gaming',
+    // Phase 6: a real 8-ball table (pool.js + render.games.js).
+    minigame: 'pool',
     intro: ['You rack the balls and {name} chalks a cue, looking far too calm.', '{name} breaks. The balls scatter and the room goes very quiet.'],
     win: { close: ['You sink the black with {name} one shot behind you.', 'It comes down to the last ball, and you get it.'], blowout: ['You clear the table before {name} gets a second turn.', 'It is not close. {name} keeps looking at the table as if it cheated.'] },
     lose: { close: ['{name} sinks the black with one ball to spare. You will be thinking about that shot for a week.', 'It comes down to the last ball, and it goes {name}\'s way.'], blowout: ['{name} runs the table. You barely touch a ball.', 'It is not close. {name} is being visibly nice about it.'] },

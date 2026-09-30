@@ -166,6 +166,12 @@ function gamePlanMatch(gs, gameId, npcId, stakeId, amount, played, mode) {
     played = dartsResult(st, gameNpcName(gs, npcId));
     played.minutes = DARTS_TUNING.modes[m].minutes;
   }
+  // Pool, headless: a whole 8-ball game played out by the physics, both sides shooting like their skill.
+  if (!played && gameId === 'pool' && typeof poolSimulate === 'function') {
+    const pst = poolNew(seededRng(gs.meta?.seed, `poolrack_${clock.day}_${clock.minutes}_${npcId}_${g?.count || 0}`));
+    poolSimulate(pst, seededRng(gs.meta?.seed, `pool_${clock.day}_${clock.minutes}_${npcId}_${g?.count || 0}`), gameSkillOf(gs, 'player', gameId), gameSkillOf(gs, npcId, gameId));
+    played = poolResult(pst, gameNpcName(gs, npcId));
+  }
   // Blackjack with a roommate dealing: modelled headless (basic strategy, a flat bet, the dealer's rule).
   if (!played && gameId === 'blackjack' && typeof bjSimulate === 'function') {
     const bst = bjNew({});

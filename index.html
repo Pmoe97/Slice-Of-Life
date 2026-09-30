@@ -3732,6 +3732,13 @@ body {
 /* Recipe picker (overhaul Phase 2) — the "What do you want to cook?"
    choice inside the shared modal. */
 /* Game Room minigames (render.games.js): the darts board and the poker table in the shared modal. */
+.games-pool { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); min-width: 0; }
+.games-pool-info { font-weight: 700; font-size: var(--fs-sm, 0.9rem); text-align: center; }
+.games-pool-canvas { max-width: 100%; height: auto; border-radius: 8px; cursor: crosshair; user-select: none; -webkit-user-select: none; }
+.games-pool-controls { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; justify-content: center; width: 100%; }
+.games-pool-controls input[type=range] { flex: 1; min-width: 120px; }
+.games-pool-label { font-size: var(--fs-sm, 0.9rem); min-width: 5.5em; }
+.games-pool-spin { width: 52px; height: 52px; cursor: pointer; border-radius: 50%; }
 .games-poker { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .games-poker-stake { font-size: var(--fs-sm, 0.9rem); color: var(--color-text-dim); text-align: center; }
 .games-poker-opps { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: center; }
@@ -8530,7 +8537,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=218"></script>
+<script src="src/src/srcfiles/config.js?v=219"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -8576,7 +8583,7 @@ body {
 <!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
      player-facing release history. Pure data, no dependencies, grouped with
      the other defs.* files for the same reason defs.dreams.js is. -->
-<script src="src/src/srcfiles/defs.patchnotes.js?v=36"></script>
+<script src="src/src/srcfiles/defs.patchnotes.js?v=37"></script>
 <!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
      WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
      ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
@@ -8833,11 +8840,12 @@ body {
      in the same change. -->
 <script src="src/src/srcfiles/projects.js?v=3"></script>
 <script src="src/src/srcfiles/books.js?v=1"></script>
-<script src="src/src/srcfiles/games.js?v=4"></script>
+<script src="src/src/srcfiles/games.js?v=5"></script>
 <script src="src/src/srcfiles/darts.js?v=1"></script>
 <script src="src/src/srcfiles/cardgames.js?v=1"></script>
 <script src="src/src/srcfiles/poker.js?v=1"></script>
 <script src="src/src/srcfiles/blackjack.js?v=1"></script>
+<script src="src/src/srcfiles/pool.js?v=1"></script>
 <script src="src/src/srcfiles/render.js?v=111"></script>
 <!-- Night Scene Phase 3b: the Living Tableau's PAINTER. After render.js
      (shares its rules: idempotent, no state mutation, no rolls) and after
@@ -8845,7 +8853,7 @@ body {
      in dev/verify/loadgame.js's ORDER — it is pure view code, and that
      loader deliberately stops before the render layer, exactly as
      render.spritestudio.js does. -->
-<script src="src/src/srcfiles/render.games.js?v=3"></script>
+<script src="src/src/srcfiles/render.games.js?v=4"></script>
 <script src="src/src/srcfiles/render.nightscene.js?v=1"></script>
 <script src="src/src/srcfiles/render.computer.js?v=82"></script>
 <!-- Avatars & Sprite Studio Phase 4: the studio's verbs and its screens.

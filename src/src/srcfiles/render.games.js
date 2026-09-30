@@ -9,6 +9,7 @@ function openMinigame(kind, opts) {
   if (kind === 'darts') return openDartsGame(opts);
   if (kind === 'poker') return openPokerGame(opts);
   if (kind === 'blackjack') return openBlackjackGame(opts);
+  if (kind === 'pool') return openPoolGame(opts);
   return Promise.resolve(null);
 }
 
@@ -562,6 +563,289 @@ function openBlackjackGame(opts) {
       endNight();
     };
     render();
+  });
+}
+
+// Pool (Phase 6, D10): 8-ball on a real 2D table. The engine is pool.js (physics, rules, the roommate's
+// shot); this is the screen: aim with the pointer, set the power and a little spin, shoot, and watch
+// the balls roll. Ball in hand: tap the table to put the cue ball down. opts: { npcName, skillP,
+// skillN, seed }. Resolves poolResult(...) for the game, or a forfeit.
+function openPoolGame(opts) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions || typeof poolNew !== 'function') { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+
+    const T = POOL_TUNING, R = T.radius;
+    const npcName = opts.npcName || 'Them';
+    const rng = mulberry32((opts.seed >>> 0) || 1);
+    const st = poolNew(rng);
+    const W = Math.max(280, Math.min(560, (window.innerWidth || 380) - 64));
+    const pad = Math.round(W * 0.045);
+    const H = Math.round((W - 2 * pad) / 2 + 2 * pad);
+    const scale = (W - 2 * pad) / T.w;
+    const tx = (x) => pad + x * scale, ty = (y) => pad + y * scale;
+    const fromPx = (px, py) => ({ x: (px - pad) / scale, y: (py - pad) / scale });
+
+    let aim = 0;                       // radians
+    let power = 0.55;
+    const spin = { x: 0, y: 0 };
+    let anim = false;                  // a shot is rolling
+    let npcBusy = false;               // the roommate is thinking or shooting
+    let placing = false;               // the player has ball in hand
+    let finished = false;
+    let status = 'Your break. Aim with the pointer, set the power, and shoot.';
+    let raf = 0, timer = 0;
+    let trail = [];                    // where the cue ball has been this shot (a faint line)
+
+    title.textContent = 'Pool';
+    body.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'games-pool';
+    const info = document.createElement('div');
+    info.className = 'games-pool-info';
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    canvas.className = 'games-pool-canvas';
+    canvas.style.touchAction = 'none';
+    const controls = document.createElement('div');
+    controls.className = 'games-pool-controls';
+    const powLab = document.createElement('span'); powLab.className = 'games-pool-label';
+    const powRange = document.createElement('input');
+    powRange.type = 'range'; powRange.min = '10'; powRange.max = '100'; powRange.value = String(Math.round(power * 100));
+    const spinCanvas = document.createElement('canvas');
+    spinCanvas.width = 52; spinCanvas.height = 52; spinCanvas.className = 'games-pool-spin';
+    spinCanvas.title = 'Where you hit the cue ball: top to follow, bottom to draw, sides for English';
+    controls.append(powLab, powRange, spinCanvas);
+    const statusEl = document.createElement('div');
+    statusEl.className = 'games-poker-status';
+    wrap.append(info, canvas, controls, statusEl);
+    body.appendChild(wrap);
+    actions.innerHTML = '';
+    const mk = (label, cls) => { const b = document.createElement('button'); b.type = 'button'; b.className = cls || 'btn'; b.textContent = label; return b; };
+    const shootBtn = mk('Shoot');
+    const outBtn = mk('Let it play out', 'btn btn-secondary');
+    const leaveBtn = mk('Forfeit', 'btn btn-secondary');
+    actions.append(shootBtn, outBtn, leaveBtn);
+    overlay.setAttribute('data-open', '');
+
+    const ctx = canvas.getContext('2d');
+    const sctx = spinCanvas.getContext('2d');
+    const COLORS = { 1: '#e6c229', 2: '#2456b8', 3: '#c0392b', 4: '#6a2c91', 5: '#e67e22', 6: '#1e8449', 7: '#7b241c', 8: '#111111' };
+    const colorOf = (id) => COLORS[id > 8 ? id - 8 : id] || '#f4f1e8';
+
+    function cue() { return poolBallById(st, 0); }
+    function myTurn() { return st.turn === 'p' && !st.over && !anim && !npcBusy && !finished; }
+
+    // the first thing the aim line meets: a ball, or a cushion. Returns { x, y, ball }.
+    function rayHit(from, ang) {
+      const dx = Math.cos(ang), dy = Math.sin(ang);
+      let best = { t: Infinity, ball: null };
+      for (const b of st.balls) {
+        if (b.potted || b.id === 0) continue;
+        const ox = b.x - from.x, oy = b.y - from.y;
+        const proj = ox * dx + oy * dy;
+        if (proj <= 0) continue;
+        const d2 = ox * ox + oy * oy - proj * proj;
+        if (d2 > 4 * R * R) continue;
+        const t = proj - Math.sqrt(4 * R * R - d2);
+        if (t < best.t) best = { t, ball: b };
+      }
+      const tw = dx > 0 ? (T.w - R - from.x) / dx : dx < 0 ? (R - from.x) / dx : Infinity;
+      const th = dy > 0 ? (T.h - R - from.y) / dy : dy < 0 ? (R - from.y) / dy : Infinity;
+      const wall = Math.min(tw, th);
+      if (wall < best.t) best = { t: wall, ball: null };
+      return { x: from.x + dx * best.t, y: from.y + dy * best.t, ball: best.ball };
+    }
+
+    function drawSpin() {
+      const c = 26;
+      sctx.clearRect(0, 0, 52, 52);
+      sctx.fillStyle = '#f4f1e8'; sctx.beginPath(); sctx.arc(c, c, 24, 0, Math.PI * 2); sctx.fill();
+      sctx.strokeStyle = '#999'; sctx.lineWidth = 1; sctx.beginPath(); sctx.moveTo(c, 4); sctx.lineTo(c, 48); sctx.moveTo(4, c); sctx.lineTo(48, c); sctx.stroke();
+      sctx.fillStyle = '#c0392b'; sctx.beginPath(); sctx.arc(c + spin.x * 17, c + spin.y * -17, 4, 0, Math.PI * 2); sctx.fill();
+    }
+
+    function ballDraw(b) {
+      const x = tx(b.x), y = ty(b.y), r = R * scale;
+      ctx.beginPath(); ctx.arc(x + 1.5, y + 2, r, 0, Math.PI * 2); ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fill();
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = b.id === 0 ? '#f8f6ee' : b.id > 8 ? '#f4f1e8' : colorOf(b.id); ctx.fill();
+      if (b.id > 8) { ctx.save(); ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.clip(); ctx.fillStyle = colorOf(b.id); ctx.fillRect(x - r, y - r * 0.55, r * 2, r * 1.1); ctx.restore(); }
+      if (b.id > 0) {
+        ctx.beginPath(); ctx.arc(x, y, r * 0.48, 0, Math.PI * 2); ctx.fillStyle = '#f4f1e8'; ctx.fill();
+        ctx.fillStyle = '#111'; ctx.font = `${Math.max(7, Math.round(r * 0.8))}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(b.id), x, y + 0.5);
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = '#5b3a1e'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#1f6b46'; ctx.fillRect(pad, pad, W - 2 * pad, H - 2 * pad);
+      for (const p of POOL_POCKETS) { ctx.beginPath(); ctx.arc(tx(p.x), ty(p.y), p.r * scale * 1.05, 0, Math.PI * 2); ctx.fillStyle = '#0a0a0a'; ctx.fill(); }
+      if (trail.length > 1) { ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 2; ctx.beginPath(); trail.forEach((p, i) => (i ? ctx.lineTo(tx(p.x), ty(p.y)) : ctx.moveTo(tx(p.x), ty(p.y)))); ctx.stroke(); }
+      const c = cue();
+      if (myTurn() && !placing && !c.potted) {
+        const hit = rayHit(c, aim);
+        ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 5]);
+        ctx.beginPath(); ctx.moveTo(tx(c.x), ty(c.y)); ctx.lineTo(tx(hit.x), ty(hit.y)); ctx.stroke(); ctx.setLineDash([]);
+        ctx.beginPath(); ctx.arc(tx(hit.x), ty(hit.y), R * scale, 0, Math.PI * 2); ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.stroke();
+        // the cue stick, pulled back with the power
+        const back = R * 2.5 + power * 0.28;
+        ctx.strokeStyle = '#d9b26f'; ctx.lineWidth = 4; ctx.beginPath();
+        ctx.moveTo(tx(c.x - Math.cos(aim) * back), ty(c.y - Math.sin(aim) * back)); ctx.lineTo(tx(c.x - Math.cos(aim) * (back + 0.5)), ty(c.y - Math.sin(aim) * (back + 0.5))); ctx.stroke();
+      }
+      for (const b of st.balls) if (!b.potted) ballDraw(b);
+      if (placing) { ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('Tap the table to place the cue ball', W / 2, H - 4); }
+      raf = requestAnimationFrame(frame);
+    }
+
+    let lastTs = 0;
+    function frame() {
+      const now = performance.now();
+      const elapsed = Math.min(60, lastTs ? now - lastTs : 16);
+      lastTs = now;
+      if (anim) {
+        // Time-based, so the balls roll at the same pace whatever the frame rate (about twice real time).
+        const n = Math.max(2, Math.round(elapsed * 0.001 * (1 / T.dt) * 2));
+        let moving = true;
+        for (let k = 0; k < n && moving; k++) { moving = poolStep(st); }
+        const c = cue(); if (!c.potted) trail.push({ x: c.x, y: c.y });
+        if (!moving || st.shot.steps > T.maxStepsPerShot) { anim = false; const v = poolEndShot(st); afterShot(v); }
+      }
+      draw();
+      infoUpdate();
+    }
+
+    function groupLabel(who) {
+      const g = st.groups[who];
+      if (!g) return 'open';
+      const left = poolRemaining(st, g);
+      return `${g} (${left ? left + ' left' : 'the 8'})`;
+    }
+    function infoUpdate() {
+      info.textContent = `You: ${groupLabel('p')}  ·  ${npcName}: ${groupLabel('n')}${st.turn === 'p' && !st.over ? '' : ''}`;
+      powLab.textContent = `Power ${Math.round(power * 100)}`;
+      statusEl.textContent = status;
+      const mine = myTurn();
+      shootBtn.style.display = mine && !placing ? '' : 'none';
+      outBtn.disabled = anim || npcBusy || finished;
+      outBtn.style.display = finished ? 'none' : '';
+      leaveBtn.textContent = finished ? 'Done' : 'Forfeit';
+      controls.style.visibility = mine && !placing ? 'visible' : 'hidden';
+    }
+
+    function tell(v) {
+      const who = v.shooter === 'p' ? 'You' : npcName;
+      const pots = v.potted.filter(id => id !== 8);
+      let s = pots.length ? `${who} ${v.shooter === 'p' ? 'pot' : 'pots'} the ${pots.join(', ')}.` : `${who} ${v.shooter === 'p' ? 'miss' : 'misses'}.`;
+      if (v.assigned) s += ` ${v.shooter === 'p' ? 'You are' : `${npcName} is`} ${v.assigned}.`;
+      if (v.foul) s += ` Foul (${v.foul}): ${st.turn === 'p' ? 'you have' : `${npcName} has`} the cue ball in hand.`;
+      else if (v.continues) s += ` ${v.shooter === 'p' ? 'Shoot again.' : `${npcName} shoots again.`}`;
+      return s;
+    }
+
+    function afterShot(v) {
+      trail = [];
+      status = tell(v);
+      if (st.over) { finishGame(); return; }
+      if (st.turn === 'n') { npcTurn(); return; }
+      if (st.ballInHand) { placing = true; status += ' Place the cue ball.'; }
+      if (!st.ballInHand && cue().potted) { placing = true; }
+      // aim at the nearest legal ball to start with
+      pointAtNearest();
+    }
+
+    function pointAtNearest() {
+      const c = cue(); if (c.potted) return;
+      const ts = poolLegalTargets(st, 'p').map(id => poolBallById(st, id)).sort((a, b) => Math.hypot(a.x - c.x, a.y - c.y) - Math.hypot(b.x - c.x, b.y - c.y));
+      if (ts[0]) aim = Math.atan2(ts[0].y - c.y, ts[0].x - c.x);
+    }
+
+    function npcTurn() {
+      npcBusy = true;
+      status = `${npcName} is lining up a shot…`;
+      timer = setTimeout(() => {
+        if (finished) return;
+        if (st.ballInHand) poolNpcPlaceCue(st, 'n');
+        const s = poolNpcShot(st, 'n', opts.skillN, rng);
+        aim = s.angle; power = Math.max(0.1, Math.min(1, s.power)); spin.x = 0; spin.y = 0;
+        timer = setTimeout(() => {
+          if (finished) return;
+          npcBusy = false;   // (the aim line shows for a moment, then the shot rolls)
+          poolBeginShotLive(st, { angle: s.angle, power: s.power, spin: s.spin });
+          trail = []; anim = true;
+        }, 650);
+      }, 700);
+    }
+
+    function shoot() {
+      if (!myTurn() || placing) return;
+      poolBeginShotLive(st, { angle: aim, power, spin: { x: spin.x, y: spin.y } });
+      trail = []; anim = true;
+      status = '';
+    }
+
+    function finishGame(modelled) {
+      finished = true; anim = false; npcBusy = true; placing = false;
+      const res = poolResult(st, npcName);
+      status = modelled || !st.lastShot ? res.summary : `${tell(st.lastShot)} ${res.summary}`.trim();
+      leaveBtn.onclick = () => { cancelAnimationFrame(raf); clearTimeout(timer); overlay.removeAttribute('data-open'); resolve(res); };
+    }
+
+    canvas.addEventListener('pointermove', (e) => {
+      if (!myTurn()) return;
+      const r = canvas.getBoundingClientRect();
+      const p = fromPx((e.clientX - r.left) * (W / r.width), (e.clientY - r.top) * (H / r.height));
+      if (placing) return;
+      const c = cue();
+      aim = Math.atan2(p.y - c.y, p.x - c.x);
+    });
+    canvas.addEventListener('pointerdown', (e) => {
+      if (!myTurn()) return;
+      e.preventDefault();
+      const r = canvas.getBoundingClientRect();
+      const p = fromPx((e.clientX - r.left) * (W / r.width), (e.clientY - r.top) * (H / r.height));
+      if (placing) {
+        if (poolPlaceCue(st, p.x, p.y)) { placing = false; status = 'Aim and shoot.'; pointAtNearest(); }
+        else status = 'Not there: it has to be clear of the other balls.';
+        return;
+      }
+      const c = cue();
+      aim = Math.atan2(p.y - c.y, p.x - c.x);
+    });
+    powRange.addEventListener('input', () => { power = Number(powRange.value) / 100; });
+    spinCanvas.addEventListener('pointerdown', (e) => {
+      const r = spinCanvas.getBoundingClientRect();
+      const x = ((e.clientX - r.left) / r.width - 0.5) * 2, y = -((e.clientY - r.top) / r.height - 0.5) * 2;
+      const len = Math.hypot(x, y);
+      spin.x = Math.max(-1, Math.min(1, len > 1 ? x / len : x)); spin.y = Math.max(-1, Math.min(1, len > 1 ? y / len : y));
+      drawSpin();
+    });
+    shootBtn.addEventListener('click', shoot);
+    outBtn.addEventListener('click', () => {
+      if (anim || npcBusy || finished) return;
+      clearTimeout(timer);
+      if (st.turn === 'p' && st.ballInHand && cue().potted) poolNpcPlaceCue(st, 'p');
+      poolSimulate(st, rng, opts.skillP, opts.skillN);
+      finishGame(true);
+    });
+    leaveBtn.onclick = () => {
+      if (finished) return;
+      cancelAnimationFrame(raf); clearTimeout(timer);
+      overlay.removeAttribute('data-open');
+      resolve({ playerWon: false, grade: 'normal', summary: `You concede the game to ${npcName}.`, minutes: Math.round(T.minutes / 2) });
+    };
+    document.addEventListener('keydown', function onKey(e) {
+      if (!overlay.hasAttribute('data-open')) { document.removeEventListener('keydown', onKey); return; }
+      if (e.code === 'Space') { e.preventDefault(); shoot(); }
+    });
+    drawSpin();
+    pointAtNearest();
+    raf = requestAnimationFrame(frame);
   });
 }
 // ===== /SECTION: RENDER.GAMES =====

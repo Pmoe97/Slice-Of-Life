@@ -103,10 +103,10 @@ const plan = J(`(() => {
   const line = gameMatchNarration(g, p1);
   // over many seeds: the mix
   let wins = 0, close = 0, blow = 0, n = 300;
-  for (let i = 0; i < n; i++) { g.meta.clock.minutes = 600 + i; const p = gamePlanMatch(g, 'pool', A, 'brag', 0); if (p.playerWon) wins++; if (p.grade === 'close') close++; if (p.grade === 'blowout') blow++; }
+  for (let i = 0; i < n; i++) { g.meta.clock.minutes = 600 + i; const p = gamePlanMatch(g, 'console', A, 'brag', 0); if (p.playerWon) wins++; if (p.grade === 'close') close++; if (p.grade === 'blowout') blow++; }
   const stake = gamePlanMatch(g, 'pool', A, 'iou', 10);
   const cold = (() => { const h = __mk(); const B = __ids(h)[1]; h.npcs[B].relPlayer = { ...h.npcs[B].relPlayer, affection: -0.5, tension: 0.6 }; return gamePlanMatch(h, 'pool', B, 'iou', 10); })();
-  return { same, line, pWin: gameWinChance(g, A, 'pool'), winRate: wins / n, close: close / n, blow: blow / n, stakeId: stake.stakeId, amt: stake.amount, coldStake: cold.stakeId, hasName: /Mira/.test(line) && !/[{}]/.test(line), minutes: p1.minutes };
+  return { same, line, pWin: gameWinChance(g, A, 'console'), winRate: wins / n, close: close / n, blow: blow / n, stakeId: stake.stakeId, amt: stake.amount, coldStake: cold.stakeId, hasName: /Mira/.test(line) && !/[{}]/.test(line), minutes: p1.minutes };
 })()`);
 check('the same save, day and count plays the same match, and the line names the opponent with no placeholder left', plan.same && plan.hasName && plan.minutes === 35, plan.line);
 check('over many matches the win rate tracks the chance, and there are close ones and walkovers', Math.abs(plan.winRate - plan.pWin) < 0.1 && plan.close > 0.25 && plan.blow > 0.05, JSON.stringify(plan));

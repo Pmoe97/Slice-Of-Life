@@ -150,7 +150,7 @@ const wired = J(`(() => {
   const stakeKept = gamePlanMatch(g, 'darts', A, 'iou', 5, { playerWon: false, grade: 'blowout', summary: 'Mira wins.' }, '301');
   return { same: JSON.stringify(p1) === JSON.stringify(p2), modelled: p1.played === true && typeof p1.summary === 'string' && p1.summary.includes('Mira'), minutes: [p1.minutes, clockPlan.minutes], clockSummary: clockPlan.summary,
     played: { won: played.playerWon, grade: played.grade, minutes: played.minutes }, line, iou: { stake: stakeKept.stakeId, amt: stakeKept.amount, won: stakeKept.playerWon },
-    modes: GAME_DEFS.darts.modes.map(m => m.id), minigame: GAME_DEFS.darts.minigame, pool: gamePlanMatch(g, 'pool', A, 'brag', 0).played };
+    modes: GAME_DEFS.darts.modes.map(m => m.id), minigame: GAME_DEFS.darts.minigame, pool: gamePlanMatch(g, 'console', A, 'brag', 0).played };
 })()`);
 check('headless, darts is modelled (both throw like their skill): deterministic, told by the match summary, and each mode has its own length', wired.same && wired.modelled && wired.modes.join() === '301,clock' && wired.minigame === 'darts' && wired.minutes[0] === 25 && wired.minutes[1] === 20, JSON.stringify(wired));
 check('a played result becomes the plan (winner, grade, minutes, and its own line), the stake still applies, and other games are untouched', wired.played.won && wired.played.grade === 'close' && wired.played.minutes === 22 && /exactly zero/.test(wired.line) && wired.iou.stake === 'iou' && wired.iou.amt === 5 && wired.iou.won === false && wired.pool === false, JSON.stringify(wired));
