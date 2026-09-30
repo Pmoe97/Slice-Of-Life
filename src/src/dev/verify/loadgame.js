@@ -266,6 +266,8 @@ const ORDER = [
   'cardgames.js',
   // poker.js (Game Room Phase 4): the pure poker table, right after cardgames.js.
   'poker.js',
+  // blackjack.js (Game Room Phase 5): the pure blackjack table, right after poker.js.
+  'blackjack.js',
   // money.js (actions-and-activities-overhaul-plan.md Phase 4, D9) — the
   // bidirectional ledger. Pure reads plus a mutating adjustMoneyLedger, no
   // load-time dependencies; sits directly before asks.js here exactly as it

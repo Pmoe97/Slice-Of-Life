@@ -8530,7 +8530,7 @@ body {
      script, so boot() can call into MENU/IMAGE). Functions calling into a
      LATER script are fine either way — those calls only happen at runtime,
      after every script below has finished loading. -->
-<script src="src/src/srcfiles/config.js?v=217"></script>
+<script src="src/src/srcfiles/config.js?v=218"></script>
 <!-- Settings & Pause Overhaul Phase 1: the one settings schema + store.
      SETTINGS (defs.settings.js) is pure data; settings.js reads kv.menu
      'settings' only at runtime, but sits right after its schema and before
@@ -8545,7 +8545,7 @@ body {
      Registered in dev/verify/loadgame.js's ORDER in the same commit. -->
 <script src="src/src/srcfiles/fields.js?v=1"></script>
 <script src="src/src/srcfiles/defs.world.js?v=57"></script>
-<script src="src/src/srcfiles/defs.actions.js?v=72"></script>
+<script src="src/src/srcfiles/defs.actions.js?v=73"></script>
 <script src="src/src/srcfiles/defs.computer.js?v=51"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
@@ -8576,7 +8576,7 @@ body {
 <!-- Patch Notes (2026-09-10 audit fix session): PATCH_NOTES, the real
      player-facing release history. Pure data, no dependencies, grouped with
      the other defs.* files for the same reason defs.dreams.js is. -->
-<script src="src/src/srcfiles/defs.patchnotes.js?v=35"></script>
+<script src="src/src/srcfiles/defs.patchnotes.js?v=36"></script>
 <!-- Aspirations & Creative Careers Phase 4 (D56): the works engine's data —
      WORK_KINDS / WORK_TUNING (later phases add CHATTER_LABELS,
      ASPIRATION_DIRECTIONS, HOME_TUNING here). Pure data, grouped with the
@@ -8833,10 +8833,11 @@ body {
      in the same change. -->
 <script src="src/src/srcfiles/projects.js?v=3"></script>
 <script src="src/src/srcfiles/books.js?v=1"></script>
-<script src="src/src/srcfiles/games.js?v=3"></script>
+<script src="src/src/srcfiles/games.js?v=4"></script>
 <script src="src/src/srcfiles/darts.js?v=1"></script>
 <script src="src/src/srcfiles/cardgames.js?v=1"></script>
 <script src="src/src/srcfiles/poker.js?v=1"></script>
+<script src="src/src/srcfiles/blackjack.js?v=1"></script>
 <script src="src/src/srcfiles/render.js?v=111"></script>
 <!-- Night Scene Phase 3b: the Living Tableau's PAINTER. After render.js
      (shares its rules: idempotent, no state mutation, no rolls) and after
@@ -8844,7 +8845,7 @@ body {
      in dev/verify/loadgame.js's ORDER — it is pure view code, and that
      loader deliberately stops before the render layer, exactly as
      render.spritestudio.js does. -->
-<script src="src/src/srcfiles/render.games.js?v=2"></script>
+<script src="src/src/srcfiles/render.games.js?v=3"></script>
 <script src="src/src/srcfiles/render.nightscene.js?v=1"></script>
 <script src="src/src/srcfiles/render.computer.js?v=82"></script>
 <!-- Avatars & Sprite Studio Phase 4: the studio's verbs and its screens.

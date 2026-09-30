@@ -2082,7 +2082,7 @@ function prepareGameChallenge(ctx) {
         if (!mode) return { cancelled: true };
       }
       const npc = gs.npcs[npcId];
-      const played = await openMinigame(gdef.minigame, { mode, npcName: npc?.bible?.name || 'them', skillP: gameSkillOf(gs, 'player', gameId), skillN: gameSkillOf(gs, npcId, gameId),
+      const played = await openMinigame(gdef.minigame, { mode, npcName: npc?.bible?.name || 'them', skillP: gameSkillOf(gs, 'player', gameId), skillN: gameSkillOf(gs, npcId, gameId), stakeId: row.stakeId, amount: row.amount,
         seed: hashStr(`${gs.meta?.seed}|${gs.meta.clock.day}|${gs.meta.clock.minutes}|${npcId}|${gameId}`) });
       if (!played) return { cancelled: true };
       return finish(gameId, npcId, row.stakeId, row.amount, played, mode);

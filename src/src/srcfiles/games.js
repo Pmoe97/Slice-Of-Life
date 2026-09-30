@@ -166,10 +166,19 @@ function gamePlanMatch(gs, gameId, npcId, stakeId, amount, played, mode) {
     played = dartsResult(st, gameNpcName(gs, npcId));
     played.minutes = DARTS_TUNING.modes[m].minutes;
   }
+  // Blackjack with a roommate dealing: modelled headless (basic strategy, a flat bet, the dealer's rule).
+  if (!played && gameId === 'blackjack' && typeof bjSimulate === 'function') {
+    const bst = bjNew({});
+    bjSimulate(bst, seededRng(gs.meta?.seed, `bj_${clock.day}_${clock.minutes}_${npcId}_${g?.count || 0}`), 0);
+    played = bjNightResult(bst, gameNpcName(gs, npcId));
+    played.iouAmount = bjIouAmount(bst, amount);
+  }
   if (played) { playerWon = !!played.playerWon; grade = played.grade || 'normal'; summary = played.summary || null; if (played.minutes) minutes = played.minutes; }
   const stake = stakeId === 'chore' && gameStakeAgrees(gs, npcId, 'chore').ok ? 'chore'
     : stakeId === 'iou' && gameStakeAgrees(gs, npcId, 'iou', amount).ok ? 'iou' : 'brag';
-  return { gameId, npcId, stakeId: stake, amount: stake === 'iou' ? amount : 0, playerWon, grade, pWin,
+  // A game that scales the IOU by how far the chips moved reports its own amount (blackjack).
+  const iouAmount = stake === 'iou' ? (played && played.iouAmount != null ? played.iouAmount : amount) : 0;
+  return { gameId, npcId, stakeId: stake === 'iou' && !(iouAmount > 0) ? 'brag' : stake, amount: iouAmount, playerWon, grade, pWin,
     minutes, summary, played: !!played, name: gameNpcName(gs, npcId), label: d.label, seed: `${clock.day}_${clock.minutes}_${g?.count || 0}` };
 }
 

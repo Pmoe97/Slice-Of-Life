@@ -4893,6 +4893,13 @@ const GAME_DEFS = {
     win: { close: ['You come out ahead, just.', 'You edge it on the last hand.'], blowout: ['You take the table apart.', 'It is not close: everyone else is looking at their empty hands.'] },
     lose: { close: ['You lose by a whisker.', 'You are one good hand short.'], blowout: ['You are cleaned out.', 'You watch your chips walk across the table, one pot at a time.'] },
   },
+  // Phase 5: blackjack with a roommate dealing (blackjack.js + render.games.js): versus, not the house.
+  blackjack: {
+    id: 'blackjack', label: 'Blackjack', anchors: [], item: 'playing_cards', minutes: 30, skillTag: 'gaming', minigame: 'blackjack',
+    intro: ['{name} shuffles with far too much flourish and deals you in.', '{name} takes the dealer\'s side of the table. "House rules," they say, "and I stand on every seventeen."'],
+    win: { close: ['You come out a few chips ahead of the dealer.', 'You edge it on the last hand.'], blowout: ['You bust the dealer\'s bank.', 'It is not close: the dealer keeps asking to change the deck.'] },
+    lose: { close: ['The dealer edges you out by a few chips.', 'You finish a hand or two short.'], blowout: ['The dealer cleans you out.', 'You watch your chips slide across the table, one hand at a time.'] },
+  },
   boardgame: {
     id: 'boardgame', label: 'Board game', anchors: [], item: 'board_game', minutes: 45, skillTag: 'gaming',
     intro: ['You unfold the board and argue about the rules for ten minutes, which is half the fun.', '{name} reads the rules aloud in a dramatic voice.'],

@@ -8,6 +8,7 @@
 function openMinigame(kind, opts) {
   if (kind === 'darts') return openDartsGame(opts);
   if (kind === 'poker') return openPokerGame(opts);
+  if (kind === 'blackjack') return openBlackjackGame(opts);
   return Promise.resolve(null);
 }
 
@@ -395,6 +396,170 @@ function openPokerGame(opts) {
       let g = 0; while (st.phase !== 'idle' && g++ < 200) { if (st.turn < 0) pokerAdvance(st); else pokerNpcTurn(st, rng, styles); }
       st.over = true;
       finishNight();
+    };
+    render();
+  });
+}
+
+// Blackjack (Phase 5, D12): a roommate deals, versus not the house. The engine is blackjack.js; this is
+// the screen. opts: { npcName, seed, stakeId, amount }. Resolves { playerWon, grade, summary, minutes,
+// net, iouAmount } for the night.
+function openBlackjackGame(opts) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions || typeof bjNew !== 'function') { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+
+    const npcName = opts.npcName || 'The dealer';
+    const st = bjNew({});
+    const rng = mulberry32((opts.seed >>> 0) || 1);
+    let status = `${npcName} is dealing. Place your bet.`;
+    let finished = false;
+    let betAmt = BJ_TUNING.minBet * 2;
+    let revealing = false;
+
+    title.textContent = 'Blackjack';
+    body.innerHTML = '';
+    const root = document.createElement('div');
+    root.className = 'games-poker games-bj';
+    body.appendChild(root);
+    actions.innerHTML = '';
+    const mk = (label, cls) => { const b = document.createElement('button'); b.type = 'button'; b.className = cls || 'btn'; b.textContent = label; return b; };
+    const hitBtn = mk('Hit');
+    const standBtn = mk('Stand');
+    const dblBtn = mk('Double', 'btn btn-secondary');
+    const dealBtn = mk('Deal');
+    const outBtn = mk('Let it play out', 'btn btn-secondary');
+    const leaveBtn = mk('Cash out', 'btn btn-secondary');
+    actions.append(hitBtn, standBtn, dblBtn, dealBtn, outBtn, leaveBtn);
+    overlay.setAttribute('data-open', '');
+
+    const cardEl = (c, hidden) => {
+      const el = document.createElement('span');
+      if (hidden || !c) { el.className = 'games-card back'; el.textContent = ' '; return el; }
+      el.className = `games-card ${c.suit === '♥' || c.suit === '♦' ? 'red' : 'black'}`;
+      el.textContent = `${c.rank}${c.suit}`;
+      return el;
+    };
+
+    function render() {
+      root.innerHTML = '';
+      const bar = document.createElement('div');
+      bar.className = 'games-poker-stake';
+      bar.textContent = `${opts.stakeId === 'iou' && opts.amount ? `Loser owes $${opts.amount}, scaled by the chips` : 'Bragging rights'} · hand ${Math.max(1, st.handNo)} of ${st.handsMax}`;
+      root.appendChild(bar);
+      const inPlay = st.phase === 'player';
+      const showDealer = !inPlay;
+      const dealer = document.createElement('div');
+      dealer.className = 'games-poker-seat';
+      const dn = document.createElement('div'); dn.className = 'games-poker-name'; dn.textContent = `${npcName} (dealer) · ${st.dealerChips} chips`;
+      const dc = document.createElement('div'); dc.className = 'games-poker-cards';
+      st.dealer.forEach((c, i) => dc.appendChild(cardEl(c, inPlay && i === 1)));
+      const dv = document.createElement('div'); dv.className = 'games-poker-act';
+      dv.textContent = st.dealer.length ? (showDealer ? `${bjValue(st.dealer)}` : `showing ${bjValue([st.dealer[0]])}`) : '';
+      dealer.append(dn, dc, dv);
+      root.appendChild(dealer);
+      const table = document.createElement('div');
+      table.className = 'games-poker-table';
+      const pot = document.createElement('div'); pot.className = 'games-poker-pot'; pot.textContent = st.bet && (inPlay || st.last) ? `Bet ${st.bet}` : '';
+      table.appendChild(pot);
+      root.appendChild(table);
+      const you = document.createElement('div');
+      you.className = 'games-poker-you';
+      const yn = document.createElement('div'); yn.className = 'games-poker-name'; yn.textContent = `You · ${st.playerChips} chips`;
+      const yc = document.createElement('div'); yc.className = 'games-poker-cards';
+      for (const c of st.player) yc.appendChild(cardEl(c, false));
+      const yv = document.createElement('div'); yv.className = 'games-poker-act'; yv.textContent = st.player.length ? `${bjValue(st.player)}${bjIsSoft(st.player) ? ' (soft)' : ''}` : '';
+      you.append(yn, yc, yv);
+      root.appendChild(you);
+      const betting = st.phase === 'bet' && !st.over && !finished;
+      if (betting) {
+        const lo = bjMinBet(st), hi = Math.max(lo, bjMaxBet(st));
+        betAmt = Math.max(lo, Math.min(hi, betAmt));
+        const row = document.createElement('div');
+        row.className = 'games-poker-raise';
+        const lab = document.createElement('span'); lab.textContent = `Bet ${betAmt}`;
+        const range = document.createElement('input');
+        range.type = 'range'; range.min = String(lo); range.max = String(hi); range.step = String(BJ_TUNING.betStep); range.value = String(betAmt);
+        range.addEventListener('input', () => { betAmt = Number(range.value); lab.textContent = `Bet ${betAmt}`; });
+        row.append(lab, range);
+        root.appendChild(row);
+      }
+      const stat = document.createElement('div');
+      stat.className = 'games-poker-status';
+      stat.textContent = status;
+      root.appendChild(stat);
+      const legal = inPlay && !revealing ? bjLegal(st) : null;
+      hitBtn.style.display = legal ? '' : 'none';
+      standBtn.style.display = legal ? '' : 'none';
+      dblBtn.style.display = legal ? '' : 'none';
+      dblBtn.disabled = !(legal && legal.canDouble);
+      dealBtn.style.display = betting ? '' : 'none';
+      dealBtn.textContent = st.handNo === 0 ? 'Deal' : 'Deal next hand';
+      outBtn.style.display = finished ? 'none' : '';
+      outBtn.disabled = revealing;
+      leaveBtn.textContent = finished ? 'Done' : (st.over ? 'Finish' : 'Cash out');
+      leaveBtn.disabled = revealing;
+    }
+
+    function tell() {
+      const l = st.last;
+      if (!l) return;
+      const verb = { blackjack: 'Blackjack! You win', win: 'You win', push: 'Push', lose: 'You lose' }[l.result] || l.result;
+      status = `${verb}${l.delta ? ` ${Math.abs(l.delta)} chips` : ''}. You ${l.pv}, ${npcName} ${l.dv}.${l.doubled ? ' (doubled)' : ''}`;
+      if (st.over) status += st.playerChips <= 0 ? ' You are out of chips.' : st.dealerChips <= 0 ? ` ${npcName} is out of chips.` : ' That is the night.';
+    }
+
+    function deal() {
+      if (st.phase !== 'bet' || st.over) return;
+      const r = bjDeal(st, rng, betAmt);
+      if (!r.ok) return;
+      status = r.natural ? '' : 'Hit, stand or double?';
+      if (r.natural) tell();
+      render();
+      if (st.over) endNight();
+    }
+
+    function act(a) {
+      if (st.phase !== 'player') return;
+      const r = bjAct(st, a);
+      if (!r.ok) return;
+      if (st.phase !== 'player') tell(); else status = 'Hit, stand or double?';
+      render();
+      if (st.over) endNight();
+    }
+
+    function endNight() {
+      finished = true;
+      const res = bjNightResult(st, npcName);
+      res.iouAmount = opts.stakeId === 'iou' ? bjIouAmount(st, opts.amount) : 0;
+      if (st.last) tell();
+      status = `${st.last ? status + ' ' : ''}${res.summary}`.trim();
+      render();
+      leaveBtn.onclick = () => { overlay.removeAttribute('data-open'); resolve(res); };
+    }
+
+    hitBtn.addEventListener('click', () => act('hit'));
+    standBtn.addEventListener('click', () => act('stand'));
+    dblBtn.addEventListener('click', () => act('double'));
+    dealBtn.addEventListener('click', deal);
+    outBtn.addEventListener('click', () => {
+      if (finished) return;
+      if (st.phase === 'player') { while (st.phase === 'player') bjAct(st, bjNpcDecision(st.player, st.dealer[0], 0) === 'hit' ? 'hit' : 'stand'); }
+      bjSimulate(st, rng, 0, betAmt);
+      st.over = true;
+      endNight();
+    });
+    leaveBtn.onclick = () => {
+      if (finished) return;
+      // Leaving mid-hand stands on what you have.
+      if (st.phase === 'player') bjAct(st, 'stand');
+      st.over = true;
+      tell();
+      endNight();
     };
     render();
   });
