@@ -18,12 +18,17 @@ function calendarCellTitle(cell, seasonLabel) {
   if (cell.selfBirthday) bits.push('🎂 Your birthday');
   for (const name of cell.birthdays) bits.push(`🎂 ${name}'s birthday`);
   for (const e of cell.events || []) bits.push(`${e.emoji} ${e.label}`);
+  // The Agenda's lanes (0.14.5): what is due or booked on the day, beyond the grid's own marks.
+  for (const a of cell.agenda || []) bits.push(`${typeof agendaLaneMeta === 'function' ? agendaLaneMeta(a.lane).emoji : '•'} ${a.title}`);
   return bits.join(' · ');
 }
 
 // Builds the grid element for a yearGridModel. opts:
 //   selectable   — cells are buttons; clicking one calls opts.onPick(doy)
 //   selectedDoy  — the currently chosen day-of-year (picker)
+//   agendaMarks  — { absoluteDay: [agenda entries] } (agenda.js's agendaGridMarks):
+//                  the bills, bookings and forecasts, drawn as one coloured dot
+//                  per lane under the date
 //   showDetail   — a detail line under the grid names what's on a tapped
 //                  day (touch has no hover, so the title tooltip alone
 //                  would hide everything on a phone)
@@ -57,16 +62,19 @@ function buildYearGrid(model, opts = {}) {
       const el = document.createElement(opts.selectable ? 'button' : 'div');
       const marks = [...cell.occasions.map(o => o.emoji), ...(cell.selfBirthday ? ['🎂'] : []), ...cell.birthdays.map(() => '🎂'), ...(cell.events || []).map(e => e.emoji)];
       if (opts.selectable) el.type = 'button';
+      cell.agenda = (opts.agendaMarks && opts.agendaMarks[cell.day]) || [];
+      const laneIds = cell.agenda.length && typeof AGENDA_LANES !== 'undefined' ? AGENDA_LANES.map(l => l.id).filter(id => cell.agenda.some(a => a.lane === id)) : [];
       el.className = 'cal-cell'
         + (cell.isToday ? ' cal-today' : '')
         + (cell.isPast && !opts.selectable ? ' cal-past' : '')
-        + (marks.length ? ' cal-marked' : '')
+        + (marks.length || laneIds.length ? ' cal-marked' : '')
         + (opts.selectedDoy === cell.doy ? ' cal-selected' : '');
       // Sunday-first column: getWeekday is Monday = 0, so Sunday (6) → 0.
       el.style.gridColumn = String(((cell.weekday + 1) % 7) + 1);
       el.title = calendarCellTitle(cell, season.label);
       el.innerHTML = `<span class="cal-dom">${cell.dom}</span>`
-        + (marks.length ? `<span class="cal-marks">${marks.slice(0, 2).join('')}</span>` : '');
+        + (marks.length ? `<span class="cal-marks">${marks.slice(0, 2).join('')}</span>` : '')
+        + (laneIds.length ? `<span class="cal-lanes">${laneIds.map(id => `<i data-lane="${id}"></i>`).join('')}</span>` : '');
       el.addEventListener('click', () => {
         detail.textContent = calendarCellTitle(cell, season.label);
         if (opts.selectable && typeof opts.onPick === 'function') opts.onPick(cell.doy);
@@ -121,9 +129,12 @@ function renderCalendarYear(body, gs, app, screen) {
   const model = yearGridModel(gs);
   const header = document.createElement('div');
   header.className = 'cal-year-header';
-  header.innerHTML = `<h3>Year ${model.year}</h3><p class="dim tiny">Holidays, the birthdays you know, and your roommates' big days. Today is outlined.</p>`;
+  header.innerHTML = `<h3>Year ${model.year}</h3><p class="dim tiny">Holidays, the birthdays you know, and your roommates' big days. A dot under a date is a lane: bills, bookings and forecasts. Today is outlined.</p>`;
   body.appendChild(header);
-  body.appendChild(buildYearGrid(model, { showDetail: true }));
+  // The Agenda's lane chips double as the legend and filter the dots.
+  const agendaMarks = typeof agendaGridMarks === 'function' ? agendaGridMarks(gs, typeof AGENDA_VIEW !== 'undefined' ? AGENDA_VIEW.lanes : null) : null;
+  if (agendaMarks && typeof buildAgendaLaneBar === 'function') body.appendChild(buildAgendaLaneBar());
+  body.appendChild(buildYearGrid(model, { showDetail: true, agendaMarks }));
 }
 
 Object.assign(COMPUTER_RENDERERS, {

@@ -72,7 +72,7 @@ const ORDER = [
   // promoteWork/decayWorks/catalogIncomeForDay are all directly testable
   // here. Registered in BOTH lists in the same commit (invariant 8).
   'works.js',
-  'tracker.js', 'debuglog.js', 'phone.js',
+  'tracker.js', 'agenda.js', 'debuglog.js', 'phone.js',
   'npc.js',
   // notice.js (aspirations-and-creative-careers-overhaul-plan.md Phase 3,
   // D9/D56) sits directly after npc.js in index.html. The Notice & Opinion

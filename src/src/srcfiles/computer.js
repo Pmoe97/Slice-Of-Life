@@ -244,9 +244,15 @@ function normalizeComputerState(raw) {
   // one.
   const windows = {};
   for (const [appId, win] of Object.entries(windowsRaw)) {
+    // A window left open on the Tracker/Calendar/Compass reopens as the Agenda, on the matching tab.
+    if (win && win.rect && typeof agendaRetired === 'function' && agendaRetired(appId)) {
+      const to = agendaRedirect(appId, win.screenId);
+      if (APP_DEFS[to.appId] && !windowsRaw[to.appId] && !windows[to.appId]) windows[to.appId] = { ...win, screenId: to.screenId, params: {} };
+      continue;
+    }
     if (win && win.rect && APP_DEFS[appId]) windows[appId] = win;
   }
-  if (!raw.windows && raw.view && raw.view.appId && APP_DEFS[raw.view.appId]) {
+  if (!raw.windows && raw.view && raw.view.appId && APP_DEFS[raw.view.appId] && !(typeof agendaRetired === 'function' && agendaRetired(raw.view.appId))) {
     windows[raw.view.appId] = {
       screenId: raw.view.screenId || APP_DEFS[raw.view.appId]?.entryScreen,
       params: raw.view.params || {},
@@ -260,7 +266,8 @@ function normalizeComputerState(raw) {
     // Guard focusedAppId against pointing at a window the prune just
     // dropped — a stale focus with no window under it would confuse
     // whoever next asks topVisibleWindowAppId.
-    focusedAppId: (raw.focusedAppId && windows[raw.focusedAppId]) ? raw.focusedAppId : (Object.keys(windows)[0] || null),
+    focusedAppId: (raw.focusedAppId && windows[raw.focusedAppId]) ? raw.focusedAppId
+      : (typeof agendaRetired === 'function' && agendaRetired(raw.focusedAppId) && windows.agenda) ? 'agenda' : (Object.keys(windows)[0] || null),
     nextZIndex: raw.nextZIndex || (Object.keys(windows).length + 1),
     // Back-fill any app added to the roster since this save was written.
     // Deep-merge per-app: start from the fresh default, then overlay the
@@ -315,6 +322,12 @@ function focusWindow(gameState, appId) {
 }
 
 function openApp(gameState, appId) {
+  // The Calendar and the Compass are tabs of the Agenda now: opening either lands on its tab.
+  let landing = null;
+  if (typeof agendaRetired === 'function' && agendaRetired(appId)) {
+    landing = agendaRedirect(appId, APP_DEFS[appId]?.entryScreen);
+    appId = landing.appId;
+  }
   const def = APP_DEFS[appId];
   if (!def) return;
   const computer = gameState.world.computer;
@@ -332,6 +345,7 @@ function openApp(gameState, appId) {
     };
   }
   focusWindow(gameState, appId);
+  if (landing) computer.windows[appId].screenId = landing.screenId;
   // Contractor tutorial (contractor doc Phase 3): the first RenoFix open
   // fires the how-to-book hint (idempotent — the flag makes it one-shot).
   if (appId === 'upgrades') fireContractorMilestone(gameState, 'renofixOpened');
@@ -356,6 +370,11 @@ function openApp(gameState, appId) {
 // never mutate a computer window (landmine L1). world.phone doesn't exist
 // until Phase 3, so the phone branch is a safe no-op until then.
 function switchScreen(gameState, appId, screenId, params, device = 'computer') {
+  // Old links (a Tracker entry, a saved navStack) that name the retired apps land on the Agenda's tabs.
+  if (typeof agendaRetired === 'function' && agendaRetired(appId)) {
+    const to = agendaRedirect(appId, screenId);
+    appId = to.appId; screenId = to.screenId;
+  }
   if (device !== 'computer') {
     const phone = gameState.world?.phone;
     if (!phone?.navStack) return;

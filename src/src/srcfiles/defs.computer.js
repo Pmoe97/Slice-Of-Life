@@ -392,6 +392,21 @@ const APP_DEFS = {
       detail: { label: 'Patch', renderer: 'patchnotes-detail', hideFromNav: true },
     },
   },
+  // The Agenda (agenda-app-plan.md; 0.14.5): the Tracker, the Calendar and the Compass as one app, on both
+  // devices. Coming up = everything dated (agenda.js's one derivation), Needs you = the notifications with
+  // Dismiss / Snooze, Year = the four-season grid, Directions = the Compass's calm overview (no dates, no
+  // badges: D49). The older three apps redirect here (agendaRedirect).
+  agenda: {
+    id: 'agenda', label: 'Agenda', category: 'personal', requires: [],
+    devices: ['computer', 'phone'],
+    entryScreen: 'coming',
+    screens: {
+      coming: { label: 'Coming up', renderer: 'agenda-coming' },
+      needs: { label: 'Needs you', renderer: 'agenda-needs' },
+      year: { label: 'Year', renderer: 'calendar-year' },
+      directions: { label: 'Directions', renderer: 'compass-overview' },
+    },
+  },
   // Calendar (actions-and-activities-overhaul-plan.md Phase 1, D2): "what's
   // on the calendar" for every booked commitment (a dinner, a hangout, and
   // whatever future eventTypes ride the same createCommitment spine) —

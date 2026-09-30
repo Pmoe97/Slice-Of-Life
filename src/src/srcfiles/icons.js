@@ -194,6 +194,16 @@ const ICONS = {
     <path d="M9 4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2"/>
     <path d="m9.5 13 2 2 3.5-3.5"/>
   `),
+  // The Agenda (0.14.5): a page with a header rule and three ticked lines — the Tracker, the Calendar and
+  // the Compass in one glyph. The key must exist or the tile renders blank (the `upgrades` landmine below).
+  agenda: () => svgWrap(`
+    <rect x="4" y="3" width="16" height="18" rx="2"/>
+    <line x1="4" y1="8" x2="20" y2="8"/>
+    <path d="m7.5 12 1.3 1.3 2.2-2.4"/>
+    <line x1="13" y1="12.5" x2="17" y2="12.5"/>
+    <path d="m7.5 16.5 1.3 1.3 2.2-2.4"/>
+    <line x1="13" y1="17" x2="17" y2="17"/>
+  `),
   // BrineOS: the RenoFix (upgrades) app — Lucide wrench. Added in Phase 5
   // when the app became phone-visible, but the desktop desktop icon and
   // taskbar had been calling svgIcon('upgrades') since Phase 4 and

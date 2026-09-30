@@ -214,8 +214,7 @@ function renderPhoneContent(gs) {
 function renderPhoneHome(body, gs) {
   body.innerHTML = '';
   const ids = [
-    ...Object.values(APP_DEFS).filter(a => (a.devices || []).includes('phone')).map(a => a.id),
-    PHONE_TRACKER_APP_ID,
+    ...Object.values(APP_DEFS).filter(a => (a.devices || []).includes('phone') && !agendaRetired(a.id)).map(a => a.id),
     PHONE_CLOCK_APP_ID,
     PHONE_CAMERA_APP_ID,
     PHONE_SETTINGS_APP_ID,

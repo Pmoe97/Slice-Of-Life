@@ -509,8 +509,13 @@ function normalizePhoneState(raw) {
   if (!raw) return defaultPhoneState();
   return {
     power: raw.power || 'off',
-    openAppId: raw.openAppId || null,
-    navStack: Array.isArray(raw.navStack) ? raw.navStack : [],
+    // A save left inside the Tracker / Calendar / Compass reopens on the Agenda's matching tab.
+    openAppId: (typeof agendaRetired === 'function' && agendaRetired(raw.openAppId)) ? 'agenda' : (raw.openAppId || null),
+    navStack: (Array.isArray(raw.navStack) ? raw.navStack : []).map(n => {
+      if (!n || typeof agendaRetired !== 'function' || !agendaRetired(n.appId)) return n;
+      const to = agendaRedirect(n.appId, n.screenId);
+      return { ...n, appId: to.appId, screenId: to.screenId, params: {} };
+    }),
     settings: { dnd: !!(raw.settings && raw.settings.dnd), passcode: !!(raw.settings && raw.settings.passcode) },
     dismissed: (raw.dismissed && typeof raw.dismissed === 'object') ? raw.dismissed : {},
     snoozed: (raw.snoozed && typeof raw.snoozed === 'object') ? raw.snoozed : {},

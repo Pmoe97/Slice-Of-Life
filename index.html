@@ -5923,6 +5923,36 @@ body {
   color: var(--color-text-dim);
 }
 
+/* --- The Agenda (0.14.5): Coming up, and the lane chips --- */
+.agenda-header h3 { margin: 0 0 2px; }
+.agenda-lanes { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-2) 0 var(--space-3); }
+.agenda-lane-chip {
+  padding: var(--space-1) var(--space-2); border: 1px solid var(--color-border-strong); border-radius: 999px;
+  background: var(--color-surface); color: var(--color-text-dim); font-size: var(--fs-xs); font-family: var(--font-sans); cursor: pointer;
+}
+.agenda-lane-chip[data-on="on"] { color: var(--color-text); border-color: var(--color-accent); background: var(--color-accent-dim); }
+.agenda-group { margin-bottom: var(--space-3); }
+.agenda-group-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-faint); margin-bottom: var(--space-1); }
+.agenda-group[data-overdue] .agenda-group-title { color: var(--color-negative); }
+.agenda-row { display: flex; align-items: stretch; gap: var(--space-2); margin-bottom: var(--space-1); }
+.agenda-link {
+  flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: var(--space-2); text-align: left;
+  padding: var(--space-2) var(--space-3); background: var(--color-surface-alt); border: 1px solid var(--color-border);
+  border-radius: var(--radius-md); color: var(--color-text); font-family: var(--font-sans); cursor: pointer;
+}
+.agenda-link:hover { border-color: var(--color-accent-dim); }
+.agenda-lane-dot { flex-shrink: 0; font-size: 14px; line-height: 1.3; }
+.agenda-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.agenda-title { font-size: var(--fs-sm); font-weight: 600; overflow-wrap: anywhere; }
+.agenda-detail { font-size: var(--fs-xs); color: var(--color-text-dim); line-height: var(--lh-tight); overflow-wrap: anywhere; }
+.agenda-due { flex-shrink: 0; font-size: var(--fs-xs); color: var(--color-text-faint); white-space: nowrap; }
+.agenda-clear {
+  flex-shrink: 0; align-self: center; padding: var(--space-1) var(--space-2); border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text-dim); font-size: var(--fs-xs); font-family: var(--font-sans); cursor: pointer;
+}
+.agenda-clear:hover { color: var(--color-negative); border-color: var(--color-negative); }
+.phone-tracker-btn[data-action="agenda.dismiss"] { color: var(--color-negative); border-color: var(--color-negative); }
+
 /* --- Codex (Intimacy & Voyeurism Phase 15, D8) --- */
 /* The per-character knowledge ledger — shared by the phone (shared-app path)
    and the computer window, so the same classes style both surfaces. The
@@ -7339,6 +7369,14 @@ body {
 .cal-cell .cal-marks { font-size: 11px; line-height: 1.1; }
 .cal-cell.cal-past { opacity: 0.45; }
 .cal-cell.cal-marked { background: var(--color-surface-hover, rgba(255,255,255,0.06)); }
+.cal-cell .cal-lanes { position: absolute; left: 0; right: 0; bottom: 2px; display: flex; justify-content: center; gap: 2px; }
+.cal-lanes i, .agenda-lane-swatch { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--color-text-faint); }
+.agenda-lane-swatch { margin-right: 5px; vertical-align: middle; }
+[data-lane="money"].agenda-lane-swatch, .cal-lanes i[data-lane="money"] { background: #4fc98a; }
+[data-lane="home"].agenda-lane-swatch, .cal-lanes i[data-lane="home"] { background: #f0a05a; }
+[data-lane="people"].agenda-lane-swatch, .cal-lanes i[data-lane="people"] { background: #5aa8f0; }
+[data-lane="occasions"].agenda-lane-swatch, .cal-lanes i[data-lane="occasions"] { background: #e879b8; }
+[data-lane="you"].agenda-lane-swatch, .cal-lanes i[data-lane="you"] { background: #a78bfa; }
 .cal-cell.cal-today { border-color: var(--color-accent); box-shadow: 0 0 0 1px var(--color-accent) inset; }
 .cal-cell.cal-selected { background: var(--color-accent-dim); border-color: var(--color-accent); }
 .cal-detail { margin-top: var(--space-2); min-height: 1.2em; }
@@ -8560,7 +8598,7 @@ body {
      order. -->
 <script src="src/src/srcfiles/defs.settings.js?v=11"></script>
 <script src="src/src/srcfiles/settings.js?v=9"></script>
-<script src="src/src/srcfiles/icons.js?v=36"></script>
+<script src="src/src/srcfiles/icons.js?v=37"></script>
 <!-- FIELDS — shared form-control builders (comboControl / customChipInput).
      AI-Assisted Character Generation Phase 1: must load before menu.js,
      render.computer.js and studio.js, all of which build controls with it.
@@ -8568,7 +8606,7 @@ body {
 <script src="src/src/srcfiles/fields.js?v=1"></script>
 <script src="src/src/srcfiles/defs.world.js?v=57"></script>
 <script src="src/src/srcfiles/defs.actions.js?v=75"></script>
-<script src="src/src/srcfiles/defs.computer.js?v=51"></script>
+<script src="src/src/srcfiles/defs.computer.js?v=52"></script>
 <!-- Menu overhaul Phase 10: title-gallery trait lists + prompt assembly
      (defs.menu.js) — pure data, needs CONFIG's CONTENT_CONFIG/RATING_ORDER
      at runtime; IMAGE's titleGallery consumes genTitlePrompt. -->
@@ -8613,7 +8651,7 @@ body {
      sim.js (calls resolveScheduleActivity/seededRng/getTickIndex at call
      time) and before render.js/ui.js, which call it at runtime. -->
 <script src="src/src/srcfiles/commitments.js?v=16"></script>
-<script src="src/src/srcfiles/world.js?v=32"></script>
+<script src="src/src/srcfiles/world.js?v=33"></script>
 <script src="src/src/srcfiles/movement.js?v=4"></script>
 <!-- NPC avatar liveliness Phase 1 (movement.present.js): the presentation
      layer — per-avatar TRACK-vs-CATCH-UP animation on REAL time, its own rAF
@@ -8655,7 +8693,7 @@ body {
 <script src="src/src/srcfiles/skills.js?v=20"></script>
 <script src="src/src/srcfiles/stealth.js?v=24"></script>
 <script src="src/src/srcfiles/time.js?v=33"></script>
-<script src="src/src/srcfiles/computer.js?v=82"></script>
+<script src="src/src/srcfiles/computer.js?v=83"></script>
 <!-- BrineOS Phase 4: the Tracker's pure derivation pass — after computer.js
      (needs computeTaxOwed/computeBillAmount at call time) and before
      phone.js (getPhoneUnreadCount calls getTrackerNotifications). -->
@@ -8668,10 +8706,11 @@ body {
      Registered in BOTH this list and loadgame.js's ORDER, same commit. -->
 <script src="src/src/srcfiles/works.js?v=6"></script>
 <script src="src/src/srcfiles/tracker.js?v=20"></script>
+<script src="src/src/srcfiles/agenda.js?v=1"></script>
 <script src="src/src/srcfiles/debuglog.js?v=2"></script>
 <!-- BrineOS Phase 3: phone shell domain — after computer.js (needs
      switchScreen's phone device branch). -->
-<script src="src/src/srcfiles/phone.js?v=22"></script>
+<script src="src/src/srcfiles/phone.js?v=23"></script>
 <script src="src/src/srcfiles/npc.js?v=66"></script>
 <!-- Aspirations & Creative Careers Phase 3 (D9/D56): the Notice & Opinion
      layer (notice.js) — after npc.js (addMemoryFact, MEMORY_IMPORTANCE,
@@ -8885,11 +8924,12 @@ body {
      so it loads after render.computer.js. Pure view code — NOT in
      dev/verify/loadgame.js's ORDER (the loader stops before the render
      layer). -->
-<script src="src/src/srcfiles/render.calendar.js?v=4"></script>
-<script src="src/src/srcfiles/render.desktop.js?v=19"></script>
+<script src="src/src/srcfiles/render.calendar.js?v=5"></script>
+<script src="src/src/srcfiles/render.agenda.js?v=1"></script>
+<script src="src/src/srcfiles/render.desktop.js?v=20"></script>
 <!-- BrineOS Phase 3: phone shell renderer — after render.computer.js (needs
      COMPUTER_RENDERERS) and phone.js (home roster/settings id). -->
-<script src="src/src/srcfiles/render.phone.js?v=25"></script>
+<script src="src/src/srcfiles/render.phone.js?v=26"></script>
 <!-- Asks & attachments (asks-and-attachments-plan.md Phase 1 + Phase 3 +
      Phase 4 + Phase 5 + Phase 6 + Phase 7 + Phase 8 + Phase 9): the ask
      spine — parse/decide/
@@ -8967,7 +9007,7 @@ body {
 <script src="src/src/srcfiles/platform.js?v=6"></script>
 <script src="src/src/srcfiles/aspirations.js?v=2"></script>
 <script src="src/src/srcfiles/asks.js?v=25"></script>
-<script src="src/src/srcfiles/ui.js?v=194"></script>
+<script src="src/src/srcfiles/ui.js?v=195"></script>
 <script src="src/src/srcfiles/ui.computer.js?v=70"></script>
 <!-- AfterHours Site Expansion (Phase 2): the full routed mini-site — the
      adapter/blend layer (Phase 1) plus the router (browser.afterHoursView),
@@ -8978,7 +9018,7 @@ body {
 <script src="src/src/srcfiles/afterhours.js?v=31"></script>
 <script src="src/src/srcfiles/ui.windowmanager.js?v=19"></script>
 <!-- BrineOS Phase 3: phone shell orchestration — after ui.computer.js. -->
-<script src="src/src/srcfiles/ui.phone.js?v=23"></script>
+<script src="src/src/srcfiles/ui.phone.js?v=24"></script>
 <!-- The Player Design studio and the opening cutscene (player creation +
      intro plan, Phases 3-5). BEFORE menu.js, because menu.js's last line
      invokes boot() — anything loading after that runs once boot has already

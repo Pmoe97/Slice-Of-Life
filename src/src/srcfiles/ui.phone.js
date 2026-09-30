@@ -97,6 +97,34 @@ async function doPhoneTrackerScreen(screenId) {
   await saveAtBoundary('phone-tracker-screen', currentGameState);
 }
 
+// --- Agenda (0.14.5): the same dismiss / snooze intents, from either device's "Needs you" tab ---
+function agendaRerender() {
+  if (typeof renderComputerScreen === 'function') renderComputerScreen(currentGameState);
+  if (typeof renderPhoneScreen === 'function') renderPhoneScreen(currentGameState);
+}
+
+async function doAgendaDismiss(key) {
+  if (!key) return;
+  phoneTrackerDismiss(currentGameState, key);
+  agendaRerender();
+  await saveAtBoundary('agenda-dismiss', currentGameState);
+}
+
+async function doAgendaSnooze(key, days) {
+  if (!key || !(days > 0)) return;
+  phoneTrackerSnooze(currentGameState, key, days);
+  agendaRerender();
+  await saveAtBoundary('agenda-snooze', currentGameState);
+}
+
+// A lane chip toggles that lane on or off (none on = every lane). A view preference: nothing is saved.
+function doAgendaLane(laneId) {
+  if (!laneId || !AGENDA_LANES.some(l => l.id === laneId)) return;
+  const i = AGENDA_VIEW.lanes.indexOf(laneId);
+  if (i >= 0) AGENDA_VIEW.lanes.splice(i, 1); else AGENDA_VIEW.lanes.push(laneId);
+  agendaRerender();
+}
+
 async function doPhoneTrackerDismiss(key) {
   if (!key) return;
   phoneTrackerDismiss(currentGameState, key);

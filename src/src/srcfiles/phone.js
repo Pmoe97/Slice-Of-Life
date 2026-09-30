@@ -100,6 +100,13 @@ function closePhone(gameState) {
 // switchScreen's phone branch (push to navStack); the special settings and
 // tracker shell apps are handled here since they have no APP_DEFS entry.
 function phoneOpenApp(gameState, appId) {
+  // The Tracker, the Calendar and the Compass are tabs of the Agenda now (the Tracker's own tile opened
+  // its Notifications, which is "Needs you").
+  if (typeof agendaRetired === 'function' && agendaRetired(appId)) {
+    const to = agendaRedirect(appId, appId === PHONE_TRACKER_APP_ID ? 'notifications' : APP_DEFS[appId]?.entryScreen);
+    switchScreen(gameState, to.appId, to.screenId, undefined, 'phone');
+    return;
+  }
   if (appId === PHONE_SETTINGS_APP_ID || appId === PHONE_TRACKER_APP_ID || appId === PHONE_CLOCK_APP_ID || appId === PHONE_CAMERA_APP_ID) {
     const phone = gameState.world.phone;
     phone.openAppId = appId;

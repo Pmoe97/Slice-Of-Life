@@ -47,6 +47,7 @@ function renderDesktopIcons(gs) {
   if (!container) return;
   container.innerHTML = '';
   for (const app of Object.values(APP_DEFS)) {
+    if (agendaRetired(app.id)) continue;   // the Agenda replaced it (still openable by old links)
     const tile = document.createElement('div');
     tile.className = 'desktop-icon';
     tile.setAttribute('data-action', 'computer.open-app');
@@ -67,6 +68,7 @@ function renderStartMenu(gs) {
   if (!menu) return;
   menu.innerHTML = '';
   for (const app of Object.values(APP_DEFS)) {
+    if (agendaRetired(app.id)) continue;
     const item = document.createElement('div');
     item.className = 'start-menu-item';
     item.setAttribute('data-action', 'computer.open-app');

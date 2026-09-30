@@ -5,7 +5,7 @@ direction — "if it's a to-do, do it; if it's a question, ask"): five follow-up
 BUILT (F1, F4, F5, F8, F9). Round 3 (same day): the user answered all nine
 design calls (all kept) and said yes to F2, F3, F6 and F7, all four BUILT (see
 "Round 3"). Still waiting on the user: six round-3 design calls, and the
-Agenda merge, which has its own plan (`wip/agenda-app-plan.md`, seven
+Agenda merge, which has its own plan (`complete/agenda-app-plan.md` (built 2026-09-29), seven
 questions). Also fixes a numb verify-i2 check (see "A harness bug found on the
 way") and, in round 3, a numb verify-w4 check.**
 Written during a self-guided find-and-improve session whose brief was "find
@@ -306,7 +306,7 @@ own plan).
 
 ### Waiting on the user (questions, not to-dos)
 
-- **The Agenda merge** — seven questions in `wip/agenda-app-plan.md`.
+- **The Agenda merge** — seven questions in `complete/agenda-app-plan.md` (built 2026-09-29).
 - **R3-1 — How much drama?** About one reaction a week per musician, two
   complaints to every listen, harsher after 22:00, bedrooms can't hear each
   other (the flat's sound model: one hop plus a door). More, less, or about

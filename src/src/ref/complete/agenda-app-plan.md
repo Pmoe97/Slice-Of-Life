@@ -1,8 +1,6 @@
 # Agenda — Tracker + Calendar + Compass as one app
 
-**Status: DRAFT, waiting on the user.** Nothing is built. The seven
-questions at the bottom decide the design; the phases below are the proposed
-shape once they're answered. Written 2026-09-24 during the Side Projects
+**Status: COMPLETE — all five phases built and verified 2026-09-29 (0.14.5).** The user answered the seven questions by approving the proposed defaults (B1–B7) in the master decisions list; sound and Handmade Rooms stay deferred. Written 2026-09-24 during the Side Projects
 session, from the user's answer to its question 13:
 
 > "Honestly, EVERYTHING that has a planned date/time should end up on the
@@ -105,9 +103,13 @@ Saves: a navStack or `openAppId` pointing at `tracker`, `calendar` or
 
 | Phase | State |
 |---|---|
-| 1–5 | Not started — waiting on Q1–Q7 |
+| 1 | **Done** — `agenda.js`: `agendaEntries(gs)` = `buildTrackerEntries` (untouched, so the badge, the notifications, dismiss and snooze are byte for byte what they were: `verify-agenda` checks the prefix, the fields and the notify set) plus holiday, known-birthday, roommates'-show and outage-watch adapters. Each entry has a `lane`; commitments have `minutes` and a `commitmentId`. The new adapters are `notify: false` with urgency capped under `TRACKER.notifyThreshold`. **Deviation from the proposal:** `buildTrackerEntries` does NOT read `agendaEntries` (that would put the holidays into the badge); the Agenda wraps the Tracker instead. |
+| 2 | **Done** — `APP_DEFS.agenda` on both devices; `render.agenda.js`: Coming up (grouped by day, Overdue / Today / Tomorrow / dates / Anytime, a lane toggle, Clear on plans) and Needs you (dismiss / snooze 1d / 3d, DND and out-of-reach still silence it). Live-checked in the browser pane on the desktop and the phone (dismiss, snooze, Clear, lanes, no overflow). |
+| 3 | **Done** — the Year tab draws one coloured dot per lane under a date (bills, plans, the outage watch), the lane chips double as the legend and filter it, a tapped day lists them. Holidays, birthdays and shows keep their own emoji marks. |
+| 4 | **Done** — Directions is a tab reusing the Compass's own renderer, so it stays calm: no dates, no badges (D49). `verify-acc-p14` still green. |
+| 5 | **Done** — the Calendar and the Compass leave the desktop icons, the Start menu and the phone's home; the Tracker tile is gone. `agendaRetired` / `agendaRedirect` send every old link (`openApp`, `switchScreen`, `phoneOpenApp`) to the matching tab, and an old save with any of them open reopens as an Agenda window (`normalizeComputerState`, `normalizePhoneState`). The old app definitions stay in `APP_DEFS` (the redirect and the tests read them). |
 
-## Questions for the user (blocking)
+## Questions for the user (answered 2026-09-29: the proposed defaults, B1–B7)
 
 1. **One app on both devices?** The Tracker is phone-only today. Should the
    Agenda be on the computer too? (Proposed: yes.)

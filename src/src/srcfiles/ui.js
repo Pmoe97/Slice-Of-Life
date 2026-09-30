@@ -5561,6 +5561,15 @@ async function handleAction(action, npcId, extra) {
     case 'phone.tracker-screen':
       await doPhoneTrackerScreen(extra?.screenId);
       break;
+    case 'agenda.dismiss':
+      await doAgendaDismiss(extra?.key);
+      break;
+    case 'agenda.snooze':
+      await doAgendaSnooze(extra?.key, Number(extra?.days));
+      break;
+    case 'agenda.lane':
+      doAgendaLane(extra?.key);
+      break;
     case 'phone.tracker-dismiss':
       await doPhoneTrackerDismiss(extra?.key);
       break;
