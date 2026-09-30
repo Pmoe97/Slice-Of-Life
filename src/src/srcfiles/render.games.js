@@ -7,6 +7,7 @@
 // One entry point: games.js's Challenge verb asks for a minigame by its GAME_DEFS `minigame` id.
 function openMinigame(kind, opts) {
   if (kind === 'darts') return openDartsGame(opts);
+  if (kind === 'poker') return openPokerGame(opts);
   return Promise.resolve(null);
 }
 
@@ -183,6 +184,219 @@ function openDartsGame(opts) {
       resolve({ playerWon: false, grade: 'normal', summary: `You concede the game to ${npcName}.`, minutes: Math.max(10, Math.round(DARTS_TUNING.modes[mode].minutes / 2)) });
     };
     raf = requestAnimationFrame(draw);
+  });
+}
+
+// Poker night (Phase 4, D11): Texas Hold'em for you and whoever is at the table. The engine is poker.js
+// (state machine, side pots) on cardgames.js (deck, evaluator, each roommate's style from who they
+// are); this is only the screen. opts: { seats: [{ id, name, style }], stakeId, amount, stakeLabel,
+// seed }. Resolves the night's result (poker.js's pokerNightResult, plus the IOU shares if that is
+// what was riding on it), or null if the table is somehow closed.
+function openPokerGame(opts) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    const actions = document.getElementById('modal-actions');
+    if (!overlay || !title || !body || !actions || typeof pokerNew !== 'function') { resolve(null); return; }
+    if (typeof hideLoading === 'function') hideLoading();
+
+    const seatsIn = opts.seats || [];
+    const ids = ['player', ...seatsIn.map(s => s.id)];
+    const names = { player: 'You' };
+    const styles = { player: { ...POKER_STYLE.base, tilt: 0 } };
+    for (const s of seatsIn) { names[s.id] = s.name; if (s.style) styles[s.id] = s.style; }
+    const st = pokerNew(ids, {});
+    const rng = mulberry32((opts.seed >>> 0) || 1);
+    const lastAct = {};
+    let status = 'Deal the first hand.';
+    let finished = false;
+    let busy = false;                 // a roommate is acting, or the night is being settled
+    let timer = 0;
+
+    title.textContent = 'Poker night';
+    body.innerHTML = '';
+    const root = document.createElement('div');
+    root.className = 'games-poker';
+    body.appendChild(root);
+    actions.innerHTML = '';
+    const mkBtn = (label, cls) => { const b = document.createElement('button'); b.type = 'button'; b.className = cls || 'btn'; b.textContent = label; return b; };
+    const foldBtn = mkBtn('Fold', 'btn btn-secondary');
+    const callBtn = mkBtn('Check');
+    const dealBtn = mkBtn('Deal');
+    const outBtn = mkBtn('Let it play out', 'btn btn-secondary');
+    const leaveBtn = mkBtn('Cash out', 'btn btn-secondary');
+    actions.append(foldBtn, callBtn, dealBtn, outBtn, leaveBtn);
+    overlay.setAttribute('data-open', '');
+
+    const cardEl = (c, hidden) => {
+      const el = document.createElement('span');
+      if (hidden || !c) { el.className = 'games-card back'; el.textContent = ' '; return el; }
+      el.className = `games-card ${c.suit === '♥' || c.suit === '♦' ? 'red' : 'black'}`;
+      el.textContent = `${c.rank}${c.suit}`;
+      return el;
+    };
+    const describe = (r) => {
+      if (!r || !r.ok) return '';
+      if (r.action === 'fold') return 'folds';
+      if (r.action === 'check') return 'checks';
+      if (r.action === 'call') return r.allIn ? `calls all in (${r.amount})` : `calls ${r.amount}`;
+      if (r.action === 'raise') return r.allIn ? `all in (${r.raiseTo})` : `raises to ${r.raiseTo}`;
+      return '';
+    };
+
+    let raiseTo = 0;
+    function render() {
+      root.innerHTML = '';
+      const bar = document.createElement('div');
+      bar.className = 'games-poker-stake';
+      bar.textContent = `${opts.stakeId === 'brag' || !opts.stakeLabel ? 'Bragging rights' : opts.stakeLabel} · hand ${Math.max(1, st.handNo)} of ${st.handsMax}`;
+      root.appendChild(bar);
+      const opps = document.createElement('div');
+      opps.className = 'games-poker-opps';
+      const reveal = st.lastHand && st.lastHand.how === 'showdown' ? new Set(st.lastHand.showdown.map(x => x.id)) : new Set();
+      st.seats.forEach((s, i) => {
+        if (s.id === 'player') return;
+        const seat = document.createElement('div');
+        seat.className = `games-poker-seat${s.out ? ' out' : ''}${s.folded && !s.out ? ' folded' : ''}${st.turn === i ? ' turn' : ''}`;
+        const nm = document.createElement('div'); nm.className = 'games-poker-name'; nm.textContent = `${names[s.id]}${st.dealer === i ? ' (D)' : ''}`;
+        const ch = document.createElement('div'); ch.className = 'games-poker-chips'; ch.textContent = s.out ? 'out' : `${s.chips} chips`;
+        const cs = document.createElement('div'); cs.className = 'games-poker-cards';
+        if (!s.out && s.hand.length) for (const c of s.hand) cs.appendChild(cardEl(c, !(reveal.has(s.id))));
+        const act = document.createElement('div'); act.className = 'games-poker-act'; act.textContent = s.out ? '' : (lastAct[s.id] || '');
+        seat.append(nm, ch, cs, act);
+        opps.appendChild(seat);
+      });
+      root.appendChild(opps);
+      const table = document.createElement('div');
+      table.className = 'games-poker-table';
+      const pot = document.createElement('div'); pot.className = 'games-poker-pot'; pot.textContent = `Pot ${st.pot}`;
+      const comm = document.createElement('div'); comm.className = 'games-poker-community';
+      for (let k = 0; k < 5; k++) { const c = st.community[k]; const el = cardEl(c, false); if (!c) el.className = 'games-card empty'; comm.appendChild(el); }
+      table.append(pot, comm);
+      root.appendChild(table);
+      const me = st.seats[0];
+      const you = document.createElement('div');
+      you.className = `games-poker-you${me.folded && !me.out ? ' folded' : ''}${st.turn === 0 ? ' turn' : ''}`;
+      const yn = document.createElement('div'); yn.className = 'games-poker-name'; yn.textContent = `You${st.dealer === 0 ? ' (D)' : ''} · ${me.chips} chips${me.bet ? ` · ${me.bet} in` : ''}`;
+      const yc = document.createElement('div'); yc.className = 'games-poker-cards';
+      for (const c of me.hand) yc.appendChild(cardEl(c, false));
+      const ya = document.createElement('div'); ya.className = 'games-poker-act'; ya.textContent = lastAct.player || '';
+      you.append(yn, yc, ya);
+      root.appendChild(you);
+      const legal = st.turn === 0 && !busy ? pokerLegal(st, 0) : null;
+      if (legal && legal.canRaise) {
+        raiseTo = Math.max(legal.minTo, Math.min(legal.maxTo, raiseTo || legal.minTo));
+        const row = document.createElement('div');
+        row.className = 'games-poker-raise';
+        const lab = document.createElement('span'); lab.textContent = legal.allInOnly ? `All in ${legal.maxTo}` : `Raise to ${raiseTo}`;
+        const raiseBtn = mkBtn(legal.allInOnly ? 'All in' : 'Raise');
+        raiseBtn.addEventListener('click', () => playerAct('raise', legal.allInOnly ? legal.maxTo : raiseTo));
+        if (!legal.allInOnly) {
+          const range = document.createElement('input');
+          range.type = 'range'; range.min = String(legal.minTo); range.max = String(legal.maxTo); range.step = '5'; range.value = String(raiseTo);
+          range.addEventListener('input', () => { raiseTo = Number(range.value); lab.textContent = `Raise to ${raiseTo}`; });
+          row.append(lab, range, raiseBtn);
+        } else row.append(lab, raiseBtn);
+        root.appendChild(row);
+      }
+      const stat = document.createElement('div');
+      stat.className = 'games-poker-status';
+      stat.textContent = status;
+      root.appendChild(stat);
+      // the buttons
+      const handOn = st.phase !== 'idle';
+      foldBtn.style.display = legal ? '' : 'none';
+      callBtn.style.display = legal ? '' : 'none';
+      if (legal) callBtn.textContent = legal.canCheck ? 'Check' : (legal.toCall >= me.chips ? `Call all in (${legal.toCall})` : `Call ${legal.toCall}`);
+      dealBtn.style.display = !handOn && !finished && !st.over ? '' : 'none';
+      dealBtn.textContent = st.handNo === 0 ? 'Deal' : 'Deal next hand';
+      outBtn.style.display = finished ? 'none' : '';
+      outBtn.disabled = busy && !legal;
+      leaveBtn.textContent = finished ? 'Done' : (st.over ? 'Finish' : 'Cash out');
+      leaveBtn.style.display = '';
+      leaveBtn.disabled = !finished && !st.over && handOn && !legal;
+    }
+
+    function handOver() {
+      busy = false;
+      const lh = st.lastHand;
+      if (lh) {
+        const w = lh.winners.map(x => `${names[x.id]} ${x.id === 'player' ? 'win' : 'wins'} ${x.amount}`).join(', ');
+        const how = lh.how === 'showdown'
+          ? ` with ${(lh.showdown.find(x => x.id === lh.winners[0].id) || {}).name || 'the best hand'}`
+          : ` (everyone else folded)`;
+        status = `${w}${how}.`;
+      }
+      if (st.over) {
+        const bust = st.seats[0].out;
+        status += bust ? ' You are out of chips.' : ' That is the night.';
+      }
+      render();
+    }
+
+    function step() {
+      if (finished) return;
+      if (st.phase === 'idle') { handOver(); return; }
+      if (st.turn === 0) { busy = false; render(); return; }
+      busy = true; render();
+      timer = setTimeout(() => {
+        const who = st.seats[st.turn];
+        const r = pokerNpcTurn(st, rng, styles);
+        if (r.ok && who) lastAct[who.id] = describe(r);
+        if (st.phase === 'idle') { render(); step(); return; }
+        render(); step();
+      }, 800);
+    }
+
+    function startHand() {
+      for (const k of Object.keys(lastAct)) delete lastAct[k];
+      raiseTo = 0;
+      if (!pokerStartHand(st, rng)) { handOver(); return; }
+      status = `Hand ${st.handNo}. Everyone antes ${st.ante}.`;
+      render();
+      step();
+    }
+
+    function playerAct(action, to) {
+      if (st.turn !== 0 || busy) return;
+      const r = pokerAct(st, 0, action, to);
+      if (r.ok) lastAct.player = describe(r);
+      status = '';
+      raiseTo = 0;
+      render(); step();
+    }
+
+    function finishNight() {
+      finished = true; busy = true;
+      clearTimeout(timer);
+      const result = pokerNightResult(st, 'player', names);
+      result.iou = opts.stakeId === 'iou' && opts.amount > 0 ? pokerIouShares(st, 'player', opts.amount) : [];
+      status = result.summary;
+      finished = true;
+      render();
+      leaveBtn.onclick = () => { overlay.removeAttribute('data-open'); resolve({ ...result, playerWon: result.net > 0 }); };
+    }
+
+    foldBtn.addEventListener('click', () => playerAct('fold'));
+    callBtn.addEventListener('click', () => { const L = pokerLegal(st, 0); playerAct(L && L.canCheck ? 'check' : 'call'); });
+    dealBtn.addEventListener('click', startHand);
+    outBtn.addEventListener('click', () => {
+      if (finished) return;
+      clearTimeout(timer);
+      pokerSimulate(st, rng, styles);
+      finishNight();
+    });
+    leaveBtn.onclick = () => {
+      if (finished) return;
+      clearTimeout(timer);
+      if (st.phase !== 'idle' && st.turn === 0) pokerAct(st, 0, 'fold');
+      // Leaving mid-night ends it: the hand in progress plays out without you and the night is settled as it stands.
+      let g = 0; while (st.phase !== 'idle' && g++ < 200) { if (st.turn < 0) pokerAdvance(st); else pokerNpcTurn(st, rng, styles); }
+      st.over = true;
+      finishNight();
+    };
+    render();
   });
 }
 // ===== /SECTION: RENDER.GAMES =====

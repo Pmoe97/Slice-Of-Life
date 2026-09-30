@@ -2013,6 +2013,16 @@ function gameMatchEffects(ctx, prepared) {
   const plan = prepared && prepared.game;
   if (!plan) return [];
   const T = GAMES_TUNING;
+  if (plan.session) {
+    const m = plan.playerWon ? T.winMood : T.loseMood;
+    const results = plan.results.map(r => `${r.npcId}~${r.playerWon ? 'p' : 'n'}~${r.grade}~${r.chips}`).join(',') || '-';
+    const iou = plan.iou.map(s => `${s.npcId}~${s.amount}`).join(',') || '-';
+    return [
+      `ADJUST_NEED player mood ${m >= 0 ? '+' : ''}${m}`,
+      'ADJUST_NEED player energy -3',
+      `GAME_SESSION ${plan.gameId} ${plan.stakeId} ${plan.amount || 0} ${plan.place} ${plan.seats} ${plan.net} ${results} ${iou}`,
+    ];
+  }
   const mood = plan.playerWon ? T.winMood : T.loseMood;
   return [
     `ADJUST_NEED player mood ${mood >= 0 ? '+' : ''}${mood}`,
@@ -2030,24 +2040,41 @@ function prepareGameChallenge(ctx) {
     const plan = gamePlanMatch(gs, gameId, npcId, stakeId, amount, played, mode);
     return plan ? { game: plan, minutes: plan.minutes } : { cancelled: true };
   };
-  if (typeof openChoicePicker !== 'function') return finish(games[0], withIds[0], 'brag', 0);
+  // A night at the card table: everyone who is here plays (up to the table's size).
+  const tableIds = () => withIds.slice(0, (typeof POKER_TUNING === 'object' ? POKER_TUNING.seatsMax : 5) - 1);
+  const finishNight = (gameId, stakeId, amount, played) => {
+    const plan = gamePlanSession(gs, gameId, tableIds(), stakeId, amount, played);
+    return plan ? { game: plan, minutes: plan.minutes } : { cancelled: true };
+  };
+  if (typeof openChoicePicker !== 'function') {
+    return GAME_DEFS[games[0]].multi ? finishNight(games[0], 'brag', 0) : finish(games[0], withIds[0], 'brag', 0);
+  }
   return (async () => {
+    let gameId = games[0];
+    if (games.length > 1) {
+      gameId = await openChoicePicker('What are you playing?', games.map(id => ({ id, label: GAME_DEFS[id].label, note: GAME_DEFS[id].multi ? 'everyone here plays' : `about ${GAME_DEFS[id].minutes} minutes` })));
+      if (!gameId) return { cancelled: true };
+    }
+    const gdef = GAME_DEFS[gameId];
     let npcId = withIds[0];
-    if (withIds.length > 1) {
+    if (!gdef.multi && withIds.length > 1) {
       npcId = await openChoicePicker('Play against…', withIds.map(id => ({ id, label: gs.npcs[id]?.bible?.name || id })));
       if (!npcId) return { cancelled: true };
     }
-    let gameId = games[0];
-    if (games.length > 1) {
-      gameId = await openChoicePicker('What are you playing?', games.map(id => ({ id, label: GAME_DEFS[id].label, note: `about ${GAME_DEFS[id].minutes} minutes` })));
-      if (!gameId) return { cancelled: true };
-    }
-    const stakes = gameStakeOptions(gs, npcId);
+    const stakes = gdef.multi ? gameSessionStakeOptions(gs, tableIds()) : gameStakeOptions(gs, npcId);
     const pick = await openChoicePicker('What is riding on it?', stakes.map(r => ({ id: r.id, label: r.label, note: r.note, disabled: !r.ok })));
     if (!pick) return { cancelled: true };
     const row = stakes.find(r => r.id === pick) || stakes[0];
+    // The table game: the night is played on the poker screen, and what it returns is the result.
+    if (gdef.multi) {
+      if (!gdef.minigame || typeof openMinigame !== 'function') return finishNight(gameId, row.stakeId, row.amount);
+      const seats = tableIds().map(id => ({ id, name: gs.npcs[id]?.bible?.name || id, style: typeof pokerStyleFor === 'function' ? pokerStyleFor(gs.npcs[id]) : null }));
+      const played = await openMinigame(gdef.minigame, { seats, stakeId: row.stakeId, amount: row.amount, stakeLabel: row.label,
+        seed: hashStr(`${gs.meta?.seed}|${gs.meta.clock.day}|${gs.meta.clock.minutes}|${gameId}|${seats.map(s => s.id).join(',')}`) });
+      if (!played) return { cancelled: true };
+      return finishNight(gameId, row.stakeId, row.amount, played);
+    }
     // A game with a real minigame (darts): pick the mode, play it, and the result is what you played.
-    const gdef = GAME_DEFS[gameId];
     if (gdef.minigame && typeof openMinigame === 'function') {
       let mode = gdef.modes ? gdef.modes[0].id : undefined;
       if (gdef.modes && gdef.modes.length > 1) {
@@ -2079,7 +2106,7 @@ ACTION_DEFS['game.challenge'] = {
   timeCost: { base: 30, fromPrepared: true },
   prepare: prepareGameChallenge,
   buildEffects: gameMatchEffects,
-  narration: { mode: 'dynamic', build: (ctx, prepared) => (typeof gameMatchNarration === 'function' && gameMatchNarration(ctx.gameState, prepared && prepared.game)) || 'You play a match.' },
+  narration: { mode: 'dynamic', build: (ctx, prepared) => (prepared && prepared.game && prepared.game.session && typeof gameSessionNarration === 'function' ? gameSessionNarration(ctx.gameState, prepared.game) : (typeof gameMatchNarration === 'function' && gameMatchNarration(ctx.gameState, prepared && prepared.game))) || 'You play a match.' },
 };
 ACTION_DEFS['game.rematch'] = {
   id: 'game.rematch', label: 'Rematch', verbs: ['rematch', 'play again', 'another game'],

@@ -1,7 +1,7 @@
 # Game Room Overhaul — a room people actually play in
 
-Status: **Phases 1–3 built 2026-09-29 (`cardgames.js` `verify-cards.js` 30; `games.js` `verify-games.js` 25; `darts.js` + `render.games.js` `verify-darts.js` 25); design complete 2026-09-22 (the user answered Q1–Q3 the
-same day); Phases 4–12 not started.** The user asked for it directly ("Game room needs to
+Status: **Phases 1–4 built 2026-09-29 (`poker.js` + the table screen, `verify-poker.js` 29; `cardgames.js` `verify-cards.js` 30; `games.js` `verify-games.js` 25; `darts.js` + `render.games.js` `verify-darts.js` 25); design complete 2026-09-22 (the user answered Q1–Q3 the
+same day); Phases 5–12 not started.** The user asked for it directly ("Game room needs to
 come to life! … This is a massive area for improvement and expansion."). Last updated
 2026-09-22.
 
@@ -20,7 +20,7 @@ Companions:
 
 ## Handoff — read this first
 
-**Resume at:** Phase 4 (poker night) — Phases 1 (the match spine), 2 (darts) and 3 (the card engine) are built; poker builds its table state machine on `cardgames.js`'s `decidePokerAction`/`pokerStyleFor`/`showdownWinners` and reports through `openMinigame` like darts; every game just has to produce a result and call `gameApplyMatch` (games.js). A minigame replaces the abstract `gamePlanMatch` result: build the plan the same way (`{ gameId, npcId, stakeId, amount, playerWon, grade }`) and hand it to the `GAME_MATCH` effect.
+**Resume at:** Phase 5 (blackjack, D12) — Phases 1–4 are built; blackjack builds on `cardgames.js`'s `bjValue`/`bjDealerShouldHit`/`bjNpcDecision`/`bjSettle` and reports through `openMinigame` like darts and poker. A multi-seat game is a `multi: true` entry in `GAME_DEFS` and returns a night through `gamePlanSession`/`GAME_SESSION`; every game just has to produce a result and call `gameApplyMatch` (games.js). A minigame replaces the abstract `gamePlanMatch` result: build the plan the same way (`{ gameId, npcId, stakeId, amount, playerWon, grade }`) and hand it to the `GAME_MATCH` effect.
 
 **Survey (2026-09-22):**
 - Today the Game Room is one flat verb: `self.play_games` (defs.actions.js)
@@ -173,7 +173,8 @@ land in the relationship engine this game is built on.
 | 1 | **Done** (2026-09-29) — the match spine: `games.js` (`GAME_DEFS`/`GAMES_TUNING`, `world.games`), the `games` skill, an abstract seeded resolver for pool/darts/console/board game, stakes (bragging, a real chore both ways, a capped IOU through `money.js`; agreement by fondness/temper), consequences (mood, rivalry on the relationship, memory, XP), the follow-up verbs (Good Game / Gloat / Rematch), the Challenge verb + `openChoicePicker`, the [Games] prompt line |
 | 2 | **Done** (2026-09-29) — darts (D9): `darts.js` (the pure half: board geometry and scoring, a thrower's spread by skill, the 301 / Around the Clock state machine, the crosshair, a whole-match simulator, grading) and `render.games.js` (the modal: a canvas board, a two-axis sweeping crosshair, tap or Space to throw, the roommate's turn animated, Let it play out, Forfeit). `openMinigame(kind, opts)` is the entry point every later minigame uses: it resolves `{ playerWon, grade, summary, minutes }`, which becomes the plan. Headless, darts is modelled by the same throwers (deterministic). Live-verified in `dev-harness.html`. |
 | 3 | **Done** (2026-09-29) — the card engine (`cardgames.js`, R12): seeded deck, the best-five-of-N evaluator and tie-breaks, Omaha's two-hole-cards rule, showdown/split pots, ONE 0–1 strength scale (with a fix to AcesAndLace's: a kicker could lift an ace-high flush above a full house — bands no longer overlap), `pokerStyleFor(npc)` (temperament + traits → aggression/bluff/foldPressure/slowplay/strengthBias/tilt, D8), `pokerTiltedStyle`, the pure multi-way `decidePokerAction(seat, table, style, rng)` (crowd discount, urgency, a light read on how often they fold, legal raise sizing, shoves), five-card-draw `drawKeepIndices`, blackjack arithmetic (`bjValue`, soft hands, the dealer stands on soft 17, basic-strategy `bjNpcDecision` nudged by risk, 3:2 `bjSettle`). Engine only — no UI. |
-| 4–12 | Not started |
+| 4 | **Done** (2026-09-29) — poker night (D11): `poker.js` (the pure table: antes, hole cards, four streets, check/call/raise/fold/all-in, a per-round raise cap, legal raise sizes, side pots built from what each seat put in, showdown, the odd chip, tilt heat, a whole-night simulator, standings and a result against each roommate, the IOU conversion) on `cardgames.js`; the table screen in `render.games.js` (`openPokerGame`: roommates' cards face down until a showdown, raise slider, Let it play out, Cash out); the spine's multi-seat path (`gamePlanSession`/`gameApplySession`/`GAME_SESSION`: one match per roommate, XP once, an IOU split by chips or a chore for last/first place); the `playing_cards` item (a deck, $5) as the anchor. Live-verified in `dev-harness.html`. |
+| 5–12 | Not started |
 
 ## Open questions
 

@@ -1395,6 +1395,21 @@ const EFFECT_DEFS = {
       gameApplyMatch(ctx.gameState, { gameId: p.gameId, npcId: p.npcId, stakeId: p.stakeId, amount: Number(p.amount) || 0, playerWon: p.winner === 'p', grade: p.grade });
     },
   },
+  // A night at the card table (poker, Phase 4): the whole table's result in one write. results is
+  // 'npcId~p|n~grade~chips,…' and iou 'npcId~dollars,…' ('-' for none).
+  GAME_SESSION: {
+    paramShape: ['gameId', 'stakeId', 'amount', 'place', 'seats', 'net', 'results', 'iou'], llm: false, implemented: true,
+    validate: (p) => (typeof gameDef === 'function' && !!gameDef(p.gameId)) || 'No such game.',
+    apply: (p, ctx) => {
+      if (typeof gameApplySession !== 'function') return;
+      const results = String(p.results || '-') === '-' ? [] : String(p.results).split(',').map(x => { const [npcId, w, grade, chips] = x.split('~'); return { npcId, playerWon: w === 'p', grade, chips: Number(chips) || 0 }; });
+      const iou = String(p.iou || '-') === '-' ? [] : String(p.iou).split(',').map(x => { const [npcId, amt] = x.split('~'); return { npcId, amount: Number(amt) || 0 }; });
+      const npcIds = results.map(r => r.npcId);
+      const rival = (results.slice().sort((a, b) => b.chips - a.chips)[0] || {}).npcId || npcIds[0];
+      gameApplySession(ctx.gameState, { gameId: p.gameId, session: true, npcIds, npcId: rival, stakeId: p.stakeId, amount: Number(p.amount) || 0, place: Number(p.place) || 1, seats: Number(p.seats) || npcIds.length + 1,
+        net: Number(p.net) || 0, results, iou, grade: (results.find(r => r.npcId === rival) || {}).grade || 'normal' });
+    },
+  },
   GAME_FOLLOWUP: {
     paramShape: ['kind'], llm: false, implemented: true,
     validate: (p) => ['gracious', 'gloat', 'rematch'].includes(p.kind) || 'Nothing to say.',

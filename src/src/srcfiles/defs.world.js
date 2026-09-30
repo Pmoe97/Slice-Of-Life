@@ -1437,6 +1437,8 @@ const ITEM_DEFS = {
   boombox: { id: 'boombox', label: 'Boombox', nouns: ['boombox', 'ghetto blaster'], category: 'electronics', stackable: false, maxStack: 1, price: 45, buyQty: 1 },
   book: { id: 'book', label: 'Book', nouns: ['book'], category: 'media', stackable: true, maxStack: 10, price: 12, buyQty: 1 },
   board_game: { id: 'board_game', label: 'Board Game', nouns: ['board game'], category: 'media', stackable: true, maxStack: 4, price: 20, buyQty: 1 },
+  // Game Room Phase 4 (0.14.5): poker night needs a deck.
+  playing_cards: { id: 'playing_cards', label: 'Deck of Cards', nouns: ['deck of cards', 'cards', 'playing cards'], category: 'media', stackable: true, maxStack: 2, price: 5, buyQty: 1 },
   pain_reliever: { id: 'pain_reliever', label: 'Pain Reliever', nouns: ['pain reliever', 'ibuprofen', 'medicine'], category: 'medication', stackable: true, maxStack: 4, price: 5, buyQty: 1 },
   allergy_medicine: { id: 'allergy_medicine', label: 'Allergy Medicine', nouns: ['allergy medicine'], category: 'medication', stackable: true, maxStack: 4, price: 6, buyQty: 1 },
   // Aspirations & Creative Careers Phase 7 (D23): a finished piece of the

@@ -210,8 +210,10 @@ function gameSettleChore(gs, doerId, day) {
   return typeof queueNpcChore === 'function' && queueNpcChore(gs, doerId, choreId, 'talk') ? label : null;
 }
 
-// Mutates. Called from the GAME_MATCH effect only.
-function gameApplyMatch(gs, plan) {
+// Mutates. Called from the GAME_MATCH effect (and, once per roommate, from gameApplySession). `opts`:
+// skipXp / skipPending / skipEvent / skipStake, for the session writer that does those once itself.
+function gameApplyMatch(gs, plan, opts) {
+  const o = opts || {};
   const T = GAMES_TUNING;
   const d = gameDef(plan.gameId);
   const npc = gs.npcs?.[plan.npcId];
@@ -231,7 +233,7 @@ function gameApplyMatch(gs, plan) {
   const t = (r[plan.gameId] || (r[plan.gameId] = { w: 0, l: 0 }));
   if (plan.playerWon) t.w++; else t.l++;
   // Skill.
-  if (typeof awardSkillXp === 'function') awardSkillXp(gs.player, 'games', plan.playerWon ? T.playerXp.win : T.playerXp.lose, day, gs);
+  if (!o.skipXp && typeof awardSkillXp === 'function') awardSkillXp(gs.player, 'games', plan.playerWon ? T.playerXp.win : T.playerXp.lose, day, gs);
   // Them: mood, the rivalry, a memory.
   let next = npc;
   const moodDelta = plan.playerWon ? T.loseMood + (sore >= 0.5 ? T.soreExtra : 0) : T.winMood;
@@ -245,7 +247,7 @@ function gameApplyMatch(gs, plan) {
   gs.npcs[plan.npcId] = next;
   // The stake.
   const lines = [];
-  if (plan.stakeId === 'chore') {
+  if (o.skipStake) { /* settled by the session */ } else if (plan.stakeId === 'chore') {
     const doer = plan.playerWon ? plan.npcId : 'player';
     const label = gameSettleChore(gs, doer, day);
     lines.push(label ? gameFill(T.lines.choreDone[doer === 'player' ? 'player' : 'npc'], { name: gameNpcName(gs, plan.npcId), chore: label }) : T.lines.choreNone);
@@ -255,11 +257,114 @@ function gameApplyMatch(gs, plan) {
     lines.push(gameFill(plan.playerWon ? T.lines.iouWon : T.lines.iouLost, { name: gameNpcName(gs, plan.npcId), amount: plan.amount }));
   }
   // The player's mood is a plain need write in the verb's effects; the follow-up window opens.
-  g.pending = { npcId: plan.npcId, gameId: plan.gameId, playerWon: plan.playerWon, grade: plan.grade, abs };
-  (gs.world.events || (gs.world.events = [])).push({ day, tick: getTickIndex(gs.meta.clock.minutes), roomId: gs.player.location, npcId: plan.npcId,
+  if (!o.skipPending) g.pending = { npcId: plan.npcId, gameId: plan.gameId, playerWon: plan.playerWon, grade: plan.grade, abs };
+  if (!o.skipEvent) (gs.world.events || (gs.world.events = [])).push({ day, tick: getTickIndex(gs.meta.clock.minutes), roomId: gs.player.location, npcId: plan.npcId,
     type: 'game_match', moodDelta: 0, importance: MEMORY_IMPORTANCE.social, data: { game: plan.gameId, playerWon: plan.playerWon },
     template: gameFill(T.lines.event, { name: '{name}', game: gameLabel }), seenByPlayer: true });
   return { rec, lines };
+}
+
+// --- Nights with more than two seats (poker, Phase 4) -----------------------------------------
+// A night at the card table is one session with everyone who is here: standings, not a single winner.
+// It reports through the same spine: each roommate is a match against you (mood, the rivalry, a memory),
+// XP is awarded once, and the stake settles across the table — an IOU by chips, a chore by finishing
+// first or last. Everything is still decided in prepare (pokerNightResult, or the modelled night) and
+// written once, by GAME_SESSION.
+
+// The most a stake can be for a whole table: it has to be agreeable to everyone in the game. Pure.
+function gameSessionStakeOptions(gs, npcIds) {
+  const per = npcIds.map(id => gameStakeOptions(gs, id));
+  return per[0].map((row, k) => {
+    const bad = per.map(rows => rows[k]).find(r => !r.ok);
+    return bad ? { ...row, ok: false, note: bad.note } : row;
+  });
+}
+
+function gameNightNames(gs, ids) {
+  const names = ids.map(id => gameNpcName(gs, id));
+  return names.length <= 1 ? names[0] || 'them' : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+// The plan for a night: `played` is what the table screen returned (pokerNightResult + iou shares), or
+// nothing — then the night is modelled headless, every seat playing like themselves. Pure.
+function gamePlanSession(gs, gameId, npcIds, stakeId, amount, played) {
+  const d = gameDef(gameId);
+  const ids = npcIds.filter(id => gs.npcs?.[id]);
+  if (!d || !ids.length) return null;
+  const g = gamesRead(gs);
+  const clock = gs.meta.clock;
+  const seedKey = `${clock.day}_${clock.minutes}_${g?.count || 0}`;
+  const stake = stakeId === 'chore' && ids.every(id => gameStakeAgrees(gs, id, 'chore').ok) ? 'chore'
+    : stakeId === 'iou' && ids.every(id => gameStakeAgrees(gs, id, 'iou', amount).ok) ? 'iou' : 'brag';
+  const amt = stake === 'iou' ? amount : 0;
+  if (!played && gameId === 'poker' && typeof pokerNew === 'function') {
+    const styles = { player: { ...POKER_STYLE.base, tilt: 0 } };
+    for (const id of ids) styles[id] = pokerStyleFor(gs.npcs[id]);
+    const st = pokerNew(['player', ...ids]);
+    pokerSimulate(st, seededRng(gs.meta?.seed, `night_${gameId}_${seedKey}`), styles);
+    const names = {}; for (const id of ids) names[id] = gameNpcName(gs, id);
+    played = pokerNightResult(st, 'player', names);
+    played.iou = stake === 'iou' ? pokerIouShares(st, 'player', amt) : [];
+  }
+  if (!played) return null;
+  const results = played.results || [];
+  const rival = (results.slice().sort((a, b) => b.chips - a.chips)[0] || {}).npcId || ids[0];
+  return { gameId, session: true, npcIds: ids, npcId: rival, stakeId: stake, amount: amt, playerWon: (played.net || 0) > 0, grade: (results.find(r => r.npcId === rival) || {}).grade || 'normal',
+    results, iou: played.iou || [], place: played.place || 1, seats: played.seats || ids.length + 1, net: played.net || 0, summary: played.summary || null,
+    minutes: played.minutes || d.minutes, played: true, name: gameNightNames(gs, ids), label: d.label, seed: seedKey, hands: played.hands || 0 };
+}
+
+// The line for a planned night. Pure.
+function gameSessionNarration(gs, plan) {
+  if (!plan) return null;
+  const d = gameDef(plan.gameId);
+  const S = GAMES_TUNING.lines.settle;
+  const parts = [gamePick(d.intro, plan.seed, plan.gameId, 'intro').replace('{name}', plan.name)];
+  if (plan.summary) parts.push(plan.summary);
+  if (plan.stakeId === 'iou' && plan.iou.length) {
+    const total = plan.iou.reduce((a, s) => a + s.amount, 0);
+    parts.push(plan.net > 0 ? gameFill(S.nightIouWon, { amount: total }) : gameFill(S.nightIouLost, { amount: total }));
+  } else if (plan.stakeId === 'chore') {
+    if (plan.place === 1) parts.push(S.nightChoreWon);
+    else if (plan.place === plan.seats) parts.push(S.nightChoreLost);
+  }
+  return parts.join(' ');
+}
+
+// Mutates: the GAME_SESSION effect. One match per roommate against you, XP once, then the stake.
+function gameApplySession(gs, plan) {
+  const T = GAMES_TUNING;
+  const d = gameDef(plan.gameId);
+  if (!d || !plan.results || !plan.results.length) return null;
+  const g = gamesState(gs);
+  const day = gs.meta.clock.day;
+  const abs = clockToAbsolute(gs.meta.clock);
+  plan.results.forEach((r, i) => {
+    if (!gs.npcs?.[r.npcId]) return;
+    gameApplyMatch(gs, { gameId: plan.gameId, npcId: r.npcId, stakeId: 'brag', amount: 0, playerWon: r.playerWon, grade: r.grade }, { skipXp: true, skipPending: true, skipEvent: i > 0 });
+  });
+  if (typeof awardSkillXp === 'function') awardSkillXp(gs.player, 'games', plan.place === 1 || plan.net > 0 ? T.playerXp.win : T.playerXp.lose, day, gs);
+  const lines = [];
+  if (plan.stakeId === 'iou' && typeof adjustMoneyLedger === 'function') {
+    let total = 0;
+    for (const s of plan.iou) {
+      if (!gs.npcs?.[s.npcId] || !(s.amount > 0)) continue;
+      adjustMoneyLedger(gs, s.npcId, plan.net > 0 ? 'npcOwes' : 'playerOwes', s.amount);
+      total += s.amount;
+    }
+    if (total > 0) g.iou.push({ day, amount: total });
+  } else if (plan.stakeId === 'chore') {
+    const worst = plan.results.slice().sort((a, b) => a.chips - b.chips)[0];
+    if (plan.place === 1 && worst) {
+      const label = gameSettleChore(gs, worst.npcId, day);
+      lines.push(label ? gameFill(T.lines.choreDone.npc, { name: gameNpcName(gs, worst.npcId), chore: label }) : T.lines.choreNone);
+    } else if (plan.place === plan.seats) {
+      const label = gameSettleChore(gs, 'player', day);
+      lines.push(label ? gameFill(T.lines.choreDone.player, { name: '', chore: label }) : T.lines.choreNone);
+    }
+  }
+  g.pending = { npcId: plan.npcId, gameId: plan.gameId, playerWon: plan.place === 1, grade: plan.grade, abs, multi: true };
+  return { lines };
 }
 
 // --- The follow-up (D2's choice after): good game, gloat, rematch -----------------------------
@@ -279,6 +384,7 @@ function gameFollowUpOpen(gs, kind) {
   const p = gamePendingNow(gs);
   if (!p) return { ok: false, reason: 'Nothing to say about a game right now.' };
   if (kind === 'gloat' && !p.playerWon) return { ok: false, reason: 'Nothing to gloat about.' };
+  if (kind === 'rematch' && p.multi) return { ok: false, reason: 'Deal another night from the table.' };
   return { ok: true, pending: p };
 }
 

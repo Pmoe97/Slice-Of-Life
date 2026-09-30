@@ -4885,6 +4885,14 @@ const GAME_DEFS = {
     win: { close: ['You win by a nose, on the very last lap.', 'A last-second win. {name} demands a rematch on principle.'], blowout: ['You win by a mile. {name} blames the controller.', 'It is a massacre, and you enjoy every second.'] },
     lose: { close: ['You lose by a nose on the very last lap.', '{name} wins with one second to spare and does a small, smug dance.'], blowout: ['{name} beats you by a mile and says "good game" in a way that stings.', 'It is a massacre, and it is yours.'] },
   },
+  // Phase 4: poker night, Texas Hold'em for you and everyone who is here (poker.js + render.games.js). The
+  // deck of cards is an item you carry; the table is whoever sits down.
+  poker: {
+    id: 'poker', label: 'Poker night', anchors: [], item: 'playing_cards', minutes: 60, skillTag: 'gaming', minigame: 'poker', multi: true,
+    intro: ['{name} pull up chairs, and somebody counts out the chips.', 'The deck comes out. {name} deal in, all pretending not to care.'],
+    win: { close: ['You come out ahead, just.', 'You edge it on the last hand.'], blowout: ['You take the table apart.', 'It is not close: everyone else is looking at their empty hands.'] },
+    lose: { close: ['You lose by a whisker.', 'You are one good hand short.'], blowout: ['You are cleaned out.', 'You watch your chips walk across the table, one pot at a time.'] },
+  },
   boardgame: {
     id: 'boardgame', label: 'Board game', anchors: [], item: 'board_game', minutes: 45, skillTag: 'gaming',
     intro: ['You unfold the board and argue about the rules for ten minutes, which is half the fun.', '{name} reads the rules aloud in a dramatic voice.'],
@@ -4925,7 +4933,7 @@ const GAMES_TUNING = {
   },
   lines: {
     // What the stake did, told with the result (the match's own line; the settling itself is gameApplyMatch's).
-    settle: { choreWon: '{name} owes you a chore, and will get to it.', choreLost: 'You owe {name} a chore, and you settle it on the spot.', iouWon: '{name} owes you ${amount}.', iouLost: 'You owe {name} ${amount}.' },
+    settle: { nightIouWon: 'You leave with ${amount} owed to you across the table.', nightIouLost: 'You owe the table ${amount} between them.', nightChoreWon: 'Whoever finished last owes a chore, and will get to it.', nightChoreLost: 'You finished last, so you settle a chore on the spot.', choreWon: '{name} owes you a chore, and will get to it.', choreLost: 'You owe {name} a chore, and you settle it on the spot.', iouWon: '{name} owes you ${amount}.', iouLost: 'You owe {name} ${amount}.' },
     refused: { chore: '{name} shakes their head. "Bragging rights only."', iou: '{name} laughs. "Not for money. Not with you."' },
     choreDone: { player: 'You pay up: {chore}.', npc: '{name} pays up: {chore}.' },
     choreNone: 'There is no chore to settle, so it stays bragging rights.',
